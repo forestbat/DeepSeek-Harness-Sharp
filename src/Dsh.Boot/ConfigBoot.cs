@@ -39,8 +39,16 @@ public static class ConfigBoot
         var host = NodeHost.Start(nodeExecutable);
         var loader = new Loader(ctx);
         loader.Attach(host);
-        loader.Builtins["group"] = typeof(Group);
-        loader.Builtins["include"] = typeof(Include);
+        loader.Builtins["group"] = new PluginDefinition
+        {
+            Name = "group",
+            Callback = new DelegatePluginCallback((pluginCtx, config) => ConstructGroup(pluginCtx, config)),
+        };
+        loader.Builtins["include"] = new PluginDefinition
+        {
+            Name = "include",
+            Callback = new DelegatePluginCallback((pluginCtx, config) => ConstructInclude(pluginCtx, config)),
+        };
         loader.Importer = new DshModuleImporter(new NodeImporter(host));
 
         var app = new HarnessApp
@@ -64,7 +72,7 @@ public static class ConfigBoot
             };
             if (patches is { Count: > 0 })
                 includeConfig["patches"] = patches.ToList();
-            var fiber = ctx.Plugin(typeof(Include), includeConfig);
+            var fiber = ctx.Plugin(loader.Builtins["include"], includeConfig);
             await fiber.Await();
             await loader.Await();
             await ThrowOnActivationFailures(ctx);
@@ -110,6 +118,18 @@ public static class ConfigBoot
             throw new CordisException("BOOT_FAILED",
                 $"config boot failed with {failures.Count} activation error(s):\n{string.Join('\n', failures)}");
         }
+    }
+
+    private static object? ConstructInclude(Context pluginCtx, object? config)
+    {
+        var include = new Include(pluginCtx, config);
+        return include is IAsyncInit init ? init.Init() : null;
+    }
+
+    private static object? ConstructGroup(Context pluginCtx, object? config)
+    {
+        var group = new Group(pluginCtx, config);
+        return group is IAsyncInit init ? init.Init() : null;
     }
 
     private static string DeepestMessage(Exception error)

@@ -85,7 +85,7 @@ public static class WireTranslate
             WireChunk chunk;
             try
             {
-                chunk = JsonSerializer.Deserialize<WireChunk>(payload)
+                chunk = JsonSerializer.Deserialize<WireChunk>(payload, DeepSeekJson.Options)
                     ?? new WireChunk();
             }
             catch (JsonException)
