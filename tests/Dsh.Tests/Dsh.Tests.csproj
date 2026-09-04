@@ -28,4 +28,10 @@
     <ProjectReference Include="..\..\src\Dsh.Boot\Dsh.Boot.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures/**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

@@ -149,6 +149,92 @@ public class ToolsTests : IDisposable
         }
     }
 
+    public sealed class Pwsh : IDisposable
+    {
+        private readonly ToolsTests _outer = new();
+
+        public Pwsh()
+        {
+            PwshTool.Register(_outer._ctx);
+        }
+
+        public void Dispose() => _outer.Dispose();
+
+        private Task<ToolExecutionResult> Run(string command, long? timeoutMs = null)
+            => _outer.Execute("pwsh", JsonSerializer.Serialize(new
+            {
+                command,
+                description = "Run test command",
+                timeoutMs,
+            }, DshJson.Options));
+
+        private static bool PwshAvailable()
+        {
+            try
+            {
+                var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "pwsh",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                });
+                process!.WaitForExit(5000);
+                return process.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [Fact]
+        public async Task Echo_ReturnsStdoutAndZeroExit()
+        {
+            if (!PwshAvailable()) return;
+            var result = await Run("Write-Output hello");
+            Assert.False(result.IsError);
+            var success = Assert.IsType<ToolExecutionResult.Success>(result);
+            Assert.Equal(0, success.Value.GetProperty("exitCode").GetInt32());
+            Assert.Equal("hello", success.Value.GetProperty("stdout").GetProperty("text").GetString()!.Trim());
+        }
+
+        [Fact]
+        public async Task NonAsciiOutput_IsUtf8Pinned()
+        {
+            if (!PwshAvailable()) return;
+            var result = await Run("[Console]::Out.WriteLine('你好')");
+            Assert.False(result.IsError);
+            var success = Assert.IsType<ToolExecutionResult.Success>(result);
+            Assert.Contains("你好", success.Value.GetProperty("stdout").GetProperty("text").GetString());
+        }
+
+        [Fact]
+        public async Task NonZeroExit_IsReportedNotErrored()
+        {
+            if (!PwshAvailable()) return;
+            var result = await Run("[Console]::Error.WriteLine('oops'); exit 3");
+            Assert.False(result.IsError);
+            var success = Assert.IsType<ToolExecutionResult.Success>(result);
+            Assert.Equal(3, success.Value.GetProperty("exitCode").GetInt32());
+            var text = TextOf(result);
+            Assert.Contains("[stderr]", text);
+            Assert.EndsWith("[exit code: 3]", text);
+        }
+
+        [Fact]
+        public async Task Timeout_KillsAndReports()
+        {
+            if (!PwshAvailable()) return;
+            var result = await Run("Start-Sleep -Seconds 30", timeoutMs: 500);
+            Assert.False(result.IsError);
+            var success = Assert.IsType<ToolExecutionResult.Success>(result);
+            Assert.True(success.Value.GetProperty("timedOut").GetBoolean());
+            Assert.Contains("[timed out after 500ms]", TextOf(result));
+        }
+    }
+
     public sealed class Fs : IDisposable
     {
         private readonly ToolsTests _outer = new();

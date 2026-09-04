@@ -49,6 +49,8 @@ public static class BashTool
         ["GIT_PAGER"] = "cat",
     };
 
+    internal static IReadOnlyDictionary<string, string?> EnvOverridesShared => EnvOverrides;
+
     public static IDisposable Register(Context ctx, BashToolConfig? config = null)
     {
         var resolved = config ?? new BashToolConfig();
@@ -113,6 +115,8 @@ public static class BashTool
           }
         }
         """);
+
+    internal static System.Text.Json.Nodes.JsonObject OutputSchemaShared => OutputSchema;
 
     private static async Task<object?> Execute(JsonElement args, ToolRunContext exec, SubprocessService subprocess, BashToolConfig config)
     {

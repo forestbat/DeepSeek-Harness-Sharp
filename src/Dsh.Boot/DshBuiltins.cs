@@ -8,6 +8,7 @@ namespace Dsh.Boot;
 public static class DshBuiltins
 {
     public const string ToolBash = "@deepseek-ai/dsh-tool-bash";
+    public const string ToolPwsh = "@deepseek-ai/dsh-tool-pwsh";
     public const string ToolFs = "@deepseek-ai/dsh-tool-fs";
     public const string ToolFsSearch = "@deepseek-ai/dsh-tool-fs-search";
     public const string ToolTodo = "@deepseek-ai/dsh-tool-todo";
@@ -19,6 +20,8 @@ public static class DshBuiltins
     {
         [ToolBash] = Define(ToolBash, [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SubprocessService.ServiceName],
             (ctx, _) => BashTool.Register(ctx)),
+        [ToolPwsh] = Define(ToolPwsh, [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SubprocessService.ServiceName],
+            (ctx, _) => PwshTool.Register(ctx)),
         [ToolFs] = Define(ToolFs, [ToolRuntime.ServiceName, SystemPrompt.ServiceName],
             (ctx, _) => new DisposableBundle(ReadTool.Register(ctx), WriteTool.Register(ctx), EditTool.Register(ctx))),
         [ToolFsSearch] = Define(ToolFsSearch, [ToolRuntime.ServiceName, SystemPrompt.ServiceName],

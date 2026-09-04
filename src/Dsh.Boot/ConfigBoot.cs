@@ -91,6 +91,8 @@ public static class ConfigBoot
     {
         var failures = new List<string>();
         var seen = new HashSet<Fiber>(ReferenceEqualityComparer.Instance);
+        // JS 插件的 fiber 经 RPC 异步创建,可能晚于一次扫描;干净扫描后短暂等待再确认一次,避免注册竞争漏等。
+        var cleanPasses = 0;
         while (true)
         {
             var fibers = ctx.Registry.Values().SelectMany(runtime => runtime.Fibers).ToList();
@@ -106,7 +108,15 @@ public static class ConfigBoot
                     failures.Add($"  - plugin <{fiber.Name}>: {DeepestMessage(error)}");
                 }
             }
-            if (pending.Count == 0) break;
+            if (pending.Count > 0)
+            {
+                cleanPasses = 0;
+                continue;
+            }
+            cleanPasses++;
+            if (cleanPasses >= 2)
+                break;
+            await Task.Delay(50);
         }
         foreach (var message in ctx.Root.Logger.Buffer)
         {

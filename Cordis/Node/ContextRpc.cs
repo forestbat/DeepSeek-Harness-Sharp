@@ -137,16 +137,23 @@ public static class ContextRpc
             return dict[prop];
         }
         var type = target.GetType();
-        var property = type.GetProperty(prop, BindingFlags.Public | BindingFlags.Instance);
-        if (property is not null) return property.GetValue(target);
-        var field = type.GetField(prop, BindingFlags.Public | BindingFlags.Instance);
-        if (field is not null) return field.GetValue(target);
-        var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(m => m.Name == prop)
-            .ToList();
-        if (methods.Count > 0)
+        // JS 插件按 camelCase 读成员;C# 属性/字段是 PascalCase,精确匹配失败后回退首字母大写。
+        var candidates = prop.Length > 0 && char.IsLower(prop[0])
+            ? new[] { prop, string.Concat(char.ToUpperInvariant(prop[0]).ToString(), prop.AsSpan(1)) }
+            : new[] { prop };
+        foreach (var candidate in candidates)
         {
-            return new BoundMethod(args => InvokeMethod(target, methods, args));
+            var property = type.GetProperty(candidate, BindingFlags.Public | BindingFlags.Instance);
+            if (property is not null) return property.GetValue(target);
+            var field = type.GetField(candidate, BindingFlags.Public | BindingFlags.Instance);
+            if (field is not null) return field.GetValue(target);
+            var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(m => m.Name == candidate)
+                .ToList();
+            if (methods.Count > 0)
+            {
+                return new BoundMethod(args => InvokeMethod(target, methods, args));
+            }
         }
         throw new JsRemoteException($"member {prop} not found on {type.Name}", null);
     }

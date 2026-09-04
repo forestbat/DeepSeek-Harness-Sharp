@@ -100,6 +100,7 @@ public sealed class Fiber
     internal readonly DisposableList<EffectHandle> Disposables = new();
 
     private object? _error;
+    private readonly Lock _stateSync = new();
     private string _epoch = InactiveEpoch;
     private readonly Dictionary<string, Impl> _pendingStore = new();
 
@@ -383,8 +384,14 @@ public sealed class Fiber
 
     private void UpdateState(Func<FiberState?> callback)
     {
-        var oldState = State;
-        State = callback() ?? GetState();
+        // State 与 Inertia 必须同一把锁内成对更新:回调里清 Inertia、回调返回后赋 State,
+        // 不加锁时 Await() 的读取线程会在窗口期观察到 Inertia==null 但 State==Loading 的撕裂态。
+        FiberState oldState;
+        lock (_stateSync)
+        {
+            oldState = State;
+            State = callback() ?? GetState();
+        }
         if (oldState == State) return;
         Ctx.Events.Emit(null, EventNames.Status, this, oldState);
         if (oldState != FiberState.Active && State != FiberState.Active) return;
@@ -519,9 +526,16 @@ public sealed class Fiber
 
     public async Task<Fiber> Await()
     {
-        while (Inertia is not null)
+        while (true)
         {
-            await Inertia;
+            Task? inertia;
+            lock (_stateSync)
+            {
+                inertia = Inertia;
+            }
+            if (inertia is null)
+                break;
+            await inertia;
         }
         if (_error is not null) throw new CordisException("PLUGIN_FAILED", _error.ToString());
         return this;

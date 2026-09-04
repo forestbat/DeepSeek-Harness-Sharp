@@ -61,6 +61,9 @@ public sealed class NodeImporter(NodeHost host) : Cordis.Loader.IModuleImporter
 {
     public async Task<object?> Import(string specifier, string? baseUrl)
     {
+        // Node ESM 只接受 file:/data:/node: scheme;Windows 绝对路径(C:\...)必须先转 file URI。
+        if (Path.IsPathRooted(specifier) && !specifier.Contains("://"))
+            specifier = new Uri(specifier).AbsoluteUri;
         var result = await host.RequestAsync("import", new JsonObject
         {
             ["specifier"] = specifier,

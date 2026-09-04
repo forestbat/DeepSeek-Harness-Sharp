@@ -56,8 +56,10 @@ public static class DshScope
 
 public sealed class NamedEntries<T>
 {
+    // Node 桥的注册回调跑在 RPC 读线程,与 agent 线程的 View 枚举并发;不加锁的 Dictionary 会产生撕裂读(枚举出 null 键值对)。
     private readonly Dictionary<string, T> _entries = [];
     private readonly Func<string, Exception> _conflict;
+    private readonly Lock _sync = new();
 
     public NamedEntries(Func<string, Exception> conflict)
     {
@@ -66,29 +68,73 @@ public sealed class NamedEntries<T>
 
     public void Insert(string name, T value)
     {
-        if (_entries.ContainsKey(name))
-            throw _conflict(name);
-        _entries[name] = value;
+        lock (_sync)
+        {
+            if (_entries.ContainsKey(name))
+                throw _conflict(name);
+            _entries[name] = value;
+        }
     }
 
-    public bool Remove(string name) => _entries.Remove(name);
+    public bool Remove(string name)
+    {
+        lock (_sync)
+            return _entries.Remove(name);
+    }
 
-    public IEnumerable<KeyValuePair<string, T>> Entries => _entries;
+    public IEnumerable<KeyValuePair<string, T>> Entries
+    {
+        get
+        {
+            lock (_sync)
+                return _entries.ToList();
+        }
+    }
 
-    public bool IsEmpty => _entries.Count == 0;
+    public bool IsEmpty
+    {
+        get
+        {
+            lock (_sync)
+                return _entries.Count == 0;
+        }
+    }
 }
 
 public sealed class AnonymousEntries<T>
 {
     private readonly List<T> _entries = [];
+    private readonly Lock _sync = new();
 
-    public void Append(T value) => _entries.Add(value);
+    public void Append(T value)
+    {
+        lock (_sync)
+            _entries.Add(value);
+    }
 
-    public bool Remove(T value) => _entries.Remove(value);
+    public bool Remove(T value)
+    {
+        lock (_sync)
+            return _entries.Remove(value);
+    }
 
-    public IReadOnlyList<T> Values => _entries;
+    public IReadOnlyList<T> Values
+    {
+        get
+        {
+            lock (_sync)
+                return _entries.ToList();
+        }
+    }
 
-    public bool IsEmpty => _entries.Count == 0;
+    public bool IsEmpty
+    {
+        get
+        {
+            lock (_sync)
+                return _entries.Count == 0;
+        }
+    }
 }
 
 public sealed class ScopedLayers<TLayer>
@@ -96,6 +142,7 @@ public sealed class ScopedLayers<TLayer>
     private readonly Func<ScopeKey?, TLayer> _factory;
     private readonly Action _onChanged;
     private readonly Dictionary<ScopeKey, TLayer> _scoped = [];
+    private readonly Lock _sync = new();
 
     public ScopedLayers(Func<ScopeKey?, TLayer> factory, Action onChanged)
     {
@@ -110,9 +157,12 @@ public sealed class ScopedLayers<TLayer>
     {
         if (scope is null)
             return Global;
-        if (!_scoped.TryGetValue(scope, out var layer))
-            _scoped[scope] = layer = _factory(scope);
-        return layer;
+        lock (_sync)
+        {
+            if (!_scoped.TryGetValue(scope, out var layer))
+                _scoped[scope] = layer = _factory(scope);
+            return layer;
+        }
     }
 
     public IReadOnlyList<TLayer> ChainLayers(ScopeKey? scope)

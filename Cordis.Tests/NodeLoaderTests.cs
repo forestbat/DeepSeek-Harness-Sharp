@@ -55,10 +55,15 @@ public class NodeLoaderTests : IDisposable
             });
             await fiber.Await();
             await loader.Await();
+            // internal/plugin 事件在 fiber 创建时触发,先于 apply 完成;loader.Await 又覆盖不到 include 子树。
+            // 逐个 await 注册表里的插件 fiber,保证监听注册落定再断言。
+            foreach (var pluginFiber in ctx.Registry.Values().SelectMany(runtime => runtime.Fibers).ToList())
+                await pluginFiber.Await();
 
-            // !!js 求值：非 win32 平台上 ping 启用、ping-off 禁用
-            Assert.Contains("ping", appliedEntries);
-            Assert.DoesNotContain("ping-off", appliedEntries);
+            // !!js 求值:ping 在非 win32 启用,ping-off 在 win32 启用
+            var isWindows = OperatingSystem.IsWindows();
+            Assert.Contains(isWindows ? "ping-off" : "ping", appliedEntries);
+            Assert.DoesNotContain(isWindows ? "ping" : "ping-off", appliedEntries);
 
             var result = await ctx.Events.Serial(null, "ping", 41L);
             Assert.Equal(42L, result);
