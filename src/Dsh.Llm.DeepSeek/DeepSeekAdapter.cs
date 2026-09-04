@@ -358,5 +358,10 @@ public sealed class DeepSeekAdapter : LlmAdapter
 
 public static class DeepSeekJson
 {
-    public static readonly JsonSerializerOptions Options = DshJson.Options;
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        TypeInfoResolver = DeepSeekWireJsonContext.Default,
+    };
 }
