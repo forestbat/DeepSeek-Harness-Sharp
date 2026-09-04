@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\..\Cordis\Cordis.csproj" />
+    <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Terminal.Gui" Version="2.5.0-develop.58" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <RootNamespace>DeepSeek_Harness_Sharp</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Content Include="..\.dockerignore">
+        <Link>.dockerignore</Link>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\src\Dsh.Core\Dsh.Core.csproj" />
+      <ProjectReference Include="..\src\Dsh.Boot\Dsh.Boot.csproj" />
+      <ProjectReference Include="..\src\Dsh.Llm\Dsh.Llm.csproj" />
+      <ProjectReference Include="..\Cordis\Cordis.csproj" />
+      <ProjectReference Include="..\src\Dsh.Tui\Dsh.Tui.csproj" />
+    </ItemGroup>
+
+</Project>

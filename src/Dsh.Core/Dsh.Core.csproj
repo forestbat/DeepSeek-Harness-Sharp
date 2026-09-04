@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\..\Cordis\Cordis.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NJsonSchema" Version="11.6.1" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

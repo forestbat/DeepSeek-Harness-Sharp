@@ -1,0 +1,7 @@
+﻿services:
+  deepseek-harness-sharp:
+    image: deepseek-harness-sharp
+    build:
+      context: .
+      dockerfile: DeepSeek-Harness-Sharp/Dockerfile
+
