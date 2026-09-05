@@ -3,7 +3,7 @@ using Dsh.Llm;
 
 namespace Dsh.Core;
 
-public sealed class SessionStore : Service
+public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
 {
     public const string ServiceName = "sessions";
     public const string CreatedEvent = "session/created";
@@ -19,10 +19,6 @@ public sealed class SessionStore : Service
     }
 
     private readonly Dictionary<SessionId, Entry> _sessions = [];
-
-    public SessionStore(Context ctx) : base(ctx, ServiceName)
-    {
-    }
 
     public Session Create(SessionId? id = null, IReadOnlyList<SessionEvent>? seed = null, SessionHeader? header = null, long? inheritedEventCount = null)
     {

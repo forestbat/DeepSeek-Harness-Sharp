@@ -33,6 +33,7 @@ public sealed class AgentRegistry : Service
     private static readonly AsyncLocal<IAgent?> InitiatorSlot = new();
 
     private readonly Dictionary<SessionId, IAgent> _agents = [];
+    private readonly Dictionary<SessionId, IAgent> _owners = [];
     private IAgentFactory? _factory;
 
     public AgentRegistry(Context ctx) : base(ctx, ServiceName)
@@ -96,11 +97,15 @@ public sealed class AgentRegistry : Service
         return new AgentHandle(agent, new AgentDetach(() => Unregister(agent.Id)));
     }
 
-    public void Register(IAgent agent)
+    public void Register(IAgent agent) => Enter(agent, null);
+
+    public void Enter(IAgent agent, IAgent? owner)
     {
         if (_agents.ContainsKey(agent.Id))
             throw new InvalidOperationException($"agent \"{agent.Id}\" is already registered");
         _agents[agent.Id] = agent;
+        if (owner is not null)
+            _owners[agent.Id] = owner;
         Ctx.Emit(AgentEventNames.Created, new { Agent = agent });
     }
 
@@ -108,12 +113,17 @@ public sealed class AgentRegistry : Service
 
     public IReadOnlyList<IAgent> List() => _agents.Values.ToList();
 
-    public IReadOnlyList<IAgent> Roots() => _agents.Values.ToList();
+    public bool IsOwnedBy(SessionId id, IAgent owner) => _owners.TryGetValue(id, out var existing) && ReferenceEquals(existing, owner);
+
+    public IReadOnlyList<IAgent> Roots() => _agents.Values.Where(agent => !_owners.ContainsKey(agent.Id)).ToList();
 
     private void Unregister(SessionId id)
     {
         if (_agents.Remove(id, out var agent))
+        {
+            _owners.Remove(id);
             Ctx.Emit(AgentEventNames.Disposed, new { Agent = agent });
+        }
     }
 
     private sealed class FactoryRegistration(Action dispose) : IDisposable

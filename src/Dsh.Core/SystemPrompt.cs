@@ -3,7 +3,7 @@ using Dsh.Llm;
 
 namespace Dsh.Core;
 
-public sealed record AssembleContext(ScopeKey? Scope = null, CancellationToken Signal = default);
+public sealed record AssembleContext(ScopeKey? Scope = null, CancellationToken Signal = default, IAgent? Agent = null);
 
 public sealed record PromptSection(string Name, int Order, Func<AssembleContext, string> Text, bool Complete = false)
 {

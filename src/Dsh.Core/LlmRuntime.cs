@@ -66,6 +66,12 @@ public sealed class LlmRuntime : Service
             ? registration.Adapter.ListModels()
             : throw new LlmException(new LlmFailure($"no adapter registered for provider \"{provider}\"", LlmFailureCodes.NoAdapter));
 
+    public LlmResolvedModelInfo ResolveModelInfo(string provider, string model)
+    {
+        var registration = RegistrationFor(provider);
+        return registration.Adapter.ResolveModel(model) ?? new LlmResolvedModelInfo(provider, model, model);
+    }
+
     private Registration RegistrationFor(string provider)
         => _adapters.TryGetValue(provider, out var registration)
             ? registration

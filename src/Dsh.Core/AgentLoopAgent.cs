@@ -194,7 +194,13 @@ public sealed class AgentLoopAgent : IAgent
         return error;
     }
 
-    private async Task Kick(Phase.Running running)
+    private Task Kick(Phase.Running running)
+    {
+        var agents = _loopCtx.Get<AgentRegistry>(AgentRegistry.ServiceName, false);
+        return agents is null ? KickCore(running) : agents.WithInitiator(this, () => KickCore(running));
+    }
+
+    private async Task KickCore(Phase.Running running)
     {
         try
         {
@@ -224,7 +230,7 @@ public sealed class AgentLoopAgent : IAgent
         var claimed = Inbox.Claim(target, phase.Turn);
         var systemPrompt = _loopCtx.Get<SystemPrompt>(SystemPrompt.ServiceName)
             ?? throw new InvalidOperationException("agent loop requires the systemPrompt service");
-        var assembly = await systemPrompt.Assemble(new AssembleContext(ScopeKey, signal));
+        var assembly = await systemPrompt.Assemble(new AssembleContext(ScopeKey, signal, this));
         signal.ThrowIfCancellationRequested();
         var sections = PromptRender.RenderContextSections(assembly);
         var context = _runtimeContext.Project(PromptRender.JoinContextSections(sections), sections);
@@ -343,7 +349,7 @@ public sealed class AgentLoopAgent : IAgent
         signal.ThrowIfCancellationRequested();
         var (turn, step) = (phase.Turn, phase.Step);
         var systemPrompt = _loopCtx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var assembly = await systemPrompt.Assemble(new AssembleContext(ScopeKey, signal));
+        var assembly = await systemPrompt.Assemble(new AssembleContext(ScopeKey, signal, this));
         var system = PromptRender.RenderPrompt(assembly);
 
         while (true)

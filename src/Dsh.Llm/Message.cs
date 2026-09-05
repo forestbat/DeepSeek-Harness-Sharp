@@ -18,7 +18,9 @@ public sealed record PluginMessageSource(
     string Plugin,
     string? Form = null,
     IReadOnlyList<ContextSnapshotSection>? Sections = null,
-    string? Summary = null) : MessageSource
+    string? Summary = null,
+    string? CompactionId = null,
+    string? SourceCommandId = null) : MessageSource
 {
     public override string Kind => "plugin";
 }
@@ -31,6 +33,11 @@ public sealed record ModelMessageSource(string Provider, string Model, JsonEleme
 public sealed record ToolMessageSource(ToolCallId CallId) : MessageSource
 {
     public override string Kind => "tool";
+}
+
+public sealed record GoalMessageSource(string GoalId, long Revision, long Round) : MessageSource
+{
+    public override string Kind => "goal";
 }
 
 public sealed record UnknownMessageSource(string RawKind, JsonElement Raw) : MessageSource
@@ -65,13 +72,19 @@ public sealed class MessageSourceJsonConverter : JsonConverter<MessageSource>
                 root.TryGetProperty("form", out var form) ? form.GetString() : null,
                 root.TryGetProperty("sections", out var sections)
                     ? sections.Deserialize<IReadOnlyList<ContextSnapshotSection>>(options) : null,
-                root.TryGetProperty("summary", out var summary) ? summary.GetString() : null),
+                root.TryGetProperty("summary", out var summary) ? summary.GetString() : null,
+                root.TryGetProperty("compactionId", out var compactionId) ? compactionId.GetString() : null,
+                root.TryGetProperty("sourceCommandId", out var sourceCommandId) ? sourceCommandId.GetString() : null),
             "model" => new ModelMessageSource(
                 root.GetProperty("provider").GetString() ?? throw new JsonException("model source missing provider"),
                 root.GetProperty("model").GetString() ?? throw new JsonException("model source missing model"),
                 root.TryGetProperty("replayState", out var replay) ? replay.Clone() : null),
             "tool" => new ToolMessageSource(ToolCallId.Create(
                 root.GetProperty("callId").GetString() ?? throw new JsonException("tool source missing callId"))),
+            "goal" => new GoalMessageSource(
+                root.GetProperty("goalId").GetString() ?? throw new JsonException("goal source missing goalId"),
+                root.GetProperty("revision").GetInt64(),
+                root.GetProperty("round").GetInt64()),
             _ => new UnknownMessageSource(kind, root.Clone()),
         };
     }
@@ -98,6 +111,10 @@ public sealed class MessageSourceJsonConverter : JsonConverter<MessageSource>
                 }
                 if (plugin.Summary is { } summary)
                     writer.WriteString("summary", summary);
+                if (plugin.CompactionId is { } compactionId)
+                    writer.WriteString("compactionId", compactionId);
+                if (plugin.SourceCommandId is { } sourceCommandId)
+                    writer.WriteString("sourceCommandId", sourceCommandId);
                 break;
             case ModelMessageSource model:
                 writer.WriteString("provider", model.Provider);
@@ -110,6 +127,11 @@ public sealed class MessageSourceJsonConverter : JsonConverter<MessageSource>
                 break;
             case ToolMessageSource tool:
                 writer.WriteString("callId", tool.CallId.Value);
+                break;
+            case GoalMessageSource goal:
+                writer.WriteString("goalId", goal.GoalId);
+                writer.WriteNumber("revision", goal.Revision);
+                writer.WriteNumber("round", goal.Round);
                 break;
         }
         writer.WriteEndObject();

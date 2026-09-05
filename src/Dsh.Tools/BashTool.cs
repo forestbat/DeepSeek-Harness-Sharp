@@ -49,7 +49,7 @@ public static class BashTool
         ["GIT_PAGER"] = "cat",
     };
 
-    internal static IReadOnlyDictionary<string, string?> EnvOverridesShared => EnvOverrides;
+    public static IReadOnlyDictionary<string, string?> EnvOverridesShared => EnvOverrides;
 
     public static IDisposable Register(Context ctx, BashToolConfig? config = null)
     {

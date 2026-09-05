@@ -7,6 +7,16 @@
     <ProjectReference Include="..\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
     <ProjectReference Include="..\Dsh.Tools\Dsh.Tools.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
+    <ProjectReference Include="..\Dsh.Compaction\Dsh.Compaction.csproj" />
+    <ProjectReference Include="..\Dsh.Jobs\Dsh.Jobs.csproj" />
+    <ProjectReference Include="..\Dsh.Subagent\Dsh.Subagent.csproj" />
+    <ProjectReference Include="..\Dsh.Skills\Dsh.Skills.csproj" />
+    <ProjectReference Include="..\Dsh.Goal\Dsh.Goal.csproj" />
+    <ProjectReference Include="..\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
+    <ProjectReference Include="..\Dsh.PlanMode\Dsh.PlanMode.csproj" />
+    <ProjectReference Include="..\Dsh.Web\Dsh.Web.csproj" />
+    <ProjectReference Include="..\Dsh.Workflow\Dsh.Workflow.csproj" />
+    <ProjectReference Include="..\Dsh.Terminal\Dsh.Terminal.csproj" />
   </ItemGroup>
 
   <ItemGroup>

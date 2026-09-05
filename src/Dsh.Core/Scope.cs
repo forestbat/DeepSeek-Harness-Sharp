@@ -153,6 +153,14 @@ public sealed class ScopedLayers<TLayer>
 
     public TLayer Global { get; }
 
+    public TLayer? Peek(ScopeKey? scope)
+    {
+        if (scope is null)
+            return Global;
+        lock (_sync)
+            return _scoped.TryGetValue(scope, out var layer) ? layer : default;
+    }
+
     public TLayer LayerFor(ScopeKey? scope)
     {
         if (scope is null)

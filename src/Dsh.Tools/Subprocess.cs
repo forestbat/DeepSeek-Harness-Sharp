@@ -18,6 +18,7 @@ public sealed record SubprocessSpawnSpec
     public IReadOnlyDictionary<string, string?>? Env { get; init; }
     public SubprocessCollect Stdout { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
     public SubprocessCollect Stderr { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
+    public bool RedirectStandardInput { get; init; }
     public CancellationToken Signal { get; init; }
 }
 
@@ -162,6 +163,8 @@ public sealed class SubprocessHandle : IDisposable
 
     public SubprocessOutputReader StderrReader { get; }
 
+    public StreamWriter StandardInput => _process.StandardInput;
+
     public Task<SubprocessOutcome> Done { get; }
 
     public void Terminate()
@@ -293,7 +296,7 @@ public sealed class SubprocessService : Service, IDisposable
         {
             FileName = spec.Argv[0],
             WorkingDirectory = spec.Cwd,
-            RedirectStandardInput = false,
+            RedirectStandardInput = spec.RedirectStandardInput,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

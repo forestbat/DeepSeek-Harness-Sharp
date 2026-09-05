@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -22,10 +22,20 @@
     <ProjectReference Include="..\..\src\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Compaction\Dsh.Compaction.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Persistence\Dsh.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Subagent\Dsh.Subagent.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Tools\Dsh.Tools.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Jobs\Dsh.Jobs.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Terminal\Dsh.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Goal\Dsh.Goal.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
+        <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>
