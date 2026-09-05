@@ -52,12 +52,15 @@ public sealed record CommandDonePayload(string CommandId, string Kind, string? T
     public override string Type => CommandEvents.Done;
 }
 
-public sealed class CommandsService : Service
+public sealed partial class CommandsService : Service
 {
     public const string ServiceName = "commands";
 
-    private static readonly Regex CommandName = new("^[a-z][a-z0-9_-]*$", RegexOptions.Compiled);
-    private static readonly Regex CommandLine = new("""^/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])""", RegexOptions.Compiled);
+    [GeneratedRegex("^[a-z][a-z0-9_-]*$", RegexOptions.Compiled)]
+    private static partial Regex CommandName();
+
+    [GeneratedRegex(@"^/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])", RegexOptions.Compiled)]
+    private static partial Regex CommandLine();
 
     private sealed class CommandLayer
     {
@@ -90,7 +93,7 @@ public sealed class CommandsService : Service
 
     public static ParsedCommand? ParseCommand(string line)
     {
-        var match = CommandLine.Match(line);
+        var match = CommandLine().Match(line);
         return match.Success ? new ParsedCommand(match.Groups[1].Value, line[match.Length..]) : null;
     }
 
@@ -103,15 +106,12 @@ public sealed class CommandsService : Service
     }
 
     public IReadOnlyList<CommandDescriptor> List(IAgent agent)
-        => _layers.Merge(agent.ScopeKey, layer => layer.Commands).Values
+        => [.. _layers.Merge(agent.ScopeKey, layer => layer.Commands).Values
             .Select(definition => new CommandDescriptor(definition.Name, definition.Description, definition.Input))
-            .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)
-            .ToList();
+            .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)];
 
     public CommandDefinition? Find(IAgent agent, string name)
-        => _layers.Merge(agent.ScopeKey, layer => layer.Commands).TryGetValue(name, out var definition)
-            ? definition
-            : null;
+        => _layers.Merge(agent.ScopeKey, layer => layer.Commands).GetValueOrDefault(name);
 
     public async Task<CommandExecution?> Execute(IAgent agent, string line, CancellationToken signal = default)
     {
@@ -149,7 +149,7 @@ public sealed class CommandsService : Service
         if (!signal.CanBeCanceled)
             return await running;
         var cancelled = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = signal.Register(
+        await using var registration = signal.Register(
             static state => ((TaskCompletionSource<object?>)state!).TrySetResult(null),
             cancelled);
         var completed = await Task.WhenAny(running, cancelled.Task);
@@ -177,22 +177,22 @@ public sealed class CommandsService : Service
         {
             CommandResult.Success success => new CommandDonePayload(commandId, "success", success.Text, success.SourceEventSeq),
             CommandResult.Error error => new CommandDonePayload(commandId, "error", error.Text),
-            _ => throw new InvalidOperationException("unknown command result"),
+            _ => throw new InvalidOperationException("unknown command result")
         };
 
     private static CommandResult NormalizeResult(string command, CommandResult? result)
-    {
-        if (result is null)
-            throw new InvalidOperationException($"command \"{command}\" handler must return a CommandResult");
-        if (result is CommandResult.Error { Text: var text } && string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException($"command \"{command}\" error text must be a non-empty string");
-        return result;
-    }
+        => result switch
+        {
+            null => throw new InvalidOperationException($"command \"{command}\" handler must return a CommandResult"),
+            CommandResult.Error { Text: var text } when string.IsNullOrWhiteSpace(text)
+                => throw new InvalidOperationException($"command \"{command}\" error text must be a non-empty string"),
+            _ => result
+        };
 
     private static CommandDefinition NormalizeDefinition(CommandDefinition definition)
     {
-        if (!CommandName.IsMatch(definition.Name))
-            throw new ArgumentException($"command name \"{definition.Name}\" must match {CommandName}");
+        if (!CommandName().IsMatch(definition.Name))
+            throw new ArgumentException($"command name \"{definition.Name}\" must match {CommandName()}");
         if (string.IsNullOrWhiteSpace(definition.Description))
             throw new ArgumentException($"command \"{definition.Name}\" description must not be empty");
         if (definition.Input is { } input && string.IsNullOrWhiteSpace(input.Hint))

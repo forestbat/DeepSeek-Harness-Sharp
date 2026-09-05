@@ -8,7 +8,7 @@ public sealed record AskUserQuestionOption(string Label, string? Description = n
 
 public enum AskUserQuestionIntentKind
 {
-    PlanReview,
+    PlanReview
 }
 
 public sealed record AskUserQuestionIntent(AskUserQuestionIntentKind Kind, string Approve);
@@ -28,7 +28,8 @@ public sealed record AskUserQuestionAnswer(IReadOnlyList<AskUserQuestionAnswerIt
 
 public sealed record AskUserQuestionRequest(IReadOnlyList<AskUserQuestionItem> Questions, IAgent? Agent = null);
 
-public sealed class UserQuestionException : HarnessException
+public sealed class UserQuestionException(string message, string code, Exception? innerException = null)
+    : HarnessException(message, code, innerException)
 {
     public const string AskAborted = "ASK_ABORTED";
     public const string EmptyQuestions = "EMPTY_QUESTIONS";
@@ -36,21 +37,12 @@ public sealed class UserQuestionException : HarnessException
     public const string NoProvider = "NO_PROVIDER";
     public const string CallerNotLive = "CALLER_NOT_LIVE";
     public const string DelegatedCaller = "DELEGATED_CALLER";
-
-    public UserQuestionException(string message, string code, Exception? innerException = null)
-        : base(message, code, innerException)
-    {
-    }
 }
 
-public sealed class UserQuestionService : Service
+public sealed class UserQuestionService(Context ctx) : Service(ctx, ServiceName)
 {
     public const string ServiceName = "userQuestions";
     public const string RequestEvent = "user-questions/request";
-
-    public UserQuestionService(Context ctx) : base(ctx, ServiceName)
-    {
-    }
 
     public static UserQuestionService Register(Context ctx) => new(ctx);
 

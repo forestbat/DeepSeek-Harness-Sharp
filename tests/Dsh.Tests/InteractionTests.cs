@@ -157,7 +157,7 @@ public class InteractionTests
 
             approval.SetPolicy(agent, ApprovalPolicy.Never);
 
-            Assert.Equal(ApprovalPolicy.Never, approval.OverrideOf(agent.Session));
+            Assert.Equal(ApprovalPolicy.Never, ApprovalService.OverrideOf(agent.Session));
             var message = Assert.Single(agent.Injected);
             var text = Assert.IsType<TextBlock>(message.Content[0]).Text;
             Assert.Contains("ask", text);

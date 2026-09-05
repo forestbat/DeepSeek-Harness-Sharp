@@ -7,7 +7,7 @@ namespace Dsh.Interaction;
 public enum ApprovalPolicy
 {
     Ask,
-    Never,
+    Never
 }
 
 public static class ApprovalEvents
@@ -67,7 +67,7 @@ public sealed class ApprovalService : Service, IApprovalService
     public static void SetApprovalPolicy(Session session, ApprovalPolicy policy)
         => session.Append(new ApprovalPolicyPayload(policy));
 
-    public ApprovalPolicy? OverrideOf(Session session)
+    public static ApprovalPolicy? OverrideOf(Session session)
     {
         for (var seq = session.Seq - 1; seq >= 0; seq--)
         {
@@ -117,7 +117,7 @@ public sealed class ApprovalService : Service, IApprovalService
         if (!signal.CanBeCanceled)
             return await answer;
         var cancelled = new TaskCompletionSource<ApprovalOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = signal.Register(
+        await using var registration = signal.Register(
             static state => ((TaskCompletionSource<ApprovalOutcome>)state!).TrySetResult(ApprovalOutcome.Cancelled),
             cancelled);
         var completed = await Task.WhenAny(answer, cancelled.Task);
@@ -144,11 +144,13 @@ public sealed class ApprovalService : Service, IApprovalService
     {
         for (var seq = session.Seq - 1; seq >= 0; seq--)
         {
-            var type = session.EventAt(seq)?.Type;
-            if (type == SessionEventTypes.TurnStart)
-                return true;
-            if (type == SessionEventTypes.TurnEnd)
-                return false;
+            switch (session.EventAt(seq)?.Type)
+            {
+                case SessionEventTypes.TurnStart:
+                    return true;
+                case SessionEventTypes.TurnEnd:
+                    return false;
+            }
         }
         return false;
     }
@@ -165,7 +167,7 @@ public static class ApprovalAnswerers
     public static IDisposable DenyAll(Context ctx)
         => Answerer(ctx, ApprovalOutcome.Rejected);
 
-    private static IDisposable Answerer(Context ctx, ApprovalOutcome outcome)
+    private static DisposeAction Answerer(Context ctx, ApprovalOutcome outcome)
     {
         var remove = ctx.On(
             ApprovalEvents.Request,
