@@ -36,6 +36,12 @@
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
         <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Acp\Dsh.Acp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Lsp\Dsh.Lsp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Telemetry\Dsh.Telemetry.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.E2b\Dsh.E2b.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.SessionQuery\Dsh.SessionQuery.csproj" />
   </ItemGroup>
 
   <ItemGroup>

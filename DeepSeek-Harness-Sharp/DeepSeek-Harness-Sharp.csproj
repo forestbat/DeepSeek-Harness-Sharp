@@ -26,6 +26,9 @@
       <ProjectReference Include="..\src\Dsh.Llm\Dsh.Llm.csproj" />
       <ProjectReference Include="..\Cordis\Cordis.csproj" />
       <ProjectReference Include="..\src\Dsh.Tui\Dsh.Tui.csproj" />
+      <ProjectReference Include="..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
+      <ProjectReference Include="..\src\Dsh.Acp\Dsh.Acp.csproj" />
+      <ProjectReference Include="..\src\Dsh.Lsp\Dsh.Lsp.csproj" />
     </ItemGroup>
 
 </Project>

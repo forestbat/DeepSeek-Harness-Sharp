@@ -256,3 +256,4 @@
     }
     ```
 46. 编写代码之后需要运行rider_lint_files（或其同类的工具）进行代码检查，按照Rider的建议修正代码，Weak级别的警告不需要管，除非能够简化代码或提升性能。
+47. 作为规则38的补充，涉及I/O的逻辑（例如Console.WriteLine/Console.Error.WriteLine，或者日志记录方法）应采取其异步重载（例如await Console.WriteLineAsync）。

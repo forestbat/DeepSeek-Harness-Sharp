@@ -1,6 +1,10 @@
 ﻿using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Sdk;
+using Dsh.Acp;
+using Dsh.Web;
+using Dsh.Lsp;
 
 namespace DeepSeek_Harness_Sharp;
 
@@ -70,10 +74,15 @@ public static class Program
         {
             case null:
             case "web":
-                Console.Error.WriteLine("dsh: the web profile is not ported to the C# harness yet; use --profile headless or tui");
-                return 1;
+                return await RunWeb(harnessHome, config, patches);
             case "headless":
                 return await RunHeadless(harnessHome, string.Join(' ', positional), config, patches);
+            case "sdk":
+                return await RunSdk(harnessHome, config, patches);
+            case "acp":
+                return await RunAcp(harnessHome, config, patches);
+            case "lsp":
+                return await RunLsp(harnessHome, config, patches);
             case "tui":
                 return await Dsh.Tui.TuiRunner.Run(harnessHome, Directory.GetCurrentDirectory(), config, patches);
             default:
@@ -88,7 +97,7 @@ public static class Program
             Usage: dsh [options] [task...]
 
             Options:
-              --profile <name>   headless | tui | web (default: web)
+              --profile <name>   headless | tui | web | sdk | acp | lsp (default: web)
               --config <path>    boot from a cordis.yml composition instead of the built-in defaults
               --home <path>      harness home (default: $DSH_HOME or ~/.dsh)
               --dump-config      print the composed configuration and exit
@@ -100,8 +109,7 @@ public static class Program
             """);
     }
 
-    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
-    {
+    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)    {
         if (string.IsNullOrWhiteSpace(task))
         {
             Console.Error.WriteLine("error: a task is required, for example: dsh --profile headless \"run the tests\"");
@@ -133,6 +141,56 @@ public static class Program
             return 1;
         }
         return reason is TurnEndReason.Completed ? 0 : 1;
+    }
+
+    private static async Task<int> RunWeb(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        await using var server = new WebProfileServer();
+        Console.WriteLine($"dsh web: http://127.0.0.1:{server.Port}");
+        await Task.Delay(Timeout.Infinite);
+        return 0;
+    }
+
+    private static async Task<int> RunLsp(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
+        var server = new LspServer();
+        transport.RequestHandler = server.HandleRequestAsync;
+        transport.Start();
+        await transport.WhenClosedAsync();
+        return 0;
+    }
+
+    private static async Task<int> RunAcp(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        using var app = config is null
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
+        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
+        var server = new AcpServer(app.Ctx, transport, app.Provider, app.Model);
+        transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);
+        transport.NotificationHandler = (method, parameters) =>
+        {
+            if (method == AcpMethods.Cancel)
+                server.Cancel(parameters);
+        };
+        transport.Start();
+        await transport.WhenClosedAsync();
+        await server.CloseAllAsync();
+        return 0;
+    }
+
+    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        using var app = config is null
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
+        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
+        var server = new HarnessSdkServer(app.Ctx, transport);
+        transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);
+        transport.Start();
+        await transport.WhenClosedAsync();
+        return 0;
     }
 
     private static (string Text, TurnEndReason? Reason) Summarize(Session session, long firstSeq)
