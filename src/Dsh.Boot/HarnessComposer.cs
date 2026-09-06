@@ -13,7 +13,9 @@ public sealed record HarnessOptions(
     string? Provider = null,
     string? Model = null,
     string? BaseUrl = null,
-    string? ApiKeyEnv = null);
+    string? ApiKeyEnv = null,
+    string? ApiKey = null,
+    string? ReasoningEffort = null);
 
 public sealed class HarnessApp : IDisposable
 {
@@ -23,6 +25,7 @@ public sealed class HarnessApp : IDisposable
     public required JsonlSessionPersistence Persistence { get; init; }
     public required string Provider { get; init; }
     public required string Model { get; init; }
+    public required string? ReasoningEffort { get; init; }
 
     private readonly List<IDisposable> _disposables = [];
 
@@ -88,6 +91,7 @@ public static class HarnessComposer
             Persistence = persistence,
             Provider = options.Provider ?? DefaultProvider,
             Model = options.Model ?? DefaultModel,
+            ReasoningEffort = options.ReasoningEffort,
         };
         app.Track(registration);
         WirePersistence(ctx, persistence);
@@ -110,7 +114,7 @@ public static class HarnessComposer
             Options = () => connection,
             ResolveApiKey = (conn, _) =>
             {
-                var raw = credentials.Get(conn.ApiKeyEnv)
+                var raw = options.ApiKey ?? credentials.Get(conn.ApiKeyEnv)
                     ?? throw new LlmException(new LlmFailure(
                         $"DeepSeek credential \"{conn.ApiKeyEnv}\" is not configured",
                         LlmFailureCodes.MissingCredential));
@@ -124,7 +128,10 @@ public static class HarnessComposer
             },
             ResolveUserId = () => AnonymousUserId.Resolve(options.Home),
         });
-        return llm.RegisterAdapter([DefaultProvider], adapter);
+        string[] providers = options.Provider is null or DefaultProvider
+            ? [DefaultProvider]
+            : [DefaultProvider, options.Provider];
+        return llm.RegisterAdapter(providers, adapter);
     }
 
     internal static void WirePersistence(Context ctx, JsonlSessionPersistence persistence)

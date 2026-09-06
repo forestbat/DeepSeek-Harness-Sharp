@@ -17,30 +17,12 @@ public sealed record WireRequest
     [JsonPropertyName("stop")] public IReadOnlyList<string>? Stop { get; init; }
 }
 
-public abstract record WireMessage
-{
-    public abstract string Role { get; }
-
-    public sealed record System(string Content) : WireMessage
-    {
-        public override string Role => "system";
-    }
-
-    public sealed record User(string Content) : WireMessage
-    {
-        public override string Role => "user";
-    }
-
-    public sealed record Assistant(string Content, string? ReasoningContent, IReadOnlyList<WireToolCall>? ToolCalls) : WireMessage
-    {
-        public override string Role => "assistant";
-    }
-
-    public sealed record Tool(ToolCallId ToolCallId, string Content) : WireMessage
-    {
-        public override string Role => "tool";
-    }
-}
+public sealed record WireMessage(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("content")] string? Content,
+    [property: JsonPropertyName("reasoning_content")] string? ReasoningContent = null,
+    [property: JsonPropertyName("tool_calls")] IReadOnlyList<WireToolCall>? ToolCalls = null,
+    [property: JsonPropertyName("tool_call_id")] string? ToolCallId = null);
 
 public sealed record WireToolCall(string Id, string Name, string Arguments);
 

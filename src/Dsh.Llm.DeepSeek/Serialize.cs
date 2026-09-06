@@ -55,7 +55,8 @@ public static class WireSerialize
             .OfType<ToolCallBlock>()
             .Select(block => new WireToolCall(block.Id.Value, block.Name, block.Arguments))
             .ToList();
-        return new WireMessage.Assistant(
+        return new WireMessage(
+            "assistant",
             text,
             reasoning.Length > 0 ? reasoning : null,
             toolCalls.Count > 0 ? toolCalls : null);
@@ -70,7 +71,7 @@ public static class WireSerialize
             switch (message.Role)
             {
                 case MessageRole.System:
-                    wire.Add(new WireMessage.System(FlattenText(message.Content)));
+                    wire.Add(new WireMessage("system", FlattenText(message.Content)));
                     continue;
                 case MessageRole.Assistant:
                     wire.Add(SerializeAssistant(message));
@@ -80,11 +81,11 @@ public static class WireSerialize
                     var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
                     var text = FlattenText(message.Content);
                     if (text.Length > 0 || toolResults.Count == 0)
-                        wire.Add(new WireMessage.User(text));
+                        wire.Add(new WireMessage("user", text));
                     foreach (var result in toolResults)
                     {
                         var content = FlattenText(result.Content);
-                        wire.Add(new WireMessage.Tool(result.ToolCallId, content.Length > 0 ? content : "(no output)"));
+                        wire.Add(new WireMessage("tool", content.Length > 0 ? content : "(no output)", ToolCallId: result.ToolCallId.Value));
                     }
                     break;
                 }
@@ -97,7 +98,7 @@ public static class WireSerialize
     {
         var messages = new List<WireMessage>();
         if (options.System is { } system)
-            messages.Add(new WireMessage.System(system));
+            messages.Add(new WireMessage("system", system));
         messages.AddRange(SerializeMessages(options.Messages));
         var (thinking, reasoningEffort) = ResolveThinking(options, defaults);
         return new WireRequest

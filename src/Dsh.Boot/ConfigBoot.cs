@@ -60,6 +60,7 @@ public static class ConfigBoot
             Persistence = persistence,
             Provider = options.Provider ?? HarnessComposer.DefaultProvider,
             Model = options.Model ?? HarnessComposer.DefaultModel,
+            ReasoningEffort = options.ReasoningEffort,
         };
         app.Track(registration);
         app.Track(host);
