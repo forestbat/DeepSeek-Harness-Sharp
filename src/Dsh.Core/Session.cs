@@ -27,7 +27,7 @@ public sealed class Session
 
     public Surface.Manager SurfaceManager => _surfaceManager;
 
-    private Session(SessionId id, IReadOnlyList<SessionEvent>? seed, SessionHeader? header, bool restore, long? suppliedInheritedEventCount)
+    private Session(SessionId id, IReadOnlyList<SessionEvent>? seed, SessionHeader? header, long? suppliedInheritedEventCount)
     {
         _surfaceManager = new Surface.Manager(_log);
         if (seed is not null)
@@ -79,10 +79,10 @@ public sealed class Session
     }
 
     public static Session Create(SessionId id, IReadOnlyList<SessionEvent>? seed = null, SessionHeader? header = null, long? inheritedEventCount = null)
-        => new(id, seed, header, false, inheritedEventCount);
+        => new(id, seed, header, inheritedEventCount);
 
     public static Session FromRestore(SessionId id, IReadOnlyList<SessionEvent> seed, SessionHeader header, long inheritedEventCount)
-        => new(id, seed, header, true, inheritedEventCount);
+        => new(id, seed, header, inheritedEventCount);
 
     public SessionEvent? EventAt(long seq) => seq >= 0 && seq < _log.Count ? _log[(int)seq] : null;
 
@@ -117,11 +117,13 @@ public sealed class Session
         _eventsSnapshot = null;
         if (subscribers is not null)
         {
-            foreach (Action<Session, SessionEvent> subscriber in subscribers.GetInvocationList())
+            foreach (var subscriber in subscribers.GetInvocationList())
             {
+                if (subscriber is not Action<Session, SessionEvent> action)
+                    continue;
                 try
                 {
-                    subscriber(this, sessionEvent);
+                    action(this, sessionEvent);
                 }
                 catch
                 {

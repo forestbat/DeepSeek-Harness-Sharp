@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Cordis;
 using Dsh.Core;
-using Dsh.Llm;
 
 namespace Dsh.Goal;
 

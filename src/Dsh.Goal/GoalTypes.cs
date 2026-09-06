@@ -1,7 +1,5 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using Dsh.Core;
 using Dsh.Llm;
 
 namespace Dsh.Goal;

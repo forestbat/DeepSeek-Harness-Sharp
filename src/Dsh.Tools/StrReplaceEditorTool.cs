@@ -103,7 +103,7 @@ public static class StrReplaceEditorTool
         var path = args.TryGetProperty("path", out var pathElement) && pathElement.ValueKind == JsonValueKind.String
             ? pathElement.GetString() ?? ""
             : "";
-        object? result = command switch
+        object result = command switch
         {
             "view" => ViewPath(path, args, config.MaxOutputChars, exec),
             "create" => CreateFile(path, OptionalString(args, "file_text"), exec),
@@ -149,12 +149,10 @@ public static class StrReplaceEditorTool
         return [values[0].GetInt32(), values[1].GetInt32()];
     }
 
-    private static string RequiredForCommand(string? value, string parameter, string command, bool allowEmpty = true)
+    private static string RequiredForCommand(string? value, string parameter, string command)
     {
         if (value is null)
             throw new ArgumentException($"Parameter `{parameter}` is required for command: {command}");
-        if (!allowEmpty && value.Length == 0)
-            throw new ArgumentException($"Parameter `{parameter}` is empty for command: {command}");
         return value;
     }
 
@@ -264,7 +262,9 @@ public static class StrReplaceEditorTool
         if (newStr.IsNull)
             throw new ArgumentException("Parameter `new_str` must be omitted or contain a string for command: str_replace");
         var target = ResolveTarget(path);
-        var oldValue = RequiredForCommand(oldStr, "old_str", "str_replace", false);
+        var oldValue = RequiredForCommand(oldStr, "old_str", "str_replace");
+        if (oldValue.Length == 0)
+            throw new ArgumentException("Parameter `old_str` is empty for command: str_replace");
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();

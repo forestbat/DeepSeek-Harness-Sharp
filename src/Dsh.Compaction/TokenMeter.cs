@@ -49,7 +49,7 @@ public sealed class TokenMeter : Service, IDisposable
     {
         public long ConsumedEvents;
         public EpochHeader? Header;
-        public List<TokenSurfaceNode> Surface = [];
+        public readonly List<TokenSurfaceNode> Surface = [];
         public (int Turn, int Step, IReadOnlyList<TokenSurfaceNode> Nodes)? StepStart;
         public MeasurementAnchor? Anchor;
     }
@@ -72,7 +72,7 @@ public sealed class TokenMeter : Service, IDisposable
 
     public void Dispose() => _listener();
 
-    public int EstimateMessage(Dsh.Llm.Message message) => TokenEstimate.EstimateMessage(message);
+    public int EstimateMessage(Llm.Message message) => TokenEstimate.EstimateMessage(message);
 
     public TokenMeasurement Measure(Session session)
     {
@@ -178,8 +178,8 @@ public sealed class TokenMeter : Service, IDisposable
                 message is null ? 0 : TokenEstimate.EstimateMessage(message));
             if (sessionEvent.SurfaceOp is SurfaceOp.Replace replace)
             {
-                var startIdx = state.Surface.FindIndex(node => node.Seq == replace.Start);
-                var endIdx = state.Surface.FindIndex(node => node.Seq == replace.End);
+                var startIdx = state.Surface.FindIndex(candidate => candidate.Seq == replace.Start);
+                var endIdx = state.Surface.FindIndex(candidate => candidate.Seq == replace.End);
                 if (startIdx == -1 || endIdx == -1 || startIdx > endIdx)
                     throw new InvalidOperationException(
                         $"token surface: replace at seq {sessionEvent.Seq} has invalid current range {replace.Start}-{replace.End}");

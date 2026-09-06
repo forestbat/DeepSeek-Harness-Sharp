@@ -318,7 +318,7 @@ public sealed class LocalJobsService : JobsService
     {
         List<TaskCompletionSource> waitResolvers;
         List<JobDoneListener> listeners;
-        JobSnapshot? snapshot = null;
+        JobSnapshot snapshot;
         lock (_gate)
         {
             if (JobStatusWire.IsTerminal(job.Status)) return;

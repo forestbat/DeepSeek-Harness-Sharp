@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using Cordis;
-using Dsh.Core;
 using Dsh.Subagent;
 using Jint;
 
@@ -39,7 +38,7 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
     public override IWorkflowRun Start(WorkflowStartRequest request)
     {
         var meta = WorkflowMetaValidator.ValidateMeta(request.Meta);
-        AssertBodyParses(request.Script, meta.Name);
+        AssertBodyParses(request.Script);
         var subagentProvider = ResolveSubagentProvider(request.SubagentProvider);
         var maxTotalAgents = ResolveMaxTotalAgents(request.MaxTotalAgents);
         var id = WorkflowRunId.Create(Guid.NewGuid().ToString());
@@ -109,7 +108,7 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
         return requested.Value;
     }
 
-    private static void AssertBodyParses(string body, string name)
+    private static void AssertBodyParses(string body)
     {
         if (MetaStatement.IsMatch(body))
         {

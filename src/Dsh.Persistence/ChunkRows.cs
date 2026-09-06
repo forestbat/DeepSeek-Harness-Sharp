@@ -245,10 +245,10 @@ internal static class ChunkRows
         string? callName = null;
         if (isToolCall)
         {
-            if (data["id"] is not JsonValue idValue || !idValue.TryGetValue<string>(out callId))
+            if (data["id"] is not JsonValue idValue || !idValue.TryGetValue(out callId))
                 throw Malformed(tag, "id (and name when present) must be strings");
             if (data["name"] is { } nameNode
-                && (nameNode is not JsonValue nameValue || !nameValue.TryGetValue<string>(out callName)))
+                && (nameNode is not JsonValue nameValue || !nameValue.TryGetValue(out callName)))
                 throw Malformed(tag, "id (and name when present) must be strings");
         }
         var payloadKey = isToolCall ? "args" : "texts";
@@ -257,7 +257,7 @@ internal static class ChunkRows
         var members = new string[payload.Count];
         for (var k = 0; k < payload.Count; k += 1)
         {
-            if (payload[k] is not JsonValue memberValue || !memberValue.TryGetValue<string>(out members[k]!))
+            if (payload[k] is not JsonValue memberValue || !memberValue.TryGetValue(out members[k]))
                 throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
         }
         if (data["dt"] is not JsonArray dtNode) throw Malformed(tag, "dt must be an array of safe integers");

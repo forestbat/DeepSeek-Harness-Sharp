@@ -68,15 +68,15 @@ public static class HarnessComposer
 
         var persistence = new JsonlSessionPersistence(options.Home.SessionsPath);
 
-        var sessions = new SessionStore(ctx);
-        var systemPrompt = new SystemPrompt(ctx, new SystemPromptConfig());
-        var tools = new ToolRuntime(ctx);
+        _ = new SessionStore(ctx);
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        _ = new ToolRuntime(ctx);
         var llm = new LlmRuntime(ctx);
-        var agents = new AgentRegistry(ctx);
-        var agentLoop = new AgentLoop(ctx, new AgentLoopConfig(), _ => persistence);
-        var approval = ApprovalService.Register(ctx);
-        var questions = UserQuestionService.Register(ctx);
-        var commands = CommandsService.Register(ctx);
+        _ = new AgentRegistry(ctx);
+        _ = new AgentLoop(ctx, new AgentLoopConfig(), _ => persistence);
+        _ = ApprovalService.Register(ctx);
+        _ = UserQuestionService.Register(ctx);
+        _ = CommandsService.Register(ctx);
 
         var registration = RegisterDeepSeekAdapter(ctx, options, credentials, llm);
 

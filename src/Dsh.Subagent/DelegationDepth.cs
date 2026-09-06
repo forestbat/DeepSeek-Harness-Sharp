@@ -18,7 +18,7 @@ public static class DelegationDepth
         if (parentDepth == int.MaxValue)
             throw new OverflowException("subagent child depth exceeds the safe integer range");
         var childDepth = parentDepth + 1;
-        if (maxDepth is not null && childDepth > maxDepth)
+        if (childDepth > maxDepth)
             throw new SubagentDepthError($"subagent maxDepth {maxDepth} exceeded: child would be depth {childDepth}");
         return childDepth;
     }

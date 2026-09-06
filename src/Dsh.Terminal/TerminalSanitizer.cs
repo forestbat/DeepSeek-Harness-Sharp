@@ -57,7 +57,7 @@ public sealed class TerminalSanitizer
             if (kind == ']')
             {
                 var bel = _pending.IndexOf('\x07', escape + 2);
-                var stringTerminator = _pending.IndexOf("\x1b\\", escape + 2, StringComparison.Ordinal);
+                var stringTerminator = _pending.IndexOf("\u001b\\", escape + 2, StringComparison.Ordinal);
                 var end = -1;
                 if (bel >= 0 && stringTerminator >= 0)
                     end = Math.Min(bel + 1, stringTerminator + 2);

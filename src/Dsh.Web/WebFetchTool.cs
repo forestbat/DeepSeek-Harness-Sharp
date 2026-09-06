@@ -200,7 +200,7 @@ public static class WebFetchTool
             var start = html.IndexOf('<', offset);
             if (inComment)
             {
-                var end = html.IndexOf("-->", offset);
+                var end = html.IndexOf("-->", offset, StringComparison.Ordinal);
                 if (end != -1 && (start == -1 || end < start))
                 {
                     inComment = false;

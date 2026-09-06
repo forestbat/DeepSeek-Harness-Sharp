@@ -148,7 +148,7 @@ public static class InProcessDriver
         private void AttachDescriptorAppend(Context childCtx, Session session, SubagentDescriptorPayload descriptor)
         {
             var appended = false;
-            _composition.Add(new FuncDispose(childCtx.On(AgentEventNames.PreStep, async (thisArg, args) =>
+            _composition.Add(new FuncDispose(childCtx.On(AgentEventNames.PreStep, async (_, args) =>
             {
                 var next = (Func<ValueTask<object?>>)args[^1]!;
                 var decision = await next();

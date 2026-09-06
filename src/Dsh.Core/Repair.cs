@@ -95,7 +95,7 @@ public static class SessionRepair
         closers.Add(new SessionEvent
         {
             Type = SessionEventTypes.TurnEnd,
-            Seq = seq++,
+            Seq = seq,
             Time = time,
             Data = new TurnEndPayload(openTurn.Value, new TurnEndReason.Interrupted()),
         });

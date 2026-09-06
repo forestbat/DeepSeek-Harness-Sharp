@@ -410,7 +410,7 @@ public static class SubagentTool
         null => null,
         int i => i,
         long l => checked((int)l),
-        double d when d == Math.Floor(d) => checked((int)d),
+        double d when double.IsInteger(d) => checked((int)d),
         _ => throw new ArgumentException($"expected an integer, got {value}"),
     };
 

@@ -183,7 +183,7 @@ public static class ToolRalph
             Parameters = ParameterSchema(),
             Output = new ToolOutputDefinition(
                 new JsonObject(),
-                (args, value) => [new TextBlock(RenderValue(value, config.MaxResultChars))],
+                (_, value) => [new TextBlock(RenderValue(value, config.MaxResultChars))],
                 (args, _) => PresentCall(args)),
             Execute = (args, exec) => ExecuteAsync(workflow, subagents, config, args, exec),
         };
@@ -329,7 +329,7 @@ public static class ToolRalph
     {
         if (!IsRecord(value) || value is not IDictionary<string, object?> record
             || ValueOf(record, "roundsStarted") is not double roundsStarted
-            || roundsStarted != Math.Floor(roundsStarted)
+            || !double.IsInteger(roundsStarted)
             || roundsStarted < 1
             || roundsStarted > maxRounds)
         {
@@ -345,7 +345,7 @@ public static class ToolRalph
             case "budget-limited":
                 if (string.Join(',', record.Keys.Order(StringComparer.Ordinal)) != "report,roundsStarted,status")
                     throw new InvalidOperationException("Ralph workflow returned a malformed terminal result");
-                if (status == "budget-limited" && maxRounds != long.MaxValue && roundsStarted != maxRounds)
+                if (status == "budget-limited" && maxRounds != long.MaxValue && roundsStartedInt != maxRounds)
                     throw new InvalidOperationException("Ralph workflow returned budget-limited before the round limit");
                 var terminalReport = ReadReport(ValueOf(record, "report"), status == "budget-limited" ? "continue" : status, maxHandoffChars);
                 return new Dictionary<string, object?>

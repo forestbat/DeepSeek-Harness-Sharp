@@ -142,7 +142,6 @@ public static class CompactionRegion
             failureStage = closing ? ManualCompactionErrorCode.Commit : stageCommitted ? ManualCompactionErrorCode.Commit : ManualCompactionErrorCode.Summary;
             if (!closing)
             {
-                closing = true;
                 try
                 {
                     session.Append(new CompactionEndPayload(compactionId, options.SourceCommandId, owner, LlmFailureClassifiers.ErrorChain(error)));
@@ -183,11 +182,15 @@ public static class CompactionRegion
 
     private static void ThrowManualFailure(Exception error, ManualCompactionErrorCode stage)
     {
-        if (stage == ManualCompactionErrorCode.Commit)
-            throw new ManualCompactionError(ManualCompactionErrorCode.Commit, "manual compaction did not commit cleanly", error);
-        if (error is SurfaceChangedError)
-            throw new ManualCompactionError(ManualCompactionErrorCode.Changed, "the compacted history changed during manual compaction", error);
-        throw new ManualCompactionError(ManualCompactionErrorCode.Summary, "manual compaction could not produce a smaller summary", error);
+        switch (stage)
+        {
+            case ManualCompactionErrorCode.Commit:
+                throw new ManualCompactionError(ManualCompactionErrorCode.Commit, "manual compaction did not commit cleanly", error);
+            default:
+                if (error is SurfaceChangedError)
+                    throw new ManualCompactionError(ManualCompactionErrorCode.Changed, "the compacted history changed during manual compaction", error);
+                throw new ManualCompactionError(ManualCompactionErrorCode.Summary, "manual compaction could not produce a smaller summary", error);
+        }
     }
 
     public static void AssertNoActiveCompaction(Session session, string stage)

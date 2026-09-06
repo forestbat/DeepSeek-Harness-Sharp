@@ -41,14 +41,14 @@ public static class SessionEventCodec
             (element, options) => new UserMessagePayload(
                 element.Deserialize<UserMessage>(options)
                 ?? throw new JsonException("user/message payload is not a user message")),
-            (payload, writer, options) => JsonSerializer.Serialize(writer, ((UserMessagePayload)payload).Message, options));
+            (payload, writer, options) => JsonSerializer.Serialize(writer, payload.Message, options));
     }
 
     public static void Register<T>(string type) where T : SessionEventPayload
         => Register<T>(type,
             (element, options) => element.Deserialize<T>(options)
                 ?? throw new JsonException($"invalid \"{type}\" payload"),
-            static (payload, writer, options) => JsonSerializer.Serialize(writer, (T)payload, options));
+            static (payload, writer, options) => JsonSerializer.Serialize(writer, payload, options));
 
     public static void Register<T>(
         string type,

@@ -215,7 +215,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
 
     private void RegisterAutomaticCompaction()
     {
-        _listeners.Add(Ctx.On(AgentEventNames.PreStep, async (thisArg, args) =>
+        _listeners.Add(Ctx.On(AgentEventNames.PreStep, async (_, args) =>
         {
             var payload = (PreStepPayload)args[0]!;
             var next = (Func<ValueTask<object?>>)args[1]!;
@@ -237,7 +237,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             return await next();
         }, new EventOptions { Global = true }));
 
-        _listeners.Add(Ctx.On(AgentEventNames.Status, (thisArg, args) =>
+        _listeners.Add(Ctx.On(AgentEventNames.Status, (_, args) =>
         {
             var payload = args[0]!;
             if (payload.GetType().GetProperty("Status")?.GetValue(payload) is AgentStatus.Idle
@@ -246,7 +246,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             return new ValueTask<object?>();
         }, new EventOptions { Global = true }));
 
-        _listeners.Add(Ctx.On(SessionStore.EventEvent, (thisArg, args) =>
+        _listeners.Add(Ctx.On(SessionStore.EventEvent, (_, args) =>
         {
             if (args[1] is SessionEvent { Type: SessionEventTypes.AssistantMessage }
                 && args[0] is Session session
@@ -255,7 +255,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             return new ValueTask<object?>();
         }, new EventOptions { Global = true }));
 
-        _listeners.Add(Ctx.On(AgentEventNames.RequestError, async (thisArg, args) =>
+        _listeners.Add(Ctx.On(AgentEventNames.RequestError, async (_, args) =>
         {
             var payload = (AgentRequestErrorPayload)args[0]!;
             var next = (Func<ValueTask<object?>>)args[1]!;

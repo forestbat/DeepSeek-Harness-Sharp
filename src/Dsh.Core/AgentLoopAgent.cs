@@ -37,7 +37,6 @@ public sealed class AgentLoopAgent : IAgent
     }
 
     private readonly Context _loopCtx;
-    private readonly Func<Session, int> _lastTurnOf;
     private Phase _phase;
     private Task _activityDone = Task.CompletedTask;
     private bool _requestHeaderLogged;
@@ -50,7 +49,6 @@ public sealed class AgentLoopAgent : IAgent
         Id = id;
         Options = options;
         Session = session;
-        _lastTurnOf = lastTurnOf;
         Dispatch = new AgentEventDispatch(loopCtx, this);
         ScopeKey = new ScopeKey();
         Ctx = DshScope.CreateScope(loopCtx, ScopeKey).Extend((AgentContextKey, this));
@@ -166,7 +164,7 @@ public sealed class AgentLoopAgent : IAgent
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _activityDone = done.Task;
         SetPhase(running);
-        Kick(running).ContinueWith(task => done.SetResult(), TaskContinuationOptions.ExecuteSynchronously);
+        Kick(running).ContinueWith(_ => done.SetResult(), TaskContinuationOptions.ExecuteSynchronously);
     }
 
     public async Task WhenIdle()
@@ -401,7 +399,7 @@ public sealed class AgentLoopAgent : IAgent
                 };
                 var action = await Dispatch.Waterfall(
                     AgentEventNames.RequestError,
-                    new AgentRequestErrorPayload(this, turn, step, request.Provider, failure, preparedCall?.RetryPolicy, signal),
+                    new AgentRequestErrorPayload(this, turn, step, request.Provider, failure, preparedCall.RetryPolicy, signal),
                     () => new ValueTask<object?>()) as RequestErrorAction;
                 signal.ThrowIfCancellationRequested();
                 if (action is not RequestErrorAction.Retry)
@@ -420,7 +418,7 @@ public sealed class AgentLoopAgent : IAgent
             var toolCalls = message.Content.OfType<ToolCallBlock>().ToList();
             if (toolCalls.Count == 0)
                 return StepOutcome.Completed;
-            var concluded = await ExecuteToolCalls(phase, turn, step, toolCalls, signal);
+            var concluded = await ExecuteToolCalls(turn, step, toolCalls, signal);
             return concluded ? StepOutcome.Completed : null;
         }
     }
@@ -448,7 +446,7 @@ public sealed class AgentLoopAgent : IAgent
         var reasoningEffort = Options.ReasoningEffort ?? persistedReasoningEffort;
         var seedConfig = _requestHeaderLogged
             ? RequestProposal(persistedHeader!)
-            : new LlmCallConfig(provider, model, reasoningEffort, null, Options.MaxTokens, null);
+            : new LlmCallConfig(provider, model, reasoningEffort, null, Options.MaxTokens);
         var proposedConfig = await Dispatch.Waterfall(
             AgentEventNames.Request,
             new AgentRequestPayload(this, phase.Turn, phase.Step, signal),
@@ -535,7 +533,7 @@ public sealed class AgentLoopAgent : IAgent
         };
     }
 
-    private async Task<bool> ExecuteToolCalls(Phase.Running phase, int turn, int step, List<ToolCallBlock> toolCalls, CancellationToken signal)
+    private async Task<bool> ExecuteToolCalls(int turn, int step, List<ToolCallBlock> toolCalls, CancellationToken signal)
     {
         var tools = _loopCtx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("agent loop requires the tools service");
@@ -583,7 +581,6 @@ public sealed class AgentLoopAgent : IAgent
         var nextToStart = 0;
         var committed = 0;
         var started = 0;
-        var aborted = signal.IsCancellationRequested;
         var concluded = false;
         Exception? schedulerFailure = null;
 
@@ -648,7 +645,7 @@ public sealed class AgentLoopAgent : IAgent
 
         async Task FillPool()
         {
-            while (!aborted && nextToStart < group.Count && inFlight.Count < maxParallel)
+            while (!signal.IsCancellationRequested && nextToStart < group.Count && inFlight.Count < maxParallel)
             {
                 if (nextToStart > 0 && mode == ToolExecutionModeKind.Parallel
                     && tools.ExecutionModeKind(group[nextToStart]) != ToolExecutionModeKind.Parallel)
@@ -658,8 +655,6 @@ public sealed class AgentLoopAgent : IAgent
                 if (schedulerFailure is not null)
                     throw schedulerFailure;
                 await CommitReady();
-                if (signal.IsCancellationRequested)
-                    aborted = true;
             }
         }
 
@@ -672,12 +667,10 @@ public sealed class AgentLoopAgent : IAgent
             if (schedulerFailure is not null)
                 throw schedulerFailure;
             await CommitReady();
-            if (signal.IsCancellationRequested)
-                aborted = true;
             await FillPool();
         }
 
-        if (aborted)
+        if (signal.IsCancellationRequested)
         {
             for (var index = started; index < group.Count; index++)
                 AppendSkippedToolCall(turn, step, group[index]);

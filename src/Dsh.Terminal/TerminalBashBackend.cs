@@ -1,6 +1,4 @@
-using System.Text;
 using Cordis;
-using Dsh.Core;
 using Dsh.Tools;
 
 namespace Dsh.Terminal;
@@ -155,11 +153,11 @@ internal sealed class PipeSendOperation : TerminalSendOperation
 {
     private readonly BoundedTextBuffer _output;
     private readonly TaskCompletionSource<TerminalSendResult> _promise = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Action _onCancel;
+    private readonly Action<PipeSendOperation> _onCancel;
     private bool _finished;
     private bool _cancellationRequested;
 
-    public PipeSendOperation(int maxBytes, Action onCancel)
+    public PipeSendOperation(int maxBytes, Action<PipeSendOperation> onCancel)
     {
         _output = new BoundedTextBuffer(maxBytes);
         _onCancel = onCancel;
@@ -201,7 +199,7 @@ internal sealed class PipeSendOperation : TerminalSendOperation
         if (_finished)
             return false;
         _cancellationRequested = true;
-        _onCancel();
+        _onCancel(this);
         return true;
     }
 }
@@ -269,8 +267,7 @@ internal sealed class PipeTerminalSession : TerminalBackendSession
             if (_active is not null)
                 throw new TerminalError("PTY session already has an active send", TerminalErrorCodes.SendActive);
             request.Signal.ThrowIfCancellationRequested();
-            PipeSendOperation? operation = null;
-            operation = new PipeSendOperation(_config.MaxReadBytes, () => Interrupt(operation!));
+            var operation = new PipeSendOperation(_config.MaxReadBytes, Interrupt);
             _active = operation;
             ResetReadiness();
             _ = RunSendAsync(operation, request);

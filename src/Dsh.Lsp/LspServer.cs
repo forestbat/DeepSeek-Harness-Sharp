@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Dsh.Sdk;
 
 namespace Dsh.Lsp;
 

@@ -71,14 +71,14 @@ public static class ToolWorkflow
         var workflow = ctx.Get<WorkflowEngine>(WorkflowEngine.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var recorder = new WorkflowRecorder(ctx);
-        var agentStartSubscription = ctx.On("workflow/agent-start", (_, args) =>
+        var agentStartSubscription = ctx.On("workflow/agent-start", (thisArg, args) =>
         {
-            recorder.OnAgentStart(_, args);
+            recorder.OnAgentStart(thisArg, args);
             return new ValueTask<object?>();
         }, new EventOptions { Global = true });
-        var agentEndSubscription = ctx.On("workflow/agent-end", (_, args) =>
+        var agentEndSubscription = ctx.On("workflow/agent-end", (thisArg, args) =>
         {
-            recorder.OnAgentEnd(_, args);
+            recorder.OnAgentEnd(thisArg, args);
             return new ValueTask<object?>();
         }, new EventOptions { Global = true });
         var prompt = systemPrompt.Section(PromptSection.Literal(
@@ -114,14 +114,13 @@ public static class ToolWorkflow
                 new JsonObject(),
                 (args, value) => [new TextBlock(RenderResult(args, value, config.MaxResultChars))],
                 (args, _) => PresentWorkflowCall(args)),
-            Execute = (args, exec) => ExecuteAsync(workflow, recorder, config, args, exec),
+            Execute = (args, exec) => ExecuteAsync(workflow, recorder, args, exec),
         };
     }
 
     private static async Task<object?> ExecuteAsync(
         WorkflowEngine workflow,
         WorkflowRecorder recorder,
-        ToolWorkflowConfig config,
         JsonElement args,
         ToolRunContext exec)
     {
@@ -320,7 +319,7 @@ public static class ToolWorkflow
             }
         }
 
-        public void OnAgentStart(object? thisArg, object?[] args)
+        public void OnAgentStart(object? _, object?[] args)
         {
             if (args[0] is not WorkflowRunInfo info || args[1] is not WorkflowAgentInfo agent)
                 return;
@@ -336,7 +335,7 @@ public static class ToolWorkflow
             }
         }
 
-        public void OnAgentEnd(object? thisArg, object?[] args)
+        public void OnAgentEnd(object? _, object?[] args)
         {
             if (args[0] is not WorkflowRunInfo info || args[1] is not WorkflowAgentEndInfo agent)
                 return;

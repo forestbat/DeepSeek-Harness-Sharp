@@ -75,7 +75,7 @@ public sealed class ToolRuntime : Service
                 $"tool name \"{RunCodeName}\" is reserved for the PTC mode presentation transport and cannot be registered or shadowed");
         }
         if (definition.TimeoutMs is <= 0)
-            throw new ArgumentException($"tool \"definition.Name\" timeoutMs must be a positive finite number");
+            throw new ArgumentException("tool \"definition.Name\" timeoutMs must be a positive finite number");
         return _layers.Effect(Ctx, null,
             layer => layer.Tools.Insert(definition.Name, definition),
             layer => layer.Tools.Remove(definition.Name));
@@ -364,14 +364,14 @@ public sealed class ToolRuntime : Service
     {
         var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null);
         if (tool?.IsConcurrencySafe is null)
-            return Core.ToolExecutionModeKind.Exclusive;
+            return ToolExecutionModeKind.Exclusive;
         try
         {
-            return tool.IsConcurrencySafe(exec.Arguments) ? Core.ToolExecutionModeKind.Parallel : Core.ToolExecutionModeKind.Exclusive;
+            return tool.IsConcurrencySafe(exec.Arguments) ? ToolExecutionModeKind.Parallel : ToolExecutionModeKind.Exclusive;
         }
         catch
         {
-            return Core.ToolExecutionModeKind.Exclusive;
+            return ToolExecutionModeKind.Exclusive;
         }
     }
 

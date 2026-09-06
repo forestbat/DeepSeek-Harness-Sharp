@@ -404,7 +404,7 @@ public static class TerminalTools
                     ? signalElement.GetString() ?? ""
                     : "";
                 var signal = ParseSignal(signalText);
-                return (object?)(await terminals.Signal(RequireAgent(exec.Agent), SessionId(args), signal));
+                return await terminals.Signal(RequireAgent(exec.Agent), SessionId(args), signal);
             },
         }));
 
@@ -450,7 +450,7 @@ public static class TerminalTools
             Output = new ToolOutputDefinition(ListOutputSchema, (_, value) =>
                 [new TextBlock(TerminalRendering.RenderList(value.Deserialize<IReadOnlyList<TerminalSessionSnapshot>>(DshJson.Options) ?? [], maxResultBytes))]),
             FinalizeContent = FinalizeContent,
-            Execute = (args, exec) => Task.FromResult<object?>(terminals.List(RequireAgent(exec.Agent))),
+            Execute = (_, exec) => Task.FromResult<object?>(terminals.List(RequireAgent(exec.Agent))),
         }));
 
         return new CompositeDisposable(disposables);

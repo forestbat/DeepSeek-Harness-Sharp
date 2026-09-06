@@ -164,7 +164,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
                     : null;
             if (locator is null)
                 continue;
-            var parsed = await ParseSkillFile(locator.Path, default, root.TrustedHost);
+            var parsed = await ParseSkillFile(locator.Path, CancellationToken.None, root.TrustedHost);
             if (parsed is null)
                 continue;
             skills.Add(new SkillCandidate
@@ -387,7 +387,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
         try
         {
-            return await fs.Stat(target, default) is not null;
+            return await fs.Stat(target, CancellationToken.None) is not null;
         }
         catch
         {

@@ -75,10 +75,10 @@ public sealed class SkillRegistry : Service
     public IDisposable RegisterProvider(Func<SkillProviderControl, ISkillProvider> create)
     {
         var lifecycle = new CancellationTokenSource();
-        ProviderSlot? slot = null;
+        var slotRef = new StrongBox<ProviderSlot?>(null);
         var control = new SkillProviderControl(lifecycle.Token, () =>
         {
-            if (slot is { Live: true })
+            if (slotRef.Value is { Live: true })
                 InvalidateCache();
         });
         ISkillProvider provider;
@@ -97,7 +97,8 @@ public sealed class SkillRegistry : Service
             lifecycle.Cancel();
             throw new InvalidOperationException($"\"{RuntimeProvider}\" is reserved for runtime skill registrations");
         }
-        slot = new ProviderSlot(provider, _nextProviderOrder++);
+        slotRef.Value = new ProviderSlot(provider, _nextProviderOrder++);
+        var slot = slotRef.Value!;
         try
         {
             return _layers.Effect(Ctx, null,

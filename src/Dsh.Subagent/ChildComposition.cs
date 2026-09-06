@@ -84,11 +84,11 @@ public static class ChildCompositionSupport
             ValidateToolFilter(childCtx, filter);
             disposables.Add(new FuncDispose(childCtx.On(
                 ToolRuntime.PreExecuteEvent,
-                (thisArg, args) => DenyFilteredTool(child, filter, args))));
+                (_, args) => DenyFilteredTool(child, filter, args))));
         }
         disposables.Add(new FuncDispose(childCtx.On(
             SystemPrompt.AssembleEvent,
-            (thisArg, args) => TransformAssembly(child, composition, structured, args))));
+            (_, args) => TransformAssembly(child, composition, structured, args))));
         return new DisposeBundle(disposables);
     }
 

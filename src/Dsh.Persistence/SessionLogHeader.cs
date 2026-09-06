@@ -76,7 +76,7 @@ internal static class SessionLogHeader
         if (line["type"] is not JsonValue typeValue || !typeValue.TryGetValue<string>(out var type) || type != "session")
             return null;
         if (!TryReadNonNegativeInt64(line["version"], out var version)) return null;
-        if (line["id"] is not JsonValue idValue || !idValue.TryGetValue<string>(out var id) || id is null) return null;
+        if (line["id"] is not JsonValue idValue || !idValue.TryGetValue<string>(out var id)) return null;
         if (!TryReadNonNegativeInt64(line["createdAt"], out var createdAt)) return null;
         if (!TryReadNonNegativeInt64(line["delegationDepth"], out var delegationDepth)) return null;
         var seedLength = line["seedLength"];

@@ -1,5 +1,4 @@
 using Cordis;
-using Dsh.Llm;
 
 namespace Dsh.Web;
 
@@ -49,14 +48,14 @@ public sealed class WebRuntime : Service
 
     public async Task<WebSearchResult> Search(WebSearchRequest request, CancellationToken signal = default)
     {
-        var provider = ResolveProvider(_searchProviders, _searchProviderId, "search");
+        var provider = ResolveProvider(_searchProviders, _searchProviderId);
         var result = await provider.Search(request, signal).ConfigureAwait(false);
         return CapSources(result, request.MaxResults);
     }
 
     public Task<WebFetchResult> Fetch(WebFetchRequest request, CancellationToken signal = default)
     {
-        var provider = ResolveProvider(_fetchProviders, _fetchProviderId, "fetch");
+        var provider = ResolveProvider(_fetchProviders, _fetchProviderId);
         return provider.Fetch(request, signal);
     }
 
@@ -73,7 +72,7 @@ public sealed class WebRuntime : Service
         }, "web.registerProvider()"));
     }
 
-    private static T ResolveProvider<T>(Dictionary<string, T> providers, string? configuredId, string kind) where T : IWebProvider
+    private static T ResolveProvider<T>(Dictionary<string, T> providers, string? configuredId) where T : IWebProvider
     {
         if (configuredId is not null)
         {

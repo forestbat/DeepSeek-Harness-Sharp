@@ -23,15 +23,14 @@ public sealed class AgentLoop : Service, IAgentFactory
 {
     public const string ServiceName = "agentLoop";
 
-    private readonly AgentLoopConfig _config;
     private readonly Func<SessionId, ISessionPersistence>? _persistenceFor;
 
     public AgentLoop(Context ctx, AgentLoopConfig? config = null, Func<SessionId, ISessionPersistence>? persistenceFor = null)
         : base(ctx, ServiceName)
     {
-        _config = config ?? new AgentLoopConfig();
+        var resolvedConfig = config ?? new AgentLoopConfig();
         _persistenceFor = persistenceFor;
-        if (_config.MaxParallelToolCalls < 1)
+        if (resolvedConfig.MaxParallelToolCalls < 1)
             throw new ArgumentException("maxParallelToolCalls must be a positive integer");
         var agents = ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)
             ?? throw new InvalidOperationException("agent loop requires the agents service");

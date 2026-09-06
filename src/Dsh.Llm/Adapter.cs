@@ -19,7 +19,7 @@ public sealed record LlmCallConfig(
         if (Provider != other.Provider
             || Model != other.Model
             || ReasoningEffort != other.ReasoningEffort
-            || Temperature != other.Temperature
+            || !Temperature.Equals(other.Temperature)
             || MaxTokens != other.MaxTokens)
             return false;
         if (Stop is null || other.Stop is null)

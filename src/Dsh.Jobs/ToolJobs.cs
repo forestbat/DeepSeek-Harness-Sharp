@@ -219,16 +219,16 @@ public static class ToolJobs
                 """),
                 (_, value) =>
                 {
-                    var jobs = value.EnumerateArray().ToList();
+                    var rows = value.EnumerateArray().ToList();
                     return
                     [
-                        new TextBlock(jobs.Count == 0
+                        new TextBlock(rows.Count == 0
                             ? "(no background jobs)"
-                            : string.Join('\n', jobs.Select(job =>
+                            : string.Join('\n', rows.Select(job =>
                                 $"{job.GetProperty("id").GetString()} [{job.GetProperty("kind").GetString()}] {job.GetProperty("status").GetString()} — {job.GetProperty("label").GetString()}")))
                     ];
                 }),
-            Execute = (args, exec) =>
+            Execute = (_, exec) =>
             {
                 IReadOnlyList<PublicJobSnapshot> visible = jobs.List(exec.Agent).Select(PublicJob).ToList();
                 return Task.FromResult<object?>(visible);

@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
 using Jint;
-using Jint.Constraints;
 using Jint.Native;
 
 namespace Dsh.Workflow;
@@ -74,8 +73,8 @@ public sealed class WorkflowExecution
 
     public void Cancel(string reason)
     {
-        WorkflowError? error = null;
-        List<TaskCompletionSource> waiters = [];
+        WorkflowError? error;
+        List<TaskCompletionSource> waiters;
         lock (_sync)
         {
             if (_cancelReason is not null)
@@ -144,9 +143,9 @@ public sealed class WorkflowExecution
             options.TimeoutInterval(TimeSpan.FromMilliseconds(_limits.SyncTimeoutMs));
             options.CancellationToken(_cts.Token);
         });
-        engine.SetValue("__hostIsCancelled", new Func<bool>(() => IsCancelled));
-        engine.SetValue("__phase", new Action<string>(Phase));
-        engine.SetValue("__log", new Action<string>(Log));
+        engine.SetValue("__hostIsCancelled", () => IsCancelled);
+        engine.SetValue("__phase", Phase);
+        engine.SetValue("__log", Log);
         engine.SetValue("__agent", new Func<string, object?, Task<object?>>(AgentAsync));
         engine.SetValue("__args", _args ?? JsValue.Undefined);
         return engine;

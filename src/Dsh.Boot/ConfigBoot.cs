@@ -2,6 +2,7 @@ using Cordis;
 using Cordis.Loader;
 using Cordis.Node;
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Persistence;
 using Dsh.Tools;
 
@@ -31,9 +32,9 @@ public static class ConfigBoot
         _ = new AgentLoop(ctx, new AgentLoopConfig(), _ => persistence);
         _ = new SubprocessService(ctx);
         _ = new LocalFsService(ctx, new LocalFsConfig { Cwd = options.Cwd });
-        _ = Dsh.Interaction.ApprovalService.Register(ctx);
-        _ = Dsh.Interaction.UserQuestionService.Register(ctx);
-        _ = Dsh.Interaction.CommandsService.Register(ctx);
+        _ = ApprovalService.Register(ctx);
+        _ = UserQuestionService.Register(ctx);
+        _ = CommandsService.Register(ctx);
         var registration = HarnessComposer.RegisterDeepSeekAdapter(ctx, options, credentials, llm);
 
         var host = NodeHost.Start(nodeExecutable);
@@ -72,7 +73,7 @@ public static class ConfigBoot
             };
             if (patches is { Count: > 0 })
                 includeConfig["patches"] = patches.ToList();
-            var fiber = ctx.Plugin(loader.Builtins["include"], includeConfig);
+            var fiber = ctx.Plugin(loader.Builtins["include"]!, includeConfig);
             await fiber.Await();
             await loader.Await();
             await ThrowOnActivationFailures(ctx);

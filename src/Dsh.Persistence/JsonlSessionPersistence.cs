@@ -345,7 +345,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         catch
         {
-            try { File.Delete(temp); } catch { }
+            try { File.Delete(temp); } catch (Exception cleanupError) when (cleanupError is IOException or UnauthorizedAccessException) { }
             if (File.Exists(finalPath)) throw new SessionAlreadyExistsException(meta.Id);
             throw;
         }

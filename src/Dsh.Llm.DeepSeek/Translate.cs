@@ -25,16 +25,17 @@ public static class WireTranslate
     public static TokenUsage MapUsage(WireUsage usage)
     {
         const double maxSafeInteger = 9007199254740991d;
-        static bool IsSafeInteger(double value) => double.IsFinite(value) && Math.Floor(value) == value && Math.Abs(value) <= maxSafeInteger;
+        static bool IsSafeInteger(double value) => double.IsFinite(value) && double.IsInteger(value) && Math.Abs(value) <= maxSafeInteger;
         var cacheRead = usage.PromptTokensDetails?.CachedTokens ?? usage.PromptCacheHitTokens;
         var reasoning = usage.CompletionTokensDetails?.ReasoningTokens;
         var combined = usage.PromptTokens + usage.CompletionTokens;
+        var combinedValue = (long)combined;
         var hasExactTotal = IsSafeInteger(usage.PromptTokens)
             && usage.PromptTokens >= 0
             && IsSafeInteger(usage.CompletionTokens)
             && usage.CompletionTokens >= 0
             && IsSafeInteger(combined)
-            && (usage.TotalTokens is null || usage.TotalTokens == combined);
+            && (usage.TotalTokens is null || (IsSafeInteger(usage.TotalTokens.Value) && (long)usage.TotalTokens.Value == combinedValue));
         return new TokenUsage(
             usage.PromptTokens - (cacheRead ?? 0),
             usage.CompletionTokens,

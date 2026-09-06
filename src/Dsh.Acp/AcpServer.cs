@@ -10,9 +10,9 @@ public sealed class AcpServer
 {
     private sealed record AcpSessionRecord(AgentHandle Handle, IAgent Agent);
 
-    private sealed record NewSessionParams(string Cwd, JsonElement[]? McpServers = null, JsonElement[]? AdditionalDirectories = null);
+    private sealed record NewSessionParams(string Cwd, JsonElement[]? AdditionalDirectories = null);
 
-    private sealed record ResumeSessionParams(string SessionId, string Cwd, JsonElement[]? McpServers = null, JsonElement[]? AdditionalDirectories = null);
+    private sealed record ResumeSessionParams(string SessionId, string Cwd, JsonElement[]? AdditionalDirectories = null);
 
     private sealed record CloseSessionParams(string SessionId);
 
@@ -318,7 +318,7 @@ public sealed class AcpServer
         });
     }
 
-    private static object? ParseToolArguments(string arguments)
+    private static object ParseToolArguments(string arguments)
     {
         try
         {

@@ -33,7 +33,7 @@ public sealed class DeepSeekAdapterOptions
     public required Func<DeepSeekConnectionOptions> Options { get; init; }
     public required Func<DeepSeekConnectionOptions, CancellationToken, Task<string>> ResolveApiKey { get; init; }
     public required Func<string> ResolveUserId { get; init; }
-    public Func<IReadOnlyDictionary<string, JsonElement>, CancellationToken, Task>? PrepareExtensions { get; init; }
+    public Func<IDictionary<string, JsonElement>, CancellationToken, Task>? PrepareExtensions { get; init; }
     public HttpClient? HttpClient { get; init; }
 }
 
@@ -83,7 +83,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
                 model.InputModalities ?? ["text"]))
             .ToList();
 
-    public override LlmResolvedModelInfo? ResolveModel(string model)
+    public override LlmResolvedModelInfo ResolveModel(string model)
     {
         var connection = _config.Options();
         var configured = connection.Models.FirstOrDefault(entry => entry.Id == model);
@@ -339,14 +339,14 @@ public sealed class DeepSeekAdapter : LlmAdapter
             {
                 TimedOut = true;
                 _source.Cancel();
-            }, null, timeoutMs, System.Threading.Timeout.Infinite);
+            }, null, timeoutMs, Timeout.Infinite);
         }
 
         public CancellationToken Token => _source.Token;
 
         public bool TimedOut { get; private set; }
 
-        public void Pulse() => _timer.Change(_timeoutMs, System.Threading.Timeout.Infinite);
+        public void Pulse() => _timer.Change(_timeoutMs, Timeout.Infinite);
 
         public void Dispose()
         {

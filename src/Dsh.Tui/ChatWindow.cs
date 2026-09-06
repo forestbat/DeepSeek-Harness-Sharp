@@ -11,7 +11,6 @@ namespace Dsh.Tui;
 
 public sealed class ChatWindow : Window
 {
-    private readonly Context _ctx;
     private readonly AgentLoopAgent _agent;
     private readonly TranscriptRenderer _renderer = new();
     private readonly TextView _transcript;
@@ -27,7 +26,6 @@ public sealed class ChatWindow : Window
 
     public ChatWindow(Context ctx, AgentLoopAgent agent, string model)
     {
-        _ctx = ctx;
         _agent = agent;
         Title = $"dsh — {model}";
 
@@ -149,7 +147,7 @@ public sealed class ChatWindow : Window
         if (_history.Count == 0)
             return;
         _historyIndex = _historyIndex < 0
-            ? (direction < 0 ? _history.Count - 1 : -1)
+            ? direction < 0 ? _history.Count - 1 : -1
             : Math.Clamp(_historyIndex + direction, -1, _history.Count - 1);
         _input.Value = _historyIndex < 0 ? "" : _history[_historyIndex];
         _input.MoveEnd();

@@ -12,7 +12,6 @@ public sealed class WorkflowRunHost : IWorkflowRun
     private readonly WorkflowExecution _execution;
     private readonly CancellationTokenSource _controller = new();
     private readonly int _disposeGraceMs;
-    private readonly Task _driveTask;
     private Task _disposeTask = Task.CompletedTask;
     private string? _cancelReason;
     private bool _settled;
@@ -30,7 +29,7 @@ public sealed class WorkflowRunHost : IWorkflowRun
         _execution = execution;
         _disposeGraceMs = disposeGraceMs;
         _controller = controller ?? new CancellationTokenSource();
-        _driveTask = Task.Run(() => execution.DriveAsync())
+        Task.Run(() => execution.DriveAsync())
             .ContinueWith(task =>
             {
                 var outcome = task.IsCanceled

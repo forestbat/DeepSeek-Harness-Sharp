@@ -207,7 +207,7 @@ public sealed class TerminalSessionService : Service
         lock (_gate)
             return _sessions.Values
                 .Where(record => ReferenceEquals(record.Owner, owner))
-                .Select(record => (TerminalSessionSnapshot)Snapshot(record))
+                .Select(record => Snapshot(record))
                 .ToList();
     }
 
@@ -364,7 +364,7 @@ public sealed class TerminalSessionService : Service
         lock (_gate)
         {
             pending = owner is null
-                ? _pendingSpawns.Values.SelectMany(owned => owned).ToList()
+                ? _pendingSpawns.Values.SelectMany(spawns => spawns).ToList()
                 : _pendingSpawns.TryGetValue(owner, out var owned) ? [..owned] : [];
         }
         foreach (var spawn in pending)
@@ -414,8 +414,9 @@ public sealed class TerminalSessionService : Service
         {
             await operation.Done;
         }
-        catch
+        catch (Exception error)
         {
+            _ = error;
         }
         finally
         {

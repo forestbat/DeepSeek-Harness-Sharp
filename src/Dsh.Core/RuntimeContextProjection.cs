@@ -26,7 +26,7 @@ public sealed class RuntimeContextProjection
                 break;
             }
         }
-        ctx.On("session/event", (thisArg, args) =>
+        ctx.On("session/event", (_, args) =>
         {
             if (!ReferenceEquals(args[0], session))
                 return new ValueTask<object?>();

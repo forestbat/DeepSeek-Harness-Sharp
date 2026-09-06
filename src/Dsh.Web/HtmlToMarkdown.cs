@@ -48,7 +48,7 @@ internal static class HtmlToMarkdown
     public static string Convert(string html)
     {
         var root = Parse(html);
-        return RenderChildren(root, block: true).Trim();
+        return RenderChildren(root).Trim();
     }
 
     private static Element Parse(string html)
@@ -223,7 +223,7 @@ internal static class HtmlToMarkdown
             parent.Children.Add(new TextNode(text));
     }
 
-    private static string RenderChildren(Element parent, bool block)
+    private static string RenderChildren(Element parent)
     {
         var blocks = new List<string>();
         var inline = new StringBuilder();
@@ -273,7 +273,7 @@ internal static class HtmlToMarkdown
             "table" => RenderTable(element),
             "hr" => "---",
             "li" => RenderListItem(element),
-            _ => RenderChildren(element, block: true).Trim(),
+            _ => RenderChildren(element).Trim(),
         };
     }
 
@@ -326,12 +326,12 @@ internal static class HtmlToMarkdown
     private static string RenderListItem(Element element)
     {
         var inline = RenderInlineChildren(element);
-        return inline.Length > 0 ? inline : RenderChildren(element, block: true).Trim();
+        return inline.Length > 0 ? inline : RenderChildren(element).Trim();
     }
 
     private static string RenderBlockquote(Element element)
     {
-        var inner = RenderChildren(element, block: true).Trim();
+        var inner = RenderChildren(element).Trim();
         return inner.Length == 0
             ? ""
             : string.Join("\n", inner.Split('\n').Select(line => $"> {line}"));

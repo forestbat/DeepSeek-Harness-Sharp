@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Dynamic;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -73,9 +72,9 @@ public static class WorkflowRealm
                 return number;
             }
             case JsonElement element:
-                return JsonElementToObject(element, path, seen);
+                return JsonElementToObject(element, path);
             case JsonNode node:
-                return JsonNodeToObject(node, path, seen);
+                return JsonNodeToObject(node, path);
             case IDictionary<string, object?> dictionary:
                 return MaterializeObject(dictionary, path, seen);
             case IEnumerable enumerable when value is not string:
@@ -85,7 +84,7 @@ public static class WorkflowRealm
         }
     }
 
-    private static object? JsonElementToObject(JsonElement element, string path, HashSet<object> seen)
+    private static object? JsonElementToObject(JsonElement element, string path)
     {
         switch (element.ValueKind)
         {
@@ -105,14 +104,14 @@ public static class WorkflowRealm
             {
                 var list = new List<object?>();
                 foreach (var item in element.EnumerateArray())
-                    list.Add(JsonElementToObject(item, $"{path}[{list.Count}]", seen));
+                    list.Add(JsonElementToObject(item, $"{path}[{list.Count}]"));
                 return list;
             }
             case JsonValueKind.Object:
             {
                 var dict = new Dictionary<string, object?>();
                 foreach (var property in element.EnumerateObject())
-                    dict[property.Name] = JsonElementToObject(property.Value, PropertyPath(path, property.Name), seen);
+                    dict[property.Name] = JsonElementToObject(property.Value, PropertyPath(path, property.Name));
                 return dict;
             }
             default:
@@ -120,13 +119,13 @@ public static class WorkflowRealm
         }
     }
 
-    private static object? JsonNodeToObject(JsonNode? node, string path, HashSet<object> seen)
-        => node is null ? null : JsonElementToObject(JsonNodeToElement(node), path, seen);
+    private static object? JsonNodeToObject(JsonNode? node, string path)
+        => node is null ? null : JsonElementToObject(JsonNodeToElement(node), path);
 
     private static JsonElement JsonNodeToElement(JsonNode node)
         => JsonDocument.Parse(node.ToJsonString()).RootElement;
 
-    private static object? MaterializeObject(IDictionary<string, object?> value, string path, HashSet<object> seen)
+    private static object MaterializeObject(IDictionary<string, object?> value, string path, HashSet<object> seen)
     {
         if (seen.Add(value))
         {
@@ -146,7 +145,7 @@ public static class WorkflowRealm
         throw new MaterializeError(path, "circular references are not JSON data");
     }
 
-    private static object? MaterializeArray(IEnumerable value, string path, HashSet<object> seen)
+    private static object MaterializeArray(IEnumerable value, string path, HashSet<object> seen)
     {
         var list = new List<object?>();
         foreach (var item in value)

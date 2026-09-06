@@ -103,7 +103,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         }
         catch (OperationCanceledException)
         {
-            throw SearchAborted(signal);
+            throw SearchAborted();
         }
         catch (Exception error)
         {
@@ -130,10 +130,11 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
                 }
                 catch (OperationCanceledException)
                 {
-                    throw SearchAborted(signal);
+                    throw SearchAborted();
                 }
-                catch
+                catch (Exception error)
                 {
+                    _ = error;
                 }
                 throw SearchEndpointError(endpoint, message);
             }
@@ -147,7 +148,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
             }
             catch (OperationCanceledException)
             {
-                throw SearchAborted(signal);
+                throw SearchAborted();
             }
             catch (WebError error)
             {
@@ -266,7 +267,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         }
         catch (OperationCanceledException)
         {
-            throw SearchAborted(signal);
+            throw SearchAborted();
         }
         catch (Exception error)
         {
@@ -285,9 +286,9 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
     private static async Task<T> Abortable<T>(Task<T> operation, CancellationToken signal)
     {
         if (signal.IsCancellationRequested)
-            throw SearchAborted(signal);
+            throw SearchAborted();
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = signal.Register(() => tcs.TrySetException(SearchAborted(signal)));
+        using var registration = signal.Register(() => tcs.TrySetException(SearchAborted()));
         try
         {
             var result = await operation.ConfigureAwait(false);
@@ -300,13 +301,13 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         return await tcs.Task.ConfigureAwait(false);
     }
 
-    private static WebError SearchAborted(CancellationToken signal)
+    private static WebError SearchAborted()
         => new("DeepSeek search aborted", WebErrorCodes.Aborted);
 
     private static void ThrowIfAborted(CancellationToken signal)
     {
         if (signal.IsCancellationRequested)
-            throw SearchAborted(signal);
+            throw SearchAborted();
     }
 
     private static WebError SearchEndpointError(string endpoint, string message, Exception? cause = null)

@@ -148,14 +148,14 @@ public static class WebSearchTool
         {
             if (source.ValueKind != JsonValueKind.Object || !source.TryGetProperty("url", out var url) || url.ValueKind != JsonValueKind.String)
                 return null;
-            string? optionalString(string name) => source.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+            string? OptionalString(string name) => source.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
             if (source.TryGetProperty("title", out var titleElement) && titleElement.ValueKind != JsonValueKind.String)
                 return null;
             if (source.TryGetProperty("snippet", out var snippetElement) && snippetElement.ValueKind != JsonValueKind.String)
                 return null;
             if (source.TryGetProperty("publishedAt", out var publishedAtElement) && publishedAtElement.ValueKind != JsonValueKind.String)
                 return null;
-            parsedSources.Add(new WebSearchSource(url.GetString() ?? "", optionalString("title"), optionalString("snippet"), optionalString("publishedAt")));
+            parsedSources.Add(new WebSearchSource(url.GetString() ?? "", OptionalString("title"), OptionalString("snippet"), OptionalString("publishedAt")));
         }
         if (!element.TryGetProperty("truncated", out var truncated) || truncated.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
             return null;
@@ -226,18 +226,20 @@ public static class WebSearchTool
         }
 
         using var batchSource = CancellationTokenSource.CreateLinkedTokenSource(signal);
+        var token = batchSource.Token;
+        Action cancel = batchSource.Cancel;
         var results = new WebSearchResult?[queries.Count];
         Exception? firstFailure = null;
         var tasks = queries.Select((query, index) => Task.Run(async () =>
         {
             try
             {
-                results[index] = await web.Search(new WebSearchRequest(query, maxResults), batchSource.Token).ConfigureAwait(false);
+                results[index] = await web.Search(new WebSearchRequest(query, maxResults), token).ConfigureAwait(false);
             }
             catch (Exception error)
             {
                 firstFailure ??= error;
-                batchSource.Cancel();
+                cancel();
                 throw;
             }
         })).ToArray();
@@ -252,7 +254,6 @@ public static class WebSearchTool
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var sources = new List<WebSearchSource>();
         var sourceRanks = results.Count == 0 ? 0 : results.Max(result => result.Sources.Count);
-        var droppedSource = false;
         for (var rank = 0; rank < sourceRanks; rank++)
         {
             foreach (var result in results)
@@ -263,22 +264,20 @@ public static class WebSearchTool
                 if (seen.Add(source.Url))
                 {
                     if (sources.Count == maxResults)
-                    {
-                        droppedSource = true;
-                        return new WebSearchResultValue(JoinedContent(), sources, droppedSource || results.Any(result => result.Truncated));
-                    }
+                        return new WebSearchResultValue(JoinedContent(), sources, true);
                     sources.Add(source);
                 }
             }
         }
-        return new WebSearchResultValue(JoinedContent(), sources, results.Any(result => result.Truncated));
+        return new WebSearchResultValue(JoinedContent(), sources, results.Any(item => item.Truncated));
 
         string? JoinedContent()
         {
             var contents = results.Select((result, index) => (result, index))
                 .Where(pair => pair.result.Content is { Length: > 0 })
-                .Select(pair => $"### {queries[pair.index]}\n\n{pair.result.Content}");
-            return contents.Any() ? string.Join("\n\n", contents) : null;
+                .Select(pair => $"### {queries[pair.index]}\n\n{pair.result.Content}")
+                .ToList();
+            return contents.Count > 0 ? string.Join("\n\n", contents) : null;
         }
     }
 

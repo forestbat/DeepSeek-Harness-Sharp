@@ -82,7 +82,7 @@ public static class DshBuiltins
             (ctx, config) => BasicCompactionEngine.Register(ctx, BasicCompactionConfigFrom(config))),
         [CommandCompact] = Define(CommandCompact,
             [CommandsService.ServiceName, CompactionEngine.ServiceName],
-            (ctx, _) => Compaction.CompactCommand.Register(ctx)),
+            (ctx, _) => CompactCommand.Register(ctx)),
         [JobsLocal] = Define(JobsLocal, [],
             (ctx, config) =>
             {
@@ -159,18 +159,18 @@ public static class DshBuiltins
                 _ = new PlanModeController(ctx, PlanModeConfigFrom(config));
                 return new DisposableBundle();
             }),
-        [Web] = Define(Web, [], (ctx, config) => Dsh.Web.WebRuntime.Apply(ctx, config)),
+        [Web] = Define(Web, [], (ctx, config) => WebRuntime.Apply(ctx, config)),
         [WebFetchHttp] = Define(WebFetchHttp, [WebRuntime.ServiceName], (ctx, config) => Dsh.Web.WebFetchHttp.Apply(ctx, config)),
         [WebSearchDeepseek] = Define(WebSearchDeepseek, [WebRuntime.ServiceName], (ctx, config) => Dsh.Web.WebSearchDeepseek.Apply(ctx, config)),
         [ToolWeb] = Define(ToolWeb, [ToolRuntime.ServiceName, SystemPrompt.ServiceName, WebRuntime.ServiceName], (ctx, config) => Dsh.Web.ToolWeb.Apply(ctx, config)),
         [WorkflowWorkerThread] = Define(WorkflowWorkerThread, [SubagentRuntime.ServiceName],
-            (ctx, config) => Dsh.Workflow.WorkerThreadWorkflowEngine.Register(ctx, config)),
+            (ctx, config) => WorkerThreadWorkflowEngine.Register(ctx, config)),
         [ToolWorkflow] = Define(ToolWorkflow, [ToolRuntime.ServiceName, WorkflowEngine.ServiceName, SystemPrompt.ServiceName],
             (ctx, config) => Dsh.Workflow.ToolWorkflow.Apply(ctx, config)),
         [ToolRalph] = Define(ToolRalph, [ToolRuntime.ServiceName, WorkflowEngine.ServiceName, SubagentRuntime.ServiceName, SystemPrompt.ServiceName],
             (ctx, config) => Dsh.Workflow.ToolRalph.Apply(ctx, config)),
         [Terminal] = Define(Terminal, [TerminalSessionService.ServiceName],
-            (ctx, _) =>
+            (ctx, config) =>
             {
                 _ = new TerminalSessionService(ctx);
                 return new DisposableBundle();
@@ -180,7 +180,7 @@ public static class DshBuiltins
             (ctx, config) => Dsh.Terminal.TerminalBash.Register(ctx, TerminalBashConfigFrom(config))),
         [ToolTerminal] = Define(ToolTerminal,
             [TerminalSessionService.ServiceName, ToolRuntime.ServiceName, SystemPrompt.ServiceName],
-            (ctx, config) => Dsh.Terminal.TerminalTools.Register(ctx, TerminalToolsConfigFrom(config))),
+            (ctx, config) => TerminalTools.Register(ctx, TerminalToolsConfigFrom(config))),
     };
 
     private static PluginDefinition Define(string name, string[] inject, Func<Context, object?, IDisposable> apply)

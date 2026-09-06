@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -72,7 +71,7 @@ public sealed class BashResolver(SubprocessService subprocess, string? explicitB
                 _inferred = subprocess.ResolveExecutable(candidate, null, signal).GetAwaiter().GetResult();
                 return _inferred;
             }
-            catch (Exception)
+            catch (FileNotFoundException)
             {
             }
         }
@@ -123,7 +122,7 @@ public static class PersistentBashTool
         public PersistentShell? Get(IAgent owner)
         {
             lock (_gate)
-                return _live.TryGetValue(owner, out var shell) ? shell : null;
+                return _live.GetValueOrDefault(owner);
         }
 
         public void Set(IAgent owner, PersistentShell shell)
@@ -132,7 +131,7 @@ public static class PersistentBashTool
                 _live[owner] = shell;
         }
 
-        public void Reset(IAgent owner, string reason)
+        public void Reset(IAgent owner, string _)
         {
             PersistentShell? shell;
             lock (_gate)
@@ -296,7 +295,7 @@ public static class PersistentBashTool
         }
     }
 
-    private static async Task<string> RespondToSessionExit(
+    private static Task<string> RespondToSessionExit(
         ShellRegistry shells,
         IAgent owner,
         PersistentShell shell,
@@ -308,7 +307,7 @@ public static class PersistentBashTool
         var partial = PartialOutput(read.Text, marker, read.Lossy);
         var content = RenderShellExitStatus(RenderCaptured(partial, config.MaxOutputChars), outcome.ExitCode, outcome.Signal);
         shells.Reset(owner, "persistent bash shell exited");
-        return string.Join('\n', new[] { content, ShellResetMessage }.Where(part => part.Length > 0));
+        return Task.FromResult(string.Join('\n', new[] { content, ShellResetMessage }.Where(part => part.Length > 0)));
     }
 
     private static CommandMarkers MakeMarkers()
@@ -320,7 +319,7 @@ public static class PersistentBashTool
     private static string QuoteForBash(string value)
     {
         var escaped = value
-            .Replace("\\", "\\\\")
+            .Replace(@"\", @"\\")
             .Replace("'", "\\'")
             .Replace("\r", "\\r")
             .Replace("\n", "\\n");

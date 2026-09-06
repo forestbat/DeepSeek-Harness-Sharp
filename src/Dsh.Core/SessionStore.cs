@@ -14,7 +14,6 @@ public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
     private sealed class Entry
     {
         public required Session Session { get; init; }
-        public required Context Owner { get; init; }
         public bool Announced;
     }
 
@@ -35,7 +34,7 @@ public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
     {
         if (_sessions.ContainsKey(session.Id))
             throw new InvalidOperationException($"session \"{session.Id}\" is already live in the store");
-        var entry = new Entry { Session = session, Owner = owner };
+        var entry = new Entry { Session = session };
         _sessions[session.Id] = entry;
         Action<Session, SessionEvent> forward = (source, sessionEvent) => PublishEvent(source, sessionEvent);
         session.Appended += forward;

@@ -159,7 +159,7 @@ public static class GoalTools
                 """),
             Output = GoalOutput with
             {
-                PresentationMeta = (args, _) => StringArg(args, "objective") is { } objective
+                PresentationMeta = (args, _) => StringArg(args, "objective") is not null
                     ? Present("Create goal", "other", CloneArg(args, "objective"))
                     : null,
             },

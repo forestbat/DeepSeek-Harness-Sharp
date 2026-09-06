@@ -10,8 +10,6 @@ public sealed class HarnessSdkServer
     private sealed record SessionRecord(AgentHandle Handle, IAgent Agent);
 
     private readonly Context _ctx;
-    private readonly IJsonRpcPeer _transport;
-    private readonly bool _maxTokensAsSuccess;
     private readonly List<Func<bool>> _disposers = [];
     private readonly Dictionary<string, SessionRecord> _sessions = [];
     private readonly Dictionary<string, Task<SessionRecord>> _sessionCreations = [];
@@ -23,11 +21,9 @@ public sealed class HarnessSdkServer
     private string? _reasoningEffort;
     private int? _maxTokens;
 
-    public HarnessSdkServer(Context ctx, IJsonRpcPeer transport, bool maxTokensAsSuccess = false)
+    public HarnessSdkServer(Context ctx, IJsonRpcPeer transport)
     {
         _ctx = ctx;
-        _transport = transport;
-        _maxTokensAsSuccess = maxTokensAsSuccess;
         _disposers.Add(ctx.On(SessionStore.EventEvent, (_, args) =>
         {
             var session = (Session)args[0]!;
@@ -66,7 +62,7 @@ public sealed class HarnessSdkServer
 
         var llm = _ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)
             ?? throw new InvalidOperationException("SDK server requires the llm service");
-        if (!llm.ListProviders().Any(provider => provider.Id == parameters.Provider))
+        if (llm.ListProviders().All(provider => provider.Id != parameters.Provider))
             throw new InvalidOperationException($"no adapter registered for provider \"{parameters.Provider}\"");
         llm.ResolveModelInfo(parameters.Provider, parameters.Model);
 
@@ -101,8 +97,9 @@ public sealed class HarnessSdkServer
             {
                 await pending;
             }
-            catch
+            catch (Exception error)
             {
+                _ctx.Logger.Warn($"SDK shutdown ignored pending session creation failure: {error.Message}");
             }
         }
         _sessionCreations.Clear();

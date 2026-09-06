@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Cordis;
 using Dsh.Llm;
 
@@ -93,14 +92,14 @@ public sealed class LlmRuntime : Service
             registration.RetryPolicy,
             adapterDefaults,
             modelInfo.ContextWindow,
-            (options, ct) =>
+            (options, _) =>
             {
                 if (dispatched)
                     throw new LlmException(new LlmFailure("a prepared LLM call can only be dispatched once", "INVALID_PREPARED_CALL"));
                 if (!options.ToCallConfig().Equals(resolved))
                     throw new LlmException(new LlmFailure("prepared LLM call config changed before adapter dispatch", "INVALID_PREPARED_CALL"));
                 dispatched = true;
-                return StreamViaWaterfall(options, registration, resolved, adapterCall);
+                return StreamViaWaterfall(options, registration, adapterCall);
             }));
     }
 
@@ -134,16 +133,15 @@ public sealed class LlmRuntime : Service
     }
 
     public IAsyncEnumerable<StreamChunk> Stream(GenerateOptions options)
-        => StreamViaWaterfall(options, null, null, null);
+        => StreamViaWaterfall(options, null, null);
 
     private async IAsyncEnumerable<StreamChunk> StreamViaWaterfall(
         GenerateOptions options,
         Registration? registration,
-        LlmCallConfig? resolvedConfig,
         PreparedAdapterCall? adapterCall)
     {
         var result = await Ctx.Events.Waterfall(Ctx, StreamEvent, [options],
-            () => new ValueTask<object?>(AdapterStream(options, registration, resolvedConfig, adapterCall)));
+            () => new ValueTask<object?>(AdapterStream(options, registration, adapterCall)));
         if (result is not IAsyncEnumerable<StreamChunk> stream)
             throw new LlmException(new LlmFailure("llm/stream waterfall returned no stream", "INVALID_STREAM"));
         await foreach (var chunk in stream)
@@ -153,9 +151,7 @@ public sealed class LlmRuntime : Service
     private async IAsyncEnumerable<StreamChunk> AdapterStream(
         GenerateOptions options,
         Registration? prepared,
-        LlmCallConfig? resolvedConfig,
-        PreparedAdapterCall? adapterCall,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        PreparedAdapterCall? adapterCall)
     {
         IAsyncEnumerator<StreamChunk>? iterator = null;
         StreamChunk? openFailure = null;

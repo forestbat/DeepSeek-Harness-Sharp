@@ -50,7 +50,7 @@ public static class DshScope
     {
         if (scope is null)
             return ctx;
-        return ctx.Extend((Cordis.Symbols.Filter, (Func<Context, bool>)(hookCtx => IsInScope(hookCtx, scope))));
+        return ctx.Extend((Symbols.Filter, (Func<Context, bool>)(hookCtx => IsInScope(hookCtx, scope))));
     }
 }
 

@@ -7,7 +7,6 @@ namespace Dsh.Persistence;
 public static class ZstdFrames
 {
     private const uint Magic = 0xFD2FB528;
-    private const int DefaultCompressionLevel = 3;
     private const int StreamBufferSize = 1 << 16;
 
     public readonly record struct FrameRange(int Start, int End);
@@ -65,7 +64,7 @@ public static class ZstdFrames
 
     public static byte[] CompressFrame(ReadOnlySpan<byte> input)
     {
-        using var compressor = new Compressor(DefaultCompressionLevel);
+        using var compressor = new Compressor();
         compressor.SetParameter(ZSTD_cParameter.ZSTD_c_checksumFlag, 1);
         return compressor.Wrap(input).ToArray();
     }

@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿#pragma warning disable CA2255
+using System.Runtime.CompilerServices;
 using Dsh.Core;
 
 namespace Dsh.Subagent;
@@ -31,9 +32,7 @@ public sealed record SubagentDescriptorPayload(int Version, string Mode, string 
 internal static class SubagentCodecRegistration
 {
     // 程序集加载即注册：子会话日志可能在 SubagentRuntime 构造之前被持久层读取/写入。
-#pragma warning disable CA2255
     [ModuleInitializer]
-#pragma warning restore CA2255
     internal static void Register()
         => SessionEventCodec.Register<SubagentDescriptorPayload>(SubagentDescriptorPayload.EventType);
 }

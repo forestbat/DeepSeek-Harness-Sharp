@@ -1,3 +1,4 @@
+#pragma warning disable CA2255
 using System.Runtime.CompilerServices;
 using Dsh.Core;
 
@@ -5,9 +6,8 @@ namespace Dsh.Workflow;
 
 internal static class ToolWorkflowCodecRegistration
 {
-#pragma warning disable CA2255
+    // ReSharper disable once All
     [ModuleInitializer]
-#pragma warning restore CA2255
     internal static void Register()
     {
         SessionEventCodec.Register<ToolWorkflowRunStartPayload>(ToolWorkflowRunStartPayload.EventType);

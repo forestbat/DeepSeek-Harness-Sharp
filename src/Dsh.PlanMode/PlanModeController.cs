@@ -38,16 +38,6 @@ public sealed class PlanModeController : Service
         public bool Narrate { get; } = narrate;
     }
 
-    private sealed class RegistrationBundle(params IDisposable?[] disposables) : IDisposable
-    {
-        public void Dispose()
-        {
-            foreach (var disposable in disposables)
-                disposable?.Dispose();
-        }
-    }
-
-    private readonly string _section;
     private readonly ConditionalWeakTable<Session, PendingIntent> _pendingIntents = new();
     private volatile bool _disposed;
 
@@ -55,7 +45,7 @@ public sealed class PlanModeController : Service
 
     public PlanModeController(Context ctx, PlanModeConfig? config = null) : base(ctx, ServiceName)
     {
-        _section = ResolveConfig(config ?? new PlanModeConfig()).Section;
+        var section = ResolveConfig(config ?? new PlanModeConfig()).Section;
 
         ctx.On(AgentEventNames.PreStep, (_, args) => PreStep(args), new EventOptions { Global = true });
         ctx.Effect(() => (Action)(() => _disposed = true), $"{PluginName}: close service lifetime");
@@ -68,7 +58,7 @@ public sealed class PlanModeController : Service
                 return "";
             var session = context.Agent.Session;
             var pending = _pendingIntents.TryGetValue(session, out var intent) ? intent.Active : LoggedActive(session);
-            return pending ? _section : "";
+            return pending ? section : "";
         }));
 
         var projections = ctx.Get<SessionProjectionRegistry>(SessionProjectionRegistry.ServiceName)
@@ -76,14 +66,13 @@ public sealed class PlanModeController : Service
         projections.Register(PlanProjectionDefinition.Instance);
 
         var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false);
-        if (commands is not null)
-            commands.Register(new CommandDefinition
-            {
-                Name = "plan",
-                Description = "Enter or leave plan mode",
-                Input = new CommandInputDescriptor("[off|message]", Images: true),
-                Handler = invocation => Task.FromResult(HandleCommand(invocation)),
-            });
+        commands?.Register(new CommandDefinition
+        {
+            Name = "plan",
+            Description = "Enter or leave plan mode",
+            Input = new CommandInputDescriptor("[off|message]", Images: true),
+            Handler = invocation => Task.FromResult(HandleCommand(invocation)),
+        });
 
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("plan-mode requires the tools service");

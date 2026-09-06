@@ -33,12 +33,11 @@ public sealed partial class SubagentRuntime : Service
 
     public IDisposable RegisterProvider(ISubagentProvider provider)
     {
-        if (_providers.ContainsKey(provider.Name))
+        if (!_providers.TryAdd(provider.Name, provider))
         {
             throw new SubagentException(
                 $"subagent provider \"{provider.Name}\" is already registered", SubagentErrorCodes.DuplicateProvider);
         }
-        _providers[provider.Name] = provider;
         _providerNames.Add(provider.Name);
         Ctx.Emit(ProviderAddedEvent, provider);
         return new DisposeAction(() =>
@@ -98,12 +97,12 @@ public sealed partial class SubagentRuntime : Service
 
     private static void AssertObjectSchema(System.Text.Json.Nodes.JsonObject schema)
     {
-        Dsh.Core.JsonSchemaValidator.AssertSupported(schema);
+        JsonSchemaValidator.AssertSupported(schema);
         if (schema["type"] is not System.Text.Json.Nodes.JsonValue type
             || !type.TryGetValue<string>(out var typeText)
             || typeText != "object")
         {
-            throw new Dsh.Llm.HarnessException(
+            throw new HarnessException(
                 "schema.type must be \"object\" (structured output is object-rooted)", "INVALID_JSON_SCHEMA");
         }
     }
@@ -132,7 +131,7 @@ public sealed partial class SubagentRuntime : Service
         }
     }
 
-    private void EmitEnd(ScopeKey parentScope, SubagentRunInfo info, SubagentStopReason stopReason, IReadOnlyList<Dsh.Llm.ContentBlock>? output)
+    private void EmitEnd(ScopeKey parentScope, SubagentRunInfo info, SubagentStopReason stopReason, IReadOnlyList<ContentBlock>? output)
         => Ctx.Events.Emit(
             DshScope.ScopeTarget(Ctx, parentScope),
             EndEvent,

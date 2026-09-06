@@ -1,9 +1,7 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using Cordis;
-using Dsh.Llm;
 
 namespace Dsh.Web;
 
@@ -265,21 +263,14 @@ public sealed class HttpFetchProvider : IWebFetchProvider
                 {
                     throw new WebError($"invalid redirect Location \"{location}\"", WebErrorCodes.ProviderError, error);
                 }
-                try
+                var validated = WebFetchHttpPolicy.ValidateFetchUrl(target.ToString());
+                if (!WebFetchHttpPolicy.IsSameOrigin(validated, currentUrl))
                 {
-                    var validated = WebFetchHttpPolicy.ValidateFetchUrl(target.ToString());
-                    if (!WebFetchHttpPolicy.IsSameOrigin(validated, currentUrl))
-                    {
-                        throw new WebError(
-                            $"cross-origin redirect to {validated.GetLeftPart(UriPartial.Authority)} is not followed automatically; retry against that URL directly",
-                            WebErrorCodes.RedirectBlocked);
-                    }
-                    currentUrl = validated;
+                    throw new WebError(
+                        $"cross-origin redirect to {validated.GetLeftPart(UriPartial.Authority)} is not followed automatically; retry against that URL directly",
+                        WebErrorCodes.RedirectBlocked);
                 }
-                catch (WebError)
-                {
-                    throw;
-                }
+                currentUrl = validated;
                 redirectsFollowed += 1;
                 continue;
             }
@@ -371,15 +362,7 @@ public sealed class HttpFetchProvider : IWebFetchProvider
         if (kind is null)
             throw new WebError($"unsupported content type \"{contentType ?? "unknown"}\"", WebErrorCodes.UnsupportedContentType);
 
-        Encoding encoding;
-        try
-        {
-            encoding = WebFetchHttpPolicy.DecoderForCharset(WebFetchHttpPolicy.ParseCharset(contentType));
-        }
-        catch (WebError)
-        {
-            throw;
-        }
+        var encoding = WebFetchHttpPolicy.DecoderForCharset(WebFetchHttpPolicy.ParseCharset(contentType));
 
         var (bytes, truncatedByBytes) = await ReadCappedAsync(response, signal, callerSignal).ConfigureAwait(false);
         var decoded = encoding.GetString(bytes);
