@@ -10,6 +10,11 @@ public sealed class SessionQueryIndex : IDisposable
 {
     private readonly SqliteConnection _connection;
 
+    static SessionQueryIndex()
+    {
+        SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
+    }
+
     public SessionQueryIndex(string databasePath = ":memory:")
     {
         _connection = new SqliteConnection(databasePath == ":memory:" ? "Data Source=:memory:" : $"Data Source={databasePath}");

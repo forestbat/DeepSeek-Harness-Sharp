@@ -12,9 +12,11 @@
     apiKey: DEEPSEEK_API_KEY
     reasoningEffort: max
     ```
-3. 构建程序和运行TUI：
+3. 构建程序和运行：
     ```
-    dotnet build "DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.sln"
-    dotnet run --project "DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp" -- --profile tui
+    dotnet build
+    dotnet run --project "DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj" -- --profile tui
+    // 也可以使用无头模式测试
+    dotnet run --project "DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj" -- --profile headless 
     ```
 4. 现在可以发送测试信息。

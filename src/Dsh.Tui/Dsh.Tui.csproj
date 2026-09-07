@@ -8,7 +8,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Terminal.Gui" Version="2.5.0-develop.58" />
+    <PackageReference Include="Terminal.Gui" Version="2.6.0-develop.61" />
   </ItemGroup>
 
   <PropertyGroup>

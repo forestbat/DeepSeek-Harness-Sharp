@@ -5,6 +5,10 @@
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Persistence\Dsh.Persistence.csproj" />
     <ProjectReference Include="..\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
+    <ProjectReference Include="..\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
+    <ProjectReference Include="..\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj" />
+    <ProjectReference Include="..\Dsh.Memory\Dsh.Memory.csproj" />
+    <ProjectReference Include="..\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\Dsh.Tools\Dsh.Tools.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\Dsh.Compaction\Dsh.Compaction.csproj" />
@@ -21,6 +25,10 @@
 
   <ItemGroup>
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Profiles\Templates\*.yaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

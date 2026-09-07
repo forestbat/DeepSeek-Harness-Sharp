@@ -141,8 +141,8 @@ public static class WireTranslate
                         fragment);
                 }
 
-                if (choice.FinishReason is { } finishReason)
-                    pendingFinish = MapFinishReason(finishReason);
+                if (!string.IsNullOrEmpty(choice.FinishReason))
+                    pendingFinish = MapFinishReason(choice.FinishReason);
             }
 
             if (chunk.Usage is { } usage)

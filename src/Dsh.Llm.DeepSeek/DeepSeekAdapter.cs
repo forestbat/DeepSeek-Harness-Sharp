@@ -59,6 +59,8 @@ public sealed class DeepSeekAdapter : LlmAdapter
         new(OffEffort, "Off", "Use for simple tasks that do not need reasoning."),
     ];
 
+    private static readonly ReasoningEffortTable ReasoningTable = ReasoningEffortTable.Load();
+
     private readonly DeepSeekAdapterOptions _config;
     private readonly HttpClient _http;
 
@@ -88,6 +90,16 @@ public sealed class DeepSeekAdapter : LlmAdapter
         var connection = _config.Options();
         var configured = connection.Models.FirstOrDefault(entry => entry.Id == model);
         var contextWindow = configured?.ContextWindow ?? connection.DefaultContextWindow;
+        var reasoning = ReasoningTable.Resolve(ProviderInfo.Id, model);
+        reasoning ??= connection.Defaults.Thinking == "disabled"
+            ? new LlmModelReasoningInfo(OffOnlyReasoningEfforts, OffEffort)
+            : new LlmModelReasoningInfo(ReasoningEfforts, connection.Defaults.ReasoningEffort switch
+            {
+                "off" => OffEffort,
+                "low" => LowEffort,
+                "max" => MaxEffort,
+                _ => HighEffort,
+            });
         return new LlmResolvedModelInfo(
             ProviderInfo.Id,
             model,
@@ -96,15 +108,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
             configured?.InputModalities ?? ["text"],
             contextWindow,
             configured?.MaxTokens ?? connection.MaxTokens,
-            connection.Defaults.Thinking == "disabled"
-                ? new LlmModelReasoningInfo(OffOnlyReasoningEfforts, OffEffort)
-                : new LlmModelReasoningInfo(ReasoningEfforts, connection.Defaults.ReasoningEffort switch
-                {
-                    "off" => OffEffort,
-                    "low" => LowEffort,
-                    "max" => MaxEffort,
-                    _ => HighEffort,
-                }));
+            reasoning);
     }
 
     public override PreparedAdapterCall PrepareCall(string model, CancellationToken cancellationToken)

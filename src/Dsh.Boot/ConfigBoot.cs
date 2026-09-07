@@ -5,11 +5,54 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Persistence;
 using Dsh.Tools;
+using Dsh.Boot.Profiles;
 
 namespace Dsh.Boot;
 
 public static class ConfigBoot
 {
+    public static async Task<HarnessApp> ComposeProfile(
+        string profileName,
+        IReadOnlyList<Dictionary<string, object?>>? patches,
+        HarnessOptions options,
+        string? nodeExecutable = null)
+    {
+        var (configPath, combinedPatches) = PrepareProfile(options.Home, profileName, patches);
+        return await Compose(configPath, options, nodeExecutable, combinedPatches);
+    }
+
+    private static string ProfileConfigTemplate(string profileName)
+    {
+        var templateName = profileName is "sdk-minimal" or "sdk" ? "minimal" : "standard";
+        var path = Path.Combine(AppContext.BaseDirectory, "Profiles", "Templates", $"{templateName}.yaml");
+        return File.Exists(path) ? File.ReadAllText(path) : "[]\n";
+    }
+
+    public static (string ConfigPath, IReadOnlyList<Dictionary<string, object?>>? Patches) PrepareProfile(
+        HarnessHome home,
+        string profileName,
+        IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        ProfileStore.InitProfile(home, profileName);
+        var profileDir = ProfileStore.ResolveProfileDir(home, profileName);
+        var combined = new List<Dictionary<string, object?>>();
+        AddPatches(Path.Combine(profileDir, "cordis.patch.yml"));
+        AddPatches(Path.Combine(home.Root, "cordis.patch.yml"));
+        if (patches is { Count: > 0 })
+            combined.AddRange(patches);
+
+var configPath = Path.Combine(profileDir, "cordis.yml");
+        if (!File.Exists(configPath))
+            File.WriteAllText(configPath, ProfileConfigTemplate(profileName));
+        return (configPath, combined.Count == 0 ? null : combined);
+
+        void AddPatches(string path)
+        {
+            if (File.Exists(path))
+                combined.AddRange(LoadPatches(path));
+        }
+    }
+
     public static async Task<HarnessApp> Compose(string configPath, HarnessOptions options, string? nodeExecutable = null, IReadOnlyList<Dictionary<string, object?>>? patches = null)
     {
         var fullPath = Path.GetFullPath(configPath);
@@ -35,7 +78,31 @@ public static class ConfigBoot
         _ = ApprovalService.Register(ctx);
         _ = UserQuestionService.Register(ctx);
         _ = CommandsService.Register(ctx);
-        var registration = HarnessComposer.RegisterDeepSeekAdapter(ctx, options, credentials, llm);
+        var modelCommand = ModelCommand.Register(ctx, options.Home);
+        var reasoningCommand = ReasoningCommand.Register(ctx);
+        var providerCommand = ProviderCommand.Register(ctx, options.Home);
+        var goalCommand = GoalCommand.Register(ctx);
+        var skillCommand = SkillCommand.Register(ctx);
+        var memoryCommand = MemoryCommand.Register(ctx);
+        var pluginCommand = PluginCommand.Register(ctx);
+        var mcpCommand = McpCommand.Register(ctx, options.Home);
+        var settings = HarnessSettings.Load(options.Home);
+        var safetyGuard = SafetyCommandGuard.Register(ctx, settings.Safety);
+        var config = settings.ResolveConfig(options.SettingsConfig);
+        var provider = options.Provider ?? config?.Provider ?? HarnessComposer.DefaultProvider;
+        var model = options.Model ?? config?.Model ?? HarnessComposer.DefaultModel;
+        var reasoningEffort = options.ReasoningEffort ?? config?.ReasoningEffort;
+        var providerSettings = settings.ResolveProvider(provider);
+        var registration = HarnessComposer.RegisterProviderAdapter(
+            ctx,
+            provider,
+            providerSettings,
+            options.BaseUrl ?? providerSettings?.BaseUrl ?? HarnessComposer.DefaultBaseUrl,
+            options.ApiKeyEnv ?? providerSettings?.ApiKeyEnv ?? HarnessComposer.DefaultApiKeyEnv,
+            options.ApiKey ?? providerSettings?.ApiKey,
+            options,
+            credentials,
+            llm);
 
         var host = NodeHost.Start(nodeExecutable);
         var loader = new Loader(ctx);
@@ -58,11 +125,20 @@ public static class ConfigBoot
             Home = options.Home,
             Credentials = credentials,
             Persistence = persistence,
-            Provider = options.Provider ?? HarnessComposer.DefaultProvider,
-            Model = options.Model ?? HarnessComposer.DefaultModel,
-            ReasoningEffort = options.ReasoningEffort,
+            Provider = provider,
+            Model = model,
+            ReasoningEffort = reasoningEffort,
         };
         app.Track(registration);
+        app.Track(modelCommand);
+        app.Track(reasoningCommand);
+        app.Track(providerCommand);
+        app.Track(goalCommand);
+        app.Track(skillCommand);
+        app.Track(memoryCommand);
+        app.Track(pluginCommand);
+        app.Track(mcpCommand);
+        app.Track(safetyGuard);
         app.Track(host);
         HarnessComposer.WirePersistence(ctx, persistence);
 

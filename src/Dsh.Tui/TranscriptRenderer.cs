@@ -10,15 +10,17 @@ public sealed class TranscriptRenderer
     public const int ToolResultPreviewChars = 300;
 
     private readonly StringBuilder _buffer = new();
+    private int _renderedLength;
     private bool _reasoningOpen;
     private bool _assistantOpen;
 
-    public string Text
+    public string TakeDelta()
     {
-        get
+        lock (_buffer)
         {
-            lock (_buffer)
-                return _buffer.ToString();
+            var delta = _buffer.ToString(_renderedLength, _buffer.Length - _renderedLength);
+            _renderedLength = _buffer.Length;
+            return delta;
         }
     }
 

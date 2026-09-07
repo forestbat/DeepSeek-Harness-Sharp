@@ -1,10 +1,9 @@
-﻿using Dsh.Boot;
+﻿using System.Diagnostics;
+using Dsh.Boot;
+using Dsh.Boot.Profiles;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Sdk;
-using Dsh.Acp;
-using Dsh.Web;
-using Dsh.Lsp;
 
 namespace DeepSeek_Harness_Sharp;
 
@@ -12,11 +11,17 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "plugin")
+            return await RunPlugin(HarnessHome.Resolve(FindHomeArg(args)), args[1..]);
+
         string? profile = null;
         string? patch = null;
         string? home = null;
         string? config = null;
+        string? settingsConfig = null;
         var dumpConfig = false;
+        var dumpDefaultConfig = false;
+        var useTmux = false;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
         {
@@ -34,8 +39,17 @@ public static class Program
                 case "--config" when index + 1 < args.Length:
                     config = args[++index];
                     break;
+                case "--settings-config" when index + 1 < args.Length:
+                    settingsConfig = args[++index];
+                    break;
                 case "--dump-config":
                     dumpConfig = true;
+                    break;
+                case "--dump-default-config":
+                    dumpDefaultConfig = true;
+                    break;
+                case "--tmux":
+                    useTmux = true;
                     break;
                 case "--help" or "-h":
                     PrintUsage();
@@ -51,7 +65,16 @@ public static class Program
                     break;
             }
         }
+        if (useTmux && Environment.GetEnvironmentVariable("TMUX") is null)
+            return StartInTmux(args);
+
         var harnessHome = HarnessHome.Resolve(home);
+        if (dumpDefaultConfig)
+        {
+            foreach (var name in ProfileTemplates.Names)
+                Console.WriteLine(name);
+            return 0;
+        }
         IReadOnlyList<Dictionary<string, object?>>? patches;
         try
         {
@@ -70,21 +93,32 @@ public static class Program
             return 0;
         }
 
+        string? bootConfig = config;
+        IReadOnlyList<Dictionary<string, object?>>? bootPatches = patches;
+        if (config is null && profile is not null)
+        {
+            (bootConfig, bootPatches) = ConfigBoot.PrepareProfile(harnessHome, profile, patches);
+        }
+
         switch (profile)
         {
             case null:
             case "web":
-                return await RunWeb(harnessHome, config, patches);
+                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("web", new ProfileSurfaceRunOptions(
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
             case "headless":
-                return await RunHeadless(harnessHome, string.Join(' ', positional), config, patches);
-            case "sdk":
-                return await RunSdk(harnessHome, config, patches);
+                return await RunHeadless(harnessHome, string.Join(' ', positional), bootConfig, bootPatches, settingsConfig);
+            case "sdk" or "sdk-minimal":
+                return await RunSdk(harnessHome, bootConfig, bootPatches, settingsConfig);
             case "acp":
-                return await RunAcp(harnessHome, config, patches);
+                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("acp", new ProfileSurfaceRunOptions(
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
             case "lsp":
-                return await RunLsp(harnessHome, config, patches);
+                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("lsp", new ProfileSurfaceRunOptions(
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
             case "tui":
-                return await Dsh.Tui.TuiRunner.Run(harnessHome, Directory.GetCurrentDirectory(), config, patches);
+                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("tui", new ProfileSurfaceRunOptions(
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
             default:
                 Console.Error.WriteLine($"dsh: unknown profile \"{profile}\"");
                 return 1;
@@ -97,10 +131,12 @@ public static class Program
             Usage: dsh [options] [task...]
 
             Options:
-              --profile <name>   headless | tui | web | sdk | acp | lsp (default: web)
+              --profile <name>   headless | tui | web | sdk | acp | lsp | sdk-minimal (default: web)
               --config <path>    boot from a cordis.yml composition instead of the built-in defaults
               --home <path>      harness home (default: $DSH_HOME or ~/.dsh)
               --dump-config      print the composed configuration and exit
+              --dump-default-config
+                                 print the built-in profile template names and exit
               -h, --help         show this help
 
             Commands:
@@ -109,15 +145,15 @@ public static class Program
             """);
     }
 
-    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)    {
+    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches, string? settingsConfig)    {
         if (string.IsNullOrWhiteSpace(task))
         {
             Console.Error.WriteLine("error: a task is required, for example: dsh --profile headless \"run the tests\"");
             return 1;
         }
         using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig), patches: patches);
         using var autoApprove = Dsh.Interaction.ApprovalAnswerers.AutoApprove(app.Ctx);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(
@@ -143,48 +179,11 @@ public static class Program
         return reason is TurnEndReason.Completed ? 0 : 1;
     }
 
-    private static async Task<int> RunWeb(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
-    {
-        await using var server = new WebProfileServer();
-        Console.WriteLine($"dsh web: http://127.0.0.1:{server.Port}");
-        await Task.Delay(Timeout.Infinite);
-        return 0;
-    }
-
-    private static async Task<int> RunLsp(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
-    {
-        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
-        var server = new LspServer();
-        transport.RequestHandler = server.HandleRequestAsync;
-        transport.Start();
-        await transport.WhenClosedAsync();
-        return 0;
-    }
-
-    private static async Task<int> RunAcp(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
+    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches, string? settingsConfig)
     {
         using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
-        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
-        var server = new AcpServer(app.Ctx, transport, app.Provider, app.Model);
-        transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);
-        transport.NotificationHandler = (method, parameters) =>
-        {
-            if (method == AcpMethods.Cancel)
-                server.Cancel(parameters);
-        };
-        transport.Start();
-        await transport.WhenClosedAsync();
-        await server.CloseAllAsync();
-        return 0;
-    }
-
-    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
-    {
-        using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig), patches: patches);
         await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
         var server = new HarnessSdkServer(app.Ctx, transport);
         transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);
@@ -275,6 +274,65 @@ public static class Program
             return new ValueTask<object?>();
         });
         return new ReasoningSubscription(dispose, Close);
+    }
+
+    private static string? FindHomeArg(string[] args)
+    {
+        for (var index = 0; index < args.Length - 1; index++)
+        {
+            if (args[index] == "--home")
+                return args[index + 1];
+        }
+        return null;
+    }
+
+    private static async Task<int> RunPlugin(HarnessHome home, string[] args)
+    {
+        string? profile = null;
+        var pnpmArgs = new List<string>();
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (args[index] == "--profile" && index + 1 < args.Length)
+            {
+                profile = args[++index];
+            }
+            else
+            {
+                pnpmArgs.Add(args[index]);
+            }
+        }
+        profile ??= "tui";
+        if ((pnpmArgs.FirstOrDefault() is "add" or "remove")
+            && !pnpmArgs.Contains("-w")
+            && !pnpmArgs.Contains("--workspace-root"))
+        {
+            pnpmArgs.Insert(1, "-w");
+        }
+        ProfileStore.InitProfile(home, profile);
+        var workingDirectory = ProfileStore.ResolveProfileDir(home, profile);
+        var startInfo = new ProcessStartInfo("pnpm")
+        {
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+        };
+        foreach (var argument in pnpmArgs)
+            startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo);
+        if (process is null)
+            return 1;
+        await process.WaitForExitAsync();
+        return process.ExitCode;
+    }
+
+    private static int StartInTmux(string[] args)
+    {
+        var relaunchArgs = args.Where(argument => argument != "--tmux").ToArray();
+        var dotnet = Environment.ProcessPath ?? "dotnet";
+        var assembly = Environment.GetCommandLineArgs()[0];
+        var command = $"{dotnet} \"{assembly}\" {string.Join(' ', relaunchArgs)}";
+        Process.Start("tmux", ["new-session", "-d", "-s", "dsh", command]);
+        Process.Start("tmux", ["attach", "-t", "dsh"])?.WaitForExit();
+        return 0;
     }
 
     private sealed class ReasoningSubscription(Func<bool> dispose, Action close) : IDisposable

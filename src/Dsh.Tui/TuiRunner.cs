@@ -7,15 +7,9 @@ namespace Dsh.Tui;
 
 public static class TuiRunner
 {
-    public static async Task<int> Run(HarnessHome home, string cwd, string? config = null, IReadOnlyList<Dictionary<string, object?>>? patches = null)
+    public static async Task<int> Run(HarnessHome home, string cwd, string? config = null, IReadOnlyList<Dictionary<string, object?>>? patches = null, string? settingsConfig = null)
     {
-        var settings = HarnessSettings.Load(home);
-        var options = new HarnessOptions(home, cwd,
-            Provider: settings.Provider,
-            Model: settings.Model,
-            BaseUrl: settings.BaseUrl,
-            ApiKey: settings.ApiKey,
-            ReasoningEffort: settings.ReasoningEffort);
+        var options = new HarnessOptions(home, cwd, SettingsConfig: settingsConfig);
         using var app = config is null
             ? HarnessComposer.Compose(options)
             : await ConfigBoot.Compose(config, options, patches: patches);

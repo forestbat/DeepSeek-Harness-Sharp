@@ -11,13 +11,18 @@ namespace Dsh.Tui;
 
 public sealed class ChatWindow : Window
 {
-    private readonly AgentLoopAgent _agent;
-    private readonly TranscriptRenderer _renderer = new();
+    private readonly Context _ctx;
+    private AgentLoopAgent _agent;
+    private TranscriptRenderer _renderer = new();
+    private readonly IRenderOptimizer _renderOptimizer = RenderOptimizerFactory.Create();
+    private readonly object _eventGate = new();
+    private readonly Queue<SessionEvent> _pendingEvents = [];
+    private bool _eventScheduled;
     private readonly TextView _transcript;
     private readonly TextField _input;
     private readonly Label _status;
     private readonly List<string> _history = [];
-    private readonly Func<bool> _unsubscribe;
+    private Func<bool> _unsubscribe;
     private readonly Func<bool> _approvalSubscription;
     private TaskCompletionSource<ApprovalOutcome>? _pendingApproval;
     private int _historyIndex = -1;
@@ -26,6 +31,7 @@ public sealed class ChatWindow : Window
 
     public ChatWindow(Context ctx, AgentLoopAgent agent, string model)
     {
+        _ctx = ctx;
         _agent = agent;
         Title = $"dsh — {model}";
 
@@ -61,10 +67,10 @@ public sealed class ChatWindow : Window
 
         _unsubscribe = ctx.On(SessionStore.EventEvent, (_, args) =>
         {
-            if (!ReferenceEquals(args[0], agent.Session))
+            if (!ReferenceEquals(args[0], _agent.Session))
                 return new ValueTask<object?>();
             var sessionEvent = (SessionEvent)args[1]!;
-            Application.Invoke(() => OnSessionEvent(sessionEvent));
+            QueueSessionEvent(sessionEvent);
             return new ValueTask<object?>();
         });
 
@@ -75,6 +81,62 @@ public sealed class ChatWindow : Window
             Application.Invoke(() => ShowApprovalPrompt(request, answer));
             return new ValueTask<object?>(answer.Task);
         }, new EventOptions { Global = true });
+    }
+
+    private void QueueSessionEvent(SessionEvent sessionEvent)
+    {
+        lock (_eventGate)
+        {
+            _pendingEvents.Enqueue(sessionEvent);
+            if (_eventScheduled)
+                return;
+            _eventScheduled = true;
+            Application.Invoke(DrainPendingEvents);
+        }
+    }
+
+    private void DrainPendingEvents()
+    {
+        lock (_eventGate)
+        {
+            while (true)
+            {
+                while (_pendingEvents.Count > 0)
+                    ProcessSessionEvent(_pendingEvents.Dequeue());
+                AppendRendererDelta();
+                if (_pendingEvents.Count == 0)
+                    break;
+            }
+            _eventScheduled = false;
+        }
+    }
+
+    private void ClearPendingEvents()
+    {
+        lock (_eventGate)
+        {
+            _pendingEvents.Clear();
+            _eventScheduled = false;
+        }
+    }
+
+    private void SwitchAgent(AgentLoopAgent agent, string model)
+    {
+        _unsubscribe();
+        ClearPendingEvents();
+        _agent = agent;
+        Title = $"dsh — {model}";
+        _renderer = new TranscriptRenderer();
+        _transcript.Text = "";
+        _renderedSeq = 0;
+        _unsubscribe = _ctx.On(SessionStore.EventEvent, (_, args) =>
+        {
+            if (!ReferenceEquals(args[0], _agent.Session))
+                return new ValueTask<object?>();
+            var sessionEvent = (SessionEvent)args[1]!;
+            QueueSessionEvent(sessionEvent);
+            return new ValueTask<object?>();
+        });
     }
 
     private void ShowApprovalPrompt(ApprovalRequest request, TaskCompletionSource<ApprovalOutcome> answer)
@@ -163,7 +225,7 @@ public sealed class ChatWindow : Window
         _historyIndex = -1;
         var message = MessageFactory.CreateUserText(text);
         _renderer.AppendUserMessage(message);
-        RefreshTranscript();
+        AppendRendererDelta();
         if (text.StartsWith('/'))
         {
             RunSlashCommand(text);
@@ -173,20 +235,87 @@ public sealed class ChatWindow : Window
         _agent.Followup(message);
     }
 
-    private void RunSlashCommand(string text)
+    private async void RunSlashCommand(string text)
     {
         switch (text.Split(' ', 2)[0])
         {
             case "/quit" or "/exit":
                 Application.RequestStop(this);
                 break;
+            case "/new":
+                await NewSession(text);
+                break;
+            case "/resume":
+                await ResumeSession(text);
+                break;
             default:
-                AppendRaw($"  unknown command: {text} (available: /quit, /exit)\n");
+                var commands = _ctx.Get<CommandsService>(CommandsService.ServiceName);
+                if (commands is null)
+                {
+                    AppendRaw($"  unknown command: {text} (available: /quit, /exit)\n");
+                    break;
+                }
+                try
+                {
+                    var execution = await commands.Execute(_agent, text);
+                    if (execution is null)
+                        AppendRaw($"  unknown command: {text}\n");
+                    else if (execution.Result is CommandResult.Success { Text: { } successText } && successText.Length > 0)
+                        AppendRaw($"  {successText}\n");
+                    else if (execution.Result is CommandResult.Error error)
+                        AppendRaw($"  {error.Text}\n");
+                }
+                catch (Exception error)
+                {
+                    AppendRaw($"  command failed: {error.Message}\n");
+                }
                 break;
         }
     }
 
-    private void OnSessionEvent(SessionEvent sessionEvent)
+    private async Task NewSession(string text)
+    {
+        var cwd = text["/new".Length..].Trim();
+        if (cwd.Length == 0)
+            cwd = Environment.CurrentDirectory;
+        var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+        var handle = await agents.Create(new CreateAgentOptions(
+            SessionId.Create($"session-{Guid.NewGuid()}"),
+            cwd,
+            new AgentOptions(_agent.Options.Provider, _agent.Options.Model, _agent.Options.ReasoningEffort, _agent.Options.MaxTokens)));
+        var newAgent = (AgentLoopAgent)handle.Agent;
+        await newAgent.WhenIdle();
+        SwitchAgent(newAgent, $"{newAgent.Options.Provider}/{newAgent.Options.Model}");
+        AppendRaw($"  new session: {newAgent.Id}\n");
+    }
+
+    private async Task ResumeSession(string text)
+    {
+        var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+        var raw = text["/resume".Length..].Trim();
+        if (raw.Length == 0)
+        {
+            var sessions = agents.List();
+            if (sessions.Count == 0)
+            {
+                AppendRaw("  no live sessions\n");
+                return;
+            }
+            AppendRaw(string.Join('\n', sessions.Select(agent => $"  {agent.Id}: {agent.Options.Provider}/{agent.Options.Model}")) + "\n");
+            return;
+        }
+        var sessionId = SessionId.Create(raw);
+        if (agents.Get(sessionId) is not AgentLoopAgent target)
+        {
+            AppendRaw($"  session not loaded: {raw}\n");
+            return;
+        }
+        SwitchAgent(target, $"{target.Options.Provider}/{target.Options.Model}");
+        AppendRaw($"  resumed: {target.Id}\n");
+        await Task.CompletedTask;
+    }
+
+    private void ProcessSessionEvent(SessionEvent sessionEvent)
     {
         if (sessionEvent.Seq < _renderedSeq)
             return;
@@ -201,7 +330,6 @@ public sealed class ChatWindow : Window
                 break;
         }
         _renderer.AppendSessionEvent(sessionEvent);
-        RefreshTranscript();
     }
 
     private void SetBusy(bool busy)
@@ -214,13 +342,16 @@ public sealed class ChatWindow : Window
 
     private void AppendRaw(string text)
     {
-        _transcript.Text += text;
+        _renderOptimizer.Append(_transcript, text);
         ScrollToEnd();
     }
 
-    private void RefreshTranscript()
+    private void AppendRendererDelta()
     {
-        _transcript.Text = _renderer.Text;
+        var delta = _renderer.TakeDelta();
+        if (delta.Length == 0)
+            return;
+        _renderOptimizer.Append(_transcript, delta);
         ScrollToEnd();
     }
 

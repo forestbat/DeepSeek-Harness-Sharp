@@ -2,7 +2,9 @@ using Cordis;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Llm.Anthropic;
 using Dsh.Llm.DeepSeek;
+using Dsh.Llm.OpenAi;
 using Dsh.Persistence;
 
 namespace Dsh.Boot;
@@ -15,7 +17,8 @@ public sealed record HarnessOptions(
     string? BaseUrl = null,
     string? ApiKeyEnv = null,
     string? ApiKey = null,
-    string? ReasoningEffort = null);
+    string? ReasoningEffort = null,
+    string? SettingsConfig = null);
 
 public sealed class HarnessApp : IDisposable
 {
@@ -69,6 +72,12 @@ public static class HarnessComposer
         ctx.Provide("dshHomePath", options.Home.Root);
         ctx.Provide("credentials", credentials);
 
+        var settings = HarnessSettings.Load(options.Home);
+        var config = settings.ResolveConfig(options.SettingsConfig);
+        var provider = options.Provider ?? config?.Provider ?? DefaultProvider;
+        var model = options.Model ?? config?.Model ?? DefaultModel;
+        var reasoningEffort = options.ReasoningEffort ?? config?.ReasoningEffort;
+
         var persistence = new JsonlSessionPersistence(options.Home.SessionsPath);
 
         _ = new SessionStore(ctx);
@@ -80,8 +89,27 @@ public static class HarnessComposer
         _ = ApprovalService.Register(ctx);
         _ = UserQuestionService.Register(ctx);
         _ = CommandsService.Register(ctx);
+        var modelCommand = ModelCommand.Register(ctx, options.Home);
+        var reasoningCommand = ReasoningCommand.Register(ctx);
+        var providerCommand = ProviderCommand.Register(ctx, options.Home);
+        var goalCommand = GoalCommand.Register(ctx);
+        var skillCommand = SkillCommand.Register(ctx);
+        var memoryCommand = MemoryCommand.Register(ctx);
+        var pluginCommand = PluginCommand.Register(ctx);
+        var mcpCommand = McpCommand.Register(ctx, options.Home);
+        var safetyGuard = SafetyCommandGuard.Register(ctx, settings.Safety);
 
-        var registration = RegisterDeepSeekAdapter(ctx, options, credentials, llm);
+        var providerSettings = settings.ResolveProvider(provider);
+        var registration = RegisterProviderAdapter(
+            ctx,
+            provider,
+            providerSettings,
+            options.BaseUrl ?? providerSettings?.BaseUrl ?? DefaultBaseUrl,
+            options.ApiKeyEnv ?? providerSettings?.ApiKeyEnv ?? DefaultApiKeyEnv,
+            options.ApiKey ?? providerSettings?.ApiKey,
+            options,
+            credentials,
+            llm);
 
         var app = new HarnessApp
         {
@@ -89,49 +117,97 @@ public static class HarnessComposer
             Home = options.Home,
             Credentials = credentials,
             Persistence = persistence,
-            Provider = options.Provider ?? DefaultProvider,
-            Model = options.Model ?? DefaultModel,
-            ReasoningEffort = options.ReasoningEffort,
+            Provider = provider,
+            Model = model,
+            ReasoningEffort = reasoningEffort,
         };
         app.Track(registration);
+        app.Track(modelCommand);
+        app.Track(reasoningCommand);
+        app.Track(providerCommand);
+        app.Track(goalCommand);
+        app.Track(skillCommand);
+        app.Track(memoryCommand);
+        app.Track(pluginCommand);
+        app.Track(mcpCommand);
+        app.Track(safetyGuard);
         WirePersistence(ctx, persistence);
         return app;
     }
 
-    internal static AdapterRegistrationHandle RegisterDeepSeekAdapter(Context ctx, HarnessOptions options, ICredentials credentials, LlmRuntime llm)
+    internal static AdapterRegistrationHandle RegisterDeepSeekAdapter(
+        Context ctx,
+        string providerId,
+        string baseUrl,
+        string? apiKeyEnv,
+        string? apiKey,
+        HarnessOptions options,
+        ICredentials credentials,
+        LlmRuntime llm)
     {
+        var resolvedBaseUrl = Endpoint.NormalizeBaseUrl(baseUrl ?? Environment.GetEnvironmentVariable("DEEPSEEK_BASE_URL") ?? DefaultBaseUrl);
+        var resolvedApiKeyEnv = apiKeyEnv ?? DefaultApiKeyEnv;
         var connection = new DeepSeekConnectionOptions(
-            options.BaseUrl ?? Environment.GetEnvironmentVariable("DEEPSEEK_BASE_URL") ?? DefaultBaseUrl,
-            options.ApiKeyEnv ?? DefaultApiKeyEnv,
+            resolvedBaseUrl,
+            resolvedApiKeyEnv,
             new RequestDefaults(),
             DeepSeekConnectionOptions.DefaultMaxTokens,
             DeepSeekConnectionOptions.DefaultContextWindowValue,
             Catalog,
             DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "llm-deepseek"));
-        var adapter = new DeepSeekAdapter(DefaultProvider, new DeepSeekAdapterOptions
+        var adapter = new DeepSeekAdapter(providerId, new DeepSeekAdapterOptions
         {
             Options = () => connection,
             ResolveApiKey = (conn, _) =>
             {
-                var raw = options.ApiKey ?? credentials.Get(conn.ApiKeyEnv)
+                var raw = apiKey ?? credentials.Get(conn.ApiKeyEnv)
                     ?? throw new LlmException(new LlmFailure(
-                        $"DeepSeek credential \"{conn.ApiKeyEnv}\" is not configured",
+                        $"provider \"{providerId}\" credential \"{conn.ApiKeyEnv}\" is not configured",
                         LlmFailureCodes.MissingCredential));
                 if (!ApiKey.Normalize(raw, out var key, out var rejection))
                 {
                     throw new LlmException(new LlmFailure(
-                        $"DeepSeek credential \"{conn.ApiKeyEnv}\" is unusable: {rejection}",
+                        $"provider \"{providerId}\" credential \"{conn.ApiKeyEnv}\" is unusable: {rejection}",
                         LlmFailureCodes.InvalidCredential));
                 }
                 return Task.FromResult(key);
             },
             ResolveUserId = () => AnonymousUserId.Resolve(options.Home),
         });
-        string[] providers = options.Provider is null or DefaultProvider
-            ? [DefaultProvider]
-            : [DefaultProvider, options.Provider];
-        return llm.RegisterAdapter(providers, adapter);
+        return llm.RegisterAdapter([providerId], adapter);
+    }
+
+    internal static AdapterRegistrationHandle RegisterProviderAdapter(
+        Context ctx,
+        string providerId,
+        ProviderSettings? provider,
+        string baseUrl,
+        string? apiKeyEnv,
+        string? apiKey,
+        HarnessOptions options,
+        ICredentials credentials,
+        LlmRuntime llm)
+    {
+        if (string.Equals(provider?.Type, "anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            var resolvedApiKey = apiKey ?? credentials.Get(apiKeyEnv ?? "ANTHROPIC_API_KEY");
+            var adapter = new AnthropicAdapter(providerId, baseUrl, resolvedApiKey, provider?.ModelIds);
+            return llm.RegisterAdapter([providerId], adapter);
+        }
+        if (provider?.Type is "openai-compatible" or "openai-responses")
+        {
+            var resolvedApiKey = apiKey ?? credentials.Get(apiKeyEnv ?? "OPENAI_API_KEY");
+            var useResponses = string.Equals(provider.Type, "openai-responses", StringComparison.OrdinalIgnoreCase);
+            var adapter = new OpenAiCompatibleAdapter(
+                providerId,
+                Endpoint.NormalizeBaseUrl(baseUrl),
+                resolvedApiKey,
+                provider.ModelIds,
+                useResponses: useResponses);
+            return llm.RegisterAdapter([providerId], adapter);
+        }
+        return RegisterDeepSeekAdapter(ctx, providerId, baseUrl, apiKeyEnv, apiKey, options, credentials, llm);
     }
 
     internal static void WirePersistence(Context ctx, JsonlSessionPersistence persistence)
