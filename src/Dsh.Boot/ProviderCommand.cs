@@ -1,7 +1,6 @@
 using Cordis;
 using Dsh.Core;
 using Dsh.Interaction;
-using Dsh.Llm;
 
 namespace Dsh.Boot;
 
@@ -24,8 +23,9 @@ public static class ProviderCommand
                 {
                     "list" => Task.FromResult<CommandResult>(new CommandResult.Success(ListProviders(home))),
                     "remove" when tokens.Length >= 2 => RemoveProvider(home, tokens[1]),
-                    "add" => AddProvider(ctx, home, tokens[1..]),
-                    _ => Task.FromResult<CommandResult>(new CommandResult.Error("usage: /provider list | add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...] | remove <name>")),
+                    "add" => UpsertProvider(ctx, home, tokens[1..], requireExisting: false),
+                    "edit" when tokens.Length >= 2 => UpsertProvider(ctx, home, tokens[1..], requireExisting: true),
+                    _ => Task.FromResult<CommandResult>(new CommandResult.Error("usage: /provider list | add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...] [--api-key-env ...] | edit <name> (...) | remove <name>")),
                 };
             },
         });
@@ -59,20 +59,27 @@ public static class ProviderCommand
         return Task.FromResult<CommandResult>(new CommandResult.Success($"removed provider \"{name}\""));
     }
 
-    private static Task<CommandResult> AddProvider(Context ctx, HarnessHome home, string[] args)
+    private static Task<CommandResult> UpsertProvider(Context ctx, HarnessHome home, string[] args, bool requireExisting)
     {
         if (args.Length < 2)
-            return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /provider add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...]"));
+            return Task.FromResult<CommandResult>(new CommandResult.Error($"usage: /provider {(requireExisting ? "edit" : "add")} <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...] [--api-key-env ...]"));
         var name = args[0];
-        var baseUrl = NextValue(args, "--base-url");
-        var apiKey = NextValue(args, "--api-key");
-        var type = NextValue(args, "--type") ?? "openai-compatible";
-        var modelIds = NextValue(args, "--model-ids") ?? NextValue(args, "--model_ids");
-        if (baseUrl is null || apiKey is null)
-            return Task.FromResult<CommandResult>(new CommandResult.Error("provider add requires --base-url and --api-key"));
         var settings = HarnessSettings.Load(home);
-        if (settings.Providers.ContainsKey(name))
+        if (requireExisting && !settings.Providers.ContainsKey(name))
+            return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" is not configured"));
+        if (!requireExisting && settings.Providers.ContainsKey(name))
             return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" already exists"));
+        var current = requireExisting ? settings.Providers[name] : new ProviderSettings();
+        var baseUrl = NextValue(args, "--base-url") ?? current.BaseUrl;
+        var apiKey = NextValue(args, "--api-key") ?? current.ApiKey;
+        var apiKeyEnv = NextValue(args, "--api-key-env") ?? current.ApiKeyEnv;
+        var type = NextValue(args, "--type") ?? current.Type ?? "openai-compatible";
+        var modelIds = NextValue(args, "--model-ids") ?? NextValue(args, "--model_ids");
+        if (!requireExisting && (baseUrl is null || apiKey is null))
+            return Task.FromResult<CommandResult>(new CommandResult.Error("provider add requires --base-url and --api-key"));
+        var resolvedModelIds = modelIds is null
+            ? current.ModelIds
+            : modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var updated = new HarnessSettings
         {
             Default = settings.Default,
@@ -83,7 +90,8 @@ public static class ProviderCommand
                     Type = type,
                     BaseUrl = baseUrl,
                     ApiKey = apiKey,
-                    ModelIds = modelIds is null ? null : modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
+                    ApiKeyEnv = apiKeyEnv,
+                    ModelIds = resolvedModelIds,
                 },
             },
             Configs = settings.Configs,
@@ -93,6 +101,8 @@ public static class ProviderCommand
         try
         {
             var llm = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
+            if (requireExisting)
+                llm.UnregisterAdapter(name);
             var credentials = new EnvCredentials(home, Environment.CurrentDirectory);
             var options = new HarnessOptions(home, Environment.CurrentDirectory);
             var provider = new ProviderSettings
@@ -100,15 +110,16 @@ public static class ProviderCommand
                 Type = type,
                 BaseUrl = baseUrl,
                 ApiKey = apiKey,
-                ModelIds = modelIds is null ? null : modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
+                ApiKeyEnv = apiKeyEnv,
+                ModelIds = resolvedModelIds,
             };
-            HarnessComposer.RegisterProviderAdapter(ctx, name, provider, baseUrl, null, apiKey, options, credentials, llm);
+            HarnessComposer.RegisterProviderAdapter(ctx, name, provider, baseUrl ?? HarnessComposer.DefaultBaseUrl, apiKeyEnv, apiKey, options, credentials, llm);
         }
         catch (Exception error)
         {
             return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" saved but could not be activated: {error.Message}"));
         }
-        return Task.FromResult<CommandResult>(new CommandResult.Success($"added provider \"{name}\""));
+        return Task.FromResult<CommandResult>(new CommandResult.Success($"{(requireExisting ? "updated" : "added")} provider \"{name}\""));
     }
 
     private static string? NextValue(string[] args, string option)

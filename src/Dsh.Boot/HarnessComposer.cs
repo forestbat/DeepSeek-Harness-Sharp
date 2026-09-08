@@ -131,6 +131,8 @@ public static class HarnessComposer
         app.Track(pluginCommand);
         app.Track(mcpCommand);
         app.Track(safetyGuard);
+        if (settings.Safety?.AutoApprove == true)
+            app.Track(ApprovalAnswerers.AutoApprove(ctx));
         WirePersistence(ctx, persistence);
         return app;
     }

@@ -21,6 +21,7 @@ public static class ProfileSurfaceRegistry
     public static readonly IReadOnlyDictionary<string, ProfileSurfaceDescriptor> All = new Dictionary<string, ProfileSurfaceDescriptor>(StringComparer.Ordinal)
     {
         ["tui"] = new("tui", RunTuiAsync),
+        ["gui"] = new("gui", RunGuiAsync),
         ["web"] = new("web", RunWebAsync),
         ["acp"] = new("acp", RunAcpAsync),
         ["lsp"] = new("lsp", RunLspAsync),
@@ -36,6 +37,13 @@ public static class ProfileSurfaceRegistry
     private static async Task<int> RunTuiAsync(ProfileSurfaceRunOptions options, CancellationToken cancellationToken)
     {
         var method = RequireMethod("Dsh.Tui.TuiRunner", "Dsh.Tui", "Run");
+        var task = (Task<int>)method.Invoke(null, [options.Home, options.Cwd, options.Config, options.Patches, options.SettingsConfig])!;
+        return await task.WaitAsync(cancellationToken);
+    }
+
+    private static async Task<int> RunGuiAsync(ProfileSurfaceRunOptions options, CancellationToken cancellationToken)
+    {
+        var method = RequireMethod("Dsh.Gui.GuiRunner", "Dsh.Gui", "Run");
         var task = (Task<int>)method.Invoke(null, [options.Home, options.Cwd, options.Config, options.Patches, options.SettingsConfig])!;
         return await task.WaitAsync(cancellationToken);
     }

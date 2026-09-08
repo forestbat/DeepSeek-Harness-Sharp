@@ -139,6 +139,8 @@ var configPath = Path.Combine(profileDir, "cordis.yml");
         app.Track(pluginCommand);
         app.Track(mcpCommand);
         app.Track(safetyGuard);
+        if (settings.Safety?.AutoApprove == true)
+            app.Track(ApprovalAnswerers.AutoApprove(ctx));
         app.Track(host);
         HarnessComposer.WirePersistence(ctx, persistence);
 

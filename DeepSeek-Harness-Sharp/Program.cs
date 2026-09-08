@@ -60,6 +60,9 @@ public static class Program
                 case "tui":
                     profile = "tui";
                     break;
+                case "gui":
+                    profile = "gui";
+                    break;
                 default:
                     positional.Add(args[index]);
                     break;
@@ -119,6 +122,9 @@ public static class Program
             case "tui":
                 return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("tui", new ProfileSurfaceRunOptions(
                     harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
+            case "gui":
+                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("gui", new ProfileSurfaceRunOptions(
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
             default:
                 Console.Error.WriteLine($"dsh: unknown profile \"{profile}\"");
                 return 1;
@@ -131,7 +137,7 @@ public static class Program
             Usage: dsh [options] [task...]
 
             Options:
-              --profile <name>   headless | tui | web | sdk | acp | lsp | sdk-minimal (default: web)
+              --profile <name>   headless | tui | gui | web | sdk | acp | lsp | sdk-minimal (default: web)
               --config <path>    boot from a cordis.yml composition instead of the built-in defaults
               --home <path>      harness home (default: $DSH_HOME or ~/.dsh)
               --dump-config      print the composed configuration and exit
@@ -141,6 +147,7 @@ public static class Program
 
             Commands:
               tui                start the terminal UI
+              gui                start the Avalonia GUI
               headless "task"    answer one task and exit
             """);
     }
