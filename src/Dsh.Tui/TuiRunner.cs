@@ -1,7 +1,6 @@
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
-using Dsh.Persistence;
 
 namespace Dsh.Tui;
 
@@ -11,6 +10,9 @@ public static class TuiRunner
         HarnessApp app,
         string cwd)
     {
+        if (IsGpuRequested())
+            return RunGpuSync(app, cwd);
+
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),
@@ -18,9 +20,6 @@ public static class TuiRunner
             new AgentOptions(app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort))));
         var agent = (AgentLoopAgent)handle.Agent;
         await agent.WhenIdle();
-
-        if (IsGpuRequested())
-            return await RunInteractiveGpuAsync(app, agent);
 
         if (Console.IsInputRedirected)
             return await RunNonInteractiveAsync(app, agent);
@@ -45,7 +44,7 @@ public static class TuiRunner
 
     private static async Task<int> RunNonInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
     {
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Persistence.Plugin.ServiceName));
         chat.DrainUi();
         var size = GetConsoleSize();
         var layout = LayoutEngine.Calculate(size.Width, size.Height);
@@ -67,7 +66,7 @@ public static class TuiRunner
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Persistence.Plugin.ServiceName));
         try
         {
             while (!chat.ExitRequested)
@@ -103,15 +102,23 @@ public static class TuiRunner
         return 0;
     }
 
-    private static async Task<int> RunInteractiveGpuAsync(HarnessApp app, AgentLoopAgent agent)
+    private static int RunGpuSync(HarnessApp app, string cwd)
     {
+        var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+        var handle = agents.Create(new CreateAgentOptions(
+            SessionId.Create($"session-{Guid.NewGuid()}"),
+            cwd,
+            new AgentOptions(app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort)))).GetAwaiter().GetResult();
+        var agent = (AgentLoopAgent)handle.Agent;
+        agent.WhenIdle().GetAwaiter().GetResult();
+
         try
         {
-            using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
+            using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Persistence.Plugin.ServiceName));
             using var renderer = new GpuRenderer(chat);
             renderer.Run();
             var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
-            await sessions.Flush(agent.Session);
+            sessions.Flush(agent.Session).GetAwaiter().GetResult();
             return 0;
         }
         catch (Exception error)
@@ -119,7 +126,7 @@ public static class TuiRunner
             Console.Error.WriteLine($"GPU unavailable: {error.Message}");
             if (Console.IsInputRedirected)
                 return 1;
-            return await RunInteractiveAsync(app, agent);
+            return RunInteractiveAsync(app, agent).GetAwaiter().GetResult();
         }
     }
 

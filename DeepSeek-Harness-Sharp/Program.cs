@@ -128,6 +128,13 @@ public static class Program
             case "acp":
             case "lsp":
             {
+                if (profile == "tui" && IsGpuRequested())
+                {
+                    using var gpuApp = ComposeEntrypointApp(harnessHome, bootConfig, bootPatches).GetAwaiter().GetResult();
+                    return PluginEntrypointRegistry.RunAsync("tui", gpuApp, new PluginEntrypointOptions(
+                        harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches)).GetAwaiter().GetResult();
+                }
+
                 using var app = await ComposeEntrypointApp(harnessHome, bootConfig, bootPatches);
                 return await PluginEntrypointRegistry.RunAsync(profile ?? "web", app, new PluginEntrypointOptions(
                     harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
@@ -140,6 +147,14 @@ public static class Program
                 Console.Error.WriteLine($"dsh: unknown profile \"{profile}\"");
                 return 1;
         }
+    }
+
+    private static bool IsGpuRequested()
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("DSH_TUI_GPU"), "1", StringComparison.Ordinal))
+            return true;
+        var args = Environment.GetCommandLineArgs();
+        return args.Any(argument => string.Equals(argument, "--gpu", StringComparison.Ordinal));
     }
 
     private static void PrintUsage()

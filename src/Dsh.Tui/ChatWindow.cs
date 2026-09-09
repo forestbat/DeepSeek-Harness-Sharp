@@ -38,6 +38,7 @@ public sealed class ChatWindow : IDisposable
     private int _cursor;
     private int _scrollOffset;
     private volatile bool _stickToBottom = true;
+    private int _hoveredTab = -1;
     private string _statusText = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+Q quits";
     private bool _exitRequested;
     private string? _deleteConfirmSessionId;
@@ -305,6 +306,57 @@ public sealed class ChatWindow : IDisposable
 
                 break;
         }
+    }
+
+    public void InsertText(string text)
+    {
+        if (string.IsNullOrEmpty(text) || _pendingApproval is not null)
+            return;
+        var sanitized = text.Replace('\r', ' ').Replace('\n', ' ');
+        if (sanitized.Length == 0)
+            return;
+        _input = _input.Insert(_cursor, sanitized);
+        _cursor += sanitized.Length;
+        RefreshMenus();
+    }
+
+    public void HandleMouseWheel(int delta)
+    {
+        if (_pendingApproval is not null)
+            return;
+        if (delta > 0)
+        {
+            _stickToBottom = false;
+            _scrollOffset = Math.Max(0, _scrollOffset - 10);
+        }
+        else if (delta < 0)
+        {
+            _scrollOffset += 10;
+        }
+    }
+
+    public void HandleMouseMove(int cellX, int cellY, UiLayout layout)
+    {
+        if (_pendingApproval is not null)
+            return;
+        _hoveredTab = -1;
+        if (layout.RightPanel.Contains(cellX, cellY) && cellY - layout.RightPanel.Y > 0 && cellY - layout.RightPanel.Y <= 4)
+            _hoveredTab = cellY - layout.RightPanel.Y - 1;
+    }
+
+    public void HandleMouseClick(int cellX, int cellY, UiLayout layout)
+    {
+        if (_pendingApproval is not null)
+            return;
+        if (layout.Input.Contains(cellX, cellY))
+        {
+            _cursor = Math.Clamp(cellX - layout.Input.X, 0, _input.Length);
+            RefreshMenus();
+            return;
+        }
+
+        if (layout.Main.Contains(cellX, cellY))
+            _stickToBottom = false;
     }
 
     public void Draw(CellGrid grid, UiLayout layout)
@@ -958,7 +1010,10 @@ public sealed class ChatWindow : IDisposable
         DrawText(grid, rect.X, rect.Y, "PANELS", AnsiColor.Default, AnsiColor.Default, CellStyle.Bold);
         var tabs = new[] { "Context", "MCP", "Plans", "Output" };
         for (var i = 0; i < tabs.Length && rect.Y + 1 + i < rect.Bottom; i++)
-            DrawText(grid, rect.X + 1, rect.Y + 1 + i, $" {tabs[i]}");
+        {
+            var style = i == _hoveredTab ? CellStyle.Reverse : CellStyle.None;
+            DrawText(grid, rect.X + 1, rect.Y + 1 + i, $" {tabs[i]}", AnsiColor.Default, AnsiColor.Default, style);
+        }
     }
 
     private void DrawInput(CellGrid grid, ConsoleRect rect)

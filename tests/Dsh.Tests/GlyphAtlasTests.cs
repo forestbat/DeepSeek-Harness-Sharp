@@ -22,21 +22,19 @@ public class GlyphAtlasTests
     {
         var atlas = new GlyphAtlas();
 
-        Assert.Equal(atlas.GetUv('?'), atlas.GetUv('\u4e2d'));
+        Assert.Equal(atlas.GetUv('?'), atlas.GetUv('\ue000'));
     }
 
     [Fact]
-    public void GetUv_ForA_UsesThirdAtlasRow()
+    public void GetUv_ForA_UsesAtlasRowFromIndex()
     {
         var atlas = new GlyphAtlas();
         var index = atlas.GetGlyphIndex('A');
         var row = index / GlyphAtlas.Columns;
 
         Assert.Equal('A' - GlyphAtlas.FirstCharacter, index);
-        Assert.Equal(2, row);
 
         var uv = atlas.GetUv('A');
-
         Assert.Equal(row / (float)GlyphAtlas.Rows, uv.MinY);
         Assert.Equal((row + 1) / (float)GlyphAtlas.Rows, uv.MaxY);
     }
@@ -52,6 +50,24 @@ public class GlyphAtlasTests
             for (var x = 0; x < GlyphAtlas.GlyphWidth; x++)
             {
                 if (atlas.IsPixelSet('A', x, y))
+                    setPixels++;
+            }
+        }
+
+        Assert.True(setPixels > 0);
+    }
+
+    [Fact]
+    public void IsPixelSet_CjkCharacter_HasVisiblePixels()
+    {
+        var atlas = new GlyphAtlas();
+        var setPixels = 0;
+
+        for (var y = 0; y < GlyphAtlas.GlyphHeight; y++)
+        {
+            for (var x = 0; x < GlyphAtlas.GlyphWidth; x++)
+            {
+                if (atlas.IsPixelSet('中', x, y))
                     setPixels++;
             }
         }

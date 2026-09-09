@@ -16,7 +16,7 @@ public readonly record struct CellQuad(
 
 public static class TerminalColorPalette
 {
-    public static readonly Rgba DefaultBackground = new(0.08f, 0.08f, 0.11f);
+    public static readonly Rgba DefaultBackground = new(0f, 0f, 0f);
     public static readonly Rgba DefaultForeground = new(0.9f, 0.9f, 0.9f);
 
     public static Rgba ToRgba(AnsiColor color) => color switch

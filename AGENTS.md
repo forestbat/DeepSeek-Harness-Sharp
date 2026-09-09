@@ -261,3 +261,4 @@
 49. 作为规则38的补充，涉及I/O的逻辑（例如Console.WriteLine/Console.Error.WriteLine，或者日志记录方法）应采取其异步重载（例如await Console.WriteLineAsync）。
 50. 使用TUI/GUI进行测试时，禁止使用mock LLM和mock TUI，一律使用真实的LLM请求和项目下的TUI构建。
 51. 如果接收到空的用户输入，不必管它，继续当前的工作。
+52. 选取第三方开源库时，应优先选择使用量大、活跃维护的库。

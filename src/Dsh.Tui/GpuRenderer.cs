@@ -3,13 +3,15 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Dsh.Tui;
 
 public sealed class GpuRenderer : IDisposable
 {
-    private const int CellPixelWidth = 8;
-    private const int CellPixelHeight = 16;
+    private const int CellPixelWidth = 16;
+    private const int CellPixelHeight = 20;
     private const int FloatsPerVertex = 9;
     private const int VerticesPerQuad = 6;
 
@@ -18,12 +20,17 @@ public sealed class GpuRenderer : IDisposable
     private readonly GameWindow _window;
     private CellGrid _grid;
     private UiLayout _layout;
+    private CellGrid? _lastGrid;
     private int _vao;
     private int _vbo;
     private int _shader;
     private int _texture;
     private int _vertexCount;
+    private float _mouseX;
+    private float _mouseY;
     private bool _disposed;
+    private readonly string? _screenshotPath = Environment.GetEnvironmentVariable("DSH_GPU_SCREENSHOT");
+    private bool _screenshotTaken;
 
     public GpuRenderer(ChatWindow chat)
     {
@@ -45,6 +52,9 @@ public sealed class GpuRenderer : IDisposable
         _window.RenderFrame += OnRenderFrame;
         _window.KeyDown += OnKeyDown;
         _window.TextInput += OnTextInput;
+        _window.MouseMove += OnMouseMove;
+        _window.MouseDown += OnMouseDown;
+        _window.MouseWheel += OnMouseWheel;
     }
 
     public void Run()
@@ -55,12 +65,20 @@ public sealed class GpuRenderer : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        if (_shader != 0)
+            GL.DeleteProgram(_shader);
+        if (_texture != 0)
+            GL.DeleteTexture(_texture);
+        if (_vao != 0)
+            GL.DeleteVertexArray(_vao);
+        if (_vbo != 0)
+            GL.DeleteBuffer(_vbo);
         _window.Dispose();
     }
 
     private void OnLoad()
     {
-        GL.ClearColor(0.04f, 0.04f, 0.06f, 1f);
+        GL.ClearColor(0f, 0f, 0f, 1f);
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
@@ -87,13 +105,16 @@ public sealed class GpuRenderer : IDisposable
 
     private void OnResize(ResizeEventArgs e)
     {
-        GL.Viewport(0, 0, e.Width, e.Height);
-        var width = Math.Max(1, e.Width / CellPixelWidth);
-        var height = Math.Max(1, e.Height / CellPixelHeight);
-        if (_grid.Width != width || _grid.Height != height)
+        var framebufferSize = _window.FramebufferSize;
+        var width = Math.Max(1, framebufferSize.X);
+        var height = Math.Max(1, framebufferSize.Y);
+        GL.Viewport(0, 0, width, height);
+        var gridWidth = Math.Max(1, width / CellPixelWidth);
+        var gridHeight = Math.Max(1, height / CellPixelHeight);
+        if (_grid.Width != gridWidth || _grid.Height != gridHeight)
         {
-            _grid = new CellGrid(width, height);
-            _layout = LayoutEngine.Calculate(width, height);
+            _grid = new CellGrid(gridWidth, gridHeight);
+            _layout = LayoutEngine.Calculate(gridWidth, gridHeight);
         }
     }
 
@@ -107,12 +128,20 @@ public sealed class GpuRenderer : IDisposable
         }
 
         _chat.Draw(_grid, _layout);
-        var quads = CellQuadBuilder.Build(_grid);
-        var vertices = BuildVertices(quads);
-        _vertexCount = vertices.Length / FloatsPerVertex;
+        var changed = _lastGrid is null
+            || _lastGrid.Width != _grid.Width
+            || _lastGrid.Height != _grid.Height
+            || _grid.Diff(_lastGrid).Any();
+        if (changed)
+        {
+            var quads = CellQuadBuilder.Build(_grid);
+            var vertices = BuildVertices(quads);
+            _vertexCount = vertices.Length / FloatsPerVertex;
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsage.DynamicDraw);
+        }
 
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsage.DynamicDraw);
+        _lastGrid = _grid.Clone();
 
         GL.Clear(ClearBufferMask.ColorBufferBit);
         GL.UseProgram(_shader);
@@ -125,6 +154,13 @@ public sealed class GpuRenderer : IDisposable
         GL.DrawArrays(PrimitiveType.Triangles, 0, _vertexCount);
         GL.BindVertexArray(0);
 
+        if (!_screenshotTaken && _screenshotPath is not null)
+        {
+            SaveScreenshot(_screenshotPath);
+            _screenshotTaken = true;
+            _chat.RequestExit();
+        }
+
         _window.SwapBuffers();
     }
 
@@ -134,6 +170,14 @@ public sealed class GpuRenderer : IDisposable
         {
             _chat.RequestExit();
             _window.Close();
+            return;
+        }
+
+        if (e.Control && e.Key == Keys.V)
+        {
+            var clipboard = _window.ClipboardString;
+            if (clipboard.Length > 0)
+                _chat.InsertText(clipboard);
             return;
         }
 
@@ -150,6 +194,58 @@ public sealed class GpuRenderer : IDisposable
             return;
         _chat.HandleKey(new ConsoleKeyInfo(text[0], ConsoleKey.NoName, false, false, false));
     }
+
+    private void OnMouseMove(MouseMoveEventArgs e)
+    {
+        _mouseX = e.X;
+        _mouseY = e.Y;
+        var cellX = (int)(_mouseX / CellPixelWidth);
+        var cellY = (int)(_mouseY / CellPixelHeight);
+        _chat.HandleMouseMove(cellX, cellY, _layout);
+    }
+
+    private void OnMouseDown(MouseButtonEventArgs e)
+    {
+        if (e.Button != MouseButton.Left || !e.IsPressed)
+            return;
+        var cellX = (int)(_mouseX / CellPixelWidth);
+        var cellY = (int)(_mouseY / CellPixelHeight);
+        _chat.HandleMouseClick(cellX, cellY, _layout);
+    }
+
+    private void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        if (e.OffsetY != 0)
+            _chat.HandleMouseWheel((int)e.OffsetY);
+    }
+
+    private void SaveScreenshot(string path)
+    {
+        var size = _window.FramebufferSize;
+        if (size.X <= 0 || size.Y <= 0)
+            return;
+        var pixels = new byte[size.X * size.Y * 4];
+        GL.ReadPixels(0, 0, size.X, size.Y, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+        using var image = new Image<Rgba32>(size.X, size.Y);
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                var sourceY = accessor.Height - 1 - y;
+                for (var x = 0; x < accessor.Width; x++)
+                {
+                    var source = ((sourceY * accessor.Width) + x) * 4;
+                    row[x] = new Rgba32(pixels[source], pixels[source + 1], pixels[source + 2], pixels[source + 3]);
+                }
+            }
+        });
+        if (path.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase))
+            image.SaveAsTiff(path);
+        else
+            image.SaveAsPng(path);
+    }
+    
 
     private int CreateTexture()
     {
