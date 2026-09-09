@@ -1,12 +1,19 @@
 using Cordis;
 using Dsh.Core;
 using Dsh.Interaction;
-using Dsh.Llm;
+using System.Net.Http.Headers;
+using System.Text.Json;
 
 namespace Dsh.Boot;
 
 public static class ProviderCommand
 {
+    private static readonly HttpClient ModelHttpClient = new();
+    private static readonly JsonSerializerOptions ModelJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     public static IDisposable Register(Context ctx, HarnessHome home)
     {
         var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
@@ -38,8 +45,8 @@ public static class ProviderCommand
             return "no providers configured";
         return string.Join('\n', settings.Providers.Select(entry =>
         {
-            var modelIds = entry.Value.ModelIds is { Count: > 0 } models ? $" models=[{string.Join(',', models)}]" : "";
-            return $"{entry.Key}: {entry.Value.Type} {entry.Value.BaseUrl}{modelIds}";
+            var models = entry.Value.Models.Count > 0 ? $" models=[{string.Join(',', entry.Value.Models.Keys)}]" : "";
+            return $"{entry.Key}: {entry.Value.Type} {entry.Value.Options?.BaseUrl}{models}";
         }));
     }
 
@@ -50,44 +57,81 @@ public static class ProviderCommand
             return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" is not configured"));
         var updated = new HarnessSettings
         {
-            Default = settings.Default,
+            GlobalDefaultModel = settings.GlobalDefaultModel,
+            CompactionModel = settings.CompactionModel,
+            Subagent = settings.Subagent,
             Providers = settings.Providers.Where(entry => entry.Key != name).ToDictionary(entry => entry.Key, entry => entry.Value),
-            Configs = settings.Configs,
+            Skills = settings.Skills,
+            Rules = settings.Rules,
+            McpServers = settings.McpServers,
+            Compaction = settings.Compaction,
             Safety = settings.Safety,
+            Memory = settings.Memory,
         };
         updated.Save(home);
         return Task.FromResult<CommandResult>(new CommandResult.Success($"removed provider \"{name}\""));
     }
 
-    private static Task<CommandResult> AddProvider(Context ctx, HarnessHome home, string[] args)
+    private static async Task<CommandResult> AddProvider(Context ctx, HarnessHome home, string[] args)
     {
         if (args.Length < 2)
-            return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /provider add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...]"));
+            return new CommandResult.Error("usage: /provider add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...]");
         var name = args[0];
         var baseUrl = NextValue(args, "--base-url");
         var apiKey = NextValue(args, "--api-key");
         var type = NextValue(args, "--type") ?? "openai-compatible";
-        var modelIds = NextValue(args, "--model-ids") ?? NextValue(args, "--model_ids");
+        var modelIds = NextValue(args, "--model-ids") ?? NextValue(args, "--model_ids") ?? NextValue(args, "--models");
         if (baseUrl is null || apiKey is null)
-            return Task.FromResult<CommandResult>(new CommandResult.Error("provider add requires --base-url and --api-key"));
+            return new CommandResult.Error("provider add requires --base-url and --api-key");
         var settings = HarnessSettings.Load(home);
         if (settings.Providers.ContainsKey(name))
-            return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" already exists"));
+            return new CommandResult.Error($"provider \"{name}\" already exists");
+        var models = new Dictionary<string, ProviderModelSettings>();
+        if (modelIds is not null)
+        {
+            foreach (var modelId in modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                models[modelId] = new ProviderModelSettings { Name = modelId };
+        }
+        else
+        {
+            try
+            {
+                models = await FetchModelsAsync(baseUrl, apiKey);
+            }
+            catch (Exception error)
+            {
+                return new CommandResult.Error($"model auto-discovery failed for \"{name}\": {error.Message}");
+            }
+
+            if (models.Count == 0)
+                return new CommandResult.Error($"model auto-discovery for \"{name}\" returned no models");
+        }
+
+        var provider = new ProviderSettings
+        {
+            Type = type,
+            Options = new ProviderOptions
+            {
+                BaseUrl = baseUrl,
+                ApiKey = apiKey,
+            },
+            Models = models,
+        };
         var updated = new HarnessSettings
         {
-            Default = settings.Default,
+            GlobalDefaultModel = settings.GlobalDefaultModel ?? (models.Count > 0 ? $"{name}/{models.Keys.First()}" : null),
+            CompactionModel = settings.CompactionModel,
+            Subagent = settings.Subagent,
             Providers = new Dictionary<string, ProviderSettings>(settings.Providers)
             {
-                [name] = new ProviderSettings
-                {
-                    Type = type,
-                    BaseUrl = baseUrl,
-                    ApiKey = apiKey,
-                    ModelIds = modelIds is null ? null : modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
-                },
+                [name] = provider,
             },
-            Configs = settings.Configs,
+            Skills = settings.Skills,
+            Rules = settings.Rules,
+            McpServers = settings.McpServers,
+            Compaction = settings.Compaction,
             Safety = settings.Safety,
+            Memory = settings.Memory,
         };
         updated.Save(home);
         try
@@ -95,21 +139,44 @@ public static class ProviderCommand
             var llm = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
             var credentials = new EnvCredentials(home, Environment.CurrentDirectory);
             var options = new HarnessOptions(home, Environment.CurrentDirectory);
-            var provider = new ProviderSettings
-            {
-                Type = type,
-                BaseUrl = baseUrl,
-                ApiKey = apiKey,
-                ModelIds = modelIds is null ? null : modelIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
-            };
             HarnessComposer.RegisterProviderAdapter(ctx, name, provider, baseUrl, null, apiKey, options, credentials, llm);
         }
         catch (Exception error)
         {
-            return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" saved but could not be activated: {error.Message}"));
+            return new CommandResult.Error($"provider \"{name}\" saved but could not be activated: {error.Message}");
         }
-        return Task.FromResult<CommandResult>(new CommandResult.Success($"added provider \"{name}\""));
+        return new CommandResult.Success($"added provider \"{name}\" with {models.Count} model(s)");
     }
+
+    private static async Task<Dictionary<string, ProviderModelSettings>> FetchModelsAsync(string baseUrl, string apiKey)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl.TrimEnd('/')}/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await ModelHttpClient.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            var raw = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException($"HTTP {(int)response.StatusCode}: {raw}");
+        }
+
+        var json = await response.Content.ReadAsStringAsync();
+        var payload = JsonSerializer.Deserialize<ModelListResponse>(json, ModelJsonOptions);
+        var models = new Dictionary<string, ProviderModelSettings>();
+        foreach (var entry in payload?.Data ?? [])
+        {
+            var modelId = entry.Id ?? entry.Model;
+            if (string.IsNullOrWhiteSpace(modelId))
+                continue;
+            models[modelId] = new ProviderModelSettings { Name = modelId };
+        }
+
+        return models;
+    }
+
+    private sealed record ModelListResponse(List<ModelEntry>? Data);
+
+    private sealed record ModelEntry(string? Id, string? Model);
 
     private static string? NextValue(string[] args, string option)
     {

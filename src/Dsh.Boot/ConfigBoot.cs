@@ -1,9 +1,11 @@
 using Cordis;
 using Cordis.Loader;
-using Cordis.Node;
+using Cordis.Logging;
+using Cordis.Plugins;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Persistence;
+using Dsh.Plugins;
 using Dsh.Tools;
 using Dsh.Boot.Profiles;
 
@@ -14,11 +16,10 @@ public static class ConfigBoot
     public static async Task<HarnessApp> ComposeProfile(
         string profileName,
         IReadOnlyList<Dictionary<string, object?>>? patches,
-        HarnessOptions options,
-        string? nodeExecutable = null)
+        HarnessOptions options)
     {
         var (configPath, combinedPatches) = PrepareProfile(options.Home, profileName, patches);
-        return await Compose(configPath, options, nodeExecutable, combinedPatches);
+        return await Compose(configPath, options, combinedPatches);
     }
 
     private static string ProfileConfigTemplate(string profileName)
@@ -53,7 +54,7 @@ var configPath = Path.Combine(profileDir, "cordis.yml");
         }
     }
 
-    public static async Task<HarnessApp> Compose(string configPath, HarnessOptions options, string? nodeExecutable = null, IReadOnlyList<Dictionary<string, object?>>? patches = null)
+    public static async Task<HarnessApp> Compose(string configPath, HarnessOptions options, IReadOnlyList<Dictionary<string, object?>>? patches = null)
     {
         var fullPath = Path.GetFullPath(configPath);
         if (!File.Exists(fullPath))
@@ -83,30 +84,31 @@ var configPath = Path.Combine(profileDir, "cordis.yml");
         var providerCommand = ProviderCommand.Register(ctx, options.Home);
         var goalCommand = GoalCommand.Register(ctx);
         var skillCommand = SkillCommand.Register(ctx);
-        var memoryCommand = MemoryCommand.Register(ctx);
-        var pluginCommand = PluginCommand.Register(ctx);
+        var memoryCommand = MemoryCommand.Register(ctx, options);
+        var sessionCommand = SessionCommand.Register(ctx, persistence);
+        var pluginHost = new PluginHost();
+        pluginHost.ScanDirectory(AppContext.BaseDirectory);
+        var pluginCommand = PluginCommand.Register(ctx, pluginHost.Catalog);
         var mcpCommand = McpCommand.Register(ctx, options.Home);
         var settings = HarnessSettings.Load(options.Home);
         var safetyGuard = SafetyCommandGuard.Register(ctx, settings.Safety);
-        var config = settings.ResolveConfig(options.SettingsConfig);
-        var provider = options.Provider ?? config?.Provider ?? HarnessComposer.DefaultProvider;
-        var model = options.Model ?? config?.Model ?? HarnessComposer.DefaultModel;
-        var reasoningEffort = options.ReasoningEffort ?? config?.ReasoningEffort;
+        var defaultModel = settings.ResolveDefaultModel();
+        var provider = options.Provider ?? defaultModel?.Provider ?? HarnessComposer.DefaultProvider;
+        var model = options.Model ?? defaultModel?.Model ?? HarnessComposer.DefaultModel;
+        var reasoningEffort = options.ReasoningEffort;
         var providerSettings = settings.ResolveProvider(provider);
         var registration = HarnessComposer.RegisterProviderAdapter(
             ctx,
             provider,
             providerSettings,
-            options.BaseUrl ?? providerSettings?.BaseUrl ?? HarnessComposer.DefaultBaseUrl,
-            options.ApiKeyEnv ?? providerSettings?.ApiKeyEnv ?? HarnessComposer.DefaultApiKeyEnv,
-            options.ApiKey ?? providerSettings?.ApiKey,
+            options.BaseUrl ?? providerSettings?.Options?.BaseUrl ?? HarnessComposer.DefaultBaseUrl,
+            options.ApiKeyEnv ?? providerSettings?.Options?.ApiKeyEnv ?? HarnessComposer.DefaultApiKeyEnv,
+            options.ApiKey ?? providerSettings?.Options?.ApiKey,
             options,
             credentials,
             llm);
 
-        var host = NodeHost.Start(nodeExecutable);
         var loader = new Loader(ctx);
-        loader.Attach(host);
         loader.Builtins["group"] = new PluginDefinition
         {
             Name = "group",
@@ -117,7 +119,13 @@ var configPath = Path.Combine(profileDir, "cordis.yml");
             Name = "include",
             Callback = new DelegatePluginCallback((pluginCtx, config) => ConstructInclude(pluginCtx, config)),
         };
-        loader.Importer = new DshModuleImporter(new NodeImporter(host));
+        loader.Builtins["timer"] = typeof(TimerService);
+        loader.Builtins["logger-console"] = PluginDefinition.From((pluginCtx, config) =>
+        {
+            _ = new ConsoleExporter(pluginCtx);
+            return null;
+        }, "logger-console");
+        loader.Importer = new DshModuleImporter(pluginHost.Catalog);
 
         var app = new HarnessApp
         {
@@ -136,10 +144,10 @@ var configPath = Path.Combine(profileDir, "cordis.yml");
         app.Track(goalCommand);
         app.Track(skillCommand);
         app.Track(memoryCommand);
+        app.Track(sessionCommand);
         app.Track(pluginCommand);
         app.Track(mcpCommand);
         app.Track(safetyGuard);
-        app.Track(host);
         HarnessComposer.WirePersistence(ctx, persistence);
 
         try

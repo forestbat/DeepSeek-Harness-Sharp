@@ -159,6 +159,7 @@ public sealed record SessionHeader
     public required SessionId Id { get; init; }
     public required long CreatedAt { get; init; }
     public string? Cwd { get; init; }
+    public string? Title { get; init; }
     public SessionId? ParentSession { get; init; }
     public required bool IsSeeded { get; init; }
     public string? Origin { get; init; }

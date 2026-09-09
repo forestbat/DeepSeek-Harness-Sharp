@@ -1,6 +1,5 @@
 using System.Text;
 using Cordis;
-using Cordis.Node;
 
 namespace Dsh.Tools;
 
@@ -62,7 +61,7 @@ public sealed class LocalFsService : Service
                 ["isDirectory"] = true,
             };
         }
-        return JsUndefined.Instance;
+        return null;
     }
 
     public object readText(string path, object? signal = null)

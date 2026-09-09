@@ -35,4 +35,6 @@ public interface ISessionPersistence
     ISessionHandle Open(SessionId id, SessionAccess access);
     SessionPersistenceSnapshot? Stat(SessionId id);
     IReadOnlyList<SessionPersistenceSnapshot> List();
+    void Rename(SessionId id, string title);
+    void Delete(SessionId id);
 }

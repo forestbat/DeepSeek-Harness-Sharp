@@ -176,7 +176,7 @@ public class TerminalToolsTests
         h.Backend.Sessions[0].CloseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var first = h.Terminals.Kill(h.Agent, new TerminalSessionId("pty-1"));
         var second = h.Execute("terminal_close", new { sessionId = "pty-1" });
-        h.Backend.Sessions[0].CloseGate.SetResult();
+        h.Backend.Sessions[0].CloseGate!.SetResult();
         await first;
         var result = await second;
         Assert.Equal("terminal session pty-1 was already closing", Harness.TextOf(result));

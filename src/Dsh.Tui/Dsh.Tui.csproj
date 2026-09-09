@@ -2,13 +2,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Persistence\Dsh.Persistence.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\Cordis\Cordis.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
+    <ProjectReference Include="..\Dsh.Pty\Dsh.Pty.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Terminal.Gui" Version="2.6.0-develop.61" />
+    <PackageReference Include="OpenTK" Version="5.0.0-pre.16" />
   </ItemGroup>
 
   <PropertyGroup>

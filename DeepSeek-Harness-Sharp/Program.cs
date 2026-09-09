@@ -3,6 +3,7 @@ using Dsh.Boot;
 using Dsh.Boot.Profiles;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Pty;
 using Dsh.Sdk;
 
 namespace DeepSeek_Harness_Sharp;
@@ -18,7 +19,6 @@ public static class Program
         string? patch = null;
         string? home = null;
         string? config = null;
-        string? settingsConfig = null;
         var dumpConfig = false;
         var dumpDefaultConfig = false;
         var useTmux = false;
@@ -38,9 +38,6 @@ public static class Program
                     break;
                 case "--config" when index + 1 < args.Length:
                     config = args[++index];
-                    break;
-                case "--settings-config" when index + 1 < args.Length:
-                    settingsConfig = args[++index];
                     break;
                 case "--dump-config":
                     dumpConfig = true;
@@ -65,6 +62,25 @@ public static class Program
                     break;
             }
         }
+        if (profile == "tui")
+        {
+            if (positional.FirstOrDefault() == "list")
+                return await RunTuiList();
+            if (positional.FirstOrDefault() == "attach")
+            {
+                if (positional.Count < 2)
+                {
+                    Console.Error.WriteLine("dsh: tui attach requires a session id");
+                    return 1;
+                }
+
+                return await RunTuiAttach(positional[1]);
+            }
+
+            if (positional.FirstOrDefault() == "daemon")
+                return await RunTuiDaemon();
+        }
+
         if (useTmux && Environment.GetEnvironmentVariable("TMUX") is null)
             return StartInTmux(args);
 
@@ -105,20 +121,20 @@ public static class Program
             case null:
             case "web":
                 return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("web", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
             case "headless":
-                return await RunHeadless(harnessHome, string.Join(' ', positional), bootConfig, bootPatches, settingsConfig);
+                return await RunHeadless(harnessHome, string.Join(' ', positional), bootConfig, bootPatches);
             case "sdk" or "sdk-minimal":
-                return await RunSdk(harnessHome, bootConfig, bootPatches, settingsConfig);
+                return await RunSdk(harnessHome, bootConfig, bootPatches);
             case "acp":
                 return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("acp", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
             case "lsp":
                 return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("lsp", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
             case "tui":
                 return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("tui", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches, settingsConfig));
+                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
             default:
                 Console.Error.WriteLine($"dsh: unknown profile \"{profile}\"");
                 return 1;
@@ -145,15 +161,89 @@ public static class Program
             """);
     }
 
-    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches, string? settingsConfig)    {
+    private static async Task<int> RunTuiList()
+    {
+        try
+        {
+            var sessions = await PtyDaemonClient.ListAsync();
+            if (sessions.Count == 0)
+            {
+                Console.WriteLine("no PTY sessions");
+                return 0;
+            }
+
+            foreach (var session in sessions)
+                Console.WriteLine($"{session.Id}\t{session.Command}\t{session.StartedAt:O}\t{session.Status}");
+
+            return 0;
+        }
+        catch (PtyDaemonNotRunningException)
+        {
+            Console.Error.WriteLine("daemon not running");
+            return 1;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"dsh: list failed: {error.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunTuiAttach(string id)
+    {
+        try
+        {
+            await PtyDaemonClient.AttachAsync(
+                id,
+                Console.OpenStandardInput(),
+                Console.OpenStandardOutput());
+            return 0;
+        }
+        catch (PtyDaemonNotRunningException)
+        {
+            Console.Error.WriteLine("daemon not running");
+            return 1;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"dsh: attach failed: {error.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunTuiDaemon()
+    {
+        await using var daemon = new PtyDaemon();
+        await daemon.StartAsync();
+        var shutdown = new ManualResetEventSlim(false);
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            shutdown.Set();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            await Task.Run(shutdown.Wait);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+            shutdown.Dispose();
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)    {
         if (string.IsNullOrWhiteSpace(task))
         {
             Console.Error.WriteLine("error: a task is required, for example: dsh --profile headless \"run the tests\"");
             return 1;
         }
         using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig), patches: patches);
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
         using var autoApprove = Dsh.Interaction.ApprovalAnswerers.AutoApprove(app.Ctx);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(
@@ -179,11 +269,11 @@ public static class Program
         return reason is TurnEndReason.Completed ? 0 : 1;
     }
 
-    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches, string? settingsConfig)
+    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
     {
         using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory(), SettingsConfig: settingsConfig), patches: patches);
+            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
+            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
         await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
         var server = new HarnessSdkServer(app.Ctx, transport);
         transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);

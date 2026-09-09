@@ -6,6 +6,7 @@ using Dsh.Llm.Anthropic;
 using Dsh.Llm.DeepSeek;
 using Dsh.Llm.OpenAi;
 using Dsh.Persistence;
+using Dsh.Plugins;
 
 namespace Dsh.Boot;
 
@@ -17,8 +18,7 @@ public sealed record HarnessOptions(
     string? BaseUrl = null,
     string? ApiKeyEnv = null,
     string? ApiKey = null,
-    string? ReasoningEffort = null,
-    string? SettingsConfig = null);
+    string? ReasoningEffort = null);
 
 public sealed class HarnessApp : IDisposable
 {
@@ -73,10 +73,10 @@ public static class HarnessComposer
         ctx.Provide("credentials", credentials);
 
         var settings = HarnessSettings.Load(options.Home);
-        var config = settings.ResolveConfig(options.SettingsConfig);
-        var provider = options.Provider ?? config?.Provider ?? DefaultProvider;
-        var model = options.Model ?? config?.Model ?? DefaultModel;
-        var reasoningEffort = options.ReasoningEffort ?? config?.ReasoningEffort;
+        var defaultModel = settings.ResolveDefaultModel();
+        var provider = options.Provider ?? defaultModel?.Provider ?? DefaultProvider;
+        var model = options.Model ?? defaultModel?.Model ?? DefaultModel;
+        var reasoningEffort = options.ReasoningEffort;
 
         var persistence = new JsonlSessionPersistence(options.Home.SessionsPath);
 
@@ -94,8 +94,11 @@ public static class HarnessComposer
         var providerCommand = ProviderCommand.Register(ctx, options.Home);
         var goalCommand = GoalCommand.Register(ctx);
         var skillCommand = SkillCommand.Register(ctx);
-        var memoryCommand = MemoryCommand.Register(ctx);
-        var pluginCommand = PluginCommand.Register(ctx);
+        var memoryCommand = MemoryCommand.Register(ctx, options);
+        var sessionCommand = SessionCommand.Register(ctx, persistence);
+        var pluginHost = new PluginHost();
+        pluginHost.ScanDirectory(AppContext.BaseDirectory);
+        var pluginCommand = PluginCommand.Register(ctx, pluginHost.Catalog);
         var mcpCommand = McpCommand.Register(ctx, options.Home);
         var safetyGuard = SafetyCommandGuard.Register(ctx, settings.Safety);
 
@@ -104,9 +107,9 @@ public static class HarnessComposer
             ctx,
             provider,
             providerSettings,
-            options.BaseUrl ?? providerSettings?.BaseUrl ?? DefaultBaseUrl,
-            options.ApiKeyEnv ?? providerSettings?.ApiKeyEnv ?? DefaultApiKeyEnv,
-            options.ApiKey ?? providerSettings?.ApiKey,
+            options.BaseUrl ?? providerSettings?.Options?.BaseUrl ?? DefaultBaseUrl,
+            options.ApiKeyEnv ?? providerSettings?.Options?.ApiKeyEnv ?? DefaultApiKeyEnv,
+            options.ApiKey ?? providerSettings?.Options?.ApiKey,
             options,
             credentials,
             llm);
@@ -128,6 +131,7 @@ public static class HarnessComposer
         app.Track(goalCommand);
         app.Track(skillCommand);
         app.Track(memoryCommand);
+        app.Track(sessionCommand);
         app.Track(pluginCommand);
         app.Track(mcpCommand);
         app.Track(safetyGuard);
@@ -192,7 +196,7 @@ public static class HarnessComposer
         if (string.Equals(provider?.Type, "anthropic", StringComparison.OrdinalIgnoreCase))
         {
             var resolvedApiKey = apiKey ?? credentials.Get(apiKeyEnv ?? "ANTHROPIC_API_KEY");
-            var adapter = new AnthropicAdapter(providerId, baseUrl, resolvedApiKey, provider?.ModelIds);
+            var adapter = new AnthropicAdapter(providerId, baseUrl, resolvedApiKey, provider?.Models.Keys.ToList());
             return llm.RegisterAdapter([providerId], adapter);
         }
         if (provider?.Type is "openai-compatible" or "openai-responses")
@@ -203,7 +207,7 @@ public static class HarnessComposer
                 providerId,
                 Endpoint.NormalizeBaseUrl(baseUrl),
                 resolvedApiKey,
-                provider.ModelIds,
+                provider.Models.Keys.ToList(),
                 useResponses: useResponses);
             return llm.RegisterAdapter([providerId], adapter);
         }

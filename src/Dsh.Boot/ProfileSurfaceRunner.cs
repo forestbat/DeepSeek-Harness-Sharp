@@ -9,8 +9,7 @@ public sealed record ProfileSurfaceRunOptions(
     HarnessHome Home,
     string Cwd,
     string? Config,
-    IReadOnlyList<Dictionary<string, object?>>? Patches,
-    string? SettingsConfig);
+    IReadOnlyList<Dictionary<string, object?>>? Patches);
 
 public sealed record ProfileSurfaceDescriptor(
     string Name,
@@ -36,7 +35,7 @@ public static class ProfileSurfaceRegistry
     private static async Task<int> RunTuiAsync(ProfileSurfaceRunOptions options, CancellationToken cancellationToken)
     {
         var method = RequireMethod("Dsh.Tui.TuiRunner", "Dsh.Tui", "Run");
-        var task = (Task<int>)method.Invoke(null, [options.Home, options.Cwd, options.Config, options.Patches, options.SettingsConfig])!;
+        var task = (Task<int>)method.Invoke(null, [options.Home, options.Cwd, options.Config, options.Patches])!;
         return await task.WaitAsync(cancellationToken);
     }
 
@@ -97,7 +96,7 @@ public static class ProfileSurfaceRegistry
 
     private static async Task<HarnessApp> ComposeAppAsync(ProfileSurfaceRunOptions options)
     {
-        var harnessOptions = new HarnessOptions(options.Home, options.Cwd, SettingsConfig: options.SettingsConfig);
+        var harnessOptions = new HarnessOptions(options.Home, options.Cwd);
         if (options.Config is not null)
             return await ConfigBoot.Compose(options.Config, harnessOptions, patches: options.Patches);
         if (options.Patches is { Count: > 0 })

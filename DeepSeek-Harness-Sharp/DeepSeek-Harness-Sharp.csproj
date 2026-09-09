@@ -26,6 +26,7 @@
       <ProjectReference Include="..\src\Dsh.Llm\Dsh.Llm.csproj" />
       <ProjectReference Include="..\Cordis\Cordis.csproj" />
       <ProjectReference Include="..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
+      <ProjectReference Include="..\src\Dsh.Pty\Dsh.Pty.csproj" />
     </ItemGroup>
 
     <ItemGroup>
@@ -33,17 +34,13 @@
     </ItemGroup>
 
     <Target Name="CopySurfaceAssemblies" AfterTargets="Build">
-      <MSBuild Projects="..\src\Dsh.Tui\Dsh.Tui.csproj;..\src\Dsh.Acp\Dsh.Acp.csproj;..\src\Dsh.Lsp\Dsh.Lsp.csproj"
-               Targets="Build"
-               Properties="Configuration=$(Configuration)" />
+      <MSBuild Projects="..\src\Dsh.Tui\Dsh.Tui.csproj;..\src\Dsh.Acp\Dsh.Acp.csproj;..\src\Dsh.Lsp\Dsh.Lsp.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
       <ItemGroup>
         <SurfaceAssemblies Include="..\src\Dsh.Tui\bin\$(Configuration)\net10.0\*.dll" />
         <SurfaceAssemblies Include="..\src\Dsh.Acp\bin\$(Configuration)\net10.0\*.dll" />
         <SurfaceAssemblies Include="..\src\Dsh.Lsp\bin\$(Configuration)\net10.0\*.dll" />
       </ItemGroup>
-      <Copy SourceFiles="@(SurfaceAssemblies)"
-            DestinationFolder="$(OutDir)"
-            SkipUnchangedFiles="true" />
+      <Copy SourceFiles="@(SurfaceAssemblies)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
     </Target>
 
 </Project>

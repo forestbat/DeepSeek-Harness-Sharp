@@ -34,13 +34,16 @@ public class Include : EntryTree, IAsyncInit
         [".yml"] = "application/yaml",
     };
 
-    private readonly IncludeConfig _config;
+    private IncludeConfig _config;
     private readonly string _filename;
     private readonly string _type;
+    private readonly IncludeJournal _journal = new();
+    private IncludePatchIndex _patchIndex;
     private bool _readonly;
     private string? _content;
     private List<object?>? _data;
-    private CancellationTokenSource _writeCts = new();
+    private List<EntryOptions>? _appliedTree;
+    private Task? _flushTask;
 
     public Include(Context ctx, object? config) : base(ctx)
     {
@@ -56,15 +59,28 @@ public class Include : EntryTree, IAsyncInit
             throw new CordisException("UNSUPPORTED_EXTENSION", $"extension \"{ext}\" not supported");
         }
         _type = type;
+        _patchIndex = new IncludePatchIndex(_config.Patches);
 
-        ctx.On("internal/update", (thisArg, args) =>
+        ctx.On("internal/update", async (thisArg, args) =>
         {
-            var next = (Func<object?>)args[2]!;
+            ValueTask<object?> Next() => args[2] switch
+            {
+                Func<ValueTask<object?>> asyncNext => asyncNext(),
+                Func<object?> syncNext => new ValueTask<object?>(syncNext()),
+                _ => throw new InvalidOperationException("invalid next"),
+            };
             var path = (args[0] as IDictionary<string, object?>)?.GetOrNull("path") as string;
-            if (path != _config.Path) return new ValueTask<object?>(next());
-            if (_data is not null) _ = Root.Update(_data.Select(EntryOptions.From).ToList());
-            return new ValueTask<object?>();
-
+            if (path != _config.Path) return await Next();
+            _config = IncludeConfig.From(args[0]!);
+            _patchIndex = new IncludePatchIndex(_config.Patches);
+            if (_data is not null)
+            {
+                var tree = ApplyPatches(_data.Select(EntryOptions.From).ToList(), _config.Patches, Warn);
+                tree = _journal.Apply(tree);
+                _appliedTree = tree.Select(IncludeJournal.CloneEntry).ToList();
+                await Root.Update(tree);
+            }
+            return await Next();
         });
     }
 
@@ -119,8 +135,9 @@ public class Include : EntryTree, IAsyncInit
         var patched = ApplyPatches(
             (_data ?? []).Select(EntryOptions.From).ToList(),
             _config.Patches,
-            (message, args) => Ctx.Root.Logger.Invoke("loader").Warn(message, args));
+            Warn);
         await Root.Update(patched);
+        _appliedTree = patched.Select(IncludeJournal.CloneEntry).ToList();
     }
 
     public void Stop()
@@ -130,8 +147,23 @@ public class Include : EntryTree, IAsyncInit
 
     public async Task Refresh()
     {
+        var oldData = _data?.Select(EntryOptions.From).ToList() ?? [];
         if (!await Read()) return;
-        if (_data is not null) await Root.Update(_data.Select(EntryOptions.From).ToList());
+        var newData = _data!.Select(EntryOptions.From).ToList();
+        var conflicts = _journal.Reconcile(
+            IncludeJournal.Flatten(oldData),
+            IncludeJournal.Flatten(newData),
+            (id, key) => _patchIndex.FileOwned(id, key));
+        foreach (var conflict in conflicts)
+        {
+            Ctx.Root.Logger.Invoke("loader").Error(
+                "config conflict in %C: entry %C %s; file wins",
+                _filename, conflict.Id, conflict.Reason);
+        }
+        var tree = ApplyPatches(newData, _config.Patches, Warn);
+        tree = _journal.Apply(tree);
+        _appliedTree = tree.Select(IncludeJournal.CloneEntry).ToList();
+        await Root.Update(tree);
     }
 
     private async Task WriteFile(List<object?> config)
@@ -146,32 +178,118 @@ public class Include : EntryTree, IAsyncInit
             "application/json" => System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
             _ => throw new CordisException("UNSUPPORTED_TYPE", $"type {_type} not supported"),
         };
-        await File.WriteAllTextAsync(_filename + ".tmp", _content);
-        File.Move(_filename + ".tmp", _filename, true);
+        await IncludeFileWriter.WriteAtomicAsync(_filename, _content);
+    }
+
+    private void Warn(string message, object?[] args)
+    {
+        Ctx.Root.Logger.Invoke("loader").Warn(message, args);
     }
 
     public override void Write()
     {
         Ctx.Events.Emit(null, "loader/config-update");
-        _writeCts.Cancel();
-        _writeCts = new CancellationTokenSource();
-        var token = _writeCts.Token;
-        var config = Root.Data.Select(o => (object?)o).ToList();
-        _ = Task.Run(async () =>
+        RecordJournal();
+        _ = FlushAsync();
+    }
+
+    public Task FlushAsync()
+    {
+        if (_flushTask is { IsCompleted: false }) return _flushTask;
+        _flushTask = FlushInternalAsync();
+        return _flushTask;
+    }
+
+    private void RecordJournal()
+    {
+        var current = Root.Data.Select(IncludeJournal.CloneEntry).ToList();
+        if (_appliedTree is null)
         {
-            try
+            _appliedTree = current;
+            return;
+        }
+        var oldMap = IncludeJournal.Flatten(_appliedTree);
+        var newMap = IncludeJournal.Flatten(current);
+        foreach (var (id, flat) in newMap)
+        {
+            if (!oldMap.TryGetValue(id, out var oldFlat))
             {
-                await Task.Delay(0, token);
-                await WriteFile(config);
+                _journal.RecordAdd(flat.Options, flat.Parent, flat.Position);
             }
-            catch (OperationCanceledException)
+            else if (!CordisUtils.DeepEqual(oldFlat.Options, flat.Options) || oldFlat.Parent != flat.Parent)
             {
+                _journal.RecordUpdate(id, oldFlat.Options, flat.Options, flat.Parent, flat.Position, oldFlat.Parent != flat.Parent);
             }
-            catch (Exception error)
+        }
+        foreach (var id in oldMap.Keys)
+        {
+            if (!newMap.ContainsKey(id)) _journal.RecordRemove(id);
+        }
+        _appliedTree = current;
+    }
+
+    private async Task FlushInternalAsync()
+    {
+        while (!_journal.IsEmpty)
+        {
+            var batch = _journal.TakeSnapshot();
+            if (batch.Count == 0) break;
+            var data = _data?.Select(EntryOptions.From).ToList() ?? [];
+            var patches = _config.Patches?.Select(ClonePatch).ToList() ?? [];
+            var result = IncludePatch.RouteJournal(batch, data, patches, Warn);
+            if (result.PatchesChanged)
             {
-                Ctx.Logger.Error("%s", error);
+                _config = new IncludeConfig
+                {
+                    Path = _config.Path,
+                    Initial = _config.Initial,
+                    Patches = patches,
+                    EnableLogs = _config.EnableLogs,
+                };
             }
-        });
+            if (result.FileChanged)
+            {
+                var expected = _content;
+                var current = await File.ReadAllTextAsync(_filename);
+                if (expected is not null && current != expected)
+                {
+                    _journal.MergeBack(batch);
+                    await Refresh();
+                    continue;
+                }
+                var fileData = data.Select(IncludeJournal.CloneEntry).ToList();
+                var text = Dump(fileData);
+                await IncludeFileWriter.WriteAtomicAsync(_filename, text, expected);
+                _content = text;
+                _data = fileData.Cast<object?>().ToList();
+            }
+        }
+    }
+
+    private static Dictionary<string, object?> ClonePatch(Dictionary<string, object?> patch)
+    {
+        return patch.ToDictionary(pair => pair.Key, pair => CloneValue(pair.Value));
+    }
+
+    private static object? CloneValue(object? value)
+    {
+        return value switch
+        {
+            Dictionary<string, object?> dict => dict.ToDictionary(pair => pair.Key, pair => CloneValue(pair.Value)),
+            List<object?> list => list.Select(CloneValue).ToList(),
+            _ => value,
+        };
+    }
+
+    private string Dump(List<EntryOptions> data)
+    {
+        var config = data.Cast<object?>().ToList();
+        return _type switch
+        {
+            "application/yaml" => YamlConfig.Dump(config),
+            "application/json" => System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
+            _ => throw new CordisException("UNSUPPORTED_TYPE", $"type {_type} not supported"),
+        };
     }
 
     public static List<EntryOptions> ApplyPatches(

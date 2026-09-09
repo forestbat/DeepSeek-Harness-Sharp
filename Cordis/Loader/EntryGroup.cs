@@ -89,10 +89,16 @@ public class Group : EntryGroup, IAsyncInit
         : base(ctx, ctx.Fiber.Entry!.Parent.Tree)
     {
         _config = Normalize(config);
-        Ctx.On("internal/update", (thisArg, args) =>
+        Ctx.On("internal/update", async (thisArg, args) =>
         {
-            _ = Update(Normalize(args[0]));
-            return new ValueTask<object?>();
+            ValueTask<object?> Next() => args[2] switch
+            {
+                Func<ValueTask<object?>> asyncNext => asyncNext(),
+                Func<object?> syncNext => new ValueTask<object?>(syncNext()),
+                _ => throw new InvalidOperationException("invalid next"),
+            };
+            await Update(Normalize(args[0]));
+            return await Next();
         });
     }
 

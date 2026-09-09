@@ -17,7 +17,9 @@ public sealed class Session
 
     public event Action<Session, SessionEvent>? Appended;
 
-    public SessionHeader Header { get; }
+    public event Action<Session, SessionHeader>? Renamed;
+
+    public SessionHeader Header { get; private set; }
 
     public SessionId Id => Header.Id;
 
@@ -132,6 +134,27 @@ public sealed class Session
             }
         }
         return sessionEvent;
+    }
+
+    public void Rename(string title)
+    {
+        Header = Header with { Title = title };
+        var subscribers = Renamed;
+        if (subscribers is null)
+            return;
+        foreach (var subscriber in subscribers.GetInvocationList())
+        {
+            if (subscriber is not Action<Session, SessionHeader> action)
+                continue;
+            try
+            {
+                action(this, Header);
+            }
+            catch
+            {
+                // Observer failures are contained and never unmake a rename.
+            }
+        }
     }
 
     public EpochHeader? RequestHeader()

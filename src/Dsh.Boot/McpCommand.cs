@@ -16,16 +16,23 @@ public static class McpCommand
             Handler = async invocation =>
             {
                 var settings = HarnessSettings.Load(home);
-                if (settings.McpServers.Count == 0)
-                    return new CommandResult.Success("no mcpServers configured");
                 var servers = settings.McpServers
-                    .Select(entry => new McpServerConfig(
-                        entry.Key,
-                        entry.Value.Transport ?? "stdio",
-                        entry.Value.Command,
-                        entry.Value.Args,
-                        entry.Value.Url))
+                    .Where(entry => entry.Value.Enabled)
+                    .Select(entry =>
+                    {
+                        var commandParts = entry.Value.Command ?? [];
+                        var command = commandParts.Count > 0 ? commandParts[0] : null;
+                        var args = commandParts.Skip(1).Concat(entry.Value.Args ?? []).ToList();
+                        return new McpServerConfig(
+                            entry.Key,
+                            entry.Value.Transport ?? "stdio",
+                            command,
+                            args,
+                            entry.Value.Url);
+                    })
                     .ToList();
+                if (servers.Count == 0)
+                    return new CommandResult.Success("no mcp servers enabled");
                 await using var runtime = new McpRuntime();
                 await runtime.ConnectAsync(servers, invocation.Signal);
                 var lines = runtime.Status().Select(status =>
