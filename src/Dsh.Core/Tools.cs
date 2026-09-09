@@ -62,7 +62,7 @@ public sealed class ToolRuntime : Service
     {
         _defaultMode = defaultMode;
         _layers = new ScopedLayers<ToolLayer>(scope => new ToolLayer(scope), () => ctx.Emit(ChangeEvent));
-        var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)
+        var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
         systemPrompt.Tools(context => WireSchemas(context.Scope));
     }

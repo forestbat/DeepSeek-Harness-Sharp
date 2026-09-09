@@ -1,8 +1,9 @@
 using System.Text.Json;
 using Cordis;
+using Dsh.Boot;
 using Dsh.Core;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class SafetyCommandGuard
 {

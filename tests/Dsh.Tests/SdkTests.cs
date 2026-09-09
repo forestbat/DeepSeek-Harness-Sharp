@@ -72,7 +72,7 @@ public sealed class SdkTests
     public async Task SdkServer_InitializeAndPromptThroughCSharpClient()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -106,7 +106,7 @@ public sealed class SdkTests
     public async Task SdkServer_EmitsSessionEventNotificationToCSharpClient()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -141,7 +141,7 @@ public sealed class SdkTests
     public async Task SdkServer_AcceptsTsWireInitializeRequest()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
         {
             var input = new StringReader("""
                 {"jsonrpc":"2.0","id":"1","method":"initialize","params":{"cwd":"C:\\work","provider":"deepseek-official","model":"deepseek-v4-flash"}}

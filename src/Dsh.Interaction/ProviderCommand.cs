@@ -1,10 +1,10 @@
 using Cordis;
+using Dsh.Boot;
 using Dsh.Core;
-using Dsh.Interaction;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class ProviderCommand
 {
@@ -16,7 +16,7 @@ public static class ProviderCommand
 
     public static IDisposable Register(Context ctx, HarnessHome home)
     {
-        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         return commands.Register(new CommandDefinition
         {
             Name = "provider",
@@ -139,7 +139,7 @@ public static class ProviderCommand
             var llm = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
             var credentials = new EnvCredentials(home, Environment.CurrentDirectory);
             var options = new HarnessOptions(home, Environment.CurrentDirectory);
-            HarnessComposer.RegisterProviderAdapter(ctx, name, provider, baseUrl, null, apiKey, options, credentials, llm);
+            ProviderAdapterRegistrar.RegisterProviderAdapter(ctx, name, provider, baseUrl, null, apiKey, options, credentials, llm);
         }
         catch (Exception error)
         {

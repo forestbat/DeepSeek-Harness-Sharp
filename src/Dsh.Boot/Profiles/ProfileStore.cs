@@ -45,9 +45,6 @@ public static class ProfileStore
             }
             : new ProfileManifest { Name = name };
         WriteManifest(directory, manifest);
-        var patchPath = Path.Combine(directory, "cordis.patch.yml");
-        if (!File.Exists(patchPath))
-            File.WriteAllText(patchPath, "[]\n");
         var workspacePath = Path.Combine(directory, "pnpm-workspace.yaml");
         if (!File.Exists(workspacePath))
             File.WriteAllText(workspacePath, "packages:\n  - .\n");

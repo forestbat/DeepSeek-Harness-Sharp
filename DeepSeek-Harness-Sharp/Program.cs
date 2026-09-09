@@ -1,10 +1,6 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Dsh.Boot;
 using Dsh.Boot.Profiles;
-using Dsh.Core;
-using Dsh.Llm;
-using Dsh.Pty;
-using Dsh.Sdk;
 
 namespace DeepSeek_Harness_Sharp;
 
@@ -12,6 +8,8 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        Dsh.Launcher.PluginRoot.EnsureRooted();
+
         if (args.Length > 0 && args[0] == "plugin")
             return await RunPlugin(HarnessHome.Resolve(FindHomeArg(args)), args[1..]);
 
@@ -57,6 +55,12 @@ public static class Program
                 case "tui":
                     profile = "tui";
                     break;
+                case "acp":
+                    profile = "acp";
+                    break;
+                case "lsp":
+                    profile = "lsp";
+                    break;
                 default:
                     positional.Add(args[index]);
                     break;
@@ -65,7 +69,7 @@ public static class Program
         if (profile == "tui")
         {
             if (positional.FirstOrDefault() == "list")
-                return await RunTuiList();
+                return await BootCli.RunTuiListAsync();
             if (positional.FirstOrDefault() == "attach")
             {
                 if (positional.Count < 2)
@@ -74,11 +78,11 @@ public static class Program
                     return 1;
                 }
 
-                return await RunTuiAttach(positional[1]);
+                return await BootCli.RunTuiAttachAsync(positional[1]);
             }
 
             if (positional.FirstOrDefault() == "daemon")
-                return await RunTuiDaemon();
+                return await BootCli.RunTuiDaemonAsync();
         }
 
         if (useTmux && Environment.GetEnvironmentVariable("TMUX") is null)
@@ -119,22 +123,19 @@ public static class Program
         switch (profile)
         {
             case null:
-            case "web":
-                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("web", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
-            case "headless":
-                return await RunHeadless(harnessHome, string.Join(' ', positional), bootConfig, bootPatches);
-            case "sdk" or "sdk-minimal":
-                return await RunSdk(harnessHome, bootConfig, bootPatches);
-            case "acp":
-                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("acp", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
-            case "lsp":
-                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("lsp", new ProfileSurfaceRunOptions(
-                    harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
             case "tui":
-                return await Dsh.Boot.ProfileSurfaceRegistry.RunAsync("tui", new ProfileSurfaceRunOptions(
+            case "web":
+            case "acp":
+            case "lsp":
+            {
+                using var app = await ComposeEntrypointApp(harnessHome, bootConfig, bootPatches);
+                return await PluginEntrypointRegistry.RunAsync(profile ?? "web", app, new PluginEntrypointOptions(
                     harnessHome, Directory.GetCurrentDirectory(), bootConfig, bootPatches));
+            }
+            case "headless":
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional), bootConfig, bootPatches);
+            case "sdk" or "sdk-minimal":
+                return await BootCli.RunSdkAsync(harnessHome, bootConfig, bootPatches);
             default:
                 Console.Error.WriteLine($"dsh: unknown profile \"{profile}\"");
                 return 1;
@@ -159,211 +160,6 @@ public static class Program
               tui                start the terminal UI
               headless "task"    answer one task and exit
             """);
-    }
-
-    private static async Task<int> RunTuiList()
-    {
-        try
-        {
-            var sessions = await PtyDaemonClient.ListAsync();
-            if (sessions.Count == 0)
-            {
-                Console.WriteLine("no PTY sessions");
-                return 0;
-            }
-
-            foreach (var session in sessions)
-                Console.WriteLine($"{session.Id}\t{session.Command}\t{session.StartedAt:O}\t{session.Status}");
-
-            return 0;
-        }
-        catch (PtyDaemonNotRunningException)
-        {
-            Console.Error.WriteLine("daemon not running");
-            return 1;
-        }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine($"dsh: list failed: {error.Message}");
-            return 1;
-        }
-    }
-
-    private static async Task<int> RunTuiAttach(string id)
-    {
-        try
-        {
-            await PtyDaemonClient.AttachAsync(
-                id,
-                Console.OpenStandardInput(),
-                Console.OpenStandardOutput());
-            return 0;
-        }
-        catch (PtyDaemonNotRunningException)
-        {
-            Console.Error.WriteLine("daemon not running");
-            return 1;
-        }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine($"dsh: attach failed: {error.Message}");
-            return 1;
-        }
-    }
-
-    private static async Task<int> RunTuiDaemon()
-    {
-        await using var daemon = new PtyDaemon();
-        await daemon.StartAsync();
-        var shutdown = new ManualResetEventSlim(false);
-        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            shutdown.Set();
-        };
-        Console.CancelKeyPress += cancelHandler;
-        try
-        {
-            await Task.Run(shutdown.Wait);
-        }
-        finally
-        {
-            Console.CancelKeyPress -= cancelHandler;
-            shutdown.Dispose();
-        }
-
-        return 0;
-    }
-
-    private static async Task<int> RunHeadless(HarnessHome home, string task, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)    {
-        if (string.IsNullOrWhiteSpace(task))
-        {
-            Console.Error.WriteLine("error: a task is required, for example: dsh --profile headless \"run the tests\"");
-            return 1;
-        }
-        using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
-        using var autoApprove = Dsh.Interaction.ApprovalAnswerers.AutoApprove(app.Ctx);
-        var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-        var handle = await agents.Create(new CreateAgentOptions(
-            SessionId.Create($"session-{Guid.NewGuid()}"),
-            Directory.GetCurrentDirectory(),
-            new AgentOptions(app.Provider, app.Model)));
-        var agent = (AgentLoopAgent)handle.Agent;
-        await agent.WhenIdle();
-        var firstSeq = agent.Session.Seq;
-        using var reasoning = StreamReasoning(app.Ctx, agent);
-        agent.Followup(MessageFactory.CreateUserText(task));
-        await agent.WhenIdle();
-        var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
-        await sessions.Flush(agent.Session);
-
-        var (text, reason) = Summarize(agent.Session, firstSeq);
-        Console.Out.WriteLine(text);
-        if (reason is TurnEndReason.Error error)
-        {
-            Console.Error.WriteLine($"dsh: {error.Failure.Code}: {error.Failure.Message}");
-            return 1;
-        }
-        return reason is TurnEndReason.Completed ? 0 : 1;
-    }
-
-    private static async Task<int> RunSdk(HarnessHome home, string? config, IReadOnlyList<Dictionary<string, object?>>? patches)
-    {
-        using var app = config is null
-            ? HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()))
-            : await ConfigBoot.Compose(config, new HarnessOptions(home, Directory.GetCurrentDirectory()), patches: patches);
-        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
-        var server = new HarnessSdkServer(app.Ctx, transport);
-        transport.RequestHandler = (method, parameters) => server.HandleRequestAsync(method, parameters);
-        transport.Start();
-        await transport.WhenClosedAsync();
-        return 0;
-    }
-
-    private static (string Text, TurnEndReason? Reason) Summarize(Session session, long firstSeq)
-    {
-        var started = false;
-        var text = "";
-        TurnEndReason? reason = null;
-        for (var seq = firstSeq; seq < session.Seq; seq++)
-        {
-            var sessionEvent = session.EventAt(seq);
-            if (sessionEvent is null)
-                throw new InvalidOperationException($"headless summary cannot read seq {seq} below captured length {session.Seq}");
-            switch (sessionEvent.Data)
-            {
-                case TurnStartPayload:
-                    started = true;
-                    break;
-                case AssistantMessagePayload assistant when started:
-                {
-                    var joined = string.Concat(assistant.Message.Content.OfType<TextBlock>().Select(block => block.Text));
-                    if (joined != "")
-                        text = joined;
-                    break;
-                }
-                case TurnEndPayload turnEnd:
-                    reason = turnEnd.Reason;
-                    break;
-            }
-        }
-        return (text, reason);
-    }
-
-    private static IDisposable StreamReasoning(Cordis.Context ctx, AgentLoopAgent agent)
-    {
-        var started = false;
-        var open = false;
-        var endsWithNewline = true;
-
-        void Close()
-        {
-            if (!open)
-                return;
-            if (!endsWithNewline)
-                Console.Error.Write('\n');
-            open = false;
-            endsWithNewline = true;
-        }
-
-        var dispose = ctx.On(SessionStore.EventEvent, (_, args) =>
-        {
-            if (!ReferenceEquals(args[0], agent.Session))
-                return new ValueTask<object?>();
-            if (((SessionEvent)args[1]!).Data is TurnStartPayload)
-            {
-                Close();
-                started = true;
-                return new ValueTask<object?>();
-            }
-            if (!started || ((SessionEvent)args[1]!).Data is not AssistantChunkPayload chunkPayload)
-                return new ValueTask<object?>();
-            switch (chunkPayload.Chunk)
-            {
-                case StreamChunk.ReasoningDelta { Text.Length: > 0 } reasoning:
-                    if (!open)
-                    {
-                        Console.Error.Write("dsh: reasoning:\n");
-                        open = true;
-                    }
-                    Console.Error.Write(reasoning.Text);
-                    endsWithNewline = reasoning.Text.EndsWith('\n');
-                    break;
-                case StreamChunk.BlockStart { BlockType: "reasoning" }:
-                    break;
-                case StreamChunk.BlockEnd { Block: ReasoningBlock }:
-                    break;
-                case StreamChunk.Usage:
-                    break;
-                default:
-                    Close();
-                    break;
-            }
-            return new ValueTask<object?>();
-        });
-        return new ReasoningSubscription(dispose, Close);
     }
 
     private static string? FindHomeArg(string[] args)
@@ -414,6 +210,17 @@ public static class Program
         return process.ExitCode;
     }
 
+    private static async Task<HarnessApp> ComposeEntrypointApp(
+        HarnessHome home,
+        string? config,
+        IReadOnlyList<Dictionary<string, object?>>? patches)
+    {
+        var options = new HarnessOptions(home, Directory.GetCurrentDirectory());
+        return config is null
+            ? await HarnessComposer.Compose(options)
+            : await ConfigBoot.Compose(config, options, patches: patches);
+    }
+
     private static int StartInTmux(string[] args)
     {
         var relaunchArgs = args.Where(argument => argument != "--tmux").ToArray();
@@ -421,16 +228,7 @@ public static class Program
         var assembly = Environment.GetCommandLineArgs()[0];
         var command = $"{dotnet} \"{assembly}\" {string.Join(' ', relaunchArgs)}";
         Process.Start("tmux", ["new-session", "-d", "-s", "dsh", command]);
-        Process.Start("tmux", ["attach", "-t", "dsh"])?.WaitForExit();
+        Process.Start("tmux", ["attach", "-t", "dsh"]).WaitForExit();
         return 0;
-    }
-
-    private sealed class ReasoningSubscription(Func<bool> dispose, Action close) : IDisposable
-    {
-        public void Dispose()
-        {
-            dispose();
-            close();
-        }
     }
 }

@@ -1,8 +1,8 @@
 using Cordis;
+using Dsh.Boot;
 using Dsh.Interaction;
-using Dsh.Mcp;
 
-namespace Dsh.Boot;
+namespace Dsh.Mcp;
 
 public static class McpCommand
 {

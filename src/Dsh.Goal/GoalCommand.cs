@@ -1,8 +1,7 @@
 using Cordis;
-using Dsh.Goal;
 using Dsh.Interaction;
 
-namespace Dsh.Boot;
+namespace Dsh.Goal;
 
 public static class GoalCommand
 {
@@ -17,7 +16,7 @@ public static class GoalCommand
             Handler = async invocation =>
             {
                 var agent = invocation.Agent;
-                var goals = ctx.Get<GoalService>(GoalService.ServiceName)!;
+                var goals = ctx.Get<GoalService>(GoalService.ServiceName, false)!;
                 var raw = invocation.RawInput.Trim();
                 try
                 {

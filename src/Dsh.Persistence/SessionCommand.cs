@@ -3,7 +3,7 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 
-namespace Dsh.Boot;
+namespace Dsh.Persistence;
 
 public static class SessionCommand
 {

@@ -1,21 +1,16 @@
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Persistence;
 
 namespace Dsh.Tui;
 
 public static class TuiRunner
 {
     public static async Task<int> Run(
-        HarnessHome home,
-        string cwd,
-        string? config = null,
-        IReadOnlyList<Dictionary<string, object?>>? patches = null)
+        HarnessApp app,
+        string cwd)
     {
-        var options = new HarnessOptions(home, cwd);
-        using var app = config is null
-            ? HarnessComposer.Compose(options)
-            : await ConfigBoot.Compose(config, options, patches: patches);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),
@@ -50,7 +45,7 @@ public static class TuiRunner
 
     private static async Task<int> RunNonInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
     {
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Persistence);
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
         chat.DrainUi();
         var size = GetConsoleSize();
         var layout = LayoutEngine.Calculate(size.Width, size.Height);
@@ -72,7 +67,7 @@ public static class TuiRunner
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Persistence);
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
         try
         {
             while (!chat.ExitRequested)
@@ -112,7 +107,7 @@ public static class TuiRunner
     {
         try
         {
-            using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Persistence);
+            using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(Dsh.Persistence.Plugin.ServiceName));
             using var renderer = new GpuRenderer(chat);
             renderer.Run();
             var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;

@@ -1,15 +1,14 @@
 using Cordis;
 using Dsh.Core;
-using Dsh.Interaction;
 using Dsh.Llm;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class ReasoningCommand
 {
     public static IDisposable Register(Context ctx)
     {
-        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         return commands.Register(new CommandDefinition
         {
             Name = "reasoning",

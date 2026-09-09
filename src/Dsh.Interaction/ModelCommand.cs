@@ -1,16 +1,16 @@
 using System.Text;
 using Cordis;
+using Dsh.Boot;
 using Dsh.Core;
-using Dsh.Interaction;
 using Dsh.Llm;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class ModelCommand
 {
     public static IDisposable Register(Context ctx, HarnessHome home)
     {
-        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         return commands.Register(new CommandDefinition
         {
             Name = "model",

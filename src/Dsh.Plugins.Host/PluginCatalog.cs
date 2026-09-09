@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Cordis;
 
@@ -5,9 +6,12 @@ namespace Dsh.Plugins;
 
 public sealed class PluginCatalog
 {
-    private readonly Dictionary<string, Type> _plugins = new();
+    private readonly Dictionary<string, PluginTypeHolder> _plugins = new();
 
     public IReadOnlyCollection<string> PackageNames => _plugins.Keys;
+
+    public IReadOnlyList<(string Package, Type Implementation)> Enumerate()
+        => _plugins.Select(entry => (entry.Key, entry.Value.Type)).ToList();
 
     public void RegisterAssembly(Assembly assembly)
     {
@@ -20,17 +24,30 @@ public sealed class PluginCatalog
             if (_plugins.TryGetValue(attribute.PackageName, out var existing))
             {
                 throw new InvalidOperationException(
-                    $"Plugin package '{attribute.PackageName}' is already registered by {existing.FullName}; cannot also register {pluginType.FullName}.");
+                    $"Plugin package '{attribute.PackageName}' is already registered by {existing.Type.FullName}; cannot also register {pluginType.FullName}.");
             }
-            _plugins[attribute.PackageName] = pluginType;
+            _plugins[attribute.PackageName] = new PluginTypeHolder(pluginType);
         }
+    }
+
+    public void RegisterPlugin(string packageName, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type pluginType)
+    {
+        if (_plugins.TryGetValue(packageName, out var existing))
+        {
+            if (existing.Type == pluginType)
+                return;
+            throw new InvalidOperationException(
+                $"Plugin package '{packageName}' is already registered by {existing.Type.FullName}; cannot also register {pluginType.FullName}.");
+        }
+
+        _plugins[packageName] = new PluginTypeHolder(pluginType);
     }
 
     public bool TryCreate(string packageName, out IDshPlugin? plugin)
     {
-        if (_plugins.TryGetValue(packageName, out var pluginType))
+        if (_plugins.TryGetValue(packageName, out var holder))
         {
-            plugin = CreatePlugin(pluginType, packageName);
+            plugin = CreatePlugin(holder.Type, packageName);
             return true;
         }
         plugin = null;
@@ -39,22 +56,22 @@ public sealed class PluginCatalog
 
     public bool TryCreateDefinition(string packageName, out PluginDefinition? definition)
     {
-        if (!_plugins.TryGetValue(packageName, out var pluginType))
+        if (!_plugins.TryGetValue(packageName, out var holder))
         {
             definition = null;
             return false;
         }
-        definition = CreateDefinition(pluginType, packageName);
+        definition = CreateDefinition(holder.Type, packageName);
         return true;
     }
 
     public PluginDefinition CreateDefinition(string packageName)
     {
-        if (!_plugins.TryGetValue(packageName, out var pluginType))
+        if (!_plugins.TryGetValue(packageName, out var holder))
         {
             throw new KeyNotFoundException($"Plugin package '{packageName}' is not registered.");
         }
-        return CreateDefinition(pluginType, packageName);
+        return CreateDefinition(holder.Type, packageName);
     }
 
     private static Type FindPluginType(Assembly assembly)
@@ -83,7 +100,7 @@ public sealed class PluginCatalog
         }
     }
 
-    private static PluginDefinition CreateDefinition(Type pluginType, string packageName)
+    private static PluginDefinition CreateDefinition([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type pluginType, string packageName)
     {
         var instance = CreatePlugin(pluginType, packageName);
         return new PluginDefinition
@@ -99,10 +116,21 @@ public sealed class PluginCatalog
         };
     }
 
-    private static IDshPlugin CreatePlugin(Type pluginType, string packageName)
+    private static IDshPlugin CreatePlugin([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type pluginType, string packageName)
     {
         if (pluginType.GetConstructor([typeof(string)]) is not null)
             return (IDshPlugin)Activator.CreateInstance(pluginType, packageName)!;
         return (IDshPlugin)Activator.CreateInstance(pluginType)!;
+    }
+
+    private sealed class PluginTypeHolder
+    {
+        public PluginTypeHolder([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type type)
+        {
+            Type = type;
+        }
+
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]
+        public Type Type { get; }
     }
 }

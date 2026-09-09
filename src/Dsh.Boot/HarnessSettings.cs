@@ -6,34 +6,34 @@ namespace Dsh.Boot;
 public sealed class HarnessSettings
 {
     [YamlMember(Alias = "global_default_model")]
-    public string? GlobalDefaultModel { get; init; }
+    public string? GlobalDefaultModel { get; set; }
 
     [YamlMember(Alias = "compaction_model")]
-    public string? CompactionModel { get; init; }
+    public string? CompactionModel { get; set; }
 
     [YamlMember(Alias = "subagent")]
-    public SubagentSettings? Subagent { get; init; }
+    public SubagentSettings? Subagent { get; set; }
 
     [YamlMember(Alias = "providers")]
-    public Dictionary<string, ProviderSettings> Providers { get; init; } = [];
+    public Dictionary<string, ProviderSettings> Providers { get; set; } = [];
 
     [YamlMember(Alias = "skills")]
-    public SkillsSettings? Skills { get; init; }
+    public SkillsSettings? Skills { get; set; }
 
     [YamlMember(Alias = "rules")]
-    public List<string> Rules { get; init; } = [];
+    public List<string> Rules { get; set; } = [];
 
     [YamlMember(Alias = "mcp")]
-    public Dictionary<string, McpServerSettings> McpServers { get; init; } = [];
+    public Dictionary<string, McpServerSettings> McpServers { get; set; } = [];
 
     [YamlMember(Alias = "compaction")]
-    public CompactionSettings? Compaction { get; init; }
+    public CompactionSettings? Compaction { get; set; }
 
     [YamlMember(Alias = "safety")]
-    public SafetySettings? Safety { get; init; }
+    public SafetySettings? Safety { get; set; }
 
     [YamlMember(Alias = "memory")]
-    public MemorySettings? Memory { get; init; }
+    public MemorySettings? Memory { get; set; }
 
     public const string DefaultSettingsTemplate = """
         # DeepSeek Harness 配置文件（settings.yaml v2）
@@ -105,7 +105,7 @@ public sealed class HarnessSettings
         Directory.CreateDirectory(home.Root);
         if (!File.Exists(path))
             File.WriteAllText(path, DefaultSettingsTemplate);
-        var deserializer = new DeserializerBuilder()
+        var deserializer = new StaticDeserializerBuilder(new DshYamlStaticContext())
             .WithAttemptingUnquotedStringTypeDeserialization()
             .Build();
         return deserializer.Deserialize<HarnessSettings>(File.ReadAllText(path));
@@ -115,7 +115,7 @@ public sealed class HarnessSettings
     {
         var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
-        var serializer = new SerializerBuilder().Build();
+        var serializer = new StaticSerializerBuilder(new DshYamlStaticContext()).Build();
         File.WriteAllText(path, serializer.Serialize(this));
     }
 
@@ -136,95 +136,95 @@ public sealed class HarnessSettings
 public sealed class ProviderSettings
 {
     [YamlMember(Alias = "type")]
-    public string? Type { get; init; }
+    public string? Type { get; set; }
 
     [YamlMember(Alias = "options")]
-    public ProviderOptions? Options { get; init; }
+    public ProviderOptions? Options { get; set; }
 
     [YamlMember(Alias = "models")]
-    public Dictionary<string, ProviderModelSettings> Models { get; init; } = [];
+    public Dictionary<string, ProviderModelSettings> Models { get; set; } = [];
 }
 
 public sealed class ProviderOptions
 {
     [YamlMember(Alias = "baseUrl")]
-    public string? BaseUrl { get; init; }
+    public string? BaseUrl { get; set; }
 
     [YamlMember(Alias = "apiKey")]
-    public string? ApiKey { get; init; }
+    public string? ApiKey { get; set; }
 
     [YamlMember(Alias = "apiKeyEnv")]
-    public string? ApiKeyEnv { get; init; }
+    public string? ApiKeyEnv { get; set; }
 }
 
 public sealed class ProviderModelSettings
 {
     [YamlMember(Alias = "name")]
-    public string? Name { get; init; }
+    public string? Name { get; set; }
 
     [YamlMember(Alias = "reasoning")]
-    public bool? Reasoning { get; init; }
+    public bool? Reasoning { get; set; }
 
     [YamlMember(Alias = "tool_call")]
-    public bool? ToolCall { get; init; }
+    public bool? ToolCall { get; set; }
 }
 
 public sealed class SubagentSettings
 {
     [YamlMember(Alias = "default_model")]
-    public string? DefaultModel { get; init; }
+    public string? DefaultModel { get; set; }
 }
 
 public sealed class SkillsSettings
 {
     [YamlMember(Alias = "paths")]
-    public List<string> Paths { get; init; } = [];
+    public List<string> Paths { get; set; } = [];
 
     [YamlMember(Alias = "urls")]
-    public List<string> Urls { get; init; } = [];
+    public List<string> Urls { get; set; } = [];
 }
 
 public sealed class CompactionSettings
 {
     [YamlMember(Alias = "auto")]
-    public bool Auto { get; init; } = true;
+    public bool Auto { get; set; } = true;
 
     [YamlMember(Alias = "prune")]
-    public bool Prune { get; init; } = true;
+    public bool Prune { get; set; } = true;
 }
 
 public sealed class SafetySettings
 {
     [YamlMember(Alias = "autoApprove")]
-    public bool AutoApprove { get; init; }
+    public bool AutoApprove { get; set; }
 
     [YamlMember(Alias = "blacklist")]
-    public List<string> Blacklist { get; init; } = [];
+    public List<string> Blacklist { get; set; } = [];
 }
 
 public sealed class MemorySettings
 {
     [YamlMember(Alias = "enabled")]
-    public bool Enabled { get; init; }
+    public bool Enabled { get; set; }
 
     [YamlMember(Alias = "file")]
-    public string? File { get; init; }
+    public string? File { get; set; }
 }
 
 public sealed class McpServerSettings
 {
     [YamlMember(Alias = "transport")]
-    public string? Transport { get; init; }
+    public string? Transport { get; set; }
 
     [YamlMember(Alias = "command")]
-    public List<string>? Command { get; init; }
+    public List<string>? Command { get; set; }
 
     [YamlMember(Alias = "args")]
-    public List<string>? Args { get; init; }
+    public List<string>? Args { get; set; }
 
     [YamlMember(Alias = "url")]
-    public string? Url { get; init; }
+    public string? Url { get; set; }
 
     [YamlMember(Alias = "enabled")]
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; set; } = true;
 }

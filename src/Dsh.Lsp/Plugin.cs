@@ -1,10 +1,11 @@
 using Cordis;
 using Dsh.Boot;
 using Dsh.Plugins;
+using Dsh.Sdk;
 
-[assembly: DshPlugin("@deepseek-ai/dsh-web")]
+[assembly: DshPlugin("@deepseek-ai/dsh-lsp")]
 
-namespace Dsh.Web;
+namespace Dsh.Lsp;
 
 public sealed class Plugin : IDshPlugin
 {
@@ -12,25 +13,20 @@ public sealed class Plugin : IDshPlugin
 
     public IDisposable Apply(Context ctx, object? config)
     {
-        PluginEntrypointRegistry.Register("web",
+        PluginEntrypointRegistry.Register("lsp",
             static (_, _, cancellationToken) => RunAsync(cancellationToken));
         return new CallbackDisposable();
     }
 
     private static async Task<int> RunAsync(CancellationToken cancellationToken)
     {
-        var server = new WebProfileServer();
-        Console.WriteLine($"dsh web: http://127.0.0.1:{server.Port}");
-        try
-        {
-            await Task.Delay(Timeout.Infinite, cancellationToken);
-            return 0;
-        }
-        finally
-        {
-            if (server is IAsyncDisposable disposable)
-                await disposable.DisposeAsync();
-        }
+        var transport = new JsonRpcLineTransport(Console.In, Console.Out);
+        var server = new LspServer();
+        transport.RequestHandler = server.HandleRequestAsync;
+        transport.Start();
+        await transport.WhenClosedAsync().WaitAsync(cancellationToken);
+        await transport.DisposeAsync();
+        return 0;
     }
 
     private sealed class CallbackDisposable : IDisposable

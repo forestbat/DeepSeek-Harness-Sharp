@@ -25,6 +25,18 @@ public class ConfigBootTests
                     complete: true
                     includeRuntimeContext: false
 
+                - id: core
+                  name: '@deepseek-ai/dsh-core'
+
+                - id: interaction
+                  name: '@deepseek-ai/dsh-interaction'
+
+                - id: persistence
+                  name: '@deepseek-ai/dsh-persistence'
+
+                - id: subprocess
+                  name: '@deepseek-ai/dsh-subprocess'
+
                 - id: tool-bash
                   name: '@deepseek-ai/dsh-tool-bash'
 
@@ -40,6 +52,9 @@ public class ConfigBootTests
                   name: '@deepseek-ai/dsh-tool-todo'
                   config:
                     allowParallelInProgress: true
+
+                - id: fs-local-root
+                  name: '@deepseek-ai/dsh-fs-local'
 
                 - id: bootstrap-filesystem
                   name: cordis:group
@@ -60,8 +75,10 @@ public class ConfigBootTests
             app = await ConfigBoot.Compose(Path.Combine(dir, "test.cordis.yml"), new HarnessOptions(home, Cwd: dir));
 
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-            foreach (var name in new[] { "bash", "read", "write", "edit", "glob", "grep", "todo_write", "str_replace_editor" })
-                Assert.NotNull(tools.Get(name));
+            var missing = new[] { "bash", "read", "write", "edit", "glob", "grep", "todo_write", "str_replace_editor" }
+                .Where(name => tools.Get(name) is null)
+                .ToList();
+            Assert.True(missing.Count == 0, "missing tools: " + string.Join(", ", missing));
 
             Assert.NotNull(app.Ctx.Get<LocalFsService>(LocalFsService.ServiceName));
 

@@ -6,10 +6,10 @@ namespace Dsh.Tests;
 public sealed class LlmAliasTests
 {
     [Fact]
-    public void ComposeRegistersConfiguredProviderAlias()
+    public async Task ComposeRegistersConfiguredProviderAlias()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "llm-alias-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = HarnessComposer.Compose(new HarnessOptions(
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(
             new HarnessHome(home),
             Directory.GetCurrentDirectory(),
             Provider: "openai-compatible",

@@ -37,7 +37,7 @@ public sealed class LocalFsService : Service
         return Path.GetFullPath(string.IsNullOrEmpty(baseDir) ? Path.Combine(Cwd, path) : Path.Combine(baseDir, path));
     }
 
-    public object stat(string path, object? signal = null)
+    public object? stat(string path, object? signal = null)
     {
         var full = Path.GetFullPath(path);
         if (File.Exists(full))

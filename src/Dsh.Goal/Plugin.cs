@@ -1,5 +1,6 @@
 using Cordis;
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Plugins;
 
 [assembly: DshPlugin(Dsh.Goal.Plugin.Goal)]
@@ -14,7 +15,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     public string[] Inject => packageName switch
     {
-        Goal => [AgentRegistry.ServiceName, SessionProjectionRegistry.ServiceName],
+        Goal => [AgentRegistry.ServiceName, SessionProjectionRegistry.ServiceName, CommandsService.ServiceName],
         ToolGoal => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, AgentRegistry.ServiceName, SessionProjectionRegistry.ServiceName, GoalService.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
@@ -29,7 +30,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static IDisposable RegisterGoalService(Context ctx, object? config)
     {
         _ = new GoalService(ctx, GoalServiceConfigFrom(config));
-        return new NoopDisposable();
+        return new DisposableBundle(new NoopDisposable(), GoalCommand.Register(ctx));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)
@@ -65,6 +66,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var disposable in disposables)
+                disposable.Dispose();
         }
     }
 }

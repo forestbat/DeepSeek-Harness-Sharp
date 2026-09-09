@@ -1,9 +1,7 @@
 using Cordis;
-using Dsh.Core;
 using Dsh.Interaction;
-using Dsh.Skills;
 
-namespace Dsh.Boot;
+namespace Dsh.Skills;
 
 public static class SkillCommand
 {
@@ -17,7 +15,7 @@ public static class SkillCommand
             Input = new CommandInputDescriptor("name"),
             Handler = async invocation =>
             {
-                var registry = ctx.Get<SkillRegistry>(SkillRegistry.ServiceName);
+                var registry = ctx.Get<SkillRegistry>(SkillRegistry.ServiceName, false);
                 if (registry is null)
                     return new CommandResult.Error("skills service is not available");
                 var raw = invocation.RawInput.Trim();

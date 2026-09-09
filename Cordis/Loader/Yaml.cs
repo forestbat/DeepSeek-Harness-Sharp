@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.IO;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 using YamlDotNet.Serialization;
+using YamlDotNet.RepresentationModel;
 
 namespace Cordis.Loader;
 
@@ -15,12 +17,11 @@ public static class YamlConfig
 
     public static List<object?> Load(string content)
     {
-        var deserializer = new DeserializerBuilder()
-            .WithTagMapping(JsTag, typeof(JsExpr))
-            .WithTypeConverter(new JsExprConverter())
-            .Build();
-        var raw = deserializer.Deserialize<object>(content);
-        return ConvertNode(raw) as List<object?> ?? [];
+        var stream = new YamlStream();
+        stream.Load(new StringReader(content));
+        if (stream.Documents.Count == 0)
+            return [];
+        return ConvertYamlNode(stream.Documents[0].RootNode) as List<object?> ?? [];
     }
 
     public static string Dump(List<object?> data)
@@ -55,6 +56,33 @@ public static class YamlConfig
                 return node;
         }
     }
+
+    private static object? ConvertYamlNode(YamlNode node)
+    {
+        switch (node)
+        {
+            case null:
+                return null;
+            case YamlScalarNode scalar:
+                if (scalar.Tag == JsTag)
+                    return new JsExpr(scalar.Value ?? "");
+                return ParseScalar(scalar.Value ?? "");
+            case YamlMappingNode mapping:
+                var mapped = new Dictionary<string, object?>();
+                foreach (var (key, value) in mapping.Children)
+                {
+                    mapped[ConvertScalarKey(key)] = ConvertYamlNode(value);
+                }
+                return mapped;
+            case YamlSequenceNode sequence:
+                return sequence.Children.Select(ConvertYamlNode).ToList();
+            default:
+                return node.ToString();
+        }
+    }
+
+    private static string ConvertScalarKey(YamlNode key)
+        => key is YamlScalarNode scalar ? scalar.Value ?? "" : key.ToString();
 
     private static object? ParseScalar(string value)
     {

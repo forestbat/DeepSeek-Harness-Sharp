@@ -1,4 +1,5 @@
 using Cordis;
+using Dsh.Interaction;
 using Dsh.Plugins;
 
 [assembly: DshPlugin(Dsh.Skills.Plugin.Skill)]
@@ -13,7 +14,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     public string[] Inject => packageName switch
     {
-        Skill => [],
+        Skill => [CommandsService.ServiceName],
         SkillFilesystem => [SkillRegistry.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
@@ -28,7 +29,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static IDisposable RegisterSkillRegistry(Context ctx, object? config)
     {
         _ = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
-        return new NoopDisposable();
+        return new DisposableBundle(new NoopDisposable(), SkillCommand.Register(ctx));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)
@@ -80,6 +81,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var disposable in disposables)
+                disposable.Dispose();
         }
     }
 }

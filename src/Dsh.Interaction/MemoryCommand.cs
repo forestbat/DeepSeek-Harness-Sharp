@@ -1,8 +1,8 @@
 using Cordis;
+using Dsh.Boot;
 using Dsh.Core;
-using Dsh.Interaction;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class MemoryCommand
 {
@@ -13,7 +13,7 @@ public static class MemoryCommand
 
     public static IDisposable Register(Context ctx, HarnessOptions options)
     {
-        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         systemPrompt.Section(new PromptSection(
             MemorySectionName,

@@ -1,14 +1,13 @@
 using Cordis;
-using Dsh.Interaction;
 using Dsh.Plugins;
 
-namespace Dsh.Boot;
+namespace Dsh.Interaction;
 
 public static class PluginCommand
 {
     public static IDisposable Register(Context ctx, PluginCatalog catalog)
     {
-        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+        var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         return commands.Register(new CommandDefinition
         {
             Name = "plugins",
