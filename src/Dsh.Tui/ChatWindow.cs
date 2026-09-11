@@ -39,6 +39,8 @@ public sealed class ChatWindow : IDisposable
     private int _scrollOffset;
     private volatile bool _stickToBottom = true;
     private int _hoveredTab = -1;
+    private int _activeTab;
+    private static readonly string[] PanelTabLabels = ["上下文", "MCP", "计划", "输出"];
     private string _statusText = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+Q quits";
     private bool _exitRequested;
     private string? _deleteConfirmSessionId;
@@ -339,18 +341,23 @@ public sealed class ChatWindow : IDisposable
     {
         if (_pendingApproval is not null)
             return;
-        _hoveredTab = -1;
-        if (layout.RightPanel.Contains(cellX, cellY) && cellY - layout.RightPanel.Y > 0 && cellY - layout.RightPanel.Y <= 4)
-            _hoveredTab = cellY - layout.RightPanel.Y - 1;
+        _hoveredTab = HitPanelTab(cellX, cellY, layout.RightPanel);
     }
 
     public void HandleMouseClick(int cellX, int cellY, UiLayout layout)
     {
         if (_pendingApproval is not null)
             return;
+        var tab = HitPanelTab(cellX, cellY, layout.RightPanel);
+        if (tab >= 0)
+        {
+            _activeTab = tab;
+            return;
+        }
+
         if (layout.Input.Contains(cellX, cellY))
         {
-            _cursor = Math.Clamp(cellX - layout.Input.X, 0, _input.Length);
+            _cursor = ColumnToCharIndex(Math.Clamp(cellX - layout.Input.X - InputPrompt.Length, 0, TerminalTextWidth.Of(_input)));
             RefreshMenus();
             return;
         }
@@ -366,6 +373,7 @@ public sealed class ChatWindow : IDisposable
         DrawRightPanel(grid, layout.RightPanel);
         DrawInput(grid, layout.Input);
         DrawStatus(grid, layout.Status);
+        DrawDividers(grid, layout);
     }
 
     public void RequestExit()
@@ -1007,30 +1015,128 @@ public sealed class ChatWindow : IDisposable
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
 
-        DrawText(grid, rect.X, rect.Y, "PANELS", AnsiColor.Default, AnsiColor.Default, CellStyle.Bold);
-        var tabs = new[] { "Context", "MCP", "Plans", "Output" };
-        for (var i = 0; i < tabs.Length && rect.Y + 1 + i < rect.Bottom; i++)
+        DrawPanelTabs(grid, rect);
+        if (rect.Height > 1)
         {
-            var style = i == _hoveredTab ? CellStyle.Reverse : CellStyle.None;
-            DrawText(grid, rect.X + 1, rect.Y + 1 + i, $" {tabs[i]}", AnsiColor.Default, AnsiColor.Default, style);
+            for (var x = rect.X; x < rect.Right && x < grid.Width; x++)
+                grid[x, rect.Y + 1] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+        }
+
+        DrawPanelContent(grid, rect);
+    }
+
+    private void DrawPanelTabs(CellGrid grid, ConsoleRect rect)
+    {
+        var x = rect.X;
+        for (var index = 0; index < PanelTabLabels.Length; index++)
+        {
+            var label = $"[{PanelTabLabels[index]}]";
+            var width = TerminalTextWidth.Of(label);
+            if (x + width > rect.Right)
+                break;
+            var style = index == _activeTab ? CellStyle.Bold : index == _hoveredTab ? CellStyle.Reverse : CellStyle.None;
+            var foreground = index == _activeTab ? AnsiColor.BrightCyan : AnsiColor.Default;
+            DrawText(grid, x, rect.Y, label, foreground, AnsiColor.Default, style);
+            x += width;
         }
     }
+
+    private void DrawPanelContent(CellGrid grid, ConsoleRect rect)
+    {
+        var contentY = rect.Y + 2;
+        if (contentY >= rect.Bottom)
+            return;
+
+        var lines = _activeTab switch
+        {
+            0 =>
+                new[]
+                {
+                    $"session: {_agent.Id}",
+                    $"title: {_agent.Session.Header.Title ?? "-"}",
+                    $"cwd: {_agent.Session.Header.Cwd ?? "-"}",
+                    $"model: {_agent.Options.Provider}/{_agent.Options.Model}",
+                },
+            1 => new[] { "MCP servers: 使用 /mcp 管理" },
+            2 => new[] { "计划: 使用 /plan 管理" },
+            _ => new[] { "输出: 暂无" },
+        };
+
+        var row = contentY;
+        foreach (var line in lines)
+        {
+            if (row >= rect.Bottom)
+                break;
+            DrawText(grid, rect.X, row, line, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            row++;
+        }
+    }
+
+    private int HitPanelTab(int cellX, int cellY, ConsoleRect rect)
+    {
+        if (rect.Width <= 0 || cellY != rect.Y || cellX < rect.X || cellX >= rect.Right)
+            return -1;
+        var x = rect.X;
+        for (var index = 0; index < PanelTabLabels.Length; index++)
+        {
+            var width = TerminalTextWidth.Of($"[{PanelTabLabels[index]}]");
+            if (x + width > rect.Right)
+                break;
+            if (cellX >= x && cellX < x + width)
+                return index;
+            x += width;
+        }
+
+        return -1;
+    }
+
+    private void DrawDividers(CellGrid grid, UiLayout layout)
+    {
+        var verticalX = layout.RightPanel.Width > 0 ? layout.RightPanel.X - 1 : -1;
+        DrawHorizontalDivider(grid, layout.Input.Y - 1, verticalX, layout.Main.Bottom, layout.Input.Y);
+        DrawHorizontalDivider(grid, layout.Status.Y - 1, verticalX, layout.Input.Bottom, layout.Status.Y);
+        if (verticalX < 0 || layout.Main.Height <= 0)
+            return;
+        for (var y = layout.Main.Y; y < layout.Main.Bottom && y < grid.Height; y++)
+            grid[verticalX, y] = new Cell('│', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+    }
+
+    private static void DrawHorizontalDivider(CellGrid grid, int y, int verticalX, int minimumY, int maximumY)
+    {
+        if (y < minimumY || y >= maximumY || y < 0 || y >= grid.Height)
+            return;
+        for (var x = 0; x < grid.Width; x++)
+            grid[x, y] = new Cell(x == verticalX ? '┼' : '─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+    }
+
+    private const string InputPrompt = "> ";
 
     private void DrawInput(CellGrid grid, ConsoleRect rect)
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
 
-        var prompt = _pendingApproval is not null ? "approval (y/n/c) " : "> ";
+        var prompt = _pendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
         var caret = Math.Clamp(_cursor, 0, _input.Length);
-        var textStart = Math.Max(0, caret - Math.Max(0, rect.Width - prompt.Length - 1));
-        var visibleLength = Math.Max(0, rect.Width - prompt.Length);
-        var visible = _input.Length == 0 ? "" : _input[textStart..Math.Min(_input.Length, textStart + visibleLength)];
+        var availableWidth = Math.Max(0, rect.Width - prompt.Length);
+        var textStart = caret;
+        var visibleWidth = 0;
+        while (textStart > 0)
+        {
+            var characterWidth = TerminalTextWidth.Of(_input[textStart - 1]);
+            if (visibleWidth + characterWidth > availableWidth)
+                break;
+            visibleWidth += characterWidth;
+            textStart--;
+        }
+
+        var visible = _input.Length == 0 ? "" : _input[textStart..];
 
         DrawText(grid, rect.X, rect.Y, prompt, AnsiColor.Default, AnsiColor.Default, _pendingApproval is null ? CellStyle.None : CellStyle.Bold);
         DrawText(grid, rect.X + prompt.Length, rect.Y, visible);
 
-        var cursorX = rect.X + Math.Min(prompt.Length + (caret - textStart), rect.Width - 1);
+        var caretColumn = TerminalTextWidth.Of(_input[textStart..caret]);
+        var cursorX = rect.X + Math.Min(prompt.Length + caretColumn, rect.Width - 1);
         var cursorY = rect.Y;
         cursorX = Math.Clamp(cursorX, 0, grid.Width - 1);
         cursorY = Math.Clamp(cursorY, 0, grid.Height - 1);
@@ -1038,6 +1144,32 @@ public sealed class ChatWindow : IDisposable
         grid[cursorX, cursorY] = cursorCell with { Style = cursorCell.Style | CellStyle.Reverse };
         CursorScreenX = cursorX;
         CursorScreenY = cursorY;
+
+        if (rect.Height < 2)
+            return;
+        var infoY = rect.Y + 1;
+        if (infoY >= grid.Height)
+            return;
+        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 折叠";
+        DrawText(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+        var profile = $"{_agent.Options.Provider} · {_agent.Options.Model}";
+        var profileWidth = TerminalTextWidth.Of(profile);
+        if (profileWidth < rect.Width)
+            DrawText(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+    }
+
+    private int ColumnToCharIndex(int column)
+    {
+        var current = 0;
+        for (var index = 0; index < _input.Length; index++)
+        {
+            var width = TerminalTextWidth.Of(_input[index]);
+            if (current + width > column)
+                return index;
+            current += width;
+        }
+
+        return _input.Length;
     }
 
     private void DrawStatus(CellGrid grid, ConsoleRect rect)
@@ -1058,11 +1190,18 @@ public sealed class ChatWindow : IDisposable
     {
         if (y < 0 || y >= grid.Height || x >= grid.Width)
             return;
-        for (var i = 0; i < text.Length && x + i < grid.Width; i++)
+        var column = Math.Max(0, x);
+        foreach (var character in text)
         {
-            if (text[i] == '\0')
+            if (column >= grid.Width)
+                break;
+            if (character == '\0')
                 continue;
-            grid[x + i, y] = new Cell(text[i], foreground, background, style);
+            grid[column, y] = new Cell(character, foreground, background, style);
+            var width = TerminalTextWidth.Of(character);
+            if (width == 2 && column + 1 < grid.Width)
+                grid[column + 1, y] = new Cell('\0', foreground, background, style);
+            column += width;
         }
     }
 
@@ -1141,8 +1280,22 @@ public sealed class ChatWindow : IDisposable
                 continue;
             }
 
-            for (var i = 0; i < line.Length; i += width)
-                result.Add(line.Substring(i, Math.Min(width, line.Length - i)));
+            var start = 0;
+            var column = 0;
+            for (var index = 0; index < line.Length; index++)
+            {
+                var characterWidth = TerminalTextWidth.Of(line[index]);
+                if (column + characterWidth > width)
+                {
+                    result.Add(line[start..index]);
+                    start = index;
+                    column = 0;
+                }
+
+                column += characterWidth;
+            }
+
+            result.Add(line[start..]);
         }
 
         return result;

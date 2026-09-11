@@ -14,12 +14,11 @@ public static class GuiRunner
         HarnessHome home,
         string cwd,
         string? config = null,
-        IReadOnlyList<Dictionary<string, object?>>? patches = null,
-        string? settingsConfig = null)
+        IReadOnlyList<Dictionary<string, object?>>? patches = null)
     {
-        var options = new HarnessOptions(home, cwd, SettingsConfig: settingsConfig);
+        var options = new HarnessOptions(home, cwd);
         using var app = config is null
-            ? HarnessComposer.Compose(options)
+            ? await HarnessComposer.Compose(options)
             : await ConfigBoot.Compose(config, options, patches: patches);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(

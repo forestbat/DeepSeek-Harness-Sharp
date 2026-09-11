@@ -10,8 +10,9 @@ public class GlyphAtlasVisualTests
     public void WriteGlyphSampleToProjectArtifacts()
     {
         var atlas = new GlyphAtlas();
-        const string characters = "ABCabc012中文字体";
-        var image = new Image<Rgba32>(characters.Length * GlyphAtlas.GlyphWidth, GlyphAtlas.GlyphHeight);
+        const string characters = "ABCabc012中文字体─│┌┐…›↑⚙✓";
+        const int scale = 8;
+        var image = new Image<Rgba32>(characters.Length * GlyphAtlas.GlyphWidth * scale, GlyphAtlas.GlyphHeight * scale);
 
         for (var characterIndex = 0; characterIndex < characters.Length; characterIndex++)
         {
@@ -19,8 +20,16 @@ public class GlyphAtlasVisualTests
             {
                 for (var x = 0; x < GlyphAtlas.GlyphWidth; x++)
                 {
-                    if (atlas.IsPixelSet(characters[characterIndex], x, y))
-                        image[x + (characterIndex * GlyphAtlas.GlyphWidth), y] = new Rgba32(255, 255, 255, 255);
+                    if (!atlas.IsPixelSet(characters[characterIndex], x, y))
+                        continue;
+                    for (var dy = 0; dy < scale; dy++)
+                    {
+                        for (var dx = 0; dx < scale; dx++)
+                        {
+                            image[((x + (characterIndex * GlyphAtlas.GlyphWidth)) * scale) + dx, (y * scale) + dy] =
+                                new Rgba32(255, 255, 255, 255);
+                        }
+                    }
                 }
             }
         }

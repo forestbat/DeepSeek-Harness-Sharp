@@ -39,8 +39,13 @@ public class GlyphAtlasTests
         Assert.Equal((row + 1) / (float)GlyphAtlas.Rows, uv.MaxY);
     }
 
-    [Fact]
-    public void IsPixelSet_A_HasVisiblePixels()
+    [Theory]
+    [InlineData('A')]
+    [InlineData('中')]
+    [InlineData('─')]
+    [InlineData('…')]
+    [InlineData('›')]
+    public void IsPixelSet_SupportedCharacters_HaveVisiblePixels(char character)
     {
         var atlas = new GlyphAtlas();
         var setPixels = 0;
@@ -49,7 +54,7 @@ public class GlyphAtlasTests
         {
             for (var x = 0; x < GlyphAtlas.GlyphWidth; x++)
             {
-                if (atlas.IsPixelSet('A', x, y))
+                if (atlas.IsPixelSet(character, x, y))
                     setPixels++;
             }
         }
@@ -58,21 +63,27 @@ public class GlyphAtlasTests
     }
 
     [Fact]
-    public void IsPixelSet_CjkCharacter_HasVisiblePixels()
+    public void IsPixelSet_LatinAndCjk_ShareBaseline()
     {
         var atlas = new GlyphAtlas();
-        var setPixels = 0;
+        var latinBottom = LastSetRow(atlas, 'A');
+        var cjkBottom = LastSetRow(atlas, '中');
 
-        for (var y = 0; y < GlyphAtlas.GlyphHeight; y++)
+        Assert.InRange(Math.Abs(latinBottom - cjkBottom), 0, 2);
+    }
+
+    private static int LastSetRow(GlyphAtlas atlas, char character)
+    {
+        for (var y = GlyphAtlas.GlyphHeight - 1; y >= 0; y--)
         {
             for (var x = 0; x < GlyphAtlas.GlyphWidth; x++)
             {
-                if (atlas.IsPixelSet('中', x, y))
-                    setPixels++;
+                if (atlas.IsPixelSet(character, x, y))
+                    return y;
             }
         }
 
-        Assert.True(setPixels > 0);
+        return -1;
     }
 
     [Fact]

@@ -1,4 +1,3 @@
-using System.Numerics;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -17,7 +16,7 @@ public sealed class GlyphAtlas
     public const char FirstCharacter = ' ';
     public const char LastCharacter = '\u9fff';
 
-    private const float FontSize = 18f;
+    private const float FontSize = 15f;
 
     private static readonly IReadOnlyList<char> Characters = BuildCharacters();
     public static readonly int Rows = (Characters.Count + Columns - 1) / Columns;
@@ -107,23 +106,19 @@ public sealed class GlyphAtlas
         using var atlas = new Image<Rgba32>(AtlasWidth, AtlasHeight);
         using (var canvas = atlas.Frames.RootFrame.CreateCanvas(Configuration.Default, new DrawingOptions()))
         {
-            var text = new string([.. Characters]);
             var options = new TextOptions(font)
             {
                 FallbackFontFamilies = ResolveFallbackFamilies(),
             };
-            var glyphs = TextBuilder.GenerateGlyphs(text, options);
-            var count = Math.Min(Characters.Count, glyphs.Count);
-            for (var index = 0; index < count; index++)
+            var offsetY = MeasureVerticalOffset(options);
+            for (var index = 0; index < Characters.Count; index++)
             {
-                var glyph = glyphs[index];
                 var column = index % Columns;
                 var row = index / Columns;
-                var translation = new Vector3(
-                    column * GlyphWidth - glyph.Bounds.X,
-                    row * GlyphHeight - glyph.Bounds.Y,
-                    0f);
-                canvas.Fill(Brushes.Solid(Color.White), glyph.Transform(Matrix4x4.CreateTranslation(translation)).Paths);
+                options.Origin = new PointF(column * GlyphWidth, row * GlyphHeight + offsetY);
+                var glyphs = TextBuilder.GenerateGlyphs(Characters[index].ToString(), options);
+                foreach (var glyph in glyphs)
+                    canvas.Fill(Brushes.Solid(Color.White), glyph.Paths);
             }
         }
 
@@ -140,15 +135,36 @@ public sealed class GlyphAtlas
         return texture;
     }
 
+    private static float MeasureVerticalOffset(TextOptions options)
+    {
+        var probe = TextBuilder.GenerateGlyphs("Hg中", options);
+        if (probe.Count == 0)
+            return 0f;
+        var top = probe.Min(glyph => glyph.Bounds.Y);
+        var bottom = probe.Max(glyph => glyph.Bounds.Y + glyph.Bounds.Height);
+        return ((GlyphHeight - (bottom - top)) / 2f) - top;
+    }
+
     private static IReadOnlyList<FontFamily> ResolveFallbackFamilies()
     {
         string[] names =
         [
+            "Microsoft YaHei",
+            "DengXian",
+            "SimSun",
+            "MS Gothic",
+            "PingFang SC",
+            "Hiragino Sans GB",
             "Noto Sans Mono CJK SC",
             "Noto Sans Mono CJK TC",
             "Noto Sans CJK SC",
             "Noto Sans CJK TC",
-            "Noto Serif CJK SC",
+            "Noto Sans CJK JP",
+            "WenQuanYi Micro Hei",
+            "Segoe UI Symbol",
+            "Segoe UI Emoji",
+            "Apple Color Emoji",
+            "Noto Color Emoji",
         ];
 
         var families = new List<FontFamily>();
@@ -165,13 +181,18 @@ public sealed class GlyphAtlas
     {
         string[] preferredNames =
         [
+            "Cascadia Mono",
+            "Cascadia Code",
             "JetBrains Mono",
+            "Consolas",
+            "Menlo",
             "DejaVu Sans Mono",
             "Liberation Mono",
             "Noto Sans Mono CJK SC",
             "Noto Sans Mono CJK TC",
             "Noto Sans CJK SC",
             "Noto Sans CJK TC",
+            "Microsoft YaHei",
         ];
 
         foreach (var name in preferredNames)
@@ -182,9 +203,9 @@ public sealed class GlyphAtlas
 
         foreach (var family in SystemFonts.Families)
         {
-            if (family.Name.Contains("Noto Sans Mono CJK", StringComparison.OrdinalIgnoreCase) ||
-                family.Name.Contains("Noto Sans CJK", StringComparison.OrdinalIgnoreCase) ||
-                family.Name.Contains("Mono", StringComparison.OrdinalIgnoreCase))
+            if (family.Name.Contains("Mono", StringComparison.OrdinalIgnoreCase) ||
+                family.Name.Contains("Console", StringComparison.OrdinalIgnoreCase) ||
+                family.Name.Contains("CJK", StringComparison.OrdinalIgnoreCase))
             {
                 return family.CreateFont(FontSize);
             }
@@ -203,7 +224,13 @@ public sealed class GlyphAtlas
             characters.Add(character);
         for (var character = '\u3000'; character <= '\u303f'; character++)
             characters.Add(character);
+        for (var character = '\u2000'; character <= '\u206f'; character++)
+            characters.Add(character);
         for (var character = '\u2190'; character <= '\u21ff'; character++)
+            characters.Add(character);
+        for (var character = '\u2500'; character <= '\u259f'; character++)
+            characters.Add(character);
+        for (var character = '\u25a0'; character <= '\u25ff'; character++)
             characters.Add(character);
         for (var character = '\u2600'; character <= '\u27bf'; character++)
             characters.Add(character);

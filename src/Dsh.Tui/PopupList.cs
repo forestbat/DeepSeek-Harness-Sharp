@@ -9,8 +9,8 @@ public static class PopupList
         if (area.Width <= 0 || area.Height <= 0 || items.Count == 0)
             return;
 
-        var contentWidth = items.Count == 0 ? title.Length : items.Max(item => item.Length);
-        contentWidth = Math.Max(contentWidth, title.Length);
+        var contentWidth = items.Count == 0 ? TerminalTextWidth.Of(title) : items.Max(TerminalTextWidth.Of);
+        contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(title));
         var width = Math.Min(area.Width, contentWidth + 4);
         var height = Math.Min(MaxPopupHeight, Math.Min(area.Height, items.Count + 2));
         if (width < 4 || height < 3)
@@ -76,18 +76,36 @@ public static class PopupList
     {
         if (y < 0 || y >= grid.Height)
             return;
-        for (var index = 0; index < text.Length && x + index < grid.Width; index++)
+        var column = Math.Max(0, x);
+        foreach (var character in text)
         {
-            if (x + index < 0)
-                continue;
-            grid[x + index, y] = new Cell(text[index], foreground, background, style);
+            if (column >= grid.Width)
+                break;
+            grid[column, y] = new Cell(character, foreground, background, style);
+            var width = TerminalTextWidth.Of(character);
+            if (width == 2 && column + 1 < grid.Width)
+                grid[column + 1, y] = new Cell('\0', foreground, background, style);
+            column += width;
         }
     }
 
-    private static string Truncate(string text, int maxLength)
+    private static string Truncate(string text, int maxWidth)
     {
-        if (maxLength <= 0)
+        if (maxWidth <= 0)
             return "";
-        return text.Length <= maxLength ? text : text[..Math.Max(0, maxLength - 1)] + "…";
+        if (TerminalTextWidth.Of(text) <= maxWidth)
+            return text;
+        var width = 0;
+        var index = 0;
+        while (index < text.Length)
+        {
+            var characterWidth = TerminalTextWidth.Of(text[index]);
+            if (width + characterWidth > maxWidth - 1)
+                break;
+            width += characterWidth;
+            index++;
+        }
+
+        return $"{text[..index]}…";
     }
 }

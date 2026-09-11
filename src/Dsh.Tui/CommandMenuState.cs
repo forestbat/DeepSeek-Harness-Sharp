@@ -423,7 +423,7 @@ public sealed class CommandMenuState
         _argumentCandidates = source is null || schema is null
             ? []
             : (_candidateProvider?.Invoke(source) ?? schema.Choices ?? [])
-                .Where(candidate => candidate.StartsWith(_query, StringComparison.OrdinalIgnoreCase))
+                .Where(candidate => candidate.Contains(_query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
         SelectedIndex = 0;
     }
