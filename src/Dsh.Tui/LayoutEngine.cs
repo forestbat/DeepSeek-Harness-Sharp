@@ -17,27 +17,32 @@ public readonly record struct UiLayout(
 
 public static class LayoutEngine
 {
-    public const int MaximumRightPanelWidth = 280;
+    public const int MaximumRightPanelWidth = 40;
+    public const int InputHeight = 2;
+
+    private const double RightPanelRatio = 0.32;
+    private const int StatusHeight = 1;
+    private const int DividerRows = 2;
 
     public static UiLayout Calculate(int consoleWidth, int consoleHeight)
     {
         var width = Math.Max(1, consoleWidth);
         var height = Math.Max(1, consoleHeight);
 
-        var rightPanelWidth = Math.Min(MaximumRightPanelWidth, (int)(width * 0.30));
-        rightPanelWidth = Math.Clamp(rightPanelWidth, 0, width - 1);
+        var rightPanelWidth = Math.Min(MaximumRightPanelWidth, (int)(width * RightPanelRatio));
+        rightPanelWidth = Math.Clamp(rightPanelWidth, 0, Math.Max(0, width - 2));
 
-        var statusHeight = 1;
-        var inputHeight = 1;
-        var bodyHeight = Math.Max(0, height - statusHeight - inputHeight);
-        var mainWidth = width - rightPanelWidth;
-        var inputY = Math.Min(bodyHeight, Math.Max(0, height - inputHeight));
-        var statusY = Math.Min(inputY + inputHeight, Math.Max(0, height - statusHeight));
+        var dividerColumn = rightPanelWidth > 0 ? 1 : 0;
+        var mainWidth = width - rightPanelWidth - dividerColumn;
+
+        var bodyHeight = Math.Max(0, height - StatusHeight - InputHeight - DividerRows);
+        var inputY = Math.Min(bodyHeight + 1, Math.Max(0, height - InputHeight));
+        var statusY = Math.Min(inputY + InputHeight + 1, Math.Max(0, height - StatusHeight));
 
         return new UiLayout(
             new ConsoleRect(0, 0, mainWidth, bodyHeight),
-            new ConsoleRect(mainWidth, 0, rightPanelWidth, bodyHeight),
-            new ConsoleRect(0, inputY, width, inputHeight),
-            new ConsoleRect(0, statusY, width, statusHeight));
+            new ConsoleRect(mainWidth + dividerColumn, 0, rightPanelWidth, bodyHeight),
+            new ConsoleRect(0, inputY, width, InputHeight),
+            new ConsoleRect(0, statusY, width, StatusHeight));
     }
 }

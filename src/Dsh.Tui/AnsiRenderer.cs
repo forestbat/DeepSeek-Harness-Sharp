@@ -42,6 +42,8 @@ public sealed class AnsiRenderer
                 var cell = grid[x, y];
                 builder.Append(Sgr(cell));
                 builder.Append(Sanitize(cell.Character));
+                if (TerminalTextWidth.IsWide(cell.Character))
+                    x++;
             }
 
             builder.Append("\x1b[0m");
@@ -57,7 +59,9 @@ public sealed class AnsiRenderer
             var x = 0;
             while (x < grid.Width)
             {
-                if (grid[x, y] == previous[x, y])
+                var current = grid[x, y];
+                if (current == previous[x, y]
+                    || (current.Character == '\0' && x > 0 && TerminalTextWidth.IsWide(grid[x - 1, y].Character)))
                 {
                     x++;
                     continue;

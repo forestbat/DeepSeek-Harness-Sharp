@@ -12,7 +12,7 @@ public sealed class SessionQueryIndex : IDisposable
 
     static SessionQueryIndex()
     {
-        SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
+        SQLitePCL.Batteries_V2.Init();
     }
 
     public SessionQueryIndex(string databasePath = ":memory:")

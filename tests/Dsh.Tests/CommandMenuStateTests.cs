@@ -87,7 +87,7 @@ public class CommandMenuStateTests
 
         Assert.Equal(CommandMenuState.MenuStage.Argument, state.Stage);
         Assert.Equal(["alpha", "beta"], state.Candidates);
-        state.ApplyInput("/provider remove a");
+        state.ApplyInput("/provider remove alp");
         Assert.Equal(["alpha"], state.Candidates);
         Assert.Equal("/provider remove alpha", state.Confirm());
     }

@@ -356,9 +356,9 @@ public sealed class GpuRenderer : IDisposable
             var x1 = quad.X + quad.Width;
             var y1 = quad.Y + quad.Height;
             var u0 = quad.U0;
-            var v0 = 1f - quad.V1;
+            var v0 = quad.V0;
             var u1 = quad.U1;
-            var v1 = 1f - quad.V0;
+            var v1 = quad.V1;
 
             AddVertex(vertices, ref offset, x0, y0, u0, v0, quad);
             AddVertex(vertices, ref offset, x1, y0, u1, v0, quad);

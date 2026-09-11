@@ -5,13 +5,13 @@ namespace Dsh.Tests;
 public class LayoutEngineTests
 {
     [Fact]
-    public void Wide_Terminal_Uses_Fixed_280_Panel_Width()
+    public void Wide_Terminal_Caps_Panel_And_Reserves_Divider_Column()
     {
         var layout = LayoutEngine.Calculate(1000, 40);
 
-        Assert.Equal(280, layout.RightPanel.Width);
-        Assert.Equal(720, layout.Main.Width);
-        Assert.Equal(38, layout.RightPanel.Height);
+        Assert.Equal(LayoutEngine.MaximumRightPanelWidth, layout.RightPanel.Width);
+        Assert.Equal(1000 - LayoutEngine.MaximumRightPanelWidth - 1, layout.Main.Width);
+        Assert.Equal(layout.Main.Right + 1, layout.RightPanel.X);
     }
 
     [Fact]
@@ -19,8 +19,18 @@ public class LayoutEngineTests
     {
         var layout = LayoutEngine.Calculate(100, 30);
 
-        Assert.Equal(30, layout.RightPanel.Width);
-        Assert.Equal(70, layout.Main.Width);
+        Assert.Equal(32, layout.RightPanel.Width);
+        Assert.Equal(67, layout.Main.Width);
+    }
+
+    [Fact]
+    public void Dividers_Sit_Between_Body_Input_And_Status()
+    {
+        var layout = LayoutEngine.Calculate(100, 30);
+
+        Assert.Equal(layout.Main.Bottom, layout.Input.Y - 1);
+        Assert.Equal(layout.Input.Bottom, layout.Status.Y - 1);
+        Assert.Equal(LayoutEngine.InputHeight, layout.Input.Height);
     }
 
     [Fact]
@@ -28,8 +38,8 @@ public class LayoutEngineTests
     {
         var layout = LayoutEngine.Calculate(20, 5);
 
-        Assert.Equal(3, layout.Main.Height);
-        Assert.Equal(3, layout.Input.Y);
+        Assert.Equal(0, layout.Main.Height);
+        Assert.Equal(1, layout.Input.Y);
         Assert.Equal(4, layout.Status.Y);
         Assert.Equal(20, layout.Input.Width);
         Assert.Equal(20, layout.Status.Width);

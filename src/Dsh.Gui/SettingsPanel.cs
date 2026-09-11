@@ -85,10 +85,10 @@ public sealed class SettingsPanel : StackPanel
             {
                 _providerName.Text = row.Name;
                 _providerType.Text = row.Settings.Type ?? "";
-                _baseUrl.Text = row.Settings.BaseUrl ?? "";
-                _apiKey.Text = row.Settings.ApiKey ?? "";
-                _apiKeyEnv.Text = row.Settings.ApiKeyEnv ?? "";
-                _modelIds.Text = row.Settings.ModelIds is { Count: > 0 } ids ? string.Join(',', ids) : "";
+                _baseUrl.Text = row.Settings.Options?.BaseUrl ?? "";
+                _apiKey.Text = row.Settings.Options?.ApiKey ?? "";
+                _apiKeyEnv.Text = row.Settings.Options?.ApiKeyEnv ?? "";
+                _modelIds.Text = row.Settings.Models is { Count: > 0 } models ? string.Join(',', models.Keys) : "";
             }
         };
         _modelCombo.SelectionChanged += async (_, _) =>
@@ -156,9 +156,15 @@ public sealed class SettingsPanel : StackPanel
         var settings = HarnessSettings.Load(_home);
         var updated = new HarnessSettings
         {
-            Default = settings.Default,
+            GlobalDefaultModel = settings.GlobalDefaultModel,
+            CompactionModel = settings.CompactionModel,
+            Subagent = settings.Subagent,
             Providers = settings.Providers,
-            Configs = settings.Configs,
+            Skills = settings.Skills,
+            Rules = settings.Rules,
+            McpServers = settings.McpServers,
+            Compaction = settings.Compaction,
+            Memory = settings.Memory,
             Safety = new SafetySettings
             {
                 AutoApprove = _autoApprove.IsChecked == true,
@@ -168,7 +174,6 @@ public sealed class SettingsPanel : StackPanel
                     .Where(line => line.Length > 0)
                     .ToList(),
             },
-            McpServers = settings.McpServers,
         };
         updated.Save(_home);
         _message.Text = "安全策略已保存（重启后生效）";
@@ -198,7 +203,7 @@ public sealed class SettingsPanel : StackPanel
                 Tag = new ProviderSettingsRow(entry.Key, entry.Value),
                 Content = new AvaloniaTextBlock
                 {
-                    Text = $"{entry.Key}: {entry.Value.Type} {entry.Value.BaseUrl}",
+                    Text = $"{entry.Key}: {entry.Value.Type} {entry.Value.Options?.BaseUrl}",
                     TextWrapping = TextWrapping.Wrap,
                     Margin = new Thickness(4),
                 },
@@ -220,16 +225,12 @@ public sealed class SettingsPanel : StackPanel
         {
             var settings = HarnessSettings.Load(_home);
             _modelCombo.Items.Clear();
-            foreach (var config in settings.Configs.Keys)
-                _modelCombo.Items.Add(config);
             foreach (var provider in settings.Providers)
             {
-                if (provider.Value.ModelIds is not { Count: > 0 } modelIds)
-                    continue;
-                foreach (var model in modelIds)
+                foreach (var model in provider.Value.Models.Keys)
                     _modelCombo.Items.Add($"{provider.Key}/{model}");
             }
-            if (settings.ResolveConfig() is { } resolved && _modelCombo.Items.Count == 0)
+            if (settings.ResolveDefaultModel() is { } resolved && _modelCombo.Items.Count == 0)
                 _modelCombo.Items.Add($"{resolved.Provider}/{resolved.Model}");
             _modelCombo.SelectedIndex = 0;
         }
