@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -10,7 +10,6 @@
         <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
         <InvariantGlobalization>true</InvariantGlobalization>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
-        <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
         <CETCompat>false</CETCompat>
     </PropertyGroup>
 
@@ -21,33 +20,61 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\src\Dsh.Core\Dsh.Core.csproj" />
       <ProjectReference Include="..\src\Dsh.Boot\Dsh.Boot.csproj" />
-      <ProjectReference Include="..\src\Dsh.Llm\Dsh.Llm.csproj" />
-      <ProjectReference Include="..\Cordis\Cordis.csproj" />
-      <ProjectReference Include="..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
+      <Analyzer Include="..\src\Dsh.Plugins.Generator\bin\$(Configuration)\netstandard2.0\Dsh.Plugins.Generator.dll" />
     </ItemGroup>
 
-    <ItemGroup>
-      <PackageReference Include="Terminal.Gui" Version="2.6.0-develop.61" />
-      <PackageReference Include="Avalonia" Version="11.3.2" />
-      <PackageReference Include="Avalonia.Desktop" Version="11.3.2" />
-      <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.2" />
+    <!--
+      NativeAOT 不支持运行时 Assembly.LoadFromAssemblyPath / Assembly.LoadFile。
+      ｜ 非 AOT 构建：主工程只引用 Dsh.Boot，插件由 CopyPluginAndSurfaceAssemblies 复制 DLL 后动态扫描加载。
+      ｜ AOT 发布（PublishAot=true）：运行时无法加载托管插件 DLL，因此必须把这些插件/表面工程一并编入 AOT 镜像；
+      ｜ 这里使用 PublishAot 条件 ProjectReference 通配自动包含 src/Dsh.*，仅影响 AOT 发布，不影响普通构建的零硬引用插件架构。
+      ｜ Dsh.Plugins.Generator 生成 DshPluginCatalog.g.cs，用 typeof(...) 引用所有 IDshPlugin 实现，
+      ｜ 使 AOT 裁剪/编译保留这些插件类型，从而 PluginHost 可通过已加载程序集注册插件。
+      参考：https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/ 与
+      https://github.com/dotnet/runtime/discussions/117470
+    -->
+    <ItemGroup Condition="'$(PublishAot)' == 'true'">
+      <ProjectReference Include="..\src\Dsh.*\*.csproj"
+                        Exclude="..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
     </ItemGroup>
 
-    <Target Name="CopySurfaceAssemblies" AfterTargets="Build">
-      <MSBuild Projects="..\src\Dsh.Tui\Dsh.Tui.csproj;..\src\Dsh.Acp\Dsh.Acp.csproj;..\src\Dsh.Lsp\Dsh.Lsp.csproj;..\src\Dsh.Gui\Dsh.Gui.csproj"
-               Targets="Build"
-               Properties="Configuration=$(Configuration)" />
+    <Target Name="CopyPluginAndSurfaceAssemblies" AfterTargets="Build">
+      <MSBuild Projects="..\src\Dsh.Core\Dsh.Core.csproj;..\src\Dsh.Persistence\Dsh.Persistence.csproj;..\src\Dsh.Mcp\Dsh.Mcp.csproj;..\src\Dsh.Tools\Dsh.Tools.csproj;..\src\Dsh.Interaction\Dsh.Interaction.csproj;..\src\Dsh.Skills\Dsh.Skills.csproj;..\src\Dsh.Goal\Dsh.Goal.csproj;..\src\Dsh.Compaction\Dsh.Compaction.csproj;..\src\Dsh.Jobs\Dsh.Jobs.csproj;..\src\Dsh.Subagent\Dsh.Subagent.csproj;..\src\Dsh.PlanMode\Dsh.PlanMode.csproj;..\src\Dsh.Web\Dsh.Web.csproj;..\src\Dsh.Workflow\Dsh.Workflow.csproj;..\src\Dsh.Terminal\Dsh.Terminal.csproj;..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj;..\src\Dsh.Llm\Dsh.Llm.csproj;..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj;..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj;..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj;..\src\Dsh.Tui\Dsh.Tui.csproj;..\src\Dsh.Acp\Dsh.Acp.csproj;..\src\Dsh.Lsp\Dsh.Lsp.csproj;..\src\Dsh.Sdk\Dsh.Sdk.csproj;..\src\Dsh.Pty\Dsh.Pty.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
       <ItemGroup>
-        <SurfaceAssemblies Include="..\src\Dsh.Tui\bin\$(Configuration)\net10.0\*.dll" />
-        <SurfaceAssemblies Include="..\src\Dsh.Acp\bin\$(Configuration)\net10.0\*.dll" />
-        <SurfaceAssemblies Include="..\src\Dsh.Lsp\bin\$(Configuration)\net10.0\*.dll" />
-        <SurfaceAssemblies Include="..\src\Dsh.Gui\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Core\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Persistence\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Mcp\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Tools\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Interaction\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Skills\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Goal\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Compaction\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Jobs\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Subagent\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.PlanMode\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Web\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Workflow\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Terminal\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Interaction.AskUser\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.DeepSeek\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.OpenAi\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.Anthropic\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Tui\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Acp\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Lsp\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Sdk\bin\$(Configuration)\net10.0\*.dll" />
+        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Pty\bin\$(Configuration)\net10.0\*.dll" />
       </ItemGroup>
-      <Copy SourceFiles="@(SurfaceAssemblies)"
-            DestinationFolder="$(OutDir)"
-            SkipUnchangedFiles="true" />
+      <Copy SourceFiles="@(PluginAndSurfaceAssemblies)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    </Target>
+
+    <Target Name="BuildPluginGenerator" BeforeTargets="CoreCompile">
+      <MSBuild Projects="..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj"
+               Targets="Build"
+               Properties="Configuration=$(Configuration)"
+               RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
     </Target>
 
 </Project>

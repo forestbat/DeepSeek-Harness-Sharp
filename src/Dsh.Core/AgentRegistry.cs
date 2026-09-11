@@ -26,7 +26,7 @@ public interface IAgentFactory
     Task<IAgent> Resume(Context owner, ResumeAgentOptions options, CancellationToken signal = default);
 }
 
-public sealed class AgentRegistry : Service
+public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 {
     public const string ServiceName = "agents";
 
@@ -35,10 +35,6 @@ public sealed class AgentRegistry : Service
     private readonly Dictionary<SessionId, IAgent> _agents = [];
     private readonly Dictionary<SessionId, IAgent> _owners = [];
     private IAgentFactory? _factory;
-
-    public AgentRegistry(Context ctx) : base(ctx, ServiceName)
-    {
-    }
 
     public IAgent? CurrentInitiator() => InitiatorSlot.Value;
 
@@ -112,6 +108,8 @@ public sealed class AgentRegistry : Service
     public IAgent? Get(SessionId id) => _agents.TryGetValue(id, out var agent) ? agent : null;
 
     public IReadOnlyList<IAgent> List() => _agents.Values.ToList();
+
+    public void Remove(SessionId id) => Unregister(id);
 
     public bool IsOwnedBy(SessionId id, IAgent owner) => _owners.TryGetValue(id, out var existing) && ReferenceEquals(existing, owner);
 

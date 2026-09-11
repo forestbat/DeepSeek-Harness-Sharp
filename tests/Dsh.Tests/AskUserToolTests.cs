@@ -84,7 +84,8 @@ public class AskUserToolTests
 
         var schema = Assert.Single(harness.Tools.Schemas(), tool => tool.Name == "ask_user_question");
         Assert.Equal("object", schema.Parameters["type"]!.GetValue<string>());
-        Assert.Equal("questions", Assert.Single(schema.Parameters["required"]!.AsArray()).GetValue<string>());
+        var required = schema.Parameters["required"]!.AsArray()!;
+        Assert.Equal("questions", Assert.Single(required)!.GetValue<string>());
         var itemProperties = schema.Parameters["properties"]!["questions"]!["items"]!["properties"]!;
         Assert.Equal("string", itemProperties["id"]!["type"]!.GetValue<string>());
         Assert.Equal("string", itemProperties["question"]!["type"]!.GetValue<string>());

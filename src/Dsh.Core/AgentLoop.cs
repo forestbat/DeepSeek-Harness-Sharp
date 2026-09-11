@@ -32,7 +32,7 @@ public sealed class AgentLoop : Service, IAgentFactory
         _persistenceFor = persistenceFor;
         if (resolvedConfig.MaxParallelToolCalls < 1)
             throw new ArgumentException("maxParallelToolCalls must be a positive integer");
-        var agents = ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)
+        var agents = ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)
             ?? throw new InvalidOperationException("agent loop requires the agents service");
         agents.SetFactory(this);
         Ctx.Get<SessionProjectionRegistry>(SessionProjectionRegistry.ServiceName, false)

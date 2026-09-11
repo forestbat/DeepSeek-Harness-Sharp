@@ -1,3 +1,4 @@
+using Cordis;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
@@ -8,54 +9,79 @@ namespace Dsh.Tests;
 public sealed class ProviderCommandTests
 {
     [Fact]
-    public async Task Edit_UpdatesProviderAndPreservesUnspecifiedFields()
+    public async Task ProviderAdd_FirstModelSetsGlobalDefault()
     {
-        var dir = Path.Combine(AppContext.BaseDirectory, "provider-test-home", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        HarnessApp? app = null;
+        var home = Path.Combine(Path.GetTempPath(), "dsh-provider-cmd", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(home);
         try
         {
-            var home = new HarnessHome(dir);
-            await File.WriteAllTextAsync(Path.Combine(dir, "settings.yaml"), """
-                providers:
-                  local:
-                    type: openai-compatible
-                    baseUrl: http://127.0.0.1:1/v1
-                    apiKey: old-key
-                    modelIds: [m1]
-                configs:
-                  local:
-                    provider: local
-                    model: m1
+            File.WriteAllText(Path.Combine(home, "settings.yaml"), """
+                global_default_model: null
+                providers: {}
                 """);
-            app = HarnessComposer.Compose(new HarnessOptions(home, Cwd: dir));
-            var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-            var handle = await agents.Create(new CreateAgentOptions(
-                SessionId.Create("session-provider-test"),
-                dir,
-                new AgentOptions("local", "m1")));
-            var agent = (AgentLoopAgent)handle.Agent;
-            var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
-            var execution = await commands.Execute(agent, "/provider edit local --base-url http://new/v1 --model-ids m2,m3");
-            Assert.NotNull(execution);
-            Assert.IsType<CommandResult.Success>(execution.Result);
-            var settings = HarnessSettings.Load(home);
-            var provider = settings.Providers["local"];
-            Assert.Equal("http://new/v1", provider.BaseUrl);
-            Assert.Equal("old-key", provider.ApiKey);
-            Assert.Equal("openai-compatible", provider.Type);
-            Assert.Equal(["m2", "m3"], provider.ModelIds);
+            var ctx = new Context();
+            _ = new SystemPrompt(ctx, new SystemPromptConfig());
+            _ = new LlmRuntime(ctx);
+            var commands = CommandsService.Register(ctx);
+            using var registration = ProviderCommand.Register(ctx, new HarnessHome(home));
+            var agent = new FakeAgent(ctx);
+
+            var result = await commands.Execute(agent, "/provider add custom --base-url http://127.0.0.1:11434/v1 --api-key sk-test --model-ids custom-model");
+
+            Assert.NotNull(result);
+            Assert.IsType<CommandResult.Success>(result.Result);
+            var settings = HarnessSettings.Load(new HarnessHome(home));
+            Assert.Equal("custom/custom-model", settings.GlobalDefaultModel);
+            Assert.True(settings.Providers["custom"].Models.ContainsKey("custom-model"));
         }
         finally
         {
-            app?.Dispose();
-            try
-            {
-                Directory.Delete(dir, true);
-            }
-            catch (IOException)
-            {
-            }
+            Directory.Delete(home, true);
         }
+    }
+
+    private sealed class FakeAgent : IAgent
+    {
+        public FakeAgent(Context ctx)
+        {
+            Ctx = ctx;
+            var id = SessionId.Create($"session-{Guid.NewGuid():N}");
+            Session = Session.Create(id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion,
+                Id = id,
+                CreatedAt = 0,
+                Cwd = Path.GetTempPath(),
+                IsSeeded = false,
+            });
+        }
+
+        public SessionId Id => Session.Id;
+        public Session Session { get; }
+        public ScopeKey ScopeKey { get; } = new();
+        public Context Ctx { get; }
+        public AgentStatus Status => AgentStatus.Idle;
+        public AgentOptions Options { get; } = new();
+        public List<UserMessage> Injected { get; } = [];
+
+        public void Cancel(AgentCancelCause cause, bool keepInbox = false)
+        {
+        }
+
+        public Task WhenIdle() => Task.CompletedTask;
+
+        public void Send(UserMessage message, string target, bool wakeup)
+        {
+        }
+
+        public void Followup(UserMessage message)
+        {
+        }
+
+        public void Steer(UserMessage message)
+        {
+        }
+
+        public void Inject(UserMessage message) => Injected.Add(message);
     }
 }

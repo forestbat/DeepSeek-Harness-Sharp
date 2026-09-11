@@ -180,6 +180,52 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return snapshots;
     }
 
+    public void Rename(SessionId id, string title)
+    {
+        ArgumentNullException.ThrowIfNull(title);
+        EnsureRootEncoding();
+        var snapshot = Stat(id) ?? throw new SessionPersistenceNotFoundException(id);
+        var renamed = snapshot.Header with { Title = title };
+        var path = FindLog(id);
+        if (path is not null)
+            RewriteHeader(path, renamed, snapshot.InheritedEventCount);
+        lock (_trackerGate)
+        {
+            if (_pending.TryGetValue(id, out var pending))
+                _pending[id] = pending with { Header = renamed };
+            foreach (var handle in _openHandles)
+            {
+                if (handle.Id == id)
+                    handle.UpdateHeader(renamed);
+            }
+        }
+    }
+
+    public void Delete(SessionId id)
+    {
+        EnsureRootEncoding();
+        var path = FindLog(id);
+        var sessionDir = path is null ? null : Path.GetDirectoryName(path);
+        List<JsonlSessionHandle> handles;
+        lock (_trackerGate)
+            handles = [.._openHandles.Where(handle => handle.Id == id)];
+        foreach (var handle in handles)
+            handle.Close();
+        lock (_trackerGate)
+        {
+            _pending.Remove(id);
+            _writers.Remove(id);
+        }
+        if (sessionDir is not null && Directory.Exists(sessionDir))
+        {
+            var trash = Path.Combine(_root, ".trash");
+            Directory.CreateDirectory(trash);
+            var trashPath = Path.Combine(trash, $"{JsonlLayout.EncodeSegment(id.Value)}-{Guid.NewGuid():N}");
+            Directory.Move(sessionDir, trashPath);
+            Directory.Delete(trashPath, recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         List<JsonlSessionHandle> handles;
@@ -191,6 +237,32 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             catch (Exception error) { errors.Add(error); }
         }
         if (errors.Count > 0) throw new AggregateException($"{BackendName} dispose failed", errors);
+    }
+
+    private void RewriteHeader(string path, SessionHeader header, long inheritedEventCount)
+    {
+        var headerLine = Encoding.UTF8.GetBytes(
+            SessionLogHeader.WriteHeaderLine(header, header.IsSeeded ? inheritedEventCount : null) + "\n");
+        byte[] replacement;
+        if (_compression == JsonlCompression.None)
+        {
+            var original = File.ReadAllBytes(path);
+            var newline = Array.IndexOf(original, (byte)'\n');
+            if (newline < 0)
+                throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header line: {path}");
+            replacement = [..headerLine, ..original.AsSpan(newline + 1).ToArray()];
+        }
+        else
+        {
+            var original = File.ReadAllBytes(path);
+            var (frames, _) = ZstdFrames.Scan(original);
+            if (frames.Count == 0)
+                throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header frame: {path}");
+            replacement = [..ZstdFrames.CompressFrame(headerLine), ..original.AsSpan(frames[0].End).ToArray()];
+        }
+        var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
+        File.WriteAllBytes(temp, replacement);
+        File.Move(temp, path, overwrite: true);
     }
 
     internal string? ResolveLog(SessionId id)

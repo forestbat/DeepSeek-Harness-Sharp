@@ -257,8 +257,9 @@ internal static class ChunkRows
         var members = new string[payload.Count];
         for (var k = 0; k < payload.Count; k += 1)
         {
-            if (payload[k] is not JsonValue memberValue || !memberValue.TryGetValue(out members[k]))
+            if (payload[k] is not JsonValue memberValue || !memberValue.TryGetValue<string>(out var text) || text is null)
                 throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
+            members[k] = text;
         }
         if (data["dt"] is not JsonArray dtNode) throw Malformed(tag, "dt must be an array of safe integers");
         if (dtNode.Count != members.Length - 1)

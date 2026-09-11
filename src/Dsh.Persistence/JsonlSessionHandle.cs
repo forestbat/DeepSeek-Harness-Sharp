@@ -23,11 +23,21 @@ internal sealed class JsonlSessionHandle(
     private readonly object _gate = new();
     private bool _closed;
     private long _observedLength;
+    private SessionHeader _header = header;
 
     public SessionId Id { get; } = id;
-    public SessionHeader Header { get; } = header;
+    public SessionHeader Header => _header;
     public SessionAccess Access { get; } = access;
     public long InheritedEventCount => state.InheritedEventCount;
+
+    internal void UpdateHeader(SessionHeader header)
+    {
+        lock (_gate)
+        {
+            AssertOpen("rename");
+            _header = header;
+        }
+    }
 
     public IReadOnlyList<SessionEvent> Read(long offset = 0, long? length = null)
     {

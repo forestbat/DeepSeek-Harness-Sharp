@@ -2,29 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Cordis\Cordis.csproj" />
-    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
-    <ProjectReference Include="..\Dsh.Persistence\Dsh.Persistence.csproj" />
-    <ProjectReference Include="..\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
-    <ProjectReference Include="..\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
-    <ProjectReference Include="..\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj" />
-    <ProjectReference Include="..\Dsh.Memory\Dsh.Memory.csproj" />
-    <ProjectReference Include="..\Dsh.Mcp\Dsh.Mcp.csproj" />
-    <ProjectReference Include="..\Dsh.Tools\Dsh.Tools.csproj" />
-    <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
-    <ProjectReference Include="..\Dsh.Compaction\Dsh.Compaction.csproj" />
-    <ProjectReference Include="..\Dsh.Jobs\Dsh.Jobs.csproj" />
-    <ProjectReference Include="..\Dsh.Subagent\Dsh.Subagent.csproj" />
-    <ProjectReference Include="..\Dsh.Skills\Dsh.Skills.csproj" />
-    <ProjectReference Include="..\Dsh.Goal\Dsh.Goal.csproj" />
-    <ProjectReference Include="..\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
-    <ProjectReference Include="..\Dsh.PlanMode\Dsh.PlanMode.csproj" />
-    <ProjectReference Include="..\Dsh.Web\Dsh.Web.csproj" />
-    <ProjectReference Include="..\Dsh.Workflow\Dsh.Workflow.csproj" />
-    <ProjectReference Include="..\Dsh.Terminal\Dsh.Terminal.csproj" />
+    <ProjectReference Include="..\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <PackageReference Include="Vecc.YamlDotNet.Analyzers.StaticGenerator" Version="18.1.0" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

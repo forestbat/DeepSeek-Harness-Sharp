@@ -10,9 +10,19 @@ public sealed class TranscriptRenderer
     public const int ToolResultPreviewChars = 300;
 
     private readonly StringBuilder _buffer = new();
+    private readonly List<TranscriptFold> _folds = [];
     private int _renderedLength;
     private bool _reasoningOpen;
     private bool _assistantOpen;
+    private int _reasoningFoldStart;
+    private int? _codeFenceStart;
+    private string? _codeFenceKind;
+
+    public string FullText => _buffer.ToString();
+
+    public IReadOnlyList<TranscriptFold> Folds => _folds;
+
+    public void AppendRaw(string text) => Append(text);
 
     public string TakeDelta()
     {
@@ -46,7 +56,15 @@ public sealed class TranscriptRenderer
             {
                 var text = string.Concat(result.Message.Content.OfType<TextBlock>().Select(block => block.Text));
                 var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
-                Append($"  {label}{Preview(text, ToolResultPreviewChars)}\n");
+                var start = _buffer.Length;
+                Append($"  {label}{text}\n");
+                _folds.Add(new TranscriptFold
+                {
+                    Start = start,
+                    End = _buffer.Length,
+                    Label = "tool result",
+                    Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
+                });
                 break;
             }
             case TurnEndPayload { Reason: TurnEndReason.Error error }:
@@ -80,7 +98,7 @@ public sealed class TranscriptRenderer
             case StreamChunk.TextDelta text:
                 CloseReasoning();
                 OpenAssistant();
-                Append(text.Text);
+                AppendCodeFenceAware(text.Text);
                 break;
             case StreamChunk.BlockEnd { Block: TextBlock }:
                 CloseAssistant();
@@ -94,7 +112,9 @@ public sealed class TranscriptRenderer
     {
         if (_reasoningOpen)
             return;
-        Append("\n[thinking] ");
+        Append("\n");
+        _reasoningFoldStart = _buffer.Length;
+        Append("[thinking] ");
         _reasoningOpen = true;
     }
 
@@ -110,7 +130,15 @@ public sealed class TranscriptRenderer
     {
         if (!_reasoningOpen)
             return;
+        var end = _buffer.Length;
         Append("\n");
+        _folds.Add(new TranscriptFold
+        {
+            Start = _reasoningFoldStart,
+            End = end,
+            Label = "thinking",
+            Preview = "[thinking]",
+        });
         _reasoningOpen = false;
     }
 
@@ -120,6 +148,53 @@ public sealed class TranscriptRenderer
             return;
         Append("\n");
         _assistantOpen = false;
+    }
+
+    private void AppendCodeFenceAware(string text)
+    {
+        var searchStart = 0;
+        while (true)
+        {
+            var marker = text.IndexOf("```", searchStart, StringComparison.Ordinal);
+            if (marker < 0)
+            {
+                Append(text[searchStart..]);
+                return;
+            }
+
+            Append(text[searchStart..marker]);
+            if (_codeFenceStart is null)
+            {
+                _codeFenceStart = _buffer.Length;
+                var lineEnd = text.IndexOf('\n', marker);
+                var markerLine = lineEnd < 0 ? text[marker..] : text[marker..lineEnd];
+                _codeFenceKind = markerLine.TrimStart('`').Trim();
+                Append(markerLine);
+                if (lineEnd >= 0)
+                {
+                    Append("\n");
+                    searchStart = lineEnd + 1;
+                }
+                else
+                {
+                    searchStart = text.Length;
+                }
+            }
+            else
+            {
+                Append("```");
+                _folds.Add(new TranscriptFold
+                {
+                    Start = _codeFenceStart.Value,
+                    End = _buffer.Length,
+                    Label = string.IsNullOrWhiteSpace(_codeFenceKind) ? "code" : _codeFenceKind,
+                    Preview = string.IsNullOrWhiteSpace(_codeFenceKind) ? "```" : $"```{_codeFenceKind}",
+                });
+                _codeFenceStart = null;
+                _codeFenceKind = null;
+                searchStart = marker + 3;
+            }
+        }
     }
 
     private static string Preview(string text, int limit)

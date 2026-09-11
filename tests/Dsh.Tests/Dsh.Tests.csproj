@@ -34,10 +34,14 @@
     <ProjectReference Include="..\..\src\Dsh.Subagent\Dsh.Subagent.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Tools\Dsh.Tools.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Jobs\Dsh.Jobs.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Terminal\Dsh.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Tui\Dsh.Tui.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Goal\Dsh.Goal.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
         <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
@@ -49,6 +53,7 @@
     <ProjectReference Include="..\..\src\Dsh.E2b\Dsh.E2b.csproj" />
     <ProjectReference Include="..\..\src\Dsh.SessionQuery\Dsh.SessionQuery.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Memory\Dsh.Memory.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Pty\Dsh.Pty.csproj" />
   </ItemGroup>
 
   <ItemGroup>

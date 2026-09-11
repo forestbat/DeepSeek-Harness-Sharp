@@ -97,7 +97,7 @@ public sealed class Entry
             Ctx.SetPrototype(Parent.Ctx);
             if (Fiber?.Uid is not null && (diff.Contains("config") || Options.Group))
             {
-                Fiber.Update(await ResolveConfig(Fiber.Runtime!.Callback), true);
+                await Fiber.UpdateAsync(await ResolveConfig(Fiber.Runtime!.Callback), true);
             }
             return null;
         });

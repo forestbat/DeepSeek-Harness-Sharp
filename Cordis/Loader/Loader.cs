@@ -25,20 +25,30 @@ public class Loader : EntryTree
             var fiber = (Fiber)thisArg!;
             var config1 = args[0];
             var noSave = args[1] is true;
-            var next = (Func<object?>)args[2]!;
-            if (fiber.Entry is null || noSave || fiber.Parent.Fiber?.Entry == fiber.Entry) return new ValueTask<object?>(next());
+            ValueTask<object?> Next() => args[2] switch
+            {
+                Func<ValueTask<object?>> asyncNext => asyncNext(),
+                Func<object?> syncNext => new ValueTask<object?>(syncNext()),
+                _ => throw new InvalidOperationException("invalid next"),
+            };
+            if (fiber.Entry is null || noSave || fiber.Parent.Fiber?.Entry == fiber.Entry) return Next();
             fiber.Entry.Options.Config = config1;
             fiber.Entry.Parent.Tree.Write();
-            return new ValueTask<object?>(next());
+            return Next();
         }, new EventOptions { Global = true, Prepend = true });
 
         ctx.On("internal/update", (thisArg, args) =>
         {
             var fiber = (Fiber)thisArg!;
-            var next = (Func<object?>)args[2]!;
-            if (fiber.Entry is null || fiber.Parent.Fiber?.Entry == fiber.Entry) return new ValueTask<object?>(next());
+            ValueTask<object?> Next() => args[2] switch
+            {
+                Func<ValueTask<object?>> asyncNext => asyncNext(),
+                Func<object?> syncNext => new ValueTask<object?>(syncNext()),
+                _ => throw new InvalidOperationException("invalid next"),
+            };
+            if (fiber.Entry is null || fiber.Parent.Fiber?.Entry == fiber.Entry) return Next();
             ShowLog(fiber.Entry, "reload");
-            return new ValueTask<object?>(next());
+            return Next();
         }, new EventOptions { Global = true });
 
         ctx.On(EventNames.Plugin, (thisArg, args) =>

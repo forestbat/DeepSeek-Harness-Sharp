@@ -304,4 +304,109 @@ public class SessionPersistenceTests : IDisposable
         Assert.Empty(reader.Read());
         Assert.Equal(session.Header.Id, reader.Header.Id);
     }
+
+    [Fact]
+    public void Title_RoundTrips_Through_Persistence()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+        var session = Session.Create(id, header: new SessionHeader
+        {
+            Version = SessionHeader.SessionFormatVersion,
+            Id = id,
+            CreatedAt = 1700000000000,
+            Cwd = TestCwd,
+            IsSeeded = false,
+            Title = "My session title",
+        });
+        var handle = persistence.Create(session.Header);
+        handle.Flush();
+        handle.Close();
+
+        var snapshot = persistence.Stat(id);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("My session title", snapshot.Header.Title);
+    }
+
+    [Fact]
+    public void Header_Without_Title_Reads_With_Null_Title()
+    {
+        var root = NewRoot();
+        var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+        var path = JsonlLayout.LogPath(root, null, id, JsonlCompression.None);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, $"{{\"type\":\"session\",\"version\":0,\"id\":\"{id.Value}\",\"createdAt\":1,\"delegationDepth\":0}}\n");
+
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var snapshot = persistence.Stat(id);
+
+        Assert.NotNull(snapshot);
+        Assert.Null(snapshot.Header.Title);
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_UpdatesPersistedHeader(JsonlCompression compression)
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        var handle = persistence.Create(session.Header);
+        handle.Append(session.SnapshotEvents());
+        handle.Close();
+
+        persistence.Rename(session.Header.Id, "Renamed title");
+
+        var snapshot = persistence.Stat(session.Header.Id);
+        Assert.NotNull(snapshot);
+        Assert.Equal("Renamed title", snapshot.Header.Title);
+        var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        Assert.Equal("Renamed title", reader.Header.Title);
+        AssertEventsEqual(session.SnapshotEvents(), reader.Read().ToArray());
+        reader.Close();
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_UpdatesActiveHandleHeaders(JsonlCompression compression)
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        var writer = persistence.Create(session.Header);
+        writer.Append(session.SnapshotEvents());
+        var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+
+        persistence.Rename(session.Header.Id, "Active renamed");
+
+        Assert.Equal("Active renamed", writer.Header.Title);
+        Assert.Equal("Active renamed", reader.Header.Title);
+        writer.Close();
+        reader.Close();
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Delete_RemovesFileAndClosesHandles(JsonlCompression compression)
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        var handle = persistence.Create(session.Header);
+        handle.Append(session.SnapshotEvents());
+        var logPath = LogPathOf(root, session.Header, compression);
+        Assert.True(File.Exists(logPath));
+
+        persistence.Delete(session.Header.Id);
+
+        Assert.Null(persistence.Stat(session.Header.Id));
+        Assert.False(File.Exists(logPath));
+        Assert.Throws<SessionHandleClosedException>(() => handle.Read());
+        Assert.Throws<SessionPersistenceNotFoundException>(() => persistence.Open(session.Header.Id, SessionAccess.Read));
+    }
 }

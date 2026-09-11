@@ -4,7 +4,7 @@ namespace Cordis.Plugins;
 
 public class TimerService : Service
 {
-    public TimerService(Context ctx) : base(ctx, "timer")
+    public TimerService(Context ctx, object? config = null) : base(ctx, "timer")
     {
         ctx.Mixin("timer", "Timeout", "Interval", "Throttle", "Debounce", "SetTimeout", "SetInterval");
     }

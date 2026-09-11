@@ -19,7 +19,7 @@ public class LoaderTests
         }
     }
 
-    private static (Context ctx, Cordis.Loader.Loader loader) CreateLoader(Dictionary<string, object?> modules, string? baseUrl = null)
+    internal static (Context ctx, Cordis.Loader.Loader loader) CreateLoader(Dictionary<string, object?> modules, string? baseUrl = null)
     {
         var ctx = new Context { BaseUrl = baseUrl ?? "file:///tmp/cordis-test/" };
         var loader = new Cordis.Loader.Loader(ctx)

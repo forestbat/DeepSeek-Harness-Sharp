@@ -1,6 +1,5 @@
 using System.Text;
 using Cordis;
-using Cordis.Node;
 
 namespace Dsh.Tools;
 
@@ -38,7 +37,7 @@ public sealed class LocalFsService : Service
         return Path.GetFullPath(string.IsNullOrEmpty(baseDir) ? Path.Combine(Cwd, path) : Path.Combine(baseDir, path));
     }
 
-    public object stat(string path, object? signal = null)
+    public object? stat(string path, object? signal = null)
     {
         var full = Path.GetFullPath(path);
         if (File.Exists(full))
@@ -62,7 +61,7 @@ public sealed class LocalFsService : Service
                 ["isDirectory"] = true,
             };
         }
-        return JsUndefined.Instance;
+        return null;
     }
 
     public object readText(string path, object? signal = null)

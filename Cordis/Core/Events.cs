@@ -72,20 +72,31 @@ public sealed class EventsService
             var self = (Fiber)thisArg!;
             var config = args[0];
             var noSave = args[1];
-            var next = (Func<object?>)args[2]!;
             var cbs = self.Hooks.TryGetValue(EventNames.Update, out var list)
                 ? list.ToList()
                 : new List<EventListener>();
-            object? Next()
+            if (args[2] is Func<ValueTask<object?>> asyncNext)
+            {
+                async ValueTask<object?> NextAsync()
+                {
+                    if (cbs.Count == 0) return await asyncNext();
+                    var cb = cbs[0];
+                    cbs.RemoveAt(0);
+                    return await cb(self, [config, noSave, (Func<ValueTask<object?>>)NextAsync]);
+                }
+                return NextAsync();
+            }
+            var next = (Func<object?>)args[2]!;
+            object? NextSync()
             {
                 if (cbs.Count == 0) return next();
                 var cb = cbs[0];
                 cbs.RemoveAt(0);
-                var task = cb(self, [config, noSave, (Func<object?>)Next]);
+                var task = cb(self, [config, noSave, (Func<object?>)NextSync]);
                 if (!task.IsCompleted) throw new CordisException("ASYNC_IN_SYNC", "async listener is not supported in sync waterfall");
                 return task.GetAwaiter().GetResult();
             }
-            return new ValueTask<object?>(Next());
+            return new ValueTask<object?>(NextSync());
         }, new EventOptions { Global = true, Prepend = true });
     }
 

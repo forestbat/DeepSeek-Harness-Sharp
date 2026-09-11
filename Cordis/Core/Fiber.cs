@@ -552,15 +552,32 @@ public sealed class Fiber
 
     public void Update(object? config, bool noSave = false)
     {
+        _ = ObserveUpdate(UpdateAsync(config, noSave));
+    }
+
+    public async Task UpdateAsync(object? config, bool noSave = false)
+    {
         var fiber = Ctx.Fiber;
         fiber.AssertActive();
         config = ResolveConfig(fiber.Runtime!, config);
-        fiber.Ctx.Events.WaterfallSync(fiber, EventNames.Update, [config, noSave], () =>
+        await fiber.Ctx.Events.Waterfall(fiber, EventNames.Update, [config, noSave], async () =>
         {
             fiber.Config = config;
             fiber._error = null;
-            _ = fiber.Restart();
+            await fiber.Restart();
             return null;
         });
+    }
+
+    private async Task ObserveUpdate(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception error)
+        {
+            Ctx.Logger.Error("%s", error);
+        }
     }
 }

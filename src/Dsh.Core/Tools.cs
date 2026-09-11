@@ -62,7 +62,7 @@ public sealed class ToolRuntime : Service
     {
         _defaultMode = defaultMode;
         _layers = new ScopedLayers<ToolLayer>(scope => new ToolLayer(scope), () => ctx.Emit(ChangeEvent));
-        var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)
+        var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
         systemPrompt.Tools(context => WireSchemas(context.Scope));
     }
@@ -288,67 +288,6 @@ public sealed class ToolRuntime : Service
         if (result is ToolExecutionResult.Failure failure)
             projected["error"] = failure.Error.Message;
         return projected;
-    }
-
-    // JS 插件经 Node 桥注册工具:execute/render 是 JS 函数句柄(JsHandle),经 InvokeCallbackAsync 回调进 Node 侧执行。
-    // 注册绑定到 root 层(桥调用拿不到插件 fiber,无法按插件生命周期回收),preset 类插件进程级常驻,语义可接受。
-    public void register(IDictionary<string, object?> definition)
-    {
-        var name = definition.TryGetValue("name", out var nameValue) ? nameValue as string : null;
-        if (string.IsNullOrEmpty(name))
-            throw new ArgumentException("tools.register: \"name\" must be a non-empty string");
-        var description = definition.TryGetValue("description", out var descriptionValue) ? descriptionValue as string : null;
-        if (string.IsNullOrEmpty(description))
-            throw new ArgumentException("tools.register: \"description\" must be a non-empty string");
-        if (!definition.TryGetValue("execute", out var executeValue) || executeValue is not Cordis.Node.JsHandle executeHandle)
-            throw new ArgumentException("tools.register: \"execute\" must be a function");
-        var parameters = ToJsonObject(definition.TryGetValue("parameters", out var parametersValue) ? parametersValue : null);
-        var output = definition.TryGetValue("output", out var outputValue) ? outputValue as IDictionary<string, object?> : null;
-        var render = output is not null && output.TryGetValue("render", out var renderValue) ? renderValue as Cordis.Node.JsHandle : null;
-        var outputSchema = output is not null && output.TryGetValue("schema", out var schemaValue) ? ToJsonObject(schemaValue) : new JsonObject();
-        var timeoutMs = definition.TryGetValue("timeoutMs", out var timeoutValue) && timeoutValue is long or int ? Convert.ToInt64(timeoutValue) : (long?)null;
-        Register(new ToolDefinition
-        {
-            Name = name,
-            Description = description,
-            Parameters = parameters,
-            TimeoutMs = timeoutMs,
-            Execute = async (args, runContext) =>
-            {
-                var exec = new Dictionary<string, object?>
-                {
-                    ["name"] = runContext.Name,
-                    ["callId"] = runContext.CallId.Value,
-                    ["agent"] = runContext.Agent,
-                    ["signal"] = null,
-                };
-                return await executeHandle.Host.InvokeCallbackAsync(
-                    executeHandle.Id,
-                    null,
-                    [JsonNode.Parse(args.GetRawText()), exec]);
-            },
-            Output = new ToolOutputDefinition(outputSchema, (args, value) =>
-            {
-                if (render is null)
-                    return [new TextBlock(value.GetRawText())];
-                var blocks = render.Host.InvokeCallbackAsync(
-                        render.Id,
-                        null,
-                        [JsonNode.Parse(args.GetRawText()), JsonNode.Parse(value.GetRawText())])
-                    .GetAwaiter().GetResult();
-                return RenderBlocks(blocks);
-            }),
-        });
-    }
-
-    private static IReadOnlyList<ContentBlock> RenderBlocks(object? blocks)
-    {
-        if (blocks is not IEnumerable<object?> list)
-            return [];
-        return list.OfType<IDictionary<string, object?>>()
-            .Where(block => block.TryGetValue("type", out var typeValue) && typeValue as string == "text")
-            .Select(block => (ContentBlock)new TextBlock(block.TryGetValue("text", out var textValue) ? textValue as string ?? "" : ""))
-            .ToList();
     }
 
     private static JsonObject ToJsonObject(object? value) => value switch

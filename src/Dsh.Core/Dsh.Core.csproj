@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\..\Cordis\Cordis.csproj" />
   </ItemGroup>
 

@@ -30,6 +30,7 @@ internal static class SessionLogHeader
             writer.WriteString("id", header.Id.Value);
             writer.WriteNumber("createdAt", header.CreatedAt);
             if (header.Cwd is { } cwd) writer.WriteString("cwd", cwd);
+            if (header.Title is { } title) writer.WriteString("title", title);
             if (header.ParentSession is { } parent) writer.WriteString("parentSession", parent.Value);
             if (header.IsSeeded) writer.WriteNumber("seedLength", inheritedEventCount!.Value);
             if (header.Origin is { } origin) writer.WriteString("origin", origin);
@@ -92,6 +93,9 @@ internal static class SessionLogHeader
         if (line["cwd"] is not null
             && (line["cwd"] is not JsonValue cwdValue || !cwdValue.TryGetValue<string>(out _)))
             return null;
+        if (line["title"] is not null
+            && (line["title"] is not JsonValue titleValue || !titleValue.TryGetValue<string>(out _)))
+            return null;
         if (line["parentSession"] is not null
             && (line["parentSession"] is not JsonValue parentValue || !parentValue.TryGetValue<string>(out _)))
             return null;
@@ -104,6 +108,7 @@ internal static class SessionLogHeader
             Id = SessionId.Create(id),
             CreatedAt = createdAt,
             Cwd = line["cwd"] is JsonValue cwdNode && cwdNode.TryGetValue<string>(out var cwd) ? cwd : null,
+            Title = line["title"] is JsonValue titleNode && titleNode.TryGetValue<string>(out var title) ? title : null,
             ParentSession = line["parentSession"] is JsonValue parentNode && parentNode.TryGetValue<string>(out var parent)
                 ? SessionId.Create(parent)
                 : null,

@@ -6,7 +6,93 @@ namespace Dsh.Interaction;
 
 public sealed record CommandInputDescriptor(string Hint, bool Images = false);
 
-public sealed record CommandDescriptor(string Name, string Description, CommandInputDescriptor? Input = null);
+public sealed record CommandArgumentSchema(
+    string Name,
+    string Kind,
+    string? Hint = null,
+    string? Flag = null,
+    IReadOnlyList<string>? Choices = null);
+
+public sealed record CommandOptionSchema(string Name, string Hint, string? ValueHint = null);
+
+public sealed record CommandMenuSchema(string Prompt, string? SearchHint = null);
+
+public sealed record CommandDescriptor(
+    string Name,
+    string Description,
+    CommandInputDescriptor? Input = null,
+    IReadOnlyList<CommandDescriptor>? Subcommands = null,
+    IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas = null,
+    CommandMenuSchema? MenuSchema = null);
+
+public static class CommandMenuCatalog
+{
+    public static IReadOnlyList<CommandDescriptor> Enrich(IEnumerable<CommandDescriptor> commands)
+    {
+        var enriched = commands.Select(EnrichDescriptor).ToList();
+        if (enriched.All(command => !string.Equals(command.Name, "session", StringComparison.OrdinalIgnoreCase)))
+        {
+            enriched.Add(new CommandDescriptor(
+                "session",
+                "List or resume persistent sessions",
+                MenuSchema: new CommandMenuSchema("Persistent sessions", "session id or title"),
+                ArgumentSchemas: [new CommandArgumentSchema("session", "select", "Session id or title")]));
+        }
+        return enriched;
+    }
+
+    private static CommandDescriptor EnrichDescriptor(CommandDescriptor descriptor) => descriptor.Name switch
+    {
+        "provider" => descriptor with
+        {
+            Subcommands =
+            [
+                new CommandDescriptor("add", "Add provider",
+                    MenuSchema: new CommandMenuSchema("Add provider", "provider name"),
+                    ArgumentSchemas:
+                    [
+                        new CommandArgumentSchema("name", "text", "Provider name"),
+                        new CommandArgumentSchema("base-url", "text", "Base URL", Flag: "--base-url"),
+                        new CommandArgumentSchema("api-key", "text", "API key", Flag: "--api-key"),
+                        new CommandArgumentSchema("type", "select", "Provider type", Flag: "--type",
+                            Choices: ["openai-compatible", "openai-responses", "anthropic", "deepseek"]),
+                        new CommandArgumentSchema("model-ids", "text", "Model ids (comma-separated)", Flag: "--model-ids"),
+                    ]),
+                new CommandDescriptor("list", "List providers"),
+                new CommandDescriptor("remove", "Remove provider",
+                    MenuSchema: new CommandMenuSchema("Remove provider", "provider name"),
+                    ArgumentSchemas: [new CommandArgumentSchema("provider", "select", "Provider name")]),
+            ],
+        },
+        "model" => descriptor with
+        {
+            MenuSchema = new CommandMenuSchema("Model", "provider/model"),
+            ArgumentSchemas = [new CommandArgumentSchema("provider/model", "select", "Provider/model")],
+        },
+        "skill" => descriptor with
+        {
+            MenuSchema = new CommandMenuSchema("Skill", "skill name"),
+            ArgumentSchemas = [new CommandArgumentSchema("name", "select", "Skill name")],
+        },
+        "memory" => descriptor with
+        {
+            Subcommands =
+            [
+                new CommandDescriptor("get", "Read memory",
+                    MenuSchema: new CommandMenuSchema("Memory key", "memory key"),
+                    ArgumentSchemas: [new CommandArgumentSchema("key", "text", "Memory key")]),
+                new CommandDescriptor("set", "Write memory",
+                    MenuSchema: new CommandMenuSchema("Memory", "key and text"),
+                    ArgumentSchemas:
+                    [
+                        new CommandArgumentSchema("key", "text", "Memory key"),
+                        new CommandArgumentSchema("text", "text", "Memory text"),
+                    ]),
+            ],
+        },
+        _ => descriptor,
+    };
+}
 
 public abstract record CommandResult
 {
@@ -30,6 +116,9 @@ public sealed record CommandDefinition
     public required string Name { get; init; }
     public required string Description { get; init; }
     public CommandInputDescriptor? Input { get; init; }
+    public IReadOnlyList<CommandDescriptor>? Subcommands { get; init; }
+    public IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas { get; init; }
+    public CommandMenuSchema? MenuSchema { get; init; }
     public bool RecordInput { get; init; } = true;
     public required Func<CommandInvocation, Task<CommandResult>> Handler { get; init; }
 }
@@ -107,7 +196,13 @@ public sealed partial class CommandsService : Service
 
     public IReadOnlyList<CommandDescriptor> List(IAgent agent)
         => [.. _layers.Merge(agent.ScopeKey, layer => layer.Commands).Values
-            .Select(definition => new CommandDescriptor(definition.Name, definition.Description, definition.Input))
+            .Select(definition => new CommandDescriptor(
+                definition.Name,
+                definition.Description,
+                definition.Input,
+                definition.Subcommands,
+                definition.ArgumentSchemas,
+                definition.MenuSchema))
             .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)];
 
     public CommandDefinition? Find(IAgent agent, string name)

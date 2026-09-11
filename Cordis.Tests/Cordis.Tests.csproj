@@ -28,10 +28,4 @@
     <ProjectReference Include="..\Cordis\Cordis.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="Fixtures/**">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
 </Project>

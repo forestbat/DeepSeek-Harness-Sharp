@@ -1,2 +1,6 @@
+- name: "@deepseek-ai/dsh-core"
+- name: "@deepseek-ai/dsh-interaction"
+- name: "@deepseek-ai/dsh-persistence"
+- name: "@deepseek-ai/dsh-subprocess"
 - name: "@deepseek-ai/dsh-tool-bash"
 - name: "@deepseek-ai/dsh-tool-str-replace-editor"
