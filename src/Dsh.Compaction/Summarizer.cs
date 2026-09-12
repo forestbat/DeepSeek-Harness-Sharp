@@ -57,6 +57,7 @@ public static class Summarizer
         - Do NOT mention this summarization request or that the context was compacted.
         - Output only the checkpoint text: do not call any tool or take any other action.
         - If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.
+        - End your output with one final line in the exact form `TITLE: <concise conversation topic, at most 15 characters, no quotes, no punctuation>`. This line is metadata for session labeling, not part of the checkpoint.
         """;
 
     public const string CheckpointPreamble =

@@ -64,13 +64,22 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
         return (agent.Options.Provider, agent.Options.Model);
     }
 
-    protected virtual Task<SummaryResult> Summarize(SummarizationInput input, IAgent agent, CancellationToken signal)
+    protected virtual async Task<SummaryResult> Summarize(SummarizationInput input, IAgent agent, CancellationToken signal)
     {
         var target = ConversationTarget(agent);
         var policy = target is null
             ? CompactionConfigResolver.ResolveTargetPolicy(Config, "", "")
             : CompactionConfigResolver.ResolveTargetPolicy(Config, target.Value.Provider, target.Value.Model);
-        return Summarizer.SummarizeWithLlm(_llm, policy.SummarizationProvider, policy.SummarizationModel, policy.MaxTokens, input, agent, signal);
+        var result = await Summarizer.SummarizeWithLlm(_llm, policy.SummarizationProvider, policy.SummarizationModel, policy.MaxTokens, input, agent, signal);
+        var (summary, title) = SessionTitleExtraction.Extract(result.Summary);
+        if (title is null)
+            return result;
+        if (string.IsNullOrWhiteSpace(agent.Session.Header.Title))
+        {
+            Ctx.Get<ISessionPersistence>("sessionPersistence", strict: false)?.Rename(agent.Session.Id, title);
+            agent.Session.Rename(title);
+        }
+        return result with { Summary = summary };
     }
 
     public override async Task<CompactionResult?> CompactIfNeeded(IAgent agent, CompactionTrigger trigger, CancellationToken signal)

@@ -30,7 +30,7 @@ public static class ProviderCommand
                 return tokens[0] switch
                 {
                     "list" => Task.FromResult<CommandResult>(new CommandResult.Success(ListProviders(home))),
-                    "remove" when tokens.Length >= 2 => RemoveProvider(home, tokens[1]),
+                    "remove" when tokens.Length >= 2 => RemoveProvider(ctx, home, tokens[1]),
                     "add" => AddProvider(ctx, home, tokens[1..]),
                     _ => Task.FromResult<CommandResult>(new CommandResult.Error("usage: /provider list | add <name> --base-url <url> --api-key <key> [--type ...] [--model-ids ...] | remove <name>")),
                 };
@@ -50,11 +50,12 @@ public static class ProviderCommand
         }));
     }
 
-    private static Task<CommandResult> RemoveProvider(HarnessHome home, string name)
+    private static Task<CommandResult> RemoveProvider(Context ctx, HarnessHome home, string name)
     {
         var settings = HarnessSettings.Load(home);
         if (!settings.Providers.ContainsKey(name))
             return Task.FromResult<CommandResult>(new CommandResult.Error($"provider \"{name}\" is not configured"));
+        ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)?.UnregisterAdapter(name);
         var updated = new HarnessSettings
         {
             GlobalDefaultModel = settings.GlobalDefaultModel,

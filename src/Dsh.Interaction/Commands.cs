@@ -74,21 +74,15 @@ public static class CommandMenuCatalog
             MenuSchema = new CommandMenuSchema("Skill", "skill name"),
             ArgumentSchemas = [new CommandArgumentSchema("name", "select", "Skill name")],
         },
+        "session" => descriptor with
+        {
+            MenuSchema = new CommandMenuSchema("Persistent sessions", "session id or title"),
+            ArgumentSchemas = [new CommandArgumentSchema("session", "select", "Session id or title")],
+        },
         "memory" => descriptor with
         {
-            Subcommands =
-            [
-                new CommandDescriptor("get", "Read memory",
-                    MenuSchema: new CommandMenuSchema("Memory key", "memory key"),
-                    ArgumentSchemas: [new CommandArgumentSchema("key", "text", "Memory key")]),
-                new CommandDescriptor("set", "Write memory",
-                    MenuSchema: new CommandMenuSchema("Memory", "key and text"),
-                    ArgumentSchemas:
-                    [
-                        new CommandArgumentSchema("key", "text", "Memory key"),
-                        new CommandArgumentSchema("text", "text", "Memory text"),
-                    ]),
-            ],
+            MenuSchema = new CommandMenuSchema("Project memory", "on or off"),
+            ArgumentSchemas = [new CommandArgumentSchema("state", "select", "on or off", Choices: ["on", "off"])],
         },
         _ => descriptor,
     };

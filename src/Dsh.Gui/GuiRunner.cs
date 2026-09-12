@@ -11,15 +11,9 @@ namespace Dsh.Gui;
 public static class GuiRunner
 {
     public static async Task<int> Run(
-        HarnessHome home,
-        string cwd,
-        string? config = null,
-        IReadOnlyList<Dictionary<string, object?>>? patches = null)
+        HarnessApp app,
+        string cwd)
     {
-        var options = new HarnessOptions(home, cwd);
-        using var app = config is null
-            ? await HarnessComposer.Compose(options)
-            : await ConfigBoot.Compose(config, options, patches: patches);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),

@@ -1,4 +1,5 @@
 using Cordis;
+using Dsh.Boot;
 using Dsh.Interaction;
 using Dsh.Plugins;
 
@@ -22,7 +23,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     public IDisposable Apply(Context ctx, object? config) => packageName switch
     {
         Skill => RegisterSkillRegistry(ctx, config),
-        SkillFilesystem => global::Dsh.Skills.SkillFilesystem.Apply(ctx, SkillFilesystemConfigFrom(config)),
+        SkillFilesystem => global::Dsh.Skills.SkillFilesystem.Apply(ctx, SkillFilesystemConfigFrom(config, ctx)),
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
@@ -44,16 +45,22 @@ public sealed class Plugin(string packageName) : IDshPlugin
         };
     }
 
-    private static SkillFilesystemConfig SkillFilesystemConfigFrom(object? config)
+    private static SkillFilesystemConfig SkillFilesystemConfigFrom(object? config, Context ctx)
     {
         var dict = ConfigOf(config);
+        var customDirs = (StringListOf(dict?.GetValueOrDefault("customSkillDirs")) ?? []).ToList();
+        foreach (var path in SettingsSkillPaths(ctx))
+        {
+            if (!customDirs.Contains(path, StringComparer.OrdinalIgnoreCase))
+                customDirs.Add(path);
+        }
         return new SkillFilesystemConfig
         {
             ProviderName = dict?.GetValueOrDefault("providerName") as string ?? new SkillFilesystemConfig().ProviderName,
             IncludeDefaultRoots = dict?.GetValueOrDefault("includeDefaultRoots") as bool? ?? new SkillFilesystemConfig().IncludeDefaultRoots,
             DshHome = dict?.GetValueOrDefault("dshHome") as string,
             AgentsHome = dict?.GetValueOrDefault("agentsHome") as string,
-            CustomSkillDirs = StringListOf(dict?.GetValueOrDefault("customSkillDirs")),
+            CustomSkillDirs = customDirs,
             Watch = dict?.GetValueOrDefault("watch") as bool? ?? new SkillFilesystemConfig().Watch,
             WatchUsePolling = dict?.GetValueOrDefault("watchUsePolling") as bool? ?? new SkillFilesystemConfig().WatchUsePolling,
             WatchStabilityThresholdMs = IntOf(dict, "watchStabilityThresholdMs") ?? new SkillFilesystemConfig().WatchStabilityThresholdMs,
@@ -62,6 +69,21 @@ public sealed class Plugin(string packageName) : IDshPlugin
             WatchFollowSymlinks = dict?.GetValueOrDefault("watchFollowSymlinks") as bool? ?? new SkillFilesystemConfig().WatchFollowSymlinks,
             BundledSkillDir = dict?.GetValueOrDefault("bundledSkillDir") as string,
         };
+    }
+
+    private static IReadOnlyList<string> SettingsSkillPaths(Context ctx)
+    {
+        if (ctx.GetProp("dshHomePath") is not string homePath)
+            return [];
+        try
+        {
+            return HarnessSettings.Load(new HarnessHome(homePath)).Skills?.Paths ?? [];
+        }
+        catch (Exception error)
+        {
+            ctx.LoggerFor(SkillFilesystem).Warn($"failed to read skills.paths from settings: {error.Message}");
+            return [];
+        }
     }
 
     private static int? IntOf(IReadOnlyDictionary<string, object?>? dict, string key)

@@ -166,13 +166,6 @@ public sealed class GpuRenderer : IDisposable
 
     private void OnKeyDown(KeyboardKeyEventArgs e)
     {
-        if (e.Control && e.Key == Keys.Q)
-        {
-            _chat.RequestExit();
-            _window.Close();
-            return;
-        }
-
         if (e.Control && e.Key == Keys.V)
         {
             var clipboard = _window.ClipboardString;
@@ -199,9 +192,6 @@ public sealed class GpuRenderer : IDisposable
     {
         _mouseX = e.X;
         _mouseY = e.Y;
-        var cellX = (int)(_mouseX / CellPixelWidth);
-        var cellY = (int)(_mouseY / CellPixelHeight);
-        _chat.HandleMouseMove(cellX, cellY, _layout);
     }
 
     private void OnMouseDown(MouseButtonEventArgs e)

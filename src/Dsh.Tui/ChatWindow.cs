@@ -25,6 +25,7 @@ public sealed class ChatWindow : IDisposable
     private TranscriptRenderer _renderer = new();
     private Func<bool> _unsubscribe;
     private readonly Func<bool> _approvalSubscription;
+    private readonly Func<bool> _skillChangeSubscription;
     private TaskCompletionSource<ApprovalOutcome>? _pendingApproval;
     private CommandMenuState? _commandMenu;
     private IReadOnlyList<string> _mentionCandidates = [];
@@ -38,11 +39,11 @@ public sealed class ChatWindow : IDisposable
     private int _cursor;
     private int _scrollOffset;
     private volatile bool _stickToBottom = true;
-    private int _hoveredTab = -1;
-    private int _activeTab;
-    private static readonly string[] PanelTabLabels = ["上下文", "MCP", "计划", "输出"];
-    private string _statusText = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+Q quits";
+    private IReadOnlyList<string>? _mcpPanelLines;
+    private string _statusText = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+C×2 quits";
     private bool _exitRequested;
+    private DateTime? _exitConfirmAt;
+    private bool _ctrlXPrefix;
     private string? _deleteConfirmSessionId;
     private bool _sessionRenamedSubscribed;
 
@@ -70,6 +71,12 @@ public sealed class ChatWindow : IDisposable
             var answer = new TaskCompletionSource<ApprovalOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             QueueAction(() => ShowApprovalPrompt(request, answer));
             return new ValueTask<object?>(answer.Task);
+        }, new EventOptions { Global = true });
+
+        _skillChangeSubscription = ctx.On(SkillRegistry.ChangeEvent, (_, _) =>
+        {
+            LoadSkillCandidates();
+            return new ValueTask<object?>();
         }, new EventOptions { Global = true });
     }
 
@@ -119,20 +126,63 @@ public sealed class ChatWindow : IDisposable
             return;
         }
 
+        if (_ctrlXPrefix)
+        {
+            _ctrlXPrefix = false;
+            RefreshMenuStatus();
+            switch (key.Key)
+            {
+                case ConsoleKey.N:
+                    RunSlashCommand("/new");
+                    return;
+                case ConsoleKey.S:
+                    _input = "/session ";
+                    _cursor = _input.Length;
+                    RefreshMenus();
+                    return;
+                case ConsoleKey.D:
+                    RunSlashCommand("/detach");
+                    return;
+                case ConsoleKey.K:
+                    _input = "/session delete ";
+                    _cursor = _input.Length;
+                    RefreshMenus();
+                    return;
+            }
+        }
+
         if ((key.Modifiers & ConsoleModifiers.Control) != 0)
         {
             switch (key.Key)
             {
-                case ConsoleKey.Q:
-                    RequestExit();
+                case ConsoleKey.X:
+                    _ctrlXPrefix = true;
+                    _statusText = "Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话";
                     return;
                 case ConsoleKey.C:
                     if (_busy)
+                    {
                         _agent.Cancel(new AgentCancelCause.User());
-                    else
+                        return;
+                    }
+                    if (_exitConfirmAt is { } firstPress
+                        && (DateTime.UtcNow - firstPress).TotalSeconds <= 2)
+                    {
+                        _exitConfirmAt = null;
                         RequestExit();
+                        return;
+                    }
+                    _exitConfirmAt = DateTime.UtcNow;
+                    _statusText = "再按一次 Ctrl+C 退出";
                     return;
+                default:
+                    ClearExitConfirm();
+                    break;
             }
+        }
+        else
+        {
+            ClearExitConfirm();
         }
 
         if (_selectedFoldKey is not null)
@@ -232,7 +282,9 @@ public sealed class ChatWindow : IDisposable
             {
                 if (_commandMenu?.IsActive == true)
                 {
-                    ConfirmCommandMenu();
+                    _commandMenu.Close();
+                    RefreshMenuStatus();
+                    Submit();
                     return;
                 }
 
@@ -244,6 +296,12 @@ public sealed class ChatWindow : IDisposable
 
                 if (_mentionActive)
                     CloseMentionMenu();
+            }
+
+            if (key.Key == ConsoleKey.Tab && _commandMenu?.IsActive == true)
+            {
+                ConfirmCommandMenu();
+                return;
             }
         }
 
@@ -337,24 +395,10 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    public void HandleMouseMove(int cellX, int cellY, UiLayout layout)
-    {
-        if (_pendingApproval is not null)
-            return;
-        _hoveredTab = HitPanelTab(cellX, cellY, layout.RightPanel);
-    }
-
     public void HandleMouseClick(int cellX, int cellY, UiLayout layout)
     {
         if (_pendingApproval is not null)
             return;
-        var tab = HitPanelTab(cellX, cellY, layout.RightPanel);
-        if (tab >= 0)
-        {
-            _activeTab = tab;
-            return;
-        }
-
         if (layout.Input.Contains(cellX, cellY))
         {
             _cursor = ColumnToCharIndex(Math.Clamp(cellX - layout.Input.X - InputPrompt.Length, 0, TerminalTextWidth.Of(_input)));
@@ -379,11 +423,20 @@ public sealed class ChatWindow : IDisposable
     public void RequestExit()
         => _exitRequested = true;
 
+    private void ClearExitConfirm()
+    {
+        if (_exitConfirmAt is null)
+            return;
+        _exitConfirmAt = null;
+        RefreshMenuStatus();
+    }
+
     public void Dispose()
     {
         UnsubscribeSessionRenamed();
         _unsubscribe.Invoke();
         _approvalSubscription.Invoke();
+        _skillChangeSubscription.Invoke();
         _pendingApproval?.TrySetResult(ApprovalOutcome.Cancelled);
     }
 
@@ -532,6 +585,8 @@ public sealed class ChatWindow : IDisposable
     private CommandMenuState CreateCommandMenu()
     {
         var commands = _ctx.Get<CommandsService>(CommandsService.ServiceName)?.List(_agent) ?? [];
+        if (commands.All(command => !string.Equals(command.Name, "exit", StringComparison.OrdinalIgnoreCase)))
+            commands = [.. commands, new CommandDescriptor("exit", "退出 TUI")];
         var descriptors = CommandMenuCatalog.Enrich(commands);
         return new CommandMenuState(descriptors, CommandCandidates);
     }
@@ -626,7 +681,7 @@ public sealed class ChatWindow : IDisposable
     {
         if (_commandMenu?.IsActive == true)
         {
-            _statusText = $"{_commandMenu.Prompt} — ↑/↓ Enter Esc";
+            _statusText = $"{_commandMenu.Prompt} — ↑/↓ 移动 · Tab 选择 · Enter 发送 · Esc 返回";
             return;
         }
 
@@ -642,7 +697,7 @@ public sealed class ChatWindow : IDisposable
     private void SetStatusReady()
         => _statusText = _busy
             ? "working… (Esc to cancel)"
-            : "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+Q quits";
+            : "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+C×2 quits";
 
     private string CurrentCwd()
         => _agent.Session.Header.Cwd ?? Environment.CurrentDirectory;
@@ -852,8 +907,21 @@ public sealed class ChatWindow : IDisposable
         var sessionId = SessionId.Create(raw);
         if (agents.Get(sessionId) is not AgentLoopAgent target)
         {
-            AppendRaw($"  session not loaded: {raw}\n");
-            return;
+            AgentHandle handle;
+            try
+            {
+                handle = await agents.Resume(new ResumeAgentOptions(
+                    sessionId,
+                    new AgentOptions(_agent.Options.Provider, _agent.Options.Model, _agent.Options.ReasoningEffort, _agent.Options.MaxTokens)));
+            }
+            catch (Exception error)
+            {
+                AppendRaw($"  session cannot be loaded: {raw} — {error.Message}\n");
+                return;
+            }
+
+            target = (AgentLoopAgent)handle.Agent;
+            await target.WhenIdle();
         }
 
         SwitchAgent(target);
@@ -1015,79 +1083,72 @@ public sealed class ChatWindow : IDisposable
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
 
-        DrawPanelTabs(grid, rect);
-        if (rect.Height > 1)
+        var row = rect.Y;
+        DrawPanelSection(grid, rect, ref row, "上下文",
+        [
+            $"session: {_agent.Id}",
+            $"title: {_agent.Session.Header.Title ?? "-"}",
+            $"cwd: {_agent.Session.Header.Cwd ?? "-"}",
+            $"model: {_agent.Options.Provider}/{_agent.Options.Model}",
+        ]);
+        DrawPanelSection(grid, rect, ref row, "MCP", McpPanelLines());
+        DrawPanelSection(grid, rect, ref row, "计划", ["使用 /plan 管理"]);
+        DrawPanelSection(grid, rect, ref row, "输出", ["暂无"]);
+        DrawPanelSection(grid, rect, ref row, "快捷键",
+        [
+            "Enter 发送 · / 命令 · @ 引用",
+            "Tab 补全/折叠 · Esc 取消",
+            "↑/↓ 历史 · PgUp/PgDn 滚动",
+            "Ctrl+C×2 退出",
+            "Ctrl+X N 新会话 · S 会话",
+            "Ctrl+X D detach · K 删会话",
+        ]);
+    }
+
+    private void DrawPanelSection(CellGrid grid, ConsoleRect rect, ref int row, string header, IReadOnlyList<string> lines)
+    {
+        if (row >= rect.Bottom)
+            return;
+        if (row > rect.Y && row + 1 < rect.Bottom)
         {
             for (var x = rect.X; x < rect.Right && x < grid.Width; x++)
-                grid[x, rect.Y + 1] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+                grid[x, row] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            row++;
         }
-
-        DrawPanelContent(grid, rect);
-    }
-
-    private void DrawPanelTabs(CellGrid grid, ConsoleRect rect)
-    {
-        var x = rect.X;
-        for (var index = 0; index < PanelTabLabels.Length; index++)
-        {
-            var label = $"[{PanelTabLabels[index]}]";
-            var width = TerminalTextWidth.Of(label);
-            if (x + width > rect.Right)
-                break;
-            var style = index == _activeTab ? CellStyle.Bold : index == _hoveredTab ? CellStyle.Reverse : CellStyle.None;
-            var foreground = index == _activeTab ? AnsiColor.BrightCyan : AnsiColor.Default;
-            DrawText(grid, x, rect.Y, label, foreground, AnsiColor.Default, style);
-            x += width;
-        }
-    }
-
-    private void DrawPanelContent(CellGrid grid, ConsoleRect rect)
-    {
-        var contentY = rect.Y + 2;
-        if (contentY >= rect.Bottom)
-            return;
-
-        var lines = _activeTab switch
-        {
-            0 =>
-                new[]
-                {
-                    $"session: {_agent.Id}",
-                    $"title: {_agent.Session.Header.Title ?? "-"}",
-                    $"cwd: {_agent.Session.Header.Cwd ?? "-"}",
-                    $"model: {_agent.Options.Provider}/{_agent.Options.Model}",
-                },
-            1 => new[] { "MCP servers: 使用 /mcp 管理" },
-            2 => new[] { "计划: 使用 /plan 管理" },
-            _ => new[] { "输出: 暂无" },
-        };
-
-        var row = contentY;
+        DrawText(grid, rect.X, row, header, AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
+        row++;
         foreach (var line in lines)
         {
             if (row >= rect.Bottom)
-                break;
+                return;
             DrawText(grid, rect.X, row, line, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
             row++;
         }
     }
 
-    private int HitPanelTab(int cellX, int cellY, ConsoleRect rect)
+    private IReadOnlyList<string> McpPanelLines()
     {
-        if (rect.Width <= 0 || cellY != rect.Y || cellX < rect.X || cellX >= rect.Right)
-            return -1;
-        var x = rect.X;
-        for (var index = 0; index < PanelTabLabels.Length; index++)
+        if (_mcpPanelLines is not null)
+            return _mcpPanelLines;
+        try
         {
-            var width = TerminalTextWidth.Of($"[{PanelTabLabels[index]}]");
-            if (x + width > rect.Right)
-                break;
-            if (cellX >= x && cellX < x + width)
-                return index;
-            x += width;
+            var servers = HarnessSettings.Load(_home).McpServers;
+            _mcpPanelLines = servers.Count == 0
+                ? ["无 MCP 服务器"]
+                : servers.Select(entry =>
+                    {
+                        var target = entry.Value.Url
+                            ?? (entry.Value.Command is { Count: > 0 } command ? string.Join(' ', command) : "-");
+                        var suffix = entry.Value.Enabled ? "" : " (disabled)";
+                        return $"{entry.Key}: {target}{suffix}";
+                    })
+                    .ToList();
         }
-
-        return -1;
+        catch (Exception error)
+        {
+            _mcpPanelLines = [$"MCP 配置读取失败: {error.Message}"];
+        }
+        return _mcpPanelLines;
     }
 
     private void DrawDividers(CellGrid grid, UiLayout layout)
@@ -1150,11 +1211,11 @@ public sealed class ChatWindow : IDisposable
         var infoY = rect.Y + 1;
         if (infoY >= grid.Height)
             return;
-        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 折叠";
+        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 补全 · Ctrl+X 会话";
         DrawText(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
         var profile = $"{_agent.Options.Provider} · {_agent.Options.Model}";
         var profileWidth = TerminalTextWidth.Of(profile);
-        if (profileWidth < rect.Width)
+        if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
             DrawText(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
     }
 

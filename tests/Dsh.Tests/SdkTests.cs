@@ -103,6 +103,39 @@ public sealed class SdkTests
     }
 
     [Fact]
+    public async Task SdkServer_CordisGateway_CallsServicesAndEvents()
+    {
+        var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        {
+            var pair = new DuplexTransportPair();
+            await using var serverTransport = pair.Server;
+            var server = new HarnessSdkServer(app.Ctx, serverTransport);
+
+            var providersResult = await server.HandleRequestAsync(SdkMethods.CordisServiceCall,
+                JsonSerializer.SerializeToElement(new CordisServiceCallParams("llm", "ListProviders"), DshJson.Options));
+            var providers = (JsonElement)providersResult!;
+            Assert.Contains(providers.EnumerateArray(), entry => entry.GetProperty("id").GetString() == "deepseek-official");
+
+            var emitReceived = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            app.Ctx.On("gateway/test", (_, args) =>
+            {
+                emitReceived.TrySetResult(((JsonElement)args[0]!).GetString()!);
+                return new ValueTask<object?>();
+            }, new Cordis.EventOptions { Global = true });
+            await server.HandleRequestAsync(SdkMethods.CordisEventEmit,
+                JsonSerializer.SerializeToElement(new CordisEventParams("gateway/test", [JsonSerializer.SerializeToElement("ping")]), DshJson.Options));
+            Assert.Equal("ping", await emitReceived.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+
+            app.Ctx.On("gateway/query", (_, _) => new ValueTask<object?>("pong"), new Cordis.EventOptions { Global = true });
+            var serialResult = await server.HandleRequestAsync(SdkMethods.CordisEventSerial,
+                JsonSerializer.SerializeToElement(new CordisEventParams("gateway/query"), DshJson.Options));
+            Assert.Equal("pong", ((JsonElement)serialResult!).GetString());
+        }
+        Directory.Delete(home, true);
+    }
+
+    [Fact]
     public async Task SdkServer_EmitsSessionEventNotificationToCSharpClient()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));

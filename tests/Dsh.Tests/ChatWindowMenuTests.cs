@@ -41,12 +41,12 @@ public class ChatWindowMenuTests : IDisposable
     }
 
     [Fact]
-    public async Task Enter_On_Model_Opens_Argument_Menu_With_Provider_Models()
+    public async Task Tab_On_Model_Opens_Argument_Menu_With_Provider_Models()
     {
         using var chat = await CreateChat();
 
         Type(chat, "/model");
-        Press(chat, ConsoleKey.Enter);
+        Press(chat, ConsoleKey.Tab);
 
         var frame = DrawFrame(chat);
         Assert.Contains("deepseek-official/deepseek-v4-flash", frame);
@@ -63,12 +63,52 @@ public class ChatWindowMenuTests : IDisposable
         using var chat = await CreateChat();
 
         Type(chat, "/model");
-        Press(chat, ConsoleKey.Enter);
+        Press(chat, ConsoleKey.Tab);
         Press(chat, ConsoleKey.Escape);
 
         var frame = DrawFrame(chat);
         Assert.Contains("Commands", frame);
         Assert.Contains("mcp", frame);
+    }
+
+    [Fact]
+    public async Task Enter_Submits_Incomplete_Command_And_Reports_Error()
+    {
+        using var chat = await CreateChat();
+
+        Type(chat, "/xyz");
+        Press(chat, ConsoleKey.Enter);
+        await Task.Delay(300);
+        chat.DrainUi();
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("unknown command: /xyz", frame);
+    }
+
+    [Fact]
+    public async Task CtrlC_Twice_Requests_Exit_With_Status_Hint()
+    {
+        using var chat = await CreateChat();
+
+        PressCtrl(chat, ConsoleKey.C);
+        var frame = DrawFrame(chat);
+        Assert.Contains("再按一次 Ctrl+C 退出", frame);
+        Assert.False(chat.ExitRequested);
+
+        PressCtrl(chat, ConsoleKey.C);
+        Assert.True(chat.ExitRequested);
+    }
+
+    [Fact]
+    public async Task CtrlX_Then_S_Opens_Session_Candidates()
+    {
+        using var chat = await CreateChat();
+
+        PressCtrl(chat, ConsoleKey.X);
+        Press(chat, ConsoleKey.S);
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("Session id or title", frame);
     }
 
     private async Task<ChatWindow> CreateChat()
@@ -80,12 +120,15 @@ public class ChatWindowMenuTests : IDisposable
         var commands = CommandsService.Register(ctx);
         RegisterCommand(commands, "model", "List or switch model");
         RegisterCommand(commands, "mcp", "Manage MCP servers");
+        RegisterCommand(commands, "session", "Manage sessions");
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),
             null,
             new AgentOptions("deepseek-official", "deepseek-v4-flash")));
+        var agent = (AgentLoopAgent)handle.Agent;
+        await agent.WhenIdle();
         var home = HarnessHome.Resolve(_homeDir);
-        return new ChatWindow(ctx, (AgentLoopAgent)handle.Agent, home);
+        return new ChatWindow(ctx, agent, home);
     }
 
     private static void RegisterCommand(CommandsService commands, string name, string description)
@@ -105,6 +148,9 @@ public class ChatWindowMenuTests : IDisposable
     private static void Press(ChatWindow chat, ConsoleKey key)
         => chat.HandleKey(new ConsoleKeyInfo('\0', key, false, false, false));
 
+    private static void PressCtrl(ChatWindow chat, ConsoleKey key)
+        => chat.HandleKey(new ConsoleKeyInfo('\0', key, false, false, true));
+
     private static string DrawFrame(ChatWindow chat)
     {
         var layout = LayoutEngine.Calculate(100, 30);
@@ -116,7 +162,7 @@ public class ChatWindowMenuTests : IDisposable
             var chars = new char[grid.Width];
             for (var x = 0; x < grid.Width; x++)
                 chars[x] = grid[x, y].Character;
-            lines.Add(new string(chars).Replace('\0', ' '));
+            lines.Add(new string(chars).Replace("\0", ""));
         }
 
         return string.Join('\n', lines);

@@ -104,6 +104,14 @@ public static class TuiRunner
 
     private static int RunGpuSync(HarnessApp app, string cwd)
     {
+        try
+        {
+            Console.Clear();
+        }
+        catch (IOException)
+        {
+        }
+
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),

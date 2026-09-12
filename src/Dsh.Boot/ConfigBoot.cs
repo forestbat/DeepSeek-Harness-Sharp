@@ -26,6 +26,7 @@ public static class ConfigBoot
         var entrypoint = profileName switch
         {
             "tui" => "@deepseek-ai/dsh-tui",
+            "gui" => "@deepseek-ai/dsh-gui",
             "web" => "@deepseek-ai/dsh-web",
             "acp" => "@deepseek-ai/dsh-acp",
             "lsp" => "@deepseek-ai/dsh-lsp",

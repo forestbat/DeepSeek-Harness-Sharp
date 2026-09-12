@@ -56,34 +56,46 @@ public sealed class AnsiRenderer
     {
         for (var y = 0; y < grid.Height; y++)
         {
+            if (RowEqual(grid, previous, y))
+                continue;
+            AppendPosition(builder, 0, y);
             var x = 0;
+            var runOpen = false;
+            AnsiColor runForeground = default;
+            AnsiColor runBackground = default;
+            CellStyle runStyle = default;
             while (x < grid.Width)
             {
-                var current = grid[x, y];
-                if (current == previous[x, y]
-                    || (current.Character == '\0' && x > 0 && TerminalTextWidth.IsWide(grid[x - 1, y].Character)))
+                var cell = grid[x, y];
+                if (cell.Character == '\0' && x > 0 && TerminalTextWidth.IsWide(grid[x - 1, y].Character))
                 {
                     x++;
                     continue;
                 }
 
-                var startX = x;
-                var cell = grid[x, y];
-                while (x + 1 < grid.Width
-                    && grid[x + 1, y] == cell
-                    && grid[x + 1, y] != previous[x + 1, y])
+                if (!runOpen || cell.Foreground != runForeground || cell.Background != runBackground || cell.Style != runStyle)
                 {
-                    x++;
+                    if (runOpen)
+                        builder.Append("\x1b[0m");
+                    builder.Append(Sgr(cell));
+                    (runForeground, runBackground, runStyle) = (cell.Foreground, cell.Background, cell.Style);
+                    runOpen = true;
                 }
-
-                AppendPosition(builder, startX, y);
-                builder.Append(Sgr(cell));
-                for (var i = startX; i <= x; i++)
-                    builder.Append(Sanitize(grid[i, y].Character));
-                builder.Append("\x1b[0m");
+                builder.Append(Sanitize(cell.Character));
                 x++;
             }
+            builder.Append("\x1b[0m");
         }
+    }
+
+    private static bool RowEqual(CellGrid grid, CellGrid previous, int y)
+    {
+        for (var x = 0; x < grid.Width; x++)
+        {
+            if (grid[x, y] != previous[x, y])
+                return false;
+        }
+        return true;
     }
 
     private static void AppendPosition(StringBuilder builder, int x, int y)

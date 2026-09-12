@@ -362,7 +362,7 @@ public sealed class CommandMenuState
             ? schemas
             : source?.MenuSchema is null
                 ? [new CommandArgumentSchema("value", "text")]
-                : [new CommandArgumentSchema("value", "select")];
+                : [new CommandArgumentSchema("value", "select", source.MenuSchema.Prompt)];
         _argumentIndex = 0;
         _argumentValues.Clear();
         _prefix = _subcommand is null
@@ -420,11 +420,18 @@ public sealed class CommandMenuState
     {
         var source = _subcommand ?? _command;
         var schema = CurrentArgumentSchema;
-        _argumentCandidates = source is null || schema is null
-            ? []
-            : (_candidateProvider?.Invoke(source) ?? schema.Choices ?? [])
+        if (source is null || schema is null)
+        {
+            _argumentCandidates = [];
+        }
+        else
+        {
+            var provided = _candidateProvider?.Invoke(source);
+            var pool = provided is { Count: > 0 } ? provided : schema.Choices ?? [];
+            _argumentCandidates = pool
                 .Where(candidate => candidate.Contains(_query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
+        }
         SelectedIndex = 0;
     }
 }

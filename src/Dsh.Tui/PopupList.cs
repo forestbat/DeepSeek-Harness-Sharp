@@ -6,13 +6,13 @@ public static class PopupList
 
     public static void Draw(CellGrid grid, ConsoleRect area, string title, IReadOnlyList<string> items, int selectedIndex)
     {
-        if (area.Width <= 0 || area.Height <= 0 || items.Count == 0)
+        if (area.Width <= 0 || area.Height <= 0)
             return;
 
         var contentWidth = items.Count == 0 ? TerminalTextWidth.Of(title) : items.Max(TerminalTextWidth.Of);
         contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(title));
         var width = Math.Min(area.Width, contentWidth + 4);
-        var height = Math.Min(MaxPopupHeight, Math.Min(area.Height, items.Count + 2));
+        var height = Math.Min(MaxPopupHeight, Math.Min(area.Height, Math.Max(1, items.Count) + 2));
         if (width < 4 || height < 3)
             return;
 
@@ -23,6 +23,12 @@ public static class PopupList
 
         DrawBorder(grid, x, y, width, height);
         DrawText(grid, x + 1, y, Truncate(title, width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
+
+        if (items.Count == 0)
+        {
+            DrawText(grid, x + 1, y + 1, "  (空)", AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            return;
+        }
 
         var visibleCount = height - 2;
         var first = Math.Max(0, Math.Min(selectedIndex - visibleCount + 1, items.Count - visibleCount));

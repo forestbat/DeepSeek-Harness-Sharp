@@ -128,8 +128,87 @@ public sealed class HarnessSdkServer
                 return await PromptAsync(Deserialize<SessionPromptParams>(parameters));
             case SdkMethods.Shutdown:
                 return await ShutdownAsync();
+            case SdkMethods.CordisServiceCall:
+                return await CordisServiceCallAsync(Deserialize<CordisServiceCallParams>(parameters));
+            case SdkMethods.CordisEventEmit:
+                CordisEventEmit(Deserialize<CordisEventParams>(parameters));
+                return null;
+            case SdkMethods.CordisEventSerial:
+                return await CordisEventSerialAsync(Deserialize<CordisEventParams>(parameters));
             default:
                 throw new InvalidOperationException($"unknown DeepSeek Harness SDK runtime method: {method}");
+        }
+    }
+
+    public async Task<object?> CordisServiceCallAsync(CordisServiceCallParams parameters)
+    {
+        var service = _ctx.Get(parameters.Service, strict: false)
+            ?? throw new InvalidOperationException($"no cordis service named \"{parameters.Service}\"");
+        var method = service.GetType()
+            .GetMethods()
+            .Where(candidate => string.Equals(candidate.Name, parameters.Method, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(candidate => candidate.GetParameters().Length)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException($"service \"{parameters.Service}\" has no method \"{parameters.Method}\"");
+        var arguments = ConvertArguments(method.GetParameters(), parameters.Args);
+        var result = method.Invoke(service, arguments);
+        result = await AwaitIfNeeded(result);
+        return result is null ? null : JsonSerializer.SerializeToElement(result, DshJson.Options);
+    }
+
+    public void CordisEventEmit(CordisEventParams parameters)
+        => _ctx.Emit(parameters.Name, parameters.Args?.Select(arg => (object?)arg).ToArray() ?? []);
+
+    public async Task<object?> CordisEventSerialAsync(CordisEventParams parameters)
+    {
+        var result = await _ctx.Serial(parameters.Name, parameters.Args?.Select(arg => (object?)arg).ToArray() ?? []);
+        return result is null ? null : JsonSerializer.SerializeToElement(result, DshJson.Options);
+    }
+
+    private static object?[] ConvertArguments(System.Reflection.ParameterInfo[] parameters, JsonElement[]? args)
+    {
+        var values = new object?[parameters.Length];
+        for (var index = 0; index < parameters.Length; index++)
+        {
+            if (args is not null && index < args.Length)
+            {
+                values[index] = args[index].Deserialize(parameters[index].ParameterType, DshJson.Options);
+            }
+            else if (parameters[index].HasDefaultValue)
+            {
+                values[index] = parameters[index].DefaultValue;
+            }
+            else
+            {
+                throw new InvalidOperationException($"missing argument for parameter \"{parameters[index].Name}\"");
+            }
+        }
+        return values;
+    }
+
+    private static async Task<object?> AwaitIfNeeded(object? result)
+    {
+        switch (result)
+        {
+            case null:
+                return null;
+            case Task task:
+            {
+                await task;
+                var resultType = task.GetType();
+                return resultType.IsGenericType ? resultType.GetProperty("Result")?.GetValue(task) : null;
+            }
+            default:
+            {
+                var type = result.GetType();
+                if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
+                {
+                    return await (Task<object?>)type.GetMethod("AsTask")!.Invoke(result, null)!;
+                }
+                if (result is ValueTask valueTask)
+                    await valueTask;
+                return result is ValueTask ? null : result;
+            }
         }
     }
 

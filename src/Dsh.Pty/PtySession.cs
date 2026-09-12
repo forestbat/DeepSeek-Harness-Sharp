@@ -7,6 +7,7 @@ public sealed class PtySession : IDisposable
     private readonly PtyStartInfo _startInfo;
     private readonly object _gate = new();
     private UnixPtySession? _unix;
+    private ConPtySession? _conPty;
     private Process? _process;
     private bool _attached;
     private bool _disposed;
@@ -27,7 +28,7 @@ public sealed class PtySession : IDisposable
 
     public DateTimeOffset StartedAt { get; }
 
-    public int? ProcessId => _unix?.Pid ?? _process?.Id;
+    public int? ProcessId => _unix?.Pid ?? _conPty?.Pid ?? _process?.Id;
 
     public PtySessionStatus Status
     {
@@ -61,6 +62,13 @@ public sealed class PtySession : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (OperatingSystem.IsWindows())
         {
+            _conPty = ConPtySession.TryStart(_startInfo);
+            if (_conPty is not null)
+            {
+                _conPty.Exited += OnConPtyExited;
+                return;
+            }
+
             _process = StartWindowsProcess(_startInfo);
             return;
         }
@@ -75,6 +83,10 @@ public sealed class PtySession : IDisposable
         if (unix is not null)
             return await unix.Stream.ReadAsync(buffer, cancellationToken);
 
+        var conPty = _conPty;
+        if (conPty is not null)
+            return await conPty.Stream.ReadAsync(buffer, cancellationToken);
+
         var process = _process;
         if (process is not null)
             return await process.StandardOutput.BaseStream.ReadAsync(buffer, cancellationToken);
@@ -88,6 +100,13 @@ public sealed class PtySession : IDisposable
         if (unix is not null)
         {
             await unix.Stream.WriteAsync(data, cancellationToken);
+            return;
+        }
+
+        var conPty = _conPty;
+        if (conPty is not null)
+        {
+            await conPty.Input.WriteAsync(data, cancellationToken);
             return;
         }
 
@@ -107,6 +126,13 @@ public sealed class PtySession : IDisposable
         if (unix is not null)
         {
             unix.Resize(rows, columns);
+            return;
+        }
+
+        var conPty = _conPty;
+        if (conPty is not null)
+        {
+            conPty.Resize(rows, columns);
             return;
         }
 
@@ -135,6 +161,20 @@ public sealed class PtySession : IDisposable
         {
             unix.Exited -= OnUnixExited;
             await unix.StopAsync();
+            lock (_gate)
+            {
+                _status = PtySessionStatus.Exited;
+                _exitCode ??= 0;
+            }
+
+            return;
+        }
+
+        var conPty = _conPty;
+        if (conPty is not null)
+        {
+            conPty.Exited -= OnConPtyExited;
+            await conPty.StopAsync();
             lock (_gate)
             {
                 _status = PtySessionStatus.Exited;
@@ -176,6 +216,12 @@ public sealed class PtySession : IDisposable
             _unix.Dispose();
         }
 
+        if (_conPty is not null)
+        {
+            _conPty.Exited -= OnConPtyExited;
+            _conPty.Dispose();
+        }
+
         _process?.Dispose();
     }
 
@@ -186,6 +232,15 @@ public sealed class PtySession : IDisposable
     }
 
     private void OnUnixExited(int? exitCode)
+    {
+        lock (_gate)
+        {
+            _status = PtySessionStatus.Exited;
+            _exitCode = exitCode;
+        }
+    }
+
+    private void OnConPtyExited(int? exitCode)
     {
         lock (_gate)
         {
