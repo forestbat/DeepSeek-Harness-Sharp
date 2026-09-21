@@ -332,7 +332,7 @@ public sealed class SubprocessService : Service, IDisposable
     public void Dispose()
     {
         List<SubprocessHandle> running;
-        lock (_gate) running = [.._running];
+        lock (_gate) running = [.. _running];
         foreach (var handle in running)
             handle.Terminate();
     }

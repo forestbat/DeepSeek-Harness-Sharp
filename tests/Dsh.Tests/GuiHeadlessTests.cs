@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -11,7 +12,6 @@ using Dsh.Gui.Views;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Tui;
-using Xunit.Abstractions;
 using TextBlock = Avalonia.Controls.TextBlock;
 
 namespace Dsh.Tests;
@@ -231,7 +231,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             }
             Directory.CreateDirectory(ScreenshotDirectory);
             using var frame = window.CaptureRenderedFrame();
-            frame?.Save(Path.Combine(ScreenshotDirectory, $"{name}.png"));
+            frame?.Save(Path.Combine(ScreenshotDirectory, $"{name}.png"), PngBitmapEncoderOptions.Default);
         }
         catch (Exception error)
         {

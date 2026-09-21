@@ -365,7 +365,7 @@ public sealed class TerminalSessionService : Service
         {
             pending = owner is null
                 ? _pendingSpawns.Values.SelectMany(spawns => spawns).ToList()
-                : _pendingSpawns.TryGetValue(owner, out var owned) ? [..owned] : [];
+                : _pendingSpawns.TryGetValue(owner, out var owned) ? [.. owned] : [];
         }
         foreach (var spawn in pending)
         {
@@ -486,7 +486,7 @@ public sealed class TerminalSessionService : Service
                 _backends.Clear();
                 _reservedNames.Clear();
                 _pendingSpawns.Clear();
-                cleanups = [.._ownerCleanups.Values];
+                cleanups = [.. _ownerCleanups.Values];
                 _ownerCleanups.Clear();
             }
             await Task.WhenAll(cleanups.Select(cleanup => cleanup.DisposeAsync()));

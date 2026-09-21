@@ -10,7 +10,7 @@ public class SkillTests
     public async Task FileSystemProvider_Discovers_And_Loads_Directory_Skill()
     {
         var ctx = new Context();
-        _ = new SkillRegistry(ctx, new SkillRegistryConfig());        var root = Path.Combine(Path.GetTempPath(), $"dsh-skills-{Guid.NewGuid():N}");
+        _ = new SkillRegistry(ctx, new SkillRegistryConfig()); var root = Path.Combine(Path.GetTempPath(), $"dsh-skills-{Guid.NewGuid():N}");
         try
         {
             var skillDir = Path.Combine(root, "alpha-skill");
@@ -24,7 +24,7 @@ public class SkillTests
                 # Alpha
 
                 Follow the alpha protocol.
-                """);
+                """, TestContext.Current.CancellationToken);
             using var registration = SkillFilesystem.Apply(ctx, new SkillFilesystemConfig
             {
                 ProviderName = "test-fs",

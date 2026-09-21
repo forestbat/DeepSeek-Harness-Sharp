@@ -296,7 +296,7 @@ public sealed class GpuRenderer : IDisposable
         else
             image.SaveAsPng(path);
     }
-    
+
 
     private static bool TryMapKey(Keys key, out ConsoleKey consoleKey)
     {

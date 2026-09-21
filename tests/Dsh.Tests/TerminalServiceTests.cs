@@ -34,7 +34,7 @@ public class TerminalServiceTests
         owner.Register();
         foreign.Register();
 
-        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main", Path.GetTempPath()));
+        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main", Path.GetTempPath()), TestContext.Current.CancellationToken);
         Assert.Equal("pty-1", created.SessionId.Value);
         Assert.Equal("main", created.Name);
         Assert.Equal("stub", created.Type);
@@ -59,9 +59,9 @@ public class TerminalServiceTests
         var owner = new TerminalFakeAgent(ctx, agents, Path.GetTempPath());
         owner.Register();
 
-        await Assert.ThrowsAsync<TerminalError>(() => terminals.Spawn(owner, new TerminalSpawnRequest("missing")));
-        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main"));
-        await Assert.ThrowsAsync<TerminalError>(() => terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main")));
+        await Assert.ThrowsAsync<TerminalError>(() => terminals.Spawn(owner, new TerminalSpawnRequest("missing"), TestContext.Current.CancellationToken));
+        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main"), TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<TerminalError>(() => terminals.Spawn(owner, new TerminalSpawnRequest("stub", "main"), TestContext.Current.CancellationToken));
 
         backend.Sessions[0].AutoSettle = false;
         var operation = terminals.StartSend(owner, created.SessionId, new TerminalSendRequest("echo hi", true));
@@ -80,7 +80,7 @@ public class TerminalServiceTests
         terminals.RegisterBackend(backend);
         var owner = new TerminalFakeAgent(ctx, agents, Path.GetTempPath());
         owner.Register();
-        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub"));
+        var created = await terminals.Spawn(owner, new TerminalSpawnRequest("stub"), TestContext.Current.CancellationToken);
         var session = backend.Sessions[0];
         session.CloseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -104,7 +104,7 @@ public class TerminalServiceTests
         var owner = new TerminalFakeAgent(ctx, agents, Path.GetTempPath());
         owner.Register();
 
-        var pending = terminals.Spawn(owner, new TerminalSpawnRequest("slow"));
+        var pending = terminals.Spawn(owner, new TerminalSpawnRequest("slow"), TestContext.Current.CancellationToken);
         Assert.True(terminals.HasOwnerActivity(owner));
         gate.SetResult(new StubTerminalSession());
         await pending;

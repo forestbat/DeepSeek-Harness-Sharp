@@ -352,30 +352,30 @@ public static class ToolRalph
                     ["report"] = terminalReport,
                 };
             case "round-failed":
-            {
-                if (string.Join(',', record.Keys.Order(StringComparer.Ordinal)) != "lastReport,roundsStarted,status")
-                    throw new InvalidOperationException("Ralph workflow returned a malformed terminal result");
-                var lastReport = ValueOf(record, "lastReport");
-                if (roundsStartedInt == 1)
                 {
-                    if (lastReport is not null)
-                        throw new InvalidOperationException("Ralph workflow returned an invalid first-round failure");
+                    if (string.Join(',', record.Keys.Order(StringComparer.Ordinal)) != "lastReport,roundsStarted,status")
+                        throw new InvalidOperationException("Ralph workflow returned a malformed terminal result");
+                    var lastReport = ValueOf(record, "lastReport");
+                    if (roundsStartedInt == 1)
+                    {
+                        if (lastReport is not null)
+                            throw new InvalidOperationException("Ralph workflow returned an invalid first-round failure");
+                        return new Dictionary<string, object?>
+                        {
+                            ["status"] = "round-failed",
+                            ["roundsStarted"] = roundsStartedInt,
+                        };
+                    }
+
+                    if (lastReport is null)
+                        throw new InvalidOperationException("Ralph workflow returned a round failure without its last handoff");
                     return new Dictionary<string, object?>
                     {
                         ["status"] = "round-failed",
                         ["roundsStarted"] = roundsStartedInt,
+                        ["lastReport"] = ReadReport(lastReport, "continue", maxHandoffChars),
                     };
                 }
-
-                if (lastReport is null)
-                    throw new InvalidOperationException("Ralph workflow returned a round failure without its last handoff");
-                return new Dictionary<string, object?>
-                {
-                    ["status"] = "round-failed",
-                    ["roundsStarted"] = roundsStartedInt,
-                    ["lastReport"] = ReadReport(lastReport, "continue", maxHandoffChars),
-                };
-            }
             default:
                 throw new InvalidOperationException("Ralph workflow returned an unknown terminal status");
         }

@@ -14,14 +14,14 @@ public sealed class ProjectMemoryTests
         using var fixture = new Fixture();
         var memory = fixture.Memory;
 
-        var remembered = await memory.RememberAsync("build.command", "dotnet build", "Commands", "tool");
+        var remembered = await memory.RememberAsync("build.command", "dotnet build", "Commands", "tool", TestContext.Current.CancellationToken);
         Assert.False(remembered.Replaced);
         Assert.Equal("Commands", remembered.Section);
 
-        var corrected = await memory.CorrectAsync("no.force.push", "never force push", "tool");
+        var corrected = await memory.CorrectAsync("no.force.push", "never force push", "tool", TestContext.Current.CancellationToken);
         Assert.Equal("Corrections", corrected.Section);
 
-        var again = await memory.RememberAsync("build.command", "dotnet build -c Release", "Commands", "tool");
+        var again = await memory.RememberAsync("build.command", "dotnet build -c Release", "Commands", "tool", TestContext.Current.CancellationToken);
         Assert.True(again.Replaced);
 
         var text = File.ReadAllText(fixture.MemoryPath);
@@ -30,7 +30,7 @@ public sealed class ProjectMemoryTests
         Assert.Contains("## Corrections", text);
         Assert.Contains("- no.force.push :: never force push (", text);
 
-        var forgotten = await memory.ForgetAsync("build.command", "tool");
+        var forgotten = await memory.ForgetAsync("build.command", "tool", TestContext.Current.CancellationToken);
         Assert.Equal("Commands", forgotten.Section);
         Assert.DoesNotContain("build.command", File.ReadAllText(fixture.MemoryPath));
 
@@ -50,7 +50,7 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Memory.ForgetAsync("missing", "tool"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Memory.ForgetAsync("missing", "tool", TestContext.Current.CancellationToken));
 
         Assert.Contains("missing", error.Message);
         Assert.False(File.Exists(fixture.AuditPath));
@@ -61,12 +61,12 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
         var memory = fixture.Memory;
-        await memory.RememberAsync("f1", "a fact", "Facts", "tool");
-        await memory.CorrectAsync("c1", "a correction", "tool");
-        await memory.RememberAsync("d1", "a decision", "Decisions", "tool");
-        await memory.WriteDigestAsync(SessionId.Create("s-1"), "topic", "did work");
+        await memory.RememberAsync("f1", "a fact", "Facts", "tool", TestContext.Current.CancellationToken);
+        await memory.CorrectAsync("c1", "a correction", "tool", TestContext.Current.CancellationToken);
+        await memory.RememberAsync("d1", "a decision", "Decisions", "tool", TestContext.Current.CancellationToken);
+        await memory.WriteDigestAsync(SessionId.Create("s-1"), "topic", "did work", TestContext.Current.CancellationToken);
 
-        var index = await memory.BuildIndexAsync();
+        var index = await memory.BuildIndexAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var correctionsAt = index.IndexOf("## Corrections", StringComparison.Ordinal);
         var decisionsAt = index.IndexOf("## Decisions", StringComparison.Ordinal);
@@ -83,7 +83,7 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
 
-        var index = await fixture.Memory.BuildIndexAsync();
+        var index = await fixture.Memory.BuildIndexAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("is empty", index);
     }
@@ -93,11 +93,11 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
         var memory = fixture.Memory;
-        await memory.CorrectAsync("c1", "keep me", "tool");
+        await memory.CorrectAsync("c1", "keep me", "tool", TestContext.Current.CancellationToken);
         for (var index = 0; index < 30; index++)
-            await memory.RememberAsync($"f{index}", new string('x', 100), "Facts", "tool");
+            await memory.RememberAsync($"f{index}", new string('x', 100), "Facts", "tool", TestContext.Current.CancellationToken);
 
-        var result = await memory.BuildIndexAsync(budgetBytes: 512);
+        var result = await memory.BuildIndexAsync(budgetBytes: 512, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(Encoding.UTF8.GetByteCount(result) <= 512 + 32);
         Assert.Contains("## Corrections", result);
@@ -110,9 +110,9 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
         var memory = fixture.Memory;
-        await memory.WriteDigestAsync(SessionId.Create("s-old"), "old", "old summary");
+        await memory.WriteDigestAsync(SessionId.Create("s-old"), "old", "old summary", TestContext.Current.CancellationToken);
         File.SetLastWriteTimeUtc(fixture.DigestPath("s-old"), DateTime.UtcNow.AddDays(-1));
-        await memory.WriteDigestAsync(SessionId.Create("s-new"), "new", "new summary");
+        await memory.WriteDigestAsync(SessionId.Create("s-new"), "new", "new summary", TestContext.Current.CancellationToken);
 
         var digests = memory.RecentDigests(5);
 
@@ -128,10 +128,10 @@ public sealed class ProjectMemoryTests
     {
         using var fixture = new Fixture();
         var memory = fixture.Memory;
-        await memory.RememberAsync("a", "1", null, "tool");
-        await memory.WriteDigestAsync(SessionId.Create("s-1"), "t", "s");
+        await memory.RememberAsync("a", "1", null, "tool", TestContext.Current.CancellationToken);
+        await memory.WriteDigestAsync(SessionId.Create("s-1"), "t", "s", TestContext.Current.CancellationToken);
 
-        var show = await memory.ShowAsync();
+        var show = await memory.ShowAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(fixture.MemoryPath, show);
         Assert.Contains("- a :: 1 (", show);

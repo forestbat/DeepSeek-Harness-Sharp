@@ -67,21 +67,21 @@ public sealed class AcpClientTests
         var updates = new List<AcpSessionUpdate>();
         client.SessionUpdate += updates.Add;
 
-        var initialize = await client.InitializeAsync();
+        var initialize = await client.InitializeAsync(TestContext.Current.CancellationToken);
         Assert.Equal(AcpMethods.ProtocolVersion, initialize.GetProperty("protocolVersion").GetInt32());
         Assert.Equal("deepseek-harness-acp", initialize.GetProperty("agentInfo").GetProperty("name").GetString());
 
-        var sessionId = await client.NewSessionAsync(Directory.GetCurrentDirectory());
+        var sessionId = await client.NewSessionAsync(Directory.GetCurrentDirectory(), TestContext.Current.CancellationToken);
         Assert.False(string.IsNullOrWhiteSpace(sessionId));
 
-        var stopReason = await client.PromptAsync(sessionId, "hi");
+        var stopReason = await client.PromptAsync(sessionId, "hi", TestContext.Current.CancellationToken);
         Assert.Equal("end_turn", stopReason);
 
         var chunks = updates.Where(update => update.Kind == AcpMethods.UpdateAgentMessageChunk).ToList();
         Assert.Equal("Hello world", string.Concat(chunks.Select(update => update.Text)));
         Assert.All(updates, update => Assert.Equal(sessionId, update.SessionId));
 
-        await client.CloseSessionAsync(sessionId);
+        await client.CloseSessionAsync(sessionId, TestContext.Current.CancellationToken);
         Assert.Null(fixture.Agents.Get(SessionId.Create(sessionId)));
         await clientTransport.StopAsync();
         await serverTransport.StopAsync();
@@ -125,9 +125,9 @@ public sealed class AcpClientTests
         var updates = new List<AcpSessionUpdate>();
         client.SessionUpdate += updates.Add;
 
-        await client.InitializeAsync();
-        var sessionId = await client.NewSessionAsync(Directory.GetCurrentDirectory());
-        var stopReason = await client.PromptAsync(sessionId, "echo please");
+        await client.InitializeAsync(TestContext.Current.CancellationToken);
+        var sessionId = await client.NewSessionAsync(Directory.GetCurrentDirectory(), TestContext.Current.CancellationToken);
+        var stopReason = await client.PromptAsync(sessionId, "echo please", TestContext.Current.CancellationToken);
 
         Assert.Equal("end_turn", stopReason);
         Assert.Equal(1, echoCalls);

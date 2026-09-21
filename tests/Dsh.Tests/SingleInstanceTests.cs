@@ -32,7 +32,7 @@ public sealed class SingleInstanceTests : IDisposable
         var second = SingleInstance.Acquire(_home);
 
         Assert.Null(second);
-        var winner = await Task.WhenAny(activated.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        var winner = await Task.WhenAny(activated.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.Same(activated.Task, winner);
     }
 

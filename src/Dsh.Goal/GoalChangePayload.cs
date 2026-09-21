@@ -33,25 +33,25 @@ public sealed record GoalChangePayload : SessionEventPayload
         switch (change)
         {
             case GoalChange.Snapshot snapshot:
-            {
-                node["operation"] = GoalNames.Of(snapshot.Operation);
-                node["goal"] = SerializeSnapshot(snapshot.Goal);
-                node["roundsStarted"] = snapshot.RoundsStarted;
-                node["createdAt"] = snapshot.CreatedAt;
-                node["updatedAt"] = snapshot.UpdatedAt;
-                break;
-            }
-            case GoalChange.Clear clear:
-            {
-                node["operation"] = GoalNames.Of(GoalOperation.Clear);
-                node["cleared"] = new JsonObject
                 {
-                    ["id"] = clear.Cleared.Id.Value,
-                    ["revision"] = clear.Cleared.Revision,
-                };
-                node["clearedAt"] = clear.ClearedAt;
-                break;
-            }
+                    node["operation"] = GoalNames.Of(snapshot.Operation);
+                    node["goal"] = SerializeSnapshot(snapshot.Goal);
+                    node["roundsStarted"] = snapshot.RoundsStarted;
+                    node["createdAt"] = snapshot.CreatedAt;
+                    node["updatedAt"] = snapshot.UpdatedAt;
+                    break;
+                }
+            case GoalChange.Clear clear:
+                {
+                    node["operation"] = GoalNames.Of(GoalOperation.Clear);
+                    node["cleared"] = new JsonObject
+                    {
+                        ["id"] = clear.Cleared.Id.Value,
+                        ["revision"] = clear.Cleared.Revision,
+                    };
+                    node["clearedAt"] = clear.ClearedAt;
+                    break;
+                }
         }
         return node.ToJsonString();
     }

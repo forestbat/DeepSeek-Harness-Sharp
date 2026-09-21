@@ -136,8 +136,8 @@ public static class ChildCompositionSupport
             tools = tools.Where(tool => AdmitsTool(filter, tool.Name)).ToList();
         if (structured is not null)
         {
-            tools = [..tools, structured.Schema];
-            sections = [..sections, new AssembledSection(StructuredOutputAttachment.SectionName, StructuredOutputAttachment.Instruction)];
+            tools = [.. tools, structured.Schema];
+            sections = [.. sections, new AssembledSection(StructuredOutputAttachment.SectionName, StructuredOutputAttachment.Instruction)];
         }
         return ReferenceEquals(sections, assembly.Sections) && ReferenceEquals(tools, assembly.Tools)
             ? assembly

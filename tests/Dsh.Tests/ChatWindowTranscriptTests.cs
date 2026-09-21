@@ -133,7 +133,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             "选择策略",
             Options: [new AskUserQuestionOption("甲"), new AskUserQuestionOption("乙")]);
 
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent));
+        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent), TestContext.Current.CancellationToken);
         chat.DrainUi();
         var frame = DrawFrame(chat);
         Assert.Contains("选择策略", frame);
@@ -160,7 +160,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             Options: [new AskUserQuestionOption("甲"), new AskUserQuestionOption("乙"), new AskUserQuestionOption("丙")],
             MultiSelect: true);
 
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent));
+        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent), TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         Type(chat, "1");
@@ -183,7 +183,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             Options: [new AskUserQuestionOption("保守"), new AskUserQuestionOption("激进")]);
         var second = new AskUserQuestionItem("q2", "补充说明");
 
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([first, second], agent));
+        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([first, second], agent), TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         Type(chat, "2");
@@ -211,7 +211,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             "选择策略",
             Options: [new AskUserQuestionOption("甲"), new AskUserQuestionOption("乙")]);
 
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent));
+        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent), TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         Press(chat, ConsoleKey.Enter);
@@ -231,7 +231,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         using var chat = new ChatWindow(ctx, agent, home);
         var question = new AskUserQuestionItem("q1", "选择策略", Options: [new AskUserQuestionOption("甲")]);
 
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent));
+        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent), TestContext.Current.CancellationToken);
         chat.DrainUi();
         Press(chat, ConsoleKey.Escape);
 

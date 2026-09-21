@@ -46,8 +46,8 @@ public static class WriteTool
                     """),
                 (_, value) =>
                 {
-        var result = DshJson.Deserialize<WriteResultValue>(value)
-                        ?? throw new JsonException("write result value is malformed");
+                    var result = DshJson.Deserialize<WriteResultValue>(value)
+                                    ?? throw new JsonException("write result value is malformed");
                     return [new TextBlock(FormatWriteOutput(result.Path, result.Operation))];
                 }),
             Execute = Execute,

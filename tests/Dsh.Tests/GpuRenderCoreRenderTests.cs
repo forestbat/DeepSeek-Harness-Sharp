@@ -90,11 +90,11 @@ public class GpuRenderCoreRenderTests : IDisposable
         GL.ReadPixels(0, GridH * CellH - CellH, CellW, CellH, PixelFormat.Rgba, PixelType.UnsignedByte, bytes);
         var rightHalfLit = 0;
         for (var y = 0; y < CellH; y++)
-        for (var x = CellW / 2; x < CellW; x++)
-        {
-            if (bytes[(y * CellW + x) * 4] > 150)
-                rightHalfLit++;
-        }
+            for (var x = CellW / 2; x < CellW; x++)
+            {
+                if (bytes[(y * CellW + x) * 4] > 150)
+                    rightHalfLit++;
+            }
         Assert.True(rightHalfLit >= 8, $"span=2 应把头格笔画拉伸到右半区,实际亮像素 {rightHalfLit}");
     }
 

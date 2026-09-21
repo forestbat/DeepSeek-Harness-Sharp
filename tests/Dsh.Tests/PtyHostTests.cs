@@ -16,7 +16,7 @@ public class PtyHostTests
         {
             FileName = "/bin/sh",
             Arguments = ["-c", "echo pty-ready; sleep 5"],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         var info = Assert.Single(host.List());
         Assert.Equal(session.Id, info.Id);
@@ -24,7 +24,7 @@ public class PtyHostTests
         Assert.Equal("echo pty-ready; sleep 5", info.Command.Split("-c ")[^1]);
 
         var buffer = new byte[4096];
-        var read = await session.ReadAsync(buffer);
+        var read = await session.ReadAsync(buffer, TestContext.Current.CancellationToken);
         Assert.Contains("pty-ready", Encoding.UTF8.GetString(buffer, 0, read));
 
         Assert.True(await host.StopAsync(session.Id.ToString()));
@@ -42,7 +42,7 @@ public class PtyHostTests
         {
             FileName = "/bin/sh",
             Arguments = ["-c", "sleep 5"],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         session.Resize(30, 120);
         Assert.Equal(PtySessionStatus.Running, session.Status);
@@ -61,11 +61,11 @@ public class PtyHostTests
         {
             FileName = "/bin/sh",
             Arguments = ["-c", "cat"],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
-        await session.WriteAsync("hello pty\n"u8.ToArray());
+        await session.WriteAsync("hello pty\n"u8.ToArray(), TestContext.Current.CancellationToken);
         var buffer = new byte[4096];
-        var read = await session.ReadAsync(buffer);
+        var read = await session.ReadAsync(buffer, TestContext.Current.CancellationToken);
         Assert.Contains("hello pty", Encoding.UTF8.GetString(buffer, 0, read));
 
         await host.StopAsync(session.Id.ToString());
@@ -92,7 +92,7 @@ public class PtyHostTests
         {
             FileName = "cmd.exe",
             Arguments = ["/c", "echo conpty-ready"],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PtySessionStatus.Running, session.Status);
         var backend = typeof(PtySession).GetField("_conPty", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(session);
@@ -118,7 +118,7 @@ public class PtyHostTests
         {
             FileName = "cmd.exe",
             Arguments = [],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await session.WriteAsync("ver\r"u8.ToArray(), cancellation.Token);

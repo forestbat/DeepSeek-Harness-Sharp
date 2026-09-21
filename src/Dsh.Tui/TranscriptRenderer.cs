@@ -70,20 +70,20 @@ public sealed class TranscriptRenderer
                 Append($"⚙ {call.Name} {Preview(call.Arguments, ToolArgumentsPreviewChars)}\n");
                 break;
             case ToolResultPayload result:
-            {
-                var text = MessageText.Flatten(result.Message.Content);
-                var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
-                var start = _buffer.Length;
-                Append($"  {label}{text}\n");
-                _folds.Add(new TranscriptFold
                 {
-                    Start = start,
-                    End = _buffer.Length,
-                    Label = "tool result",
-                    Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
-                });
-                break;
-            }
+                    var text = MessageText.Flatten(result.Message.Content);
+                    var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
+                    var start = _buffer.Length;
+                    Append($"  {label}{text}\n");
+                    _folds.Add(new TranscriptFold
+                    {
+                        Start = start,
+                        End = _buffer.Length,
+                        Label = "tool result",
+                        Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
+                    });
+                    break;
+                }
             case TurnEndPayload { Reason: TurnEndReason.Error error }:
                 _assistantStreamed = false;
                 Append($"  ✗ turn failed: {error.Failure.Code}: {error.Failure.Message}\n");

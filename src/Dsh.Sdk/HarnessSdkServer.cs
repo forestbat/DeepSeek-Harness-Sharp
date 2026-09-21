@@ -169,22 +169,22 @@ public sealed class HarnessSdkServer
             case null:
                 return null;
             case Task task:
-            {
-                await task;
-                var resultType = task.GetType();
-                return resultType.IsGenericType ? resultType.GetProperty("Result")?.GetValue(task) : null;
-            }
-            default:
-            {
-                var type = result.GetType();
-                if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
                 {
-                    return await (Task<object?>)type.GetMethod("AsTask")!.Invoke(result, null)!;
+                    await task;
+                    var resultType = task.GetType();
+                    return resultType.IsGenericType ? resultType.GetProperty("Result")?.GetValue(task) : null;
                 }
-                if (result is ValueTask valueTask)
-                    await valueTask;
-                return result is ValueTask ? null : result;
-            }
+            default:
+                {
+                    var type = result.GetType();
+                    if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ValueTask<>))
+                    {
+                        return await (Task<object?>)type.GetMethod("AsTask")!.Invoke(result, null)!;
+                    }
+                    if (result is ValueTask valueTask)
+                        await valueTask;
+                    return result is ValueTask ? null : result;
+                }
         }
     }
 

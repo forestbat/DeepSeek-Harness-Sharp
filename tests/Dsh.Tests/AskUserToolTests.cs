@@ -114,7 +114,7 @@ public class AskUserToolTests
 
         var result = await Execute(harness, """
             { "questions": [{ "id": "pkg", "question": "Which package manager should I use?", "options": [{ "label": "pnpm", "description": "Use pnpm workspaces." }] }] }
-            """);
+            """, signal: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
         Assert.Equal("""{"answers":[{"id":"pkg","selected":["pnpm"]}]}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
@@ -141,7 +141,7 @@ public class AskUserToolTests
 
         await Execute(harness, """
             { "questions": [{ "id": "pkg", "question": "Which package manager should I use?", "options": [{ "label": "pnpm (Recommended)" }, { "label": "npm" }] }] }
-            """);
+            """, signal: TestContext.Current.CancellationToken);
 
         var options = Assert.Single(seen).Questions[0].Options!;
         Assert.Equal(["pnpm (Recommended)", "npm"], options.Select(option => option.Label).ToList());
@@ -171,7 +171,7 @@ public class AskUserToolTests
               { "id": "labels-only", "question": "Which labels should I keep?", "options": [{ "label": "tests" }, { "label": "docs" }], "multi_select": true },
               { "id": "notes", "question": "Any note?" }
             ] }
-            """);
+            """, signal: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
         const string expected = """{"answers":[{"id":"targets","selected":["tests","docs"],"custom":"release notes"},{"id":"labels-only","selected":["tests"]},{"id":"notes","selected":[],"custom":"ship today"}]}""";
@@ -214,7 +214,7 @@ public class AskUserToolTests
         var agent = new FakeAgent(harness.Ctx);
         harness.Agents.Register(agent);
 
-        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "header": "Confirm", "question": "Continue?" }] }""", agent);
+        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "header": "Confirm", "question": "Continue?" }] }""", agent, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
         Assert.Equal("""{"answers":[{"id":"continue","selected":["ok"]}]}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
@@ -229,7 +229,7 @@ public class AskUserToolTests
         using var harness = new Harness();
         using var tool = AskUserTool.Register(harness.Ctx);
 
-        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "question": "Continue?" }] }""");
+        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "question": "Continue?" }] }""", signal: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsError);
         Assert.Equal(UserQuestionException.NoProvider, ((ToolExecutionResult.Failure)result).Error.Info?.Code);
@@ -251,7 +251,7 @@ public class AskUserToolTests
         harness.Agents.Register(root);
         harness.Agents.Enter(child, root);
 
-        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "question": "Continue?" }] }""", child);
+        var result = await Execute(harness, """{ "questions": [{ "id": "continue", "question": "Continue?" }] }""", child, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsError);
         var failure = (ToolExecutionResult.Failure)result;
@@ -268,7 +268,7 @@ public class AskUserToolTests
         using var harness = new Harness();
         using var tool = AskUserTool.Register(harness.Ctx);
 
-        var result = await Execute(harness, """{ "questions": [] }""");
+        var result = await Execute(harness, """{ "questions": [] }""", signal: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsError);
         Assert.Equal(UserQuestionException.EmptyQuestions, ((ToolExecutionResult.Failure)result).Error.Info?.Code);

@@ -242,7 +242,7 @@ public sealed class AgentLoopAgent : IAgent
         var decision = await Dispatch.Waterfall(
             new AgentPreStepNotification(payload),
             () => new ValueTask<object?>(new PreStepDecision.Enter(
-                context is null ? payload.Messages : [..payload.Messages, context]))) as PreStepDecision;
+                context is null ? payload.Messages : [.. payload.Messages, context]))) as PreStepDecision;
         signal.ThrowIfCancellationRequested();
         return decision ?? new PreStepDecision.Enter(claimed);
     }

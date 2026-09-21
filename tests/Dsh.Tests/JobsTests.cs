@@ -175,7 +175,7 @@ public class JobsTests : IDisposable
         {
             var agent = _outer.NewAgent();
             var id = _outer.StartBashJob(agent, "echo first; sleep 1; echo second");
-            await Task.Delay(500);
+            await Task.Delay(500, TestContext.Current.CancellationToken);
 
             var first = await _outer.Execute("job_output", new { job_id = id }, agent);
             Assert.Equal("first\n", Assert.IsType<ToolExecutionResult.Success>(first).Value.GetProperty("text").GetString());
@@ -200,7 +200,7 @@ public class JobsTests : IDisposable
             Assert.True(status is "stopping" or "killed", $"unexpected status {status}");
             Assert.Equal($"requested cancellation of job {id}", TextOf(kill));
 
-            var settled = await _outer._jobs.WaitAsync(id, 5000, agent);
+            var settled = await _outer._jobs.WaitAsync(id, 5000, agent, TestContext.Current.CancellationToken);
             Assert.Equal(JobStatus.Killed, settled.Status);
 
             var again = await _outer.Execute("job_kill", new { job_id = id }, agent);
@@ -225,7 +225,7 @@ public class JobsTests : IDisposable
             var agent = _outer.NewAgent();
             _outer.StartBashJob(agent, "sleep 30");
             var done = _outer.StartBashJob(agent, "true");
-            await _outer._jobs.WaitAsync(done, 5000, agent);
+            await _outer._jobs.WaitAsync(done, 5000, agent, TestContext.Current.CancellationToken);
 
             var result = await _outer.Execute("job_list", new { }, agent);
             Assert.False(result.IsError);
@@ -257,12 +257,12 @@ public class JobsTests : IDisposable
         {
             var agent = _outer.NewAgent(AgentStatus.Running);
             var id = _outer.StartBashJob(agent, "sleep 0.3; echo done");
-            await _outer._jobs.WaitAsync(id, 5000, agent);
+            await _outer._jobs.WaitAsync(id, 5000, agent, TestContext.Current.CancellationToken);
             WaitFor(() => agent.Injected.Count == 0 && agent.Followups.Count == 0);
 
             var unread = _outer.StartBashJob(agent, "echo later");
             WaitFor(() => agent.Injected.Count > 0);
-            await _outer._jobs.WaitAsync(unread, 5000, agent);
+            await _outer._jobs.WaitAsync(unread, 5000, agent, TestContext.Current.CancellationToken);
             var notice = Assert.Single(agent.Injected);
             var text = notice.Content.OfType<TextBlock>().Single().Text;
             Assert.Contains($"background job {unread}", text);
@@ -277,12 +277,12 @@ public class JobsTests : IDisposable
         {
             var agent = _outer.NewAgent();
             var id = _outer.StartBashJob(agent, "sleep 0.3; echo done");
-            await _outer._jobs.WaitAsync(id, 5000, agent);
+            await _outer._jobs.WaitAsync(id, 5000, agent, TestContext.Current.CancellationToken);
             WaitFor(() => agent.Injected.Count == 0 && agent.Followups.Count == 0);
 
             var unread = _outer.StartBashJob(agent, "echo later");
             WaitFor(() => agent.Followups.Count > 0);
-            await _outer._jobs.WaitAsync(unread, 5000, agent);
+            await _outer._jobs.WaitAsync(unread, 5000, agent, TestContext.Current.CancellationToken);
             Assert.Single(agent.Followups);
         }
     }

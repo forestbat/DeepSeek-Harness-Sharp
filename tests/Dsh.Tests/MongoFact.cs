@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -6,7 +7,8 @@ namespace Dsh.Tests;
 /** Mongo 是可选后端: 本机没跑 mongo 时自动跳过整个用例, 而不是把它算作失败。 */
 public sealed class MongoFactAttribute : FactAttribute
 {
-    public MongoFactAttribute()
+    public MongoFactAttribute([CallerFilePath] string? sourceFilePath = null,
+    [CallerLineNumber] int sourceLineNumber = -1) : base(sourceFilePath, sourceLineNumber)
     {
         if (!MongoProbe.IsAvailable)
             Skip = "MongoDB is not reachable at mongodb://localhost:27017";

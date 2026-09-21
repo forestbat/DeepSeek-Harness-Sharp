@@ -122,15 +122,15 @@ public static class WebFetchTool
 
     private static IReadOnlyList<ContentBlock> Render(JsonElement value, int maxOutputChars)
     {
-            var result = DshJson.Deserialize<WebFetchResult>(value)
-            ?? throw new JsonException("web_fetch result value is malformed");
+        var result = DshJson.Deserialize<WebFetchResult>(value)
+        ?? throw new JsonException("web_fetch result value is malformed");
         return [new TextBlock(FormatFetchOutput(result, maxOutputChars))];
     }
 
     private static JsonElement FetchMetaElement(JsonElement value, int maxOutputChars)
     {
-            var result = DshJson.Deserialize<WebFetchResult>(value)
-            ?? throw new JsonException("web_fetch result value is malformed");
+        var result = DshJson.Deserialize<WebFetchResult>(value)
+        ?? throw new JsonException("web_fetch result value is malformed");
         return DshJson.ToElement(FetchMetaFromValue(result, maxOutputChars));
     }
 

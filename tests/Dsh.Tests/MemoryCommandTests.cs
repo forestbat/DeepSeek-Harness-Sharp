@@ -28,7 +28,7 @@ public sealed class MemoryCommandTests
             using var registration = MemoryCommand.Register(ctx, options);
             var agent = new FakeAgent(ctx);
 
-            var enabled = await commands.Execute(agent, "/memory on");
+            var enabled = await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
             Assert.NotNull(enabled);
             Assert.IsType<CommandResult.Success>(enabled.Result);
             Assert.True(HarnessSettings.Load(home).Memory?.Enabled == true);
@@ -40,7 +40,7 @@ public sealed class MemoryCommandTests
             Assert.Contains(".dsh-memory.md", prompt);
             Assert.Contains(assembly.Contexts, context => context.Text.Contains("Project memory"));
 
-            var disabled = await commands.Execute(agent, "/memory off");
+            var disabled = await commands.Execute(agent, "/memory off", TestContext.Current.CancellationToken);
             Assert.NotNull(disabled);
             Assert.IsType<CommandResult.Success>(disabled.Result);
             Assert.False(HarnessSettings.Load(home).Memory?.Enabled == true);
@@ -71,20 +71,18 @@ public sealed class MemoryCommandTests
             using var registration = MemoryCommand.Register(ctx, options);
             var agent = new FakeAgent(ctx);
 
-            var hidden = await commands.Execute(agent, "/memory show");
+            var hidden = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
             Assert.NotNull(hidden);
             Assert.IsType<CommandResult.Error>(hidden.Result);
 
-            await File.WriteAllTextAsync(
-                Path.Combine(projectDir, ".dsh-memory.md"),
-                "## Facts\n- a :: 1 (2026-09-16T09:35:17Z)\n");
+            await File.WriteAllTextAsync(Path.Combine(projectDir, ".dsh-memory.md"), "## Facts\n- a :: 1 (2026-09-16T09:35:17Z)\n", TestContext.Current.CancellationToken);
             var sidecar = Path.Combine(projectDir, ".dsh-memory");
             var memory = new ProjectMemory(new FileMemoryStore(Path.Combine(projectDir, ".dsh-memory.md")), sidecar);
             ctx.Provide(MemoryServices.ProjectMemory, memory);
-            await memory.WriteDigestAsync(SessionId.Create("s-1"), "topic", "summary text");
-            await commands.Execute(agent, "/memory on");
+            await memory.WriteDigestAsync(SessionId.Create("s-1"), "topic", "summary text", TestContext.Current.CancellationToken);
+            await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
 
-            var shown = await commands.Execute(agent, "/memory show");
+            var shown = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
 
             Assert.NotNull(shown);
             var success = Assert.IsType<CommandResult.Success>(shown.Result);
@@ -113,8 +111,8 @@ public sealed class MemoryCommandTests
             using var registration = MemoryCommand.Register(ctx, options);
             var agent = new FakeAgent(ctx);
 
-            await commands.Execute(agent, "/memory on");
-            var shown = await commands.Execute(agent, "/memory show");
+            await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
+            var shown = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
 
             Assert.NotNull(shown);
             var error = Assert.IsType<CommandResult.Error>(shown.Result);
@@ -140,7 +138,7 @@ public sealed class MemoryCommandTests
             using var registration = MemoryCommand.Register(ctx, new HarnessOptions(home, Cwd: root));
             var agent = new FakeAgent(ctx);
 
-            var result = await commands.Execute(agent, "/memory maybe");
+            var result = await commands.Execute(agent, "/memory maybe", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
             Assert.IsType<CommandResult.Error>(result.Result);

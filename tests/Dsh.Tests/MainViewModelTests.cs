@@ -70,7 +70,7 @@ public sealed class MainViewModelTests
 
         for (var attempt = 0; attempt < 500 && viewModel.SelectedSession?.SessionId == environment.Agent.Id; attempt++)
         {
-            await Task.Delay(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
             Dispatcher.UIThread.RunJobs();
         }
         Assert.True(viewModel.IsChatPage);
@@ -229,7 +229,7 @@ public sealed class MainViewModelTests
 
         using var restarted = await environment.RestartAsync();
         var agents = restarted.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-        var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")));
+        var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);
         var resumed = (AgentLoopAgent)handle.Agent;
         using var viewModel = new MainViewModel(restarted.App, resumed);
 

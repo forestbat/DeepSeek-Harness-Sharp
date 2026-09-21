@@ -208,18 +208,18 @@ public static class BootCli
                     started = true;
                     break;
                 case "AssistantMessagePayload" when started:
-                {
-                    var message = Prop(data, "Message");
-                    if (message is null)
+                    {
+                        var message = Prop(data, "Message");
+                        if (message is null)
+                            break;
+                        var joined = string.Concat(((IEnumerable)(Prop(message, "Content") ?? Array.Empty<object>()))
+                            .Cast<object>()
+                            .Where(block => block.GetType().Name == "TextBlock")
+                            .Select(block => Prop(block, "Text") as string ?? ""));
+                        if (joined != "")
+                            text = joined;
                         break;
-                    var joined = string.Concat(((IEnumerable)(Prop(message, "Content") ?? Array.Empty<object>()))
-                        .Cast<object>()
-                        .Where(block => block.GetType().Name == "TextBlock")
-                        .Select(block => Prop(block, "Text") as string ?? ""));
-                    if (joined != "")
-                        text = joined;
-                    break;
-                }
+                    }
                 case "TurnEndPayload":
                     var reason = Prop(data, "Reason");
                     if (reason is null)
@@ -333,16 +333,16 @@ public static class BootCli
                 await valueTask;
                 return null;
             default:
-            {
-                var asTask = awaitable.GetType().GetMethod("AsTask", Type.EmptyTypes);
-                if (asTask is null)
-                    return awaitable;
-                var task = (Task)asTask.Invoke(awaitable, null)!;
-                await task;
-                return task.GetType().IsGenericType
-                    ? task.GetType().GetProperty("Result")!.GetValue(task)
-                    : null;
-            }
+                {
+                    var asTask = awaitable.GetType().GetMethod("AsTask", Type.EmptyTypes);
+                    if (asTask is null)
+                        return awaitable;
+                    var task = (Task)asTask.Invoke(awaitable, null)!;
+                    await task;
+                    return task.GetType().IsGenericType
+                        ? task.GetType().GetProperty("Result")!.GetValue(task)
+                        : null;
+                }
         }
     }
 

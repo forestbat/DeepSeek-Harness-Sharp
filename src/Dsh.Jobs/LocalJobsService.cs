@@ -328,7 +328,7 @@ public sealed class LocalJobsService : JobsService
             job.FinishedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (job.Waiters > 0) job.Reported = true;
             snapshot = Snapshot(job);
-            waitResolvers = [..job.WaitResolvers];
+            waitResolvers = [.. job.WaitResolvers];
             job.WaitResolvers.Clear();
             job.Settled.TrySetResult();
             listeners = _listenersClosed ? [] : ListenersFor(job.Owner);
@@ -387,16 +387,16 @@ public sealed class LocalJobsService : JobsService
         lock (_gate)
         {
             _listenersClosed = true;
-            all = [.._store.Values];
+            all = [.. _store.Values];
         }
         CancelForTeardown(all, "jobs service disposed");
         await Task.WhenAll(all.Select(job => job.Settled.Task));
         HashSet<IAgent?> emptied;
         lock (_gate)
         {
-            emptied = [..all.Select(job => job.Owner)];
+            emptied = [.. all.Select(job => job.Owner)];
             _store.Clear();
-            ownerCleanups = [.._ownerCleanups.Values];
+            ownerCleanups = [.. _ownerCleanups.Values];
             _ownerCleanups.Clear();
         }
         foreach (var owner in emptied)

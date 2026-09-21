@@ -78,7 +78,7 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "/xyz");
         Press(chat, ConsoleKey.Enter);
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         var frame = DrawFrame(chat);
@@ -92,7 +92,7 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "/gpu");
         Press(chat, ConsoleKey.Enter);
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         var frame = DrawFrame(chat);
@@ -106,7 +106,7 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "/gpu 1");
         Press(chat, ConsoleKey.Enter);
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         frame = DrawFrame(chat);
@@ -122,7 +122,7 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "/gpu 999");
         Press(chat, ConsoleKey.Enter);
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
         chat.DrainUi();
 
         var frame = DrawFrame(chat);

@@ -212,7 +212,7 @@ public sealed class ProjectMemory
     private static string SafeFileName(string value)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        return new string([..value.Select(c => invalid.Contains(c) ? '_' : c)]);
+        return new string([.. value.Select(c => invalid.Contains(c) ? '_' : c)]);
     }
 
     private static string FirstLine(string text)

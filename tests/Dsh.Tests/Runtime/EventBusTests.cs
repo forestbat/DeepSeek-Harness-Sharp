@@ -41,7 +41,7 @@ public class EventBusTests
 
         ctx.Emit(new PingNotification(11));
 
-        Assert.Equal(11, await seen.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(11, await seen.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
     }
 
     [Fact]

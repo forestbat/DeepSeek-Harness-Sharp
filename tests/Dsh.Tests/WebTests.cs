@@ -213,7 +213,7 @@ public class WebTests : IDisposable
             using var host = new WebTests();
             host._web.RegisterSearchProvider(new StubSearchProvider("one", (_, _) => Task.FromResult(new WebSearchResult(null, [], false)), available: true));
             host._web.RegisterSearchProvider(new StubSearchProvider("two", (_, _) => Task.FromResult(new WebSearchResult(null, [], false)), available: true));
-            var error = await Assert.ThrowsAsync<WebError>(() => host._web.Search(new WebSearchRequest("q")));
+            var error = await Assert.ThrowsAsync<WebError>(() => host._web.Search(new WebSearchRequest("q"), TestContext.Current.CancellationToken));
             Assert.Equal(WebErrorCodes.ProviderAmbiguous, error.Code);
         }
     }
@@ -304,14 +304,14 @@ public class WebTests : IDisposable
                 var header = $"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n";
                 await stream.WriteAsync(Encoding.ASCII.GetBytes(header));
                 await stream.WriteAsync(body);
-            });
+            }, TestContext.Current.CancellationToken);
 
             try
             {
                 var provider = new HttpFetchProvider(
                     new HttpFetchLimits { MaxResponseBytes = 1024, MaxBodyChars = 1024, TimeoutMs = 5000, MaxRedirects = 0, UserAgent = "test" },
                     (_, _) => Task.FromResult<IReadOnlyList<PublicAddress>>([new PublicAddress("127.0.0.1", 4)]));
-                var result = await provider.Fetch(new WebFetchRequest($"http://127.0.0.1:{port}/"));
+                var result = await provider.Fetch(new WebFetchRequest($"http://127.0.0.1:{port}/"), TestContext.Current.CancellationToken);
                 Assert.Equal(200, result.StatusCode);
                 Assert.Equal("ok", result.Body.Content);
             }

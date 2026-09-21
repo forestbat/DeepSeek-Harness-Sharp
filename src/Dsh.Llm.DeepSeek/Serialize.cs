@@ -77,18 +77,18 @@ public static class WireSerialize
                     wire.Add(SerializeAssistant(message));
                     continue;
                 default:
-                {
-                    var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
-                    var text = FlattenText(message.Content);
-                    if (text.Length > 0 || toolResults.Count == 0)
-                        wire.Add(new WireMessage("user", text));
-                    foreach (var result in toolResults)
                     {
-                        var content = FlattenText(result.Content);
-                        wire.Add(new WireMessage("tool", content.Length > 0 ? content : "(no output)", ToolCallId: result.ToolCallId.Value));
+                        var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
+                        var text = FlattenText(message.Content);
+                        if (text.Length > 0 || toolResults.Count == 0)
+                            wire.Add(new WireMessage("user", text));
+                        foreach (var result in toolResults)
+                        {
+                            var content = FlattenText(result.Content);
+                            wire.Add(new WireMessage("tool", content.Length > 0 ? content : "(no output)", ToolCallId: result.ToolCallId.Value));
+                        }
+                        break;
                     }
-                    break;
-                }
             }
         }
         return wire;

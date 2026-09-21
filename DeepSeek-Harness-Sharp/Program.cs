@@ -61,23 +61,23 @@ public static class Program
         switch (command)
         {
             case "tui":
-            {
-                var subcommand = positional.Skip(1).FirstOrDefault();
-                if (subcommand == "list")
-                    return await BootCli.RunTuiListAsync();
-                if (subcommand == "attach")
                 {
-                    if (positional.Count < 3)
+                    var subcommand = positional.Skip(1).FirstOrDefault();
+                    if (subcommand == "list")
+                        return await BootCli.RunTuiListAsync();
+                    if (subcommand == "attach")
                     {
-                        await Console.Error.WriteLineAsync("dsh: tui attach requires a session id");
-                        return 1;
+                        if (positional.Count < 3)
+                        {
+                            await Console.Error.WriteLineAsync("dsh: tui attach requires a session id");
+                            return 1;
+                        }
+                        return await BootCli.RunTuiAttachAsync(positional[2]);
                     }
-                    return await BootCli.RunTuiAttachAsync(positional[2]);
+                    if (subcommand == "daemon")
+                        return await BootCli.RunTuiDaemonAsync();
+                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId);
                 }
-                if (subcommand == "daemon")
-                    return await BootCli.RunTuiDaemonAsync();
-                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId);
-            }
             case "gui":
                 // 组合插件之前先摘掉自己的控制台
                 ConsoleWindow.DetachIfOwned();

@@ -27,7 +27,7 @@ public sealed class SessionCommandTests
                 handle.Flush();
                 handle.Close();
 
-                var result = await commands.Execute(agent, "/rename New Title");
+                var result = await commands.Execute(agent, "/rename New Title", TestContext.Current.CancellationToken);
 
                 Assert.NotNull(result);
                 Assert.IsType<CommandResult.Success>(result.Result);
@@ -70,7 +70,7 @@ public sealed class SessionCommandTests
                 handle.Close();
             }
 
-            var result = await commands.Execute(current, $"/session delete {target.Id}");
+            var result = await commands.Execute(current, $"/session delete {target.Id}", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
             Assert.IsType<CommandResult.Success>(result.Result);

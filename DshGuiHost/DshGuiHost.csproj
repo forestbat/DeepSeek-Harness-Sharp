@@ -16,6 +16,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <CETCompat>false</CETCompat>
     <ApplicationIcon Condition="Exists('..\src\Dsh.Gui\Assets\icon.ico')">..\src\Dsh.Gui\Assets\icon.ico</ApplicationIcon>
+    <!--.NET 限制了引用项目不能使用自包含，但可关闭校验-->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
   </PropertyGroup>
 
   <ItemGroup>

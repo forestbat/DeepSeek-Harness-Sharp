@@ -38,10 +38,10 @@ public sealed class RealLlmTurnSmokeTests
             var handle = await agents.Create(new CreateAgentOptions(
                 SessionId.Create($"smoke-{Guid.NewGuid():N}"),
                 Directory.GetCurrentDirectory(),
-                new AgentOptions(providerId, modelId)));
+                new AgentOptions(providerId, modelId)), TestContext.Current.CancellationToken);
             var agent = (AgentLoopAgent)handle.Agent;
             agent.Followup(MessageFactory.CreateUserText("只回复两个字:收到"));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(60));
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
             var events = agent.Session.SnapshotEvents();
             var assistant = events
                 .Select(sessionEvent => sessionEvent.Data)

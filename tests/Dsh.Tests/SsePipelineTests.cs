@@ -20,7 +20,7 @@ public class SsePipelineTests
         };
         var stream = new MemoryStream(Encoding.UTF8.GetBytes(string.Join("\n", lines) + "\n"));
         var chunks = new List<StreamChunk>();
-        await foreach (var chunk in WireTranslate.Translate(SseParser.Parse(stream)))
+        await foreach (var chunk in WireTranslate.Translate(SseParser.Parse(stream, null, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken))
             chunks.Add(chunk);
 
         Assert.Equal(4, chunks.Count);

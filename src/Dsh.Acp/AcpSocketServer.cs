@@ -69,7 +69,7 @@ public sealed class AcpSocketServer : IDisposable
         Socket[] clients;
         lock (_gate)
         {
-            clients = [.._clients];
+            clients = [.. _clients];
             _clients.Clear();
         }
         foreach (var client in clients)

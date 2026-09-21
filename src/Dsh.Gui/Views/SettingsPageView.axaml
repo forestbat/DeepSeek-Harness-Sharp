@@ -121,11 +121,11 @@
                   <Button Classes="Ghost" Content="删除" Command="{Binding Preferences.RemoveProviderCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
                   <Button Classes="Ghost" Content="测试连接" Command="{Binding Preferences.TestConnectionCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
                 </StackPanel>
-                <TextBox Text="{Binding Preferences.ProviderName}" Watermark="name，例如 deepseek" />
-                <TextBox Text="{Binding Preferences.ProviderType}" Watermark="type，例如 openai-compatible / deepseek / anthropic" />
-                <TextBox Text="{Binding Preferences.ProviderBaseUrl}" Watermark="baseUrl，例如 https://api.deepseek.com" />
-                <TextBox Text="{Binding Preferences.ProviderApiKey}" Watermark="apiKey" />
-                <TextBox Text="{Binding Preferences.ProviderModelIds}" Watermark="modelIds，逗号或空格分隔（可选）" />
+                <TextBox Text="{Binding Preferences.ProviderName}" PlaceholderText="name，例如 deepseek" />
+                <TextBox Text="{Binding Preferences.ProviderType}" PlaceholderText="type，例如 openai-compatible / deepseek / anthropic" />
+                <TextBox Text="{Binding Preferences.ProviderBaseUrl}" PlaceholderText="baseUrl，例如 https://api.deepseek.com" />
+                <TextBox Text="{Binding Preferences.ProviderApiKey}" PlaceholderText="apiKey" />
+                <TextBox Text="{Binding Preferences.ProviderModelIds}" PlaceholderText="modelIds，逗号或空格分隔（可选）" />
                 <TextBlock Text="{Binding Preferences.Status}" Classes="Tertiary" TextWrapping="Wrap" />
               </StackPanel>
             </Border>
@@ -139,7 +139,7 @@
                 <CheckBox Content="自动批准普通工具（autoApprove）" IsChecked="{Binding Preferences.AutoApprove, Mode=TwoWay}" />
                 <TextBlock Text="黑名单（每行一条）" Classes="Secondary" />
                 <TextBox AcceptsReturn="True" Height="160" TextWrapping="Wrap"
-                         Watermark="每行一条，例如 bash: rm -rf /*"
+                         PlaceholderText="每行一条，例如 bash: rm -rf /*"
                          Text="{Binding Preferences.BlacklistText, Mode=TwoWay}" />
                 <Button Classes="Primary" HorizontalAlignment="Left" Content="保存"
                         Command="{Binding Preferences.SaveSafetyCommand}" />
@@ -237,7 +237,7 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <Grid ColumnDefinitions="*,Auto">
-                  <TextBox Text="{Binding Preferences.PluginInput}" Watermark="包名或本地路径，例如 ./plugins/my-plugin" />
+                  <TextBox Text="{Binding Preferences.PluginInput}" PlaceholderText="包名或本地路径，例如 ./plugins/my-plugin" />
                   <Button Grid.Column="1" Classes="Primary" Margin="8,0,0,0" Content="安装"
                           Command="{Binding Preferences.AddPluginCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
                 </Grid>

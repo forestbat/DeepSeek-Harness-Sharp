@@ -79,20 +79,20 @@ internal static partial class SettingsDocument
                 builder.Append(' ').Append(FormatString(text));
                 return;
             case IEnumerable<object?> sequence:
-            {
-                var items = sequence.ToList();
-                if (items.Count == 0)
                 {
-                    builder.Append(" []");
+                    var items = sequence.ToList();
+                    if (items.Count == 0)
+                    {
+                        builder.Append(" []");
+                        return;
+                    }
+                    foreach (var item in items)
+                    {
+                        builder.Append('\n').Append(indent).Append('-');
+                        RenderValue(builder, item, indent + Indent);
+                    }
                     return;
                 }
-                foreach (var item in items)
-                {
-                    builder.Append('\n').Append(indent).Append('-');
-                    RenderValue(builder, item, indent + Indent);
-                }
-                return;
-            }
             default:
                 builder.Append(' ').Append(FormatScalar(value));
                 return;

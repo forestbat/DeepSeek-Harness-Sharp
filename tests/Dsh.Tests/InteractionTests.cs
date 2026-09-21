@@ -81,8 +81,7 @@ public class InteractionTests
             using var answerer = ApprovalAnswerers.AutoApprove(harness.Ctx);
             var agent = CreateAgent(harness);
 
-            var outcome = await approval.Request(
-                new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1"), "needs it"), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1"), "needs it"), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.AllowedOnce, outcome);
             var payloads = agent.Session.SnapshotEvents().Select(e => e.Data).ToList();
@@ -102,7 +101,7 @@ public class InteractionTests
             using var answerer = ApprovalAnswerers.DenyAll(harness.Ctx);
             var agent = CreateAgent(harness);
 
-            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.Rejected, outcome);
             var decided = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<ApprovalDecidedPayload>().Single();
@@ -122,14 +121,14 @@ public class InteractionTests
             }, new EventOptions { Global = true });
             var agent = CreateAgent(harness);
 
-            var first = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1"), Arguments: """{"cmd":"ls"}"""), default);
-            var second = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-2")), default);
+            var first = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1"), Arguments: """{"cmd":"ls"}"""), TestContext.Current.CancellationToken);
+            var second = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-2")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.AllowedForSession, first);
             Assert.Equal(ApprovalOutcome.AllowedOnce, second);
             Assert.Equal(1, dispatches);
 
-            var other = await approval.Request(new ApprovalRequest(agent, "write", ToolCallId.Create("call-3")), default);
+            var other = await approval.Request(new ApprovalRequest(agent, "write", ToolCallId.Create("call-3")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.Rejected, other);
             Assert.Equal(2, dispatches);
@@ -146,7 +145,7 @@ public class InteractionTests
             var approval = ApprovalService.Register(harness.Ctx);
             var agent = CreateAgent(harness);
 
-            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.Unavailable, outcome);
         }
@@ -173,7 +172,7 @@ public class InteractionTests
                 new EventOptions { Global = true });
             var agent = CreateAgent(harness);
 
-            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.Unavailable, outcome);
         }
@@ -186,7 +185,7 @@ public class InteractionTests
             using var answerer = ApprovalAnswerers.AutoApprove(harness.Ctx);
             var agent = CreateAgent(harness);
 
-            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken);
 
             Assert.Equal(ApprovalOutcome.Rejected, outcome);
         }
@@ -206,7 +205,7 @@ public class InteractionTests
             var text = Assert.IsType<TextBlock>(message.Content[0]).Text;
             Assert.Contains("ask", text);
             Assert.Contains("never", text);
-            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default);
+            var outcome = await approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken);
             Assert.Equal(ApprovalOutcome.Rejected, outcome);
         }
 
@@ -247,7 +246,7 @@ public class InteractionTests
             var agent = CreateAgent(harness, openTurn: false);
 
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default));
+                () => approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken));
 
             Assert.Empty(agent.Session.SnapshotEvents());
         }
@@ -261,7 +260,7 @@ public class InteractionTests
             agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
 
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), default));
+                () => approval.Request(new ApprovalRequest(agent, "bash", ToolCallId.Create("call-1")), TestContext.Current.CancellationToken));
         }
     }
 
@@ -274,7 +273,7 @@ public class InteractionTests
             var service = UserQuestionService.Register(harness.Ctx);
 
             var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([])));
+                () => service.Ask(new AskUserQuestionRequest([]), TestContext.Current.CancellationToken));
 
             Assert.Equal(UserQuestionException.EmptyQuestions, error.Code);
         }
@@ -300,7 +299,7 @@ public class InteractionTests
             var service = UserQuestionService.Register(harness.Ctx);
 
             var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([SampleQuestion])));
+                () => service.Ask(new AskUserQuestionRequest([SampleQuestion]), TestContext.Current.CancellationToken));
 
             Assert.Equal(UserQuestionException.NoProvider, error.Code);
         }
@@ -318,7 +317,7 @@ public class InteractionTests
                     [new AskUserQuestionAnswerItem("q1", ["beta"], "custom note")]));
             });
 
-            var answer = await service.Ask(new AskUserQuestionRequest([SampleQuestion]));
+            var answer = await service.Ask(new AskUserQuestionRequest([SampleQuestion]), TestContext.Current.CancellationToken);
 
             Assert.NotNull(seen);
             var item = Assert.Single(answer.Answers);
@@ -335,7 +334,7 @@ public class InteractionTests
             using var answerer = UserQuestionAnswerers.Headless(harness.Ctx);
 
             var answer = await service.Ask(new AskUserQuestionRequest(
-                [SampleQuestion, new AskUserQuestionItem("q2", "Free text?")]));
+                [SampleQuestion, new AskUserQuestionItem("q2", "Free text?")]), TestContext.Current.CancellationToken);
 
             Assert.Equal(["alpha"], answer.Answers[0].Selected);
             Assert.Equal([], answer.Answers[1].Selected);
@@ -353,7 +352,7 @@ public class InteractionTests
             };
 
             var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([question])));
+                () => service.Ask(new AskUserQuestionRequest([question]), TestContext.Current.CancellationToken));
 
             Assert.Equal(UserQuestionException.BadIntent, error.Code);
         }
@@ -369,7 +368,7 @@ public class InteractionTests
             };
 
             var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([question])));
+                () => service.Ask(new AskUserQuestionRequest([question]), TestContext.Current.CancellationToken));
 
             Assert.Equal(UserQuestionException.BadIntent, error.Code);
         }
@@ -382,7 +381,7 @@ public class InteractionTests
             var agent = CreateAgent(harness);
 
             var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([SampleQuestion], agent)));
+                () => service.Ask(new AskUserQuestionRequest([SampleQuestion], agent), TestContext.Current.CancellationToken));
 
             Assert.Equal(UserQuestionException.CallerNotLive, error.Code);
         }
@@ -397,7 +396,7 @@ public class InteractionTests
             var agent = CreateAgent(harness);
             registry.Register(agent);
 
-            var answer = await service.Ask(new AskUserQuestionRequest([SampleQuestion], agent));
+            var answer = await service.Ask(new AskUserQuestionRequest([SampleQuestion], agent), TestContext.Current.CancellationToken);
 
             Assert.Equal(["alpha"], answer.Answers[0].Selected);
         }
@@ -488,8 +487,8 @@ public class InteractionTests
             var commands = CommandsService.Register(harness.Ctx);
             var agent = CreateAgent(harness);
 
-            Assert.Null(await commands.Execute(agent, "not a command"));
-            Assert.Null(await commands.Execute(agent, "/missing"));
+            Assert.Null(await commands.Execute(agent, "not a command", TestContext.Current.CancellationToken));
+            Assert.Null(await commands.Execute(agent, "/missing", TestContext.Current.CancellationToken));
             Assert.Equal(1, agent.Session.Seq);
         }
 
@@ -501,7 +500,7 @@ public class InteractionTests
             using var registration = commands.Register(Command("goal", "ran"));
             var agent = CreateAgent(harness);
 
-            var execution = await commands.Execute(agent, "/goal do it");
+            var execution = await commands.Execute(agent, "/goal do it", TestContext.Current.CancellationToken);
 
             Assert.NotNull(execution);
             var success = Assert.IsType<CommandResult.Success>(execution.Result);
@@ -526,7 +525,7 @@ public class InteractionTests
             using var registration = commands.Register(Command("goal", "ran") with { RecordInput = false });
             var agent = CreateAgent(harness);
 
-            var execution = await commands.Execute(agent, "/goal secret input");
+            var execution = await commands.Execute(agent, "/goal secret input", TestContext.Current.CancellationToken);
 
             Assert.NotNull(execution);
             var run = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<CommandRunPayload>().Single();
@@ -546,7 +545,7 @@ public class InteractionTests
             });
             var agent = CreateAgent(harness);
 
-            var execution = await commands.Execute(agent, "/goal");
+            var execution = await commands.Execute(agent, "/goal", TestContext.Current.CancellationToken);
 
             var error = Assert.IsType<CommandResult.Error>(execution!.Result);
             Assert.Equal("nope", error.Text);
@@ -568,7 +567,7 @@ public class InteractionTests
             });
             var agent = CreateAgent(harness);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() => commands.Execute(agent, "/goal"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => commands.Execute(agent, "/goal", TestContext.Current.CancellationToken));
 
             var done = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<CommandDonePayload>().Single();
             Assert.Equal("error", done.Kind);
@@ -585,10 +584,10 @@ public class InteractionTests
             var other = CreateAgent(harness);
             using var scoped = commands.Register(Command("shared", "scoped"), agent.ScopeKey);
 
-            var agentExecution = await commands.Execute(agent, "/shared");
+            var agentExecution = await commands.Execute(agent, "/shared", TestContext.Current.CancellationToken);
             Assert.Equal("scoped", Assert.IsType<CommandResult.Success>(agentExecution!.Result).Text);
 
-            var otherExecution = await commands.Execute(other, "/shared");
+            var otherExecution = await commands.Execute(other, "/shared", TestContext.Current.CancellationToken);
             Assert.Equal("global", Assert.IsType<CommandResult.Success>(otherExecution!.Result).Text);
         }
 

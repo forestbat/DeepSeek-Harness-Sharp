@@ -105,10 +105,10 @@ internal sealed class NotificationDispatch<TNotification>(object handler) : INot
                 await plain.Handle(typed);
                 return await next();
             case IBailHandler<TNotification> bail:
-            {
-                var result = await bail.Handle(typed);
-                return EventsService.IsBailed(result) ? result : await next();
-            }
+                {
+                    var result = await bail.Handle(typed);
+                    return EventsService.IsBailed(result) ? result : await next();
+                }
             default:
                 throw new RuntimeException("INVALID_HANDLER", $"handler does not implement a notification interface for {typeof(TNotification).Name}");
         }

@@ -30,7 +30,7 @@ public sealed class SessionResumeTests
             using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
             {
                 var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-                var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")));
+                var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);
                 var resumed = (AgentLoopAgent)handle.Agent;
                 var resumedEvents = resumed.Session.SnapshotEvents();
                 // 恢复会补一条 session/end-seed, 标记"这之前的都是被恢复的历史"。
@@ -81,7 +81,7 @@ public sealed class SessionResumeTests
             using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
             {
                 var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-                var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")));
+                var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);
                 var resumed = (AgentLoopAgent)handle.Agent;
                 var events = resumed.Session.SnapshotEvents();
                 // 中断轮先补收尾事件, 再补 session/end-seed 边界。

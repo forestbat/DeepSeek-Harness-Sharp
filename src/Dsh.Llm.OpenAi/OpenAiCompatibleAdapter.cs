@@ -156,45 +156,45 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                 switch (content)
                 {
                     case TextContent text when text.Text.Length > 0:
-                    {
-                        textBlock ??= Open("text");
-                        if (textBlock.Text.Length == 0)
-                            yield return new StreamChunk.BlockStart(textBlock.Index, "text");
-                        textBlock.Text += text.Text;
-                        yield return new StreamChunk.TextDelta(textBlock.Index, text.Text);
-                        break;
-                    }
-                    case TextReasoningContent reasoning when reasoning.Text.Length > 0:
-                    {
-                        reasoningBlock ??= Open("reasoning");
-                        if (reasoningBlock.Text.Length == 0)
-                            yield return new StreamChunk.BlockStart(reasoningBlock.Index, "reasoning");
-                        reasoningBlock.Text += reasoning.Text;
-                        yield return new StreamChunk.ReasoningDelta(reasoningBlock.Index, reasoning.Text);
-                        break;
-                    }
-                    case FunctionCallContent call:
-                    {
-                        var key = call.CallId;
-                        if (!toolBlocks.TryGetValue(key, out var block))
                         {
-                            block = Open("tool-call");
-                            toolBlocks[key] = block;
-                            yield return new StreamChunk.BlockStart(block.Index, "tool-call");
+                            textBlock ??= Open("text");
+                            if (textBlock.Text.Length == 0)
+                                yield return new StreamChunk.BlockStart(textBlock.Index, "text");
+                            textBlock.Text += text.Text;
+                            yield return new StreamChunk.TextDelta(textBlock.Index, text.Text);
+                            break;
                         }
-                        if (!string.IsNullOrEmpty(call.CallId))
-                            block.CallId = ToolCallId.Create(call.CallId);
-                        if (!string.IsNullOrEmpty(call.Name))
-                            block.Name = call.Name;
-                        var arguments = JsonSerializer.Serialize(call.Arguments);
-                        block.Arguments += arguments;
-                        yield return new StreamChunk.ToolCallDelta(
-                            block.Index,
-                            block.CallId,
-                            block.Name,
-                            arguments);
-                        break;
-                    }
+                    case TextReasoningContent reasoning when reasoning.Text.Length > 0:
+                        {
+                            reasoningBlock ??= Open("reasoning");
+                            if (reasoningBlock.Text.Length == 0)
+                                yield return new StreamChunk.BlockStart(reasoningBlock.Index, "reasoning");
+                            reasoningBlock.Text += reasoning.Text;
+                            yield return new StreamChunk.ReasoningDelta(reasoningBlock.Index, reasoning.Text);
+                            break;
+                        }
+                    case FunctionCallContent call:
+                        {
+                            var key = call.CallId;
+                            if (!toolBlocks.TryGetValue(key, out var block))
+                            {
+                                block = Open("tool-call");
+                                toolBlocks[key] = block;
+                                yield return new StreamChunk.BlockStart(block.Index, "tool-call");
+                            }
+                            if (!string.IsNullOrEmpty(call.CallId))
+                                block.CallId = ToolCallId.Create(call.CallId);
+                            if (!string.IsNullOrEmpty(call.Name))
+                                block.Name = call.Name;
+                            var arguments = JsonSerializer.Serialize(call.Arguments);
+                            block.Arguments += arguments;
+                            yield return new StreamChunk.ToolCallDelta(
+                                block.Index,
+                                block.CallId,
+                                block.Name,
+                                arguments);
+                            break;
+                        }
                     case UsageContent usage:
                         pendingUsage = ToTokenUsage(usage.Details);
                         break;
@@ -252,21 +252,21 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                     messages.Add(new ChatMessage(ChatRole.Assistant, ToAssistantContents(message.Content)));
                     break;
                 default:
-                {
-                    var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
-                    if (toolResults.Count > 0)
                     {
-                        foreach (var result in toolResults)
+                        var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
+                        if (toolResults.Count > 0)
                         {
-                            messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(
+                            foreach (var result in toolResults)
+                            {
+                                messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(
                                 result.ToolCallId.Value,
                                 FlattenText(result.Content))]));
+                            }
+                            break;
                         }
+                        messages.Add(new ChatMessage(ChatRole.User, [new TextContent(FlattenText(message.Content))]));
                         break;
                     }
-                    messages.Add(new ChatMessage(ChatRole.User, [new TextContent(FlattenText(message.Content))]));
-                    break;
-                }
             }
         }
         return messages;
@@ -300,7 +300,7 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             ModelId = options.Model,
             Temperature = options.Temperature is { } temperature ? (float)temperature : null,
             MaxOutputTokens = options.MaxTokens,
-            StopSequences = options.Stop is { Count: > 0 } stop ? [..stop] : null,
+            StopSequences = options.Stop is { Count: > 0 } stop ? [.. stop] : null,
             Tools = options.Tools is { Count: > 0 } tools
                 ? tools.Select(tool => AIFunctionFactory.CreateDeclaration(
                     tool.Name,
