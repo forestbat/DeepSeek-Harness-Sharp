@@ -105,7 +105,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     public void Flush()
     {
         List<JsonlSessionHandle?> writers;
-        lock (_trackerGate) writers = [.._writers.Values];
+        lock (_trackerGate) writers = [.. _writers.Values];
         var errors = new List<Exception>();
         foreach (var writer in writers)
         {
@@ -163,7 +163,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     public IReadOnlyList<SessionPersistenceSnapshot> List()
     {
         List<KeyValuePair<SessionId, PendingSession>> pending;
-        lock (_trackerGate) pending = [.._pending];
+        lock (_trackerGate) pending = [.. _pending];
         var snapshots = new List<SessionPersistenceSnapshot>();
         var listed = new HashSet<SessionId>();
         foreach (var (meta, path) in ListArtifacts())
@@ -208,7 +208,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         var sessionDir = path is null ? null : Path.GetDirectoryName(path);
         List<JsonlSessionHandle> handles;
         lock (_trackerGate)
-            handles = [.._openHandles.Where(handle => handle.Id == id)];
+            handles = [.. _openHandles.Where(handle => handle.Id == id)];
         foreach (var handle in handles)
             handle.Close();
         lock (_trackerGate)
@@ -229,7 +229,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     public void Dispose()
     {
         List<JsonlSessionHandle> handles;
-        lock (_trackerGate) handles = [.._openHandles];
+        lock (_trackerGate) handles = [.. _openHandles];
         var errors = new List<Exception>();
         foreach (var handle in handles)
         {
@@ -250,7 +250,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             var newline = Array.IndexOf(original, (byte)'\n');
             if (newline < 0)
                 throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header line: {path}");
-            replacement = [..headerLine, ..original.AsSpan(newline + 1).ToArray()];
+            replacement = [.. headerLine, .. original.AsSpan(newline + 1).ToArray()];
         }
         else
         {
@@ -258,7 +258,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             var (frames, _) = ZstdFrames.Scan(original);
             if (frames.Count == 0)
                 throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header frame: {path}");
-            replacement = [..ZstdFrames.CompressFrame(headerLine), ..original.AsSpan(frames[0].End).ToArray()];
+            replacement = [.. ZstdFrames.CompressFrame(headerLine), .. original.AsSpan(frames[0].End).ToArray()];
         }
         var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
         File.WriteAllBytes(temp, replacement);
@@ -383,7 +383,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             prefix.Meta,
             prefix.Events,
             tornStart.Value,
-            [..prefix.Events.Skip((int)eventCount)],
+            [.. prefix.Events.Skip((int)eventCount)],
             prefix.InheritedEventCount);
     }
 
@@ -439,7 +439,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         var headerFrame = ZstdFrames.CompressFrame(headerBytes);
         var eventFrame = ZstdFrames.CompressFrame(bodyBytes);
-        return [..headerFrame, ..eventFrame];
+        return [.. headerFrame, .. eventFrame];
     }
 
     private byte[] EncodeEventBatch(IReadOnlyList<SessionEvent> events)
@@ -599,7 +599,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     private List<string> ListProjectDirs()
-        => Directory.Exists(_root) ? [..Directory.GetDirectories(_root)] : [];
+        => Directory.Exists(_root) ? [.. Directory.GetDirectories(_root)] : [];
 
     private static List<string> ListSessionDirs(string project)
     {
@@ -609,7 +609,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             if (File.Exists(entry) && (entry.EndsWith(".jsonl", StringComparison.Ordinal) || entry.EndsWith(".jsonl.zstd", StringComparison.Ordinal)))
                 throw LegacyLayout(entry);
         }
-        return [..entries.Where(Directory.Exists)];
+        return [.. entries.Where(Directory.Exists)];
     }
 
     private void CheckRootEncoding()

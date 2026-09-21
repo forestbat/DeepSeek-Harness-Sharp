@@ -198,70 +198,70 @@ public sealed class PtyDaemon : IAsyncDisposable
                 return false;
 
             case "start":
-            {
-                if (request.Params is not { FileName.Length: > 0 } parameters)
                 {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "start requires params.fileName" }, cancellationToken);
+                    if (request.Params is not { FileName.Length: > 0 } parameters)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "start requires params.fileName" }, cancellationToken);
+                        return false;
+                    }
+
+                    try
+                    {
+                        var startInfo = new PtyStartInfo
+                        {
+                            FileName = parameters.FileName,
+                            Arguments = parameters.Arguments,
+                            WorkingDirectory = parameters.WorkingDirectory,
+                            Environment = parameters.Environment,
+                            Rows = parameters.Rows,
+                            Columns = parameters.Columns,
+                        };
+                        var session = await _host.StartAsync(startInfo, parameters.Id, cancellationToken);
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
+                    }
+                    catch (Exception error)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = error.Message }, cancellationToken);
+                    }
+
                     return false;
                 }
-
-                try
-                {
-                    var startInfo = new PtyStartInfo
-                    {
-                        FileName = parameters.FileName,
-                        Arguments = parameters.Arguments,
-                        WorkingDirectory = parameters.WorkingDirectory,
-                        Environment = parameters.Environment,
-                        Rows = parameters.Rows,
-                        Columns = parameters.Columns,
-                    };
-                    var session = await _host.StartAsync(startInfo, parameters.Id, cancellationToken);
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
-                }
-                catch (Exception error)
-                {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = error.Message }, cancellationToken);
-                }
-
-                return false;
-            }
 
             case "attach":
-            {
-                var id = request.Id;
-                if (id is null)
                 {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "attach requires id" }, cancellationToken);
-                    return false;
-                }
+                    var id = request.Id;
+                    if (id is null)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "attach requires id" }, cancellationToken);
+                        return false;
+                    }
 
-                var session = _host.Get(id);
-                if (session is null)
-                {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
-                    return false;
-                }
+                    var session = _host.Get(id);
+                    if (session is null)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        return false;
+                    }
 
-                if (session.Status != PtySessionStatus.Running)
-                {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session {id} is not running" }, cancellationToken);
-                    return false;
-                }
+                    if (session.Status != PtySessionStatus.Running)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session {id} is not running" }, cancellationToken);
+                        return false;
+                    }
 
-                session.Attach();
-                try
-                {
-                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
-                    await TunnelAsync(session, stream, cancellationToken);
-                }
-                finally
-                {
-                    session.Detach();
-                }
+                    session.Attach();
+                    try
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
+                        await TunnelAsync(session, stream, cancellationToken);
+                    }
+                    finally
+                    {
+                        session.Detach();
+                    }
 
-                return true;
-            }
+                    return true;
+                }
 
             default:
                 await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"unknown method: {request.Method}" }, cancellationToken);

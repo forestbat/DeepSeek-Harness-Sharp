@@ -71,7 +71,7 @@
         </Button>
       </Grid>
 
-      <TextBox Classes="Search" Watermark="搜索会话" Text="{Binding SearchText}" />
+      <TextBox Classes="Search" PlaceholderText="搜索会话" Text="{Binding SearchText}" />
     </StackPanel>
 
     <StackPanel DockPanel.Dock="Bottom" Margin="8,4,8,8" Spacing="2">

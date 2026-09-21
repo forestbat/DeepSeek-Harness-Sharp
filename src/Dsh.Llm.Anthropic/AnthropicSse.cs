@@ -91,95 +91,95 @@ internal static class AnthropicSse
         switch (type)
         {
             case "content_block_start":
-            {
-                var index = frame.GetProperty("index").GetInt32();
-                var contentBlock = frame.GetProperty("content_block");
-                var blockType = contentBlock.GetProperty("type").GetString();
-                switch (blockType)
                 {
-                    case "text":
-                        openBlocks[index] = new OpenBlock { Type = "text" };
-                        yield return new StreamChunk.BlockStart(index, "text");
-                        break;
-                    case "thinking":
-                        openBlocks[index] = new OpenBlock { Type = "thinking" };
-                        yield return new StreamChunk.BlockStart(index, "reasoning");
-                        break;
-                    case "tool_use":
-                        openBlocks[index] = new OpenBlock
-                        {
-                            Type = "tool-call",
-                            Id = contentBlock.TryGetProperty("id", out var id) ? id.GetString() : null,
-                            Name = contentBlock.TryGetProperty("name", out var name) ? name.GetString() : null,
-                        };
-                        yield return new StreamChunk.BlockStart(index, "tool-call");
-                        break;
-                }
+                    var index = frame.GetProperty("index").GetInt32();
+                    var contentBlock = frame.GetProperty("content_block");
+                    var blockType = contentBlock.GetProperty("type").GetString();
+                    switch (blockType)
+                    {
+                        case "text":
+                            openBlocks[index] = new OpenBlock { Type = "text" };
+                            yield return new StreamChunk.BlockStart(index, "text");
+                            break;
+                        case "thinking":
+                            openBlocks[index] = new OpenBlock { Type = "thinking" };
+                            yield return new StreamChunk.BlockStart(index, "reasoning");
+                            break;
+                        case "tool_use":
+                            openBlocks[index] = new OpenBlock
+                            {
+                                Type = "tool-call",
+                                Id = contentBlock.TryGetProperty("id", out var id) ? id.GetString() : null,
+                                Name = contentBlock.TryGetProperty("name", out var name) ? name.GetString() : null,
+                            };
+                            yield return new StreamChunk.BlockStart(index, "tool-call");
+                            break;
+                    }
 
-                break;
-            }
-            case "content_block_delta":
-            {
-                var index = frame.GetProperty("index").GetInt32();
-                var delta = frame.GetProperty("delta");
-                var deltaType = delta.GetProperty("type").GetString();
-                switch (deltaType)
-                {
-                    case "text_delta":
-                    {
-                        var text = delta.GetProperty("text").GetString() ?? "";
-                        EnsureOpen(openBlocks, index, "text").Text += text;
-                        yield return new StreamChunk.TextDelta(index, text);
-                        break;
-                    }
-                    case "thinking_delta":
-                    {
-                        var text = delta.GetProperty("thinking").GetString() ?? "";
-                        EnsureOpen(openBlocks, index, "thinking").Text += text;
-                        yield return new StreamChunk.ReasoningDelta(index, text);
-                        break;
-                    }
-                    case "input_json_delta":
-                    {
-                        var partial = delta.GetProperty("partial_json").GetString() ?? "";
-                        var open = EnsureOpen(openBlocks, index, "tool-call");
-                        open.Arguments += partial;
-                        yield return new StreamChunk.ToolCallDelta(
-                            index,
-                            ToolCallId.Create(open.Id ?? $"call-{index}"),
-                            open.Name,
-                            partial);
-                        break;
-                    }
-                }
-
-                break;
-            }
-            case "content_block_stop":
-            {
-                var index = frame.GetProperty("index").GetInt32();
-                if (!openBlocks.TryGetValue(index, out var open))
                     break;
-                openBlocks.Remove(index);
-                yield return new StreamChunk.BlockEnd(index, CloseBlock(open, index));
-                break;
-            }
+                }
+            case "content_block_delta":
+                {
+                    var index = frame.GetProperty("index").GetInt32();
+                    var delta = frame.GetProperty("delta");
+                    var deltaType = delta.GetProperty("type").GetString();
+                    switch (deltaType)
+                    {
+                        case "text_delta":
+                            {
+                                var text = delta.GetProperty("text").GetString() ?? "";
+                                EnsureOpen(openBlocks, index, "text").Text += text;
+                                yield return new StreamChunk.TextDelta(index, text);
+                                break;
+                            }
+                        case "thinking_delta":
+                            {
+                                var text = delta.GetProperty("thinking").GetString() ?? "";
+                                EnsureOpen(openBlocks, index, "thinking").Text += text;
+                                yield return new StreamChunk.ReasoningDelta(index, text);
+                                break;
+                            }
+                        case "input_json_delta":
+                            {
+                                var partial = delta.GetProperty("partial_json").GetString() ?? "";
+                                var open = EnsureOpen(openBlocks, index, "tool-call");
+                                open.Arguments += partial;
+                                yield return new StreamChunk.ToolCallDelta(
+                                    index,
+                                    ToolCallId.Create(open.Id ?? $"call-{index}"),
+                                    open.Name,
+                                    partial);
+                                break;
+                            }
+                    }
+
+                    break;
+                }
+            case "content_block_stop":
+                {
+                    var index = frame.GetProperty("index").GetInt32();
+                    if (!openBlocks.TryGetValue(index, out var open))
+                        break;
+                    openBlocks.Remove(index);
+                    yield return new StreamChunk.BlockEnd(index, CloseBlock(open, index));
+                    break;
+                }
             case "message_delta":
-            {
-                if (frame.TryGetProperty("usage", out var usage))
-                    yield return new StreamChunk.Usage(MapUsage(usage));
-                break;
-            }
+                {
+                    if (frame.TryGetProperty("usage", out var usage))
+                        yield return new StreamChunk.Usage(MapUsage(usage));
+                    break;
+                }
             case "message_stop":
                 break;
             case "error":
-            {
-                var error = frame.GetProperty("error");
-                var message = error.TryGetProperty("message", out var messageProperty)
-                    ? messageProperty.GetString() ?? "Anthropic stream error"
-                    : "Anthropic stream error";
-                throw new LlmException(new LlmFailure(message, LlmFailureCodes.Server));
-            }
+                {
+                    var error = frame.GetProperty("error");
+                    var message = error.TryGetProperty("message", out var messageProperty)
+                        ? messageProperty.GetString() ?? "Anthropic stream error"
+                        : "Anthropic stream error";
+                    throw new LlmException(new LlmFailure(message, LlmFailureCodes.Server));
+                }
         }
     }
 

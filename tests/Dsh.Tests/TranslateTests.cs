@@ -33,7 +33,7 @@ public class TranslateTests
             new { choices = new[] { new { delta = new { content = "Hel" } } } },
             new { choices = new[] { new { delta = new { content = "lo" } } } },
             new { choices = new[] { new { delta = new { content = "" }, finish_reason = "stop" } }, usage = new { prompt_tokens = 5, completion_tokens = 2 } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(6, chunks.Count);
         Assert.Equal(new StreamChunk.BlockStart(0, "text"), chunks[0]);
@@ -52,7 +52,7 @@ public class TranslateTests
             FirstChunk,
             new { choices = new[] { new { delta = new { content = "hi" } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } } },
-            SseParser.Done)))
+            SseParser.Done), TestContext.Current.CancellationToken))
             assembler.Push(chunk);
 
         Assert.Equal([new TextBlock("hi")], assembler.Message().Content);
@@ -66,7 +66,7 @@ public class TranslateTests
             FirstChunk,
             new { choices = new[] { new { delta = new { content = "plain" } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.DoesNotContain(chunks, chunk => chunk is StreamChunk.BlockStart { BlockType: "reasoning" });
     }
@@ -80,7 +80,7 @@ public class TranslateTests
             new { choices = new[] { new { delta = new { content = (string?)null, reasoning_content = "ing" } } } },
             new { choices = new[] { new { delta = new { content = "answer", reasoning_content = (string?)null } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(8, chunks.Count);
         Assert.Equal(new StreamChunk.BlockStart(0, "reasoning"), chunks[0]);
@@ -102,7 +102,7 @@ public class TranslateTests
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, @function = new { arguments = "{\"city\"" } } } } } } },
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, @function = new { arguments = ": \"Paris\"}" } } } } } } },
             new { choices = new[] { new { delta = new { content = "" }, finish_reason = "tool_calls" } }, usage = new { prompt_tokens = 28, completion_tokens = 6 } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(7, chunks.Count);
         Assert.Equal(new StreamChunk.BlockStart(0, "tool-call"), chunks[0]);
@@ -138,7 +138,7 @@ public class TranslateTests
             },
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 1, @function = new { arguments = "{}" } } } } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "tool_calls" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         var ends = chunks.OfType<StreamChunk.BlockEnd>().ToList();
         Assert.Equal(2, ends.Count);
@@ -154,7 +154,7 @@ public class TranslateTests
             new { choices = new[] { new { delta = new { content = "x" } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } }, usage = (object?)null },
             new { choices = Array.Empty<object>(), usage = new { prompt_tokens = 9, completion_tokens = 1 } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(new StreamChunk.Usage(new TokenUsage(9, 1, 10)), chunks[^2]);
         Assert.Equal(new StreamChunk.Finish(new FinishReason.Stop()), chunks[^1]);
@@ -167,7 +167,7 @@ public class TranslateTests
             FirstChunk,
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } }, usage = new { prompt_tokens = 1, completion_tokens = 1 } },
             new { choices = Array.Empty<object>(), usage = new { prompt_tokens = 2, completion_tokens = 2 } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         var usage = chunks.OfType<StreamChunk.Usage>().Single();
         Assert.Equal(new TokenUsage(2, 2, 4), usage.Value);
@@ -179,7 +179,7 @@ public class TranslateTests
         var chunks = await Collect(WireTranslate.Translate(Feed(
             FirstChunk,
             new { choices = new[] { new { delta = new { content = "x" } } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(new StreamChunk.Finish(new FinishReason.Stop()), chunks[^1]);
     }
@@ -187,7 +187,7 @@ public class TranslateTests
     [Fact]
     public async Task Finish_NoChoicesIsEmptyResponseError()
     {
-        var chunks = await Collect(WireTranslate.Translate(Feed(new { }, SseParser.Done)));
+        var chunks = await Collect(WireTranslate.Translate(Feed(new { }, SseParser.Done), TestContext.Current.CancellationToken));
 
         var finish = Assert.IsType<StreamChunk.Finish>(Assert.Single(chunks));
         var error = Assert.IsType<FinishReason.Error>(finish.Reason);
@@ -200,7 +200,7 @@ public class TranslateTests
         var chunks = await Collect(WireTranslate.Translate(Feed(
             FirstChunk,
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } }, usage = new { prompt_tokens = 7, completion_tokens = 0 } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(2, chunks.Count);
         Assert.Equal(new StreamChunk.Usage(new TokenUsage(7, 0, 7)), chunks[0]);
@@ -215,7 +215,7 @@ public class TranslateTests
             FirstChunk,
             new { choices = new[] { new { delta = new { content = (string?)null, reasoning_content = "mull" } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "stop" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(new StreamChunk.Finish(new FinishReason.Stop()), chunks[^1]);
     }
@@ -226,7 +226,7 @@ public class TranslateTests
         var chunks = await Collect(WireTranslate.Translate(Feed(
             FirstChunk,
             new { choices = new[] { new { delta = new { }, finish_reason = "length" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(new StreamChunk.Finish(new FinishReason.MaxTokens()), chunks[^1]);
     }
@@ -234,13 +234,13 @@ public class TranslateTests
     [Fact]
     public async Task Error_MalformedJsonThrows()
     {
-        await Assert.ThrowsAsync<LlmException>(async () => await Collect(WireTranslate.Translate(Feed("{bad json"))));
+        await Assert.ThrowsAsync<LlmException>(async () => await Collect(WireTranslate.Translate(Feed("{bad json"), TestContext.Current.CancellationToken)));
     }
 
     [Fact]
     public async Task Error_MissingDoneThrowsStreamClosed()
     {
-        var error = await Assert.ThrowsAsync<LlmException>(async () => await Collect(WireTranslate.Translate(Feed(FirstChunk))));
+        var error = await Assert.ThrowsAsync<LlmException>(async () => await Collect(WireTranslate.Translate(Feed(FirstChunk), TestContext.Current.CancellationToken)));
         Assert.Contains("without [DONE]", error.Message);
     }
 
@@ -325,7 +325,7 @@ public class TranslateTests
             FirstChunk,
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, @function = new { arguments = "{}" } } } } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "tool_calls" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         Assert.Equal(4, chunks.Count);
         Assert.Equal(new StreamChunk.ToolCallDelta(0, ToolCallId.Create(""), null, "{}"), chunks[1]);
@@ -341,7 +341,7 @@ public class TranslateTests
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, id = "", type = "function", @function = new { name = "", arguments = "{\"city\"" } } } } } } },
             new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, id = "", type = "function", @function = new { name = "", arguments = ": \"Paris\"}" } } } } } } },
             new { choices = new[] { new { delta = new { }, finish_reason = "tool_calls" } } },
-            SseParser.Done)));
+            SseParser.Done), TestContext.Current.CancellationToken));
 
         var end = chunks.OfType<StreamChunk.BlockEnd>().Single();
         Assert.Equal(new ToolCallBlock(ToolCallId.Create("call_00_x"), "get_weather", "{\"city\": \"Paris\"}"), end.Block);

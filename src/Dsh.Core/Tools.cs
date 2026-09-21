@@ -215,7 +215,7 @@ public sealed class ToolRuntime : Service
         {
             return new ToolProviderResult(
                 view.Visible.Values.Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters)).ToList(),
-                [..view.KnownNames]);
+                [.. view.KnownNames]);
         }
         throw new NotSupportedException($"tool presentation mode \"{mode}\" requires the PTC code runtime, which is not ported yet");
     }
@@ -327,15 +327,15 @@ public sealed class ToolRuntime : Service
         switch (prepared)
         {
             case ScheduledToolPreparation.Dispatch dispatch:
-            {
-                var dispatched = await DispatchScheduledExecution(dispatch.Exec);
-                return dispatched switch
                 {
-                    ScheduledToolDispatch.PostResult postResult => await FinalizeScheduledExecution(dispatch.Exec, postResult.Result),
-                    ScheduledToolDispatch.FinalResult finalResult => FinishScheduledExecution(dispatch.Exec, finalResult.Result),
-                    _ => throw new InvalidOperationException("unknown scheduled dispatch"),
-                };
-            }
+                    var dispatched = await DispatchScheduledExecution(dispatch.Exec);
+                    return dispatched switch
+                    {
+                        ScheduledToolDispatch.PostResult postResult => await FinalizeScheduledExecution(dispatch.Exec, postResult.Result),
+                        ScheduledToolDispatch.FinalResult finalResult => FinishScheduledExecution(dispatch.Exec, finalResult.Result),
+                        _ => throw new InvalidOperationException("unknown scheduled dispatch"),
+                    };
+                }
             case ScheduledToolPreparation.PostResult postResult:
                 return await FinalizeScheduledExecution(postResult.Exec, postResult.Result);
             case ScheduledToolPreparation.FinalResult finalResult:
@@ -465,7 +465,7 @@ public sealed class ToolRuntime : Service
             var deferred = exec.DeferredContexts;
             ToolExecutionResult withDeferred = deferred.Count == 0
                 ? normalized
-                : normalized with { AdditionalContexts = [..deferred, ..normalized.AdditionalContexts ?? []] };
+                : normalized with { AdditionalContexts = [.. deferred, .. normalized.AdditionalContexts ?? []] };
             return new ScheduledToolDispatch.PostResult(
                 exec.Signal.IsCancellationRequested && !withDeferred.IsError
                     ? CancellationResult(exec, withDeferred)
@@ -521,36 +521,36 @@ public sealed class ToolRuntime : Service
         switch (decision)
         {
             case PostToolDecision.Block block:
-            {
-                var message = FailureMessageFromContent(block.Feedback);
-                return new ToolExecutionResult.Failure
                 {
-                    IsError = true,
-                    Content = block.Feedback,
-                    Error = new ToolFailure(message),
-                    AdditionalContexts = block.AdditionalContexts,
-                };
-            }
-            case PostToolDecision.Accept accept:
-            {
-                var additionalContexts = accept.AdditionalContexts is { } contexts
-                    ? [..result.AdditionalContexts ?? [], ..contexts]
-                    : result.AdditionalContexts;
-                if (accept.Value is { } value)
-                {
-                    if (result.IsError)
-                        throw new JsonException("tools/post-execute cannot replace the value of a failed result");
-                    var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null)
-                        ?? throw new ToolNotFoundException(exec.Name);
-                    var replaced = CreateSuccessResult(exec, tool, value);
-                    return replaced with { AdditionalContexts = additionalContexts };
+                    var message = FailureMessageFromContent(block.Feedback);
+                    return new ToolExecutionResult.Failure
+                    {
+                        IsError = true,
+                        Content = block.Feedback,
+                        Error = new ToolFailure(message),
+                        AdditionalContexts = block.AdditionalContexts,
+                    };
                 }
-                return result with
+            case PostToolDecision.Accept accept:
                 {
-                    Content = accept.Content ?? result.Content,
-                    AdditionalContexts = additionalContexts,
-                };
-            }
+                    var additionalContexts = accept.AdditionalContexts is { } contexts
+                        ? [.. result.AdditionalContexts ?? [], .. contexts]
+                        : result.AdditionalContexts;
+                    if (accept.Value is { } value)
+                    {
+                        if (result.IsError)
+                            throw new JsonException("tools/post-execute cannot replace the value of a failed result");
+                        var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null)
+                            ?? throw new ToolNotFoundException(exec.Name);
+                        var replaced = CreateSuccessResult(exec, tool, value);
+                        return replaced with { AdditionalContexts = additionalContexts };
+                    }
+                    return result with
+                    {
+                        Content = accept.Content ?? result.Content,
+                        AdditionalContexts = additionalContexts,
+                    };
+                }
             default:
                 throw new InvalidOperationException("unknown post-execute decision");
         }

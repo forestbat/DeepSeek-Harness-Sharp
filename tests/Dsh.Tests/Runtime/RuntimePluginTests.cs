@@ -30,7 +30,7 @@ public class RuntimePluginTests
         var ctx = new Context();
         var definition = PluginDefinition.From((_, _) => null, "needy", ["foo"]);
         var activation = ctx.Plugin(definition);
-        await Task.Delay(20);
+        await Task.Delay(20, TestContext.Current.CancellationToken);
         Assert.Equal(ActivationState.Pending, activation.State);
     }
 
@@ -45,7 +45,7 @@ public class RuntimePluginTests
             return null;
         }, "needy", ["foo"]);
         var activation = ctx.Plugin(definition);
-        await Task.Delay(20);
+        await Task.Delay(20, TestContext.Current.CancellationToken);
         Assert.Equal(ActivationState.Pending, activation.State);
         ctx.Provide("foo", 42);
         await activation.WaitAsync();

@@ -23,7 +23,7 @@ public sealed class ProviderCommandTests
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 
-            var result = await commands.Execute(agent, "/provider add custom --base-url http://127.0.0.1:11434/v1 --api-key sk-test --model-ids custom-model");
+            var result = await commands.Execute(agent, "/provider add custom --base-url http://127.0.0.1:11434/v1 --api-key sk-test --model-ids custom-model", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
             Assert.IsType<CommandResult.Success>(result.Result);

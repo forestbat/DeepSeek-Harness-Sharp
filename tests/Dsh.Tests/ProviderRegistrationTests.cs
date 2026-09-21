@@ -127,7 +127,7 @@ public sealed class ProviderRegistrationTests
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Empty(llm.ListProviders());
         Assert.Equal("", app.Provider);
-        var failure = await Assert.ThrowsAsync<LlmException>(() => llm.PrepareCall(new LlmCallConfig("", "")));
+        var failure = await Assert.ThrowsAsync<LlmException>(() => llm.PrepareCall(new LlmCallConfig("", ""), TestContext.Current.CancellationToken));
         Assert.Equal(LlmFailureCodes.NoAdapter, failure.Failure.Code);
         Assert.Contains("no LLM provider is configured", failure.Failure.Message);
     }

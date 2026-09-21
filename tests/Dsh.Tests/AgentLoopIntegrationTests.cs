@@ -131,7 +131,7 @@ public class AgentLoopIntegrationTests
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-test-1"),
             null,
-            new AgentOptions("test-provider", "test-model")));
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
         var agent = (AgentLoopAgent)handle.Agent;
 
         agent.Followup(MessageFactory.CreateUserText("hi"));
@@ -219,7 +219,7 @@ public class AgentLoopIntegrationTests
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-test-2"),
             null,
-            new AgentOptions("test-provider", "test-model")));
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
         var agent = (AgentLoopAgent)handle.Agent;
 
         agent.Followup(MessageFactory.CreateUserText("echo please"));
@@ -245,7 +245,7 @@ public class AgentLoopIntegrationTests
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-in-history"),
             null,
-            new AgentOptions("test-provider", "test-model")));
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
         var agent = (AgentLoopAgent)handle.Agent;
 
         agent.Followup(MessageFactory.CreateUserText("hi"));
@@ -276,7 +276,7 @@ public class AgentLoopIntegrationTests
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-replace"),
             null,
-            new AgentOptions("test-provider", "test-model")));
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
         var agent = (AgentLoopAgent)handle.Agent;
 
         agent.Followup(MessageFactory.CreateUserText("hi"));

@@ -71,7 +71,7 @@ public abstract record ResolvedRetryPolicy
         if (retryableCodes.Distinct().Count() != retryableCodes.Count)
             throw new ArgumentException($"{path}.retryableCodes must not contain duplicates");
         var backoff = ResolveBackoff(config.Backoff, $"{path}.backoff");
-        return new Normal(maxRetries, [..retryableCodes])
+        return new Normal(maxRetries, [.. retryableCodes])
         {
             InitialDelayMs = backoff.InitialDelayMs,
             MaxDelayMs = backoff.MaxDelayMs,

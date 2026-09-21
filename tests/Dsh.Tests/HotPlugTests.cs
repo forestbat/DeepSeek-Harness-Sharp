@@ -111,7 +111,7 @@ public sealed class HotPlugTests
             for (var attempt = 0; attempt < 30; attempt++)
             {
                 Assert.DoesNotContain("leaked", manager.Describe("test/local"));
-                await Task.Delay(50);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
         }
         finally
@@ -144,7 +144,7 @@ public sealed class HotPlugTests
 
                 safety:
                   autoApprove: false
-                """);
+                """, TestContext.Current.CancellationToken);
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;

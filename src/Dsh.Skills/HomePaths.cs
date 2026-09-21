@@ -37,7 +37,7 @@ public static class HomePaths
                 if (missing.Count > 0 && !Directory.Exists(resolved))
                     throw new IOException($"watch path ancestor \"{resolved}\" is not a directory");
                 missing.Reverse();
-                return missing.Count == 0 ? resolved : Path.Combine([resolved, ..missing]);
+                return missing.Count == 0 ? resolved : Path.Combine([resolved, .. missing]);
             }
             var parent = Path.GetDirectoryName(current);
             if (parent is null || parent == current)

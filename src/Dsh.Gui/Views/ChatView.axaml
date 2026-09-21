@@ -195,7 +195,7 @@
 
         <TextBox Grid.Row="1" Name="InputBox" Classes="Bare" AcceptsReturn="True" TextWrapping="Wrap"
                  MinHeight="40" MaxHeight="180"
-                 Watermark="{Binding Composer.Placeholder}"
+                 PlaceholderText="{Binding Composer.Placeholder}"
                  Text="{Binding Composer.Input}" />
 
         <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">

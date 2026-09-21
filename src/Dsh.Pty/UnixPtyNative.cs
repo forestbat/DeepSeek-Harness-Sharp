@@ -30,8 +30,8 @@ internal static class UnixPtyNative
             allocated.AddRange(envStrings);
 
             var initError = posix_spawn_file_actions_init(out var actions);
-                if (initError != 0)
-                    throw new Win32Exception(initError, "posix_spawn_file_actions_init failed");
+            if (initError != 0)
+                throw new Win32Exception(initError, "posix_spawn_file_actions_init failed");
             try
             {
                 ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, slave, 0), "posix_spawn_file_actions_adddup2(stdin)");

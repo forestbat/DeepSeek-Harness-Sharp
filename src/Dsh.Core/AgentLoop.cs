@@ -71,7 +71,7 @@ public sealed class AgentLoop : Service, IAgentFactory
         using var handle = persistence.Open(options.SessionId, SessionAccess.Read);
         var persisted = handle.Read();
         var closers = SessionRepair.InterruptedTurnClosers(persisted);
-        var events = closers.Count > 0 ? [..persisted, ..closers] : persisted;
+        var events = closers.Count > 0 ? [.. persisted, .. closers] : persisted;
         var session = Session.FromRestore(options.SessionId, events, handle.Header, handle.InheritedEventCount);
         var sessions = Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         // 与 Create 一致: 会话进入 store 后由 agent 生命周期持有, 不能在这里就解绑, 否则事件不再转发/落盘。

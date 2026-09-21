@@ -78,7 +78,7 @@ public sealed class MemoryCaptureTests
         var session = fixture.NewSession("capture-off");
 
         fixture.AppendTurn(session);
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, fixture.Adapter.DigestCalls);
         Assert.False(File.Exists(fixture.MemoryPath));
@@ -95,7 +95,7 @@ public sealed class MemoryCaptureTests
         fixture.AppendTurn(session, turn: 2);
         await WaitFor(() => File.Exists(fixture.MemoryPath)
             && File.ReadAllText(fixture.MemoryPath).Contains("repo.layout"));
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, fixture.Adapter.DigestCalls);
     }

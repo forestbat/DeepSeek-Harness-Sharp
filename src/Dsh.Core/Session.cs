@@ -92,7 +92,7 @@ public sealed class Session
     {
         var to = toSeqExclusive ?? Seq;
         if (fromSeq == 0 && to == _log.Count)
-            return _eventsSnapshot ??= [.._log];
+            return _eventsSnapshot ??= [.. _log];
         return _log.GetRange((int)fromSeq, (int)(to - fromSeq));
     }
 
@@ -198,6 +198,6 @@ public sealed class Session
                 _derived.Add(message);
         }
         _derivedNodes = nodes.Count;
-        return [.._derived];
+        return [.. _derived];
     }
 }

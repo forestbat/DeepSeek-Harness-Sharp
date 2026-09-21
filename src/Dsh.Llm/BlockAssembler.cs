@@ -30,40 +30,40 @@ public sealed class BlockAssembler
                 }
                 return;
             case StreamChunk.TextDelta textDelta:
-            {
-                var partial = Ensure(textDelta.Index, "text");
-                if (partial.Block is not null)
+                {
+                    var partial = Ensure(textDelta.Index, "text");
+                    if (partial.Block is not null)
+                        return;
+                    partial.Text += textDelta.Text;
                     return;
-                partial.Text += textDelta.Text;
-                return;
-            }
+                }
             case StreamChunk.ReasoningDelta reasoningDelta:
-            {
-                var partial = Ensure(reasoningDelta.Index, "reasoning");
-                if (partial.Block is not null)
+                {
+                    var partial = Ensure(reasoningDelta.Index, "reasoning");
+                    if (partial.Block is not null)
+                        return;
+                    partial.Text += reasoningDelta.Text;
                     return;
-                partial.Text += reasoningDelta.Text;
-                return;
-            }
+                }
             case StreamChunk.ToolCallDelta toolCallDelta:
-            {
-                var partial = Ensure(toolCallDelta.Index, "tool-call");
-                if (partial.Block is not null)
+                {
+                    var partial = Ensure(toolCallDelta.Index, "tool-call");
+                    if (partial.Block is not null)
+                        return;
+                    partial.ToolCallId = toolCallDelta.Id;
+                    if (toolCallDelta.Name is not null)
+                        partial.ToolCallName = toolCallDelta.Name;
+                    partial.ToolCallArguments += toolCallDelta.ArgumentsDelta;
                     return;
-                partial.ToolCallId = toolCallDelta.Id;
-                if (toolCallDelta.Name is not null)
-                    partial.ToolCallName = toolCallDelta.Name;
-                partial.ToolCallArguments += toolCallDelta.ArgumentsDelta;
-                return;
-            }
+                }
             case StreamChunk.BlockEnd blockEnd:
-            {
-                var partial = Ensure(blockEnd.Index, blockEnd.Block.Type);
-                if (partial.Block is not null)
+                {
+                    var partial = Ensure(blockEnd.Index, blockEnd.Block.Type);
+                    if (partial.Block is not null)
+                        return;
+                    partial.Block = blockEnd.Block;
                     return;
-                partial.Block = blockEnd.Block;
-                return;
-            }
+                }
             case StreamChunk.Usage usage:
                 _usage = usage.Value;
                 return;

@@ -70,7 +70,7 @@ public sealed class HarnessClient : IAsyncDisposable
     {
         NotificationSubscription[] snapshot;
         lock (_subscriptions)
-            snapshot = [.._subscriptions];
+            snapshot = [.. _subscriptions];
         foreach (var subscription in snapshot)
             subscription.Push(method, parameters);
     }

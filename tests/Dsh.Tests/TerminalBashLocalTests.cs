@@ -78,7 +78,7 @@ public class TerminalBashLocalTests : IDisposable
         });
         var agent = new TerminalFakeAgent(_ctx, _agents, _tempDir);
         agent.Register();
-        var created = await _terminals.Spawn(agent, new TerminalSpawnRequest("shell", "main", _tempDir));
+        var created = await _terminals.Spawn(agent, new TerminalSpawnRequest("shell", "main", _tempDir), TestContext.Current.CancellationToken);
         Assert.Equal("shell", created.Type);
 
         var first = _terminals.StartSend(agent, created.SessionId, new TerminalSendRequest("export KEEP=ok; cd /", true));

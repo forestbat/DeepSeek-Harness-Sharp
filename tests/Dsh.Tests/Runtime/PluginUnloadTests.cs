@@ -19,7 +19,7 @@ public class PluginUnloadTests
 
     [Fact]
     public async Task DynamicPlugin_UnloadRemovesProvidedServices()
-   {
+    {
         var ctx = new Context();
         var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.Checkpoints.dll");
         var (activation, provided) = await LoadAndUnloadTrackedAsync(ctx, pluginPath);

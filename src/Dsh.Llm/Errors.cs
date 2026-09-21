@@ -97,24 +97,24 @@ public static partial class LlmFailureClassifiers
                 case null:
                     return "<null>";
                 case Exception exception:
-                {
-                    if (!path.Add(exception))
-                        return "<circular cause>";
-                    try
                     {
-                        var message = exception.Message == "" ? exception.GetType().Name : exception.Message;
-                        var members = exception is AggregateErrorException { InnerExceptions.Count: > 0 } aggregate
-                            ? $" [{string.Join("; ", aggregate.InnerExceptions.Select(Render))}]"
-                            : "";
-                        var causeText = exception.InnerException is { } inner ? Render(inner) : "";
-                        var cause = causeText == "" || causeText == message ? "" : $": {causeText}";
-                        return $"{message}{members}{cause}";
+                        if (!path.Add(exception))
+                            return "<circular cause>";
+                        try
+                        {
+                            var message = exception.Message == "" ? exception.GetType().Name : exception.Message;
+                            var members = exception is AggregateErrorException { InnerExceptions.Count: > 0 } aggregate
+                                ? $" [{string.Join("; ", aggregate.InnerExceptions.Select(Render))}]"
+                                : "";
+                            var causeText = exception.InnerException is { } inner ? Render(inner) : "";
+                            var cause = causeText == "" || causeText == message ? "" : $": {causeText}";
+                            return $"{message}{members}{cause}";
+                        }
+                        finally
+                        {
+                            path.Remove(exception);
+                        }
                     }
-                    finally
-                    {
-                        path.Remove(exception);
-                    }
-                }
                 default:
                     return current.ToString() ?? "<unrenderable value>";
             }

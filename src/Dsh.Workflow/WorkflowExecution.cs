@@ -81,7 +81,7 @@ public sealed class WorkflowExecution
                 return;
             _cancelReason = reason;
             error = _cancelError = new WorkflowError($"workflow run cancelled: {reason}", WorkflowErrorCodes.Cancelled);
-            waiters = [.._slotWaiters];
+            waiters = [.. _slotWaiters];
             _slotWaiters.Clear();
         }
 

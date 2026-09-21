@@ -33,7 +33,7 @@ public class ConfigBootTests
                   "@deepseek-ai/dsh-fs-local": true
                   "@deepseek-ai/dsh-tool-str-replace-editor":
                     maxOutputChars: 16000
-                """);
+                """, TestContext.Current.CancellationToken);
 
             app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
 
@@ -78,7 +78,7 @@ public class ConfigBootTests
             await File.WriteAllTextAsync(Path.Combine(home.Root, "settings.yaml"), """
                 plugins:
                   "@deepseek-ai/dsh-tool-todo": false
-                """);
+                """, TestContext.Current.CancellationToken);
 
             app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
 

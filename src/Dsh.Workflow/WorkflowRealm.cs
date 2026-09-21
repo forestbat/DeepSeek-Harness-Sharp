@@ -65,12 +65,12 @@ public static class WorkflowRealm
             case byte or sbyte or short or ushort or int or uint or long or ulong:
                 return Convert.ToDouble(value);
             case float or double or decimal:
-            {
-                var number = Convert.ToDouble(value);
-                if (double.IsNaN(number) || double.IsInfinity(number))
-                    throw new MaterializeError(path, "non-finite numbers are not JSON data");
-                return number;
-            }
+                {
+                    var number = Convert.ToDouble(value);
+                    if (double.IsNaN(number) || double.IsInfinity(number))
+                        throw new MaterializeError(path, "non-finite numbers are not JSON data");
+                    return number;
+                }
             case JsonElement element:
                 return JsonElementToObject(element, path);
             case JsonNode node:
@@ -101,19 +101,19 @@ public static class WorkflowRealm
                     return (double)integer;
                 return element.GetDouble();
             case JsonValueKind.Array:
-            {
-                var list = new List<object?>();
-                foreach (var item in element.EnumerateArray())
-                    list.Add(JsonElementToObject(item, $"{path}[{list.Count}]"));
-                return list;
-            }
+                {
+                    var list = new List<object?>();
+                    foreach (var item in element.EnumerateArray())
+                        list.Add(JsonElementToObject(item, $"{path}[{list.Count}]"));
+                    return list;
+                }
             case JsonValueKind.Object:
-            {
-                var dict = new Dictionary<string, object?>();
-                foreach (var property in element.EnumerateObject())
-                    dict[property.Name] = JsonElementToObject(property.Value, PropertyPath(path, property.Name));
-                return dict;
-            }
+                {
+                    var dict = new Dictionary<string, object?>();
+                    foreach (var property in element.EnumerateObject())
+                        dict[property.Name] = JsonElementToObject(property.Value, PropertyPath(path, property.Name));
+                    return dict;
+                }
             default:
                 throw new MaterializeError(path, "unsupported JSON value");
         }

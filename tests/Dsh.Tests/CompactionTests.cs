@@ -280,7 +280,7 @@ public class CompactionTests
         await agent.WhenIdle();
         Assert.Equal(0, harness.Adapter.CompactionCalls);
 
-        var execution = await harness.Commands.Execute(agent, "/compact");
+        var execution = await harness.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
 
         Assert.NotNull(execution);
         var success = Assert.IsType<CommandResult.Success>(execution.Result);
@@ -351,11 +351,11 @@ public class CompactionTests
         using var harness = new Harness(contextWindow: 1_000_000, turnText: "ok");
         var agent = await harness.CreateAgent("compaction-command-edge");
 
-        var usage = await harness.Commands.Execute(agent, "/compact now");
+        var usage = await harness.Commands.Execute(agent, "/compact now", TestContext.Current.CancellationToken);
         Assert.NotNull(usage);
         Assert.Equal("Usage: /compact (no arguments)", Assert.IsType<CommandResult.Error>(usage.Result).Text);
 
-        var empty = await harness.Commands.Execute(agent, "/compact");
+        var empty = await harness.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
         Assert.NotNull(empty);
         Assert.Equal("No compactable history yet.", Assert.IsType<CommandResult.Success>(empty.Result).Text);
         Assert.Equal(0, harness.Adapter.CompactionCalls);
@@ -372,7 +372,7 @@ public class CompactionTests
         await harness.Adapter.TurnStarted.Task;
         try
         {
-            var execution = await harness.Commands.Execute(agent, "/compact");
+            var execution = await harness.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
             Assert.NotNull(execution);
             Assert.Equal(
                 "Compaction is unavailable because this process has an active compaction, or the agent is not idle.",

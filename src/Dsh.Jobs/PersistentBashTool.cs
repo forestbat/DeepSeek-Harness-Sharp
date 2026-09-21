@@ -146,7 +146,7 @@ public static class PersistentBashTool
             List<PersistentShell> shells;
             lock (_gate)
             {
-                shells = [.._live.Values];
+                shells = [.. _live.Values];
                 _live.Clear();
             }
             foreach (var shell in shells)

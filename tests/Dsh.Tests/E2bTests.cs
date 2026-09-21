@@ -22,10 +22,10 @@ public sealed class E2bTests
         using var http = new HttpClient(handler);
         var client = new E2bClient(http, "https://e2b.test");
 
-        var sandboxId = await client.CreateSandboxAsync("code-runner");
+        var sandboxId = await client.CreateSandboxAsync("code-runner", TestContext.Current.CancellationToken);
         Assert.Equal("sb_test", sandboxId);
 
-        var result = await client.ExecuteCommandAsync(sandboxId, "echo hello");
+        var result = await client.ExecuteCommandAsync(sandboxId, "echo hello", TestContext.Current.CancellationToken);
         Assert.Equal("hello", result.Stdout);
         Assert.Equal(0, result.ExitCode);
     }

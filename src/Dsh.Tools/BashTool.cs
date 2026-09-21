@@ -170,8 +170,8 @@ public static class BashTool
 
     private static IReadOnlyList<ContentBlock> Render(JsonElement value)
     {
-            var run = DshJson.Deserialize<BashRunValue>(value)
-            ?? throw new JsonException("bash result value is malformed");
+        var run = DshJson.Deserialize<BashRunValue>(value)
+        ?? throw new JsonException("bash result value is malformed");
         return [new TextBlock(RenderResult(run))];
     }
 

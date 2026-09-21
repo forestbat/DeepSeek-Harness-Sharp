@@ -84,7 +84,7 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <TextBox Watermark="也可以直接输入你的答案"
+                <TextBox PlaceholderText="也可以直接输入你的答案"
                          Text="{Binding CustomText, Mode=TwoWay}"
                          IsVisible="{Binding AllowCustom}" />
                 <TextBlock Classes="Tertiary" Text="可多选" IsVisible="{Binding MultiSelect}" />

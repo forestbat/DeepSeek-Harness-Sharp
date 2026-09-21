@@ -139,7 +139,7 @@ public class SessionPersistenceTests : IDisposable
         writer.Close();
 
         var reopened = persistence.Open(session.Header.Id, SessionAccess.Read);
-        AssertEventsEqual([..events, extra], reopened.Read().ToArray());
+        AssertEventsEqual([.. events, extra], reopened.Read().ToArray());
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class SessionPersistenceTests : IDisposable
         writer.Close();
 
         var reopened = persistence.Open(session.Header.Id, SessionAccess.Read);
-        AssertEventsEqual([..events, extra], reopened.Read().ToArray());
+        AssertEventsEqual([.. events, extra], reopened.Read().ToArray());
     }
 
     [Fact]

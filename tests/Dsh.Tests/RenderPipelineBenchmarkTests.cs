@@ -155,7 +155,7 @@ public class RenderPipelineBenchmarkTests
         }
         return new PipelineMeasurement(build, upload, raster, gpuNs, vertices, primitives, vsInvocations, primitivesGenerated);
     }
-    
+
     [Fact]
     public void Terminal_Parse_Benchmark()
     {

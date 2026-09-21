@@ -51,7 +51,7 @@ public static class GoalFold
                 DecodeRef(value.GetProperty("cleared")),
                 NonNegativeInteger(value.GetProperty("clearedAt"), "clearedAt"));
         }
-        var operation = operationElement.ValueKind == JsonValueKind.String ? operationElement.GetString() : null;var snapshotOperation = operation switch
+        var operation = operationElement.ValueKind == JsonValueKind.String ? operationElement.GetString() : null; var snapshotOperation = operation switch
         {
             "create" => GoalOperation.Create,
             "edit" => GoalOperation.Edit,

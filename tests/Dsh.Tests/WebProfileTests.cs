@@ -11,10 +11,10 @@ public sealed class WebProfileTests
     {
         await using var server = new WebProfileServer();
 
-        var root = await HttpClient.GetStringAsync($"http://127.0.0.1:{server.Port}/");
+        var root = await HttpClient.GetStringAsync($"http://127.0.0.1:{server.Port}/", TestContext.Current.CancellationToken);
         Assert.Contains("DeepSeek Harness", root);
 
-        var health = await HttpClient.GetStringAsync($"http://127.0.0.1:{server.Port}/api/health");
+        var health = await HttpClient.GetStringAsync($"http://127.0.0.1:{server.Port}/api/health", TestContext.Current.CancellationToken);
         Assert.Contains("\"ok\":true", health);
 
         await server.StopAsync();

@@ -2,6 +2,7 @@ using Dsh.Runtime;
 using Dsh.AgentInstructions;
 using Dsh.Boot;
 using Dsh.Core;
+using System.Runtime.CompilerServices;
 
 namespace Dsh.Tests;
 
@@ -100,7 +101,8 @@ public sealed class AgentInstructionsTests
  */
 public sealed class NoInheritedAgentsMdFactAttribute : FactAttribute
 {
-    public NoInheritedAgentsMdFactAttribute()
+    public NoInheritedAgentsMdFactAttribute([CallerFilePath] string? sourceFilePath = null,
+    [CallerLineNumber] int sourceLineNumber = -1) : base(sourceFilePath, sourceLineNumber)
     {
         if (InheritedAgentsMdExists())
             Skip = "an AGENTS.md already exists between the temp directory and the user profile";

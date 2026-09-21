@@ -71,12 +71,12 @@ public sealed class SdkTests
                 received.TrySetResult(parameters!.Value.GetProperty("sessionId").GetString()!);
         };
 
-        var result = await clientTransport.RequestAsync("initialize", new { cwd = "C:\\work", provider = "p", model = "m" });
+        var result = await clientTransport.RequestAsync("initialize", new { cwd = "C:\\work", provider = "p", model = "m" }, TestContext.Current.CancellationToken);
         using var resultDocument = JsonDocument.Parse(((JsonElement)result!).GetRawText());
         Assert.True(resultDocument.RootElement.GetProperty("ok").GetBoolean());
 
         serverTransport.Notify("session.event", new { sessionId = "s1" });
-        Assert.Equal("s1", await received.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("s1", await received.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
 
         var requestLines = pair.ClientWriter.WrittenLines;
         Assert.Contains(requestLines, line => line.Contains("initialize"));
@@ -163,7 +163,7 @@ public sealed class SdkTests
                 "deepseek-v4-flash"));
             await client.PromptAsync("session-event-test", [new TextBlock("hello")]);
 
-            var notification = await subscription.NextAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            var notification = await subscription.NextAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
             Assert.Equal(SdkMethods.SessionEvent, notification.Method);
             var parameters = notification.Parameters!.Value;
             Assert.Equal("session-event-test", parameters.GetProperty("sessionId").GetString());
@@ -267,7 +267,7 @@ public sealed class SdkTests
             get
             {
                 lock (_sync)
-                    return [.._writtenLines];
+                    return [.. _writtenLines];
             }
         }
 

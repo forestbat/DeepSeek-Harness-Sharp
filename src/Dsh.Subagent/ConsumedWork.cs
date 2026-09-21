@@ -30,25 +30,25 @@ public static class ConsumedWorkFold
                     stepped.Add(stepStart.Turn);
                     break;
                 case InboxSplicePayload splice:
-                {
-                    if (splice.RemovedCount is null)
-                        break;
-                    if (splice.Outcome == "canceled")
-                        droppedUnrun |= splice.Inserted.Count == 0;
-                    else if (open is { } openTurn)
-                        claimed.Add(openTurn);
-                    break;
-                }
-                case TurnEndPayload turnEnd:
-                {
-                    open = null;
-                    if (stepped.Remove(turnEnd.Turn) || claimed.Remove(turnEnd.Turn) && AccountsForClaim(turnEnd.Reason))
                     {
-                        end = sessionEvent;
-                        droppedUnrun = false;
+                        if (splice.RemovedCount is null)
+                            break;
+                        if (splice.Outcome == "canceled")
+                            droppedUnrun |= splice.Inserted.Count == 0;
+                        else if (open is { } openTurn)
+                            claimed.Add(openTurn);
+                        break;
                     }
-                    break;
-                }
+                case TurnEndPayload turnEnd:
+                    {
+                        open = null;
+                        if (stepped.Remove(turnEnd.Turn) || claimed.Remove(turnEnd.Turn) && AccountsForClaim(turnEnd.Reason))
+                        {
+                            end = sessionEvent;
+                            droppedUnrun = false;
+                        }
+                        break;
+                    }
             }
         }
         return new ConsumedWork(end, droppedUnrun);

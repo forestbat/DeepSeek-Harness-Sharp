@@ -1,0 +1,57 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path="compose.yaml" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Dsh.Acp/Dsh.Acp.csproj" />
+    <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
+    <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
+    <Project Path="src/Dsh.Checkpoints/Dsh.Checkpoints.csproj" />
+    <Project Path="src/Dsh.Compaction/Dsh.Compaction.csproj" />
+    <Project Path="src/Dsh.Core/Dsh.Core.csproj" />
+    <Project Path="src/Dsh.E2b/Dsh.E2b.csproj" />
+    <Project Path="src/Dsh.Goal/Dsh.Goal.csproj" />
+    <Project Path="src/Dsh.Gui/Dsh.Gui.csproj" />
+    <Project Path="src/Dsh.IdeHistory/Dsh.IdeHistory.csproj" />
+    <Project Path="src/Dsh.Interaction.AskUser/Dsh.Interaction.AskUser.csproj" />
+    <Project Path="src/Dsh.Interaction/Dsh.Interaction.csproj" />
+    <Project Path="src/Dsh.Jobs/Dsh.Jobs.csproj" />
+    <Project Path="src/Dsh.Llm.Anthropic/Dsh.Llm.Anthropic.csproj" />
+    <Project Path="src/Dsh.Llm.DeepSeek/Dsh.Llm.DeepSeek.csproj" />
+    <Project Path="src/Dsh.Llm.OpenAi/Dsh.Llm.OpenAi.csproj" />
+    <Project Path="src/Dsh.Llm/Dsh.Llm.csproj" />
+    <Project Path="src/Dsh.Lsp/Dsh.Lsp.csproj" />
+    <Project Path="src/Dsh.Mcp/Dsh.Mcp.csproj" />
+    <Project Path="src/Dsh.Memory/Dsh.Memory.csproj" />
+    <Project Path="src/Dsh.Persistence/Dsh.Persistence.csproj" />
+    <Project Path="src/Dsh.PlanMode/Dsh.PlanMode.csproj" />
+    <Project Path="src/Dsh.Plugins.Abstractions/Dsh.Plugins.Abstractions.csproj" />
+    <Project Path="src/Dsh.Plugins.Generator/Dsh.Plugins.Generator.csproj" />
+    <Project Path="src/Dsh.Plugins.Host/Dsh.Plugins.Host.csproj" />
+    <Project Path="src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj" />
+    <Project Path="src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj" />
+    <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
+    <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
+    <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />
+    <Project Path="src/Dsh.SessionQuery/Dsh.SessionQuery.csproj" />
+    <Project Path="src/Dsh.Skills/Dsh.Skills.csproj" />
+    <Project Path="src/Dsh.Subagent/Dsh.Subagent.csproj" />
+    <Project Path="src/Dsh.Telemetry/Dsh.Telemetry.csproj" />
+    <Project Path="src/Dsh.Terminal/Dsh.Terminal.csproj" />
+    <Project Path="src/Dsh.Tools/Dsh.Tools.csproj" />
+    <Project Path="src/Dsh.Tui/Dsh.Tui.csproj" />
+    <Project Path="src/Dsh.Web/Dsh.Web.csproj" />
+    <Project Path="src/Dsh.Workflow/Dsh.Workflow.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dsh.IocAotSmoke/Dsh.IocAotSmoke.csproj" />
+    <Project Path="tests/Dsh.Tests/Dsh.Tests.csproj" />
+  </Folder>
+  <Project Path="DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj" />
+  <Project Path="DshGuiHost/DshGuiHost.csproj" />
+</Solution>

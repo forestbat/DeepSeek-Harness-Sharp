@@ -173,8 +173,8 @@ public static class GlobTool
                     """),
                 (_, value) =>
                 {
-        var result = DshJson.Deserialize<GlobResultValue>(value)
-                        ?? throw new JsonException("glob result value is malformed");
+                    var result = DshJson.Deserialize<GlobResultValue>(value)
+                                    ?? throw new JsonException("glob result value is malformed");
                     return [new TextBlock(RenderGlobPaths(result.Paths, resolved))];
                 }),
             Execute = (args, exec) => Execute(args, exec),
@@ -290,8 +290,8 @@ public static class GrepTool
                     """),
                 (_, value) =>
                 {
-            var result = DshJson.Deserialize<GrepResultValue>(value)
-                        ?? throw new JsonException("grep result value is malformed");
+                    var result = DshJson.Deserialize<GrepResultValue>(value)
+                                ?? throw new JsonException("grep result value is malformed");
                     return [new TextBlock(FormatRetainedGrep(RetainGrepMatches(result.Matches, resolved.MaxMatches, resolved.MaxLineBytes)))];
                 }),
             Execute = (args, exec) => Execute(args, exec),

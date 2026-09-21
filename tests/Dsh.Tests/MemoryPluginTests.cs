@@ -39,11 +39,11 @@ public sealed class MemoryPluginTests
         try
         {
             var store = new FileMemoryStore(path);
-            Assert.Null(await store.GetAsync());
+            Assert.Null(await store.GetAsync(TestContext.Current.CancellationToken));
 
-            await store.SetAsync("# Memory\n- fact");
+            await store.SetAsync("# Memory\n- fact", TestContext.Current.CancellationToken);
 
-            Assert.Equal("# Memory\n- fact", await store.GetAsync());
+            Assert.Equal("# Memory\n- fact", await store.GetAsync(TestContext.Current.CancellationToken));
         }
         finally
         {

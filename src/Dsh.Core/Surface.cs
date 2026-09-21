@@ -183,7 +183,7 @@ public static class Surface
             if (replacement is not null)
                 replacements.Add(replacement);
         }
-        return new SurfaceFoldResult([..state.Nodes], replacements);
+        return new SurfaceFoldResult([.. state.Nodes], replacements);
     }
 
     public sealed class Manager

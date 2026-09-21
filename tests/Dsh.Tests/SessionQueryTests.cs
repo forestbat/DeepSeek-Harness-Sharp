@@ -106,8 +106,8 @@ public sealed class SessionQueryTests
         using var command = SessionsCommand.Register(ctx, service);
         var agent = new FakeAgent(ctx, session);
 
-        var hit = await commands.Execute(agent, "/sessions otter");
-        var usage = await commands.Execute(agent, "/sessions");
+        var hit = await commands.Execute(agent, "/sessions otter", TestContext.Current.CancellationToken);
+        var usage = await commands.Execute(agent, "/sessions", TestContext.Current.CancellationToken);
 
         var success = Assert.IsType<CommandResult.Success>(hit?.Result);
         Assert.Contains("cmd-1", success.Text ?? "");

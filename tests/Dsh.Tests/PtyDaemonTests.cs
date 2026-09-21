@@ -16,9 +16,9 @@ public class PtyDaemonTests
         try
         {
             await using var daemon = new PtyDaemon(socketPath: socketPath);
-            await daemon.StartAsync();
+            await daemon.StartAsync(TestContext.Current.CancellationToken);
 
-            var sessions = await PtyDaemonClient.ListAsync(socketPath, null);
+            var sessions = await PtyDaemonClient.ListAsync(socketPath, null, TestContext.Current.CancellationToken);
 
             Assert.Empty(sessions);
         }
@@ -38,15 +38,15 @@ public class PtyDaemonTests
         try
         {
             await using var daemon = new PtyDaemon(socketPath: socketPath);
-            await daemon.StartAsync();
+            await daemon.StartAsync(TestContext.Current.CancellationToken);
 
             var started = await PtyDaemonClient.StartAsync(new PtyDaemonStartParams
             {
                 FileName = "/bin/sh",
                 Arguments = ["-c", "sleep 5"],
-            }, socketPath, null);
+            }, socketPath, null, TestContext.Current.CancellationToken);
 
-            var info = Assert.Single(await PtyDaemonClient.ListAsync(socketPath, null));
+            var info = Assert.Single(await PtyDaemonClient.ListAsync(socketPath, null, TestContext.Current.CancellationToken));
             Assert.Equal(started.Id, info.Id);
             Assert.Equal("Running", info.Status);
         }
@@ -67,8 +67,8 @@ public class PtyDaemonTests
         {
             FileName = "/bin/sh",
             Arguments = ["-c", "read line; echo GOT:$line"],
-        });
-        await session.WriteAsync("hello\n"u8.ToArray());
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        await session.WriteAsync("hello\n"u8.ToArray(), TestContext.Current.CancellationToken);
         var text = await ReadUntilAsync(session, "GOT:hello", TimeSpan.FromSeconds(4));
         Assert.Contains("GOT:hello", text);
     }
@@ -84,11 +84,11 @@ public class PtyDaemonTests
         {
             FileName = "/bin/sh",
             Arguments = ["-c", "read line; echo GOT:$line"],
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         var readTask = ReadUntilAsync(session, "GOT:hello", TimeSpan.FromSeconds(4));
-        await Task.Delay(500);
-        await session.WriteAsync("hello\n"u8.ToArray());
-        var text = await readTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await session.WriteAsync("hello\n"u8.ToArray(), TestContext.Current.CancellationToken);
+        var text = await readTask.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Contains("GOT:hello", text);
     }
 
@@ -117,16 +117,16 @@ public class PtyDaemonTests
         try
         {
             await using var daemon = new PtyDaemon(socketPath: socketPath);
-            await daemon.StartAsync();
+            await daemon.StartAsync(TestContext.Current.CancellationToken);
             var started = await PtyDaemonClient.StartAsync(new PtyDaemonStartParams
             {
                 FileName = "/bin/sh",
                 Arguments = ["-c", "read line; echo GOT:$line"],
-            }, socketPath, null);
+            }, socketPath, null, TestContext.Current.CancellationToken);
 
             using var input = new OpenEndedInputStream("hello\n"u8.ToArray());
             using var output = new MemoryStream();
-            await PtyDaemonClient.AttachAsync(started.Id, input, output, socketPath, null);
+            await PtyDaemonClient.AttachAsync(started.Id, input, output, socketPath, null, TestContext.Current.CancellationToken);
 
             Assert.Contains("GOT:hello", System.Text.Encoding.UTF8.GetString(output.ToArray()));
         }
@@ -187,7 +187,7 @@ public class PtyDaemonTests
 
         var socketPath = CreateSocketPath();
         var daemon = new PtyDaemon(socketPath: socketPath);
-        await daemon.StartAsync();
+        await daemon.StartAsync(TestContext.Current.CancellationToken);
         Assert.True(File.Exists(socketPath));
 
         await daemon.DisposeAsync();

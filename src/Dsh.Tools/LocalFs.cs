@@ -25,7 +25,7 @@ public sealed class LocalFsService : Service
         _ = new LocalFsService(ctx, new LocalFsConfig { Cwd = cwd });
         return new CompositeDisposable();
     }
-    
+
     public object Resolve(string path, IDictionary<string, object?>? options = null)
     {
         if (string.IsNullOrWhiteSpace(path))

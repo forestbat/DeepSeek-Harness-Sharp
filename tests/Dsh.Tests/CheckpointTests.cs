@@ -28,7 +28,7 @@ public sealed class CheckpointTests
             await WaitUntilAsync(() => service.PointsFor(project).Count == 1, "first checkpoint");
 
             AppendToolResult(session);
-            await Task.Delay(500);
+            await Task.Delay(500, TestContext.Current.CancellationToken);
             Assert.Single(service.PointsFor(project));
 
             File.WriteAllText(Path.Combine(project, "a.txt"), "three");
@@ -106,7 +106,7 @@ public sealed class CheckpointTests
 
             File.WriteAllText(Path.Combine(project, "ignored.txt"), "ignored-2");
             AppendToolResult(session);
-            await Task.Delay(400);
+            await Task.Delay(400, TestContext.Current.CancellationToken);
             Assert.Single(service.PointsFor(project));
 
             File.WriteAllText(Path.Combine(project, "a.txt"), "three");

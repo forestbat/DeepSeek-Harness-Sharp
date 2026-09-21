@@ -109,8 +109,8 @@ public static class ReadTool
 
     private static IReadOnlyList<ContentBlock> Render(JsonElement args, JsonElement value, ReadToolCaps caps)
     {
-            var result = DshJson.Deserialize<ReadResultValue>(value)
-            ?? throw new JsonException("read result value is malformed");
+        var result = DshJson.Deserialize<ReadResultValue>(value)
+        ?? throw new JsonException("read result value is malformed");
         var input = ParseArgs(args, caps.Limit);
         var endLine = result.Lines.Count > 0 ? result.Lines[^1].Number : Math.Max(0, result.Offset - 1);
         var truncatedByBytes = result.Lines.Count < input.Limit && endLine < result.TotalLines;

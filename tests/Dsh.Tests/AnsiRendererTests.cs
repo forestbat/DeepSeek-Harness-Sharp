@@ -211,15 +211,15 @@ public class AnsiRendererTests
             switch (final)
             {
                 case 'H':
-                {
-                    var parts = parameters.Split(';');
-                    var row = parts.Length > 0 && int.TryParse(parts[0], out var parsedRow) ? parsedRow : 1;
-                    var column = parts.Length > 1 && int.TryParse(parts[1], out var parsedColumn) ? parsedColumn : 1;
-                    CursorY = Math.Clamp(row - 1, 0, Height - 1);
-                    CursorX = Math.Clamp(column - 1, 0, Width - 1);
-                    WrapPending = false;
-                    break;
-                }
+                    {
+                        var parts = parameters.Split(';');
+                        var row = parts.Length > 0 && int.TryParse(parts[0], out var parsedRow) ? parsedRow : 1;
+                        var column = parts.Length > 1 && int.TryParse(parts[1], out var parsedColumn) ? parsedColumn : 1;
+                        CursorY = Math.Clamp(row - 1, 0, Height - 1);
+                        CursorX = Math.Clamp(column - 1, 0, Width - 1);
+                        WrapPending = false;
+                        break;
+                    }
                 case 'J':
                     if (parameters is "" or "2")
                     {
