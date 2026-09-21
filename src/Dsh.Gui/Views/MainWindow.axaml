@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="using:Avalonia.Controls.Chrome"
         xmlns:vm="using:Dsh.Gui.ViewModels"
         xmlns:views="using:Dsh.Gui.Views"
         x:Class="Dsh.Gui.Views.MainWindow"
@@ -24,17 +25,20 @@
   <Grid RowDefinitions="Auto,*">
     <Grid Name="TitleBar" Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto"
           Height="34" Background="{DynamicResource Brush.Bg.Sidebar}" IsVisible="False"
-          PointerPressed="OnTitleBarPressed">
+          chrome:WindowDecorationProperties.ElementRole="TitleBar">
       <Image Grid.Column="0" Source="avares://Dsh.Gui/Assets/icon.png" Width="18" Height="18"
              Margin="10,0,8,0" VerticalAlignment="Center" />
       <TextBlock Grid.Column="1" Text="DeepSeek Harness" Classes="Tertiary" VerticalAlignment="Center" />
-      <Button Grid.Column="2" Classes="TitleButton" Click="OnMinimizeClick" ToolTip.Tip="最小化">
+      <Button Grid.Column="2" Classes="TitleButton" Click="OnMinimizeClick" ToolTip.Tip="最小化"
+              chrome:WindowDecorationProperties.ElementRole="MinimizeButton">
         <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Minimize}" />
       </Button>
-      <Button Grid.Column="3" Classes="TitleButton" Click="OnMaximizeClick" ToolTip.Tip="最大化/还原">
+      <Button Grid.Column="3" Classes="TitleButton" Click="OnMaximizeClick" ToolTip.Tip="最大化/还原"
+              chrome:WindowDecorationProperties.ElementRole="MaximizeButton">
         <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.Maximize}" />
       </Button>
-      <Button Grid.Column="4" Classes="TitleButton close" Click="OnCloseClick" ToolTip.Tip="关闭">
+      <Button Grid.Column="4" Classes="TitleButton close" Click="OnCloseClick" ToolTip.Tip="关闭"
+              chrome:WindowDecorationProperties.ElementRole="CloseButton">
         <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.Close}" />
       </Button>
     </Grid>

@@ -3,7 +3,7 @@
   <!--
     GUI 启动器:子系统是 Windows(GUI),所以双击/快捷方式启动不会创建控制台窗口。
     CLI 与 TUI 仍走同目录下的控制台子系统宿主(dsh.exe),shell 等待与 TUI 占用控制台的行为不变。
-    逻辑不重复实现:直接转调宿主的 Program.Main("gui", ...),插件目录(生成目录 + plugins/)由宿主程序集提供。
+    逻辑不重复实现:转调 Dsh.Host 组合根的 gui 分支,插件目录(生成目录 + plugins/)由宿主程序集提供。
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -16,12 +16,10 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <CETCompat>false</CETCompat>
     <ApplicationIcon Condition="Exists('..\src\Dsh.Gui\Assets\icon.ico')">..\src\Dsh.Gui\Assets\icon.ico</ApplicationIcon>
-    <!--.NET 限制了引用项目不能使用自包含，但可关闭校验-->
-    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DeepSeek-Harness-Sharp\DeepSeek-Harness-Sharp.csproj" />
+    <ProjectReference Include="..\Dsh.Host\Dsh.Host.csproj" />
   </ItemGroup>
 
 </Project>

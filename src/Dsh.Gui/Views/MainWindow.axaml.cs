@@ -116,7 +116,6 @@ public sealed partial class MainWindow : Window
         if (!OperatingSystem.IsWindows())
             return;
         ExtendClientAreaToDecorationsHint = true;
-        // ExtendClientAreaChromeHints = ExtendClientAreaChromeHints.NoChrome;
         ExtendClientAreaTitleBarHeightHint = TitleBarHeight;
         WindowDecorations = WindowDecorations.BorderOnly;
         TitleBar.IsVisible = true;
@@ -281,17 +280,6 @@ public sealed partial class MainWindow : Window
             e.Handled = true;
             Quit();
         }
-    }
-
-    private void OnTitleBarPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.ClickCount == 2)
-        {
-            ToggleMaximize();
-            return;
-        }
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-            BeginMoveDrag(e);
     }
 
     private void OnMinimizeClick(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;

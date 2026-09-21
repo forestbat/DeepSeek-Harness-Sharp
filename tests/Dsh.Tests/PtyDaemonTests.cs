@@ -205,7 +205,7 @@ public class PtyDaemonTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.sln")))
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.slnx")))
             directory = directory.Parent;
         return directory?.FullName ?? AppContext.BaseDirectory;
     }

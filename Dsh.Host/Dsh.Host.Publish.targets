@@ -1,0 +1,54 @@
+﻿<Project>
+
+  <!--
+    宿主 exe 共用的发布配置: 由最终发布的 exe 项目导入。
+    裁剪/AOT 发布时插件仍按完整框架依赖程序集单独构建并拷入输出目录, 供运行时动态装载。
+  -->
+
+  <ItemGroup Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">
+    <!-- 契约面:插件工厂由生成目录直接 new;插件程序集的源生成 JSON 上下文由生成目录静态引用保根
+         (DshPluginJson),故不再逐插件 root 整个程序集。 -->
+    <TrimmerRootAssembly Include="Dsh.Plugins.Abstractions" />
+    <TrimmerRootAssembly Include="Dsh.Runtime" />
+    <TrimmerRootAssembly Include="Dsh.Plugins.Host" />
+    <TrimmerRootAssembly Include="Dsh.Plugins.Native" />
+    <TrimmerRootAssembly Include="Dsh.Plugins.Native.Host" />
+    <TrimmerRootAssembly Include="Dsh.Llm" />
+    <TrimmerRootAssembly Include="System.Text.Json" />
+  </ItemGroup>
+
+  <Target Name="CopyPluginAndSurfaceAssemblies" AfterTargets="Build">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\Dsh.Core\Dsh.Core.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Persistence\Dsh.Persistence.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Mcp\Dsh.Mcp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tools\Dsh.Tools.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction\Dsh.Interaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Skills\Dsh.Skills.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Goal\Dsh.Goal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Compaction\Dsh.Compaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Jobs\Dsh.Jobs.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Subagent\Dsh.Subagent.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.PlanMode\Dsh.PlanMode.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Web\Dsh.Web.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Workflow\Dsh.Workflow.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Terminal\Dsh.Terminal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm\Dsh.Llm.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tui\Dsh.Tui.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Acp\Dsh.Acp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Lsp\Dsh.Lsp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Sdk\Dsh.Sdk.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Pty\Dsh.Pty.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.IdeHistory\Dsh.IdeHistory.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
+    <ItemGroup>
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Core\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Persistence\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Mcp\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Tools\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Interaction\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Skills\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Goal\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Compaction\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Jobs\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Subagent\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.PlanMode\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Web\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Workflow\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Terminal\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Interaction.AskUser\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm.DeepSeek\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm.OpenAi\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm.Anthropic\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Tui\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Acp\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.AgentInstructions\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Lsp\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Sdk\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Pty\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Checkpoints\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.IdeHistory\bin\$(Configuration)\net10.0\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PluginAndSurfaceAssemblies)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

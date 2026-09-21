@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="..\src\Dsh.Plugins.Generator\DshPluginHost.props" />
+    <Import Project="..\Dsh.Host\Dsh.Host.Publish.targets" />
 
+    <!--
+      控制台宿主(dsh): 薄入口, 组合根与插件引用在 Dsh.Host 库中。
+      发布形态:默认 Release 为 JIT + partial 裁剪 + 自包含;AOT 属可选档,用 -p:PublishAot=true 命令行开启(见 README)。
+    -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <TargetFramework>net10.0</TargetFramework>
@@ -14,7 +18,6 @@
         <CETCompat>false</CETCompat>
     </PropertyGroup>
 
-    <!-- 发布形态:默认 Release 为 JIT + partial 裁剪 + 自包含;AOT 属可选档,用 -p:PublishAot=true 命令行开启(见 README)。 -->
     <PropertyGroup Condition="'$(Configuration)' == 'Release'">
         <PublishTrimmed>true</PublishTrimmed>
         <TrimMode>partial</TrimMode>
@@ -28,59 +31,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\src\Dsh.Boot\Dsh.Boot.csproj" />
+      <ProjectReference Include="..\Dsh.Host\Dsh.Host.csproj" />
     </ItemGroup>
-
-    
-    <ItemGroup>
-      <ProjectReference Include="..\src\Dsh.*\*.csproj"
-                        Exclude="..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
-    </ItemGroup>
-
-    <ItemGroup Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">
-      <!-- 契约面:插件工厂由生成目录直接 new;插件程序集的源生成 JSON 上下文由生成目录静态引用保根
-           (DshPluginJson),故不再逐插件 root 整个程序集。 -->
-      <TrimmerRootAssembly Include="Dsh.Plugins.Abstractions" />
-      <TrimmerRootAssembly Include="Dsh.Runtime" />
-      <TrimmerRootAssembly Include="Dsh.Plugins.Host" />
-      <TrimmerRootAssembly Include="Dsh.Plugins.Native" />
-      <TrimmerRootAssembly Include="Dsh.Plugins.Native.Host" />
-      <TrimmerRootAssembly Include="Dsh.Llm" />
-      <TrimmerRootAssembly Include="System.Text.Json" />
-    </ItemGroup>
-
-    <Target Name="CopyPluginAndSurfaceAssemblies" AfterTargets="Build">
-      <MSBuild Projects="..\src\Dsh.Core\Dsh.Core.csproj;..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj;..\src\Dsh.Persistence\Dsh.Persistence.csproj;..\src\Dsh.Mcp\Dsh.Mcp.csproj;..\src\Dsh.Tools\Dsh.Tools.csproj;..\src\Dsh.Interaction\Dsh.Interaction.csproj;..\src\Dsh.Skills\Dsh.Skills.csproj;..\src\Dsh.Goal\Dsh.Goal.csproj;..\src\Dsh.Compaction\Dsh.Compaction.csproj;..\src\Dsh.Jobs\Dsh.Jobs.csproj;..\src\Dsh.Subagent\Dsh.Subagent.csproj;..\src\Dsh.PlanMode\Dsh.PlanMode.csproj;..\src\Dsh.Web\Dsh.Web.csproj;..\src\Dsh.Workflow\Dsh.Workflow.csproj;..\src\Dsh.Terminal\Dsh.Terminal.csproj;..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj;..\src\Dsh.Llm\Dsh.Llm.csproj;..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj;..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj;..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj;..\src\Dsh.Tui\Dsh.Tui.csproj;..\src\Dsh.Acp\Dsh.Acp.csproj;..\src\Dsh.Lsp\Dsh.Lsp.csproj;..\src\Dsh.Sdk\Dsh.Sdk.csproj;..\src\Dsh.Pty\Dsh.Pty.csproj;..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj;..\src\Dsh.IdeHistory\Dsh.IdeHistory.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
-      <ItemGroup>
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Core\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Persistence\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Mcp\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Tools\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Interaction\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Skills\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Goal\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Compaction\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Jobs\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Subagent\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.PlanMode\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Web\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Workflow\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Terminal\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Interaction.AskUser\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.DeepSeek\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.OpenAi\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Llm.Anthropic\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Tui\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Acp\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.AgentInstructions\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Lsp\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Sdk\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Pty\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.Checkpoints\bin\$(Configuration)\net10.0\*.dll" />
-        <PluginAndSurfaceAssemblies Include="..\src\Dsh.IdeHistory\bin\$(Configuration)\net10.0\*.dll" />
-      </ItemGroup>
-      <Copy SourceFiles="@(PluginAndSurfaceAssemblies)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
-    </Target>
 
 </Project>

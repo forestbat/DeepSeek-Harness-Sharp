@@ -1,4 +1,4 @@
-﻿using System.Xml.Linq;
+using System.Xml.Linq;
 
 namespace Dsh.Tests;
 
@@ -90,7 +90,7 @@ public sealed class PluginReferenceRulesTests
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "DeepSeek-Harness-Sharp.sln")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "DeepSeek-Harness-Sharp.slnx")))
             dir = dir.Parent;
         return dir?.FullName ?? throw new InvalidOperationException("repo root not found from test assembly location");
     }

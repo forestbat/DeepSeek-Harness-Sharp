@@ -1,4 +1,3 @@
-using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Core;
@@ -171,25 +170,25 @@ public sealed class MainViewModelTests
         Assert.Contains("dsh-", message.Text);
     }
 
-    [AvaloniaFact]
-    public async Task Submit_TextMessage_IsRenderedOnceFromSessionEvent()
-    {
-        using var environment = await GuiTestEnvironment.CreateAsync();
-        using var viewModel = new MainViewModel(environment.App, environment.Agent);
-
-        viewModel.Composer.Input = "你好";
-        await viewModel.SubmitCommand.ExecuteAsync(null);
-
-        // 提交本身不回显, 消息要等会话事件到达才出现。
-        Assert.Empty(viewModel.Messages);
-        for (var attempt = 0; attempt < 200 && viewModel.Messages.Count == 0; attempt += 1)
+    [Fact]
+    public Task Submit_TextMessage_IsRenderedOnceFromSessionEvent() => HeadlessGui.Run(async () =>
         {
-            await Task.Delay(10);
-            Dispatcher.UIThread.RunJobs();
-        }
-        Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
-        Assert.Equal("你好", viewModel.Messages[0].Text);
-    }
+            using var environment = await GuiTestEnvironment.CreateAsync();
+            using var viewModel = new MainViewModel(environment.App, environment.Agent);
+
+            viewModel.Composer.Input = "你好";
+            await viewModel.SubmitCommand.ExecuteAsync(null);
+
+            // 提交本身不回显, 消息要等会话事件到达才出现。
+            Assert.Empty(viewModel.Messages);
+            for (var attempt = 0; attempt < 200 && viewModel.Messages.Count == 0; attempt += 1)
+            {
+                await Task.Delay(10);
+                Dispatcher.UIThread.RunJobs();
+            }
+            Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
+            Assert.Equal("你好", viewModel.Messages[0].Text);
+        });
 
     [Fact]
     public async Task Submit_EmptyInput_DoesNothing()
@@ -260,48 +259,48 @@ public sealed class MainViewModelTests
         Assert.Equal(ApprovalPolicy.Ask, approval.EffectivePolicy(environment.Agent.Session));
     }
 
-    [AvaloniaFact]
-    public async Task ApprovalRequest_ReachesUnifiedDecisionWindow()
-    {
-        using var environment = await GuiTestEnvironment.CreateAsync();
-        using var viewModel = new MainViewModel(environment.App, environment.Agent);
-        DecisionViewModel? seen = null;
-        viewModel.DecisionRequested += decision =>
+    [Fact]
+    public Task ApprovalRequest_ReachesUnifiedDecisionWindow() => HeadlessGui.Run(async () =>
         {
-            seen = decision;
-            return Task.FromResult<object?>(ApprovalOutcome.AllowedOnce);
-        };
-        var approval = environment.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName)!;
-        environment.Agent.Session.Append(new TurnStartPayload(1));
+            using var environment = await GuiTestEnvironment.CreateAsync();
+            using var viewModel = new MainViewModel(environment.App, environment.Agent);
+            DecisionViewModel? seen = null;
+            viewModel.DecisionRequested += decision =>
+            {
+                seen = decision;
+                return Task.FromResult<object?>(ApprovalOutcome.AllowedOnce);
+            };
+            var approval = environment.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName)!;
+            environment.Agent.Session.Append(new TurnStartPayload(1));
 
-        var request = approval.Request(
-            new ApprovalRequest(environment.Agent, "bash", ToolCallId.Create("call-1"), null, """{"command":"ls -la"}"""),
-            default);
-        var outcome = await PumpAsync(request);
+            var request = approval.Request(
+                new ApprovalRequest(environment.Agent, "bash", ToolCallId.Create("call-1"), null, """{"command":"ls -la"}"""),
+                default);
+            var outcome = await PumpAsync(request);
 
-        Assert.Equal(ApprovalOutcome.AllowedOnce, outcome);
-        Assert.NotNull(seen);
-        Assert.True(seen!.IsApproval);
-        Assert.Equal("bash", seen.ToolName);
-        Assert.Equal("ls -la", seen.Command);
-    }
+            Assert.Equal(ApprovalOutcome.AllowedOnce, outcome);
+            Assert.NotNull(seen);
+            Assert.True(seen!.IsApproval);
+            Assert.Equal("bash", seen.ToolName);
+            Assert.Equal("ls -la", seen.Command);
+        });
 
-    [AvaloniaFact]
-    public async Task UserQuestion_ReachesUnifiedDecisionWindow()
-    {
-        using var environment = await GuiTestEnvironment.CreateAsync();
-        using var viewModel = new MainViewModel(environment.App, environment.Agent);
-        viewModel.DecisionRequested += decision => Task.FromResult<object?>(new AskUserQuestionAnswer(
-            [new AskUserQuestionAnswerItem(decision.Questions[0].Item.Id, ["继续"])]));
-        var questions = environment.App.Ctx.Get<UserQuestionService>(UserQuestionService.ServiceName)!;
+    [Fact]
+    public Task UserQuestion_ReachesUnifiedDecisionWindow() => HeadlessGui.Run(async () =>
+        {
+            using var environment = await GuiTestEnvironment.CreateAsync();
+            using var viewModel = new MainViewModel(environment.App, environment.Agent);
+            viewModel.DecisionRequested += decision => Task.FromResult<object?>(new AskUserQuestionAnswer(
+                [new AskUserQuestionAnswerItem(decision.Questions[0].Item.Id, ["继续"])]));
+            var questions = environment.App.Ctx.Get<UserQuestionService>(UserQuestionService.ServiceName)!;
 
-        var ask = questions.Ask(new AskUserQuestionRequest(
-            [new AskUserQuestionItem("q1", "继续吗？", Options: [new AskUserQuestionOption("继续"), new AskUserQuestionOption("停下")])],
-            environment.Agent));
-        var answer = await PumpAsync(ask);
+            var ask = questions.Ask(new AskUserQuestionRequest(
+                [new AskUserQuestionItem("q1", "继续吗？", Options: [new AskUserQuestionOption("继续"), new AskUserQuestionOption("停下")])],
+                environment.Agent));
+            var answer = await PumpAsync(ask);
 
-        Assert.Equal("继续", Assert.Single(answer.Answers).Selected[0]);
-    }
+            Assert.Equal("继续", Assert.Single(answer.Answers).Selected[0]);
+        });
 
     [Fact]
     public async Task TraceFilter_NarrowsTraceView_WithoutDroppingItems()

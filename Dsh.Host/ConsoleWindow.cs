@@ -1,6 +1,6 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 
-namespace DeepSeek_Harness_Sharp;
+namespace Dsh.Host;
 
 /** 控制台窗口处理: 双击启动时进程独占控制台, 需要把它去掉, 否则 GUI 会顶着一个黑窗口。 */
 internal static class ConsoleWindow

@@ -15,7 +15,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
-    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -52,7 +52,7 @@
     <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
-        <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Acp\Dsh.Acp.csproj" />
