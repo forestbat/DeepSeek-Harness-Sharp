@@ -414,6 +414,71 @@ public sealed class MainViewModelTests
     });
 
     [Fact]
+    public async Task SwitchCommand_Updates_Labels_For_Multi_Segment_Model()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync("""
+            logging:
+              file: false
+            providers:
+              pa:
+                type: openai-compatible
+                options:
+                  baseUrl: https://example.invalid
+                  apiKey: sk-test
+                models:
+                  m1: {}
+                  aion-labs/aion-3.0-mini: {}
+            """);
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+
+        viewModel.SwitchModelCommand.Execute("pa/aion-labs/aion-3.0-mini");
+        for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "pa/aion-labs/aion-3.0-mini"; attempt++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
+        }
+
+        Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.Composer.ModelLabel);
+        Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.SessionSubtitle);
+    }
+
+    [Fact]
+    public async Task SwitchReasoningCommand_Updates_Label_For_Flagged_Model()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync("""
+            logging:
+              file: false
+            providers:
+              pa:
+                type: openai-compatible
+                options:
+                  baseUrl: https://example.invalid
+                  apiKey: sk-test
+                models:
+                  deepseek-flash:
+                    reasoning: true
+            """);
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+
+        viewModel.SwitchModelCommand.Execute("pa/deepseek-flash");
+        for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "pa/deepseek-flash"; attempt++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
+        }
+
+        Assert.Contains("max", viewModel.Preferences.ReasoningEfforts);
+        viewModel.SwitchReasoningCommand.Execute("max");
+        for (var attempt = 0; attempt < 200 && viewModel.Composer.ReasoningLabel != "max"; attempt++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(5);
+        }
+
+        Assert.Equal("max", viewModel.Composer.ReasoningLabel);
+    }
+
+    [Fact]
     public async Task AssistantMessages_AreLabeledWithCurrentModel()
     {
         using var environment = await GuiTestEnvironment.CreateAsync();

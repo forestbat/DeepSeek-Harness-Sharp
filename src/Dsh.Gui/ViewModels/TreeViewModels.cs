@@ -37,3 +37,6 @@ public sealed partial class TraceFilterViewModel(TraceKind? kind, string label) 
 
 /** 命令/@ 候选浮层里的一条候选。 */
 public sealed record SuggestionViewModel(string Kind, string Label, string Description, string InsertText);
+
+/** 模型浮层的一项: Name 为 provider/model, IsCurrent 标记当前会话使用的模型。 */
+public sealed record ModelListItem(string Name, bool IsCurrent);

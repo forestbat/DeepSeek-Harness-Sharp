@@ -77,11 +77,27 @@ public sealed partial class ChatView : UserControl
             Dispatcher.UIThread.Post(() => search.Focus());
     }
 
-    private void OnModelItemClick(object? sender, RoutedEventArgs e) => _modelFlyout?.Hide();
+    /** 命令先同步执行再关浮层: 关闭会让按钮脱离逻辑树, 依赖 Button.Command 绑定会在 OnClick 后段拿到 null; 命令本身已做轻量化(不重载整份设置)。 */
+    private void OnModelItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ModelListItem item })
+            _viewModel?.SwitchModelCommand.Execute(item.Name);
+        _modelFlyout?.Hide();
+    }
 
-    private void OnReasoningFlyoutOpened(object? sender, EventArgs e) => _reasoningFlyout = sender as Flyout;
+    /** 打开浮层时按当前模型重算强度候选: 在线元数据是后台预热的, 打开时刻通常已就绪。 */
+    private void OnReasoningFlyoutOpened(object? sender, EventArgs e)
+    {
+        _reasoningFlyout = sender as Flyout;
+        _viewModel?.Preferences.RefreshReasoningEfforts();
+    }
 
-    private void OnReasoningItemClick(object? sender, RoutedEventArgs e) => _reasoningFlyout?.Hide();
+    private void OnReasoningItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: string effort })
+            _viewModel?.SwitchReasoningCommand.Execute(effort);
+        _reasoningFlyout?.Hide();
+    }
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)
     {

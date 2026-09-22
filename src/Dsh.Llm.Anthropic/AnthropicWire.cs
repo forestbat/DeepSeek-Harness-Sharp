@@ -24,6 +24,9 @@ internal static class AnthropicWire
         if (options.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(SerializeTool).ToArray());
 
+        if (options.ReasoningEffort is { } effort)
+            body["output_config"] = new JsonObject { ["effort"] = effort.Value };
+
         return body.ToJsonString();
     }
 

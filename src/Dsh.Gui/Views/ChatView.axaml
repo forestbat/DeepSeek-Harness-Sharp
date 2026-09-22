@@ -248,12 +248,11 @@
                   <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{Binding FilteredModels}">
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="sys:String">
-                          <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                  Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SwitchModelCommand}"
-                                  CommandParameter="{Binding}"
+                        <DataTemplate x:DataType="vm:ModelListItem">
+                          <Button Classes="Ghost" Classes.selected="{Binding IsCurrent}"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                   Click="OnModelItemClick">
-                            <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
                           </Button>
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
@@ -263,23 +262,23 @@
               </Flyout>
             </Button.Flyout>
           </Button>
-          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="推理强度"
-                  IsVisible="{Binding HasReasoningEfforts}">
+          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="推理强度">
             <TextBlock Text="{Binding Composer.ReasoningLabel}" />
             <Button.Flyout>
               <Flyout Placement="Top" Opened="OnReasoningFlyoutOpened">
-                <ItemsControl Width="200" ItemsSource="{Binding Preferences.ReasoningEfforts}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="sys:String">
-                      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                              Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SwitchReasoningCommand}"
-                              CommandParameter="{Binding}"
-                              Click="OnReasoningItemClick">
-                        <TextBlock Text="{Binding}" />
-                      </Button>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <StackPanel Width="200" Spacing="4">
+                  <TextBlock Text="当前模型不支持推理强度" Opacity="0.6" IsVisible="{Binding !HasReasoningEfforts}" />
+                  <ItemsControl ItemsSource="{Binding Preferences.ReasoningEfforts}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="sys:String">
+                        <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                Click="OnReasoningItemClick">
+                          <TextBlock Text="{Binding}" />
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
               </Flyout>
             </Button.Flyout>
           </Button>

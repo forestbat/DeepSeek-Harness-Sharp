@@ -123,8 +123,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /** 输入胶囊「引用会话」列表。 */
     public ObservableCollection<SessionNodeViewModel> RecentSessions { get; } = [];
 
-    /** 模型浮层列表: 按 ModelSearchText 子串过滤 Preferences.Models。 */
-    public ObservableCollection<string> FilteredModels { get; } = [];
+    /** 模型浮层列表: 按 ModelSearchText 子串过滤 Preferences.Models, IsCurrent 跟随当前模型标签。 */
+    public ObservableCollection<ModelListItem> FilteredModels { get; } = [];
 
     public ComposerViewModel Composer { get; } = new();
 
@@ -263,7 +263,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var model in Preferences.Models)
         {
             if (search.Length == 0 || model.Contains(search, StringComparison.OrdinalIgnoreCase))
-                FilteredModels.Add(model);
+                FilteredModels.Add(new ModelListItem(model, string.Equals(model, Composer.ModelLabel, StringComparison.Ordinal)));
         }
     }
 
@@ -610,7 +610,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         StatusText = await _bridge.RunAsync(_agent, $"/model {model}");
         RefreshModelLabels();
-        Preferences.Reload();
+        Preferences.RefreshReasoningEfforts();
     }
 
     [RelayCommand]
@@ -996,6 +996,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Composer.ModelLabel = label;
         SessionSubtitle = label;
         Composer.ReasoningLabel = config?.ReasoningEffort?.Value ?? "推理";
+        RefreshFilteredModels();
     }
 
     private void ApplyEvents(IReadOnlyList<SessionEvent> batch)

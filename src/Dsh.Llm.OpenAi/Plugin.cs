@@ -33,6 +33,6 @@ internal sealed class OpenAiAdapterFactory : ILlmAdapterFactory
             provider.ProviderId,
             Endpoint.NormalizeBaseUrl(provider.BaseUrl),
             provider.ApiKey,
-            provider.Models.Select(model => model.Id).ToList(),
+            provider.Models,
             useResponses: string.Equals(provider.Wire, "openai-responses", StringComparison.OrdinalIgnoreCase));
 }

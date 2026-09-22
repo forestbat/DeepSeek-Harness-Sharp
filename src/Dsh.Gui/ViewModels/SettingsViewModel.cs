@@ -225,6 +225,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isWorking;
 
+    /** 模型切换后只需刷新推理强度候选; 完整 Reload 会读盘并重查 GPU/版本, 在点击链路里太重。 */
+    public void RefreshReasoningEfforts() => LoadReasoningEfforts();
+
     public void Reload()
     {
         var snapshot = _gui.Load();

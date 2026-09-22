@@ -15,7 +15,9 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
     private static readonly IReadOnlyList<string> ReasoningKeys = ["reasoning", "reasoning_content", "thinking"];
 
     private readonly string _providerId;
-    private readonly IReadOnlyList<string> _modelIds;
+    private readonly IReadOnlyList<ProviderModelSpec> _models;
+    private readonly IReadOnlySet<string> _reasoningModels;
+    private readonly IModelReasoningSource _metadata;
     private readonly OpenAIClient _openAi;
     private readonly bool _useResponses;
 
@@ -23,9 +25,10 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         string providerId,
         string baseUrl,
         string? apiKey,
-        IReadOnlyList<string>? modelIds = null,
+        IReadOnlyList<ProviderModelSpec>? models = null,
         HttpClient? httpClient = null,
-        bool useResponses = false)
+        bool useResponses = false,
+        IModelReasoningSource? metadataSource = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
@@ -33,7 +36,8 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
 
         _providerId = providerId;
         ProviderInfo = new LlmProviderInfo(providerId, "OpenAI-Compatible");
-        _modelIds = modelIds ?? [];
+        _models = models ?? [];
+        _reasoningModels = _models.Where(model => model.Reasoning).Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
         _useResponses = useResponses;
 
         var options = new OpenAIClientOptions
@@ -43,6 +47,16 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         var transportClient = httpClient ?? new HttpClient(new FinishReasonNormalizingHandler(new HttpClientHandler()));
         options.Transport = new HttpClientPipelineTransport(transportClient);
         _openAi = new OpenAIClient(new ApiKeyCredential(apiKey), options);
+        if (metadataSource is not null)
+        {
+            _metadata = metadataSource;
+        }
+        else
+        {
+            var source = new ModelMetadataReasoningSource(baseUrl, apiKey, transportClient);
+            _metadata = source;
+            source.RefreshInBackground();
+        }
     }
 
     public override LlmProviderInfo ProviderInfo { get; }
@@ -50,13 +64,16 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
     public override ResolvedRetryPolicy ProviderRetryPolicy { get; } = ResolvedRetryPolicy.Resolve(null, "openai-compatible");
 
     public override IReadOnlyList<LlmModelInfo> ListModels()
-        => _modelIds
-            .Select(model => new LlmModelInfo(_providerId, model, model, null, ["text"]))
+        => _models
+            .Select(model => new LlmModelInfo(_providerId, model.Id, model.Name ?? model.Id, null, ["text"]))
             .ToList();
 
+    /** 解析顺序: 端点 /models 的实时元数据 → provider 专属静态表 → settings 的 reasoning: true 通用回退。 */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
-        var reasoning = ReasoningTable.Resolve(_providerId, model);
+        var reasoning = _metadata.ReasoningFor(model)
+            ?? ReasoningTable.Resolve(_providerId, model)
+            ?? (_reasoningModels.Contains(model) ? ReasoningEffortTable.DefaultReasoning : null);
         return new LlmResolvedModelInfo(
             _providerId,
             model,

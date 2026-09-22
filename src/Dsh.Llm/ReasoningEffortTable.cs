@@ -13,35 +13,36 @@ public sealed record ReasoningEffortProviderTable(
 
 public sealed class ReasoningEffortTable
 {
+    private static readonly IReadOnlyList<ReasoningEffortEntry> StandardEfforts =
+    [
+        new("off", "Off", "Use for simple tasks that do not need reasoning."),
+        new("low", "Low", "Prefer for routine or latency-sensitive tasks."),
+        new("high", "High", "The default balance for most tasks."),
+        new("max", "Max", "Reserve for the hardest quality-first tasks."),
+    ];
+
+    /** provider 没有专属表但 settings 标记 reasoning: true 时使用的通用强度集合。 */
+    public static LlmModelReasoningInfo DefaultReasoning { get; } = Materialize(StandardEfforts, "high");
+
     private static readonly IReadOnlyList<ReasoningEffortProviderTable> Builtin =
     [
         new(
             "deepseek-official",
             null,
-            [
-                new("off", "Off", "Use for simple tasks that do not need reasoning."),
-                new("low", "Low", "Prefer for routine or latency-sensitive tasks."),
-                new("high", "High", "The default balance for most tasks."),
-                new("max", "Max", "Reserve for the hardest quality-first tasks."),
-            ],
+            StandardEfforts,
             "high"),
         new(
             "openai-compatible",
             null,
-            [
-                new("off", "Off", "Use for simple tasks that do not need reasoning."),
-                new("low", "Low", "Prefer for routine or latency-sensitive tasks."),
-                new("high", "High", "The default balance for most tasks."),
-                new("max", "Max", "Reserve for the hardest quality-first tasks."),
-            ],
+            StandardEfforts,
             "high"),
         new(
             "anthropic",
             null,
             [
-                new("none", "None", "Do not use extended thinking."),
-                new("low", "Low", "Use extended thinking with low token budget."),
-                new("high", "High", "Use extended thinking with high token budget."),
+                new("low", "Low", "Prefer for routine or latency-sensitive tasks."),
+                new("medium", "Medium", "The balanced effort for most tasks."),
+                new("high", "High", "Reserve for the hardest quality-first tasks."),
             ],
             "high"),
     ];
@@ -69,12 +70,15 @@ public sealed class ReasoningEffortTable
         var table = _tables.FirstOrDefault(entry =>
             entry.Provider == provider
             && (entry.ModelPrefix is null || model.StartsWith(entry.ModelPrefix, StringComparison.OrdinalIgnoreCase)));
-        if (table is null)
-            return null;
-        var efforts = table.Efforts
+        return table is null ? null : Materialize(table.Efforts, table.Default);
+    }
+
+    private static LlmModelReasoningInfo Materialize(IReadOnlyList<ReasoningEffortEntry> efforts, string? defaultEffort)
+    {
+        var infos = efforts
             .Select(effort => new LlmReasoningEffortInfo(ReasoningEffortId.Create(effort.Id), effort.Name, effort.Description))
             .ToList();
-        var defaultEffort = table.Default is null ? (ReasoningEffortId?)null : ReasoningEffortId.Create(table.Default);
-        return new LlmModelReasoningInfo(efforts, defaultEffort);
+        var defaultId = defaultEffort is null ? (ReasoningEffortId?)null : ReasoningEffortId.Create(defaultEffort);
+        return new LlmModelReasoningInfo(infos, defaultId);
     }
 }

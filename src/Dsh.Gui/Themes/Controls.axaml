@@ -57,6 +57,10 @@
     <Setter Property="TextBlock.Foreground" Value="{DynamicResource Brush.Text.Primary}" />
   </Style>
 
+  <Style Selector="Button.Ghost.selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Brush.Accent.Soft}" />
+  </Style>
+
   <Style Selector="Button.Primary">
     <Setter Property="Background" Value="{DynamicResource Brush.Accent}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text.OnAccent}" />

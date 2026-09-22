@@ -10,7 +10,8 @@ public sealed record LlmWireDefinition(
 public sealed record ProviderModelSpec(
     string Id,
     string? Name = null,
-    string? SystemPromptUpdate = null);
+    string? SystemPromptUpdate = null,
+    bool Reasoning = false);
 
 /** 宿主解析好的 provider 配置:适配器工厂只依赖这份数据构造适配器。 */
 public sealed record ResolvedLlmProvider(

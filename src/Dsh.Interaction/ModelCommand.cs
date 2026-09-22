@@ -36,13 +36,12 @@ public static class ModelCommand
                     return Task.FromResult<CommandResult>(new CommandResult.Success(builder.ToString().TrimEnd()));
                 }
 
-                var parts = raw.Split('/');
-                if (parts.Length != 2)
+                // provider 名取自 settings 键(不含斜杠), 第一个斜杠之后全部是模型名——模型 id 允许包含任意数量的斜杠(如 kilo/anthropic/claude-3-haiku)。
+                var separator = raw.IndexOf('/');
+                if (separator <= 0 || separator == raw.Length - 1)
                     return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /model <provider/model>"));
-                var provider = parts[0];
-                var model = parts[1];
-                if (provider.Length == 0 || model.Length == 0)
-                    return Task.FromResult<CommandResult>(new CommandResult.Error("provider and model must not be empty"));
+                var provider = raw[..separator];
+                var model = raw[(separator + 1)..];
                 var llm = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
                 try
                 {
