@@ -18,26 +18,28 @@ public static class DesktopIntegration
         return $"当前平台不支持创建快捷方式: {targetPath}";
     }
 
-    public static string OpenPath(string path)
-    {
-        try
+    // 资源管理器被第三方工具(Tablacus 等)接管时, shell 钩子会挂起 UseShellExecute 的同步调用, 必须离开 UI 线程。
+    public static async Task<string> OpenPathAsync(string path)
+        => await Task.Run(() =>
         {
-            if (OperatingSystem.IsWindows())
+            try
             {
-                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                if (OperatingSystem.IsWindows())
+                {
+                    Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                    return "已打开";
+                }
+                var command = OperatingSystem.IsMacOS() ? "open" : "xdg-open";
+                var startInfo = new ProcessStartInfo(command) { UseShellExecute = false };
+                startInfo.ArgumentList.Add(path);
+                Process.Start(startInfo);
                 return "已打开";
             }
-            var command = OperatingSystem.IsMacOS() ? "open" : "xdg-open";
-            var startInfo = new ProcessStartInfo(command) { UseShellExecute = false };
-            startInfo.ArgumentList.Add(path);
-            Process.Start(startInfo);
-            return "已打开";
-        }
-        catch (Exception error)
-        {
-            return $"打开失败: {error.Message}";
-        }
-    }
+            catch (Exception error)
+            {
+                return $"打开失败: {error.Message}";
+            }
+        });
 
     [SupportedOSPlatform("windows")]
     private static string CreateWindowsShortcut(string targetPath, string? iconPath, string? arguments)

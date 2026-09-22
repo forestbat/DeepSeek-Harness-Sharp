@@ -188,4 +188,68 @@ public class CommandMenuStateTests
         Assert.True(state.Back());
         Assert.Equal(0, state.ArgumentIndex);
     }
+
+    [Fact]
+    public void Reasoning_Menu_Filters_And_Completes_Command()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("reasoning", "Show or set reasoning effort")]);
+        var state = new CommandMenuState(descriptors,
+            descriptor => descriptor.Name == "reasoning" ? ["low", "high"] : []);
+
+        state.ApplyInput("/reasoning");
+        Assert.Null(state.Confirm());
+        Assert.Equal(CommandMenuState.MenuStage.Argument, state.Stage);
+        Assert.Equal(["low", "high"], state.Candidates);
+
+        state.ApplyInput("/reasoning hig");
+        Assert.Equal(["high"], state.Candidates);
+        Assert.Equal("/reasoning high", state.Confirm());
+    }
+
+    [Fact]
+    public void Skill_Menu_Uses_Injected_Candidates()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("skill", "List or inspect a skill")]);
+        var state = new CommandMenuState(descriptors,
+            descriptor => descriptor.Name == "skill" ? ["review-code", "ship-it"] : []);
+
+        state.ApplyInput("/skill");
+        Assert.Null(state.Confirm());
+        Assert.Equal(CommandMenuState.MenuStage.Argument, state.Stage);
+
+        state.ApplyInput("/skill ship");
+        Assert.Equal(["ship-it"], state.Candidates);
+        Assert.Equal("/skill ship-it", state.Confirm());
+    }
+
+    [Fact]
+    public void Session_Menu_Lists_Injected_Session_Ids()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("session", "List or delete persistent sessions")]);
+        var state = new CommandMenuState(descriptors,
+            descriptor => descriptor.Name == "session" ? ["session-aaa", "session-bbb"] : []);
+
+        state.ApplyInput("/session ");
+        Assert.Equal(CommandMenuState.MenuStage.Argument, state.Stage);
+        Assert.Equal(["session-aaa", "session-bbb"], state.Candidates);
+
+        state.MoveDown();
+        Assert.Equal("/session session-bbb", state.Confirm());
+    }
+
+    [Fact]
+    public void Argument_Menu_Scrolls_Through_Large_Candidate_List()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("model", "List or switch model")]);
+        var state = new CommandMenuState(descriptors,
+            _ => Enumerable.Range(0, 500).Select(index => $"provider/m{index:000}").ToList());
+
+        state.ApplyInput("/model");
+        state.Confirm();
+        Assert.Equal(500, state.Candidates.Count);
+
+        for (var index = 0; index < 300; index++)
+            state.MoveDown();
+        Assert.Equal("/model provider/m300", state.Confirm());
+    }
 }

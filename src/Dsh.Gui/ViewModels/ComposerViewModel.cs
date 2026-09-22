@@ -24,6 +24,9 @@ public sealed partial class ComposerViewModel : ObservableObject
     private string _modelLabel = "";
 
     [ObservableProperty]
+    private string _reasoningLabel = "推理";
+
+    [ObservableProperty]
     private bool _isAttachmentMenuOpen;
 
     [ObservableProperty]

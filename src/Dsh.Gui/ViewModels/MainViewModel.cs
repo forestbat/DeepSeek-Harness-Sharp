@@ -51,6 +51,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherBridge<SessionEvent> _events;
     private readonly List<Func<bool>> _unsubscribers = [];
     private readonly List<MessageViewModel> _lastUserMessages = [];
+    private IReadOnlyList<string> _skillNames = [];
 
     private AgentLoopAgent _agent;
     private long _renderedSeq;
@@ -76,7 +77,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _onlyWithSessions = snapshot.ShowOnlyWithSessions;
         _isSidebarVisible = snapshot.SidebarVisible;
         Preferences = new SettingsViewModel(_ctx, app.Home, () => _agent, _bridge, Gui, _settings);
+        Preferences.Models.CollectionChanged += (_, _) => RefreshFilteredModels();
+        Preferences.ReasoningEfforts.CollectionChanged += (_, _) => HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
+        HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
+        RefreshFilteredModels();
         Composer.PropertyChanged += OnComposerPropertyChanged;
+        _unsubscribers.Add(_ctx.On<SkillsChangedNotification>(notification => { _ = LoadSkillNamesAsync(); }));
+        _ = LoadSkillNamesAsync();
         _unsubscribers.Add(_ctx.On<SessionEventNotification>(notification => OnSessionEvent(notification)));
         _unsubscribers.Add(_ctx.OnWaterfall<ApprovalRequestNotification>(
             (notification, next) => OnApprovalRequest(notification, next),
@@ -115,6 +122,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /** 输入胶囊「引用会话」列表。 */
     public ObservableCollection<SessionNodeViewModel> RecentSessions { get; } = [];
+
+    /** 模型浮层列表: 按 ModelSearchText 子串过滤 Preferences.Models。 */
+    public ObservableCollection<string> FilteredModels { get; } = [];
 
     public ComposerViewModel Composer { get; } = new();
 
@@ -174,6 +184,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _searchText = "";
+
+    [ObservableProperty]
+    private string _modelSearchText = "";
+
+    [ObservableProperty]
+    private bool _hasReasoningEfforts;
 
     [ObservableProperty]
     private SessionMode _mode = SessionMode.Standard;
@@ -237,6 +253,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     partial void OnSearchTextChanged(string value) => RefreshSessions();
+
+    partial void OnModelSearchTextChanged(string value) => RefreshFilteredModels();
+
+    private void RefreshFilteredModels()
+    {
+        FilteredModels.Clear();
+        var search = ModelSearchText.Trim();
+        foreach (var model in Preferences.Models)
+        {
+            if (search.Length == 0 || model.Contains(search, StringComparison.OrdinalIgnoreCase))
+                FilteredModels.Add(model);
+        }
+    }
 
     partial void OnOnlyWithSessionsChanged(bool value)
     {
@@ -346,7 +375,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task CommitRenameAsync(SessionNodeViewModel? node)
+    private void CommitRename(SessionNodeViewModel? node)
     {
         if (node is null || !node.IsRenaming)
             return;
@@ -354,7 +383,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var title = node.RenameDraft.Trim();
         if (title.Length == 0 || title == node.Title)
             return;
-        StatusText = await _bridge.RunAsync(_agent, $"/rename {node.SessionId.Value} {title}");
+        var persistence = _ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
+        if (persistence is null)
+        {
+            StatusText = "会话持久化不可用";
+            return;
+        }
+        persistence.Rename(node.SessionId, title);
+        node.Agent?.Session.Rename(title);
+        if (node.SessionId == _agent.Id)
+            SessionTitle = title;
+        StatusText = $"已重命名为「{title}」";
         RefreshSessions();
     }
 
@@ -396,9 +435,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"{_agent.Id.Value}-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.jsonl");
             await using var stream = File.Create(path);
-            await using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+            await using var writer = new StreamWriter(stream);
             foreach (var sessionEvent in events)
-                DshJson.Serialize(writer, sessionEvent);
+                await writer.WriteLineAsync(DshJson.Serialize(sessionEvent));
             await writer.FlushAsync();
             StatusText = $"已导出 {events.Count} 条事件: {path}";
             CopyRequested?.Invoke(path);
@@ -410,7 +449,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void OpenSessionFolder() => DesktopIntegration.OpenPath(Path.Combine(Home.Root, "sessions"));
+    private async Task OpenSessionFolderAsync()
+        => StatusText = await DesktopIntegration.OpenPathAsync(Path.Combine(Home.Root, "sessions"));
 
     [RelayCommand]
     private void SetWorkspaceView(string view) => WorkspaceView = view == GuiSettings.ViewFilesystem ? GuiSettings.ViewFilesystem : GuiSettings.ViewSolution;
@@ -564,6 +604,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task SwitchModelAsync(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return;
+        StatusText = await _bridge.RunAsync(_agent, $"/model {model}");
+        RefreshModelLabels();
+        Preferences.Reload();
+    }
+
+    [RelayCommand]
+    private async Task SwitchReasoningAsync(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+            return;
+        StatusText = await _bridge.RunAsync(_agent, $"/reasoning {effort}");
+        RefreshModelLabels();
+    }
+
+    [RelayCommand]
     private void MoveSuggestion(int delta)
     {
         if (Suggestions.Count == 0)
@@ -572,12 +631,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void ConfirmSuggestion()
+    private void ConfirmSuggestion(SuggestionViewModel? suggestion)
     {
+        if (suggestion is not null)
+        {
+            ApplySuggestion(suggestion);
+            return;
+        }
         if (!IsSuggestionOpen || Suggestions.Count == 0)
             return;
-        var suggestion = Suggestions[Math.Clamp(SuggestionIndex, 0, Suggestions.Count - 1)];
-        ApplySuggestion(suggestion);
+        ApplySuggestion(Suggestions[Math.Clamp(SuggestionIndex, 0, Suggestions.Count - 1)]);
     }
 
     [RelayCommand]
@@ -874,7 +937,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _lastUserMessages.Clear();
         Page = AppPage.Chat;
         SessionTitle = agent.Session.Header.Title ?? agent.Id.Value;
-        SessionSubtitle = ModelLabel(agent);
         ApplyEvents(agent.Session.SnapshotEvents());
         IsBusy = agent.Status == AgentStatus.Running;
         RefreshMode();
@@ -924,7 +986,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ApprovalPolicy.Auto => "Full access",
             _ => "Ask（每次审批）",
         };
-        Composer.ModelLabel = ModelLabel(_agent);
+        RefreshModelLabels();
+    }
+
+    private void RefreshModelLabels()
+    {
+        var config = _agent.Session.RequestHeader()?.Config;
+        var label = $"{config?.Provider ?? _agent.Options.Provider}/{config?.Model ?? _agent.Options.Model}";
+        Composer.ModelLabel = label;
+        SessionSubtitle = label;
+        Composer.ReasoningLabel = config?.ReasoningEffort?.Value ?? "推理";
     }
 
     private void ApplyEvents(IReadOnlyList<SessionEvent> batch)
@@ -963,6 +1034,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 break;
             case RequestHeaderPayload:
                 TokenStats.RequestStarted();
+                RefreshModelLabels();
                 break;
             case AssistantChunkPayload chunk:
                 ApplyChunk(sessionEvent.Seq, chunk.Chunk);
@@ -1063,8 +1135,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         if (text.Length > 0)
-            AppendMessage(new MessageViewModel("助手", text, MessageKind.Assistant, false));
+            AppendMessage(new MessageViewModel(AssistantRole(), text, MessageKind.Assistant, false));
     }
+
+    private string AssistantRole()
+        => _agent.Session.RequestHeader()?.Config.Model ?? _agent.Options.Model ?? "助手";
 
     private void ApplyToolCall(long seq, ToolCallPayload call)
     {
@@ -1086,7 +1161,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void AppendAssistant(string delta)
     {
-        _openAssistant ??= AppendMessage(new MessageViewModel("助手", "", MessageKind.Assistant, true));
+        _openAssistant ??= AppendMessage(new MessageViewModel(AssistantRole(), "", MessageKind.Assistant, true));
         _openAssistant.Append(delta);
     }
 
@@ -1167,19 +1242,45 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private IReadOnlyList<SuggestionViewModel> ArgumentSuggestions(string name, string argument)
-    {
-        var candidates = name switch
-        {
-            "model" => Preferences.Models,
-            "session" => _catalog.Load().Select(node => node.SessionId.Value),
-            "skill" => [],
-            "provider" => [],
-            _ => [],
-        };
-        return [.. candidates
+        => [.. ArgumentCandidates(name, argument)
             .Where(candidate => candidate.StartsWith(argument, StringComparison.OrdinalIgnoreCase))
             .Take(20)
             .Select(candidate => new SuggestionViewModel("argument", $"/{name} {candidate}", "", $"/{name} {candidate} "))];
+
+    /** 「从集合里选一个参数」的命令统一在这里登记候选来源。 */
+    private IReadOnlyList<string> ArgumentCandidates(string name, string argument)
+        => name switch
+        {
+            "model" => [.. Preferences.Models],
+            "reasoning" => [.. Preferences.ReasoningEfforts],
+            "session" => [.. _catalog.Load().Select(node => node.SessionId.Value)],
+            "skill" => _skillNames,
+            "provider" => ProviderCandidates(argument),
+            _ => [],
+        };
+
+    private IReadOnlyList<string> ProviderCandidates(string argument)
+    {
+        if (!argument.StartsWith("remove ", StringComparison.Ordinal))
+            return ["add", "list", "remove"];
+        return [.. HarnessSettings.Load(Home).Providers.Keys
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .Select(key => $"remove {key}")];
+    }
+
+    private async Task LoadSkillNamesAsync()
+    {
+        var catalog = _ctx.Get<ISkillCatalog>(ISkillCatalog.ServiceName, false);
+        if (catalog is null)
+            return;
+        try
+        {
+            _skillNames = await catalog.ListNames();
+        }
+        catch (Exception error)
+        {
+            _ctx.LoggerFor("gui").Warn($"failed to list skills: {error.Message}");
+        }
     }
 
     private IReadOnlyList<SuggestionViewModel> MentionSuggestions(string input)
@@ -1219,9 +1320,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var flat = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
         return flat.Length <= TracePreviewChars ? flat : flat[..TracePreviewChars] + "…";
     }
-
-    private static string ModelLabel(AgentLoopAgent agent)
-        => $"{agent.Options.Provider}/{agent.Options.Model}";
 
     private static string TurnEndText(TurnEndReason reason) => reason switch
     {

@@ -8,6 +8,7 @@ public sealed class TranscriptRenderer
 {
     public const int ToolArgumentsPreviewChars = 120;
     public const int ToolResultPreviewChars = 300;
+    public const int SystemMessageFoldChars = 140;
 
     private readonly StringBuilder _buffer = new();
     private readonly List<TranscriptFold> _folds = [];
@@ -42,6 +43,25 @@ public sealed class TranscriptRenderer
     }
 
     public void AppendRaw(string text) => Append(text);
+
+    public void AppendSystemMessage(string text)
+    {
+        var flat = text.Replace("\r\n", " ").Replace('\n', ' ').Trim();
+        if (flat.Length <= SystemMessageFoldChars)
+        {
+            Append(text);
+            return;
+        }
+        var start = _buffer.Length;
+        Append(text);
+        _folds.Add(new TranscriptFold
+        {
+            Start = start,
+            End = _buffer.Length,
+            Label = "output",
+            Preview = Preview(flat, ToolResultPreviewChars),
+        });
+    }
 
     public void AppendUserMessage(UserMessage message)
     {

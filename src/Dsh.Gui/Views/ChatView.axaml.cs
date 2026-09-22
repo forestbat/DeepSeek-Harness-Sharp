@@ -12,6 +12,8 @@ public sealed partial class ChatView : UserControl
 
     private MainViewModel? _viewModel;
     private bool _sticky = true;
+    private Flyout? _modelFlyout;
+    private Flyout? _reasoningFlyout;
 
     public ChatView()
     {
@@ -63,6 +65,23 @@ public sealed partial class ChatView : UserControl
             return;
         Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(_viewModel.Messages[^1]));
     }
+
+    private void OnModelFlyoutOpened(object? sender, EventArgs e)
+    {
+        if (sender is not Flyout flyout)
+            return;
+        _modelFlyout = flyout;
+        if (_viewModel is not null)
+            _viewModel.ModelSearchText = "";
+        if (flyout.Content is Panel panel && panel.Children.OfType<TextBox>().FirstOrDefault() is { } search)
+            Dispatcher.UIThread.Post(() => search.Focus());
+    }
+
+    private void OnModelItemClick(object? sender, RoutedEventArgs e) => _modelFlyout?.Hide();
+
+    private void OnReasoningFlyoutOpened(object? sender, EventArgs e) => _reasoningFlyout = sender as Flyout;
+
+    private void OnReasoningItemClick(object? sender, RoutedEventArgs e) => _reasoningFlyout?.Hide();
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)
     {

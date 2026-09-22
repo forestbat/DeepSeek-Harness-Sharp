@@ -59,7 +59,6 @@ public sealed class ChatWindow : IDisposable
     private int _wrapCacheWidth = -1;
     private List<string>? _wrapCacheLines;
     private int _wrapProcessedLine;
-    private string? _profileText;
     private bool _sessionRenamedSubscribed;
 
     public ChatWindow(Context ctx, AgentLoopAgent agent, HarnessHome home, ISessionPersistence? persistence = null)
@@ -521,7 +520,7 @@ public sealed class ChatWindow : IDisposable
 
     private void AppendText(string text)
     {
-        _renderer.AppendRaw(text);
+        _renderer.AppendSystemMessage(text);
         _stickToBottom = true;
     }
 
@@ -537,7 +536,6 @@ public sealed class ChatWindow : IDisposable
         _renderedSeq = 0;
         _scrollOffset = 0;
         _stickToBottom = true;
-        _profileText = null;
         InvalidateWrapCache();
         _unsubscribe = _ctx.On<SessionEventNotification>(notification =>
         {
@@ -802,6 +800,7 @@ public sealed class ChatWindow : IDisposable
                 "remove" => settings.Providers.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(),
                 "session" => CurrentSessions().Select(session => session.Id).ToList(),
                 "skill" => _skillCandidates,
+                "reasoning" => ReasoningEffortCandidates(),
                 _ => [],
             };
         }
@@ -809,6 +808,21 @@ public sealed class ChatWindow : IDisposable
         {
             return [];
         }
+    }
+
+    private IReadOnlyList<string> ReasoningEffortCandidates()
+    {
+        var (provider, model) = CurrentModel(_agent);
+        if (provider is null || model is null)
+            return [];
+        var info = _ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false)?.ResolveModelInfo(provider, model);
+        return info?.Reasoning?.Efforts.Select(effort => effort.Id.Value).ToList() ?? [];
+    }
+
+    private static (string? Provider, string? Model) CurrentModel(IAgent agent)
+    {
+        var config = agent.Session.RequestHeader()?.Config;
+        return (config?.Provider ?? agent.Options.Provider, config?.Model ?? agent.Options.Model);
     }
 
     private void MoveMenuSelection(int direction)
@@ -1095,7 +1109,11 @@ public sealed class ChatWindow : IDisposable
                 return;
             }
 
-            AppendRaw(string.Join('\n', sessions.Select(agent => $"  {agent.Id}: {agent.Options.Provider}/{agent.Options.Model}")) + "\n");
+            AppendRaw(string.Join('\n', sessions.Select(agent =>
+            {
+                var (provider, model) = CurrentModel(agent);
+                return $"  {agent.Id}: {provider}/{model}";
+            })) + "\n");
             return;
         }
 
@@ -1320,12 +1338,13 @@ public sealed class ChatWindow : IDisposable
             return;
 
         var row = rect.Y;
+        var (provider, model) = CurrentModel(_agent);
         DrawPanelSection(grid, rect, ref row, "上下文",
         [
             $"session: {_agent.Id}",
             $"title: {_agent.Session.Header.Title ?? "-"}",
             $"cwd: {_agent.Session.Header.Cwd ?? "-"}",
-            $"model: {_agent.Options.Provider}/{_agent.Options.Model}",
+            $"model: {provider}/{model}",
         ]);
         DrawPanelSection(grid, rect, ref row, "MCP", McpPanelLines());
         DrawPanelSection(grid, rect, ref row, "计划", ["使用 /plan 管理"]);
@@ -1449,7 +1468,8 @@ public sealed class ChatWindow : IDisposable
             return;
         var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 补全 · Ctrl+X 会话";
         DrawText(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
-        var profile = _profileText ??= $"{_agent.Options.Provider} · {_agent.Options.Model}";
+        var (currentProvider, currentModel) = CurrentModel(_agent);
+        var profile = $"{currentProvider} · {currentModel}";
         var profileWidth = TerminalTextWidth.Of(profile);
         if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
             DrawText(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);

@@ -156,20 +156,116 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Contains("Session id or title", frame);
     }
 
-    private async Task<ChatWindow> CreateChat()
+    [Fact]
+    public async Task Tab_On_Reasoning_Lists_Efforts_And_Confirms_Command()
+    {
+        using var chat = await CreateChat((ctx, commands) =>
+        {
+            _ = new LlmRuntime(ctx).RegisterAdapter(["deepseek-official"], new EffortAdapter());
+            _ = ReasoningCommand.Register(ctx);
+        });
+
+        Type(chat, "/reasoning");
+        Press(chat, ConsoleKey.Tab);
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("Reasoning effort", frame);
+        Assert.Contains("low", frame);
+        Assert.Contains("high", frame);
+
+        Press(chat, ConsoleKey.DownArrow);
+        Press(chat, ConsoleKey.Tab);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        chat.DrainUi();
+
+        frame = DrawFrame(chat);
+        Assert.Contains("reasoning effort set to high", frame);
+    }
+
+    [Fact]
+    public async Task Model_Label_Updates_After_Model_Switch()
+    {
+        using var chat = await CreateChat((ctx, commands) =>
+        {
+            _ = new LlmRuntime(ctx).RegisterAdapter(["deepseek-official"], new EffortAdapter());
+            _ = ModelCommand.Register(ctx, HarnessHome.Resolve(_homeDir));
+        }, model: "m-a", stubModelCommand: false);
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("model: deepseek-official/m-a", frame);
+
+        Type(chat, "/model deepseek-official/m-b");
+        Press(chat, ConsoleKey.Enter);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        chat.DrainUi();
+
+        frame = DrawFrame(chat);
+        Assert.Contains("model: deepseek-official/m-b", frame);
+        Assert.Contains("deepseek-official · m-b", frame);
+        Assert.DoesNotContain("m-a", frame);
+    }
+
+    [Fact]
+    public async Task Long_Command_Output_Folds_And_Expands()
+    {
+        var rows = string.Join('\n', Enumerable.Range(1, 12).Select(index => $"row-{index} {new string('x', 40)}"));
+        using var chat = await CreateChat((ctx, commands) => _ = commands.Register(new CommandDefinition
+        {
+            Name = "dump",
+            Description = "Dump long output",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(rows)),
+        }));
+
+        Type(chat, "/dump");
+        Press(chat, ConsoleKey.Enter);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        chat.DrainUi();
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("row-1", frame);
+        Assert.DoesNotContain("row-9", frame);
+
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+
+        frame = DrawFrame(chat);
+        Assert.Contains("row-9", frame);
+    }
+
+    private sealed class EffortAdapter : LlmAdapter
+    {
+        public override LlmProviderInfo ProviderInfo { get; } = new("deepseek-official", "deepseek-official");
+
+        public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, "test");
+
+        public override IAsyncEnumerable<StreamChunk> Stream(GenerateOptions options, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public override LlmResolvedModelInfo ResolveModel(string model)
+            => new("deepseek-official", model, model,
+                Reasoning: new LlmModelReasoningInfo(
+                [
+                    new LlmReasoningEffortInfo(ReasoningEffortId.Create("low"), "Low"),
+                    new LlmReasoningEffortInfo(ReasoningEffortId.Create("high"), "High"),
+                ]));
+    }
+
+    private async Task<ChatWindow> CreateChat(Action<Context, CommandsService>? configure = null, string model = "deepseek-v4-flash", bool stubModelCommand = true)
     {
         var ctx = new Context();
         _ = new SessionStore(ctx);
         var agents = new AgentRegistry(ctx);
         _ = new AgentLoop(ctx);
         var commands = CommandsService.Register(ctx);
-        RegisterCommand(commands, "model", "List or switch model");
+        if (stubModelCommand)
+            RegisterCommand(commands, "model", "List or switch model");
         RegisterCommand(commands, "mcp", "Manage MCP servers");
         RegisterCommand(commands, "session", "Manage sessions");
+        configure?.Invoke(ctx, commands);
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),
             null,
-            new AgentOptions("deepseek-official", "deepseek-v4-flash")));
+            new AgentOptions("deepseek-official", model)));
         var agent = (AgentLoopAgent)handle.Agent;
         await agent.WhenIdle();
         var home = HarnessHome.Resolve(_homeDir);

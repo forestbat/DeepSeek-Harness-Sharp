@@ -87,6 +87,11 @@ public static class CommandMenuCatalog
             MenuSchema = new CommandMenuSchema("Project memory", "on, off, or show"),
             ArgumentSchemas = [new CommandArgumentSchema("state", "select", "on, off, or show", Choices: ["on", "off", "show"])],
         },
+        "reasoning" => descriptor with
+        {
+            MenuSchema = new CommandMenuSchema("Reasoning effort", "effort"),
+            ArgumentSchemas = [new CommandArgumentSchema("effort", "select", "Reasoning effort")],
+        },
         _ => descriptor,
     };
 }

@@ -39,7 +39,7 @@ public sealed partial class MessageViewModel : ObservableObject
         Role = role;
         Kind = kind;
         IsStreaming = streaming;
-        IsExpanded = !IsFoldable;
+        IsExpanded = !IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars);
         _buffer.Append(text);
         Text = text;
     }
@@ -95,8 +95,8 @@ public sealed partial class MessageViewModel : ObservableObject
 
     public HorizontalAlignment Align => IsUser ? HorizontalAlignment.Right : HorizontalAlignment.Left;
 
-    /** 思考/工具调用/工具结果/上下文注入默认折叠; 正文始终展开。 */
-    public bool IsFoldable => Kind is MessageKind.Reasoning or MessageKind.Tool or MessageKind.Result or MessageKind.Context;
+    /** 思考/工具/结果/上下文/系统消息可折叠; 摊平后不超过 PreviewChars 的短消息默认展开, 流式消息构造时内容未定, 默认折叠。 */
+    public bool IsFoldable => Kind is MessageKind.Reasoning or MessageKind.Tool or MessageKind.Result or MessageKind.Context or MessageKind.System;
 
     public string FoldLabel => IsExpanded ? "▾ 折叠" : "▸ 展开";
 
@@ -106,10 +106,12 @@ public sealed partial class MessageViewModel : ObservableObject
     {
         get
         {
-            var flat = Text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            var flat = Flatten(Text);
             return flat.Length <= PreviewChars ? flat : flat[..PreviewChars] + "…";
         }
     }
+
+    private static string Flatten(string text) => text.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
     public bool ShowActions => Kind == MessageKind.Assistant && !IsStreaming;
 

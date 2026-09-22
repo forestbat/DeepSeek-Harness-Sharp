@@ -61,7 +61,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<SettingsNavItemViewModel> Sections { get; } =
     [
         new(SettingsSection.Appearance, "外观"),
-        new(SettingsSection.Model, "模型与 Provider"),
+        new(SettingsSection.Model, "模型提供者"),
         new(SettingsSection.Safety, "安全策略"),
         new(SettingsSection.Graphics, "图形与加速"),
         new(SettingsSection.Storage, "会话与存储"),
@@ -146,12 +146,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string _workspaceView = GuiSettings.ViewSolution;
-
-    [ObservableProperty]
-    private string _selectedModel = "";
-
-    [ObservableProperty]
-    private string _selectedEffort = "";
 
     [ObservableProperty]
     private string _providerName = "";
@@ -331,22 +325,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task SwitchModelAsync()
-    {
-        if (SelectedModel.Length == 0)
-            return;
-        Status = await RunAsync($"/model {SelectedModel}");
-    }
-
-    [RelayCommand]
-    private async Task SwitchReasoningAsync()
-    {
-        if (SelectedEffort.Length == 0)
-            return;
-        Status = await RunAsync($"/reasoning {SelectedEffort}");
-    }
-
-    [RelayCommand]
     private async Task SaveProviderAsync()
     {
         if (ProviderName.Trim().Length == 0 || ProviderBaseUrl.Trim().Length == 0 || ProviderApiKey.Trim().Length == 0)
@@ -521,10 +499,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void OpenSessionsFolder() => DesktopIntegration.OpenPath(SessionsPath);
+    private async Task OpenSessionsFolderAsync() => Status = await DesktopIntegration.OpenPathAsync(SessionsPath);
 
     [RelayCommand]
-    private void OpenConfigFolder() => DesktopIntegration.OpenPath(Path.GetDirectoryName(ConfigPath) ?? _home.Root);
+    private async Task OpenConfigFolderAsync() => Status = await DesktopIntegration.OpenPathAsync(Path.GetDirectoryName(ConfigPath) ?? _home.Root);
 
     private void SelectSection(SettingsNavItemViewModel? section)
     {
@@ -562,7 +540,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             foreach (var modelId in providerEntry.Models.Keys.OrderBy(id => id, StringComparer.Ordinal))
                 Models.Add($"{providerName}/{modelId}");
         }
-        SelectedModel = Models.Count > 0 ? Models[0] : "";
         Providers.Clear();
         foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             Providers.Add(new ProviderRowViewModel(providerName, providerEntry.Type ?? "openai-compatible", providerEntry.Options?.BaseUrl ?? "", providerEntry.Models.Count));
@@ -600,7 +577,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             ReasoningEfforts.Clear();
         }
-        SelectedEffort = ReasoningEfforts.FirstOrDefault() ?? "";
     }
 
     private void LoadPluginRows()

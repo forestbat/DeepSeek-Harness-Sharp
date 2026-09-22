@@ -81,25 +81,7 @@
           </StackPanel>
 
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsModelSection}">
-            <TextBlock Text="模型与 Provider" Classes="Title" />
-
-            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
-              <StackPanel Spacing="8">
-                <TextBlock Text="当前模型" Classes="Secondary" />
-                <ListBox ItemsSource="{Binding Preferences.Models}" SelectedItem="{Binding Preferences.SelectedModel}" MaxHeight="180" />
-                <Button Classes="Primary" HorizontalAlignment="Left" Content="切换"
-                        Command="{Binding Preferences.SwitchModelCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
-              </StackPanel>
-            </Border>
-
-            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
-              <StackPanel Spacing="8">
-                <TextBlock Text="推理强度" Classes="Secondary" />
-                <ListBox ItemsSource="{Binding Preferences.ReasoningEfforts}" SelectedItem="{Binding Preferences.SelectedEffort}" MaxHeight="140" />
-                <Button Classes="Primary" HorizontalAlignment="Left" Content="应用"
-                        Command="{Binding Preferences.SwitchReasoningCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
-              </StackPanel>
-            </Border>
+            <TextBlock Text="模型提供者" Classes="Title" />
 
             <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
               <StackPanel Spacing="8">
@@ -202,6 +184,7 @@
                 <CheckBox Content="自动压缩上下文（compaction）" IsChecked="{Binding Preferences.CompactionAuto, Mode=TwoWay}" />
                 <TextBlock Text="压缩阈值（%）" Classes="Secondary" />
                 <Slider Minimum="10" Maximum="95" VerticalAlignment="Center"
+                        ToolTip.Tip="{Binding Preferences.CompactionThreshold, StringFormat={}{0:0}%}"
                         Value="{Binding Preferences.CompactionThreshold, Mode=TwoWay}" />
                 <Button Classes="Primary" HorizontalAlignment="Left" Content="保存"
                         Command="{Binding Preferences.SaveStorageCommand}" />

@@ -351,6 +351,89 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task ConfirmSuggestion_PrefersClickedItem_OverKeyboardIndex()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        viewModel.Composer.Input = "/";
+
+        Assert.True(viewModel.IsSuggestionOpen);
+        Assert.True(viewModel.Suggestions.Count > 1);
+        var clicked = viewModel.Suggestions[1];
+        viewModel.ConfirmSuggestionCommand.Execute(clicked);
+
+        Assert.Equal(clicked.InsertText, viewModel.Composer.Input);
+
+        viewModel.Composer.Input = "/";
+        var first = viewModel.Suggestions[0];
+        viewModel.ConfirmSuggestionCommand.Execute(null);
+
+        Assert.Equal(first.InsertText, viewModel.Composer.Input);
+    }
+
+    [Fact]
+    public async Task CommitRename_WritesThroughPersistence_AndSyncsTitle()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First();
+
+        viewModel.BeginRenameCommand.Execute(node);
+        node.RenameDraft = " 新名字 ";
+        viewModel.CommitRenameCommand.Execute(node);
+
+        var persistence = environment.App.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)!;
+        Assert.Equal("新名字", persistence.Stat(environment.Agent.Id)?.Header.Title);
+        Assert.Equal("新名字", environment.Agent.Session.Header.Title);
+        Assert.Equal("新名字", viewModel.SessionTitle);
+        var refreshed = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First();
+        Assert.Equal("新名字", refreshed.Title);
+    }
+
+    [Fact]
+    public Task ModelLabels_FollowRequestHeaderPayload() => HeadlessGui.Run(async () =>
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        Assert.Equal("test/test-model", viewModel.Composer.ModelLabel);
+        Assert.Equal("推理", viewModel.Composer.ReasoningLabel);
+
+        environment.Agent.Session.Append(new RequestHeaderPayload(
+            new EpochHeader(new LlmCallConfig("other", "other-model", ReasoningEffortId.Create("high"))),
+            RequestHeaderReasons.Change,
+            true));
+        for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "other/other-model"; attempt++)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        Assert.Equal("other/other-model", viewModel.Composer.ModelLabel);
+        Assert.Equal("other/other-model", viewModel.SessionSubtitle);
+        Assert.Equal("high", viewModel.Composer.ReasoningLabel);
+    });
+
+    [Fact]
+    public async Task AssistantMessages_AreLabeledWithCurrentModel()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        session.Append(new RequestHeaderPayload(
+            new EpochHeader(new LlmCallConfig("other", "other-model")),
+            RequestHeaderReasons.Change));
+        session.Append(new AssistantMessagePayload(
+            1,
+            1,
+            MessageFactory.CreateAssistantMessage([new TextBlock("回答")], "other", "other-model")),
+            new SurfaceOp.Append());
+
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+
+        var assistant = Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.Assistant);
+        Assert.Equal("other-model", assistant.Role);
+    }
+
+    [Fact]
     public async Task WorkspaceView_SwitchPersistsIntoGuiParameters()
     {
         using var environment = await GuiTestEnvironment.CreateAsync();

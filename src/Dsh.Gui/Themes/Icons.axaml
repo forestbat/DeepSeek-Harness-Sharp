@@ -21,7 +21,8 @@
   <StreamGeometry x:Key="Icon.ThumbDown">M7,13.5 L10.5,19.5 A2,2 0 0 0 14.5,18 L14.5,14.5 L18.5,14.5 A1.8,1.8 0 0 0 20.3,12.3 L18.8,5.3 A1.8,1.8 0 0 0 17,3.5 L7,3.5 Z M7,13.5 L7,3.5 M3.5,13.5 L7,13.5 L7,3.5 L3.5,3.5 Z</StreamGeometry>
   <StreamGeometry x:Key="Icon.Download">M12,4 L12,15 M7,10.5 L12,15.5 L17,10.5 M4.5,19.5 L19.5,19.5</StreamGeometry>
   <StreamGeometry x:Key="Icon.Close">M6,6 L18,18 M18,6 L6,18</StreamGeometry>
-  <StreamGeometry x:Key="Icon.Minimize">M5,12 L19,12</StreamGeometry>
+  <!-- 单条水平线的包围盒高度为 0, Stretch=Uniform 下缩放系数被算成 0, 图标塌缩成一个点; 画成 2px 高的细条规避。 -->
+  <StreamGeometry x:Key="Icon.Minimize">M5,11 L19,11 L19,13 L5,13 Z</StreamGeometry>
   <StreamGeometry x:Key="Icon.Maximize">M6,6 L18,6 L18,18 L6,18 Z</StreamGeometry>
   <StreamGeometry x:Key="Icon.Tray">M4,13 L8,13 L9.5,16 L14.5,16 L16,13 L20,13 M4,13 L6.5,5.5 L17.5,5.5 L20,13 M4,13 L4,18 A1,1 0 0 0 5,19 L19,19 A1,1 0 0 0 20,18 L20,13</StreamGeometry>
   <StreamGeometry x:Key="Icon.Attach">M17.5,9.5 L10,17 A3.5,3.5 0 0 1 5,12.5 L13,4.5 A2.5,2.5 0 0 1 16.5,8 L8.5,16 A1.2,1.2 0 0 1 6.8,14.3 L14,7</StreamGeometry>

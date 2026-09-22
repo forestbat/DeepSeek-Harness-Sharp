@@ -1,5 +1,4 @@
 using Dsh.Core;
-using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -30,7 +29,7 @@ public sealed class GuiComponentTests
     [Fact]
     public void MessageViewModel_FoldsReasoningAndTools_ButNeverAssistantBody()
     {
-        var reasoning = new MessageViewModel("思考", "第一行\n第二行", MessageKind.Reasoning, false);
+        var reasoning = new MessageViewModel("思考", new string('x', MessageViewModel.PreviewChars + 1), MessageKind.Reasoning, false);
         var assistant = new MessageViewModel("助手", "正文", MessageKind.Assistant, false);
 
         Assert.True(reasoning.IsFoldable);
@@ -40,10 +39,36 @@ public sealed class GuiComponentTests
         reasoning.ToggleFoldCommand.Execute(null);
         Assert.True(reasoning.ShowBody);
 
+        var shortReasoning = new MessageViewModel("思考", "第一行\n第二行", MessageKind.Reasoning, false);
+        Assert.True(shortReasoning.IsFoldable);
+        Assert.True(shortReasoning.IsExpanded);
+
+        var streaming = new MessageViewModel("思考", "", MessageKind.Reasoning, true);
+        Assert.False(streaming.IsExpanded);
+
         Assert.False(assistant.IsFoldable);
         Assert.True(assistant.ShowBody);
         Assert.True(assistant.ShowMarkdown);
         Assert.True(assistant.ShowActions);
+    }
+
+    [Fact]
+    public void MessageViewModel_SystemMessages_FoldOnlyBeyondPreviewChars()
+    {
+        var shortMessage = new MessageViewModel("系统", "导出完成", MessageKind.System, false);
+
+        Assert.True(shortMessage.IsFoldable);
+        Assert.True(shortMessage.IsExpanded);
+        Assert.False(shortMessage.ShowPreview);
+
+        var longMessage = new MessageViewModel("系统", new string('x', MessageViewModel.PreviewChars + 1), MessageKind.System, false);
+
+        Assert.True(longMessage.IsFoldable);
+        Assert.False(longMessage.IsExpanded);
+        Assert.True(longMessage.ShowPreview);
+        Assert.False(longMessage.ShowBody);
+        longMessage.ToggleFoldCommand.Execute(null);
+        Assert.True(longMessage.ShowBody);
     }
 
     [Fact]
@@ -62,9 +87,10 @@ public sealed class GuiComponentTests
 
         Assert.Equal("上下文注入 · @pkg", message.Text);
         Assert.True(message.HasDetail);
-        Assert.False(message.ShowDetail);
-        message.ToggleFoldCommand.Execute(null);
         Assert.True(message.ShowDetail);
+        message.ToggleFoldCommand.Execute(null);
+        Assert.False(message.ShowDetail);
+        Assert.True(message.ShowPreview);
         Assert.False(message.HasRole);
     }
 

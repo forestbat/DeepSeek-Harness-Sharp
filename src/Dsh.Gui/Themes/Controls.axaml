@@ -111,7 +111,7 @@
   <Style Selector="ListBox.MessageList">
     <Setter Property="Background" Value="Transparent" />
     <Setter Property="BorderThickness" Value="0" />
-    <Setter Property="Padding" Value="0" />
+    <Setter Property="Padding" Value="8,0" />
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
   </Style>
 
@@ -217,7 +217,7 @@
 
   <Style Selector="Border.Msg">
     <Setter Property="MaxWidth" Value="780" />
-    <Setter Property="Margin" Value="0,4" />
+    <Setter Property="Margin" Value="16,4" />
   </Style>
 
   <Style Selector="Border.Msg.user">

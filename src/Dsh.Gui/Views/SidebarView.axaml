@@ -92,7 +92,7 @@
     </StackPanel>
 
     <Grid>
-      <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="6,0,0,0" IsVisible="{Binding IsSolutionView}">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="6,0,8,0" IsVisible="{Binding IsSolutionView}">
         <ItemsControl ItemsSource="{Binding Workspaces}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:WorkspaceGroupViewModel">
@@ -152,8 +152,13 @@
         </ItemsControl>
       </ScrollViewer>
 
-      <TreeView ItemsSource="{Binding FileSystemNodes}" IsVisible="{Binding IsFileSystemView}"
-                Background="Transparent" Padding="6,0,0,0">
+      <TreeView x:Name="FileTree" ItemsSource="{Binding FileSystemNodes}" IsVisible="{Binding IsFileSystemView}"
+                Background="Transparent" Padding="6,0,8,0">
+        <TreeView.Styles>
+          <Style Selector="TreeViewItem" x:DataType="vm:WorkspaceNodeViewModel">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+          </Style>
+        </TreeView.Styles>
         <TreeView.ItemTemplate>
           <TreeDataTemplate x:DataType="vm:WorkspaceNodeViewModel" ItemsSource="{Binding Children}">
             <StackPanel Margin="0,2">

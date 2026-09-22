@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Dsh.Gui.ViewModels"
              xmlns:views="using:Dsh.Gui.Views"
+             xmlns:sys="using:System"
              x:Class="Dsh.Gui.Views.ChatView"
              x:DataType="vm:MainViewModel"
              x:CompileBindings="True"
@@ -180,7 +181,8 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:SuggestionViewModel">
                   <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                          Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ConfirmSuggestionCommand}">
+                          Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ConfirmSuggestionCommand}"
+                          CommandParameter="{Binding}">
                     <Grid ColumnDefinitions="Auto,*">
                       <TextBlock Text="{Binding Label}" Classes="Mono" />
                       <TextBlock Grid.Column="1" Text="{Binding Description}" Classes="Tertiary"
@@ -198,7 +200,7 @@
                  PlaceholderText="{Binding Composer.Placeholder}"
                  Text="{Binding Composer.Input}" />
 
-        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
+        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
           <Button Classes="Chip" ToolTip.Tip="附件与引用">
             <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
             <Button.Flyout>
@@ -239,17 +241,50 @@
           <Button Grid.Column="3" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="模型">
             <TextBlock Text="{Binding Composer.ModelLabel}" TextTrimming="CharacterEllipsis" MaxWidth="220" />
             <Button.Flyout>
-              <Flyout Placement="Top">
+              <Flyout Placement="Top" Opened="OnModelFlyoutOpened">
                 <StackPanel Width="300" Spacing="6">
-                  <ListBox ItemsSource="{Binding Preferences.Models}" MaxHeight="220"
-                           SelectedItem="{Binding Preferences.SelectedModel}" />
-                  <Button Classes="Primary" Content="切换模型" Command="{Binding Preferences.SwitchModelCommand}" />
+                  <TextBox Classes="Search" PlaceholderText="搜索模型"
+                           Text="{Binding ModelSearchText}" />
+                  <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding FilteredModels}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="sys:String">
+                          <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                  Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SwitchModelCommand}"
+                                  CommandParameter="{Binding}"
+                                  Click="OnModelItemClick">
+                            <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
                 </StackPanel>
               </Flyout>
             </Button.Flyout>
           </Button>
-          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="维护动作">
-            <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Refresh}" />
+          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="推理强度"
+                  IsVisible="{Binding HasReasoningEfforts}">
+            <TextBlock Text="{Binding Composer.ReasoningLabel}" />
+            <Button.Flyout>
+              <Flyout Placement="Top" Opened="OnReasoningFlyoutOpened">
+                <ItemsControl Width="200" ItemsSource="{Binding Preferences.ReasoningEfforts}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="sys:String">
+                      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                              Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).SwitchReasoningCommand}"
+                              CommandParameter="{Binding}"
+                              Click="OnReasoningItemClick">
+                        <TextBlock Text="{Binding}" />
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <Button Grid.Column="5" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="会话操作">
+            <TextBlock Text="会话操作" />
             <Button.Flyout>
               <MenuFlyout Placement="TopEdgeAlignedLeft">
                 <MenuItem Header="压缩上下文（/compact）" Command="{Binding CompactCommand}" />
@@ -258,16 +293,16 @@
               </MenuFlyout>
             </Button.Flyout>
           </Button>
-          <TextBlock Grid.Column="5" Text="Enter 发送 · Shift+Enter 换行 · / 命令 · @ 引用" Classes="Tertiary"
+          <TextBlock Grid.Column="6" Text="Enter 发送 · Shift+Enter 换行 · / 命令 · @ 引用" Classes="Tertiary"
                      VerticalAlignment="Center" Margin="10,0,0,0" />
-          <Button Grid.Column="6" Classes="Send" Command="{Binding SubmitCommand}"
+          <Button Grid.Column="7" Classes="Send" Command="{Binding SubmitCommand}"
                   IsVisible="{Binding !IsBusy}"
                   IsEnabled="{Binding Composer.CanSubmit}"
                   ToolTip.Tip="发送 (Enter)">
             <Path Classes="Icon" Width="16" Height="16" Stroke="{DynamicResource Brush.Text.OnAccent}"
                   Data="{StaticResource Icon.Send}" />
           </Button>
-          <Button Grid.Column="6" Classes="Send" Command="{Binding CancelTaskCommand}"
+          <Button Grid.Column="7" Classes="Send" Command="{Binding CancelTaskCommand}"
                   IsVisible="{Binding IsBusy}"
                   ToolTip.Tip="停止">
             <Path Classes="Icon" Width="14" Height="14" Stroke="{DynamicResource Brush.Text.OnAccent}"
