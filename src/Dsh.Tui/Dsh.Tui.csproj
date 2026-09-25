@@ -8,6 +8,7 @@
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
+    <ProjectReference Include="..\Dsh.Subagent\Dsh.Subagent.csproj" />
     <ProjectReference Include="..\Dsh.Pty\Dsh.Pty.csproj" />
   </ItemGroup>
 

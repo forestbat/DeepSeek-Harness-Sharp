@@ -21,6 +21,7 @@ public sealed class GpuRenderCore : IDisposable
     private int _gridSizeLocation;
     private int _passLocation;
     private int _texEnabledLocation;
+    private int _instanceBaseLocation;
     private bool _disposed;
 
     public void Initialize(GlyphAtlas atlas)
@@ -38,6 +39,7 @@ public sealed class GpuRenderCore : IDisposable
         _gridSizeLocation = GL.GetUniformLocation(_shader, "uGridSize");
         _passLocation = GL.GetUniformLocation(_shader, "uPass");
         _texEnabledLocation = GL.GetUniformLocation(_shader, "uTexEnabled");
+        _instanceBaseLocation = GL.GetUniformLocation(_shader, "uInstanceBase");
 
         float[] unitQuad = [0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f];
         _unitVbo = GL.GenBuffer();
@@ -87,6 +89,7 @@ public sealed class GpuRenderCore : IDisposable
         GL.Uniform1i(_atlasTextureLocation, 0);
         GL.Uniform1i(_cellsLocation, 1);
         GL.Uniform1i(_glyphMapLocation, 2);
+        GL.Uniform1i(_instanceBaseLocation, 0);
     }
 
     public void EnsureCellCapacity(int cellCount)
@@ -112,8 +115,54 @@ public sealed class GpuRenderCore : IDisposable
     }
 
     public void RenderFrame(GlyphAtlas atlas, int gridWidth, int gridHeight)
+        => RenderFrame(atlas, gridWidth, gridHeight, null);
+
+    /**
+     * 脏行裁剪渲染: dirtyRows 为 null/空、或脏行合计达到半屏时走整帧路径(行为与旧版一致);
+     * 否则按脏行带绘制, 用 uInstanceBase 把实例区间偏移到该行带, 只绘制这些行的格。
+     * 背景趟对每个格都写不透明色, 脏行因此被完整重绘, 无需清屏, 脏区外旧内容保持不动(故不需要 scissor)。
+     * 不设行带数上限: 半屏规则已把行带数限制在 rows/2 以内, 实测(240x67 与 480x135, 见 pane-dirty-band-crossover.md)
+     * 该范围内脏行路径始终快于整帧, 每带仅约 6 µs 提交开销。
+     */
+    public void RenderFrame(GlyphAtlas atlas, int gridWidth, int gridHeight, IReadOnlyList<(int Start, int Count)>? dirtyRows)
     {
-        GL.Clear(ClearBufferMask.ColorBufferBit);
+        PrepareFrame(atlas, gridWidth, gridHeight);
+        var dirtyTotal = 0;
+        if (dirtyRows is not null)
+        {
+            foreach (var (_, count) in dirtyRows)
+                dirtyTotal += count;
+        }
+        if (dirtyRows is null || dirtyRows.Count == 0 || dirtyTotal * 2 >= gridHeight)
+        {
+            GL.Disable(EnableCap.ScissorTest);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+            GL.Uniform1i(_instanceBaseLocation, 0);
+            DrawPasses(gridWidth * gridHeight);
+        }
+        else
+        {
+            // 按趟外层循环: 脏行带互不重叠, 背景趟全部画完再画字形趟, 结果与逐带绘制一致但状态切换更少。
+            GL.Uniform1f(_texEnabledLocation, 0f);
+            GL.Uniform1i(_passLocation, 0);
+            foreach (var (start, count) in dirtyRows)
+            {
+                GL.Uniform1i(_instanceBaseLocation, start * gridWidth);
+                DrawInstances(count * gridWidth);
+            }
+            GL.Uniform1f(_texEnabledLocation, 1f);
+            GL.Uniform1i(_passLocation, 1);
+            foreach (var (start, count) in dirtyRows)
+            {
+                GL.Uniform1i(_instanceBaseLocation, start * gridWidth);
+                DrawInstances(count * gridWidth);
+            }
+        }
+        GL.BindVertexArray(0);
+    }
+
+    private void PrepareFrame(GlyphAtlas atlas, int gridWidth, int gridHeight)
+    {
         GL.UseProgram(_shader);
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
@@ -129,17 +178,21 @@ public sealed class GpuRenderCore : IDisposable
         }
         FlushAtlasDirty(atlas);
         GL.Uniform2i(_gridSizeLocation, gridWidth, gridHeight);
-
-        var cellCount = gridWidth * gridHeight;
         GL.BindVertexArray(_vao);
+    }
+
+    private void DrawPasses(int instanceCount)
+    {
         GL.Uniform1f(_texEnabledLocation, 0f);
         GL.Uniform1i(_passLocation, 0);
-        GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, cellCount);
+        DrawInstances(instanceCount);
         GL.Uniform1f(_texEnabledLocation, 1f);
         GL.Uniform1i(_passLocation, 1);
-        GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, cellCount);
-        GL.BindVertexArray(0);
+        DrawInstances(instanceCount);
     }
+
+    private static void DrawInstances(int instanceCount)
+        => GL.DrawElementsInstanced(PrimitiveType.Triangles, 6, DrawElementsType.UnsignedShort, IntPtr.Zero, instanceCount);
 
     public void Dispose()
     {
@@ -228,6 +281,7 @@ public sealed class GpuRenderCore : IDisposable
             uniform ivec2 uAtlasPixels;
             uniform ivec2 uCellPixels;
             uniform int uPass;
+            uniform int uInstanceBase;
             uniform usamplerBuffer uCells;
             uniform isampler2D uGlyphMap;
             uniform vec4 uPalette[17];
@@ -237,7 +291,7 @@ public sealed class GpuRenderCore : IDisposable
             out vec2 vUv;
             void main()
             {
-                int cellIndex = gl_InstanceID;
+                int cellIndex = gl_InstanceID + uInstanceBase;
                 int cy = cellIndex / uGridSize.x;
                 int cx = cellIndex - cy * uGridSize.x;
                 uint packedCell = texelFetch(uCells, cellIndex).r;

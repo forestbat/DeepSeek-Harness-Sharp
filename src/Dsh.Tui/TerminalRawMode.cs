@@ -29,23 +29,33 @@ public sealed class TerminalRawMode : IDisposable
     private const ulong MacIexten = 0x00000400;
     private const ulong MacOpost = 0x00000001;
 
+    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1006h";
+
+    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1000l";
+
     private readonly bool _active;
     private readonly byte[]? _original;
     private readonly bool _restoreTreatControlCAsInput;
+    private readonly bool _mouseEnabled;
     private bool _disposed;
 
-    private TerminalRawMode(bool active, byte[]? original = null, bool restoreTreatControlCAsInput = false)
+    private TerminalRawMode(bool active, byte[]? original = null, bool restoreTreatControlCAsInput = false, bool mouseEnabled = false)
     {
         _active = active;
         _original = original;
         _restoreTreatControlCAsInput = restoreTreatControlCAsInput;
+        _mouseEnabled = mouseEnabled;
     }
 
-    public static TerminalRawMode? TryEnable()
+    internal static string MouseEnableSequenceForTests => MouseEnableSequence;
+
+    internal static string MouseDisableSequenceForTests => MouseDisableSequence;
+
+    public static TerminalRawMode? TryEnable(bool enableMouse = false)
     {
         if (OperatingSystem.IsWindows())
             return TryEnableWindows();
-        return TryEnableUnix();
+        return TryEnableUnix(enableMouse);
     }
 
     public void Dispose()
@@ -58,6 +68,8 @@ public sealed class TerminalRawMode : IDisposable
 
         if (_original is not null)
         {
+            if (_mouseEnabled)
+                WriteMouseSequence(MouseDisableSequence);
             var buffer = Marshal.AllocHGlobal(_original.Length);
             try
             {
@@ -123,7 +135,7 @@ public sealed class TerminalRawMode : IDisposable
         }
     }
 
-    private static TerminalRawMode? TryEnableUnix()
+    private static TerminalRawMode? TryEnableUnix(bool enableMouse)
     {
         var size = OperatingSystem.IsMacOS() ? MacTermiosSize : LinuxTermiosSize;
         var buffer = Marshal.AllocHGlobal(size);
@@ -139,11 +151,30 @@ public sealed class TerminalRawMode : IDisposable
             Marshal.Copy(raw, 0, buffer, size);
             if (tcsetattr(0, TcsaNow, buffer) != 0)
                 return null;
-            return new TerminalRawMode(true, original);
+            if (enableMouse)
+                WriteMouseSequence(MouseEnableSequence);
+            return new TerminalRawMode(true, original, mouseEnabled: enableMouse);
         }
         finally
         {
             Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static void WriteMouseSequence(string sequence)
+    {
+        try
+        {
+            if (Console.IsOutputRedirected)
+                return;
+            Console.Out.Write(sequence);
+            Console.Out.Flush();
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 

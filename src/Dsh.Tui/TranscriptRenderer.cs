@@ -35,11 +35,31 @@ public sealed class TranscriptRenderer
 
     public int Version { get; private set; }
 
+    /** 当前全文偏移; 供调用方在追加事件前记录 fold 起点。 */
+    public int CurrentLength
+    {
+        get
+        {
+            lock (_buffer)
+                return _buffer.Length;
+        }
+    }
+
     public IReadOnlyList<TranscriptFold> Folds => _folds;
 
     public void BumpVersion()
     {
         Version++;
+    }
+
+    /** 由调用方追加一段正文后, 把 [start, CurrentLength) 收成一个 fold; 用于包装工具调用+结果等多事件区间。 */
+    public void AddFold(int start, int end, string label, string preview)
+    {
+        if (end <= start)
+            return;
+        lock (_buffer)
+            _folds.Add(new TranscriptFold { Start = start, End = end, Label = label, Preview = preview });
+        BumpVersion();
     }
 
     public void AppendRaw(string text) => Append(text);
@@ -70,7 +90,7 @@ public sealed class TranscriptRenderer
     }
 
     /** replay=true 用于会话切换后的历史回放: 用户消息平时由输入回显渲染, 只在回放时从事件补渲染。 */
-    public void AppendSessionEvent(SessionEvent sessionEvent, bool replay = false)
+    public void AppendSessionEvent(SessionEvent sessionEvent, bool replay = false, bool foldToolResult = true)
     {
         switch (sessionEvent.Data)
         {
@@ -95,13 +115,17 @@ public sealed class TranscriptRenderer
                     var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
                     var start = _buffer.Length;
                     Append($"  {label}{text}\n");
-                    _folds.Add(new TranscriptFold
+                    if (foldToolResult)
                     {
-                        Start = start,
-                        End = _buffer.Length,
-                        Label = "tool result",
-                        Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
-                    });
+                        _folds.Add(new TranscriptFold
+                        {
+                            Start = start,
+                            End = _buffer.Length,
+                            Label = "tool result",
+                            Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
+                        });
+                    }
+
                     break;
                 }
             case TurnEndPayload { Reason: TurnEndReason.Error error }:

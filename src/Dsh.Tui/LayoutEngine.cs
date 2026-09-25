@@ -45,4 +45,53 @@ public static class LayoutEngine
             new ConsoleRect(0, inputY, width, InputHeight),
             new ConsoleRect(0, statusY, width, StatusHeight));
     }
+
+    /** 对二叉分割树求值: 叶子得到矩形, 每次分割沿轴向预留 1 格画分隔线; 与 shell 布局独立组合。 */
+    public static PaneLayout EvaluatePanes(PaneNode root, ConsoleRect area)
+    {
+        var panes = new List<PanePlacement>();
+        var dividers = new List<SplitDivider>();
+        EvaluatePanesInto(root, area, panes, dividers);
+        return new PaneLayout(panes, dividers);
+    }
+
+    private static void EvaluatePanesInto(PaneNode node, ConsoleRect area, List<PanePlacement> panes, List<SplitDivider> dividers)
+    {
+        switch (node)
+        {
+            case PaneLeaf leaf:
+                panes.Add(new PanePlacement(leaf.PaneId, area));
+                return;
+            case PaneSplit split when split.Orientation == SplitOrientation.Vertical:
+            {
+                var available = Math.Max(0, area.Width - 1);
+                var firstWidth = FirstPaneExtent(available, split.Ratio);
+                var secondWidth = available - firstWidth;
+                dividers.Add(new SplitDivider(SplitOrientation.Vertical, area.X + firstWidth, area.Y, area.Height));
+                EvaluatePanesInto(split.First, new ConsoleRect(area.X, area.Y, firstWidth, area.Height), panes, dividers);
+                EvaluatePanesInto(split.Second, new ConsoleRect(area.X + firstWidth + 1, area.Y, secondWidth, area.Height), panes, dividers);
+                return;
+            }
+            case PaneSplit split:
+            {
+                var available = Math.Max(0, area.Height - 1);
+                var firstHeight = FirstPaneExtent(available, split.Ratio);
+                var secondHeight = available - firstHeight;
+                dividers.Add(new SplitDivider(SplitOrientation.Horizontal, area.X, area.Y + firstHeight, area.Width));
+                EvaluatePanesInto(split.First, new ConsoleRect(area.X, area.Y, area.Width, firstHeight), panes, dividers);
+                EvaluatePanesInto(split.Second, new ConsoleRect(area.X, area.Y + firstHeight + 1, area.Width, secondHeight), panes, dividers);
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
+    private static int FirstPaneExtent(int available, double ratio)
+    {
+        if (available <= 1)
+            return available;
+        var extent = (int)Math.Round(available * ratio, MidpointRounding.AwayFromZero);
+        return Math.Clamp(extent, 1, available - 1);
+    }
 }

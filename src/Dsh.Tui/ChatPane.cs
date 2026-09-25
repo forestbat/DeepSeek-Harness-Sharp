@@ -1,0 +1,1262 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Dsh.Boot;
+using Dsh.Core;
+using Dsh.Interaction;
+using Dsh.Llm;
+
+namespace Dsh.Tui;
+
+/**
+ * 单个 agent 绑定的视图状态: 渲染器、滚动/输入缓冲、fold 选择、菜单与待决交互。
+ * ChatWindow 持有 pane 集合与分割树, 键盘只进焦点 pane; 后台 pane 只更新自己的渲染器。
+ */
+public sealed class ChatPane : ITuiPane
+{
+    private const string InputPrompt = "> ";
+    private const string ReadyStatus = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+C×2 quits";
+
+    private readonly ChatWindow _window;
+    private readonly Dictionary<ToolCallId, (int Start, string Arguments)> _pendingSubagentCalls = [];
+    private AskUserQuestionRequest? _questionRequest;
+    private readonly List<AskUserQuestionAnswerItem> _questionAnswers = [];
+    private readonly HashSet<int> _questionSelection = [];
+    private int _questionIndex;
+    private string? _stashedInput;
+    private int _stashedCursor;
+    private IReadOnlyList<string> _mentionCandidates = [];
+    private int _mentionIndex;
+    private int _mentionStart;
+    private bool _mentionActive;
+    private readonly List<string> _history = [];
+    private int _historyIndex = -1;
+    private bool _sessionRenamedSubscribed;
+    private int _wrapCacheVersion = -1;
+    private int _wrapCacheWidth = -1;
+    private List<string>? _wrapCacheLines;
+    private int _wrapProcessedLine;
+    private readonly List<VisualRow> _visualRows = [];
+    private readonly List<(int Start, int End, bool Collapsed)> _foldSnapshot = [];
+
+    public ChatPane(ChatWindow window, int id, AgentLoopAgent agent)
+    {
+        _window = window;
+        Id = id;
+        Agent = agent;
+        SubscribeSessionRenamed();
+        ReplayEvents();
+    }
+
+    public int Id { get; }
+
+    public AgentLoopAgent Agent { get; private set; }
+
+    public Session Session => Agent.Session;
+
+    public string PaneTitle
+    {
+        get
+        {
+            var title = Agent.Session.Header.Title;
+            return string.IsNullOrWhiteSpace(title) ? Agent.Id.ToString() : $"{Agent.Id}: {title}";
+        }
+    }
+
+    public TranscriptRenderer Renderer { get; private set; } = new();
+
+    public long RenderedSeq { get; private set; }
+
+    public string Input { get; set; } = "";
+
+    public int Cursor { get; set; }
+
+    public int ScrollOffset { get; set; }
+
+    public bool StickToBottom { get; set; } = true;
+
+    public string? SelectedFoldKey { get; set; }
+
+    public TaskCompletionSource<object?>? PendingApproval { get; private set; }
+
+    public TaskCompletionSource<object?>? PendingQuestions { get; private set; }
+
+    public CommandMenuState? CommandMenu { get; private set; }
+
+    public bool Busy { get; private set; }
+
+    public string StatusText { get; set; } = ReadyStatus;
+
+    public string? DeleteConfirmSessionId { get; set; }
+
+    public int CursorScreenX { get; private set; }
+
+    public int CursorScreenY { get; private set; }
+
+    public void HandleKey(ConsoleKeyInfo key)
+    {
+        if (PendingApproval is not null)
+        {
+            if (key.Key == ConsoleKey.Y)
+                AnswerApproval(ApprovalOutcome.AllowedOnce);
+            else if (key.Key == ConsoleKey.N)
+                AnswerApproval(ApprovalOutcome.Rejected);
+            else if (key.Key == ConsoleKey.C || key.Key == ConsoleKey.Escape)
+                AnswerApproval(ApprovalOutcome.Cancelled);
+            return;
+        }
+
+        if (PendingQuestions is not null)
+        {
+            HandleQuestionKey(key);
+            return;
+        }
+
+        if (SelectedFoldKey is not null)
+        {
+            if (key.Key == ConsoleKey.Escape)
+            {
+                SelectedFoldKey = null;
+                return;
+            }
+            if (key.Key == ConsoleKey.Tab)
+            {
+                SelectNextFold(1);
+                return;
+            }
+            if (key.Key == ConsoleKey.Enter)
+            {
+                var selected = FindSelectedFold();
+                if (selected is not null)
+                {
+                    selected.Collapsed = !selected.Collapsed;
+                    Renderer.BumpVersion();
+                    SelectedFoldKey = null;
+                    return;
+                }
+            }
+        }
+
+        if (key.Key == ConsoleKey.Tab && CommandMenu?.IsActive != true && !_mentionActive)
+        {
+            if (SelectedFoldKey is null)
+            {
+                var first = Renderer.Folds.FirstOrDefault();
+                if (first is not null)
+                    SelectedFoldKey = FoldKey(first);
+            }
+            else
+            {
+                SelectNextFold(1);
+            }
+            return;
+        }
+
+        if (CommandMenu?.IsActive == true || _mentionActive)
+        {
+            if (key.Key == ConsoleKey.Delete
+                && CommandMenu?.IsActive == true
+                && CommandMenu.Stage == CommandMenuState.MenuStage.Argument
+                && string.Equals(CommandMenu.CurrentCommand?.Name, "session", StringComparison.OrdinalIgnoreCase))
+            {
+                if (DeleteConfirmSessionId is null)
+                {
+                    var candidate = CommandMenu.Candidates.ElementAtOrDefault(CommandMenu.SelectedIndex);
+                    if (candidate is not null)
+                    {
+                        DeleteConfirmSessionId = candidate;
+                        AppendRaw($"  press Delete again to delete session {candidate}\n");
+                    }
+                }
+                else
+                {
+                    var id = DeleteConfirmSessionId;
+                    DeleteConfirmSessionId = null;
+                    _window.RunSlashCommand(this, $"/session delete {id}");
+                }
+                return;
+            }
+
+            if (key.Key == ConsoleKey.Escape)
+            {
+                DeleteConfirmSessionId = null;
+                if (CommandMenu?.IsActive == true)
+                {
+                    CommandMenu.Back();
+                    SyncCommandMenuInput();
+                }
+                else
+                {
+                    CloseMentionMenu();
+                }
+
+                RefreshMenuStatus();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.UpArrow)
+            {
+                MoveMenuSelection(-1);
+                return;
+            }
+
+            if (key.Key == ConsoleKey.DownArrow)
+            {
+                MoveMenuSelection(1);
+                return;
+            }
+
+            if (key.Key == ConsoleKey.Enter)
+            {
+                if (CommandMenu?.IsActive == true)
+                {
+                    CommandMenu.Close();
+                    RefreshMenuStatus();
+                    Submit();
+                    return;
+                }
+
+                if (_mentionActive && _mentionCandidates.Count > 0)
+                {
+                    InsertMentionCandidate();
+                    return;
+                }
+
+                if (_mentionActive)
+                    CloseMentionMenu();
+            }
+
+            if (key.Key == ConsoleKey.Tab && CommandMenu?.IsActive == true)
+            {
+                ConfirmCommandMenu();
+                return;
+            }
+        }
+
+        switch (key.Key)
+        {
+            case ConsoleKey.Enter:
+                Submit();
+                break;
+            case ConsoleKey.Escape:
+                if (Busy)
+                    Agent.Cancel(new AgentCancelCause.User());
+                break;
+            case ConsoleKey.UpArrow:
+                RecallHistory(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                RecallHistory(1);
+                break;
+            case ConsoleKey.LeftArrow:
+                Cursor = Math.Max(0, Cursor - 1);
+                break;
+            case ConsoleKey.RightArrow:
+                Cursor = Math.Min(Input.Length, Cursor + 1);
+                break;
+            case ConsoleKey.Home:
+                Cursor = 0;
+                break;
+            case ConsoleKey.End:
+                Cursor = Input.Length;
+                break;
+            case ConsoleKey.Backspace:
+                if (Cursor > 0)
+                {
+                    Input = Input.Remove(Cursor - 1, 1);
+                    Cursor--;
+                    RefreshMenus();
+                }
+
+                break;
+            case ConsoleKey.Delete:
+                if (Cursor < Input.Length)
+                {
+                    Input = Input.Remove(Cursor, 1);
+                    RefreshMenus();
+                }
+
+                break;
+            case ConsoleKey.PageUp:
+                StickToBottom = false;
+                ScrollOffset = Math.Max(0, ScrollOffset - 10);
+                break;
+            case ConsoleKey.PageDown:
+                ScrollOffset += 10;
+                break;
+            default:
+                if (key.KeyChar >= ' ')
+                {
+                    Input = Input.Insert(Cursor, key.KeyChar.ToString());
+                    Cursor++;
+                    RefreshMenus();
+                }
+
+                break;
+        }
+    }
+
+    public void InsertText(string text)
+    {
+        if (string.IsNullOrEmpty(text) || PendingApproval is not null)
+            return;
+        var sanitized = text.Replace('\r', ' ').Replace('\n', ' ');
+        if (sanitized.Length == 0)
+            return;
+        Input = Input.Insert(Cursor, sanitized);
+        Cursor += sanitized.Length;
+        RefreshMenus();
+    }
+
+    /** 鼠标滚轮只作用于收到的 pane; 由调用方按命中测试路由。 */
+    public void HandleMouseWheel(int delta)
+    {
+        if (PendingApproval is not null)
+            return;
+        if (delta > 0)
+        {
+            StickToBottom = false;
+            ScrollOffset = Math.Max(0, ScrollOffset - 10);
+        }
+        else if (delta < 0)
+        {
+            ScrollOffset += 10;
+        }
+    }
+
+    public void HandleInputClick(int cellX, ConsoleRect inputRect)
+    {
+        Cursor = ColumnToCharIndex(Math.Clamp(cellX - inputRect.X - InputPrompt.Length, 0, TerminalTextWidth.Of(Input)));
+        RefreshMenus();
+    }
+
+    public void SwitchAgent(AgentLoopAgent agent)
+    {
+        UnsubscribeSessionRenamed();
+        Agent = agent;
+        SubscribeSessionRenamed();
+        Renderer = new TranscriptRenderer();
+        SelectedFoldKey = null;
+        RenderedSeq = 0;
+        ScrollOffset = 0;
+        StickToBottom = true;
+        InvalidateWrapCache();
+        ReplayEvents();
+    }
+
+    /** 切换会话后回放历史事件, 让恢复/重进的会话立刻可见; 序列守卫会跳过与滞留事件的重合部分。 */
+    public void ReplayEvents()
+    {
+        foreach (var sessionEvent in Agent.Session.SnapshotEvents())
+            ProcessSessionEvent(sessionEvent, replay: true);
+    }
+
+    public void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false)
+    {
+        if (sessionEvent.Seq < RenderedSeq)
+            return;
+        RenderedSeq = sessionEvent.Seq + 1;
+        switch (sessionEvent.Data)
+        {
+            case TurnStartPayload:
+                SetBusy(true);
+                break;
+            case TurnEndPayload:
+                SetBusy(false);
+                break;
+        }
+
+        if (sessionEvent.Data is ToolCallPayload call)
+            _pendingSubagentCalls[call.CallId] = (Renderer.CurrentLength, call.Arguments);
+
+        if (sessionEvent.Data is ToolResultPayload result)
+        {
+            var pending = _pendingSubagentCalls.Remove(result.Message.Block.ToolCallId, out var tracked)
+                ? tracked
+                : (Start: -1, Arguments: "");
+            if (pending.Start >= 0 && TryMatchSubagent(pending.Arguments, out var child))
+            {
+                Renderer.AppendSessionEvent(sessionEvent, replay, foldToolResult: false);
+                AppendSubagentSummary(child!, pending.Start);
+                return;
+            }
+        }
+
+        Renderer.AppendSessionEvent(sessionEvent, replay);
+    }
+
+    /** 工具调用参数里的 description 与某个子会话的持久化 Label 一致时, 判定该调用为子代理委派。 */
+    private bool TryMatchSubagent(string arguments, out SubagentNode? child)
+    {
+        child = null;
+        if (arguments.Length == 0)
+            return false;
+        string? description = null;
+        try
+        {
+            using var document = JsonDocument.Parse(arguments);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("description", out var value)
+                && value.ValueKind == JsonValueKind.String)
+            {
+                description = value.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        if (string.IsNullOrEmpty(description))
+            return false;
+        child = _window.Subagents.FindChildByLabel(Agent.Id, description);
+        return child is not null;
+    }
+
+    /** 把子会话自身的工具调用/结果摘要追加进 fold 区间, 展开委派调用即可内联查看。 */
+    private void AppendSubagentSummary(SubagentNode child, int foldStart)
+    {
+        var label = child.Label ?? child.Id.Value;
+        var session = _window.Subagents.FindSession(child.Id);
+        var summary = session is null ? "" : BuildToolCallSummary(session);
+        Renderer.AppendRaw(summary.Length == 0
+            ? $"\n  subagent {label}: no tool calls\n"
+            : $"\n  subagent {label} tool calls:\n{summary}\n");
+        Renderer.AddFold(foldStart, Renderer.CurrentLength, "subagent", $"⚙ subagent: {label}");
+    }
+
+    private static string BuildToolCallSummary(Session session)
+    {
+        var renderer = new TranscriptRenderer();
+        foreach (var sessionEvent in session.OwnEvents())
+        {
+            if (sessionEvent.Data is ToolCallPayload or ToolResultPayload)
+                renderer.AppendSessionEvent(sessionEvent);
+        }
+
+        var lines = renderer.CompletedLines.Select(line => $"  {line}").ToList();
+        if (renderer.Tail.Length > 0)
+            lines.Add($"  {renderer.Tail}");
+        return string.Join('\n', lines);
+    }
+
+    public void AppendRaw(string text)
+        => AppendText(text);
+
+    private void AppendText(string text)
+    {
+        Renderer.AppendSystemMessage(text);
+        StickToBottom = true;
+    }
+
+    public void DrawTranscript(CellGrid grid, ConsoleRect rect)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+            return;
+
+        var transcriptVersion = Renderer.Version;
+        if (_wrapCacheLines is null || _wrapCacheVersion != transcriptVersion || _wrapCacheWidth != rect.Width)
+        {
+            RebuildWrapCache(rect.Width);
+            _wrapCacheVersion = transcriptVersion;
+        }
+        var wrapped = _wrapCacheLines!;
+        if (wrapped.Count == 0)
+            wrapped.Add("");
+
+        var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
+        if (StickToBottom)
+            ScrollOffset = maxOffset;
+        ScrollOffset = Math.Clamp(ScrollOffset, 0, maxOffset);
+
+        var start = ScrollOffset;
+        for (var row = 0; row < rect.Height; row++)
+        {
+            var lineIndex = start + row;
+            if (lineIndex >= wrapped.Count)
+                break;
+            CellText.Draw(grid, rect.X, rect.Y + row, wrapped[lineIndex]);
+        }
+
+        if (CommandMenu?.IsActive == true || _mentionActive)
+            DrawMenuOverlay(grid, rect);
+    }
+
+    private void DrawMenuOverlay(CellGrid grid, ConsoleRect rect)
+    {
+        if (CommandMenu?.IsActive == true)
+        {
+            PopupList.Draw(grid, rect, CommandMenu.Prompt, CommandMenu.Candidates, CommandMenu.SelectedIndex);
+        }
+        else if (_mentionActive)
+        {
+            PopupList.Draw(grid, rect, $"@ {_mentionCandidates.Count} candidates", _mentionCandidates, _mentionIndex);
+        }
+    }
+
+    public void DrawRightPanel(CellGrid grid, ConsoleRect rect)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+            return;
+
+        var row = rect.Y;
+        var (provider, model) = CurrentModel(Agent);
+        DrawPanelSection(grid, rect, ref row, "上下文",
+        [
+            $"session: {Agent.Id}",
+            $"title: {Agent.Session.Header.Title ?? "-"}",
+            $"cwd: {Agent.Session.Header.Cwd ?? "-"}",
+            $"model: {provider}/{model}",
+        ]);
+        DrawPanelSection(grid, rect, ref row, "MCP", _window.McpLines());
+        DrawPanelSection(grid, rect, ref row, "计划", ["使用 /plan 管理"]);
+        DrawPanelSection(grid, rect, ref row, "输出", ["暂无"]);
+        DrawPanelSection(grid, rect, ref row, "快捷键",
+        [
+            "Enter 发送 · / 命令 · @ 引用",
+            "Tab 补全/折叠 · Esc 取消",
+            "↑/↓ 历史 · PgUp/PgDn 滚动",
+            "Ctrl+C×2 退出",
+            "Ctrl+X N 新会话 · S 会话",
+            "Ctrl+X D detach · K 删会话",
+            "Ctrl+X W 总览 · + 分屏 · - 关闭",
+            "Ctrl+X 方向键/O 切窗格",
+        ]);
+    }
+
+    private static void DrawPanelSection(CellGrid grid, ConsoleRect rect, ref int row, string header, IReadOnlyList<string> lines)
+    {
+        if (row >= rect.Bottom)
+            return;
+        if (row > rect.Y && row + 1 < rect.Bottom)
+        {
+            for (var x = rect.X; x < rect.Right && x < grid.Width; x++)
+                grid[x, row] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            row++;
+        }
+        CellText.Draw(grid, rect.X, row, header, AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
+        row++;
+        foreach (var line in lines)
+        {
+            if (row >= rect.Bottom)
+                return;
+            CellText.Draw(grid, rect.X, row, line, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            row++;
+        }
+    }
+
+    public void DrawInput(CellGrid grid, ConsoleRect rect)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+            return;
+
+        var prompt = PendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
+        var caret = Math.Clamp(Cursor, 0, Input.Length);
+        var availableWidth = Math.Max(0, rect.Width - prompt.Length);
+        var textStart = caret;
+        var visibleWidth = 0;
+        while (textStart > 0)
+        {
+            var characterWidth = TerminalTextWidth.Of(Input[textStart - 1]);
+            if (visibleWidth + characterWidth > availableWidth)
+                break;
+            visibleWidth += characterWidth;
+            textStart--;
+        }
+
+        var visible = Input.AsSpan(textStart);
+
+        CellText.Draw(grid, rect.X, rect.Y, prompt, AnsiColor.Default, AnsiColor.Default, PendingApproval is null ? CellStyle.None : CellStyle.Bold);
+        CellText.Draw(grid, rect.X + prompt.Length, rect.Y, visible);
+
+        var caretColumn = TerminalTextWidth.Of(Input.AsSpan(textStart, caret - textStart));
+        var cursorX = rect.X + Math.Min(prompt.Length + caretColumn, rect.Width - 1);
+        var cursorY = rect.Y;
+        cursorX = Math.Clamp(cursorX, 0, grid.Width - 1);
+        cursorY = Math.Clamp(cursorY, 0, grid.Height - 1);
+        var cursorCell = grid[cursorX, cursorY];
+        grid[cursorX, cursorY] = cursorCell with { Style = cursorCell.Style | CellStyle.Reverse };
+        CursorScreenX = cursorX;
+        CursorScreenY = cursorY;
+
+        if (rect.Height < 2)
+            return;
+        var infoY = rect.Y + 1;
+        if (infoY >= grid.Height)
+            return;
+        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 补全 · Ctrl+X 会话";
+        CellText.Draw(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+        var (currentProvider, currentModel) = CurrentModel(Agent);
+        var preset = CurrentPreset(Agent);
+        var profile = CurrentReasoningEffort(Agent) is { } effort
+            ? $"{preset} · {currentProvider} · {currentModel} · {effort.Value}"
+            : $"{preset} · {currentProvider} · {currentModel}";
+        var profileWidth = TerminalTextWidth.Of(profile);
+        if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
+            CellText.Draw(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+    }
+
+    public void ShowApprovalPrompt(ApprovalRequest request, TaskCompletionSource<object?> answer)
+    {
+        PendingApproval = answer;
+        var argument = ApprovalHints.PrimaryArgument(request.ToolName, request.Arguments);
+        var impact = ApprovalHints.Impact(request.ToolName, request.Arguments);
+        var line = $"  ⚠ approve tool \"{request.ToolName}\"?"
+            + (request.Reason is null ? "" : $" {request.Reason}")
+            + (argument.Length == 0 ? "" : $" · {argument}")
+            + (impact.Length == 0 ? "" : $" {impact}")
+            + " [y]es/[n]o/[c]ancel turn\n";
+        AppendRaw(line);
+        StatusText = $"approval pending for \"{request.ToolName}\" — y/n/c";
+    }
+
+    private void AnswerApproval(ApprovalOutcome outcome)
+    {
+        var pending = PendingApproval;
+        if (pending is null)
+            return;
+        PendingApproval = null;
+        AppendRaw($"  approval: {outcome}\n");
+        SetStatusReady();
+        pending.TrySetResult(outcome);
+    }
+
+    public void ShowQuestionPrompt(AskUserQuestionRequest request, TaskCompletionSource<object?> answer)
+    {
+        if (PendingQuestions is not null)
+            CompleteQuestions(null);
+        PendingQuestions = answer;
+        _questionRequest = request;
+        _questionIndex = 0;
+        _questionAnswers.Clear();
+        _questionSelection.Clear();
+        _stashedInput = Input;
+        _stashedCursor = Cursor;
+        Input = "";
+        Cursor = 0;
+        AppendRaw("  ? 智能体需要你回答:\n");
+        ShowCurrentQuestion();
+    }
+
+    private void ShowCurrentQuestion()
+    {
+        var question = _questionRequest!.Questions[_questionIndex];
+        AppendRaw($"  ? {question.Question}\n");
+        if (question.Detail is { } detail)
+            AppendRaw($"    {detail}\n");
+        if (question.Options is { Count: > 0 } options)
+        {
+            for (var index = 0; index < options.Count && index < 9; index++)
+            {
+                var option = options[index];
+                AppendRaw($"    [{index + 1}] {option.Label}{(option.Description is null ? "" : $" — {option.Description}")}\n");
+            }
+        }
+        RefreshQuestionStatus();
+    }
+
+    private void RefreshQuestionStatus()
+    {
+        var question = _questionRequest!.Questions[_questionIndex];
+        var total = _questionRequest.Questions.Count;
+        var prefix = total > 1 ? $"问题 {_questionIndex + 1}/{total} · " : "";
+        StatusText = question.Options is { Count: > 0 }
+            ? question.MultiSelect
+                ? $"{prefix}1-9 切换选项(已选 {_questionSelection.Count}) · 输入框可补充 · Enter 确认 · Esc 取消"
+                : $"{prefix}1-9 选择 · 输入框可补充 · Enter 确认 · Esc 取消"
+            : $"{prefix}输入回答 · Enter 确认 · Esc 取消";
+    }
+
+    private void HandleQuestionKey(ConsoleKeyInfo key)
+    {
+        var question = _questionRequest!.Questions[_questionIndex];
+        if (key.Key == ConsoleKey.Escape)
+        {
+            AppendRaw("  ✗ 已取消\n");
+            CompleteQuestions(null);
+            return;
+        }
+        if (key.Key == ConsoleKey.Enter)
+        {
+            SubmitCurrentQuestion(question);
+            return;
+        }
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (Cursor > 0)
+            {
+                Input = Input.Remove(Cursor - 1, 1);
+                Cursor--;
+            }
+            return;
+        }
+        if (question.Options is { Count: > 0 } options && key.KeyChar >= '1' && key.KeyChar <= '9')
+        {
+            var index = key.KeyChar - '1';
+            if (index >= options.Count)
+                return;
+            if (question.MultiSelect)
+            {
+                if (!_questionSelection.Remove(index))
+                    _questionSelection.Add(index);
+            }
+            else
+            {
+                _questionSelection.Clear();
+                _questionSelection.Add(index);
+            }
+            RefreshQuestionStatus();
+            return;
+        }
+        if (!char.IsControl(key.KeyChar))
+        {
+            Input = Input.Insert(Cursor, key.KeyChar.ToString());
+            Cursor++;
+        }
+    }
+
+    private void SubmitCurrentQuestion(AskUserQuestionItem question)
+    {
+        IReadOnlyList<string> selected = question.Options is { Count: > 0 } options
+            ? _questionSelection.Where(index => index < options.Count).Order().Select(index => options[index].Label).ToList()
+            : [];
+        var custom = Input.Trim();
+        if (selected.Count == 0 && custom.Length == 0)
+        {
+            StatusText = "请先选择选项或输入回答";
+            return;
+        }
+        _questionAnswers.Add(new AskUserQuestionAnswerItem(question.Id, selected, custom.Length > 0 ? custom : null));
+        _questionSelection.Clear();
+        Input = "";
+        Cursor = 0;
+        _questionIndex++;
+        if (_questionIndex < _questionRequest!.Questions.Count)
+        {
+            ShowCurrentQuestion();
+            return;
+        }
+        AppendRaw("  ✓ 已回答\n");
+        CompleteQuestions(new AskUserQuestionAnswer([.. _questionAnswers]));
+    }
+
+    private void CompleteQuestions(object? result)
+    {
+        var pending = PendingQuestions;
+        PendingQuestions = null;
+        _questionRequest = null;
+        _questionSelection.Clear();
+        if (_stashedInput is not null)
+        {
+            Input = _stashedInput;
+            Cursor = _stashedCursor;
+            _stashedInput = null;
+        }
+        SetStatusReady();
+        pending?.TrySetResult(result);
+    }
+
+    internal void RefreshMenus()
+    {
+        var text = Input;
+        if (text.StartsWith('/'))
+        {
+            if (CommandMenu is not { IsActive: true })
+                CommandMenu = CreateCommandMenu();
+            CommandMenu.ApplyInput(text);
+            CloseMentionMenu();
+        }
+        else
+        {
+            if (CommandMenu?.IsActive == true)
+                CommandMenu.Close();
+            DeleteConfirmSessionId = null;
+            if (TryGetMentionToken(text, out var start, out var token))
+            {
+                _mentionActive = true;
+                _mentionStart = start;
+                _mentionCandidates = _window.MentionResolver.ResolveCandidates(token, CurrentCwd(), _window.CurrentSessions());
+                _mentionIndex = Math.Clamp(_mentionIndex, 0, Math.Max(0, _mentionCandidates.Count - 1));
+            }
+            else
+            {
+                CloseMentionMenu();
+            }
+        }
+
+        RefreshMenuStatus();
+    }
+
+    private CommandMenuState CreateCommandMenu()
+    {
+        var commands = _window.Ctx.Get<CommandsService>(CommandsService.ServiceName)?.List(Agent) ?? [];
+        if (commands.All(command => !string.Equals(command.Name, "exit", StringComparison.OrdinalIgnoreCase)))
+            commands = [.. commands, new CommandDescriptor("exit", "退出 TUI")];
+        var descriptors = CommandMenuCatalog.Enrich(commands);
+        return new CommandMenuState(descriptors, CommandCandidates);
+    }
+
+    private IReadOnlyList<string> CommandCandidates(CommandDescriptor descriptor)
+    {
+        try
+        {
+            var settings = HarnessSettings.Load(_window.Home);
+            return descriptor.Name switch
+            {
+                "model" => settings.Providers
+                    .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                    .SelectMany(entry => entry.Value.Models.Keys
+                        .OrderBy(model => model, StringComparer.Ordinal)
+                        .Select(model => $"{entry.Key}/{model}"))
+                    .ToList(),
+                "remove" => settings.Providers.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList(),
+                "session" => _window.CurrentSessions().Select(session => session.Id).ToList(),
+                "skill" => _window.SkillCandidates,
+                "reasoning" => ReasoningEffortCandidates(),
+                _ => [],
+            };
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    private IReadOnlyList<string> ReasoningEffortCandidates()
+    {
+        var (provider, model) = CurrentModel(Agent);
+        if (provider is null || model is null)
+            return [];
+        var info = _window.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false)?.ResolveModelInfo(provider, model);
+        return info?.Reasoning?.Efforts.Select(effort => effort.Id.Value).ToList() ?? [];
+    }
+
+    private static (string? Provider, string? Model) CurrentModel(IAgent agent)
+    {
+        var config = agent.Session.RequestHeader()?.Config;
+        return (config?.Provider ?? agent.Options.Provider, config?.Model ?? agent.Options.Model);
+    }
+
+    private static ReasoningEffortId? CurrentReasoningEffort(IAgent agent)
+        => agent.Session.RequestHeader()?.Config.ReasoningEffort ?? agent.Options.ReasoningEffort;
+
+    /** 会话 preset 持久在 `preset/mode` 事件里; Dsh.Tui 不引用 Dsh.Presets, 属性名按约定泛化读取。 */
+    private static string CurrentPreset(IAgent agent)
+    {
+        var preset = "standard";
+        foreach (var sessionEvent in agent.Session.SnapshotEvents())
+        {
+            if (sessionEvent.Type != "preset/mode")
+                continue;
+            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
+        }
+        return preset;
+    }
+
+    private static string? ReadStringProperty(SessionEventPayload payload, string name)
+    {
+        try
+        {
+            var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options);
+            if (node is not JsonObject json)
+                return null;
+            foreach (var (key, value) in json)
+            {
+                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                    return value.GetValue<string>();
+            }
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private void MoveMenuSelection(int direction)
+    {
+        if (CommandMenu?.IsActive == true)
+        {
+            if (direction < 0)
+                CommandMenu.MoveUp();
+            else
+                CommandMenu.MoveDown();
+        }
+        else if (_mentionActive && _mentionCandidates.Count > 0)
+        {
+            _mentionIndex = Math.Clamp(_mentionIndex + direction, 0, _mentionCandidates.Count - 1);
+        }
+
+        RefreshMenuStatus();
+    }
+
+    private void ConfirmCommandMenu()
+    {
+        var completed = CommandMenu!.Confirm();
+        if (completed is not null)
+        {
+            CommandMenu.Close();
+            Input = completed;
+            Cursor = Input.Length;
+            RefreshMenuStatus();
+            Submit();
+            return;
+        }
+
+        SyncCommandMenuInput();
+        RefreshMenuStatus();
+    }
+
+    private void SyncCommandMenuInput()
+    {
+        if (CommandMenu?.IsActive == true)
+        {
+            Input = CommandMenu.Prefix + CommandMenu.Query;
+            Cursor = Input.Length;
+        }
+    }
+
+    private void InsertMentionCandidate()
+    {
+        var text = Input;
+        var candidate = _mentionCandidates[_mentionIndex];
+        Input = $"{text[.._mentionStart]}@{candidate}";
+        Cursor = Input.Length;
+        CloseMentionMenu();
+        RefreshMenuStatus();
+    }
+
+    private void CloseMentionMenu()
+    {
+        _mentionActive = false;
+        _mentionCandidates = [];
+        _mentionIndex = 0;
+        _mentionStart = 0;
+    }
+
+    internal void RefreshMenuStatus()
+    {
+        if (CommandMenu?.IsActive == true)
+        {
+            StatusText = $"{CommandMenu.Prompt} — ↑/↓ 移动 · Tab 选择 · Enter 发送 · Esc 返回";
+            return;
+        }
+
+        if (_mentionActive)
+        {
+            StatusText = $"@ {_mentionCandidates.Count} candidates — ↑/↓ Enter Esc";
+            return;
+        }
+
+        SetStatusReady();
+    }
+
+    public void SetStatusReady()
+        => StatusText = Busy
+            ? "working… (Esc to cancel)"
+            : ReadyStatus;
+
+    private void SetBusy(bool busy)
+    {
+        Busy = busy;
+        SetStatusReady();
+    }
+
+    internal string CurrentCwd()
+        => Agent.Session.Header.Cwd ?? Environment.CurrentDirectory;
+
+    private void Submit()
+    {
+        var text = Input.Trim();
+        if (text.Length == 0)
+            return;
+        Input = "";
+        Cursor = 0;
+        _history.Add(text);
+        _historyIndex = -1;
+
+        var displayMessage = MessageFactory.CreateUserText(text);
+        Renderer.AppendUserMessage(displayMessage);
+        StickToBottom = true;
+
+        if (text.StartsWith('/'))
+        {
+            _window.RunSlashCommand(this, text);
+            return;
+        }
+
+        var expandedText = _window.MentionResolver.ExpandMentions(text, CurrentCwd(), _window.CurrentSessions());
+        SetBusy(true);
+        Agent.Followup(MessageFactory.CreateUserText(expandedText));
+    }
+
+    private static bool TryGetMentionToken(string text, out int start, out string token)
+    {
+        var at = text.LastIndexOf('@');
+        if (at < 0)
+        {
+            start = 0;
+            token = "";
+            return false;
+        }
+
+        var end = at + 1;
+        while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != '@')
+            end++;
+        start = at;
+        token = text[(at + 1)..end];
+        return true;
+    }
+
+    private void RecallHistory(int direction)
+    {
+        if (_history.Count == 0)
+            return;
+        _historyIndex = _historyIndex < 0
+            ? direction < 0 ? _history.Count - 1 : -1
+            : Math.Clamp(_historyIndex + direction, -1, _history.Count - 1);
+        Input = _historyIndex < 0 ? "" : _history[_historyIndex];
+        Cursor = Input.Length;
+    }
+
+    private void SubscribeSessionRenamed()
+    {
+        if (_sessionRenamedSubscribed)
+            return;
+        Agent.Session.Renamed += HandleSessionRenamed;
+        _sessionRenamedSubscribed = true;
+    }
+
+    private void UnsubscribeSessionRenamed()
+    {
+        if (!_sessionRenamedSubscribed)
+            return;
+        Agent.Session.Renamed -= HandleSessionRenamed;
+        _sessionRenamedSubscribed = false;
+    }
+
+    private void HandleSessionRenamed(Session session, SessionHeader header)
+        => _window.QueueAction(_window.InvalidateSessionInfos);
+
+    private void InvalidateWrapCache()
+    {
+        _wrapCacheVersion = -1;
+        _wrapCacheWidth = -1;
+        _wrapCacheLines = null;
+        _wrapProcessedLine = 0;
+        _visualRows.Clear();
+        _foldSnapshot.Clear();
+    }
+
+    private int ColumnToCharIndex(int column)
+    {
+        var current = 0;
+        for (var index = 0; index < Input.Length; index++)
+        {
+            var width = TerminalTextWidth.Of(Input[index]);
+            if (current + width > column)
+                return index;
+            current += width;
+        }
+
+        return Input.Length;
+    }
+
+    private TranscriptFold? FindSelectedFold()
+        => SelectedFoldKey is null ? null : Renderer.Folds.FirstOrDefault(fold => FoldKey(fold) == SelectedFoldKey);
+
+    private void SelectNextFold(int direction)
+    {
+        var folds = Renderer.Folds;
+        if (folds.Count == 0)
+        {
+            SelectedFoldKey = null;
+            return;
+        }
+
+        var currentIndex = -1;
+        for (var index = 0; index < folds.Count; index++)
+        {
+            if (FoldKey(folds[index]) == SelectedFoldKey)
+            {
+                currentIndex = index;
+                break;
+            }
+        }
+
+        var next = (currentIndex + direction + folds.Count) % folds.Count;
+        SelectedFoldKey = FoldKey(folds[next]);
+    }
+
+    private static string FoldKey(TranscriptFold fold)
+        => $"{fold.Start}:{fold.Label}";
+
+    private sealed class VisualRow
+    {
+        public required int SourceStart { get; init; }
+        public required int FlatStart { get; init; }
+    }
+
+    private void RebuildWrapCache(int width)
+    {
+        var lines = Renderer.CompletedLines;
+        var starts = Renderer.LineStarts;
+        var tail = Renderer.Tail;
+        var tailStart = Renderer.TailStart;
+        var folds = Renderer.Folds;
+        var from = 0;
+        if (_wrapCacheLines is not null && _wrapCacheWidth == width && _wrapProcessedLine <= lines.Count + 1)
+        {
+            from = _wrapProcessedLine;
+            for (var index = 0; index < folds.Count; index++)
+            {
+                var fold = folds[index];
+                if (index < _foldSnapshot.Count && _foldSnapshot[index] == (fold.Start, fold.End, fold.Collapsed))
+                    continue;
+                if (index >= _foldSnapshot.Count && !fold.Collapsed)
+                    continue;
+                from = Math.Min(from, LineIndexOf(starts, lines.Count, tailStart, fold.Start));
+            }
+        }
+        RebuildWrapFromLines(lines, starts, tail, tailStart, folds, width, from);
+        SnapshotFolds(folds);
+        _wrapCacheWidth = width;
+    }
+
+    /** 行索引空间的增量重排: 全文不再物化, 行文本直接取 renderer 的行列表; fold 偏移经 LineStarts 二分映射为行号。 */
+    private void RebuildWrapFromLines(IReadOnlyList<string> lines, IReadOnlyList<int> starts, string tail, int tailStart, IReadOnlyList<TranscriptFold> folds, int width, int fromLine)
+    {
+        var rows = _visualRows;
+        var wrapped = _wrapCacheLines ??= [];
+        var fromOffset = fromLine < lines.Count ? starts[fromLine] : tailStart;
+        var rowIndex = LowerBoundRow(rows, fromOffset);
+        var flatIndex = rowIndex < rows.Count ? rows[rowIndex].FlatStart : wrapped.Count;
+        if (rowIndex < rows.Count)
+            rows.RemoveRange(rowIndex, rows.Count - rowIndex);
+        wrapped.RemoveRange(flatIndex, wrapped.Count - flatIndex);
+
+        var lineIndex = fromLine;
+        while (lineIndex <= lines.Count)
+        {
+            var lineStart = lineIndex < lines.Count ? starts[lineIndex] : tailStart;
+            var raw = lineIndex < lines.Count ? lines[lineIndex] : tail;
+            var fold = FindCollapsedFold(folds, lineStart);
+            if (fold is not null)
+            {
+                AddRow(lineStart, fold.Preview, width);
+                var endLine = LineIndexOf(starts, lines.Count, tailStart, fold.End);
+                var endLineStart = endLine < lines.Count ? starts[endLine] : tailStart;
+                if (fold.End <= endLineStart)
+                {
+                    lineIndex = endLine;
+                }
+                else
+                {
+                    var endRaw = endLine < lines.Count ? lines[endLine] : tail;
+                    var rest = endRaw[(fold.End - endLineStart)..];
+                    if (rest.EndsWith('\r'))
+                        rest = rest[..^1];
+                    AddRow(fold.End, rest, width);
+                    lineIndex = endLine + 1;
+                }
+                continue;
+            }
+            var content = raw.EndsWith('\r') ? raw[..^1] : raw;
+            AddRow(lineStart, content, width);
+            lineIndex++;
+        }
+        _wrapProcessedLine = lines.Count;
+    }
+
+    /** offset → 行号: 行 i 覆盖 [starts[i], 下一行起点), tail 行覆盖 [tailStart, 末尾)。 */
+    private static int LineIndexOf(IReadOnlyList<int> starts, int completeCount, int tailStart, int offset)
+    {
+        if (offset >= tailStart)
+            return completeCount;
+        var low = 0;
+        var high = completeCount;
+        while (low < high)
+        {
+            var mid = (low + high) >>> 1;
+            if (starts[mid] <= offset)
+                low = mid + 1;
+            else
+                high = mid;
+        }
+        return Math.Max(0, low - 1);
+    }
+
+    private static TranscriptFold? FindCollapsedFold(IReadOnlyList<TranscriptFold> folds, int position)
+    {
+        TranscriptFold? outermost = null;
+        foreach (var fold in folds)
+        {
+            if (!fold.Collapsed || fold.Start > position || position >= fold.End)
+                continue;
+            if (outermost is null || fold.Start < outermost.Start)
+                outermost = fold;
+        }
+        return outermost;
+    }
+
+    private static int LowerBoundRow(List<VisualRow> rows, int sourceStart)
+    {
+        var low = 0;
+        var high = rows.Count;
+        while (low < high)
+        {
+            var middle = (low + high) / 2;
+            if (rows[middle].SourceStart < sourceStart)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        return low;
+    }
+
+    private void AddRow(int sourceStart, string content, int width)
+    {
+        var probe = new List<string>();
+        WrapSingleLine(content, width, probe);
+        _visualRows.Add(new VisualRow { SourceStart = sourceStart, FlatStart = _wrapCacheLines!.Count });
+        _wrapCacheLines.AddRange(probe);
+    }
+
+    private void SnapshotFolds(IReadOnlyList<TranscriptFold> folds)
+    {
+        _foldSnapshot.Clear();
+        foreach (var fold in folds)
+            _foldSnapshot.Add((fold.Start, fold.End, fold.Collapsed));
+    }
+
+    internal static void WrapSingleLine(string line, int width, List<string> output)
+    {
+        if (line.Length == 0)
+        {
+            output.Add("");
+            return;
+        }
+
+        var start = 0;
+        var column = 0;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var characterWidth = TerminalTextWidth.Of(line[index]);
+            if (column + characterWidth > width)
+            {
+                output.Add(line[start..index]);
+                start = index;
+                column = 0;
+            }
+
+            column += characterWidth;
+        }
+
+        output.Add(line[start..]);
+    }
+
+    public void Dispose()
+    {
+        UnsubscribeSessionRenamed();
+        PendingApproval?.TrySetResult(ApprovalOutcome.Cancelled);
+        PendingQuestions?.TrySetResult(null);
+    }
+}

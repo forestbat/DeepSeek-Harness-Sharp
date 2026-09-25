@@ -206,7 +206,7 @@ public sealed class GpuRenderer : IDisposable
         _lastGrid ??= new CellGrid(_grid.Width, _grid.Height);
         (_grid, _lastGrid) = (_lastGrid, _grid);
 
-        _core.RenderFrame(_atlas, _grid.Width, _grid.Height);
+        _core.RenderFrame(_atlas, _grid.Width, _grid.Height, _dirtyRanges);
 
         if (!_screenshotTaken && _screenshotPath is not null)
         {
@@ -266,8 +266,11 @@ public sealed class GpuRenderer : IDisposable
 
     private void OnMouseWheel(MouseWheelEventArgs e)
     {
-        if (e.OffsetY != 0)
-            _chat.HandleMouseWheel((int)e.OffsetY);
+        if (e.OffsetY == 0)
+            return;
+        var cellX = (int)(_mouseX / _atlas.GlyphWidth);
+        var cellY = (int)(_mouseY / _atlas.GlyphHeight);
+        _chat.HandleMouseWheel((int)e.OffsetY, cellX, cellY, _layout);
     }
 
     private void SaveScreenshot(string path)

@@ -62,7 +62,10 @@ public static class TuiRunner
     private static async Task<int> RunInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
     {
         SetConsoleInteractive(true);
-        using var rawMode = TerminalRawMode.TryEnable();
+        // Unix 上用原始字节读取以便解析 SGR 鼠标; Windows 控制台 ReadKey 无法消费 SGR, 鼠标仅 GPU 后端可用。
+        var rawMouse = !OperatingSystem.IsWindows();
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: rawMouse);
+        using var inputReader = rawMouse ? new TerminalInputReader(Console.OpenStandardInput()) : null;
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
@@ -88,8 +91,27 @@ public static class TuiRunner
                 if (chat.ExitRequested)
                     break;
 
-                var key = Console.ReadKey(true);
-                chat.HandleKey(key);
+                if (inputReader is null)
+                {
+                    chat.HandleKey(Console.ReadKey(true));
+                    continue;
+                }
+
+                var inputEvent = inputReader.Read();
+                if (inputEvent is null)
+                    break;
+                if (inputEvent.Value.IsMouse)
+                {
+                    var mouse = inputEvent.Value.Mouse!.Value;
+                    if (mouse.IsWheel)
+                        chat.HandleMouseWheel(mouse.WheelDelta, mouse.X, mouse.Y, layout);
+                    else if (mouse.Pressed && mouse.Button == 0)
+                        chat.HandleMouseClick(mouse.X, mouse.Y, layout);
+                }
+                else
+                {
+                    chat.HandleKey(inputEvent.Value.Key);
+                }
             }
         }
         finally
