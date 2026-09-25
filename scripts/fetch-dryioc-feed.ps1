@@ -3,10 +3,12 @@
 需要的版本直接从 src/Dsh.Runtime/Dsh.Runtime.csproj 的 PackageReference 读取。
 构建用的 commit 取 dadhi/DryIoc 默认分支的最新 commit(运行时解析, 不硬编码)。
 该版本不在 nuget.org 的 DryIoc 线上, 且包 ID 是 DryIoc.dll 而非 DryIoc。
-默认从源码构建, 已有则跳过, 不依赖 GitHub CLI。
+默认从源码构建; 本地已有 nupkg 时比较其构建 commit 与远程最新 commit, 不一致(或无标记)则重建。
+每个 nupkg 旁边的 <包名>.commit 戳记文件记录它构建自哪个 commit。
 
 用法:
     pwsh -File scripts/fetch-dryioc-feed.ps1
+    pwsh -File scripts/fetch-dryioc-feed.ps1 -Force                      # 不管戳记是否一致都重建
     pwsh -File scripts/fetch-dryioc-feed.ps1 -Proxy http://<host>:<port>   # 访问 GitHub 走指定代理, 不传则直连
     pwsh -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact   # 本机有已登录的 gh CLI 时, 优先直接从 CI 产物下载
 
@@ -15,7 +17,8 @@
 [CmdletBinding()]
 param(
     [string]$Proxy,
-    [switch]$UseGhArtifact
+    [switch]$UseGhArtifact,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,8 +78,30 @@ function Get-LatestCommit {
     return ($line -split '\s+')[0]
 }
 
+# 远程不可达时返回 $null(离线容忍), 由调用方决定降级行为。
+function Try-GetLatestCommit {
+    try {
+        return Get-LatestCommit
+    }
+    catch {
+        return $null
+    }
+}
+
+function Read-BuildStamp([string]$StampFile) {
+    if (-not (Test-Path -LiteralPath $StampFile)) {
+        return $null
+    }
+    $value = (Get-Content -LiteralPath $StampFile -Raw).Trim()
+    return $value.Length -gt 0 ? $value : $null
+}
+
+function Write-BuildStamp([string]$StampFile, [string]$Commit) {
+    Set-Content -LiteralPath $StampFile -Value $Commit -NoNewline
+}
+
 # 从 CI 产物下载; 无 gh CLI 或下载不到时返回 $false, 由调用方回退。
-function Get-FromGhArtifact([string]$TargetNupkg) {
+function Get-FromGhArtifact([string]$TargetNupkg, [string]$StampFile) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         return $false
     }
@@ -85,7 +110,7 @@ function Get-FromGhArtifact([string]$TargetNupkg) {
         return $false
     }
 
-    $runs = gh run list --repo $GhRepo --workflow $GhWorkflow --status success --limit 20 --json databaseId | ConvertFrom-Json
+    $runs = gh run list --repo $GhRepo --workflow $GhWorkflow --status success --limit 20 --json databaseId,headSha | ConvertFrom-Json
     foreach ($run in $runs) {
         $json = gh api "repos/$GhRepo/actions/runs/$($run.databaseId)/artifacts" 2>$null
         if (-not $json) {
@@ -106,6 +131,7 @@ function Get-FromGhArtifact([string]$TargetNupkg) {
         if (Test-Path -LiteralPath $staged) {
             New-Item -ItemType Directory -Path $FeedDir -Force | Out-Null
             Copy-Item -LiteralPath $staged -Destination $TargetNupkg -Force
+            Write-BuildStamp $StampFile $run.headSha
             Remove-Item -LiteralPath $WorkDir -Recurse -Force
             return $true
         }
@@ -115,8 +141,8 @@ function Get-FromGhArtifact([string]$TargetNupkg) {
     return $false
 }
 
-# 在默认分支最新 commit 上本地构建; 与 CI 一样产出包 ID 为 DryIoc.dll 的 nupkg。
-function Build-FromSource([string]$Commit) {
+# 在指定 commit 上本地构建; 与 CI 一样产出包 ID 为 DryIoc.dll 的 nupkg。
+function Build-FromSource([string]$Commit, [string]$StampFile) {
     Assert-DotnetSdk
 
     if (Test-Path -LiteralPath $WorkDir) {
@@ -141,6 +167,7 @@ function Build-FromSource([string]$Commit) {
         -p:EnableSourceControlManagerQueries=false -p:EnableSourceLink=false `
         -o $FeedDir
 
+    Write-BuildStamp $StampFile $Commit
     Remove-Item -LiteralPath $WorkDir -Recurse -Force
 }
 
@@ -159,13 +186,34 @@ function Assert-ProducedVersion([string]$TargetNupkg, [string]$Version) {
 
 $PackageVersion = Get-RequiredPackageVersion
 $TargetNupkg = Join-Path $FeedDir "$PackageId.$PackageVersion.nupkg"
-if (Test-Path -LiteralPath $TargetNupkg) {
-    Write-Host "本地 feed 已包含 $PackageId $PackageVersion, 跳过: $TargetNupkg"
-    exit 0
+$StampFile = "$TargetNupkg.commit"
+
+if ((Test-Path -LiteralPath $TargetNupkg) -and -not $Force) {
+    $localCommit = Read-BuildStamp $StampFile
+    $remoteCommit = Try-GetLatestCommit
+    if ($null -eq $remoteCommit) {
+        if ($null -eq $localCommit) {
+            Write-Warning "本地包无 commit 戳记且远程不可达, 无法判断是否过期, 保留现有包: $TargetNupkg"
+        }
+        else {
+            Write-Host "远程不可达, 保留现有包(构建自 $($localCommit.Substring(0, [Math]::Min(12, $localCommit.Length)))): $TargetNupkg"
+        }
+        exit 0
+    }
+    if ($null -ne $localCommit -and $localCommit -eq $remoteCommit) {
+        Write-Host "本地 feed 已是最新($($remoteCommit.Substring(0, 12))): $TargetNupkg"
+        exit 0
+    }
+    if ($null -eq $localCommit) {
+        Write-Host "本地包无 commit 戳记, 重新构建以与远程 $($remoteCommit.Substring(0, 12)) 对齐..."
+    }
+    else {
+        Write-Host "远程已更新($($localCommit.Substring(0, [Math]::Min(12, $localCommit.Length))) -> $($remoteCommit.Substring(0, 12))), 重新构建..."
+    }
 }
 
 if ($UseGhArtifact) {
-    if (Get-FromGhArtifact $TargetNupkg) {
+    if (Get-FromGhArtifact $TargetNupkg $StampFile) {
         Write-Host "已从 CI 产物写入本地 feed: $TargetNupkg"
         exit 0
     }
@@ -173,7 +221,7 @@ if ($UseGhArtifact) {
 }
 
 $Commit = Get-LatestCommit
-Build-FromSource $Commit
+Build-FromSource $Commit $StampFile
 Assert-ProducedVersion $TargetNupkg $PackageVersion
 
 Write-Host "已写入本地 feed: $TargetNupkg"

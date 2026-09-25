@@ -4,10 +4,12 @@
 # 需要的版本直接从 src/Dsh.Runtime/Dsh.Runtime.csproj 的 PackageReference 读取。
 # 构建用的 commit 取 dadhi/DryIoc 默认分支的最新 commit(运行时解析, 不硬编码)。
 # 该版本不在 nuget.org 的 DryIoc 线上, 且包 ID 是 DryIoc.dll 而非 DryIoc。
-# 默认从源码构建, 已有则跳过, 不依赖 GitHub CLI。
+# 默认从源码构建; 本地已有 nupkg 时比较其构建 commit 与远程最新 commit, 不一致(或无标记)则重建。
+# 每个 nupkg 旁边的 <包名>.commit 戳记文件记录它构建自哪个 commit。
 #
 # 用法:
 #   ./scripts/fetch-dryioc-feed.sh
+#   ./scripts/fetch-dryioc-feed.sh --force                       # 不管戳记是否一致都重建
 #   ./scripts/fetch-dryioc-feed.sh --proxy http://<host>:<port>   # 访问 GitHub 走指定代理, 不传则直连
 #   ./scripts/fetch-dryioc-feed.sh --use-gh-artifact   # 本机有已登录的 gh CLI 时, 优先直接从 CI 产物下载
 #
@@ -30,6 +32,7 @@ GH_ARTIFACT="packages"
 
 USE_GH_ARTIFACT=0
 PROXY=""
+FORCE=0
 
 usage() {
     cat <<'EOF'
@@ -38,6 +41,7 @@ usage() {
 选项:
   --proxy <url>       访问 GitHub 走指定代理(如 http://<host>:<port>), 不传则直连
   --use-gh-artifact   若本机有已登录的 gh CLI, 优先从 CI 产物下载, 失败则回退到源码构建
+  --force             不管 commit 戳记是否一致都重建
   -h, --help          显示本帮助
 EOF
 }
@@ -47,6 +51,7 @@ while [ "$#" -gt 0 ]; do
         --proxy) shift; PROXY="${1:?--proxy 需要一个值}" ;;
         --proxy=*) PROXY="${1#--proxy=}" ;;
         --use-gh-artifact) USE_GH_ARTIFACT=1 ;;
+        --force) FORCE=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "未知参数: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -101,18 +106,34 @@ get_latest_commit() {
     printf '%s' "$sha"
 }
 
+# 远程不可达时输出空, 由调用方决定降级行为。
+try_get_latest_commit() {
+    git ls-remote "$REPO_URL" HEAD 2>/dev/null | head -n1 | cut -f1 || true
+}
+
+read_build_stamp() {
+    local stamp_file="$1"
+    [ -f "$stamp_file" ] && tr -d '[:space:]' < "$stamp_file" || true
+}
+
+write_build_stamp() {
+    printf '%s' "$2" > "$1"
+}
+
 # 从 CI 产物下载; 无 gh CLI 或下载不到时返回非零, 由调用方回退。
 fetch_from_gh_artifact() {
     local target_nupkg="$1"
+    local stamp_file="$2"
 
     command -v gh >/dev/null 2>&1 || return 1
     gh auth status >/dev/null 2>&1 || return 1
 
-    local run_ids
-    run_ids="$(gh run list --repo "$GH_REPO" --workflow "$GH_WORKFLOW" --status success --limit 20 --json databaseId --jq '.[].databaseId')"
+    local runs
+    runs="$(gh run list --repo "$GH_REPO" --workflow "$GH_WORKFLOW" --status success --limit 20 --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"')"
 
-    local run_id
-    for run_id in $run_ids; do
+    local run_id head_sha
+    while read -r run_id head_sha; do
+        [ -n "$run_id" ] || continue
         local artifact_names
         artifact_names="$(gh api "repos/$GH_REPO/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.expired == false) | .name' 2>/dev/null || true)"
         printf '%s\n' "$artifact_names" | grep -qx "$GH_ARTIFACT" || continue
@@ -123,18 +144,20 @@ fetch_from_gh_artifact() {
             && [ -f "$WORK_DIR/$(basename -- "$target_nupkg")" ]; then
             mkdir -p "$FEED_DIR"
             cp "$WORK_DIR/$(basename -- "$target_nupkg")" "$target_nupkg"
+            write_build_stamp "$stamp_file" "$head_sha"
             rm -rf "$WORK_DIR"
             return 0
         fi
         rm -rf "$WORK_DIR"
         return 1
-    done
+    done <<< "$runs"
     return 1
 }
 
-# 在默认分支最新 commit 上本地构建; 与 CI 一样产出包 ID 为 DryIoc.dll 的 nupkg。
+# 在指定 commit 上本地构建; 与 CI 一样产出包 ID 为 DryIoc.dll 的 nupkg。
 build_from_source() {
     local commit="$1"
+    local stamp_file="$2"
 
     require_dotnet_sdk
 
@@ -158,6 +181,7 @@ build_from_source() {
         -p:EnableSourceControlManagerQueries=false -p:EnableSourceLink=false \
         -o "$FEED_DIR"
 
+    write_build_stamp "$stamp_file" "$commit"
     rm -rf "$WORK_DIR"
 }
 
@@ -180,14 +204,32 @@ assert_produced_version() {
 
 PACKAGE_VERSION="$(get_required_package_version)"
 TARGET_NUPKG="$FEED_DIR/$PACKAGE_ID.$PACKAGE_VERSION.nupkg"
+STAMP_FILE="$TARGET_NUPKG.commit"
 
-if [ -f "$TARGET_NUPKG" ]; then
-    echo "本地 feed 已包含 $PACKAGE_ID $PACKAGE_VERSION, 跳过: $TARGET_NUPKG"
-    exit 0
+if [ -f "$TARGET_NUPKG" ] && [ "$FORCE" != "1" ]; then
+    LOCAL_COMMIT="$(read_build_stamp "$STAMP_FILE")"
+    REMOTE_COMMIT="$(try_get_latest_commit)"
+    if [ -z "$REMOTE_COMMIT" ]; then
+        if [ -z "$LOCAL_COMMIT" ]; then
+            echo "警告: 本地包无 commit 戳记且远程不可达, 无法判断是否过期, 保留现有包: $TARGET_NUPKG" >&2
+        else
+            echo "远程不可达, 保留现有包(构建自 ${LOCAL_COMMIT:0:12}): $TARGET_NUPKG"
+        fi
+        exit 0
+    fi
+    if [ -n "$LOCAL_COMMIT" ] && [ "$LOCAL_COMMIT" = "$REMOTE_COMMIT" ]; then
+        echo "本地 feed 已是最新(${REMOTE_COMMIT:0:12}): $TARGET_NUPKG"
+        exit 0
+    fi
+    if [ -z "$LOCAL_COMMIT" ]; then
+        echo "本地包无 commit 戳记, 重新构建以与远程 ${REMOTE_COMMIT:0:12} 对齐..."
+    else
+        echo "远程已更新(${LOCAL_COMMIT:0:12} -> ${REMOTE_COMMIT:0:12}), 重新构建..."
+    fi
 fi
 
 if [ "$USE_GH_ARTIFACT" = "1" ]; then
-    if fetch_from_gh_artifact "$TARGET_NUPKG"; then
+    if fetch_from_gh_artifact "$TARGET_NUPKG" "$STAMP_FILE"; then
         echo "已从 CI 产物写入本地 feed: $TARGET_NUPKG"
         exit 0
     fi
@@ -195,7 +237,7 @@ if [ "$USE_GH_ARTIFACT" = "1" ]; then
 fi
 
 COMMIT="$(get_latest_commit)"
-build_from_source "$COMMIT"
+build_from_source "$COMMIT" "$STAMP_FILE"
 assert_produced_version "$TARGET_NUPKG" "$PACKAGE_VERSION"
 
 echo "已写入本地 feed: $TARGET_NUPKG"
