@@ -84,9 +84,11 @@ public sealed class ToolRuntime : Service
     }
 
     public IDisposable Restrict(ToolRestriction filter)
+        => Restrict(filter, DshScope.ScopeOf(Ctx)
+            ?? throw new InvalidOperationException("tools.restrict() requires a scoped context (agent.ctx): a context-global restriction would mask every agent — deny the tool for the intended agent instead"));
+
+    public IDisposable Restrict(ToolRestriction filter, ScopeKey scope)
     {
-        var scope = DshScope.ScopeOf(Ctx)
-            ?? throw new InvalidOperationException("tools.restrict() requires a scoped context (agent.ctx): a context-global restriction would mask every agent — deny the tool for the intended agent instead");
         if (filter.Allow is null && filter.Deny is null)
             throw new InvalidOperationException("tools.restrict({}) is a no-op: pass allow and/or deny (an empty filter is almost always a materialized-empty-config bug)");
         if (filter.Allow?.Contains(RunCodeName) == true || filter.Deny?.Contains(RunCodeName) == true)
@@ -110,10 +112,11 @@ public sealed class ToolRuntime : Service
             notify: false);
 
     public IDisposable PresentAs(ToolPresentationMode mode)
-    {
-        var scope = DshScope.ScopeOf(Ctx)
-            ?? throw new InvalidOperationException("tools.presentAs() requires a scoped context (agent.ctx): a context-global presentation is the mode config field on the tools row");
-        return _layers.Effect(Ctx, scope,
+        => PresentAs(mode, DshScope.ScopeOf(Ctx)
+            ?? throw new InvalidOperationException("tools.presentAs() requires a scoped context (agent.ctx): a context-global presentation is the mode config field on the tools row"));
+
+    public IDisposable PresentAs(ToolPresentationMode mode, ScopeKey scope)
+        => _layers.Effect(Ctx, scope,
             layer =>
             {
                 if (layer.Mode is not null)
@@ -124,7 +127,6 @@ public sealed class ToolRuntime : Service
                 layer.Mode = mode;
             },
             layer => layer.Mode = null);
-    }
 
     private string? GuardReason(ToolExecution exec)
     {

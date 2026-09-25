@@ -85,6 +85,12 @@ public static partial class LlmFailureClassifiers
            || BalanceExhausted().IsMatch(detail)
            || OutOfCredits().IsMatch(detail);
 
+    [GeneratedRegex("""(?:request[\s_-]+entity[\s_-]+too[\s_-]+large|payload[\s_-]+too[\s_-]+large|function[_-]payload[_-]too[_-]large|(?:request[\s_-]+)?body[\s_-]+too[\s_-]+large|http[\s_-]+413)\b""", RegexOptions.IgnoreCase)]
+    private static partial Regex PayloadTooLarge();
+
+    /** 请求体本身过大(HTTP 413 一类的传输层拒绝),区别于上下文窗口超限。 */
+    public static bool IsPayloadTooLargeError(string detail) => PayloadTooLarge().IsMatch(detail);
+
     public static string ErrorChain(object? value)
     {
         var path = new HashSet<object>(ReferenceEqualityComparer.Instance);

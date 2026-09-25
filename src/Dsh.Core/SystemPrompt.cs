@@ -53,6 +53,7 @@ public static class PromptOrders
     public const int ToolWebFetch = 2100;
     public const int ToolLsp = 2200;
     public const int ToolSessionQuery = 2300;
+    public const int ToolCompact = 2350;
     public const int ToolGoal = 2400;
     public const int ToolE2b = 2500;
     public const int ToolMemorySave = 2550;
@@ -144,6 +145,12 @@ public sealed class SystemPrompt : Service
             layer => layer.Sections.Insert(section.Name, section),
             layer => layer.Sections.Remove(section.Name));
 
+    /** 按 scope(如 agent.ScopeKey)注册段: 同名段遮蔽全局层, 仅对该 scope 及其子 scope 生效。 */
+    public IDisposable Section(PromptSection section, ScopeKey scope)
+        => _layers.Effect(Ctx, scope,
+            layer => layer.Sections.Insert(section.Name, section),
+            layer => layer.Sections.Remove(section.Name));
+
     public IDisposable ReplacePersona(string text, bool complete = false)
     {
         _layers.Global.Sections.Remove(PersonaSection);
@@ -157,6 +164,11 @@ public sealed class SystemPrompt : Service
 
     public IDisposable SuppressRuntimeContext()
         => _layers.Effect(Ctx, null,
+            layer => layer.RuntimeContextSuppressors.Append(true),
+            layer => layer.RuntimeContextSuppressors.Remove(true));
+
+    public IDisposable SuppressRuntimeContext(ScopeKey scope)
+        => _layers.Effect(Ctx, scope,
             layer => layer.RuntimeContextSuppressors.Append(true),
             layer => layer.RuntimeContextSuppressors.Remove(true));
 
