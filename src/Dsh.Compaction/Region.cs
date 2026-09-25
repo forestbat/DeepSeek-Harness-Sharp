@@ -19,7 +19,8 @@ public sealed record CompactionTransactionOptions(
     CompactionOwner Owner,
     CompactionStability Stability,
     string? SourceCommandId = null,
-    Func<Task>? Flush = null);
+    Func<Task>? Flush = null,
+    string? Focus = null);
 
 public sealed record SurfaceSelection(
     long Start,
@@ -50,7 +51,14 @@ public delegate Task<SummaryResult> RegionSummarize(SummarizationInput input, IA
 
 public static class CompactionRegion
 {
-    public static ShadowedRange? SelectCompactableRange(Session session, TokenMeasurement measurement, int retainTokens)
+    private readonly record struct TurnSpan(int StartIdx, int EndIdx);
+
+    /** 选区尾部保留:先按最近 tailTurns 个 user turn 定位边界,再用 token 预算夹紧,最后对齐到平衡切点。 */
+    public static ShadowedRange? SelectCompactableRange(
+        Session session,
+        TokenMeasurement measurement,
+        int retainTokens,
+        int tailTurns)
     {
         var pricedNodes = measurement.Nodes;
         if (pricedNodes.Count == 0)
@@ -67,15 +75,8 @@ public static class CompactionRegion
             firstEligibleIdx++;
         }
 
-        var accumulated = 0;
-        var keepFromIdx = pricedNodes.Count;
-        for (var index = pricedNodes.Count - 1; index >= 0; index--)
-        {
-            accumulated += pricedNodes[index].Tokens;
-            keepFromIdx = index;
-            if (accumulated >= retainTokens)
-                break;
-        }
+        var lastStepStart = LastBalancedCut(session, surfaceNodes, firstEligibleIdx);
+        var keepFromIdx = SelectRetentionStart(session, pricedNodes, retainTokens, tailTurns, lastStepStart);
         if (keepFromIdx <= firstEligibleIdx)
             return null;
         while (keepFromIdx > firstEligibleIdx)
@@ -87,6 +88,86 @@ public static class CompactionRegion
         if (keepFromIdx <= firstEligibleIdx)
             return null;
         return new ShadowedRange(surfaceNodes[firstEligibleIdx], surfaceNodes[keepFromIdx - 1]);
+    }
+
+    private static int SelectRetentionStart(
+        Session session,
+        IReadOnlyList<TokenSurfaceNode> nodes,
+        int retainTokens,
+        int tailTurns,
+        int lastStepStart)
+    {
+        var prefix = PrefixTokens(nodes);
+        var turns = UserTurns(session, nodes, tailTurns);
+        var total = 0;
+        var keep = -1;
+        for (var index = turns.Count - 1; index >= 0; index--)
+        {
+            var turn = turns[index];
+            var size = prefix[turn.EndIdx] - prefix[turn.StartIdx];
+            if (total + size <= retainTokens)
+            {
+                total += size;
+                keep = turn.StartIdx;
+                continue;
+            }
+            var split = SplitTurn(prefix, turn, retainTokens - total);
+            if (split >= 0)
+                keep = split;
+            break;
+        }
+        if (keep < 0)
+            return lastStepStart;
+        return Math.Min(keep, lastStepStart);
+    }
+
+    /** 按 user 消息切分 surface;插件 checkpoint 等非 user 消息不构成 turn,随头部一起被重摘要。 */
+    private static List<TurnSpan> UserTurns(Session session, IReadOnlyList<TokenSurfaceNode> nodes, int tailTurns)
+    {
+        var starts = new List<int>();
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            if (session.EventAt(nodes[index].Seq)?.Data is UserMessagePayload { Message.Source: UserMessageSource })
+                starts.Add(index);
+        }
+        var turns = new List<TurnSpan>();
+        var first = Math.Max(0, starts.Count - Math.Max(tailTurns, 0));
+        for (var index = first; index < starts.Count; index++)
+        {
+            var end = index + 1 < starts.Count ? starts[index + 1] : nodes.Count;
+            turns.Add(new TurnSpan(starts[index], end));
+        }
+        return turns;
+    }
+
+    private static int SplitTurn(IReadOnlyList<int> prefix, TurnSpan turn, int budget)
+    {
+        if (budget <= 0 || turn.EndIdx - turn.StartIdx <= 1)
+            return -1;
+        for (var start = turn.StartIdx + 1; start < turn.EndIdx; start++)
+        {
+            if (prefix[turn.EndIdx] - prefix[start] <= budget)
+                return start;
+        }
+        return -1;
+    }
+
+    private static IReadOnlyList<int> PrefixTokens(IReadOnlyList<TokenSurfaceNode> nodes)
+    {
+        var prefix = new int[nodes.Count + 1];
+        for (var index = 0; index < nodes.Count; index++)
+            prefix[index + 1] = prefix[index] + nodes[index].Tokens;
+        return prefix;
+    }
+
+    private static int LastBalancedCut(Session session, IReadOnlyList<long> surfaceNodes, int firstEligibleIdx)
+    {
+        for (var index = surfaceNodes.Count - 1; index > firstEligibleIdx; index--)
+        {
+            if (ToolPairing.BalancedBefore(session, surfaceNodes[index]))
+                return index;
+        }
+        return firstEligibleIdx;
     }
 
     public static async Task<CompactionResult> CompactSurfaceRegion(
@@ -131,7 +212,7 @@ public static class CompactionRegion
 
         try
         {
-            var prepared = PrepareCompaction(meter, session, selection);
+            var prepared = PrepareCompaction(meter, session, selection, options.Focus);
             var summarized = await SummarizeCompaction(meter, summarize, prepared, agent, compactionId, options.SourceCommandId, signal);
             if (standalone)
                 signal.ThrowIfCancellationRequested();
@@ -245,7 +326,7 @@ public static class CompactionRegion
         return new SurfaceSelection(start, end, startIdx, endIdx, [.. nodes.Skip(startIdx).Take(endIdx - startIdx + 1)]);
     }
 
-    private static PreparedCompaction PrepareCompaction(TokenMeter meter, Session session, SurfaceSelection selection)
+    private static PreparedCompaction PrepareCompaction(TokenMeter meter, Session session, SurfaceSelection selection, string? focus)
     {
         var measurement = meter.Measure(session);
         var selectedNodes = (IReadOnlyList<TokenSurfaceNode>)[.. measurement.Nodes.Skip(selection.StartIdx).Take(selection.EndIdx - selection.StartIdx + 1)];
@@ -258,7 +339,7 @@ public static class CompactionRegion
             selectedNodes,
             selectedNodes.Sum(node => node.HeuristicTokens),
             selectedNodes.Sum(node => node.Tokens),
-            BuildSummarizationInput(session, selection.ShadowedSeqs));
+            BuildSummarizationInput(session, selection.ShadowedSeqs, focus));
     }
 
     private static async Task<SummarizedCompaction> SummarizeCompaction(
@@ -341,7 +422,7 @@ public static class CompactionRegion
             prepared.ShadowedTokenCount);
     }
 
-    private static SummarizationInput BuildSummarizationInput(Session session, IReadOnlyList<long> shadowedSeqs)
+    private static SummarizationInput BuildSummarizationInput(Session session, IReadOnlyList<long> shadowedSeqs, string? focus)
     {
         var header = session.RequestHeader();
         var systemNodes = session.SurfaceManager.Nodes;
@@ -353,7 +434,7 @@ public static class CompactionRegion
             .Select(seq => Surface.DeriveEventMessage(session.EventAt(seq)!))
             .OfType<Message>()
             .ToList();
-        return new SummarizationInput(system, header?.Tools, regionMessages);
+        return new SummarizationInput(system, header?.Tools, regionMessages, focus);
     }
 
     private static (int? OpenTurn, SessionEvent? UnmatchedCompactionStart, long? LatestEndSeedSeq) InspectCompactionEntryState(Session session)

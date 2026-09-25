@@ -6,7 +6,8 @@ namespace Dsh.Compaction;
 public sealed record SummarizationInput(
     string? System,
     IReadOnlyList<ToolSchema>? Tools,
-    IReadOnlyList<Message> Messages);
+    IReadOnlyList<Message> Messages,
+    string? Focus = null);
 
 public sealed record SummaryResult(
     IReadOnlyList<ContentBlock> Summary,
@@ -70,7 +71,8 @@ public static class Summarizer
         int maxTokens,
         SummarizationInput input,
         IAgent agent,
-        CancellationToken signal = default)
+        CancellationToken signal = default,
+        string? instruction = null)
     {
         var latest = agent.Session.RequestHeader()?.Config;
         var configured = summarizationProvider.Length == 0
@@ -86,10 +88,14 @@ public static class Summarizer
                 "no provider/model available for summarization: set both BasicCompactionConfig summarization fields, route one request, or set both AgentOptions fields");
 
         var assembler = new BlockAssembler();
+        var baseInstruction = string.IsNullOrEmpty(instruction) ? CompactionInstruction : instruction;
+        var prompt = string.IsNullOrWhiteSpace(input.Focus)
+            ? baseInstruction
+            : $"{baseInstruction}\n\nAdditional focus for this condensation: {input.Focus}";
         var messages = new List<Message>(input.Messages)
         {
             MessageFactory.CreateUserMessage(
-                [new TextBlock(CompactionInstruction)],
+                [new TextBlock(prompt)],
                 new PluginMessageSource("dsh-compaction-basic")),
         };
         var options = new GenerateOptions

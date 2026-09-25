@@ -15,5 +15,7 @@ public abstract class CompactionEngine : Service
 
     public abstract Task<CompactionResult?> CompactNow(IAgent agent, CancellationToken signal, string? sourceCommandId = null);
 
+    public abstract Task<CompactionResult?> CompactInTurn(IAgent agent, string? focus, CancellationToken signal);
+
     public abstract Task<CompactionResult> CompactRegion(long start, long end, IAgent agent, CancellationToken signal = default);
 }

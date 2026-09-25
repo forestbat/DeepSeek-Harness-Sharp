@@ -71,7 +71,8 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
         var policy = target is null
             ? CompactionConfigResolver.ResolveTargetPolicy(Config, "", "")
             : CompactionConfigResolver.ResolveTargetPolicy(Config, target.Value.Provider, target.Value.Model);
-        var result = await Summarizer.SummarizeWithLlm(_llm, policy.SummarizationProvider, policy.SummarizationModel, policy.MaxTokens, input, agent, signal);
+        var result = await CompactionSummarizer.Summarize(
+            _llm, policy.SummarizationProvider, policy.SummarizationModel, policy.MaxTokens, input, agent, signal);
         var (summary, title) = SessionTitleExtraction.Extract(result.Summary);
         if (title is null)
             return result;
@@ -99,7 +100,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
                 prune.PruneSession(agent.Session);
                 measurement = _meter.Measure(agent.Session);
             }
-            var overflowRange = CompactionRegion.SelectCompactableRange(agent.Session, measurement, 0);
+            var overflowRange = CompactionRegion.SelectCompactableRange(agent.Session, measurement, 0, policy.TailTurns);
             if (overflowRange is null)
                 return null;
             return await CompactRegion(overflowRange.Start, overflowRange.End, agent, signal);
@@ -127,7 +128,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
         CompactionResult? result = null;
         for (var attempt = 0; attempt <= spec.CompactionRetries; attempt++)
         {
-            var range = CompactionRegion.SelectCompactableRange(agent.Session, measurement, spec.RetainTokens);
+            var range = CompactionRegion.SelectCompactableRange(agent.Session, measurement, spec.RetainTokens, spec.TailTurns);
             if (range is null)
             {
                 if (result is null)
@@ -156,6 +157,38 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             new CompactionTransactionOptions(CompactionOwner.CurrentTurn, CompactionStability.WholeSurface),
             signal);
 
+    /** LLM 工具发起的当场压缩:与自动压缩共用 tail_turns+预算选区,在开启的 turn 内提交并接受可选 focus。 */
+    public override async Task<CompactionResult?> CompactInTurn(IAgent agent, string? focus, CancellationToken signal)
+    {
+        signal.ThrowIfCancellationRequested();
+        var (retainTokens, tailTurns) = ResolveRetention(agent);
+        var measurement = _meter.Measure(agent.Session);
+        var range = CompactionRegion.SelectCompactableRange(agent.Session, measurement, retainTokens, tailTurns);
+        if (range is null)
+            return null;
+        return await CompactionRegion.CompactSurfaceRegion(
+            _meter,
+            Summarize,
+            agent.Session,
+            range.Start,
+            range.End,
+            agent,
+            new CompactionTransactionOptions(CompactionOwner.CurrentTurn, CompactionStability.WholeSurface, Focus: focus),
+            signal);
+    }
+
+    private (int RetainTokens, int TailTurns) ResolveRetention(IAgent agent)
+    {
+        var target = ConversationTarget(agent);
+        var policy = target is null
+            ? CompactionConfigResolver.ResolveTargetPolicy(Config, "", "")
+            : CompactionConfigResolver.ResolveTargetPolicy(Config, target.Value.Provider, target.Value.Model);
+        var contextWindow = target is null
+            ? null
+            : _llm.ResolveModelInfo(target.Value.Provider, target.Value.Model).ContextWindow;
+        return (CompactionConfigResolver.ResolveRetainTokens(policy.Retention, contextWindow), policy.TailTurns);
+    }
+
     public override Task<CompactionResult?> CompactNow(IAgent agent, CancellationToken signal, string? sourceCommandId = null)
     {
         signal.ThrowIfCancellationRequested();
@@ -172,7 +205,9 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
                 try
                 {
                     operationSignal.ThrowIfCancellationRequested();
-                    var range = CompactionRegion.SelectCompactableRange(agent.Session, _meter.Measure(agent.Session), 0);
+                    var (retainTokens, tailTurns) = ResolveRetention(agent);
+                    var range = CompactionRegion.SelectCompactableRange(
+                        agent.Session, _meter.Measure(agent.Session), retainTokens, tailTurns);
                     if (range is null)
                         return null;
                     return await CompactionRegion.CompactSurfaceRegion(

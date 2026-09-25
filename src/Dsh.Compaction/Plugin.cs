@@ -7,6 +7,7 @@ using Dsh.Plugins;
 [assembly: DshPlugin(Dsh.Compaction.Plugin.CompactionToolResultPruner)]
 [assembly: DshPlugin(Dsh.Compaction.Plugin.CompactionBasic)]
 [assembly: DshPlugin(Dsh.Compaction.Plugin.CommandCompact)]
+[assembly: DshPlugin(Dsh.Compaction.Plugin.ToolCompact)]
 
 namespace Dsh.Compaction;
 
@@ -16,6 +17,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     internal const string CompactionToolResultPruner = "@deepseek-ai/dsh-compaction-tool-result-pruner";
     internal const string CompactionBasic = "@deepseek-ai/dsh-compaction-basic";
     internal const string CommandCompact = "@deepseek-ai/dsh-command-compact";
+    internal const string ToolCompact = "@deepseek-ai/dsh-compaction-tool";
 
     public string[] Inject => packageName switch
     {
@@ -23,6 +25,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
         CompactionToolResultPruner => [Dsh.Compaction.TokenMeter.ServiceName],
         CompactionBasic => [LlmRuntime.ServiceName, Dsh.Compaction.TokenMeter.ServiceName, SessionStore.ServiceName],
         CommandCompact => [CommandsService.ServiceName, CompactionEngine.ServiceName],
+        ToolCompact => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, CompactionEngine.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
@@ -32,6 +35,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
         CompactionToolResultPruner => ToolResultPruner.Register(ctx, PruneConfigFrom(config)),
         CompactionBasic => BasicCompactionEngine.Register(ctx, BasicCompactionConfigFrom(config)),
         CommandCompact => CompactCommand.Register(ctx),
+        ToolCompact => CompactTool.Register(ctx),
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
@@ -57,6 +61,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ThresholdRatio = DoubleOf(dict, "thresholdRatio"),
             RetainRatio = DoubleOf(dict, "retainRatio"),
             RetainTokens = IntOf(dict, "retainTokens"),
+            TailTurns = IntOf(dict, "tailTurns"),
             SummarizationProvider = dict?.GetValueOrDefault("summarizationProvider") as string,
             SummarizationModel = dict?.GetValueOrDefault("summarizationModel") as string,
             MaxTokens = IntOf(dict, "maxTokens"),
@@ -83,6 +88,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 ThresholdRatio = DoubleOf(dict, "thresholdRatio"),
                 RetainRatio = DoubleOf(dict, "retainRatio"),
                 RetainTokens = IntOf(dict, "retainTokens"),
+                TailTurns = IntOf(dict, "tailTurns"),
                 SummarizationProvider = dict.GetValueOrDefault("summarizationProvider") as string,
                 SummarizationModel = dict.GetValueOrDefault("summarizationModel") as string,
                 MaxTokens = IntOf(dict, "maxTokens"),

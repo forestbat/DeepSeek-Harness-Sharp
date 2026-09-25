@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 using Microsoft.ML.Tokenizers;
@@ -63,6 +62,27 @@ public static class TokenEstimate
     }
 
     public static int EstimateMessage(Message message) => EstimateContent(message.Content) + RoleOverhead;
+
+    /** 内容块的字符规模,用于分块阈值与超限剥离的判定;图片按附件字节数计入。 */
+    public static long EstimateContentChars(IReadOnlyList<ContentBlock> blocks)
+    {
+        var chars = 0L;
+        foreach (var block in blocks)
+        {
+            chars += block switch
+            {
+                TextBlock text => text.Text.Length,
+                ReasoningBlock reasoning => reasoning.Text.Length,
+                ToolCallBlock call => (long)call.Name.Length + call.Arguments.Length,
+                ToolResultBlock result => EstimateContentChars(result.Content),
+                ImageBlock image => image.Attachment.Bytes,
+                _ => 0,
+            };
+        }
+        return chars;
+    }
+
+    public static long EstimateMessageChars(Message message) => EstimateContentChars(message.Content);
 
     public static int EstimateToolsTokens(EpochHeader? header)
         => header?.Tools is not { Count: > 0 } tools
