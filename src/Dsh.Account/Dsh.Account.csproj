@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
