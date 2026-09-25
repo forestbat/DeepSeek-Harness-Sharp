@@ -37,6 +37,12 @@ public sealed partial class SessionNodeViewModel : ObservableObject
     [ObservableProperty]
     private string _renameDraft = "";
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMatchSnippet))]
+    private string _matchSnippet = "";
+
+    public bool HasMatchSnippet => MatchSnippet.Length > 0;
+
     public AgentLoopAgent? Agent { get; set; }
 
     public void Refresh(AgentLoopAgent? liveAgent, string title, string modelLabel)

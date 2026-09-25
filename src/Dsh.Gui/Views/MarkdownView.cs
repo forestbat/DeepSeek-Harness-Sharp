@@ -46,6 +46,7 @@ public sealed class MarkdownView : UserControl
     private readonly StackPanel _root = new() { Orientation = Orientation.Vertical, Spacing = BlockSpacing };
     private readonly Dictionary<int, bool> _expandedCodeBlocks = [];
     private string _renderedText = "";
+    private double _fontScale = 1;
     private IBrush _primaryBrush = Brushes.Black;
     private IBrush _secondaryBrush = Brushes.Gray;
     private IBrush _codeBackground = TranslucentGray;
@@ -77,6 +78,22 @@ public sealed class MarkdownView : UserControl
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
+        if (Application.Current is { } app)
+            app.ResourcesChanged += OnAppResourcesChanged;
+        ApplyTheme();
+        Rebuild(force: true);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        if (Application.Current is { } app)
+            app.ResourcesChanged -= OnAppResourcesChanged;
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    /** 字号/主题资源变化后重建: 正文块的字号是构建期算出来的, 不会随 DynamicResource 自动刷新。 */
+    private void OnAppResourcesChanged(object? sender, ResourcesChangedEventArgs e)
+    {
         ApplyTheme();
         Rebuild(force: true);
     }
@@ -93,7 +110,18 @@ public sealed class MarkdownView : UserControl
         _secondaryBrush = ResolveBrush("Brush.Text.Secondary", IsDark ? Brushes.Silver : Brushes.DimGray);
         _codeBackground = ResolveBrush("Brush.Bg.Inset", TranslucentGray);
         _monoFont = LookupResource("Font.Mono") as FontFamily ?? FontFamily.Parse(MonoFontFallback);
+        _fontScale = ResolveFontSize("FontSize.Body", BodyFontSize) / BodyFontSize;
     }
+
+    private double BodySize => BodyFontSize * _fontScale;
+
+    private double CodeSize => CodeFontSize * _fontScale;
+
+    private double CaptionSize => CaptionFontSize * _fontScale;
+
+    private double Scaled(double baseSize) => baseSize * _fontScale;
+
+    private double ResolveFontSize(string key, double fallback) => LookupResource(key) is double value ? value : fallback;
 
     private IBrush ResolveBrush(string key, IBrush fallback) => LookupResource(key) as IBrush ?? fallback;
 
@@ -142,9 +170,9 @@ public sealed class MarkdownView : UserControl
         var block = CreateTextBlock(heading.Content);
         block.FontSize = heading.Level switch
         {
-            1 => Heading1FontSize,
-            2 => Heading2FontSize,
-            _ => Heading3FontSize,
+            1 => Scaled(Heading1FontSize),
+            2 => Scaled(Heading2FontSize),
+            _ => Scaled(Heading3FontSize),
         };
         block.FontWeight = FontWeight.SemiBold;
         _root.Children.Add(block);
@@ -185,7 +213,7 @@ public sealed class MarkdownView : UserControl
         {
             Text = marker.Marker,
             Foreground = _secondaryBrush,
-            FontSize = BodyFontSize,
+            FontSize = BodySize,
             Margin = new Thickness(0, 0, ListGap, 0),
         });
         var text = CreateTextBlock(content);
@@ -233,14 +261,14 @@ public sealed class MarkdownView : UserControl
         panel.Children.Add(new TextBlock
         {
             Text = ReadLanguage(lines[start]),
-            FontSize = CaptionFontSize,
+            FontSize = CaptionSize,
             Foreground = _secondaryBrush,
         });
         panel.Children.Add(new TextBlock
         {
             Text = string.Join('\n', visible),
             FontFamily = _monoFont,
-            FontSize = CodeFontSize,
+            FontSize = CodeSize,
             Foreground = _primaryBrush,
             TextWrapping = TextWrapping.Wrap,
         });
@@ -260,7 +288,7 @@ public sealed class MarkdownView : UserControl
         var button = new Button
         {
             Content = isExpanded ? "折叠" : $"展开全部 {totalLines} 行",
-            FontSize = CaptionFontSize,
+            FontSize = CaptionSize,
             Foreground = _secondaryBrush,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(1),
@@ -283,7 +311,7 @@ public sealed class MarkdownView : UserControl
     {
         TextWrapping = TextWrapping.Wrap,
         Foreground = _primaryBrush,
-        FontSize = BodyFontSize,
+        FontSize = BodySize,
         Inlines = BuildInlines(text),
     };
 

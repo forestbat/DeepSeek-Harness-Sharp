@@ -3,6 +3,7 @@ using Avalonia.Layout;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Dsh.Llm;
 
 namespace Dsh.Gui.ViewModels;
 
@@ -90,6 +91,26 @@ public sealed partial class MessageViewModel : ObservableObject
 
     public bool IsDisliked => Feedback == MessageFeedback.Disliked;
 
+    /** 该工具消息来自 subagent 工具调用时携带子会话信息, 展开后内联显示子会话工具流摘要。 */
+    public bool IsSubagentTool { get; set; }
+
+    public string? SubagentLabel { get; set; }
+
+    public SessionId? SubagentSessionId { get; set; }
+
+    public IReadOnlyList<MessageViewModel> SubagentStream { get; private set; } = [];
+
+    public bool ShowSubagentStream => IsSubagentTool && IsExpanded && SubagentStream.Count > 0;
+
+    public bool ShowSubagentEmpty => IsSubagentTool && IsExpanded && SubagentStream.Count == 0;
+
+    public void SetSubagentStream(IReadOnlyList<MessageViewModel> stream)
+    {
+        SubagentStream = stream;
+        OnPropertyChanged(nameof(ShowSubagentStream));
+        OnPropertyChanged(nameof(ShowSubagentEmpty));
+    }
+
     /** 上下文注入行自带说明文案, 不再重复显示角色标签。 */
     public bool HasRole => Kind != MessageKind.Context;
 
@@ -159,6 +180,8 @@ public sealed partial class MessageViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowPlainBody));
         OnPropertyChanged(nameof(ShowPreview));
         OnPropertyChanged(nameof(ShowDetail));
+        OnPropertyChanged(nameof(ShowSubagentStream));
+        OnPropertyChanged(nameof(ShowSubagentEmpty));
     }
 
     partial void OnFeedbackChanged(MessageFeedback value)

@@ -12,7 +12,8 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
-using LlmTextBlock = Dsh.Llm.TextBlock;
+using Dsh.SessionQuery;
+using Dsh.Subagent;
 
 namespace Dsh.Gui.ViewModels;
 
@@ -35,13 +36,17 @@ public enum SessionMode
     Plan,
     ReadOnly,
     FullAccess,
-    Creative,
 }
 
 /** 主窗口状态: 会话目录、会话流、轨迹、输入胶囊、页面切换与统一决策入口。 */
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     public const int TracePreviewChars = 160;
+    private const int ContentSearchDebounceMs = 300;
+    private const int ContentSearchLimit = 50;
+    private const int MinContentQueryLength = 2;
+
+    private const string PresetEventType = "preset/mode";
 
     private readonly Context _ctx;
     private readonly AgentRegistry _agents;
@@ -52,6 +57,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly List<Func<bool>> _unsubscribers = [];
     private readonly List<MessageViewModel> _lastUserMessages = [];
     private IReadOnlyList<string> _skillNames = [];
+    private readonly Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
+    private CancellationTokenSource? _contentSearch;
 
     private AgentLoopAgent _agent;
     private long _renderedSeq;
@@ -66,6 +73,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _agent = agent;
         Home = app.Home;
         _agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+        Subagents = new SubagentPanelViewModel(_ctx);
+        Subagents.Changed += PopulateSubagentCards;
         _settings = new SettingsFacade(_ctx, app.Home);
         _catalog = new SessionCatalog(_ctx);
         _bridge = new CommandBridge(_ctx);
@@ -104,6 +113,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public GuiSettings Gui { get; }
 
     public SettingsViewModel Preferences { get; }
+
+    public SubagentPanelViewModel Subagents { get; }
 
     public ObservableCollection<WorkspaceGroupViewModel> Workspaces { get; } = [];
 
@@ -186,6 +197,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string _searchText = "";
 
     [ObservableProperty]
+    private bool _isSearchOpen;
+
+    [ObservableProperty]
     private string _modelSearchText = "";
 
     [ObservableProperty]
@@ -193,6 +207,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private SessionMode _mode = SessionMode.Standard;
+
+    [ObservableProperty]
+    private string _preset = "standard";
+
+    [ObservableProperty]
+    private IReadOnlyList<PresetListItem> _presetItems = BuildPresetItems("standard");
 
     [ObservableProperty]
     private bool _isChatPage = true;
@@ -226,9 +246,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SessionMode.Plan => "计划模式",
         SessionMode.ReadOnly => "只读模式",
         SessionMode.FullAccess => "Full access",
-        SessionMode.Creative => "创造模式",
         _ => "标准模式",
     };
+
+    public string PresetLabel => PresetDefinitions.FirstOrDefault(definition => definition.Id == Preset).Label ?? Preset;
 
     public IReadOnlyList<SettingsNavItemViewModel> SettingsSections => Preferences.Sections;
 
@@ -252,7 +273,52 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Preferences.ApplyWorkspaceView(value);
     }
 
-    partial void OnSearchTextChanged(string value) => RefreshSessions();
+    partial void OnSearchTextChanged(string value)
+    {
+        ScheduleContentSearch(value);
+        RefreshSessions();
+    }
+
+    [RelayCommand]
+    private void ToggleSearch()
+    {
+        IsSearchOpen = !IsSearchOpen;
+        if (!IsSearchOpen)
+            SearchText = "";
+    }
+
+    /** 标题/workspace 立即过滤; 内容命中走防抖后的 FTS 查询, 结果回来再刷新一次。 */
+    private void ScheduleContentSearch(string query)
+    {
+        _contentSearch?.Cancel();
+        _contentSearch?.Dispose();
+        _contentSearch = null;
+        _contentMatches.Clear();
+        var trimmed = query.Trim();
+        if (trimmed.Length < MinContentQueryLength)
+            return;
+        var signal = new CancellationTokenSource();
+        _contentSearch = signal;
+        _ = SearchContentAsync(trimmed, signal.Token);
+    }
+
+    private async Task SearchContentAsync(string query, CancellationToken signal)
+    {
+        try
+        {
+            await Task.Delay(ContentSearchDebounceMs, signal);
+            var service = _ctx.Get<SessionQueryService>(SessionQueryService.ServiceName, false);
+            if (service is null)
+                return;
+            foreach (var hit in service.Search(query, ContentSearchLimit))
+                _contentMatches.TryAdd(hit.SessionId, hit.Snippet);
+            if (!signal.IsCancellationRequested)
+                RefreshSessions();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 
     partial void OnModelSearchTextChanged(string value) => RefreshFilteredModels();
 
@@ -276,6 +342,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     partial void OnModeChanged(SessionMode value) => OnPropertyChanged(nameof(ModeLabel));
+
+    partial void OnPresetChanged(string value)
+    {
+        OnPropertyChanged(nameof(PresetLabel));
+        PresetItems = BuildPresetItems(value);
+    }
+
+    /** preset 四项固定, 标签口径与 Dsh.Presets 的 InteractionPreset 对齐; 未知 id 原样显示。 */
+    private static readonly (string Id, string Label)[] PresetDefinitions =
+        [("standard", "标准"), ("minimal", "极简"), ("ptc", "PTC"), ("creative", "创造")];
+
+    private static IReadOnlyList<PresetListItem> BuildPresetItems(string current)
+        => [.. PresetDefinitions.Select(definition => new PresetListItem(definition.Id, definition.Label, definition.Id == current))];
 
     partial void OnSelectedSessionChanged(SessionNodeViewModel? value)
     {
@@ -484,7 +563,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void ToggleMessageFold(MessageViewModel? message) => message?.ToggleFoldCommand.Execute(null);
+    private void ToggleMessageFold(MessageViewModel? message)
+    {
+        message?.ToggleFoldCommand.Execute(null);
+        if (message is { IsSubagentTool: true, IsExpanded: true })
+            PopulateSubagentCards();
+    }
+
+    /** 打开子代理卡片对应的只读视图 (卡片已关联到具体子会话时)。 */
+    [RelayCommand]
+    private void OpenSubagentView(MessageViewModel? message)
+    {
+        if (message?.SubagentSessionId is not { } id)
+            return;
+        Subagents.OpenCommand.Execute(Subagents.Nodes.FirstOrDefault(node => node.Id == id));
+    }
 
     [RelayCommand]
     private void CopyMessage(MessageViewModel? message)
@@ -537,9 +630,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 return;
             case "full":
                 ApplyApprovalPolicy(ApprovalPolicy.Auto, SessionMode.FullAccess, "Full access：需要审批的工具自动放行（黑名单仍然生效）");
-                return;
-            case "creative":
-                StatusText = "创造模式尚未实现";
                 return;
             default:
                 ApplyApprovalPolicy(ApprovalPolicy.Ask, SessionMode.Standard, "标准模式：需要审批时弹窗确认");
@@ -604,6 +694,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task SetPreset(string id)
+    {
+        var output = await _bridge.RunAsync(_agent, $"/preset {id}");
+        StatusText = output;
+        RefreshPreset();
+    }
+
+    [RelayCommand]
     private async Task SwitchModelAsync(string? model)
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -655,8 +753,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        _contentSearch?.Cancel();
+        _contentSearch?.Dispose();
         Composer.PropertyChanged -= OnComposerPropertyChanged;
         _settings.Changed -= OnSettingsChanged;
+        Subagents.Changed -= PopulateSubagentCards;
+        Subagents.Dispose();
         foreach (var unsubscribe in _unsubscribers)
             unsubscribe();
         _unsubscribers.Clear();
@@ -708,13 +810,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var nodes = _catalog.Load();
         var search = SearchText.Trim();
         if (search.Length > 0)
-        {
-            nodes = [.. nodes.Where(node =>
-                node.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
-                || node.Workspace.Contains(search, StringComparison.OrdinalIgnoreCase))];
-        }
+            nodes = [.. nodes.Where(node => IsTitleHit(node, search) || _contentMatches.ContainsKey(node.SessionId.Value))];
         if (OnlyWithSessions)
             nodes = [.. nodes.Where(node => node.IsLive)];
+        foreach (var node in nodes)
+            node.MatchSnippet = _contentMatches.TryGetValue(node.SessionId.Value, out var snippet) ? snippet : "";
         return nodes;
     }
 
@@ -764,9 +864,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private IEnumerable<SessionNodeViewModel> Sort(IEnumerable<SessionNodeViewModel> nodes)
-        => SortMode == GuiSettings.SortName
+    {
+        var search = SearchText.Trim();
+        if (search.Length > 0)
+            nodes = nodes.OrderByDescending(node => IsTitleHit(node, search));
+        return SortMode == GuiSettings.SortName
             ? nodes.OrderBy(node => node.Title, StringComparer.OrdinalIgnoreCase)
             : nodes.OrderByDescending(node => node.CreatedAt);
+    }
+
+    private static bool IsTitleHit(SessionNodeViewModel node, string search)
+        => node.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || node.Workspace.Contains(search, StringComparison.OrdinalIgnoreCase);
 
     private void RefreshTraceFilters()
     {
@@ -940,13 +1049,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ApplyEvents(agent.Session.SnapshotEvents());
         IsBusy = agent.Status == AgentStatus.Running;
         RefreshMode();
+        RefreshPreset();
         RefreshPermissionLabel();
         SelectedSession = FindSession(agent.Id);
+        Subagents.SetRoot(agent.Id);
         AgentChanged?.Invoke(agent);
     }
 
     private void RefreshMode()
         => Mode = PlanActive(_agent.Session) ? SessionMode.Plan : SessionMode.Standard;
+
+    /** preset 状态持久在会话事件 `preset/mode` 里; payload 类型在 Dsh.Presets 程序集, GUI 只能按事件 Type + 泛化属性读取。 */
+    private void RefreshPreset()
+    {
+        var preset = "standard";
+        foreach (var sessionEvent in _agent.Session.SnapshotEvents())
+        {
+            if (sessionEvent.Type != PresetEventType)
+                continue;
+            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
+        }
+        Preset = preset;
+    }
 
     /** 计划模式状态持久在会话事件 `plan/mode` 里; 这里只读它, 不复制 PlanMode 插件的判定逻辑。 */
     private static bool PlanActive(Session session)
@@ -962,17 +1086,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private static bool? ReadBoolProperty(SessionEventPayload payload, string name)
+        => ReadProperty<bool>(payload, name);
+
+    private static string? ReadStringProperty(SessionEventPayload payload, string name)
+        => ReadProperty<string>(payload, name);
+
+    /** payload 经 DshJson(camelCase) 序列化后键名会变形, 故按忽略大小写匹配。 */
+    private static T? ReadProperty<T>(SessionEventPayload payload, string name)
     {
         try
         {
-            var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options);
-            return node is JsonObject json && json.TryGetPropertyValue(name, out var value) && value is not null
-                ? value.GetValue<bool>()
-                : null;
+            if (JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options) is not JsonObject json)
+                return default;
+            foreach (var (key, value) in json)
+            {
+                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                    return value.GetValue<T>();
+            }
+            return default;
         }
         catch (Exception)
         {
-            return null;
+            return default;
         }
     }
 
@@ -1014,6 +1149,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void ApplyEvent(SessionEvent sessionEvent)
     {
+        if (sessionEvent.Type == PresetEventType)
+            RefreshPreset();
         switch (sessionEvent.Data)
         {
             case TurnStartPayload turn:
@@ -1041,7 +1178,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 ApplyChunk(sessionEvent.Seq, chunk.Chunk);
                 break;
             case AssistantMessagePayload assistant:
-                ApplyAssistant(AssistantText(assistant.Message.Content));
+                ApplyAssistant(SessionText.AssistantText(assistant.Message.Content));
                 break;
             case ToolCallPayload call:
                 ApplyToolCall(sessionEvent.Seq, call);
@@ -1070,7 +1207,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void ApplyUserMessage(long seq, UserMessagePayload payload)
     {
-        var text = ContentText(payload.Message.Content);
+        var text = SessionText.ContentText(payload.Message.Content);
         switch (payload.Message.Source)
         {
             case UserMessageSource:
@@ -1146,14 +1283,77 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         _openAssistant = null;
         _openReasoning = null;
-        var message = AppendMessage(new MessageViewModel("工具", $"{call.Name} {call.Arguments}", MessageKind.Tool, false));
+        var isSubagent = string.Equals(call.Name, SubagentTool.DefaultToolName, StringComparison.Ordinal);
+        var label = isSubagent ? ReadDescription(call.Arguments) : null;
+        var message = AppendMessage(new MessageViewModel(
+            "工具",
+            isSubagent ? SubagentCardText(label) : $"{call.Name} {call.Arguments}",
+            MessageKind.Tool,
+            false));
         message.Detail = call.Arguments;
+        if (isSubagent)
+        {
+            message.IsSubagentTool = true;
+            message.SubagentLabel = label;
+            message.IsExpanded = false;
+        }
         AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", call.Arguments);
+    }
+
+    /** subagent 工具的 description 参数即子会话 descriptor 的 Label, 用它把工具卡片关联到子代理条目。 */
+    private static string? ReadDescription(string arguments)
+    {
+        try
+        {
+            return JsonNode.Parse(arguments)?["description"]?.GetValue<string>();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string SubagentCardText(string? label)
+        => string.IsNullOrWhiteSpace(label) ? "子代理" : $"子代理 · {label}";
+
+    /** 已展开的 subagent 卡片按 Label(同序)关联到子代理条目并内联摘要; 目录刷新或首次展开时调用。 */
+    private void PopulateSubagentCards()
+    {
+        if (_disposed)
+            return;
+        var claimed = new HashSet<SessionId>();
+        foreach (var message in Messages)
+        {
+            if (message is not { IsSubagentTool: true, IsExpanded: true })
+                continue;
+            var node = ResolveSubagentNode(message, claimed);
+            if (node is null)
+                continue;
+            claimed.Add(node.Id);
+            message.SubagentSessionId = node.Id;
+            if (Subagents.FindSession(node.Id) is { } session)
+                message.SetSubagentStream(SubagentTranscript.Summarize(session));
+        }
+    }
+
+    private SubagentNodeViewModel? ResolveSubagentNode(MessageViewModel message, HashSet<SessionId> claimed)
+    {
+        if (message.SubagentSessionId is { } bound)
+        {
+            var existing = Subagents.Nodes.FirstOrDefault(node => node.Id == bound);
+            if (existing is not null)
+                return existing;
+        }
+        var label = message.SubagentLabel;
+        if (string.IsNullOrEmpty(label))
+            return null;
+        return Subagents.Nodes.FirstOrDefault(node =>
+            !claimed.Contains(node.Id) && string.Equals(node.Label, label, StringComparison.Ordinal));
     }
 
     private void ApplyToolResult(long seq, ToolResultPayload result)
     {
-        var text = ContentText(result.Message.Content);
+        var text = SessionText.ContentText(result.Message.Content);
         var label = result.Error is null ? "结果" : $"错误 {result.Error.Code}";
         var message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
         message.Detail = text;
@@ -1333,10 +1533,4 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _ => reason.Kind,
     };
 
-    private static string ContentText(IReadOnlyList<ContentBlock> blocks)
-        => MessageText.Flatten(blocks);
-
-    /** 思考内容已由流式增量渲染, 最终消息只取正文, 避免重复。 */
-    private static string AssistantText(IReadOnlyList<ContentBlock> blocks)
-        => string.Join('\n', blocks.OfType<LlmTextBlock>().Select(block => block.Text)).Trim();
 }

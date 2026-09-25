@@ -10,13 +10,78 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,14,20,0">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="20,14,20,0">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
         <TextBlock Text="{Binding SessionSubtitle}" Classes="Tertiary" />
       </StackPanel>
 
-      <Button Grid.Column="1" Classes="Chip" VerticalAlignment="Center" ToolTip.Tip="会话模式">
+      <Button Grid.Column="1" Classes="Chip" VerticalAlignment="Center" ToolTip.Tip="交互 preset">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
+          <TextBlock Text="{Binding PresetLabel}" />
+          <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
+        </StackPanel>
+        <Button.Flyout>
+          <Flyout Placement="BottomEdgeAlignedRight" Opened="OnPresetFlyoutOpened">
+            <ItemsControl ItemsSource="{Binding PresetItems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PresetListItem">
+                  <Button Classes="Ghost" Classes.selected="{Binding IsCurrent}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                          Click="OnPresetItemClick">
+                    <TextBlock Text="{Binding Label}" />
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Flyout>
+        </Button.Flyout>
+      </Button>
+
+      <Button Grid.Column="2" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Trace}" />
+          <TextBlock Text="子代理" />
+          <Border IsVisible="{Binding Subagents.HasNodes}" Padding="5,1" CornerRadius="999"
+                  Background="{DynamicResource Brush.Accent.Soft}" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Subagents.Badge}" Classes="Tertiary" />
+          </Border>
+        </StackPanel>
+        <Button.Flyout>
+          <Flyout Placement="BottomEdgeAlignedRight" Opened="OnSubagentFlyoutOpened">
+            <StackPanel Width="330" Spacing="4">
+              <TextBlock Text="当前会话没有子代理" Classes="Tertiary" IsVisible="{Binding !Subagents.HasNodes}" />
+              <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding Subagents.Nodes}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SubagentNodeViewModel">
+                      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                              Click="OnSubagentItemClick">
+                        <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                          <Border Width="{Binding Indent}" />
+                          <TextBlock Grid.Column="1" Text="●" Margin="0,0,6,0" VerticalAlignment="Center"
+                                     Foreground="{DynamicResource Brush.Status.Success}" IsVisible="{Binding IsLive}" />
+                          <TextBlock Grid.Column="1" Text="○" Margin="0,0,6,0" VerticalAlignment="Center"
+                                     Classes="Tertiary" IsVisible="{Binding !IsLive}" />
+                          <TextBlock Grid.Column="2" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding ModeLabel}" Classes="Tertiary" />
+                            <TextBlock Text="▾" Classes="Tertiary" IsVisible="{Binding HasChildren}" />
+                          </StackPanel>
+                        </Grid>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </StackPanel>
+          </Flyout>
+        </Button.Flyout>
+      </Button>
+
+      <Button Grid.Column="3" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
           <TextBlock Text="{Binding ModeLabel}" />
@@ -28,12 +93,11 @@
             <MenuItem Header="计划模式（/plan）" Command="{Binding SetModeCommand}" CommandParameter="plan" />
             <MenuItem Header="只读模式（自动拒绝需要审批的操作）" Command="{Binding SetModeCommand}" CommandParameter="readonly" />
             <MenuItem Header="Full access（自动放行，黑名单仍生效）" Command="{Binding SetModeCommand}" CommandParameter="full" />
-            <MenuItem Header="创造模式（尚未实现）" IsEnabled="False" />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="2" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
+      <Button Grid.Column="4" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Download}" />
           <TextBlock Text="Session log" />
@@ -96,6 +160,26 @@
                         CommandParameter="{Binding}">
                   <TextBlock Text="{Binding FoldLabel}" Classes="Tertiary" />
                 </Button>
+
+                <StackPanel Spacing="2" Margin="2,2,0,2" IsVisible="{Binding ShowSubagentStream}">
+                  <ItemsControl ItemsSource="{Binding SubagentStream}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:MessageViewModel">
+                        <Grid ColumnDefinitions="Auto,*" Margin="0,1">
+                          <TextBlock Text="{Binding Role}" Classes="Tertiary" Margin="0,0,6,0" />
+                          <TextBlock Grid.Column="1" Text="{Binding Preview}" Classes="Secondary"
+                                     TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Button Classes="Ghost" Padding="2,0" HorizontalAlignment="Left"
+                          Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSubagentViewCommand}"
+                          CommandParameter="{Binding}">
+                    <TextBlock Text="打开只读视图 →" Classes="Tertiary" />
+                  </Button>
+                </StackPanel>
+                <TextBlock Text="子代理暂无工具调用" Classes="Tertiary" IsVisible="{Binding ShowSubagentEmpty}" />
 
                 <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding ShowMarkdown}" />
                 <TextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
@@ -320,5 +404,69 @@
       <TextBlock Text="{Binding TokenStats.Totals}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.Latency}" Classes="Tertiary" />
     </StackPanel>
+
+    <Grid Grid.Row="0" Grid.RowSpan="5" IsVisible="{Binding Subagents.IsViewing}"
+          Background="{DynamicResource Brush.Bg.Chat}">
+      <Grid RowDefinitions="Auto,*,Auto">
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="20,14,20,0">
+          <Button Classes="Ghost" VerticalAlignment="Center" Command="{Binding Subagents.CloseCommand}"
+                  ToolTip.Tip="返回父会话">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.ChevronDown}" />
+              <TextBlock Text="返回父会话" />
+            </StackPanel>
+          </Button>
+          <StackPanel Grid.Column="1" Spacing="2" Margin="12,0,0,0">
+            <TextBlock Text="{Binding Subagents.Current.DisplayName}" Classes="Title"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding Subagents.Current.ModeLabel}" Classes="Tertiary" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <TextBlock Text="● 运行中" Foreground="{DynamicResource Brush.Status.Success}"
+                       IsVisible="{Binding Subagents.Current.IsLive}" />
+            <TextBlock Text="○ 已结束" Classes="Tertiary" IsVisible="{Binding !Subagents.Current.IsLive}" />
+            <Border Padding="6,1" CornerRadius="999" Background="{DynamicResource Brush.Accent.Soft}">
+              <TextBlock Text="只读" Classes="Tertiary" />
+            </Border>
+          </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Border.Subtle}" />
+
+        <ListBox Grid.Row="1" Classes="MessageList" ItemsSource="{Binding Subagents.Viewing.Messages}">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:MessageViewModel">
+              <Border Classes="Msg" Classes.user="{Binding IsUser}" HorizontalAlignment="{Binding Align}">
+                <StackPanel Spacing="3">
+                  <TextBlock Text="{Binding Role}" Classes="Tertiary" IsVisible="{Binding HasRole}" />
+                  <TextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
+                  <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding ShowMarkdown}" />
+                  <TextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
+                  <TextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
+                             FontFamily="{DynamicResource Font.Mono}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="20,8,20,12">
+          <Button Classes="Chip" Command="{Binding Subagents.PreviousCommand}"
+                  IsEnabled="{Binding Subagents.CanPrevious}">
+            <TextBlock Text="← 上一个" />
+          </Button>
+          <TextBlock Text="{Binding Subagents.PositionText}" Classes="Tertiary" VerticalAlignment="Center" />
+          <Button Classes="Chip" Command="{Binding Subagents.NextCommand}"
+                  IsEnabled="{Binding Subagents.CanNext}">
+            <TextBlock Text="下一个 →" />
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Grid>
   </Grid>
 </UserControl>

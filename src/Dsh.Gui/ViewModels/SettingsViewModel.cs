@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Reflection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Dsh.Account;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Gui.Services;
@@ -14,6 +15,7 @@ public enum SettingsSection
 {
     Appearance,
     Model,
+    Account,
     Safety,
     Graphics,
     Storage,
@@ -22,7 +24,7 @@ public enum SettingsSection
     About,
 }
 
-/** 设置页状态: 八个分页共用一份草稿, 写入分别落在 GUI 插件参数段与 harness 设置上。 */
+/** 设置页状态: 九个分页共用一份草稿, 写入分别落在 GUI 插件参数段与 harness 设置上。 */
 public sealed partial class SettingsViewModel : ObservableObject
 {
     private const string CompactionPackage = "@deepseek-ai/dsh-compaction";
@@ -49,6 +51,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _bridge = bridge;
         _gui = gui;
         _facade = facade;
+        Account = new AccountPanelViewModel(_ctx.Get<IAccountService>(AccountService.ServiceName, false));
         foreach (var section in Sections)
             section.SelectCommand = new RelayCommand<SettingsNavItemViewModel>(SelectSection);
         Sections[0].IsSelected = true;
@@ -58,10 +61,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     /** 主题/字号等外观项变化后由视图重新应用 App 资源。 */
     public event Action? Applied;
 
+    /** 拖动字号滑块时的实时预览: 不写盘, 由 MainWindow 用内存值重应用外观。 */
+    public event Action? Preview;
+
+    partial void OnFontSizeChanged(double value)
+    {
+        FontSizeText = value.ToString("0.0");
+        Preview?.Invoke();
+    }
+
     public ObservableCollection<SettingsNavItemViewModel> Sections { get; } =
     [
         new(SettingsSection.Appearance, "外观"),
         new(SettingsSection.Model, "模型提供者"),
+        new(SettingsSection.Account, "账号"),
         new(SettingsSection.Safety, "安全策略"),
         new(SettingsSection.Graphics, "图形与加速"),
         new(SettingsSection.Storage, "会话与存储"),
@@ -111,11 +124,16 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsSection Section { get; private set; }
 
+    public AccountPanelViewModel Account { get; }
+
     [ObservableProperty]
     private bool _isAppearanceSection = true;
 
     [ObservableProperty]
     private bool _isModelSection;
+
+    [ObservableProperty]
+    private bool _isAccountSection;
 
     [ObservableProperty]
     private bool _isSafetySection;
@@ -233,7 +251,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         var snapshot = _gui.Load();
         Theme = snapshot.Theme;
         FontSize = snapshot.FontSize;
-        FontSizeText = snapshot.FontSize.ToString("0.0");
         WorkspaceView = snapshot.WorkspaceView;
         GpuEnabled = snapshot.GpuEnabled;
         SelectedGpuBackend = snapshot.GpuBackend;
@@ -323,7 +340,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void ResetFontSize()
     {
         FontSize = 13.5;
-        FontSizeText = "13.5";
         PersistAppearance();
     }
 
@@ -516,6 +532,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             item.IsSelected = ReferenceEquals(item, section);
         IsAppearanceSection = Section == SettingsSection.Appearance;
         IsModelSection = Section == SettingsSection.Model;
+        IsAccountSection = Section == SettingsSection.Account;
         IsSafetySection = Section == SettingsSection.Safety;
         IsGraphicsSection = Section == SettingsSection.Graphics;
         IsStorageSection = Section == SettingsSection.Storage;
@@ -526,6 +543,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             LoadHarnessSettings();
         if (Section == SettingsSection.Plugins)
             LoadPluginRows();
+        if (Section == SettingsSection.Account)
+            _ = Account.RefreshAsync();
     }
 
     private async Task<string> RunAsync(string line)

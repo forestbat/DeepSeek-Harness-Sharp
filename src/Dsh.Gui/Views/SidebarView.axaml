@@ -39,7 +39,7 @@
         </StackPanel>
       </Button>
 
-      <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,2,0,0">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,2,0,0">
         <Button Classes="Chip" HorizontalAlignment="Left" ToolTip.Tip="工作区视图">
           <StackPanel Orientation="Horizontal" Spacing="6">
             <TextBlock Text="{Binding WorkspaceViewLabel}" />
@@ -66,12 +66,16 @@
             </MenuFlyout>
           </Button.Flyout>
         </Button>
-        <Button Grid.Column="3" Classes="Icon" Width="26" Height="26" ToolTip.Tip="新建会话" Command="{Binding NewSessionCommand}">
+        <Button Grid.Column="3" Classes="Icon" Width="26" Height="26" ToolTip.Tip="搜索会话内容"
+                Classes.selected="{Binding IsSearchOpen}" Command="{Binding ToggleSearchCommand}">
+          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Search}" />
+        </Button>
+        <Button Grid.Column="4" Classes="Icon" Width="26" Height="26" ToolTip.Tip="新建会话" Command="{Binding NewSessionCommand}">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Plus}" />
         </Button>
       </Grid>
 
-      <TextBox Classes="Search" PlaceholderText="搜索会话" Text="{Binding SearchText}" />
+      <TextBox Classes="Search" PlaceholderText="搜索会话内容" IsVisible="{Binding IsSearchOpen}" Text="{Binding SearchText}" />
     </StackPanel>
 
     <StackPanel DockPanel.Dock="Bottom" Margin="8,4,8,8" Spacing="2">
@@ -114,8 +118,12 @@
                                 Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSessionCommand}"
                                 CommandParameter="{Binding}">
                           <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
-                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                            <StackPanel VerticalAlignment="Center">
+                              <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
+                                         TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding MatchSnippet}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
+                                         TextTrimming="CharacterEllipsis" IsVisible="{Binding HasMatchSnippet}" />
+                            </StackPanel>
                             <TextBlock Grid.Column="1" Text="{Binding RelativeTime}" Classes="Tertiary"
                                        Margin="8,0,0,0" VerticalAlignment="Center" />
                           </Grid>
@@ -170,8 +178,12 @@
                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,5"
                             Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSessionCommand}"
                             CommandParameter="{Binding}">
-                      <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
-                                 TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                      <StackPanel>
+                        <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding MatchSnippet}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
+                                   TextTrimming="CharacterEllipsis" IsVisible="{Binding HasMatchSnippet}" />
+                      </StackPanel>
                     </Button>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>

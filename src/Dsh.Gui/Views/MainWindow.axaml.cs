@@ -40,6 +40,7 @@ public sealed partial class MainWindow : Window
         ViewModel.CopyRequested += CopyToClipboard;
         ViewModel.FilePicker = PickAsync;
         ViewModel.Preferences.Applied += ApplyAppearance;
+        ViewModel.Preferences.Preview += ApplyPreview;
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
         Dispatcher.UIThread.UnhandledException += OnDispatcherUnhandledException;
         SetUpTitleBar();
@@ -95,6 +96,7 @@ public sealed partial class MainWindow : Window
             viewModel.DecisionRequested -= ShowDecisionAsync;
             viewModel.CopyRequested -= CopyToClipboard;
             viewModel.Preferences.Applied -= ApplyAppearance;
+            viewModel.Preferences.Preview -= ApplyPreview;
             viewModel.Dispose();
         }
         _tray?.Dispose();
@@ -243,6 +245,13 @@ public sealed partial class MainWindow : Window
     {
         if (Application.Current is { } app && _guiSettings is not null)
             ThemeService.Apply(app, _guiSettings.Load());
+    }
+
+    /** 实时预览用内存里的字号, 不读盘; 落盘由设置页"保存外观"负责。 */
+    private void ApplyPreview()
+    {
+        if (Application.Current is { } app && _guiSettings is not null)
+            ThemeService.Apply(app, _guiSettings.Load() with { FontSize = ViewModel!.Preferences.FontSize });
     }
 
     /**

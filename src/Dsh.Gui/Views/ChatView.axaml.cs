@@ -14,6 +14,8 @@ public sealed partial class ChatView : UserControl
     private bool _sticky = true;
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
+    private Flyout? _presetFlyout;
+    private Flyout? _subagentFlyout;
 
     public ChatView()
     {
@@ -83,6 +85,30 @@ public sealed partial class ChatView : UserControl
         if (sender is Button { DataContext: ModelListItem item })
             _viewModel?.SwitchModelCommand.Execute(item.Name);
         _modelFlyout?.Hide();
+    }
+
+    private void OnPresetFlyoutOpened(object? sender, EventArgs e)
+    {
+        _presetFlyout = sender as Flyout;
+    }
+
+    /** 命令先同步执行再关浮层, 同 OnModelItemClick。 */
+    private void OnPresetItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: PresetListItem item })
+            _viewModel?.SetPresetCommand.Execute(item.Id);
+        _presetFlyout?.Hide();
+    }
+
+    private void OnSubagentFlyoutOpened(object? sender, EventArgs e)
+        => _subagentFlyout = sender as Flyout;
+
+    /** 命令先同步执行再关浮层, 同 OnPresetItemClick: 浮层关闭后按钮脱离逻辑树, Command 绑定会求值为 null。 */
+    private void OnSubagentItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: SubagentNodeViewModel node })
+            _viewModel?.Subagents.OpenCommand.Execute(node);
+        _subagentFlyout?.Hide();
     }
 
     /** 打开浮层时按当前模型重算强度候选: 在线元数据是后台预热的, 打开时刻通常已就绪。 */
