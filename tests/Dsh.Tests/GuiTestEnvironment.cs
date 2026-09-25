@@ -1,7 +1,6 @@
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
-using Dsh.Runtime;
 
 namespace Dsh.Tests;
 
@@ -21,6 +20,13 @@ public sealed class GuiTestEnvironment : IDisposable
     public HarnessApp App { get; }
 
     public AgentLoopAgent Agent { get; }
+
+    /**
+     * headless 测试体运行在共享会话的 UI 线程上; 在该线程上组合环境会拖垮整个共享会话,
+     * 之后任何 Dispatch 都永不完成(表现为整套测试挂死)。headless 测试体一律用它创建环境。
+     */
+    public static GuiTestEnvironment CreateBlocking()
+        => Task.Run(async () => await CreateAsync()).GetAwaiter().GetResult();
 
     public static async Task<GuiTestEnvironment> CreateAsync()
         => await CreateAsync(HomeSettings);

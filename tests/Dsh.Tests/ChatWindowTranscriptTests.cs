@@ -2,6 +2,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Presets;
 using Dsh.Runtime;
 using Dsh.Tui;
 
@@ -239,6 +240,22 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Equal(UserQuestionException.NoProvider, error.Code);
     }
 
+    [Fact]
+    public async Task Input_Info_Line_Shows_Current_Preset()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        PresetModePayload.RegisterCodec();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+
+        Assert.Contains("standard · deepseek-official · deepseek-v4-flash", DrawFrame(chat));
+
+        agent.Session.Append(new PresetModePayload(InteractionPreset.Minimal));
+        chat.DrainUi();
+
+        Assert.Contains("minimal · deepseek-official · deepseek-v4-flash", DrawFrame(chat));
+    }
+
     private async Task<(Context Ctx, AgentLoopAgent Agent, HarnessHome Home)> CreateAgent()
     {
         var ctx = new Context();
@@ -291,7 +308,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             frame = DrawFrame(chat);
             if (predicate(frame))
                 return frame;
-            await Task.Delay(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
         }
         return frame;
     }

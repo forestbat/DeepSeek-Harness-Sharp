@@ -21,7 +21,8 @@ public sealed class PluginReferenceRulesTests
         "Dsh.Interaction", "Dsh.Tools", "Dsh.Jobs", "Dsh.Terminal", "Dsh.Persistence", "Dsh.Compaction",
         "Dsh.Subagent", "Dsh.Goal", "Dsh.Interaction.AskUser", "Dsh.Skills", "Dsh.PlanMode",
         "Dsh.SessionQuery", "Dsh.Mcp", "Dsh.Memory", "Dsh.AgentInstructions", "Dsh.Checkpoints",
-        "Dsh.IdeHistory", "Dsh.Web", "Dsh.Workflow", "Dsh.Telemetry", "Dsh.E2b",
+        "Dsh.IdeHistory", "Dsh.Web", "Dsh.Workflow", "Dsh.Telemetry", "Dsh.E2b", "Dsh.Presets",
+        "Dsh.Account",
     ];
 
     private static readonly Dictionary<string, HashSet<string>> CoreLayerAllowed = new()

@@ -5,6 +5,7 @@ using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Presets;
 
 namespace Dsh.Tests;
 
@@ -171,9 +172,10 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public Task Submit_TextMessage_IsRenderedOnceFromSessionEvent() => HeadlessGui.Run(async () =>
+    public async Task Submit_TextMessage_IsRenderedOnceFromSessionEvent() => await HeadlessGui.RunAsync(async () =>
         {
-            using var environment = await GuiTestEnvironment.CreateAsync();
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
             using var viewModel = new MainViewModel(environment.App, environment.Agent);
 
             viewModel.Composer.Input = "你好";
@@ -183,7 +185,7 @@ public sealed class MainViewModelTests
             Assert.Empty(viewModel.Messages);
             for (var attempt = 0; attempt < 200 && viewModel.Messages.Count == 0; attempt += 1)
             {
-                await Task.Delay(10);
+                await Task.Delay(10, TestContext.Current.CancellationToken);
                 Dispatcher.UIThread.RunJobs();
             }
             Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
@@ -260,9 +262,70 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public Task ApprovalRequest_ReachesUnifiedDecisionWindow() => HeadlessGui.Run(async () =>
+    public async Task PresetLabel_FollowsPresetModeEvent() => await HeadlessGui.RunAsync(async () =>
+    {
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        Assert.Equal("标准", viewModel.PresetLabel);
+        Assert.Single(viewModel.PresetItems, item => item.Id == "standard" && item.IsCurrent);
+
+        environment.Agent.Session.Append(new PresetModePayload("minimal"));
+        for (var attempt = 0; attempt < 200 && viewModel.PresetLabel != "极简"; attempt++)
         {
-            using var environment = await GuiTestEnvironment.CreateAsync();
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        Assert.Equal("极简", viewModel.PresetLabel);
+        Assert.Single(viewModel.PresetItems, item => item.Id == "minimal" && item.IsCurrent);
+    });
+
+    /** 内容命中: 标题/workspace 不匹配时靠 FTS 命中, 并带出摘要; 关闭搜索后复位。 */
+    [Fact]
+    public async Task SessionSearch_ContentHit_CarriesSnippet_AndResetsOnClose() => await HeadlessGui.RunAsync(async () =>
+    {
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        environment.Agent.Session.Append(
+            new UserMessagePayload(MessageFactory.CreateUserText("unique-platypus-token")), new SurfaceOp.Append());
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.IsSearchOpen);
+        viewModel.ToggleSearchCommand.Execute(null);
+        Assert.True(viewModel.IsSearchOpen);
+        viewModel.SearchText = "platypus";
+
+        SessionNodeViewModel? node = null;
+        for (var attempt = 0; attempt < 400; attempt++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+            node = FindNode(viewModel, environment.Agent.Id);
+            if (node is { HasMatchSnippet: true })
+                break;
+        }
+
+        Assert.NotNull(node);
+        Assert.Contains("platypus", node.MatchSnippet);
+
+        viewModel.ToggleSearchCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(viewModel.IsSearchOpen);
+        Assert.Equal("", viewModel.SearchText);
+        Assert.True(FindNode(viewModel, environment.Agent.Id) is { HasMatchSnippet: false });
+    });
+
+    private static SessionNodeViewModel? FindNode(MainViewModel viewModel, SessionId id)
+        => viewModel.Workspaces.SelectMany(group => group.Sessions).FirstOrDefault(node => node.SessionId == id)
+            ?? viewModel.FileSystemNodes.SelectMany(group => group.Sessions).FirstOrDefault(node => node.SessionId == id);
+
+    [Fact]
+    public async Task ApprovalRequest_ReachesUnifiedDecisionWindow() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
             using var viewModel = new MainViewModel(environment.App, environment.Agent);
             DecisionViewModel? seen = null;
             viewModel.DecisionRequested += decision =>
@@ -280,15 +343,16 @@ public sealed class MainViewModelTests
 
             Assert.Equal(ApprovalOutcome.AllowedOnce, outcome);
             Assert.NotNull(seen);
-            Assert.True(seen!.IsApproval);
+            Assert.True(seen.IsApproval);
             Assert.Equal("bash", seen.ToolName);
             Assert.Equal("ls -la", seen.Command);
         });
 
     [Fact]
-    public Task UserQuestion_ReachesUnifiedDecisionWindow() => HeadlessGui.Run(async () =>
+    public async Task UserQuestion_ReachesUnifiedDecisionWindow() => await HeadlessGui.RunAsync(async () =>
         {
-            using var environment = await GuiTestEnvironment.CreateAsync();
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
             using var viewModel = new MainViewModel(environment.App, environment.Agent);
             viewModel.DecisionRequested += decision => Task.FromResult<object?>(new AskUserQuestionAnswer(
                 [new AskUserQuestionAnswerItem(decision.Questions[0].Item.Id, ["继续"])]));
@@ -391,9 +455,10 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public Task ModelLabels_FollowRequestHeaderPayload() => HeadlessGui.Run(async () =>
+    public async Task ModelLabels_FollowRequestHeaderPayload() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
         using var viewModel = new MainViewModel(environment.App, environment.Agent);
         Assert.Equal("test/test-model", viewModel.Composer.ModelLabel);
         Assert.Equal("推理", viewModel.Composer.ReasoningLabel);
@@ -435,7 +500,7 @@ public sealed class MainViewModelTests
         for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "pa/aion-labs/aion-3.0-mini"; attempt++)
         {
             Dispatcher.UIThread.RunJobs();
-            Thread.Sleep(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.Composer.ModelLabel);
@@ -464,7 +529,7 @@ public sealed class MainViewModelTests
         for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "pa/deepseek-flash"; attempt++)
         {
             Dispatcher.UIThread.RunJobs();
-            Thread.Sleep(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.Contains("max", viewModel.Preferences.ReasoningEfforts);
@@ -472,7 +537,7 @@ public sealed class MainViewModelTests
         for (var attempt = 0; attempt < 200 && viewModel.Composer.ReasoningLabel != "max"; attempt++)
         {
             Dispatcher.UIThread.RunJobs();
-            Thread.Sleep(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal("max", viewModel.Composer.ReasoningLabel);
@@ -526,9 +591,9 @@ public sealed class MainViewModelTests
     {
         for (var attempt = 0; attempt < 500 && !task.IsCompleted; attempt += 1)
         {
-            await Task.Delay(5);
+            await Task.Delay(5, TestContext.Current.CancellationToken);
             Dispatcher.UIThread.RunJobs();
         }
-        return await task;
+        return await task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 }

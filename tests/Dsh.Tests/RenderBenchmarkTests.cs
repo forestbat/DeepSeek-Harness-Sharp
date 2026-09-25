@@ -6,6 +6,7 @@ using Dsh.Tui;
 namespace Dsh.Tests;
 
 [Collection("RenderBench")]
+[Trait("Category", "RenderBench")]
 public class RenderBenchmarkTests
 {
     private const int CorpusLines = 4000;
@@ -421,12 +422,5 @@ public class RenderBenchmarkTests
         return sorted[(int)Math.Ceiling(sorted.Length * p) - 1];
     }
 
-    private static void WriteReport(string fileName, StringBuilder report)
-    {
-        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/bench");
-        Directory.CreateDirectory(directory);
-        var path = Path.GetFullPath(Path.Combine(directory, fileName));
-        File.WriteAllText(path, report.ToString());
-        Assert.True(File.Exists(path));
-    }
+    private static void WriteReport(string fileName, StringBuilder report) => BenchReport.Write(fileName, report);
 }

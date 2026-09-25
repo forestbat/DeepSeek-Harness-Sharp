@@ -6,6 +6,7 @@ using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
 
+[Trait("Category", "LlmSmoke")]
 public sealed class RealLlmTurnSmokeTests
 {
     [Fact]

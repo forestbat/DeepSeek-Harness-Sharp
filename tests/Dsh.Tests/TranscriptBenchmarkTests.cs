@@ -10,6 +10,7 @@ using Dsh.Tui;
 namespace Dsh.Tests;
 
 [Collection("RenderBench")]
+[Trait("Category", "RenderBench")]
 public class TranscriptBenchmarkTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(Path.GetTempPath(), $"dsh-transcript-bench-{Guid.NewGuid():N}");

@@ -1,11 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Dsh.Core;
+using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
 using Dsh.Interaction;
@@ -24,9 +26,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", "gui-screenshots"));
 
     [Fact]
-    public void MainWindow_RendersEveryPage() => HeadlessGui.Run(() =>
+    public async Task MainWindow_RendersEveryPage() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var window = new MainWindow(environment.App, environment.Agent);
             var viewModel = window.ViewModel!;
@@ -61,9 +63,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         });
 
     [Fact]
-    public void DecisionDialog_RendersAndResolvesApproval() => HeadlessGui.Run(() =>
+    public async Task DecisionDialog_RendersAndResolvesApproval() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var decision = DecisionViewModel.ForApproval(new ApprovalRequest(
                 environment.Agent,
@@ -86,9 +88,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         });
 
     [Fact]
-    public void DecisionDialog_RendersQuestion_AndSubmitsSelection() => HeadlessGui.Run(() =>
+    public async Task DecisionDialog_RendersQuestion_AndSubmitsSelection() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
                 [
@@ -116,9 +118,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         });
 
     [Fact]
-    public void ThemeSwitch_AppliesLightVariantToTheWholeApp() => HeadlessGui.Run(() =>
+    public async Task ThemeSwitch_AppliesLightVariantToTheWholeApp() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var window = new MainWindow(environment.App, environment.Agent);
             var viewModel = window.ViewModel!;
@@ -143,9 +145,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         });
 
     [Fact]
-    public void SettingsGraphics_ListsAdaptersAndSaves() => HeadlessGui.Run(() =>
+    public async Task SettingsGraphics_ListsAdaptersAndSaves() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var window = new MainWindow(environment.App, environment.Agent);
             var viewModel = window.ViewModel!;
@@ -180,9 +182,9 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
 
     /** 1000 条消息的渲染冒烟: 只验证绑定集合到虚拟化列表的路径不因体量崩掉, 并记录耗时。 */
     [Fact]
-    public void MessageList_RendersThousandMessages() => HeadlessGui.Run(() =>
+    public async Task MessageList_RendersThousandMessages() => await HeadlessGui.RunAsync(async () =>
         {
-            var environment = CreateEnvironment();
+            var environment = await GuiTestEnvironment.CreateAsync();
             using var environmentScope = environment;
             var window = new MainWindow(environment.App, environment.Agent);
             var viewModel = window.ViewModel!;
@@ -214,8 +216,147 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
         });
 
-    private static GuiTestEnvironment CreateEnvironment()
-        => Task.Run(async () => await GuiTestEnvironment.CreateAsync()).GetAwaiter().GetResult();
+    /** 模拟点击 preset 浮层里的项: 验证 XAML Click 处理器到 /preset 命令管道的整条接线。 */
+    [Fact]
+    public async Task PresetChip_Click_Item_SwitchesPreset() => await HeadlessGui.RunAsync(async () =>
+    {
+        // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的窗口测试。
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
+        var window = new MainWindow(environment.App, environment.Agent);
+        var viewModel = window.ViewModel!;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Assert.Equal("标准", viewModel.PresetLabel);
+            var chip = window.GetVisualDescendants().OfType<Button>()
+                .First(button => button.Flyout is Flyout { Content: ItemsControl });
+            var flyout = (Flyout)chip.Flyout!;
+            flyout.ShowAt(chip);
+            Dispatcher.UIThread.RunJobs();
+
+            var item = ((ItemsControl)flyout.Content!).GetVisualDescendants().OfType<Button>()
+                .First(button => button.DataContext is PresetListItem { Id: "minimal" });
+            item.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            for (var attempt = 0; attempt < 400 && viewModel.PresetLabel != "极简"; attempt++)
+            {
+                await Task.Delay(5, TestContext.Current.CancellationToken);
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            Assert.Equal("极简", viewModel.PresetLabel);
+            Assert.Contains(environment.Agent.Session.SnapshotEvents(), sessionEvent => sessionEvent.Type == "preset/mode");
+            var tools = environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+            var names = tools.Schemas(environment.Agent.ScopeKey).Select(schema => schema.Name).ToList();
+            Assert.NotEmpty(names);
+            Assert.All(names, name => Assert.Contains(name, new[] { "bash", "pwsh" }));
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** 拖动字号滑块实时预览(不落盘): FontSizeText 跟随 + App 资源更新 + 磁盘值不变。 */
+    [Fact]
+    public async Task FontSizeSlider_PreviewsLive_WithoutPersisting() => await HeadlessGui.RunAsync(async () =>
+    {
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
+        var window = new MainWindow(environment.App, environment.Agent);
+        var viewModel = window.ViewModel!;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var preferences = viewModel.Preferences;
+            Assert.Equal("13.5", preferences.FontSizeText);
+            preferences.FontSize = 16.5;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("16.5", preferences.FontSizeText);
+            Assert.Equal(16.5, Assert.IsType<double>(Application.Current!.Resources["FontSize.Body"]));
+            Assert.Equal(13.5, new GuiSettings(environment.App.Home).Load().FontSize);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** 聊天正文是构建期字号, 必须随 App 资源变化重建(旧实现硬编码常量, 永不跟随)。 */
+    [Fact]
+    public async Task MarkdownView_Rebuilds_OnFontSizeResourceChange() => await HeadlessGui.RunAsync(() =>
+        {
+        var app = Application.Current!;
+        var markdown = new MarkdownView { Text = "# 标题\n\n正文" };
+        var window = new Window { Content = markdown };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            app.Resources["FontSize.Body"] = 13.5;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(20, LargestFont(markdown));
+            app.Resources["FontSize.Body"] = 27.0;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(40, LargestFont(markdown));
+        }
+        finally
+        {
+            app.Resources["FontSize.Body"] = 13.5;
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** 真实点击子代理浮层里的条目: 验证 XAML Click 处理器到只读视图的整条接线。 */
+    [Fact]
+    public async Task SubagentChip_ClickItem_OpensReadOnlyView() => await HeadlessGui.RunAsync(async () =>
+    {
+        // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的 MainWindow 测试。
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
+        var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
+        SubagentTestData.AddChild(store, environment.Agent.Id, "headless-sub", createdAt: 1, withToolCall: true);
+        var window = new MainWindow(environment.App, environment.Agent);
+        var viewModel = window.ViewModel!;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        Flyout? flyout = null;
+        try
+        {
+            Assert.True(viewModel.Subagents.HasNodes);
+            var chip = window.GetVisualDescendants().OfType<Button>()
+                .First(button => button.Flyout is Flyout
+                    && button.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == "子代理"));
+            flyout = (Flyout)chip.Flyout!;
+            flyout.ShowAt(chip);
+            Dispatcher.UIThread.RunJobs();
+
+            var item = ((StackPanel)flyout.Content!).GetVisualDescendants().OfType<Button>()
+                .First(button => button.DataContext is SubagentNodeViewModel);
+            item.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Subagents.IsViewing);
+            Assert.NotNull(viewModel.Subagents.Viewing);
+            Assert.NotEmpty(viewModel.Subagents.Viewing!.Messages);
+        }
+        finally
+        {
+            flyout?.Hide();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    private static double LargestFont(Visual root)
+        => root.GetVisualDescendants().OfType<TextBlock>().Max(block => block.FontSize);
+
 
     private static void Capture(Window window, string name, double height = 0)
     {

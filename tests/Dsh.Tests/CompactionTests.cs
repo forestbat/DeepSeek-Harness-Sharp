@@ -33,6 +33,10 @@ public class CompactionTests
 
         public GenerateOptions? LastCompactionOptions { get; private set; }
 
+        public List<GenerateOptions> CompactionOptions { get; } = [];
+
+        public Func<int, Exception?>? CompactionError { get; set; }
+
         public TaskCompletionSource TurnStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource ReleaseTurn { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -43,7 +47,7 @@ public class CompactionTests
 
         public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, "test");
 
-        public override LlmResolvedModelInfo? ResolveModel(string model)
+        public override LlmResolvedModelInfo ResolveModel(string model)
             => new(Provider, model, model, ContextWindow: _contextWindow);
 
         public override async IAsyncEnumerable<StreamChunk> Stream(
@@ -55,6 +59,9 @@ public class CompactionTests
             {
                 CompactionCalls++;
                 LastCompactionOptions = options;
+                CompactionOptions.Add(options);
+                if (CompactionError?.Invoke(CompactionCalls - 1) is { } error)
+                    throw error;
                 text = _summaryText;
             }
             else
@@ -81,23 +88,26 @@ public class CompactionTests
         public LlmRuntime Llm { get; }
         public AgentRegistry Agents { get; }
         public ToolResultPruner Pruner { get; }
+        public TokenMeter Meter { get; }
+        public ToolRuntime Tools { get; }
+        public SystemPrompt Prompt { get; }
         public BasicCompactionEngine Compaction { get; }
         public CommandsService Commands { get; }
         public IDisposable CompactRegistration { get; }
         public MockSummaryAdapter Adapter { get; }
 
-        public Harness(int contextWindow, string turnText, string summaryText = SummaryText)
+        public Harness(int contextWindow, string turnText, string summaryText = SummaryText, bool auto = true, int? tailTurns = null)
         {
             Ctx = new Context();
             Sessions = new SessionStore(Ctx);
-            _ = new SystemPrompt(Ctx, new SystemPromptConfig());
-            _ = new ToolRuntime(Ctx);
+            Prompt = new SystemPrompt(Ctx, new SystemPromptConfig());
+            Tools = new ToolRuntime(Ctx);
             Llm = new LlmRuntime(Ctx);
             Agents = new AgentRegistry(Ctx);
             _ = new AgentLoop(Ctx);
-            _ = new TokenMeter(Ctx);
+            Meter = new TokenMeter(Ctx);
             Pruner = new ToolResultPruner(Ctx);
-            Compaction = new BasicCompactionEngine(Ctx);
+            Compaction = new BasicCompactionEngine(Ctx, new BasicCompactionConfig { Auto = auto, TailTurns = tailTurns });
             Commands = CommandsService.Register(Ctx);
             CompactRegistration = CompactCommand.Register(Ctx);
             Adapter = new MockSummaryAdapter(contextWindow, turnText, summaryText);
@@ -119,6 +129,34 @@ public class CompactionTests
             Compaction.Dispose();
         }
     }
+
+    private const int TurnContextWindow = 4000;
+
+    private static readonly string[] TurnUsers =
+    [
+        new string('u', 14000),
+        new string('o', 400),
+        new string('p', 400),
+        new string('q', 400),
+    ];
+
+    private static async Task BuildFourTurns(AgentLoopAgent agent)
+    {
+        foreach (var user in TurnUsers)
+        {
+            agent.Followup(MessageFactory.CreateUserText(user));
+            await agent.WhenIdle();
+        }
+    }
+
+    private static List<long> UserSeqs(Session session)
+        => session.SnapshotEvents()
+            .Where(e => e.Data is UserMessagePayload { Message.Source: UserMessageSource })
+            .Select(e => e.Seq)
+            .ToList();
+
+    private static string InstructionOf(GenerateOptions options)
+        => Assert.IsType<TextBlock>(Assert.IsType<UserMessage>(options.Messages[^1]).Content[0]).Text;
 
     [Fact]
     public async Task PressureTrigger_CompactsAtNextTurnBoundary()
@@ -274,17 +312,15 @@ public class CompactionTests
     [Fact]
     public async Task CompactCommand_RunsManualCompaction()
     {
-        using var harness = new Harness(contextWindow: 1_000_000, turnText: new string('x', 200));
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: new string('x', 200), auto: false);
         var agent = await harness.CreateAgent("compaction-command");
-        agent.Followup(MessageFactory.CreateUserText(new string('u', 600)));
-        await agent.WhenIdle();
+        await BuildFourTurns(agent);
         Assert.Equal(0, harness.Adapter.CompactionCalls);
 
         var execution = await harness.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
 
         Assert.NotNull(execution);
         var success = Assert.IsType<CommandResult.Success>(execution.Result);
-        Assert.Equal("Compacted 1 history items (~158 tokens).", success.Text);
         Assert.Equal(1, harness.Adapter.CompactionCalls);
 
         var events = agent.Session.SnapshotEvents();
@@ -297,6 +333,15 @@ public class CompactionTests
         Assert.Null(endPayload.Error);
         var summaryEvent = events.Single(e => e.Data is CompactionSummaryPayload);
         Assert.Equal(summaryEvent.Seq, success.SourceEventSeq);
+
+        // 手动 /compact 与自动一致:保留最后两个 user turn,只压缩更早的 turn。
+        var summaryPayload = (CompactionSummaryPayload)summaryEvent.Data;
+        var userSeqs = UserSeqs(agent.Session);
+        Assert.Equal(4, userSeqs.Count);
+        Assert.Equal(success.Text, $"Compacted {summaryPayload.ShadowedSeqs.Count} history items (~{summaryPayload.ShadowedTokenCount} tokens).");
+        Assert.Equal(4, summaryPayload.ShadowedSeqs.Count);
+        Assert.DoesNotContain(userSeqs[2], summaryPayload.ShadowedSeqs);
+        Assert.DoesNotContain(userSeqs[3], summaryPayload.ShadowedSeqs);
 
         var types = events.Select(e => e.Type).ToList();
         var commandRun = types.IndexOf(CommandEvents.Run);
@@ -314,6 +359,8 @@ public class CompactionTests
         var checkpoint = Assert.IsType<UserMessage>(messages[1]);
         var source = Assert.IsType<PluginMessageSource>(checkpoint.Source);
         Assert.Equal(execution.CommandId, source.SourceCommandId);
+        Assert.Equal(TurnUsers[2], Assert.IsType<TextBlock>(messages[2].Content[0]).Text);
+        Assert.Equal(TurnUsers[3], Assert.IsType<TextBlock>(messages[4].Content[0]).Text);
 
         var json = JsonSerializer.Serialize(events, DshJson.Options);
         Assert.Contains("\"turn\":null", json);
@@ -383,5 +430,156 @@ public class CompactionTests
             harness.Adapter.ReleaseTurn.TrySetResult();
         }
         await agent.WhenIdle();
+    }
+
+    [Fact]
+    public async Task SelectCompactableRange_RespectsTailTurnsAndBudget()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: new string('x', 200), auto: false);
+        var agent = await harness.CreateAgent("compaction-select");
+        await BuildFourTurns(agent);
+        var session = agent.Session;
+        var userSeqs = UserSeqs(session);
+
+        var byTwoTurns = CompactionRegion.SelectCompactableRange(session, harness.Meter.Measure(session), retainTokens: 640, tailTurns: 2);
+        Assert.NotNull(byTwoTurns);
+        Assert.Equal(userSeqs[0], byTwoTurns.Start);
+        Assert.True(byTwoTurns.End < userSeqs[2]);
+
+        var byOneTurn = CompactionRegion.SelectCompactableRange(session, harness.Meter.Measure(session), retainTokens: 640, tailTurns: 1);
+        Assert.NotNull(byOneTurn);
+        Assert.Equal(userSeqs[0], byOneTurn.Start);
+        Assert.True(byOneTurn.End >= userSeqs[2] && byOneTurn.End < userSeqs[3]);
+
+        var budgetTooSmall = CompactionRegion.SelectCompactableRange(session, harness.Meter.Measure(session), retainTokens: 1, tailTurns: 1);
+        Assert.NotNull(budgetTooSmall);
+        Assert.Equal(userSeqs[3], budgetTooSmall.End);
+
+        var generousBudget = CompactionRegion.SelectCompactableRange(session, harness.Meter.Measure(session), retainTokens: 100_000, tailTurns: 4);
+        Assert.True(generousBudget is null || generousBudget.End < userSeqs[0]);
+    }
+
+    [Fact]
+    public async Task ManualAndAutomatic_SelectSameTailTurns()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: new string('x', 200), auto: false);
+
+        var manualAgent = await harness.CreateAgent("compaction-manual-consistency");
+        await BuildFourTurns(manualAgent);
+        var manual = await harness.Compaction.CompactNow(manualAgent, TestContext.Current.CancellationToken);
+
+        var autoAgent = await harness.CreateAgent("compaction-auto-consistency");
+        await BuildFourTurns(autoAgent);
+        autoAgent.Session.Append(new TurnStartPayload(5));
+        var auto = await harness.Compaction.CompactIfNeeded(autoAgent, CompactionTrigger.Pressure, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(manual);
+        Assert.NotNull(auto);
+        Assert.Equal(manual.ShadowedSeqs, auto.ShadowedSeqs);
+        Assert.Equal(manual.ShadowedTokenCount, auto.ShadowedTokenCount);
+        Assert.Equal(4, manual.ShadowedSeqs.Count);
+        var retained = UserSeqs(manualAgent.Session);
+        Assert.DoesNotContain(retained[2], manual.ShadowedSeqs);
+        Assert.DoesNotContain(retained[3], manual.ShadowedSeqs);
+    }
+
+    [Fact]
+    public async Task CompactTool_RegistersAndCompactsWithFocus()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: new string('x', 200), auto: false);
+        var agent = await harness.CreateAgent("compaction-tool");
+        await BuildFourTurns(agent);
+        using var compactTool = CompactTool.Register(harness.Ctx);
+
+        var definition = harness.Tools.Get(CompactTool.ToolName);
+        Assert.NotNull(definition);
+        Assert.True(definition.Parameters["properties"]!.AsObject().ContainsKey("focus"));
+        Assert.Contains("focus", CompactTool.SectionText);
+
+        // 运行时确认注册点:工具 schema 与提示词段都在装配结果里。
+        var assembly = await harness.Prompt.Assemble(new AssembleContext());
+        Assert.Contains(assembly.Sections, section => section.Name == "tool:compact" && section.Text == CompactTool.SectionText);
+        Assert.Contains(assembly.Tools, tool => tool.Name == CompactTool.ToolName);
+
+        agent.Session.Append(new TurnStartPayload(5));
+        agent.Session.Append(new StepStartPayload(5, 1));
+        var focus = "keep the failing test and the agreed API contract";
+        var execution = await harness.Tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-compact"),
+            Name = CompactTool.ToolName,
+            Arguments = JsonSerializer.SerializeToElement(new { focus }),
+            Signal = TestContext.Current.CancellationToken,
+            Agent = agent,
+        });
+
+        var success = Assert.IsType<ToolExecutionResult.Success>(execution);
+        Assert.True(success.Value.GetProperty("compacted").GetBoolean());
+        Assert.Equal(4, success.Value.GetProperty("shadowedItems").GetInt32());
+        var instruction = InstructionOf(harness.Adapter.LastCompactionOptions!);
+        Assert.Contains(Summarizer.CompactionInstruction, instruction);
+        Assert.Contains(focus, instruction);
+    }
+
+    [Fact]
+    public async Task ChunkedSummarization_SplitsAndMerges()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: "ok");
+        var agent = await harness.CreateAgent("compaction-chunks");
+        var input = new SummarizationInput(null, null,
+        [
+            MessageFactory.CreateUserText(new string('a', 20_000)),
+            MessageFactory.CreateUserText(new string('b', 20_000)),
+            MessageFactory.CreateUserText(new string('c', 20_000)),
+        ]);
+
+        var result = await CompactionSummarizer.Summarize(
+            harness.Llm, Provider, Model, 8192, input, agent, TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, harness.Adapter.CompactionCalls);
+        Assert.Equal(SummaryText, string.Concat(result.Summary.OfType<TextBlock>().Select(block => block.Text)));
+        Assert.Equal(CompactionSummarizer.ChunkInstruction, InstructionOf(harness.Adapter.CompactionOptions[0]));
+        Assert.Equal(CompactionSummarizer.ChunkInstruction, InstructionOf(harness.Adapter.CompactionOptions[2]));
+        Assert.Equal(CompactionSummarizer.MergeInstruction, InstructionOf(harness.Adapter.CompactionOptions[3]));
+    }
+
+    [Fact]
+    public async Task PayloadTooLarge_StripsMediaAndToolOutputAndRetries()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: "ok");
+        var agent = await harness.CreateAgent("compaction-payload");
+        var callId = ToolCallId.Create("call-big");
+        var big = new string('a', 10_000);
+        var image = new ImageBlock(new ImageAttachmentRef("att-1", "image/png", 1024, 8, 8, "shot.png"));
+        var message = MessageFactory.CreateUserMessage(
+            [image, new TextBlock("review this"), new ToolResultBlock(callId, [new TextBlock(big)], false)]);
+        var input = new SummarizationInput(null, null, [message]);
+        harness.Adapter.CompactionError = index => index == 0
+            ? new LlmException(new LlmFailure("Request entity too large", "INVALID_REQUEST"))
+            : null;
+
+        var result = await CompactionSummarizer.Summarize(
+            harness.Llm, Provider, Model, 8192, input, agent, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, harness.Adapter.CompactionCalls);
+        Assert.Equal(SummaryText, string.Concat(result.Summary.OfType<TextBlock>().Select(block => block.Text)));
+        var retryText = MessageText.Flatten(harness.Adapter.CompactionOptions[1].Messages[0].Content);
+        Assert.DoesNotContain(big, retryText);
+        Assert.Contains("[truncated for compaction]", retryText);
+        Assert.Contains("media omitted for compaction", retryText);
+    }
+
+    [Fact]
+    public async Task PayloadTooLarge_NonSplittableMessageFailsWithoutRecursing()
+    {
+        using var harness = new Harness(contextWindow: TurnContextWindow, turnText: "ok");
+        var agent = await harness.CreateAgent("compaction-payload-guard");
+        var input = new SummarizationInput(null, null, [MessageFactory.CreateUserText(new string('z', 20_000))]);
+        harness.Adapter.CompactionError = _ => new LlmException(new LlmFailure("Request entity too large", "INVALID_REQUEST"));
+
+        await Assert.ThrowsAnyAsync<HarnessException>(() => CompactionSummarizer.Summarize(
+            harness.Llm, Provider, Model, 8192, input, agent, TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, harness.Adapter.CompactionCalls);
     }
 }

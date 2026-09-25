@@ -1,0 +1,162 @@
+using System.Text;
+using Dsh.Tui;
+
+namespace Dsh.Tests;
+
+/** 原始字节解码: 键盘转义序列与 SGR 鼠标。 */
+public class TerminalInputParserTests
+{
+    [Fact]
+    public void Printable_Ascii_Becomes_A_Key()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("a"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.False(input.IsMouse);
+        Assert.Equal('a', input.Key.KeyChar);
+    }
+
+    [Fact]
+    public void Cjk_Character_Decodes_As_Single_Key()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("汉"u8);
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal('汉', input.Key.KeyChar);
+    }
+
+    [Theory]
+    [InlineData(0x0d, ConsoleKey.Enter)]
+    [InlineData(0x09, ConsoleKey.Tab)]
+    [InlineData(0x08, ConsoleKey.Backspace)]
+    [InlineData(0x7f, ConsoleKey.Backspace)]
+    public void Control_Bytes_Map_To_Named_Keys(byte value, ConsoleKey expected)
+    {
+        var parser = new TerminalInputParser();
+        parser.Append([value]);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(expected, input.Key.Key);
+    }
+
+    [Fact]
+    public void Ctrl_X_Is_Control_Modified_Letter()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append([0x18]);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(ConsoleKey.X, input.Key.Key);
+        Assert.True((input.Key.Modifiers & ConsoleModifiers.Control) != 0);
+    }
+
+    [Theory]
+    [InlineData("\u001b[A", ConsoleKey.UpArrow)]
+    [InlineData("\u001b[B", ConsoleKey.DownArrow)]
+    [InlineData("\u001b[C", ConsoleKey.RightArrow)]
+    [InlineData("\u001b[D", ConsoleKey.LeftArrow)]
+    [InlineData("\u001b[5~", ConsoleKey.PageUp)]
+    [InlineData("\u001b[6~", ConsoleKey.PageDown)]
+    [InlineData("\u001b[3~", ConsoleKey.Delete)]
+    [InlineData("\u001b[H", ConsoleKey.Home)]
+    [InlineData("\u001b[F", ConsoleKey.End)]
+    [InlineData("\u001bOA", ConsoleKey.UpArrow)]
+    public void Escape_Sequences_Map_To_Named_Keys(string sequence, ConsoleKey expected)
+    {
+        var parser = new TerminalInputParser();
+        parser.Append(Encoding.ASCII.GetBytes(sequence));
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(expected, input.Key.Key);
+    }
+
+    [Fact]
+    public void Lone_Escape_Is_Escape_Key()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append([0x1b]);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(ConsoleKey.Escape, input.Key.Key);
+    }
+
+    [Fact]
+    public void Sequence_Split_Across_Appends_Is_Buffered()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append([0x1b, (byte)'[']);
+
+        Assert.False(parser.TryParse(out _));
+        parser.Append([(byte)'A']);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(ConsoleKey.UpArrow, input.Key.Key);
+    }
+
+    [Fact]
+    public void Sgr_Mouse_Press_Is_Parsed_With_Zero_Based_Coordinates()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("\u001b[<0;12;5M"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.True(input.IsMouse);
+        var mouse = input.Mouse!.Value;
+        Assert.Equal(0, mouse.Button);
+        Assert.True(mouse.Pressed);
+        Assert.Equal(11, mouse.X);
+        Assert.Equal(4, mouse.Y);
+        Assert.False(mouse.IsWheel);
+    }
+
+    [Fact]
+    public void Sgr_Mouse_Release_Is_Parsed()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("\u001b[<0;3;3m"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.False(input.Mouse!.Value.Pressed);
+    }
+
+    [Theory]
+    [InlineData("\u001b[<64;3;2M", 1)]
+    [InlineData("\u001b[<65;3;2M", -1)]
+    public void Sgr_Wheel_Reports_Delta(string sequence, int expectedDelta)
+    {
+        var parser = new TerminalInputParser();
+        parser.Append(Encoding.ASCII.GetBytes(sequence));
+
+        Assert.True(parser.TryParse(out var input));
+        var mouse = input.Mouse!.Value;
+        Assert.True(mouse.IsWheel);
+        Assert.Equal(expectedDelta, mouse.WheelDelta);
+    }
+
+    [Fact]
+    public void Mixed_Stream_Yields_Events_In_Order()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("\u001b[<0;2;2M"u8);
+        parser.Append("x"u8);
+        parser.Append("\u001b[B"u8);
+
+        Assert.True(parser.TryParse(out var first));
+        Assert.True(first.IsMouse);
+        Assert.True(parser.TryParse(out var second));
+        Assert.Equal('x', second.Key.KeyChar);
+        Assert.True(parser.TryParse(out var third));
+        Assert.Equal(ConsoleKey.DownArrow, third.Key.Key);
+        Assert.False(parser.TryParse(out _));
+    }
+
+    [Fact]
+    public void Mouse_Enable_And_Disable_Sequences_Are_Sgr()
+    {
+        Assert.Contains("1006", TerminalRawMode.MouseEnableSequenceForTests);
+        Assert.Contains("1006", TerminalRawMode.MouseDisableSequenceForTests);
+        Assert.Contains("h", TerminalRawMode.MouseEnableSequenceForTests);
+        Assert.Contains("l", TerminalRawMode.MouseDisableSequenceForTests);
+    }
+}

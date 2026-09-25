@@ -5,6 +5,7 @@ using Dsh.Llm.DeepSeek;
 
 namespace Dsh.Tests;
 
+[Trait("Category", "LlmSmoke")]
 public sealed class DeepSeekInHistorySmokeTests
 {
     private static (DeepSeekAdapter Adapter, string Model)? ResolveRealAdapter()

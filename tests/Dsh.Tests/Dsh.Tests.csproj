@@ -28,6 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Account\Dsh.Account.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
@@ -52,6 +53,7 @@
     <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Presets\Dsh.Presets.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
