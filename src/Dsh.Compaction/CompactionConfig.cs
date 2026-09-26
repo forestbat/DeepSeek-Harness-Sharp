@@ -77,6 +77,8 @@ public sealed class TargetPressureConfigError(string targetKey, string message) 
 
 public static class CompactionConfigResolver
 {
+    private const string PolicyKeySeparator = "\u001f";
+
     public const double DefaultThresholdRatio = 0.8;
     public const double DefaultRetainRatio = 0.16;
     public const int DefaultTailTurns = 2;
@@ -196,7 +198,7 @@ public static class CompactionConfigResolver
             if (string.IsNullOrEmpty(source.Model))
                 throw new ArgumentException($"{name}.model must be a non-empty string");
             ValidatePolicy(source, name);
-            var key = $"{source.Provider} {source.Model}";
+            var key = $"{source.Provider}{PolicyKeySeparator}{source.Model}";
             if (!seen.Add(key))
                 throw new ArgumentException($"BasicCompactionConfig: duplicate model policy for {source.Provider}/{source.Model}");
             result.Add(source);
