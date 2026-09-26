@@ -11,6 +11,7 @@
     <Project Path="src/Dsh.Account/Dsh.Account.csproj" />
     <Project Path="src/Dsh.Acp/Dsh.Acp.csproj" />
     <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
+    <Project Path="src/Dsh.Board/Dsh.Board.csproj" />
     <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
     <Project Path="src/Dsh.Checkpoints/Dsh.Checkpoints.csproj" />
     <Project Path="src/Dsh.Compaction/Dsh.Compaction.csproj" />
@@ -21,6 +22,7 @@
     <Project Path="src/Dsh.IdeHistory/Dsh.IdeHistory.csproj" />
     <Project Path="src/Dsh.Interaction.AskUser/Dsh.Interaction.AskUser.csproj" />
     <Project Path="src/Dsh.Interaction/Dsh.Interaction.csproj" />
+    <Project Path="src/Dsh.Inspection/Dsh.Inspection.csproj" />
     <Project Path="src/Dsh.Jobs/Dsh.Jobs.csproj" />
     <Project Path="src/Dsh.Llm.Anthropic/Dsh.Llm.Anthropic.csproj" />
     <Project Path="src/Dsh.Llm.DeepSeek/Dsh.Llm.DeepSeek.csproj" />
@@ -38,6 +40,7 @@
     <Project Path="src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj" />
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
+    <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
     <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
     <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />
     <Project Path="src/Dsh.SessionQuery/Dsh.SessionQuery.csproj" />

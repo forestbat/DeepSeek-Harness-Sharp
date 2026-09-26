@@ -138,7 +138,7 @@ public sealed class ProviderRegistrar : IDisposable
             ?? $"{EnvironmentName(id)}_API_KEY";
         var apiKey = (isDefault ? options.ApiKey : null) ?? provider.Options?.ApiKey;
         var resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? credentials.Get(apiKeyEnv) : apiKey;
-        if (string.IsNullOrWhiteSpace(resolvedKey))
+        if (string.IsNullOrWhiteSpace(resolvedKey) && !AccountCovers(ctx, baseUrl))
         {
             return new ProviderRegistrationResult(null, Wire: wire, Source: source,
                 Error: $"provider \"{id}\" skipped: API key is not configured "
@@ -153,6 +153,14 @@ public sealed class ProviderRegistrar : IDisposable
             provider.Models.Select(model => new ProviderModelSpec(
                 model.Key, model.Value.Name, model.Value.SystemPromptUpdate, model.Value.Reasoning == true)).ToList());
         return new ProviderRegistrationResult(llm.RegisterAdapter([id], factory!.Create(resolved)), wire, source);
+    }
+
+    /** 没配 API key 时, 账号凭据源能覆盖该 baseUrl 的 origin 就照常注册, 令牌在请求时按 origin 取。 */
+    private static bool AccountCovers(Context ctx, string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var destination))
+            return false;
+        return ctx.Get<IInferenceCredentials>(IInferenceCredentials.ServiceName, false)?.Covers(destination) is true;
     }
 
     /** 当前可供 `type` 使用的 wire 列表(未知类型报错时提示用户)。 */

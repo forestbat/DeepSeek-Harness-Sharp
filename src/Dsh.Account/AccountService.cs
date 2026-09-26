@@ -1,4 +1,5 @@
 ﻿using Dsh.Boot;
+using Dsh.Llm;
 using Dsh.Runtime;
 
 namespace Dsh.Account;
@@ -7,7 +8,7 @@ namespace Dsh.Account;
  * 账号服务: 状态快照 + 发起/取消浏览器登录 + 资料/余额 + 退出。
  * 登录交互全部发生在平台页面, 本服务只做 PKCE 流程与凭据落盘。
  */
-public sealed class AccountService : Service, IAccountService, IDisposable
+public sealed class AccountService : Service, IAccountService, IInferenceCredentials, IDisposable
 {
     public const string ServiceName = "account";
 
@@ -51,10 +52,11 @@ public sealed class AccountService : Service, IAccountService, IDisposable
         _logger = ctx.LoggerFor(LogName);
         _openBrowser = openBrowser ?? BrowserLauncher.Open;
         Origin = ResolveOrigin(config);
-        InferenceOrigin = config.InferenceOrigin;
+        InferenceOrigin = AccountOrigins.InferenceOrigin(config.InferenceOrigin);
         _store = new AccountStore(home, protector);
         var handler = httpHandler ?? new HttpClientHandler { AllowAutoRedirect = false };
         _client = new PlatformClient(handler, Origin, config.ClientPlatform, Version(), config.Locale, config.RequestTimeoutMs, disposeHandler: true, Log);
+        ctx.Provide(IInferenceCredentials.ServiceName, this, Check);
     }
 
     public event Action? Changed;
@@ -206,6 +208,27 @@ public sealed class AccountService : Service, IAccountService, IDisposable
             return null;
         }
     }
+
+    /** 注册阶段: 该目标是否由账号提供令牌(只看开关与 origin, 不读取令牌)。 */
+    public bool Covers(Uri destination)
+        => Enabled && IsInferenceOrigin(destination);
+
+    /** 请求阶段: origin 匹配且存在同签发者的授权时给出令牌。 */
+    public string? TryGetToken(Uri destination)
+    {
+        if (!Covers(destination))
+            return null;
+        var grant = _store.ReadGrant(Origin);
+        return grant is not null && string.Equals(grant.Issuer, Origin, StringComparison.Ordinal)
+            ? grant.Token
+            : null;
+    }
+
+    private bool IsInferenceOrigin(Uri destination)
+        => string.Equals(
+            destination.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped),
+            InferenceOrigin,
+            StringComparison.Ordinal);
 
     public void Dispose()
     {

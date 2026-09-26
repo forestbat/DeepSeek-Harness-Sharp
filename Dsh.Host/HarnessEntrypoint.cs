@@ -1,5 +1,6 @@
 ﻿using Dsh.Boot;
 using Dsh.Plugins;
+using Dsh.Ptc;
 
 namespace Dsh.Host;
 
@@ -8,6 +9,9 @@ public static class HarnessEntrypoint
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length > 0 && args[0] == PtcScriptHost.HostArgument)
+            return await PtcScriptHost.RunAsync(args);
+
         string? home = null;
         string? resumeSessionId = null;
         var dumpConfig = false;

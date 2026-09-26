@@ -17,11 +17,11 @@ public sealed class Plugin : IDshPlugin
         var factories = ctx.Get<LlmAdapterFactoryRegistry>(LlmAdapterFactoryRegistry.ServiceName)
             ?? throw new InvalidOperationException("llmAdapterFactories is required for the DeepSeek adapter plugin");
         var homeRoot = ctx.GetProp("dshHomePath") as string ?? "";
-        return factories.Register(Package, new DeepSeekAdapterFactory(homeRoot));
+        return factories.Register(Package, new DeepSeekAdapterFactory(homeRoot, ctx));
     }
 }
 
-internal sealed class DeepSeekAdapterFactory(string homeRoot) : ILlmAdapterFactory
+internal sealed class DeepSeekAdapterFactory(string homeRoot, Context ctx) : ILlmAdapterFactory
 {
     private static readonly IReadOnlyList<DeepSeekCatalogModel> Catalog =
     [
@@ -59,13 +59,17 @@ internal sealed class DeepSeekAdapterFactory(string homeRoot) : ILlmAdapterFacto
         return new DeepSeekAdapter(provider.ProviderId, new DeepSeekAdapterOptions
         {
             Options = () => connection,
-            ResolveApiKey = (_, _) =>
+            ResolveApiKey = (activeConnection, cancellationToken) =>
             {
                 if (provider.ApiKey is not null && ApiKey.Normalize(provider.ApiKey, out var key, out _))
                     return Task.FromResult(key);
-                throw new LlmException(new LlmFailure(
-                    $"provider \"{provider.ProviderId}\" credential \"{provider.ApiKeyEnv}\" is unusable",
-                    LlmFailureCodes.InvalidCredential));
+                var (accountToken, accountCovered) = InferenceCredentials.Resolve(ctx, activeConnection.BaseUrl);
+                if (accountToken is { Length: > 0 })
+                    return Task.FromResult(accountToken);
+                var reason = accountCovered
+                    ? $"provider \"{provider.ProviderId}\" has no API key and the DeepSeek account is not signed in"
+                    : $"provider \"{provider.ProviderId}\" credential \"{provider.ApiKeyEnv}\" is unusable";
+                throw new LlmException(new LlmFailure(reason, LlmFailureCodes.InvalidCredential));
             },
             ResolveUserId = () => AnonymousUserId.Resolve(homeRoot),
         });

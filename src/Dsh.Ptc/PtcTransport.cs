@@ -8,8 +8,9 @@ using Dsh.Runtime;
 namespace Dsh.Ptc;
 
 /** PTC 呈现的传输接缝实现: 提供 run_code 定义、SDK 段文本与 C# script-host 执行。 */
-public sealed class PtcTransport : Service, IPtcTransport
+public sealed class PtcTransport : Service, IToolPresentation
 {
+    public const string RunCodeName = "run_code";
     public const long DefaultTimeoutMs = 120_000;
     public const long MaxTimeoutMs = 600_000;
 
@@ -22,17 +23,19 @@ public sealed class PtcTransport : Service, IPtcTransport
     private readonly SubprocessService _subprocess;
     private readonly string _cwd;
 
-    public PtcTransport(Context ctx, string cwd) : base(ctx, IPtcTransport.ServiceName)
+    public PtcTransport(Context ctx, string cwd) : base(ctx, IToolPresentation.ServiceName)
     {
         _tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("the PTC transport requires the tools service");
         _subprocess = ctx.Get<SubprocessService>(SubprocessService.ServiceName)
             ?? throw new InvalidOperationException("the PTC transport requires the subprocess service");
         _cwd = cwd;
-        RunCodeDefinition = BuildRunCodeDefinition();
+        TransportDefinition = BuildRunCodeDefinition();
     }
 
-    public ToolDefinition RunCodeDefinition { get; }
+    public ToolDefinition TransportDefinition { get; }
+
+    public string TransportToolName => RunCodeName;
 
     public bool IsAvailable => Environment.ProcessPath is not null;
 
@@ -41,12 +44,12 @@ public sealed class PtcTransport : Service, IPtcTransport
             ? ""
             : PtcSdkRenderer.Render(_tools.Schemas(scope));
 
-    public string PtcOnlySection(ScopeKey? scope)
+    public string TransportOnlySection(ScopeKey? scope)
         => _tools.PresentationMode(scope) == ToolPresentationMode.Ptc ? PtcOnlyText : "";
 
     private ToolDefinition BuildRunCodeDefinition() => new()
     {
-        Name = ToolRuntime.RunCodeName,
+        Name = RunCodeName,
         Description = "Run a C# program that can call other tools; only printed output and the returned value come back.",
         Parameters = BuildParameters(),
         Output = new ToolOutputDefinition(BuildOutputSchema(), RenderRunCode),
@@ -99,7 +102,7 @@ public sealed class PtcTransport : Service, IPtcTransport
         var timeoutMs = ResolveTimeout(arguments);
         var bindings = _tools.Schemas(exec.Agent?.ScopeKey)
             .Select(schema => schema.Name)
-            .Where(name => name != ToolRuntime.RunCodeName && PtcToolNaming.IsCallable(name))
+            .Where(name => name != RunCodeName && PtcToolNaming.IsCallable(name))
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
         var dispatcher = new PtcSubDispatch(_tools, exec);

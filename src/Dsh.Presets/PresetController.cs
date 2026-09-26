@@ -22,7 +22,7 @@ public sealed class PresetController : Service
         "PTC preset 依赖 PTC 运行时，尚未移植（见 plans/PTC运行时调研与移植立项-2026-09-25.md）";
 
     private const string CreativeNotReady =
-        "创造模式随 PTC 立项阶段四（运行时检查工具 + plugin-manager）落地，尚未就绪";
+        "创造模式依赖运行时检查与插件管理工具（Dsh.Inspection），当前未就绪";
 
     private static readonly string[] ShellToolNames = ["bash", "pwsh"];
 
@@ -76,20 +76,31 @@ public sealed class PresetController : Service
             return new CommandResult.Error(
                 $"unknown preset \"{preset}\"; available: {string.Join(", ", InteractionPreset.All)}");
         }
-        if (target == InteractionPreset.Ptc)
-            return new CommandResult.Error(PtcNotReady);
-        if (target == InteractionPreset.Creative)
+        if (target == InteractionPreset.Creative && !CreativeAvailable())
             return new CommandResult.Error(CreativeNotReady);
+        if (target == InteractionPreset.Ptc && !PtcAvailable())
+            return new CommandResult.Error(PtcNotReady);
         var current = PresetOf(agent.Session);
         if (target == current)
             return new CommandResult.Success($"Preset is already {target}.");
         agent.Session.Append(new PresetModePayload(target));
         Apply(agent, target);
         agent.Inject(Narration(target));
-        return new CommandResult.Success(target == InteractionPreset.Standard
-            ? "Preset: standard — default persona and toolset."
-            : "Preset: minimal — bare assistant persona, persistent shell only.");
+        return new CommandResult.Success(target switch
+        {
+            InteractionPreset.Minimal => "Preset: minimal — bare assistant persona, persistent shell only.",
+            InteractionPreset.Ptc => "Preset: ptc — call tools from inside run_code programs.",
+            InteractionPreset.Creative =>
+                "Preset: creative — standard toolset plus runtime inspection and plugin management.",
+            _ => "Preset: standard — default persona and toolset.",
+        });
     }
+
+    private bool PtcAvailable()
+        => Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false) is { IsAvailable: true };
+
+    private bool CreativeAvailable()
+        => Ctx.Get<ICreativeToolset>(ICreativeToolset.ServiceName, false) is { IsAvailable: true };
 
     private CommandResult HandleCommand(CommandInvocation invocation)
     {
@@ -99,7 +110,7 @@ public sealed class PresetController : Service
             return new CommandResult.Success(
                 $"Current preset: {PresetOf(invocation.Agent.Session)}. "
                 + $"Available: {string.Join(", ", InteractionPreset.All)} "
-                + $"(ptc: 未移植; creative: 未就绪).");
+                + $"(ptc: {(PtcAvailable() ? "可用" : "未移植")}; creative: {(CreativeAvailable() ? "可用" : "未就绪")}).");
         }
         return Set(invocation.Agent, input);
     }
@@ -108,12 +119,22 @@ public sealed class PresetController : Service
     {
         var holder = _applied.GetOrCreateValue(agent);
         Release(agent);
-        if (preset != InteractionPreset.Minimal)
-            return;
         var systemPrompt = Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)
             ?? throw new InvalidOperationException("presets requires the systemPrompt service");
         var tools = Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("presets requires the tools service");
+        if (preset == InteractionPreset.Ptc)
+        {
+            holder.Effects.Add(tools.PresentAs(ToolPresentationMode.Ptc, agent.ScopeKey));
+            return;
+        }
+        if (preset == InteractionPreset.Creative)
+        {
+            ApplyCreative(agent, holder, systemPrompt, tools);
+            return;
+        }
+        if (preset != InteractionPreset.Minimal)
+            return;
         var shell = ShellToolNames.Where(name => tools.Get(name) is not null).ToList();
         if (shell.Count == 0)
         {
@@ -127,6 +148,15 @@ public sealed class PresetController : Service
         holder.Effects.Add(tools.Restrict(new ToolRestriction(Allow: shell), agent.ScopeKey));
     }
 
+    private void ApplyCreative(IAgent agent, EffectHolder holder, SystemPrompt systemPrompt, ToolRuntime tools)
+    {
+        var creative = Ctx.Get<ICreativeToolset>(ICreativeToolset.ServiceName, false)
+            ?? throw new InvalidOperationException("creative preset requires the creative toolset service");
+        foreach (var tool in creative.Tools)
+            holder.Effects.Add(tools.Register(tool, agent.ScopeKey));
+        holder.Effects.Add(systemPrompt.Section(creative.GuidanceSection, agent.ScopeKey));
+    }
+
     private void Release(IAgent agent)
     {
         if (!_applied.TryGetValue(agent, out var holder))
@@ -138,9 +168,16 @@ public sealed class PresetController : Service
 
     private static UserMessage Narration(string preset)
     {
-        var text = preset == InteractionPreset.Minimal
-            ? "The user switched this session to the minimal preset: bare assistant persona; only the persistent shell tool is available."
-            : "The user switched this session back to the standard preset: the default persona and toolset apply.";
+        var text = preset switch
+        {
+            InteractionPreset.Minimal =>
+                "The user switched this session to the minimal preset: bare assistant persona; only the persistent shell tool is available.",
+            InteractionPreset.Ptc =>
+                "The user switched this session to the ptc preset: only run_code is callable directly; call other tools from inside run_code programs.",
+            InteractionPreset.Creative =>
+                "The user switched this session to the creative preset: the standard toolset plus read-only runtime inspection and plugin management, which asks for approval on every operation.",
+            _ => "The user switched this session back to the standard preset: the default persona and toolset apply.",
+        };
         return MessageFactory.CreateUserMessage(
             [new TextBlock(text)],
             new PluginMessageSource(PluginName, ContextForms.Notice, Summary: text));

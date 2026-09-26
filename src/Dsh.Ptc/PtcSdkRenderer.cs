@@ -1,6 +1,5 @@
 ﻿using System.Text;
 using System.Text.Json.Nodes;
-using Dsh.Core;
 using Dsh.Llm;
 
 namespace Dsh.Ptc;
@@ -21,7 +20,7 @@ public static class PtcSdkRenderer
     public static string Render(IReadOnlyList<ToolSchema> schemas)
     {
         var ordered = schemas
-            .Where(schema => schema.Name != ToolRuntime.RunCodeName && PtcToolNaming.IsCallable(schema.Name))
+            .Where(schema => schema.Name != PtcTransport.RunCodeName && PtcToolNaming.IsCallable(schema.Name))
             .OrderBy(schema => schema.Name, StringComparer.Ordinal)
             .ToList();
         var builder = new StringBuilder();

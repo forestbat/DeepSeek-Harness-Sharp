@@ -36,6 +36,10 @@ internal static class SessionLogHeader
             if (header.Origin is { } origin) writer.WriteString("origin", origin);
             writer.WriteNumber("delegationDepth", header.DelegationDepth ?? 0);
             if (header.AgentPreset is { } agentPreset) writer.WriteString("agentPreset", agentPreset);
+            if (header.RootSession is { } root) writer.WriteString("rootSession", root.Value);
+            if (header.SubagentProvider is { } subagentProvider) writer.WriteString("subagentProvider", subagentProvider);
+            if (header.SubagentMode is { } subagentMode) writer.WriteString("subagentMode", subagentMode);
+            if (header.SubagentLabel is { } subagentLabel) writer.WriteString("subagentLabel", subagentLabel);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -99,6 +103,18 @@ internal static class SessionLogHeader
         if (line["parentSession"] is not null
             && (line["parentSession"] is not JsonValue parentValue || !parentValue.TryGetValue<string>(out _)))
             return null;
+        if (line["rootSession"] is not null
+            && (line["rootSession"] is not JsonValue rootValue || !rootValue.TryGetValue<string>(out _)))
+            return null;
+        if (line["subagentProvider"] is not null
+            && (line["subagentProvider"] is not JsonValue providerValue || !providerValue.TryGetValue<string>(out _)))
+            return null;
+        if (line["subagentMode"] is not null
+            && (line["subagentMode"] is not JsonValue modeValue || !modeValue.TryGetValue<string>(out _)))
+            return null;
+        if (line["subagentLabel"] is not null
+            && (line["subagentLabel"] is not JsonValue labelValue || !labelValue.TryGetValue<string>(out _)))
+            return null;
         if (line.ContainsKey("sandboxMode") || line.ContainsKey("approvalPolicy"))
             throw new FormatException("session header uses retired policy baseline fields");
         var isSeeded = seedLength is not null;
@@ -116,6 +132,12 @@ internal static class SessionLogHeader
             Origin = line["origin"] is JsonValue originNode && originNode.TryGetValue<string>(out var originText) ? originText : null,
             DelegationDepth = checked((int)delegationDepth),
             AgentPreset = line["agentPreset"] is JsonValue presetNode && presetNode.TryGetValue<string>(out var preset) ? preset : null,
+            RootSession = line["rootSession"] is JsonValue rootNode && rootNode.TryGetValue<string>(out var root)
+                ? SessionId.Create(root)
+                : null,
+            SubagentProvider = line["subagentProvider"] is JsonValue providerNode && providerNode.TryGetValue<string>(out var provider) ? provider : null,
+            SubagentMode = line["subagentMode"] is JsonValue modeNode && modeNode.TryGetValue<string>(out var mode) ? mode : null,
+            SubagentLabel = line["subagentLabel"] is JsonValue labelNode && labelNode.TryGetValue<string>(out var label) ? label : null,
         };
         TryReadNonNegativeInt64(seedLength, out var cut);
         return new SessionStorageMetadata(meta, isSeeded ? cut : 0);
