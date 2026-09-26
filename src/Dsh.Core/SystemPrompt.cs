@@ -38,7 +38,6 @@ public static class PromptOrders
     public const int AgentInstructions = 100;
     public const int PlanPolicy = 500;
     public const int TeamPolicy = 600;
-    public const int PtcOnly = 800;
     public const int FileReference = 900;
     public const int ToolBash = 1000;
     public const int ToolPwsh = 1010;
@@ -60,14 +59,15 @@ public static class PromptOrders
     public const int ToolWorkflow = 2600;
     public const int ToolRalph = 2700;
     public const int ToolSubagent = 2800;
+    public const int ToolBoard = 2850;
     public const int ToolReport = 2900;
-    public const int ToolsSdk = 5000;
     public const int DeliverableFileReferences = 9000;
     public const int StructuredOutput = 9900;
 
     public const int ContextSandboxPolicy = 110;
     public const int ContextApprovalPolicy = 115;
     public const int ContextSubagentDelegation = 120;
+    public const int ContextBoardCoordination = 130;
 }
 
 public sealed class SystemPromptConfig

@@ -35,7 +35,6 @@ public sealed record ToolView(
 public sealed class ToolRuntime : Service
 {
     public const string ServiceName = "tools";
-    public const string RunCodeName = "run_code";
 
     private sealed class ToolLayer
     {
@@ -59,6 +58,8 @@ public sealed class ToolRuntime : Service
 
     private readonly ScopedLayers<ToolLayer> _layers;
     private readonly ToolPresentationMode _defaultMode;
+    private readonly Dictionary<string, string> _reservedNames = [];
+    private readonly Lock _reservedSync = new();
 
     public ToolRuntime(Context ctx, ToolPresentationMode defaultMode = ToolPresentationMode.Native) : base(ctx, ServiceName)
     {
@@ -69,16 +70,19 @@ public sealed class ToolRuntime : Service
         systemPrompt.Tools(context => WireSchemas(context.Scope));
     }
 
-    public IDisposable Register(ToolDefinition definition)
+    public IDisposable Register(ToolDefinition definition) => Register(definition, null);
+
+    /** 按 scope(如 agent.ScopeKey)注册: 该工具仅对 scope 及其子 scope 可见, 用于 preset 独占工具。 */
+    public IDisposable Register(ToolDefinition definition, ScopeKey? scope)
     {
-        if (definition.Name == RunCodeName)
+        if (IsReservedName(definition.Name))
         {
             throw new InvalidOperationException(
-                $"tool name \"{RunCodeName}\" is reserved for the PTC mode presentation transport and cannot be registered or shadowed");
+                $"tool name \"{definition.Name}\" is reserved for the presentation transport and cannot be registered or shadowed");
         }
         if (definition.TimeoutMs is <= 0)
             throw new ArgumentException("tool \"definition.Name\" timeoutMs must be a positive finite number");
-        return _layers.Effect(Ctx, null,
+        return _layers.Effect(Ctx, scope,
             layer => layer.Tools.Insert(definition.Name, definition),
             layer => layer.Tools.Remove(definition.Name));
     }
@@ -91,8 +95,9 @@ public sealed class ToolRuntime : Service
     {
         if (filter.Allow is null && filter.Deny is null)
             throw new InvalidOperationException("tools.restrict({}) is a no-op: pass allow and/or deny (an empty filter is almost always a materialized-empty-config bug)");
-        if (filter.Allow?.Contains(RunCodeName) == true || filter.Deny?.Contains(RunCodeName) == true)
-            throw new InvalidOperationException($"tools.restrict() cannot name reserved PTC mode presentation transport \"{RunCodeName}\"; restrict end-capability tools instead");
+        var reserved = (filter.Allow ?? []).Concat(filter.Deny ?? []).FirstOrDefault(IsReservedName);
+        if (reserved is not null)
+            throw new InvalidOperationException($"tools.restrict() cannot name reserved tool \"{reserved}\"; restrict end-capability tools instead");
         var known = View(scope).RestrictableNames;
         var unknown = (filter.Allow ?? []).Concat(filter.Deny ?? []).Where(name => !known.Contains(name)).ToList();
         if (unknown.Count > 0)
@@ -128,6 +133,23 @@ public sealed class ToolRuntime : Service
             },
             layer => layer.Mode = null);
 
+    /** 声明一个保留工具名(如呈现模式的传输工具): 幂等, 同一名字以不同理由重复声明即失败。 */
+    public void ReserveName(string name, string reason)
+    {
+        lock (_reservedSync)
+        {
+            if (_reservedNames.TryGetValue(name, out var existing))
+            {
+                if (existing != reason)
+                    throw new InvalidOperationException($"tool name \"{name}\" is already reserved: {existing}");
+                return;
+            }
+            _reservedNames[name] = reason;
+        }
+        if (_layers.Global.Tools.Entries.Any(entry => entry.Key == name))
+            throw new InvalidOperationException($"tool name \"{name}\" is already registered and cannot be reserved");
+    }
+
     private string? GuardReason(ToolExecution exec)
     {
         var globalReason = _layers.Global.Guards.Values.Select(guard => guard(exec)).FirstOrDefault(reason => reason is not null);
@@ -153,6 +175,19 @@ public sealed class ToolRuntime : Service
                 return mode;
         }
         return _defaultMode;
+    }
+
+    private string? TransportToolName()
+        => Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false)?.TransportToolName;
+
+    private bool IsReservedName(string name)
+    {
+        lock (_reservedSync)
+        {
+            if (_reservedNames.ContainsKey(name))
+                return true;
+        }
+        return TransportToolName() == name;
     }
 
     private ToolView View(ScopeKey? scope)
@@ -188,6 +223,13 @@ public sealed class ToolRuntime : Service
                 visible[name] = definition;
             }
         }
+        if (ModeFor(scope) != ToolPresentationMode.Native
+            && Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false) is { IsAvailable: true } presentation)
+        {
+            var transport = presentation.TransportDefinition;
+            knownNames.Add(presentation.TransportToolName);
+            visible[transport.Name] = transport;
+        }
         return new ToolView(visible, knownNames, restrictableNames);
     }
 
@@ -199,7 +241,7 @@ public sealed class ToolRuntime : Service
         var tool = Get(name, scope);
         if (tool is null)
             return null;
-        if (!nested && ModeFor(scope) == ToolPresentationMode.Ptc && name != RunCodeName)
+        if (!nested && ModeFor(scope) == ToolPresentationMode.Ptc && name != TransportToolName())
             return null;
         return tool;
     }
@@ -209,17 +251,29 @@ public sealed class ToolRuntime : Service
             .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
             .ToList();
 
+    /** 当前 scope 的呈现模式, 供提示词段与呈现接缝判定。 */
+    public ToolPresentationMode PresentationMode(ScopeKey? scope = null) => ModeFor(scope);
+
     private ToolProviderResult WireSchemas(ScopeKey? scope)
     {
         var view = View(scope);
         var mode = ModeFor(scope);
+        var native = view.Visible.Values
+            .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
+            .ToList();
         if (mode == ToolPresentationMode.Native)
+            return new ToolProviderResult(native, [.. view.KnownNames]);
+        var presentation = Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false);
+        if (presentation is not { IsAvailable: true })
         {
-            return new ToolProviderResult(
-                view.Visible.Values.Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters)).ToList(),
-                [.. view.KnownNames]);
+            throw new InvalidOperationException(
+                $"tool presentation mode \"{mode}\" requires the presentation runtime, which is not available in this deployment");
         }
-        throw new NotSupportedException($"tool presentation mode \"{mode}\" requires the PTC code runtime, which is not ported yet");
+        var transport = presentation.TransportDefinition;
+        var transportSchema = new ToolSchema(transport.Name, transport.Description, transport.Parameters);
+        return mode == ToolPresentationMode.Ptc
+            ? new ToolProviderResult([transportSchema], [presentation.TransportToolName])
+            : new ToolProviderResult([.. native, transportSchema], [.. view.KnownNames, presentation.TransportToolName]);
     }
 
     private static PreToolDecision NormalizePreDecision(object? value)
@@ -368,9 +422,10 @@ public sealed class ToolRuntime : Service
         {
             if (input.Signal.IsCancellationRequested)
                 return (runContext, new ScheduledToolPreparation.FinalResult(runContext, AbortedBeforeDispatchResult()));
+            var transportName = TransportToolName() ?? "transport";
             return (runContext, new ScheduledToolPreparation.FinalResult(runContext, ErrorResult(new ToolNotFoundException(
                 input.Name,
-                $"only `{RunCodeName}` is callable directly — call `{input.Name}` from inside a `{RunCodeName}` program instead"))));
+                $"tool \"{input.Name}\" is not callable directly in this presentation mode; call it from inside a \"{transportName}\" program instead"))));
         }
         return (runContext, null);
     }
@@ -632,7 +687,13 @@ public sealed class ToolRuntime : Service
 
     internal static ToolExecutionResult ErrorResult(Exception error)
     {
-        var info = error is HarnessException harness ? new ToolErrorInfo(harness.GetType().Name, harness.Code) : null;
+        // 工具体抛出的 OCE 即中途取消：统一标记为 AbortError，使消费方能把"被取消"与"真实失败"区分开。
+        var info = error switch
+        {
+            OperationCanceledException => new ToolErrorInfo("AbortError", ToolErrorCodes.Aborted),
+            HarnessException harness => new ToolErrorInfo(harness.GetType().Name, harness.Code),
+            _ => null,
+        };
         return new ToolExecutionResult.Failure
         {
             IsError = true,

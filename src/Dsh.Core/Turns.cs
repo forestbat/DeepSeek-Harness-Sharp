@@ -165,6 +165,12 @@ public sealed record SessionHeader
     public string? Origin { get; init; }
     public int? DelegationDepth { get; init; }
     public string? AgentPreset { get; init; }
+    /** 谱系树根会话 id（主会话为 null）；子代理创建时从父头部继承，O(1) 判定归属哪棵树。 */
+    public SessionId? RootSession { get; init; }
+    /** 子代理身份（provider/mode/label）的权威副本；旧日志的身份在 subagent/descriptor 事件里。 */
+    public string? SubagentProvider { get; init; }
+    public string? SubagentMode { get; init; }
+    public string? SubagentLabel { get; init; }
 
     public void Validate()
     {
@@ -178,5 +184,11 @@ public sealed record SessionHeader
             throw new JsonException("session header origin must be \"subagent\"");
         if (DelegationDepth is < 0)
             throw new JsonException("session header delegationDepth must be a non-negative safe integer");
+        if (RootSession is not null && ParentSession is null)
+            throw new JsonException("session header rootSession requires parentSession");
+        if (SubagentProvider is not null && Origin != "subagent")
+            throw new JsonException("session header subagentProvider requires origin \"subagent\"");
+        if (SubagentMode is not null && SubagentProvider is null)
+            throw new JsonException("session header subagentMode requires subagentProvider");
     }
 }

@@ -33,12 +33,41 @@ public sealed record SubagentCapabilities(
     bool ToolFilter = false,
     bool Persona = false);
 
+/** 中断发生的相位：turn 边界 / LLM 流式输出中途 / 工具执行中途。 */
+public enum SubagentInterruptionPhase
+{
+    TurnBoundary,
+    LlmStream,
+    ToolExecution,
+}
+
+/** 中断时尚未拿到结果的工具调用；其副作用是否发生不可知。 */
+public sealed record SubagentPendingToolCall(string ToolName, string CallId, string ArgsPreview)
+{
+    public const string UnknownOutcome = "unknown";
+
+    public string Outcome { get; init; } = UnknownOutcome;
+}
+
+/**
+ * 非 Completed 终态的自包含快照：不依赖子会话日志即可向主会话说明断在哪里、能否续跑。
+ * Resumable 表达数据完好性（断在工具执行中途时副作用未知，不可续跑）；续跑通道由 provider 能力另行决定。
+ */
+public sealed record SubagentInterruptionSnapshot(
+    SubagentInterruptionPhase Phase,
+    int CompletedTurns,
+    string PartialOutput,
+    SubagentPendingToolCall? PendingToolCall,
+    bool Resumable,
+    string? CheckpointToken);
+
 public sealed record SubagentResult
 {
     public required IReadOnlyList<ContentBlock> Output { get; init; }
     public required SubagentStopReason StopReason { get; init; }
     public JsonElement? Structured { get; init; }
     public string? Diagnostic { get; init; }
+    public SubagentInterruptionSnapshot? Interruption { get; init; }
 }
 
 public interface ISubagentRun
