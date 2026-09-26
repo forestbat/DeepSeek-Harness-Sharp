@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Text;
 using Dsh.Runtime;
 using Dsh.Core;
 
@@ -106,47 +108,293 @@ public static class TerminalBash
 
 internal sealed class BoundedTextBuffer
 {
+    /**
+     * 有界文本环形缓冲: 以 char[] 承载, 从头部淘汰来维持行数上限与 UTF-8 字节预算。
+     * 容量取 maxBytes 个 char 足够: 合法 UTF-16 文本的 UTF-8 字节数恒不小于其 char 数, 故预算内的内容必能容纳。
+     */
     private readonly int _maxBytes;
     private readonly int? _maxLines;
-    private string _value = "";
+    private readonly char[] _buffer;
+    private readonly object _gate = new();
+    private int _head;
+    private int _count;
+    private int _newlineCount;
+    private int _utf8Bytes;
     private bool _dropped;
 
     public BoundedTextBuffer(int maxBytes, int? maxLines = null)
     {
         _maxBytes = maxBytes;
         _maxLines = maxLines;
+        _buffer = new char[Math.Max(1, maxBytes)];
     }
 
-    public void Append(string text)
+    public bool Truncated
+    {
+        get
+        {
+            lock (_gate)
+                return _dropped;
+        }
+    }
+
+    public void Append(ReadOnlySpan<char> text)
     {
         if (text.Length == 0)
             return;
-        _value += text;
-        if (_maxLines is { } maxLines)
-        {
-            var lines = _value.Split('\n');
-            if (lines.Length > maxLines)
-            {
-                _value = string.Join('\n', lines[^maxLines..]);
-                _dropped = true;
-            }
-        }
-        var tail = TerminalText.Utf8Tail(_value, _maxBytes);
-        _value = tail.Text;
-        _dropped |= tail.Truncated;
+        lock (_gate)
+            AppendUnlocked(text);
     }
 
     public TerminalSendRead Consume()
     {
-        var delta = _value;
-        var truncated = _dropped;
-        _value = "";
-        _dropped = false;
-        return new TerminalSendRead(delta, truncated);
+        lock (_gate)
+        {
+            var delta = MaterializeUnlocked();
+            var truncated = _dropped;
+            _head = 0;
+            _count = 0;
+            _newlineCount = 0;
+            _utf8Bytes = 0;
+            _dropped = false;
+            return new TerminalSendRead(delta, truncated);
+        }
     }
 
     public (string Text, bool Truncated) Snapshot()
-        => (_value, _dropped);
+    {
+        lock (_gate)
+            return (MaterializeUnlocked(), _dropped);
+    }
+
+    /**
+     * 按"距尾部行偏移 + 行数"在环上定位区间, 只把最终返回的字符复制到池化缓冲, 物化在锁外完成。
+     */
+    public TerminalReadResult Read(int offset, int count, int maxBytes)
+    {
+        int totalLines;
+        int length;
+        bool truncated;
+        char[]? rented = null;
+        lock (_gate)
+        {
+            totalLines = _count == 0 ? 0 : _newlineCount + 1;
+            if (offset >= totalLines)
+                return new TerminalReadResult("", totalLines, offset, offset, _dropped);
+            var end = totalLines - offset;
+            var start = Math.Max(0, end - count);
+            var begin = start == 0 ? 0 : FindNewlineFromTail(totalLines - start) + 1;
+            var endExclusive = end == totalLines ? _count : FindNewlineFromTail(totalLines - end);
+            var window = ByteWindow(begin, endExclusive, maxBytes);
+            length = endExclusive - window.Begin;
+            if (length > 0)
+            {
+                rented = ArrayPool<char>.Shared.Rent(length);
+                CopyRange(window.Begin, rented.AsSpan(0, length));
+            }
+            truncated = _dropped || window.Truncated;
+        }
+        try
+        {
+            var text = length == 0 ? "" : new string(rented!, 0, length);
+            var returnedLines = text.Length == 0 ? 0 : CountLines(text);
+            return new TerminalReadResult(text, totalLines, offset, offset + returnedLines, truncated);
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    private void AppendUnlocked(ReadOnlySpan<char> text)
+    {
+        var capacity = _buffer.Length;
+        var overflow = _count + text.Length - capacity;
+        if (overflow > 0)
+        {
+            if (overflow < _count)
+            {
+                DropFrontToFit(overflow);
+            }
+            else
+            {
+                var skip = text.Length - capacity;
+                _head = 0;
+                _count = 0;
+                _newlineCount = 0;
+                _utf8Bytes = 0;
+                _dropped = true;
+                if (skip > 0)
+                    text = text[skip..];
+            }
+        }
+        var physical = _head + _count;
+        if (physical >= capacity)
+            physical -= capacity;
+        var first = Math.Min(text.Length, capacity - physical);
+        text[..first].CopyTo(_buffer.AsSpan(physical, first));
+        if (first < text.Length)
+            text[first..].CopyTo(_buffer);
+        _count += text.Length;
+        _newlineCount += CountNewlines(text);
+        _utf8Bytes += Encoding.UTF8.GetByteCount(text);
+        EnforceLineLimit();
+        EnforceByteLimit();
+    }
+
+    private void DropFrontToFit(int minimum)
+    {
+        var removed = 0;
+        while (removed < minimum && _count > 0)
+            removed += DropHeadRune();
+    }
+
+    private void EnforceLineLimit()
+    {
+        if (_maxLines is not { } maxLines)
+            return;
+        while (_newlineCount + 1 > maxLines && _count > 0)
+        {
+            while (_count > 0)
+            {
+                var isNewline = _buffer[_head] == '\n';
+                DropHeadRune();
+                if (isNewline)
+                    break;
+            }
+        }
+    }
+
+    private void EnforceByteLimit()
+    {
+        while (_utf8Bytes > _maxBytes && _count > 0)
+            DropHeadRune();
+    }
+
+    private int DropHeadRune()
+    {
+        var capacity = _buffer.Length;
+        var c = _buffer[_head];
+        int chars;
+        int bytes;
+        if (char.IsHighSurrogate(c) && _count > 1 && char.IsLowSurrogate(CharAt(1)))
+        {
+            chars = 2;
+            bytes = 4;
+        }
+        else
+        {
+            chars = 1;
+            bytes = Utf8BytesOfChar(c);
+        }
+        if (c == '\n')
+            _newlineCount--;
+        _head += chars;
+        if (_head >= capacity)
+            _head -= capacity;
+        _count -= chars;
+        _utf8Bytes -= bytes;
+        _dropped = true;
+        return chars;
+    }
+
+    private string MaterializeUnlocked()
+        => _count == 0 ? "" : string.Create(_count, this, static (span, self) => self.CopyRange(0, span));
+
+    private void CopyRange(int start, Span<char> destination)
+    {
+        if (destination.Length == 0)
+            return;
+        var capacity = _buffer.Length;
+        var physical = _head + start;
+        if (physical >= capacity)
+            physical -= capacity;
+        var first = Math.Min(destination.Length, capacity - physical);
+        _buffer.AsSpan(physical, first).CopyTo(destination);
+        if (first < destination.Length)
+            _buffer.AsSpan(0, destination.Length - first).CopyTo(destination[first..]);
+    }
+
+    /** 返回从尾部数第 nth 个换行的逻辑下标(nth 从 1 起)。 */
+    private int FindNewlineFromTail(int nth)
+    {
+        var remaining = nth;
+        for (var logical = _count - 1; logical >= 0; logical--)
+        {
+            if (CharAt(logical) == '\n' && --remaining == 0)
+                return logical;
+        }
+        return -1;
+    }
+
+    /** 从区间尾部按 UTF-8 字节预算回退, 返回可容纳的最长后缀起点与是否发生截断。 */
+    private (int Begin, bool Truncated) ByteWindow(int begin, int endExclusive, int maxBytes)
+    {
+        var bytes = 0;
+        var index = endExclusive;
+        while (index > begin)
+        {
+            var c = CharAt(index - 1);
+            int runeBytes;
+            int chars;
+            if (char.IsLowSurrogate(c) && index - 1 > begin && char.IsHighSurrogate(CharAt(index - 2)))
+            {
+                runeBytes = 4;
+                chars = 2;
+            }
+            else
+            {
+                runeBytes = Utf8BytesOfChar(c);
+                chars = 1;
+            }
+            if (bytes + runeBytes > maxBytes)
+                break;
+            bytes += runeBytes;
+            index -= chars;
+        }
+        return (index, index > begin);
+    }
+
+    private char CharAt(int logicalIndex)
+    {
+        var physical = _head + logicalIndex;
+        var capacity = _buffer.Length;
+        if (physical >= capacity)
+            physical -= capacity;
+        return _buffer[physical];
+    }
+
+    private static int CountNewlines(ReadOnlySpan<char> text)
+    {
+        var count = 0;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+                count++;
+        }
+        return count;
+    }
+
+    private static int CountLines(string text)
+    {
+        var lines = 1;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+                lines++;
+        }
+        return lines;
+    }
+
+    private static int Utf8BytesOfChar(char c)
+    {
+        if (char.IsSurrogate(c))
+            return 3;
+        if (c < 0x80)
+            return 1;
+        return c < 0x800 ? 2 : 3;
+    }
 }
 
 internal sealed class PipeSendOperation : TerminalSendOperation
@@ -277,28 +525,13 @@ internal sealed class PipeTerminalSession : TerminalBackendSession
 
     public TerminalReadResult Read(TerminalReadRequest request)
     {
-        var snapshot = _scrollback.Snapshot();
-        var lines = snapshot.Text.Length == 0 ? [] : snapshot.Text.Split('\n').ToList();
-        var totalLines = snapshot.Text.Length == 0 ? 0 : lines.Count;
         var offset = request.Offset ?? 0;
         var count = request.Count ?? 500;
         if (offset < 0)
             throw new InvalidOperationException("PTY read offset must be a non-negative safe integer");
         if (count <= 0)
             throw new InvalidOperationException("PTY read count must be a positive safe integer");
-        if (offset >= totalLines)
-            return new TerminalReadResult("", totalLines, offset, offset, snapshot.Truncated);
-        var end = totalLines - offset;
-        var start = Math.Max(0, end - count);
-        var requested = string.Join('\n', lines.Skip(start).Take(end - start));
-        var bounded = TerminalText.Utf8Tail(requested, _config.MaxReadBytes);
-        var returnedLines = bounded.Text.Length == 0 ? 0 : bounded.Text.Split('\n').Length;
-        return new TerminalReadResult(
-            bounded.Text,
-            totalLines,
-            offset,
-            offset + returnedLines,
-            snapshot.Truncated || bounded.Truncated);
+        return _scrollback.Read(offset, count, _config.MaxReadBytes);
     }
 
     public async Task<TerminalSignalResult> Signal(TerminalSignal signal)
@@ -346,7 +579,7 @@ internal sealed class PipeTerminalSession : TerminalBackendSession
         lock (_gate)
         {
             _status = TerminalSessionStatus.Exited(null, "SIGKILL");
-            _active?.Settle(TerminalWaitReason.SessionExit, _status, _scrollback.Snapshot().Truncated);
+            _active?.Settle(TerminalWaitReason.SessionExit, _status, _scrollback.Truncated);
             _active = null;
         }
     }
@@ -478,7 +711,7 @@ internal sealed class PipeTerminalSession : TerminalBackendSession
             if (_active != operation)
                 return;
             _active = null;
-            operation.Settle(reason, _status, _scrollback.Snapshot().Truncated);
+            operation.Settle(reason, _status, _scrollback.Truncated);
         }
     }
 
@@ -500,7 +733,7 @@ internal sealed class PipeTerminalSession : TerminalBackendSession
         lock (_gate)
         {
             _status = TerminalSessionStatus.Exited(outcome.ExitCode, outcome.Signal);
-            _active?.Settle(TerminalWaitReason.SessionExit, _status, _scrollback.Snapshot().Truncated);
+            _active?.Settle(TerminalWaitReason.SessionExit, _status, _scrollback.Truncated);
             _active = null;
         }
     }

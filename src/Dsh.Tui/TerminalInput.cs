@@ -23,6 +23,13 @@ public readonly record struct TerminalInputEvent(ConsoleKeyInfo Key, TerminalMou
     public static TerminalInputEvent FromMouse(TerminalMouseEvent mouse) => new(default, mouse);
 }
 
+/** 平台无关的输入源: Unix 走原始字节 + SGR, Windows 走控制台输入记录; 两者产出同一事件类型。 */
+internal interface ITerminalInputSource : IDisposable
+{
+    /** 阻塞直到一个键或鼠标事件; 流结束或失败返回 null。 */
+    TerminalInputEvent? Read();
+}
+
 /** 原始字节增量解码: 键盘转义序列与 SGR 鼠标事件, 跨读取块保持状态。 */
 public sealed class TerminalInputParser
 {
@@ -231,7 +238,7 @@ public sealed class TerminalInputParser
 }
 
 /** 阻塞读取原始字节并逐个解码为键或鼠标事件; 仅在 Unix 终端后端使用。 */
-internal sealed class TerminalInputReader(Stream input) : IDisposable
+internal sealed class TerminalInputReader(Stream input) : ITerminalInputSource
 {
     private readonly TerminalInputParser _parser = new();
     private readonly byte[] _buffer = new byte[1024];

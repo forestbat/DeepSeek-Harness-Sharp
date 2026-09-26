@@ -197,8 +197,65 @@ public sealed class TerminalSanitizer
 
 public static class TerminalText
 {
+    /**
+     * 单趟归一化: \r\n 与孤立 \r 折叠为 \n, 并剔除 BEL。
+     * 无 \r/\x07 时原样返回, 避免热路径上的整串重建。
+     */
     public static string NormalizeTerminalText(string text)
-        => text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\x07", "");
+    {
+        if (!RequiresNormalization(text))
+            return text;
+        return string.Create(NormalizedLength(text), text, static (destination, source) => NormalizeInto(source, destination));
+    }
+
+    private static bool RequiresNormalization(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c is '\r' or '\x07')
+                return true;
+        }
+        return false;
+    }
+
+    private static int NormalizedLength(string text)
+    {
+        var length = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (c == '\x07')
+                continue;
+            if (c == '\r')
+            {
+                length++;
+                if (index + 1 < text.Length && text[index + 1] == '\n')
+                    index++;
+                continue;
+            }
+            length++;
+        }
+        return length;
+    }
+
+    private static void NormalizeInto(string source, Span<char> destination)
+    {
+        var written = 0;
+        for (var index = 0; index < source.Length; index++)
+        {
+            var c = source[index];
+            if (c == '\x07')
+                continue;
+            if (c == '\r')
+            {
+                destination[written++] = '\n';
+                if (index + 1 < source.Length && source[index + 1] == '\n')
+                    index++;
+                continue;
+            }
+            destination[written++] = c;
+        }
+    }
 
     public static (string Text, bool Truncated) Utf8Tail(string text, int maxBytes)
     {

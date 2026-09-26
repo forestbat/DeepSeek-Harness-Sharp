@@ -62,10 +62,8 @@ public static class TuiRunner
     private static async Task<int> RunInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
     {
         SetConsoleInteractive(true);
-        // Unix 上用原始字节读取以便解析 SGR 鼠标; Windows 控制台 ReadKey 无法消费 SGR, 鼠标仅 GPU 后端可用。
-        var rawMouse = !OperatingSystem.IsWindows();
-        using var rawMode = TerminalRawMode.TryEnable(enableMouse: rawMouse);
-        using var inputReader = rawMouse ? new TerminalInputReader(Console.OpenStandardInput()) : null;
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
+        using var inputSource = CreateInputSource();
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
@@ -91,13 +89,13 @@ public static class TuiRunner
                 if (chat.ExitRequested)
                     break;
 
-                if (inputReader is null)
+                if (inputSource is null)
                 {
                     chat.HandleKey(Console.ReadKey(true));
                     continue;
                 }
 
-                var inputEvent = inputReader.Read();
+                var inputEvent = inputSource.Read();
                 if (inputEvent is null)
                     break;
                 if (inputEvent.Value.IsMouse)
@@ -123,6 +121,15 @@ public static class TuiRunner
         await sessions.Flush(agent.Session);
         return 0;
     }
+
+    /**
+     * 输入源按平台选择: Unix 原始字节 + SGR 鼠标, Windows 控制台输入记录(ReadConsoleInputW)。
+     * 句柄不可用时返回 null, 调用方回退到 Console.ReadKey(无鼠标)。
+     */
+    private static ITerminalInputSource? CreateInputSource()
+        => OperatingSystem.IsWindows()
+            ? WindowsConsoleInputReader.TryCreate()
+            : new TerminalInputReader(Console.OpenStandardInput());
 
     private static int RunGpuSync(HarnessApp app, string cwd)
     {

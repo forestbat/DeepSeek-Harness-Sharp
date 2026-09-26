@@ -33,18 +33,37 @@ public sealed class TerminalRawMode : IDisposable
 
     internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1000l";
 
+    private const uint EnableProcessedInput = 0x0001;
+    private const uint EnableLineInput = 0x0002;
+    private const uint EnableEchoInput = 0x0004;
+    private const uint EnableMouseInput = 0x0010;
+    private const uint EnableQuickEditMode = 0x0040;
+    private const uint EnableExtendedFlags = 0x0080;
+    private const uint EnableVirtualTerminalInput = 0x0200;
+    private const int StdInputHandle = -10;
+
     private readonly bool _active;
     private readonly byte[]? _original;
     private readonly bool _restoreTreatControlCAsInput;
     private readonly bool _mouseEnabled;
+    private readonly nint _consoleInputHandle;
+    private readonly uint? _consoleInputMode;
     private bool _disposed;
 
-    private TerminalRawMode(bool active, byte[]? original = null, bool restoreTreatControlCAsInput = false, bool mouseEnabled = false)
+    private TerminalRawMode(
+        bool active,
+        byte[]? original = null,
+        bool restoreTreatControlCAsInput = false,
+        bool mouseEnabled = false,
+        nint consoleInputHandle = 0,
+        uint? consoleInputMode = null)
     {
         _active = active;
         _original = original;
         _restoreTreatControlCAsInput = restoreTreatControlCAsInput;
         _mouseEnabled = mouseEnabled;
+        _consoleInputHandle = consoleInputHandle;
+        _consoleInputMode = consoleInputMode;
     }
 
     internal static string MouseEnableSequenceForTests => MouseEnableSequence;
@@ -54,7 +73,7 @@ public sealed class TerminalRawMode : IDisposable
     public static TerminalRawMode? TryEnable(bool enableMouse = false)
     {
         if (OperatingSystem.IsWindows())
-            return TryEnableWindows();
+            return TryEnableWindows(enableMouse);
         return TryEnableUnix(enableMouse);
     }
 
@@ -86,7 +105,10 @@ public sealed class TerminalRawMode : IDisposable
 
         try
         {
-            Console.TreatControlCAsInput = _restoreTreatControlCAsInput;
+            if (_consoleInputMode is { } mode && _consoleInputHandle != 0)
+                SetConsoleMode(_consoleInputHandle, mode);
+            else
+                Console.TreatControlCAsInput = _restoreTreatControlCAsInput;
             Console.CursorVisible = true;
         }
         catch (IOException)
@@ -113,7 +135,12 @@ public sealed class TerminalRawMode : IDisposable
         }
     }
 
-    private static TerminalRawMode? TryEnableWindows()
+    /**
+     * Windows 原始模式: 关掉行/回显/整行处理与快速编辑, 开鼠标输入。快速编辑开着时鼠标点击会被控制台
+     * 截去做选择而不进输入缓冲; 清除虚拟终端输入位以保证键盘按虚拟键码送达(与 psmux 的本地路径一致)。
+     * 句柄或模式不可写时退回仅 TreatControlCAsInput, 此时输入源会退回 Console.ReadKey。
+     */
+    private static TerminalRawMode? TryEnableWindows(bool enableMouse)
     {
         if (Console.IsInputRedirected)
             return null;
@@ -121,9 +148,23 @@ public sealed class TerminalRawMode : IDisposable
         try
         {
             var restoreTreatControlCAsInput = Console.TreatControlCAsInput;
-            Console.TreatControlCAsInput = true;
             Console.CursorVisible = false;
-            return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            var handle = GetStdHandle(StdInputHandle);
+            if (handle == 0 || handle == -1 || !GetConsoleMode(handle, out var original))
+                return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            var mode = (original
+                & ~(EnableProcessedInput | EnableLineInput | EnableEchoInput | EnableQuickEditMode | EnableVirtualTerminalInput))
+                | EnableExtendedFlags;
+            if (enableMouse)
+                mode |= EnableMouseInput;
+            if (!SetConsoleMode(handle, mode))
+                return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            return new TerminalRawMode(
+                true,
+                restoreTreatControlCAsInput: restoreTreatControlCAsInput,
+                mouseEnabled: enableMouse,
+                consoleInputHandle: handle,
+                consoleInputMode: original);
         }
         catch (IOException)
         {
@@ -222,4 +263,13 @@ public sealed class TerminalRawMode : IDisposable
 
     [DllImport("libc", SetLastError = true)]
     private static extern int tcsetattr(int fd, int optionalActions, IntPtr termios);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(nint hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(nint hConsoleHandle, uint dwMode);
 }
