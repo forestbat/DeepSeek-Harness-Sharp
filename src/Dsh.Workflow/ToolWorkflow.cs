@@ -53,19 +53,19 @@ public sealed record WorkflowRunToolResult(string RunId, int AgentsStarted, Json
 public static class ToolWorkflow
 {
     public const string Description = """
-        Run a JavaScript workflow script that orchestrates subagents at scale. Use this for work that fans out across many independent pieces — an audit over many files, a migration, multi-angle research, adversarial verification of findings — where you write the orchestration as a script instead of delegating turn by turn.
+        Run a C# workflow program that orchestrates subagents at scale. Use this for work that fans out across many independent pieces — an audit over many files, a migration, multi-angle research, adversarial verification of findings — where you write the orchestration as a program instead of delegating turn by turn.
 
-        The workflow's identity rides the `meta` parameter as JSON: required `name` (short kebab-case) and `description` strings, optional `whenToUse` string and `phases` array (`{title, detail?, provider?, model?}`). The `script` parameter is the plain JavaScript body ONLY (NOT TypeScript, and NO `export const meta` statement — meta is a parameter, not code), running with top-level await; end with `return <value>` — the value must be JSON-serializable and is this tool's result.
+        The workflow's identity rides the `meta` parameter as JSON: required `name` (short kebab-case) and `description` strings, optional `whenToUse` string and `phases` array (`{title, detail?, provider?, model?}`). The `script` parameter is the C# statement body ONLY (plain statements run inside an async method — NOT a class or method declaration), executed on the same C# script host as run_code: `await` is available and `return <JsonNode?>` ends the program. Build the result from `JsonNode`/`JsonObject`/`JsonArray`/`JsonValue`; return `null` for nothing. Because a `JsonNode` can have only one parent, call `.DeepClone()` before placing a value into a second structure (agent() results are already detached).
 
-        Script-body hooks:
-        - `agent(prompt, opts?): Promise<any>` — run one subagent to completion. Without `opts.schema` it resolves to the child's final text; with `opts.schema` (an object-rooted JSON Schema using ONLY type/properties/required/additionalProperties/items/enum/const/oneOf — no pattern/format/numeric bounds) it resolves to the validated object. Resolves `null` when the child fails (filter with `.filter(Boolean)`). Other opts: `label` (display), `phase` (progress group), and independent `provider`/`model` LLM target overrides (either may be provided alone). Anything else (`effort`/`isolation`/`agentType`) is rejected loudly.
-        - `pipeline(items, ...stages): Promise<any[]>` — run each item through the stages independently with NO barrier between stages (prefer this for multi-stage work). Each stage receives `(prev, item, index)`. An ordinary stage throw drops that ITEM to `null` and skips its remaining stages.
-        - `parallel(thunks): Promise<any[]>` — run zero-argument functions concurrently and await ALL of them (a barrier; use only when a stage genuinely needs every prior result together). A throwing thunk resolves to `null`.
-        - `phase(title)` — start a progress phase; `log(message)` — narrate progress; `args` — the tool call's `args` input, verbatim.
+        Program-body helpers:
+        - `await agent(string prompt, JsonObject? opts = null): Task<JsonNode?>` — run one subagent to completion. Without `opts["schema"]` it resolves to the child's final text (a string `JsonValue`); with `opts["schema"]` (an object-rooted JSON Schema using ONLY type/properties/required/additionalProperties/items/enum/const/oneOf — no pattern/format/numeric bounds) it resolves to the validated object. Resolves `null` when the child fails. Other opts: `label` (display), `phase` (progress group), and independent `provider`/`model` LLM target overrides (either may be provided alone). Anything else (`effort`/`isolation`/`agentType`) is rejected loudly.
+        - `await pipeline(JsonArray items, params Func<JsonNode?, JsonNode?, int, Task<JsonNode?>>[] stages): Task<JsonNode?>` — run each item through the stages independently with NO barrier between stages (prefer this for multi-stage work). Each stage is an `async (prev, item, index) => ...` lambda. An ordinary stage throw drops that ITEM to `null` and skips its remaining stages.
+        - `await parallel(Func<Task<JsonNode?>>[] thunks): Task<JsonNode?>` — run zero-argument functions concurrently and await ALL of them (a barrier; use only when a stage genuinely needs every prior result together). A throwing thunk resolves to `null`.
+        - `await phase(string title)` — start a progress phase; `await log(string message)` — narrate progress; `JsonNode? args` — the tool call's `args` input, verbatim.
 
-        Misused hooks (bad arguments, unknown options, unsupported schemas, tripped caps) throw errors that ALWAYS kill the script — they never dissolve into a per-item `null`.
+        Misused helpers (bad arguments, unknown options, unsupported schemas, tripped caps) throw errors that ALWAYS kill the program — they never dissolve into a per-item `null`.
 
-        Constraints: concurrency and total-agent caps apply; no filesystem, network, timers, or Node.js APIs are provided — the agents do the work, the script only coordinates them. The run executes in the foreground: this call returns when the whole script finishes.
+        Constraints: concurrency and total-agent caps apply, and the program runs in a separate C# process. Let the agents do the work — use `agent(...)` for anything that must go through the audited subagent pipeline — and keep the script to coordination. The run executes in the foreground: this call returns when the whole program finishes.
         """;
 
     public static IDisposable Apply(Context ctx, object? config)
@@ -86,7 +86,7 @@ public static class ToolWorkflow
         var prompt = systemPrompt.Section(PromptSection.Literal(
             $"tool:{resolved.ToolName}",
             PromptOrders.ToolWorkflow,
-            $"Use the {resolved.ToolName} tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a JavaScript script (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls."));
+            $"Use the {resolved.ToolName} tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a C# program (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls."));
         var registration = tools.Register(BuildDefinition(workflow, recorder, resolved));
         return new DisposeBundle([prompt, registration, new FuncDispose(agentStartSubscription), new FuncDispose(agentEndSubscription)]);
     }
@@ -225,7 +225,7 @@ public static class ToolWorkflow
               "properties": {
                 "script": {
                   "type": "string",
-                  "description": "The plain-JS workflow script body (top-level await allowed; NO `export const meta` statement; end with `return <json-value>`)."
+                  "description": "The C# workflow program statement body (runs inside an async method: `await` allowed; end with `return <JsonNode?>`; plain statements only, no class/method declaration)."
                 },
                 "meta": {
                   "type": "object",

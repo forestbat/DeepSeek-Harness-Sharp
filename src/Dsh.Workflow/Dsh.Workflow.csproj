@@ -7,10 +7,7 @@
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Jint" Version="4.16.3" />
+    <ProjectReference Include="..\Dsh.Ptc\Dsh.Ptc.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

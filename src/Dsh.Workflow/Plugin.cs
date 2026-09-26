@@ -16,7 +16,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     public string[] Inject => packageName switch
     {
-        WorkflowWorkerThread => [ISubagentService.ServiceName],
+        WorkflowWorkerThread => [ISubagentService.ServiceName, SubprocessService.ServiceName],
         ToolWorkflow => [ToolRuntime.ServiceName, WorkflowEngine.ServiceName, SystemPrompt.ServiceName],
         ToolRalph => [ToolRuntime.ServiceName, WorkflowEngine.ServiceName, ISubagentService.ServiceName, SystemPrompt.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),

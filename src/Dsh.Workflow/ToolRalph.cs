@@ -48,92 +48,93 @@ public static class ToolRalph
     };
 
     private const string RalphScript = """
-        const reportSchema = {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['continue', 'complete', 'blocked'] },
-            summary: { type: 'string' },
-            evidence: { type: 'array', items: { type: 'string' } },
-            nextSteps: { type: 'array', items: { type: 'string' } },
-            blocker: { type: 'string' },
-          },
-          required: ['status', 'summary', 'evidence', 'nextSteps', 'blocker'],
-          additionalProperties: false,
+        var __reportSchema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["status"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("continue", "complete", "blocked") },
+                ["summary"] = new JsonObject { ["type"] = "string" },
+                ["evidence"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } },
+                ["nextSteps"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } },
+                ["blocker"] = new JsonObject { ["type"] = "string" },
+            },
+            ["required"] = new JsonArray("status", "summary", "evidence", "nextSteps", "blocker"),
+            ["additionalProperties"] = false,
+        };
+
+        bool __normalizedText(JsonNode? value)
+        {
+            if (value is not JsonValue json || !json.TryGetValue<string>(out var text)) return false;
+            return text.Length > 0 && text == text.Trim();
         }
 
-        function normalizedText(value) {
-          return typeof value === 'string' && value.length > 0 && value === value.trim()
+        bool __normalizedList(JsonNode? value)
+        {
+            if (value is not JsonArray array) return false;
+            foreach (var item in array)
+                if (!__normalizedText(item)) return false;
+            return true;
         }
 
-        function normalizedList(value) {
-          return Array.isArray(value) && value.every(normalizedText)
+        JsonNode __validateReport(JsonNode? report, long maxChars)
+        {
+            if (report is not JsonObject obj) throw new ToolCallError("ralph", "Ralph child returned no structured round report");
+            if (!__normalizedText(obj["summary"])) throw new ToolCallError("ralph", "Ralph round report summary must be non-empty and normalized");
+            if (!__normalizedList(obj["evidence"]) || !__normalizedList(obj["nextSteps"])) throw new ToolCallError("ralph", "Ralph round report evidence and nextSteps must contain only non-empty normalized strings");
+            if (obj["blocker"] is not JsonValue blockerValue || !blockerValue.TryGetValue<string>(out var blocker) || blocker != blocker.Trim()) throw new ToolCallError("ralph", "Ralph round report blocker must be a normalized string");
+            if (obj["status"] is not JsonValue statusValue || !statusValue.TryGetValue<string>(out var status)) throw new ToolCallError("ralph", "Ralph round report status is invalid");
+            var evidenceCount = ((JsonArray)obj["evidence"]!).Count;
+            var nextStepsCount = ((JsonArray)obj["nextSteps"]!).Count;
+            if (status == "continue")
+            {
+                if (nextStepsCount == 0 || blocker != "") throw new ToolCallError("ralph", "a continuing Ralph report needs nextSteps and an empty blocker");
+            }
+            else if (status == "complete")
+            {
+                if (evidenceCount == 0 || nextStepsCount != 0 || blocker != "") throw new ToolCallError("ralph", "a complete Ralph report needs evidence, no nextSteps, and an empty blocker");
+            }
+            else if (status == "blocked")
+            {
+                if (!__normalizedText(obj["blocker"])) throw new ToolCallError("ralph", "a blocked Ralph report needs a concrete blocker");
+            }
+            else throw new ToolCallError("ralph", "Ralph round report status is invalid");
+            var serialized = report.ToJsonString();
+            if (serialized.Length > maxChars) throw new ToolCallError("ralph", "Ralph round report exceeds maxHandoffChars (" + serialized.Length + " > " + maxChars + ")");
+            return report;
         }
 
-        function validateReport(report) {
-          if (report === null || typeof report !== 'object' || Array.isArray(report)) {
-            throw new Error('Ralph child returned no structured round report')
-          }
-          if (!normalizedText(report.summary)) {
-            throw new Error('Ralph round report summary must be non-empty and normalized')
-          }
-          if (!normalizedList(report.evidence) || !normalizedList(report.nextSteps)) {
-            throw new Error('Ralph round report evidence and nextSteps must contain only non-empty normalized strings')
-          }
-          if (typeof report.blocker !== 'string' || report.blocker !== report.blocker.trim()) {
-            throw new Error('Ralph round report blocker must be a normalized string')
-          }
-          switch (report.status) {
-            case 'continue':
-              if (report.nextSteps.length === 0 || report.blocker !== '') {
-                throw new Error('a continuing Ralph report needs nextSteps and an empty blocker')
-              }
-              break
-            case 'complete':
-              if (report.evidence.length === 0 || report.nextSteps.length !== 0 || report.blocker !== '') {
-                throw new Error('a complete Ralph report needs evidence, no nextSteps, and an empty blocker')
-              }
-              break
-            case 'blocked':
-              if (!normalizedText(report.blocker)) {
-                throw new Error('a blocked Ralph report needs a concrete blocker')
-              }
-              break
-            default:
-              throw new Error('Ralph round report status is invalid')
-          }
-          const serialized = JSON.stringify(report)
-          if (serialized.length > args.maxHandoffChars) {
-            throw new Error('Ralph round report exceeds maxHandoffChars (' + serialized.length + ' > ' + args.maxHandoffChars + ')')
-          }
-          return report
+        var __objective = args!["objective"]!.GetValue<string>();
+        var __maxRounds = args!["maxRounds"]!.GetValue<long>();
+        var __maxHandoff = args!["maxHandoffChars"]!.GetValue<long>();
+        JsonNode? __previous = null;
+        await phase("Fresh-agent rounds");
+        for (long __round = 1; __round <= __maxRounds; __round += 1)
+        {
+            var __prior = __previous is null ? "(none - this is the first round)" : __previous.ToJsonString();
+            var __prompt = string.Join("\n\n", new string[]
+            {
+                "You are one fresh worker in a foreground Ralph loop. You receive no parent conversation and no prior child session. Do not call the ralph tool: this round already is its worker.",
+                "Immutable objective:\n" + __objective,
+                "Ralph round: " + __round + " of " + __maxRounds + ".",
+                "The shared workspace and its current working tree are the long-term memory and source of truth. Inspect them before acting, preserve existing work, perform concrete in-scope work, and verify what you change. Treat the previous report only as a bounded handoff; confirm it against the workspace.",
+                "Previous structured handoff:\n" + __prior,
+                "Return one report with exact normalized strings. Use status continue with at least one nextSteps entry while useful work remains; complete only with concrete evidence and no nextSteps; blocked only when no meaningful progress is possible without human input or an external-state change. blocker must be empty unless blocked.",
+            });
+            var __rawReport = await agent(__prompt, new JsonObject
+            {
+                ["label"] = "Ralph round " + __round,
+                ["phase"] = "Fresh-agent rounds",
+                ["schema"] = __reportSchema.DeepClone(),
+            });
+            if (__rawReport is null) return new JsonObject { ["status"] = "round-failed", ["roundsStarted"] = __round, ["lastReport"] = __previous };
+            var __report = __validateReport(__rawReport, __maxHandoff);
+            var __status = __report["status"]!.GetValue<string>();
+            if (__status == "complete") return new JsonObject { ["status"] = "complete", ["roundsStarted"] = __round, ["report"] = __report };
+            if (__status == "blocked") return new JsonObject { ["status"] = "blocked", ["roundsStarted"] = __round, ["report"] = __report };
+            __previous = __report;
         }
-
-        let previous
-        phase('Fresh-agent rounds')
-        for (let round = 1; round <= args.maxRounds; round += 1) {
-          const prior = previous === undefined ? '(none — this is the first round)' : JSON.stringify(previous)
-          const prompt = [
-            'You are one fresh worker in a foreground Ralph loop. You receive no parent conversation and no prior child session. Do not call the ralph tool: this round already is its worker.',
-            'Immutable objective:\n' + args.objective,
-            'Ralph round: ' + round + ' of ' + args.maxRounds + '.',
-            'The shared workspace and its current working tree are the long-term memory and source of truth. Inspect them before acting, preserve existing work, perform concrete in-scope work, and verify what you change. Treat the previous report only as a bounded handoff; confirm it against the workspace.',
-            'Previous structured handoff:\n' + prior,
-            'Return one report with exact normalized strings. Use status continue with at least one nextSteps entry while useful work remains; complete only with concrete evidence and no nextSteps; blocked only when no meaningful progress is possible without human input or an external-state change. blocker must be empty unless blocked.',
-          ].join('\n\n')
-          const rawReport = await agent(prompt, {
-            label: 'Ralph round ' + round,
-            phase: 'Fresh-agent rounds',
-            schema: reportSchema,
-          })
-          if (rawReport === null) {
-            return { status: 'round-failed', roundsStarted: round, lastReport: previous ?? null }
-          }
-          const report = validateReport(rawReport)
-          if (report.status === 'complete') return { status: 'complete', roundsStarted: round, report }
-          if (report.status === 'blocked') return { status: 'blocked', roundsStarted: round, report }
-          previous = report
-        }
-        return { status: 'budget-limited', roundsStarted: args.maxRounds, report: previous }
+        return new JsonObject { ["status"] = "budget-limited", ["roundsStarted"] = __maxRounds, ["report"] = __previous };
         """;
 
     public static IDisposable Apply(Context ctx, object? config)

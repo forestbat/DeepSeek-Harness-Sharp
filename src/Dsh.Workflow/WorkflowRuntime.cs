@@ -27,7 +27,7 @@ public sealed record WorkerLimits(
     int MaxConcurrentAgents,
     int MaxTotalAgents,
     int MaxItemsPerCall,
-    int SyncTimeoutMs);
+    int RunTimeoutMs);
 
 public sealed record ChildStartRequest(
     string Prompt,

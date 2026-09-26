@@ -2,8 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
-using Jint;
-using Jint.Native;
+using Dsh.Ptc;
 
 namespace Dsh.Workflow;
 
@@ -23,12 +22,12 @@ public sealed class WorkflowExecution
         object? Schema = null);
 
     private readonly object _sync = new();
-    private readonly WorkflowMeta _meta;
-    private readonly string _body;
-    private readonly object? _args;
+    private readonly string _program;
     private readonly WorkerLimits _limits;
     private readonly WorkflowExecutionObserver _observer;
     private readonly IChildPort _children;
+    private readonly SubprocessService _subprocess;
+    private readonly string _cwd;
     private readonly CancellationTokenSource _cts = new();
     private int _started;
     private int _activeSlots;
@@ -38,19 +37,19 @@ public sealed class WorkflowExecution
     private string? _currentPhase;
 
     public WorkflowExecution(
-        WorkflowMeta meta,
-        string body,
-        object? args,
+        string program,
         WorkerLimits limits,
         WorkflowExecutionObserver observer,
-        IChildPort children)
+        IChildPort children,
+        SubprocessService subprocess,
+        string cwd)
     {
-        _meta = meta;
-        _body = body;
-        _args = args;
+        _program = program;
         _limits = limits;
         _observer = observer;
         _children = children;
+        _subprocess = subprocess;
+        _cwd = cwd;
     }
 
     public int AgentsStarted
@@ -95,21 +94,37 @@ public sealed class WorkflowExecution
         try
         {
             ThrowIfCancelled();
-            using var engine = CreateEngine();
-            var evaluated = await engine.EvaluateAsync(BuildScript(), $"workflow:{_meta.Name}", _cts.Token);
-            if (IsCancelled)
-                throw CancelledError();
-            var raw = evaluated.ToObject();
-            if (raw is not null)
+            var client = new PtcScriptHostClient(
+                _subprocess,
+                _cwd,
+                WorkflowProgram.Bindings,
+                DispatchAsync,
+                maxPendingCalls: Math.Max(_limits.MaxItemsPerCall, PtcScriptHostClient.MaxPendingCalls));
+            var outcome = await client.RunAsync(_program, RunTimeoutMs(), _cts.Token);
+            if (IsCancelled || outcome.Kind == PtcFailureKinds.Abort)
+                return CancelledResult();
+            if (!outcome.Ok)
+            {
+                return new WorkflowResult
+                {
+                    Value = null,
+                    StopReason = WorkflowStopReason.Error,
+                    Error = ComposeFailure(outcome),
+                    AgentsStarted = AgentsStarted,
+                };
+            }
+
+            object? value = null;
+            if (outcome.Value is not null)
             {
                 try
                 {
-                    raw = WorkflowRealm.MaterializeFromRealm(raw, "workflow result");
+                    value = WorkflowRealm.MaterializeFromRealm(outcome.Value, "workflow result");
                 }
                 catch (MaterializeError error)
                 {
                     throw new WorkflowError(
-                        $"the workflow's return value is not plain JSON data — {error.Message}. Return only JSON-serializable objects/arrays/scalars.",
+                        $"the workflow's return value is not plain JSON data - {error.Message}. Return only JSON-serializable objects/arrays/scalars.",
                         WorkflowErrorCodes.ResultUnserializable,
                         error);
                 }
@@ -117,7 +132,7 @@ public sealed class WorkflowExecution
 
             return new WorkflowResult
             {
-                Value = raw,
+                Value = value,
                 StopReason = WorkflowStopReason.Completed,
                 AgentsStarted = AgentsStarted,
             };
@@ -136,122 +151,56 @@ public sealed class WorkflowExecution
         }
     }
 
-    private Engine CreateEngine()
+    private long RunTimeoutMs() => _limits.RunTimeoutMs > 0 ? _limits.RunTimeoutMs : -1;
+
+    private async Task<PtcToolReply> DispatchAsync(PtcToolCall call, CancellationToken signal)
     {
-        var engine = new Engine(options =>
+        _ = signal;
+        switch (call.ToolName)
         {
-            options.TimeoutInterval(TimeSpan.FromMilliseconds(_limits.SyncTimeoutMs));
-            options.CancellationToken(_cts.Token);
-        });
-        engine.SetValue("__hostIsCancelled", () => IsCancelled);
-        engine.SetValue("__phase", Phase);
-        engine.SetValue("__log", Log);
-        engine.SetValue("__agent", new Func<string, object?, Task<object?>>(AgentAsync));
-        engine.SetValue("__args", _args ?? JsValue.Undefined);
-        return engine;
+            case "agent":
+                return await AgentCallAsync(call.Arguments);
+            case "phase":
+                {
+                    var title = call.Arguments["title"]?.GetValue<string>();
+                    if (string.IsNullOrEmpty(title))
+                        return new PtcToolReply(false, null, "phase() requires a non-empty title string");
+                    Phase(title);
+                    return new PtcToolReply(true, null, null);
+                }
+            case "log":
+                {
+                    var message = call.Arguments["message"]?.GetValue<string>();
+                    if (message is null)
+                        return new PtcToolReply(false, null, "log() requires a message string");
+                    Log(message);
+                    return new PtcToolReply(true, null, null);
+                }
+            default:
+                return new PtcToolReply(false, null, $"unknown workflow binding \"{call.ToolName}\"");
+        }
     }
 
-    private const string ScriptTemplate = """
-        (async () => {
-          const __workflowError = (message, code) => {
-            const error = new Error(message);
-            error.name = 'WorkflowError';
-            error.code = code;
-            error.__workflowFatal = true;
-            return error;
-          };
-          const __cancelledError = (message) => {
-            const error = __workflowError(message ?? 'workflow run cancelled', 'CANCELLED');
-            error.__workflowCancelled = true;
-            return error;
-          };
-          const __isCancelled = () => __hostIsCancelled();
-          const __fatalInfo = (error) => {
-            if (error && error.__workflowFatal) {
-              return { message: error.message || '', code: error.code || '', fatal: true };
-            }
-            const inner = error && error.InnerException;
-            if (inner && inner.Fatal === true) {
-              return { message: inner.Message || '', code: inner.Code || '', fatal: true };
-            }
-            return null;
-          };
-          const __renderThrown = (error) => {
-            const inner = error && error.InnerException;
-            if (inner && typeof inner.Message === 'string' && inner.Message.length > 0) return inner.Message;
-            if (error && typeof error.message === 'string' && error.message.length > 0) return error.message;
-            return String(error);
-          };
-          const __isFatal = (error) => __fatalInfo(error) !== null;
-          const agent = async (prompt, opts) => {
-            if (__isCancelled()) throw __cancelledError();
-            if (typeof prompt !== 'string' || prompt.length === 0) throw __workflowError('agent() requires a non-empty prompt string', 'INVALID_ARGUMENT');
-            try {
-              return await __agent(prompt, opts);
-            } catch (error) {
-              const info = __fatalInfo(error);
-              if (info) {
-                if (info.code === 'CANCELLED') throw __cancelledError(info.message);
-                throw __workflowError(info.message, info.code);
-              }
-              throw __workflowError(`agent() could not start a child: ${__renderThrown(error)}`, 'AGENT_START');
-            }
-          };
-          const parallel = async (thunks) => {
-            if (__isCancelled()) throw __cancelledError();
-            if (!Array.isArray(thunks)) throw __workflowError('parallel() requires an array of zero-argument functions', 'INVALID_ARGUMENT');
-            if (thunks.length > __MAX_ITEMS__) throw __workflowError('parallel() received ' + thunks.length + ' items — over the per-call cap (__MAX_ITEMS__); split the work or raise maxItemsPerCall in the engine config', 'ITEM_CAP');
-            return await Promise.all(thunks.map(async (thunk, index) => {
-              if (typeof thunk !== 'function') throw __workflowError('parallel() item ' + index + ' is not a function', 'INVALID_ARGUMENT');
-              try {
-                return await thunk();
-              } catch (error) {
-                if (__isFatal(error)) throw error;
-                return null;
-              }
-            }));
-          };
-          const pipeline = async (items, ...stages) => {
-            if (__isCancelled()) throw __cancelledError();
-            if (!Array.isArray(items)) throw __workflowError('pipeline() requires an items array', 'INVALID_ARGUMENT');
-            if (items.length > __MAX_ITEMS__) throw __workflowError('pipeline() received ' + items.length + ' items — over the per-call cap (__MAX_ITEMS__); split the work or raise maxItemsPerCall in the engine config', 'ITEM_CAP');
-            if (stages.length === 0) throw __workflowError('pipeline() requires at least one stage function', 'INVALID_ARGUMENT');
-            const mapped = stages.map((stage, index) => {
-              if (typeof stage !== 'function') throw __workflowError('pipeline() stage ' + index + ' is not a function', 'INVALID_ARGUMENT');
-              return stage;
-            });
-            return await Promise.all(items.map(async (item, index) => {
-              let value = item;
-              try {
-                for (const stage of mapped) value = await stage(value, item, index);
-                return value;
-              } catch (error) {
-                if (__isFatal(error)) throw error;
-                return null;
-              }
-            }));
-          };
-          const phase = (title) => {
-            if (__isCancelled()) throw __cancelledError();
-            if (typeof title !== 'string' || title.length === 0) throw __workflowError('phase() requires a non-empty title string', 'INVALID_ARGUMENT');
-            __phase(title);
-          };
-          const log = (message) => {
-            if (__isCancelled()) throw __cancelledError();
-            if (typeof message !== 'string') throw __workflowError('log() requires a message string', 'INVALID_ARGUMENT');
-            __log(message);
-          };
-          const args = __args;
-          __BODY__
-        })()
-        """;
-
-    private string BuildScript()
+    private async Task<PtcToolReply> AgentCallAsync(JsonObject arguments)
     {
-        var maxItems = _limits.MaxItemsPerCall.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return ScriptTemplate
-            .Replace("__MAX_ITEMS__", maxItems)
-            .Replace("__BODY__", _body);
+        var prompt = arguments["prompt"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(prompt))
+            return new PtcToolReply(false, null, "agent() requires a non-empty prompt string");
+        try
+        {
+            var value = await AgentAsync(prompt, arguments["opts"]);
+            return new PtcToolReply(true, WorkflowJson.ToNode(value), null);
+        }
+        catch (Exception error)
+        {
+            return new PtcToolReply(false, null, WorkflowRealm.RenderThrown(error));
+        }
+    }
+
+    private static string ComposeFailure(PtcRunOutcome outcome)
+    {
+        var message = $"[{outcome.Kind}] {outcome.Message}";
+        return string.IsNullOrEmpty(outcome.Logs) ? message : $"{message}\n[logs]\n{outcome.Logs}";
     }
 
     private void ThrowIfCancelled()
@@ -288,11 +237,9 @@ public sealed class WorkflowExecution
     private void Log(string message)
         => _observer.Log(message);
 
-    private async Task<object?> AgentAsync(object? rawPrompt, object? rawOpts)
+    private async Task<object?> AgentAsync(string prompt, JsonNode? rawOpts)
     {
         ThrowIfCancelled();
-        if (rawPrompt is not string prompt || prompt.Length == 0)
-            throw new WorkflowError("agent() requires a non-empty prompt string", WorkflowErrorCodes.InvalidArgument);
         var opts = ReadAgentOptions(rawOpts);
         var (seq, label, phase) = NextAgent(opts, prompt);
         await AcquireSlotAsync();
@@ -376,7 +323,7 @@ public sealed class WorkflowExecution
         }
     }
 
-    private AgentOptionsResult ReadAgentOptions(object? rawOpts)
+    private static AgentOptionsResult ReadAgentOptions(JsonNode? rawOpts)
     {
         if (rawOpts is null)
             return new AgentOptionsResult();
@@ -387,9 +334,11 @@ public sealed class WorkflowExecution
         }
         catch (MaterializeError error)
         {
-            throw new WorkflowError($"agent() options must be plain JSON data — {error.Message}", WorkflowErrorCodes.InvalidArgument, error);
+            throw new WorkflowError($"agent() options must be plain JSON data - {error.Message}", WorkflowErrorCodes.InvalidArgument, error);
         }
 
+        if (opts is null)
+            return new AgentOptionsResult();
         if (opts is not IDictionary<string, object?> record)
             throw new WorkflowError("agent() options must be an object", WorkflowErrorCodes.InvalidArgument);
         var supported = new HashSet<string>(StringComparer.Ordinal) { "label", "phase", "schema", "provider", "model" };
@@ -443,14 +392,14 @@ public sealed class WorkflowExecution
         }
         catch (Exception error)
         {
-            throw new WorkflowError($"agent() schema is outside the supported subset — {WorkflowRealm.RenderThrown(error)}", WorkflowErrorCodes.UnsupportedSchema, error);
+            throw new WorkflowError($"agent() schema is outside the supported subset - {WorkflowRealm.RenderThrown(error)}", WorkflowErrorCodes.UnsupportedSchema, error);
         }
 
         if (node is not JsonObject obj
             || obj["type"]?.GetValue<string>() != "object")
         {
             throw new WorkflowError(
-                "agent() schema is outside the supported subset — schema.type must be \"object\" (structured output is object-rooted)",
+                "agent() schema is outside the supported subset - schema.type must be \"object\" (structured output is object-rooted)",
                 WorkflowErrorCodes.UnsupportedSchema);
         }
 
@@ -460,7 +409,7 @@ public sealed class WorkflowExecution
         }
         catch (Exception error)
         {
-            throw new WorkflowError($"agent() schema is outside the supported subset — {WorkflowRealm.RenderThrown(error)}", WorkflowErrorCodes.UnsupportedSchema, error);
+            throw new WorkflowError($"agent() schema is outside the supported subset - {WorkflowRealm.RenderThrown(error)}", WorkflowErrorCodes.UnsupportedSchema, error);
         }
     }
 
@@ -473,7 +422,7 @@ public sealed class WorkflowExecution
             if (_started >= _limits.MaxTotalAgents)
             {
                 throw new WorkflowError(
-                    $"this run reached its total agent cap ({_limits.MaxTotalAgents}) — a runaway-loop backstop; raise the applicable maxTotalAgents limit if the scale is intentional",
+                    $"this run reached its total agent cap ({_limits.MaxTotalAgents}) - a runaway-loop backstop; raise the applicable maxTotalAgents limit if the scale is intentional",
                     WorkflowErrorCodes.AgentCap);
             }
 

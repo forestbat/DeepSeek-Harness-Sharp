@@ -1,21 +1,16 @@
-using System.Text.RegularExpressions;
 using Dsh.Runtime;
 using Dsh.Core;
-using Jint;
+using Dsh.Ptc;
 
 namespace Dsh.Workflow;
 
 public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
 {
-    private static readonly Regex MetaStatement = new(
-        @"^\s*export\s+const\s+meta\b",
-        RegexOptions.Multiline | RegexOptions.CultureInvariant);
-
     private readonly string _provider;
     private readonly int _maxConcurrentAgents;
     private readonly int _maxTotalAgents;
     private readonly int _maxItemsPerCall;
-    private readonly int _syncTimeoutMs;
+    private readonly int _runTimeoutMs;
     private readonly int _disposeGraceMs;
 
     public WorkerThreadWorkflowEngine(Context ctx, object? config) : base(ctx)
@@ -25,7 +20,7 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
         _maxConcurrentAgents = IntOf(dict, "maxConcurrentAgents") ?? 0;
         _maxTotalAgents = IntOf(dict, "maxTotalAgents") ?? 1000;
         _maxItemsPerCall = IntOf(dict, "maxItemsPerCall") ?? 4096;
-        _syncTimeoutMs = IntOf(dict, "syncTimeoutMs") ?? 5000;
+        _runTimeoutMs = IntOf(dict, "runTimeoutMs") ?? 0;
         _disposeGraceMs = IntOf(dict, "disposeGraceMs") ?? 5000;
     }
 
@@ -38,9 +33,12 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
     public override IWorkflowRun Start(WorkflowStartRequest request)
     {
         var meta = WorkflowMetaValidator.ValidateMeta(request.Meta);
-        AssertBodyParses(request.Script);
+        var program = WorkflowProgram.Build(request.Script, request.Args, _maxItemsPerCall);
+        AssertProgramCompiles(program);
         var subagentProvider = ResolveSubagentProvider(request.SubagentProvider);
         var maxTotalAgents = ResolveMaxTotalAgents(request.MaxTotalAgents);
+        var subprocess = Ctx.Get<SubprocessService>(SubprocessService.ServiceName)
+            ?? throw new InvalidOperationException("workflow engine requires the subprocess service");
         var id = WorkflowRunId.Create(Guid.NewGuid().ToString());
         var info = new WorkflowRunInfo(id, meta);
         var limits = new WorkerLimits(
@@ -49,7 +47,7 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
                 : _maxConcurrentAgents,
             maxTotalAgents,
             _maxItemsPerCall,
-            _syncTimeoutMs);
+            _runTimeoutMs);
         var subagents = Ctx.Get<ISubagentService>(ISubagentService.ServiceName)
             ?? throw new InvalidOperationException("workflow engine requires the subagents service");
         var controller = new CancellationTokenSource();
@@ -60,12 +58,12 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
             AgentStart: agent => Ctx.Emit(new WorkflowAgentStartNotification(info, agent)),
             AgentEnd: agent => Ctx.Emit(new WorkflowAgentEndNotification(info, agent)));
         var execution = new WorkflowExecution(
-            meta,
-            request.Script,
-            request.Args,
+            program,
             limits,
             observer,
-            port);
+            port,
+            subprocess,
+            Environment.CurrentDirectory);
         var run = new WorkflowRunHost(id, meta, execution, _disposeGraceMs, controller);
         return run;
     }
@@ -99,22 +97,14 @@ public sealed class WorkerThreadWorkflowEngine : WorkflowEngine
         return requested.Value;
     }
 
-    private static void AssertBodyParses(string body)
+    private static void AssertProgramCompiles(string program)
     {
-        if (MetaStatement.IsMatch(body))
+        var compilation = PtcProgramCompiler.Compile(program, WorkflowProgram.Bindings);
+        if (compilation.Assembly is null)
         {
             throw new WorkflowError(
-                "workflow meta rides the `meta` request field, not the script: remove the `export const meta = {...}` statement from the body",
+                $"workflow script does not compile: {string.Join("; ", compilation.Errors)}",
                 WorkflowErrorCodes.ScriptParse);
-        }
-
-        try
-        {
-            _ = Engine.PrepareScript($" (async () => {{\n{body}\n}})() ");
-        }
-        catch (Exception error)
-        {
-            throw new WorkflowError($"workflow script does not parse: {WorkflowRealm.RenderThrown(error)}", WorkflowErrorCodes.ScriptParse, error);
         }
     }
 
