@@ -11,7 +11,7 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
 
     private readonly Dictionary<string, ISubagentProvider> _providers = [];
     private readonly List<string> _providerNames = [];
-    private readonly Dictionary<SessionId, IAgent> _liveChildren = [];
+    private readonly Dictionary<SessionId, ISubagentRun> _liveRuns = [];
     private readonly HashSet<ScopeKey> _childScopes = [];
     private readonly Lock _sync = new();
 
@@ -57,7 +57,59 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
     public IAgent? GetLive(SessionId id)
     {
         lock (_sync)
-            return _liveChildren.GetValueOrDefault(id);
+            return _liveRuns.GetValueOrDefault(id)?.LocalAgent;
+    }
+
+    /** 控制面：中断存活的直系子 agent（任意档位）。未知或非直系 id 返回 false。 */
+    public bool CancelChild(SessionId parentId, SessionId childId)
+    {
+        if (GetLiveChild(parentId, childId) is not { } child)
+            return false;
+        child.Cancel(new AgentCancelCause.User());
+        return true;
+    }
+
+    /** 控制面：向存活的直系子 agent 注入提示词，在下一个 step 边界消费（Steer 语义）。已完成的 run 拒绝注入。 */
+    public bool InjectChild(SessionId parentId, SessionId childId, IReadOnlyList<ContentBlock> content)
+    {
+        ISubagentRun? run;
+        IAgent? child;
+        lock (_sync)
+        {
+            run = _liveRuns.GetValueOrDefault(childId);
+            child = run?.LocalAgent;
+            if (child is null || child.Session.Header.ParentSession != parentId)
+                return false;
+        }
+        if (run!.Result.IsCompleted)
+            return false;
+        // 换挡规则：注入是写操作，无头子代先升档（入 SessionStore，从此持久化与 UI 可见）；中断不算写操作，不升档。
+        AttachChild(parentId, childId);
+        child.Steer(MessageFactory.CreateUserMessage(content));
+        return true;
+    }
+
+    /** 升档：把纯内存的无头子会话接入 SessionStore（Announce 触发持久化全量回填）。已在店内的子代为 no-op。 */
+    public bool AttachChild(SessionId parentId, SessionId childId)
+    {
+        if (GetLiveChild(parentId, childId) is not { } child)
+            return false;
+        if (Ctx.Get<SessionStore>(SessionStore.ServiceName, false) is not { } sessions)
+            return false;
+        if (sessions.Get(childId) is not null)
+            return true;
+        sessions.Enter(child.Session, Ctx);
+        sessions.Announce(child.Session);
+        return true;
+    }
+
+    private IAgent? GetLiveChild(SessionId parentId, SessionId childId)
+    {
+        lock (_sync)
+        {
+            var child = _liveRuns.GetValueOrDefault(childId)?.LocalAgent;
+            return child is not null && child.Session.Header.ParentSession == parentId ? child : null;
+        }
     }
 
     public async Task<ISubagentRun> StartAsync(string name, SubagentStartRequest request)
@@ -111,9 +163,9 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
     private ISubagentRun ObserveRun(string providerName, IAgent parent, ISubagentRun run)
     {
         var info = new SubagentRunInfo(Guid.NewGuid().ToString(), providerName, run.Id, run.LocalAgent is not null);
-        if (run.LocalAgent is { } local)
-            Track(local);
         var observed = new ObservedRun(run, this);
+        if (run.LocalAgent is { } local)
+            Track(local.Id, observed);
         _ = ObserveEndAsync(info, observed, parent.ScopeKey);
         Ctx.Events.Emit(DshScope.ScopeTarget(Ctx, parent.ScopeKey), new SubagentStartNotification(info));
         return observed;
@@ -124,29 +176,35 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
         try
         {
             var result = await run.Result;
-            EmitEnd(parentScope, info, result.StopReason, result.Output.Count > 0 ? result.Output : null);
+            EmitEnd(parentScope, info, result.StopReason, result.Output.Count > 0 ? result.Output : null, result.Interruption);
         }
         catch
         {
-            EmitEnd(parentScope, info, SubagentStopReason.Error, null);
+            EmitEnd(parentScope, info, SubagentStopReason.Error, null, null);
         }
     }
 
-    private void EmitEnd(ScopeKey parentScope, SubagentRunInfo info, SubagentStopReason stopReason, IReadOnlyList<ContentBlock>? output)
+    private void EmitEnd(
+        ScopeKey parentScope,
+        SubagentRunInfo info,
+        SubagentStopReason stopReason,
+        IReadOnlyList<ContentBlock>? output,
+        SubagentInterruptionSnapshot? interruption)
         => Ctx.Events.Emit(
             DshScope.ScopeTarget(Ctx, parentScope),
-            new SubagentEndNotification(new SubagentRunEndInfo(info.RunId, info.Provider, info.Id, info.Local, stopReason, output)));
+            new SubagentEndNotification(
+                new SubagentRunEndInfo(info.RunId, info.Provider, info.Id, info.Local, stopReason, output, interruption)));
 
-    private void Track(IAgent child)
+    private void Track(SessionId id, ISubagentRun run)
     {
         lock (_sync)
-            _liveChildren[child.Id] = child;
+            _liveRuns[id] = run;
     }
 
     private void Untrack(SessionId id)
     {
         lock (_sync)
-            _liveChildren.Remove(id);
+            _liveRuns.Remove(id);
     }
 
     // 驱动器在子 agent 构造后、首个 prompt 装配前调用；scope 一旦属于子会话即永久成立（该会话始终是 subagent）。

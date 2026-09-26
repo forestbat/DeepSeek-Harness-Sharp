@@ -56,6 +56,26 @@ public sealed class ForkInProcessProvider(string? providerName = null) : ISubage
     }
 }
 
+/** 无头 provider：子会话纯内存（不进 SessionStore、无持久化、无 session 级事件），只经 subagent 通知对外。 */
+public sealed class HeadlessInProcessProvider(string? providerName = null) : ISubagentProvider
+{
+    public const string DefaultProviderName = "headless";
+
+    public string Name => providerName ?? DefaultProviderName;
+
+    public SubagentCapabilities Capabilities { get; } = new(
+        AgentOptions: true,
+        OutputSchema: true,
+        DepthLimit: true,
+        ToolFilter: true,
+        Persona: true);
+
+    public bool InheritsParentContext => false;
+
+    public Task<ISubagentRun> StartAsync(ResolvedSubagentStartRequest request)
+        => InProcessDriver.StartAsync(request, seed: null, standalone: true);
+}
+
 public static class SubagentInProcessProviders
 {
     public static IDisposable RegisterSpawn(Context ctx, string? providerName = null)
@@ -63,4 +83,7 @@ public static class SubagentInProcessProviders
 
     public static IDisposable RegisterFork(Context ctx, string? providerName = null)
         => ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!.RegisterProvider(new ForkInProcessProvider(providerName));
+
+    public static IDisposable RegisterHeadless(Context ctx, string? providerName = null)
+        => ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!.RegisterProvider(new HeadlessInProcessProvider(providerName));
 }

@@ -19,7 +19,8 @@ public static class ChildCompositionSupport
         + "sandbox mode is fixed at the delegation point and cannot be changed or "
         + "widened for this session.";
 
-    public static SessionHeader ChildSessionHeader(IAgent parent, int childDepth, SessionId childId, bool isSeeded)
+    public static SessionHeader ChildSessionHeader(
+        IAgent parent, int childDepth, SessionId childId, bool isSeeded, SubagentDescriptorPayload descriptor)
     {
         var parentHeader = parent.Session.Header;
         return new SessionHeader
@@ -33,6 +34,10 @@ public static class ChildCompositionSupport
             Origin = "subagent",
             DelegationDepth = childDepth,
             AgentPreset = parentHeader.AgentPreset,
+            RootSession = parentHeader.RootSession ?? parentHeader.Id,
+            SubagentProvider = descriptor.Provider,
+            SubagentMode = descriptor.Mode,
+            SubagentLabel = descriptor.Label,
         };
     }
 

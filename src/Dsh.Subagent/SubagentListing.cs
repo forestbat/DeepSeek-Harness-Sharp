@@ -34,7 +34,7 @@ public sealed partial class SubagentRuntime
         foreach (var candidate in OrderedSubagentChildren(live, parentSessionId))
         {
             signal.ThrowIfCancellationRequested();
-            if (SubagentDescriptorPayload.IdentityOf(candidate) is not { } identity)
+            if (IdentityOf(candidate) is not { } identity)
                 continue;
             rows.Add(new SubagentListEntry.Child
             {
@@ -60,7 +60,7 @@ public sealed partial class SubagentRuntime
         foreach (var session in live)
         {
             if (session.Header is not { Origin: "subagent", ParentSession: { } parent }
-                || SubagentDescriptorPayload.IdentityOf(session) is null)
+                || IdentityOf(session) is null)
             {
                 continue;
             }
@@ -75,6 +75,16 @@ public sealed partial class SubagentRuntime
             .Select(item => ToEntry(item.Session, subagentParents, item.Parent, item.Depth))
             .ToList();
         return Task.FromResult<IReadOnlyList<SubagentListEntry>>(rows);
+    }
+
+    private static (string Mode, string? Label)? IdentityOf(Session session)
+    {
+        if (session.Header is { SubagentProvider: not null, SubagentMode: { } mode } header)
+            return (mode, header.SubagentLabel);
+        // 旧日志的子代理身份在 descriptor 事件里；新会话身份在头部，不走事件解析。
+        return SubagentDescriptorPayload.IdentityOf(session) is { } legacy
+            ? (legacy.Mode, legacy.Label)
+            : null;
     }
 
     private SessionStore SessionsOrThrow()
@@ -127,12 +137,12 @@ public sealed partial class SubagentRuntime
 
     private static SubagentListEntry ToEntry(Session session, HashSet<SessionId> subagentParents, SessionId parent, int depth)
     {
-        var identity = SubagentDescriptorPayload.IdentityOf(session)!;
+        var identity = IdentityOf(session)!;
         return new SubagentListEntry.Child
         {
             Id = session.Id,
-            Mode = identity.Mode,
-            Label = identity.Label,
+            Mode = identity.Value.Mode,
+            Label = identity.Value.Label,
             HasChildren = subagentParents.Contains(session.Id),
             Parent = parent,
             Depth = depth,

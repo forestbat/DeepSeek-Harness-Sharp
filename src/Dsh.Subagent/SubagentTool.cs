@@ -309,6 +309,8 @@ public static class SubagentTool
     private static string WithDiagnosticAndPartialText(string headline, SubagentResult result)
     {
         var message = headline;
+        if (result.Interruption is { } interruption)
+            message += InterruptionHint(interruption);
         if (result.Diagnostic is not null)
             message += $"\n\nsubagent diagnostic: {result.Diagnostic}";
         var partial = OutputValueText(result.Output);
@@ -316,6 +318,18 @@ public static class SubagentTool
             message += $"\n\npartial output before the failure: {partial}";
         return message;
     }
+
+    private static string InterruptionHint(SubagentInterruptionSnapshot interruption) => interruption switch
+    {
+        { Phase: SubagentInterruptionPhase.ToolExecution, PendingToolCall: { } pending } =>
+            $"\n\ninterrupted during tool execution (tool: {pending.ToolName}, outcome unknown)"
+            + " — the tool's side effects are unknown; rerun the task instead of resuming",
+        { Phase: SubagentInterruptionPhase.LlmStream, PartialOutput: { Length: > 0 } partial } =>
+            $"\n\ninterrupted mid-stream after {interruption.CompletedTurns} completed turn(s);"
+            + $" partial text of the unfinished turn: {partial}",
+        { CompletedTurns: var turns } =>
+            $"\n\ninterrupted at a turn boundary after {turns} completed turn(s); the subagent state is intact",
+    };
 
     private static JsonArray SerializeOutput(IReadOnlyList<ContentBlock> output)
     {

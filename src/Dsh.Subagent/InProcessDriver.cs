@@ -7,7 +7,7 @@ namespace Dsh.Subagent;
 
 public static class InProcessDriver
 {
-    public static Task<ISubagentRun> StartAsync(ResolvedSubagentStartRequest request, IReadOnlyList<SessionEvent>? seed)
+    public static Task<ISubagentRun> StartAsync(ResolvedSubagentStartRequest request, IReadOnlyList<SessionEvent>? seed, bool standalone = false)
     {
         DelegationDepth.AssertSubagentMaxDepth(request.Request.MaxDepth);
         if (request.Request.Signal.IsCancellationRequested)
@@ -17,14 +17,14 @@ public static class InProcessDriver
         var childId = SessionId.Create(Guid.NewGuid().ToString());
         var activationBoundary = seed?.Count ?? 0;
         var inherited = ChildCompositionSupport.CaptureDelegatedPolicyOverrides(parent);
-        var sessions = parent.Ctx.Get<SessionStore>(SessionStore.ServiceName)
-            ?? throw new SubagentException(
-                "in-process subagents require the sessions service", SubagentErrorCodes.SessionStoreUnavailable);
-        var session = sessions.Create(
-            childId,
-            seed,
-            ChildCompositionSupport.ChildSessionHeader(parent, childDepth, childId, seed is not null),
-            seed is null ? null : activationBoundary);
+        var header = ChildCompositionSupport.ChildSessionHeader(parent, childDepth, childId, seed is not null, request.Descriptor);
+        // standalone（无头）会话不进 SessionStore：无持久化订阅、无 session 级事件发布，transcript 纯内存。
+        var session = standalone
+            ? Session.Create(childId, seed, header, seed is null ? null : activationBoundary)
+            : (parent.Ctx.Get<SessionStore>(SessionStore.ServiceName)
+                ?? throw new SubagentException(
+                    "in-process subagents require the sessions service", SubagentErrorCodes.SessionStoreUnavailable))
+                .Create(childId, seed, header, seed is null ? null : activationBoundary);
         var child = new AgentLoopAgent(
             parent.Ctx.Root,
             childId,
@@ -33,7 +33,8 @@ public static class InProcessDriver
             LastTurnOf);
         (parent.Ctx.Get(SubagentRuntime.ServiceName, false) as SubagentRuntime)?.NoteChildScope(child.ScopeKey);
         var run = new InProcessRun(child, activationBoundary, request, inherited);
-        parent.Ctx.Root.Emit(new AgentSessionStartNotification(child, "startup"));
+        if (!standalone)
+            parent.Ctx.Root.Emit(new AgentSessionStartNotification(child, "startup"));
         return Task.FromResult<ISubagentRun>(run);
     }
 
@@ -119,13 +120,16 @@ public static class InProcessDriver
             var stopReason = _cancelled && recorded != SubagentStopReason.Completed
                 ? SubagentStopReason.Aborted
                 : recorded;
-            if (_structured is null)
-                return new SubagentResult { Output = output, StopReason = stopReason };
-            if (_structured.Captured is { } captured)
-                return new SubagentResult { Output = output, StopReason = stopReason, Structured = captured };
-            if (stopReason == SubagentStopReason.Completed)
+            var captured = _structured?.Captured;
+            if (_structured is not null && captured is null && stopReason == SubagentStopReason.Completed)
                 stopReason = _cancelled ? SubagentStopReason.Aborted : SubagentStopReason.Error;
-            return new SubagentResult { Output = output, StopReason = stopReason };
+            return new SubagentResult
+            {
+                Output = output,
+                StopReason = stopReason,
+                Structured = captured,
+                Interruption = InterruptionSnapshotFold.Fold(own, _child.Id, stopReason),
+            };
         }
 
         public async Task DisposeAsync()

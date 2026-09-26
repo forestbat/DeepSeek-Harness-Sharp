@@ -13,11 +13,11 @@ public static class SubagentControlTools
     public const string ListAgentsToolName = "list_agents";
 
     private const string SendMessageDescription =
-        "Send a message to a live direct child subagent (continuable), or to the direct parent of this "
-        + "session while running as a subagent. Plain user-role content; the target treats it as a new user message.";
+        "Send a message to a live direct child subagent; the target treats it as a user message injected at the "
+        + "next step boundary. Also usable toward the direct parent of this session while running as a subagent.";
 
     private const string InterruptDescription =
-        "Interrupt a live direct child subagent (continuable). One-shot subagents and unknown ids are accepted as a no-op.";
+        "Interrupt a live direct child subagent (cancels its current work). Unknown or already-finished ids are accepted as a no-op.";
 
     private const string ListAgentsDescription =
         "List the durable subagent identity of every session-backed subagent of this session (continuable and one-shot). "
@@ -27,7 +27,7 @@ public static class SubagentControlTools
     public static IDisposable Apply(Context ctx)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-        return new DisposeBundle([tools.Register(SendMessageDefinition()), tools.Register(InterruptAgentDefinition())]);
+        return new DisposeBundle([tools.Register(SendMessageDefinition(ctx)), tools.Register(InterruptAgentDefinition(ctx))]);
     }
 
     public static IDisposable ApplyListAgents(Context ctx)
@@ -36,7 +36,7 @@ public static class SubagentControlTools
         return tools.Register(ListAgentsDefinition(ctx));
     }
 
-    private static ToolDefinition SendMessageDefinition() => new()
+    private static ToolDefinition SendMessageDefinition(Context ctx) => new()
     {
         Name = SendMessageToolName,
         Description = SendMessageDescription,
@@ -61,13 +61,51 @@ public static class SubagentControlTools
                 },
             },
         },
-        Output = new ToolOutputDefinition(new JsonObject(), (_, _) => []),
-        Execute = (_, _) => throw new SubagentException(
-            "continuable subagents are not available in this deployment (the continuation runtime is not ported)",
-            SubagentErrorCodes.ContinuationUnavailable),
+        Output = new ToolOutputDefinition(
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = new JsonArray("delivered"),
+                ["properties"] = new JsonObject
+                {
+                    ["delivered"] = new JsonObject { ["type"] = "boolean" },
+                },
+            },
+            (_, value) => [new TextBlock(value.GetProperty("delivered").GetBoolean()
+                ? "Message delivered to the child subagent."
+                : "Message was not delivered.")]),
+        Execute = (args, exec) => SendMessageExecute(ctx, args, exec),
     };
 
-    private static ToolDefinition InterruptAgentDefinition() => new()
+    private static Task<object?> SendMessageExecute(Context ctx, JsonElement args, ToolRunContext exec)
+    {
+        var agent = exec.Agent
+            ?? throw new InvalidOperationException("send_message requires a calling agent (exec.agent was undefined)");
+        var target = args.GetProperty("target").GetString();
+        if (target != "child")
+        {
+            throw new SubagentException(
+                "messaging the parent is not available in this deployment (the continuation runtime is not ported)",
+                SubagentErrorCodes.ContinuationUnavailable);
+        }
+        if (!args.TryGetProperty("childId", out var childIdValue) || childIdValue.GetString() is not { Length: > 0 } childId)
+        {
+            throw new SubagentException(
+                "send_message with target \"child\" requires childId", SubagentErrorCodes.NoProvider);
+        }
+        var runtime = ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
+        var content = args.GetProperty("content").GetString() ?? "";
+        if (!runtime.InjectChild(agent.Id, SessionId.Create(childId), [new TextBlock(content)]))
+        {
+            throw new SubagentException(
+                $"child subagent \"{childId}\" is not live (already finished or unknown)",
+                SubagentErrorCodes.ContinuationUnavailable);
+        }
+        return Task.FromResult<object?>(new JsonObject { ["delivered"] = true });
+    }
+
+    private static ToolDefinition InterruptAgentDefinition(Context ctx) => new()
     {
         Name = InterruptAgentToolName,
         Description = InterruptDescription,
@@ -99,9 +137,12 @@ public static class SubagentControlTools
             (args, _) => [new TextBlock($"Interrupt requested for subagent {args.GetProperty("childId").GetString()}")]),
         Execute = (args, exec) =>
         {
-            // 一次性 in-process 子代不属于可寻址目标：与 TS 一致，接受为 no-op（run 的生命周期由其调用方的 signal 持有）。
-            _ = exec.Agent
+            // 未知/已结束的 id 接受为 no-op；存活直系子代则真实取消（用户干预通道）。
+            var agent = exec.Agent
                 ?? throw new InvalidOperationException("interrupt_agent requires a calling agent (exec.agent was undefined)");
+            var runtime = ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
+            if (args.GetProperty("childId").GetString() is { Length: > 0 } childId)
+                runtime.CancelChild(agent.Id, SessionId.Create(childId));
             return Task.FromResult<object?>(new JsonObject { ["accepted"] = true });
         },
     };

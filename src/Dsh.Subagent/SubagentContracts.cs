@@ -24,4 +24,5 @@ public sealed record SubagentRunEndInfo(
     SessionId Id,
     bool Local,
     SubagentStopReason StopReason,
-    IReadOnlyList<ContentBlock>? LastAssistantMessage = null);
+    IReadOnlyList<ContentBlock>? LastAssistantMessage = null,
+    SubagentInterruptionSnapshot? Interruption = null);
