@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
