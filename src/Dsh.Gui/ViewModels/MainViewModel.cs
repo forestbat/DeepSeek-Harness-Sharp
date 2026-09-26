@@ -34,7 +34,6 @@ public enum SessionMode
 {
     Standard,
     Plan,
-    ReadOnly,
     FullAccess,
 }
 
@@ -244,7 +243,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public string ModeLabel => Mode switch
     {
         SessionMode.Plan => "计划模式",
-        SessionMode.ReadOnly => "只读模式",
         SessionMode.FullAccess => "Full access",
         _ => "标准模式",
     };
@@ -625,9 +623,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             case "plan":
                 _ = TogglePlanModeAsync();
                 return;
-            case "readonly":
-                ApplyApprovalPolicy(ApprovalPolicy.Never, SessionMode.ReadOnly, "只读模式：需要审批的操作会被自动拒绝");
-                return;
             case "full":
                 ApplyApprovalPolicy(ApprovalPolicy.Auto, SessionMode.FullAccess, "Full access：需要审批的工具自动放行（黑名单仍然生效）");
                 return;
@@ -644,9 +639,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             case "full":
                 SetMode("full");
-                return;
-            case "readonly":
-                SetMode("readonly");
                 return;
             default:
                 SetMode("standard");
@@ -1117,7 +1109,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var policy = approval?.EffectivePolicy(_agent.Session) ?? ApprovalPolicy.Ask;
         Composer.PermissionLabel = policy switch
         {
-            ApprovalPolicy.Never => "只读（自动拒绝）",
+            ApprovalPolicy.Never => "Never（自动拒绝）",
             ApprovalPolicy.Auto => "Full access",
             _ => "Ask（每次审批）",
         };

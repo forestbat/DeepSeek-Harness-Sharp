@@ -91,7 +91,6 @@
           <MenuFlyout Placement="BottomEdgeAlignedRight">
             <MenuItem Header="标准模式（每次审批弹窗）" Command="{Binding SetModeCommand}" CommandParameter="standard" />
             <MenuItem Header="计划模式（/plan）" Command="{Binding SetModeCommand}" CommandParameter="plan" />
-            <MenuItem Header="只读模式（自动拒绝需要审批的操作）" Command="{Binding SetModeCommand}" CommandParameter="readonly" />
             <MenuItem Header="Full access（自动放行，黑名单仍生效）" Command="{Binding SetModeCommand}" CommandParameter="full" />
           </MenuFlyout>
         </Button.Flyout>
@@ -318,7 +317,6 @@
               <MenuFlyout Placement="TopEdgeAlignedLeft">
                 <MenuItem Header="Ask（每次审批）" Command="{Binding SetPermissionCommand}" CommandParameter="ask" />
                 <MenuItem Header="Full access（自动放行）" Command="{Binding SetPermissionCommand}" CommandParameter="full" />
-                <MenuItem Header="Read only（自动拒绝）" Command="{Binding SetPermissionCommand}" CommandParameter="readonly" />
               </MenuFlyout>
             </Button.Flyout>
           </Button>
