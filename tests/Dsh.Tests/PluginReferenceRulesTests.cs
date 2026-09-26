@@ -14,7 +14,7 @@ public sealed class PluginReferenceRulesTests
     };
 
     private static readonly HashSet<string> PluginAllowedTargets =
-        ["Dsh.Runtime", "Dsh.Plugins.Abstractions", "Dsh.Core", "Dsh.Llm", "Dsh.Interaction", "Dsh.Boot"];
+        ["Dsh.Runtime", "Dsh.Plugins.Abstractions", "Dsh.Core", "Dsh.Llm", "Dsh.Interaction", "Dsh.Boot", "Dsh.Ptc", "Dsh.Presets"];
 
     private static readonly HashSet<string> FeaturePlugins =
     [

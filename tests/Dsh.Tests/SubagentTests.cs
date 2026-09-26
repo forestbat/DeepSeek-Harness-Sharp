@@ -12,6 +12,8 @@ namespace Dsh.Tests;
 
 public class SubagentTests
 {
+    private static readonly TimeSpan RunCompletionTimeout = TimeSpan.FromSeconds(30);
+
     private sealed class ScriptedAdapter : LlmAdapter
     {
         private readonly Queue<Func<GenerateOptions, IReadOnlyList<StreamChunk>>> _script;
@@ -158,6 +160,10 @@ public class SubagentTests
         Assert.Equal(1, child.Header.DelegationDepth);
         Assert.Equal(parent.Id, child.Header.ParentSession);
         Assert.False(child.Header.IsSeeded);
+        Assert.Equal(parent.Id, child.Header.RootSession);
+        Assert.Equal("spawn", child.Header.SubagentProvider);
+        Assert.Equal(SubagentDescriptorPayload.OneShotMode, child.Header.SubagentMode);
+        Assert.Equal("research task", child.Header.SubagentLabel);
 
         var descriptor = child.SnapshotEvents()
             .Select(sessionEvent => sessionEvent.Data)
@@ -302,6 +308,7 @@ public class SubagentTests
         Assert.NotNull(inner);
         Assert.Equal(2, inner.Header.DelegationDepth);
         Assert.Equal(outer.Id, inner.Header.ParentSession);
+        Assert.Equal(parent.Id, inner.Header.RootSession);
 
         var result = await fixture.Tools.Execute(new ToolExecutionInput
         {
@@ -424,7 +431,7 @@ public class SubagentTests
         });
         Assert.Contains(fixture.Adapter.Requests[1].Tools!, tool => tool.Name == "structured_output");
 
-        var result = await run.Result;
+        var result = await run.Result.WaitAsync(RunCompletionTimeout, TestContext.Current.CancellationToken);
         Assert.Equal(SubagentStopReason.Completed, result.StopReason);
         Assert.NotNull(result.Structured);
         Assert.Equal(42, result.Structured!.Value.GetProperty("answer").GetInt32());

@@ -21,15 +21,12 @@ public class WorkflowTests
             ProviderInfo = new LlmProviderInfo(provider, provider);
         }
 
-        public List<GenerateOptions> Requests { get; } = [];
-
         public override LlmProviderInfo ProviderInfo { get; }
 
         public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, "test");
 
         public override IAsyncEnumerable<StreamChunk> Stream(GenerateOptions options, CancellationToken cancellationToken)
         {
-            Requests.Add(options);
             if (_script.Count == 0)
                 throw new InvalidOperationException("scripted adapter: no scripted response left");
             return Yield(_script.Dequeue()(options), cancellationToken);
@@ -51,6 +48,7 @@ public class WorkflowTests
     {
         private readonly IDisposable _spawn;
         private readonly IDisposable _fork;
+        private readonly SubprocessService _subprocess;
 
         public WorkflowFixture(IEnumerable<Func<GenerateOptions, IReadOnlyList<StreamChunk>>> script)
         {
@@ -62,9 +60,9 @@ public class WorkflowTests
             _ = new AgentRegistry(Ctx);
             _ = new AgentLoop(Ctx);
             _ = ApprovalService.Register(Ctx);
-            Subagents = new SubagentRuntime(Ctx);
-            Adapter = new ScriptedAdapter("test-provider", script);
-            llm.RegisterAdapter(["test-provider"], Adapter);
+            _ = new SubagentRuntime(Ctx);
+            _subprocess = new SubprocessService(Ctx);
+            llm.RegisterAdapter(["test-provider"], new ScriptedAdapter("test-provider", script));
             _spawn = SubagentInProcessProviders.RegisterSpawn(Ctx);
             _fork = SubagentInProcessProviders.RegisterFork(Ctx);
             Workflow = new WorkerThreadWorkflowEngine(Ctx, null);
@@ -72,8 +70,6 @@ public class WorkflowTests
 
         public Context Ctx { get; }
         public ToolRuntime Tools { get; }
-        public SubagentRuntime Subagents { get; }
-        public ScriptedAdapter Adapter { get; }
         public WorkflowEngine Workflow { get; }
 
         public async Task<AgentLoopAgent> CreateParent(string id)
@@ -88,6 +84,7 @@ public class WorkflowTests
         {
             _spawn.Dispose();
             _fork.Dispose();
+            _subprocess.Dispose();
         }
     }
 
@@ -98,6 +95,18 @@ public class WorkflowTests
         new StreamChunk.BlockEnd(0, new TextBlock(text)),
         new StreamChunk.Finish(new FinishReason.Stop()),
     ];
+
+    private static IReadOnlyList<StreamChunk> ToolCallAnswer(string callId, string name, string arguments) =>
+    [
+        new StreamChunk.ToolCallDelta(0, ToolCallId.Create(callId), name, arguments),
+        new StreamChunk.Finish(new FinishReason.ToolCalls()),
+    ];
+
+    private static Dictionary<string, object?> Meta(string name, string description) => new()
+    {
+        ["name"] = name,
+        ["description"] = description,
+    };
 
     [Fact]
     public async Task Engine_RunsAgentsAndReturnsMaterializedJson()
@@ -111,16 +120,12 @@ public class WorkflowTests
         var run = fixture.Workflow.Start(new WorkflowStartRequest
         {
             Script = """
-                const a = await agent('child one');
-                phase('phase1');
-                const b = await agent('child two', { label: 'two' });
-                return { a, b, count: 2 };
+                var a = await agent("child one");
+                await phase("phase1");
+                var b = await agent("child two", new JsonObject { ["label"] = "two" });
+                return new JsonObject { ["a"] = a, ["b"] = b, ["count"] = 2 };
                 """,
-            Meta = new Dictionary<string, object?>
-            {
-                ["name"] = "test",
-                ["description"] = "test description",
-            },
+            Meta = Meta("test", "test description"),
             Parent = parent,
         });
 
@@ -142,15 +147,18 @@ public class WorkflowTests
         var run = fixture.Workflow.Start(new WorkflowStartRequest
         {
             Script = """
-                const par = await parallel([async () => 1, () => 2]);
-                const pipe = await pipeline([1, 2], (prev, item) => prev + item, (prev) => prev * 2);
-                return { par, pipe };
+                var par = await parallel(new Func<Task<JsonNode?>>[]
+                {
+                    () => Task.FromResult<JsonNode?>(JsonValue.Create(1)),
+                    () => Task.FromResult<JsonNode?>(JsonValue.Create(2)),
+                });
+                var pipe = await pipeline(
+                    new JsonArray(JsonValue.Create(1), JsonValue.Create(2)),
+                    async (prev, item, index) => JsonValue.Create(prev!.GetValue<int>() + item!.GetValue<int>()),
+                    async (prev, item, index) => JsonValue.Create(prev!.GetValue<int>() * 2));
+                return new JsonObject { ["par"] = par, ["pipe"] = pipe };
                 """,
-            Meta = new Dictionary<string, object?>
-            {
-                ["name"] = "parallel-test",
-                ["description"] = "parallel and pipeline test",
-            },
+            Meta = Meta("parallel-test", "parallel and pipeline test"),
             Parent = parent,
         });
 
@@ -178,7 +186,7 @@ public class WorkflowTests
         var parent = await fixture.CreateParent("session-parent-tool");
         var arguments = """
             {
-              "script": "const a = await agent('child one'); const b = await agent('child two'); return { a, b };",
+              "script": "var a = await agent(\"child one\"); var b = await agent(\"child two\"); return new JsonObject { [\"a\"] = a, [\"b\"] = b };",
               "meta": { "name": "tool-test", "description": "tool test description" }
             }
             """;
@@ -203,4 +211,47 @@ public class WorkflowTests
         Assert.Contains("tool-workflow/run-start", recordTypes);
         Assert.Contains("tool-workflow/run-end", recordTypes);
     }
+
+    [Fact]
+    public async Task Engine_ReportsNonCompilingScript()
+    {
+        using var fixture = new WorkflowFixture([]);
+        var parent = await fixture.CreateParent("session-parent-workflow-compile");
+        var error = Assert.Throws<WorkflowError>(() => fixture.Workflow.Start(new WorkflowStartRequest
+        {
+            Script = "this is not valid C# ;;;",
+            Meta = Meta("bad", "a script that does not compile"),
+            Parent = parent,
+        }));
+
+        Assert.Contains("does not compile", error.Message);
+    }
+
+    [Fact]
+    public async Task ToolRalph_RunsStructuredFreshRound()
+    {
+        using var fixture = new WorkflowFixture(
+        [
+            _ => ToolCallAnswer("call-ralph-1", "structured_output",
+                """{"status":"complete","summary":"objective done","evidence":["workspace verified"],"nextSteps":[],"blocker":""}"""),
+        ]);
+        _ = ToolRalph.Apply(fixture.Ctx, new ToolRalphConfig { SubagentProvider = "spawn", MaxRounds = 1, MaxResultChars = 16_384 });
+        var parent = await fixture.CreateParent("session-parent-ralph");
+        var result = await fixture.Tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-ralph"),
+            Name = "ralph",
+            Arguments = JsonDocument.Parse("""{"objective":"finish the objective","maxRounds":1}""").RootElement,
+            Agent = parent,
+            Signal = default,
+        });
+
+        Assert.False(result.IsError, TextOf(result));
+        var success = Assert.IsType<ToolExecutionResult.Success>(result);
+        Assert.Equal(1, success.Value.GetProperty("agentsStarted").GetInt32());
+        Assert.Equal("complete", success.Value.GetProperty("result").GetProperty("status").GetString());
+    }
+
+    private static string TextOf(ToolExecutionResult result)
+        => string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
 }

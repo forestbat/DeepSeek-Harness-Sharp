@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Text;
+using Dsh.Core;
+using Dsh.Runtime;
+using Dsh.Terminal;
 using Dsh.Tui;
 using OpenTK.Graphics.OpenGL;
 
@@ -154,108 +157,196 @@ public class RenderPipelineBenchmarkTests
         return new PipelineMeasurement(build, upload, raster, gpuNs, vertices, primitives, vsInvocations, primitivesGenerated);
     }
 
+    /**
+     * 终端消费侧压测: 消费方是本仓库自己的 PTY + 终端会话读路径(PipeTerminalSession 的输出泵与 BoundedTextBuffer),
+     * 不是外部终端。ANSI 流先落到临时文件, 再由会话内的 cat 经由 PTY 回灌, 计时到我们的读路径解析出哨兵为止。
+     */
     [Fact]
-    public void Terminal_Parse_Benchmark()
+    public async Task Terminal_Parse_Benchmark()
     {
-        var tmux = FindOnPath("tmux");
         var report = new StringBuilder();
-        report.AppendLine("# 终端解析压测(CPU ANSI 输出的消费侧)");
+        report.AppendLine("# 终端消费压测(本仓库自己的 PTY + 终端会话读路径)");
         report.AppendLine();
-        if (tmux is null)
-        {
-            report.AppendLine("跳过: 未找到 tmux。");
-            WriteReport("render-terminal-benchmark.md", report);
-            return;
-        }
-
         const int width = 480;
         const int height = 135;
         var markdownLines = MarkdownCorpus.Build(CorpusLines, width, Seed);
         var pixelLines = RenderBenchmarkTests.BuildPixelLines(CorpusLines, width, Seed);
-        var session = $"dshbench{Environment.ProcessId}";
+        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/bench");
+        Directory.CreateDirectory(directory);
+        var temp = Path.Combine(Path.GetTempPath(), $"dsh-terminal-bench-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        var ctx = new Context();
+        var subprocess = new SubprocessService(ctx);
+        var agents = new AgentRegistry(ctx);
+        var terminals = new TerminalSessionService(ctx);
         try
         {
-            Run(tmux, $"new-session -d -s {session} -x {width} -y {height}");
-            MeasureStream(tmux, session, report, "markdown 场景 A", markdownLines, width, height, frames: 1000, "terminal-stream.txt");
-            MeasureStream(tmux, session, report, "像素画场景 C(每格异色)", pixelLines, width, height, frames: 1000, "terminal-stream-pixel.txt");
-            report.AppendLine("口径说明: 计时从写入 pane tty 开始到 tmux 解析出哨兵为止,含 tmux 的解析+屏幕更新+回滚;这是终端侧成本的参考值,GPU 加速终端(alacritty/kitty 等)会更快。哨兵探测轮询间隔 20 ms,对小流有量化误差。");
+            TerminalBash.Register(ctx, new TerminalBashConfig
+            {
+                BackendType = "shell",
+                ShellDialect = ShellDialect.Bash,
+                Rows = height,
+                Cols = width,
+                PollIntervalMs = 10,
+                ExactProbeAfterMs = 20,
+                IdleSilenceMs = 100,
+                HandoffGraceMs = 100,
+                TimeoutMs = 180_000,
+                DisposeGraceMs = 500,
+                ScrollbackLines = 5000,
+                ScrollbackMaxBytes = 1_048_576,
+                MaxReadBytes = 65_536,
+            });
+            var agent = new TerminalFakeAgent(ctx, agents, temp);
+            agent.Register();
+            (string Label, Cell[][] Lines, string File, int Frames)[] scenarios =
+            [
+                ("markdown 场景 A", markdownLines, "terminal-stream.txt", 1000),
+                ("像素画场景 C(每格异色)", pixelLines, "terminal-stream-pixel.txt", 1000),
+            ];
+            foreach (var (label, lines, file, frames) in scenarios)
+            {
+                await RunTerminalScenarioAsync(
+                    terminals, agent, temp, directory, label, lines, file, frames, width, height, report,
+                    TestContext.Current.CancellationToken);
+            }
+            report.AppendLine("口径说明: 计时从会话内 cat 经 PTY/管道回灌开始, 到该 session 的滚动缓冲抵达哨兵为止; 消费侧是本仓库自己的 PipeTerminalSession 输出泵 + TerminalSanitizer + BoundedTextBuffer。每个场景使用独立会话(场景间 kill 旧会话), 因此前一个场景未结束的 send 不会干扰后一个场景。这是压力测试: 流规模(百 MB 到 GB 级)刻意远超本路径的有界容量(子进程收集器 64 KiB 窗口/64 MiB spill、scrollback 1 MiB), 超出部分由有界设计丢弃; 若哨兵未出现, 说明尾部也没能抵达读路径。哨兵探测轮询间隔 10 ms。");
+            WriteReport("render-terminal-benchmark.md", report);
         }
         finally
         {
-            Run(tmux, $"kill-session -t {session}");
+            try
+            {
+                Directory.Delete(temp, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            try
+            {
+                subprocess.Dispose();
+            }
+            catch (Exception error)
+            {
+                report.AppendLine();
+                report.AppendLine($"(压测尾清理失败: {error.GetType().Name}: {error.Message})");
+                WriteReport("render-terminal-benchmark.md", report);
+            }
         }
-        WriteReport("render-terminal-benchmark.md", report);
     }
 
-    private static void MeasureStream(string tmux, string session, StringBuilder report, string label, Cell[][] lines, int width, int height, int frames, string fileName)
+    /** 每个场景独立开一个新会话, 场景结束 kill; 测量异常只记入报告, 不中断整场测试。 */
+    private static async Task RunTerminalScenarioAsync(
+        TerminalSessionService terminals,
+        TerminalFakeAgent agent,
+        string temp,
+        string directory,
+        string label,
+        Cell[][] lines,
+        string file,
+        int frames,
+        int width,
+        int height,
+        StringBuilder report,
+        CancellationToken signal)
+    {
+        var streamPath = Path.GetFullPath(Path.Combine(directory, file));
+        var characters = WriteAnsiStream(streamPath, lines, width, height, frames);
+        var sentinel = $"__DSH_DONE_{file}__";
+        File.AppendAllText(streamPath, $"\n{sentinel}\n");
+        TerminalSessionId? sessionId = null;
+        try
+        {
+            var created = await terminals.Spawn(agent, new TerminalSpawnRequest("shell", $"bench-{file}", temp), signal);
+            sessionId = created.SessionId;
+            var operation = terminals.StartSend(agent, sessionId.Value, new TerminalSendRequest($"cat '{streamPath.Replace('\\', '/')}'", true));
+            var started = Stopwatch.GetTimestamp();
+            var delivered = false;
+            TerminalReadResult last = new("", 0, 0, 0, false);
+            try
+            {
+                while (Stopwatch.GetElapsedTime(started).TotalSeconds < 120)
+                {
+                    last = terminals.Read(agent, sessionId.Value, new TerminalReadRequest(Count: 200));
+                    if (last.Text.Contains(sentinel, StringComparison.Ordinal))
+                    {
+                        delivered = true;
+                        break;
+                    }
+                    Thread.Sleep(10);
+                }
+            }
+            catch (Exception error)
+            {
+                report.AppendLine($"## {label}: {frames} 帧");
+                report.AppendLine();
+                report.AppendLine($"测量阶段异常: {error.GetType().Name}: {error.Message}");
+                report.AppendLine();
+                return;
+            }
+            try
+            {
+                await operation.Done.WaitAsync(TimeSpan.FromSeconds(5), signal);
+            }
+            catch (Exception error)
+            {
+                _ = error;
+            }
+            var elapsed = Stopwatch.GetElapsedTime(started);
+            var megabytes = characters * sizeof(char) / 1e6;
+            report.AppendLine($"## {label}: {frames} 帧,共 {megabytes:F1} MB(UTF-16 计)");
+            report.AppendLine();
+            report.AppendLine(delivered
+                ? $"本仓库 PTY + 会话读路径消费耗时 {elapsed.TotalSeconds:F2} s,吞吐 {megabytes / elapsed.TotalSeconds:F2} MB/s,折合每帧 {elapsed.TotalMilliseconds / frames:F2} ms。"
+                : $"超时(120 s)未等到哨兵: 读路径仅见 {last.TotalLines} 行,{(last.Truncated ? "已截断" : "未截断")},末尾片段: {Tail(last.Text)}");
+            report.AppendLine();
+        }
+        catch (Exception error)
+        {
+            report.AppendLine($"## {label}: {frames} 帧");
+            report.AppendLine();
+            report.AppendLine($"场景失败: {error.GetType().Name}: {error.Message}");
+            report.AppendLine();
+        }
+        finally
+        {
+            if (sessionId is { } id)
+            {
+                try
+                {
+                    await terminals.Kill(agent, id);
+                }
+                catch (Exception error)
+                {
+                    _ = error;
+                }
+            }
+        }
+    }
+
+    /** 报告用: 折叠换行并只留末尾片段, 便于在压测报告里诊断读路径到底收到了什么。 */
+    private static string Tail(string text)
+    {
+        const int limit = 200;
+        var tail = text.Length <= limit ? text : text[^limit..];
+        return tail.Replace("\r", "").Replace('\n', '⏎');
+    }
+
+    /** 逐帧写出 ANSI 流(不整体物化, 避免 1000 帧大流的内存峰值), 返回写入的字符数。 */
+    private static long WriteAnsiStream(string path, Cell[][] lines, int width, int height, int frames)
     {
         var grid = new CellGrid(width, height);
         var renderer = new AnsiRenderer();
-        var stream = new StringBuilder(frames * width * height);
+        long characters = 0;
+        using var writer = new StreamWriter(path, append: false, Encoding.UTF8);
         for (var frame = 0; frame < frames; frame++)
         {
             FillStreaming(lines, grid, frame);
-            stream.Append(renderer.Render(grid, 0, 0));
+            var text = renderer.Render(grid, 0, 0);
+            characters += text.Length;
+            writer.Write(text);
         }
-
-        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/bench");
-        Directory.CreateDirectory(directory);
-        var streamPath = Path.GetFullPath(Path.Combine(directory, fileName));
-        File.WriteAllText(streamPath, stream.ToString());
-
-        var paneTty = Run(tmux, $"list-panes -t {session} -F \"#{{pane_tty}}\"").Trim();
-        var sentinel = $"__DSH_DONE_{fileName}__";
-        using var feeder = Process.Start(new ProcessStartInfo("bash", $"-c \"cat '{streamPath}' > {paneTty}; printf '\\n{sentinel}\\n' > {paneTty}\"")
-        {
-            UseShellExecute = false,
-        })!;
-        var started = Stopwatch.GetTimestamp();
-        var delivered = false;
-        while (Stopwatch.GetElapsedTime(started).TotalSeconds < 120)
-        {
-            var pane = Run(tmux, $"capture-pane -p -t {session} -S -");
-            if (pane.Contains(sentinel, StringComparison.Ordinal))
-            {
-                delivered = true;
-                break;
-            }
-            Thread.Sleep(20);
-        }
-        var elapsed = Stopwatch.GetElapsedTime(started);
-        if (!delivered && !feeder.HasExited)
-            feeder.Kill();
-        var megabytes = stream.Length * sizeof(char) / 1e6;
-        report.AppendLine($"## {label}: {frames} 帧,共 {megabytes:F1} MB(UTF-16 计)");
-        report.AppendLine();
-        if (delivered)
-            report.AppendLine($"整流消费耗时 {elapsed.TotalSeconds:F2} s,吞吐 {megabytes / elapsed.TotalSeconds:F2} MB/s,折合每帧 {elapsed.TotalMilliseconds / frames:F2} ms。");
-        else
-            report.AppendLine("超时(120 s)未完成消费,哨兵未出现。");
-        report.AppendLine();
-    }
-
-    private static string? FindOnPath(string name)
-    {
-        foreach (var dir in Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator) ?? [])
-        {
-            var candidate = Path.Combine(dir, name);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-        return null;
-    }
-
-    private static string Run(string fileName, string arguments)
-    {
-        var process = Process.Start(new ProcessStartInfo(fileName, arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        })!;
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        return output;
+        return characters;
     }
 
     private static void Fill(Cell[][] lines, CellGrid grid, int frame, bool streaming)

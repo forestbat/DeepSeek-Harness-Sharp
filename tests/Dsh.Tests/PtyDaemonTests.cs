@@ -5,6 +5,7 @@ namespace Dsh.Tests;
 public class PtyDaemonTests
 {
     private static readonly string TestRoot = Path.Combine(FindRepositoryRoot(), ".daemon-tests");
+    private static readonly TimeSpan ReadReleaseTimeout = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task List_ReturnsEmpty_WhenNoSessionsExist()
@@ -145,7 +146,8 @@ public class PtyDaemonTests
         {
             if (_payload.Position < _payload.Length)
                 return _payload.Read(buffer, offset, count);
-            _closed.Wait();
+            if (!_closed.Wait(ReadReleaseTimeout))
+                throw new TimeoutException($"OpenEndedInputStream 在 {ReadReleaseTimeout.TotalSeconds:0} s 内未被释放，同步读取将永久阻塞");
             return 0;
         }
 

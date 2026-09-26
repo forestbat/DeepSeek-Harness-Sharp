@@ -29,6 +29,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dsh.Account\Dsh.Account.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Board\Dsh.Board.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
@@ -55,6 +56,7 @@
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Presets\Dsh.Presets.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Ptc\Dsh.Ptc.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Acp\Dsh.Acp.csproj" />
@@ -63,6 +65,7 @@
     <ProjectReference Include="..\..\src\Dsh.Telemetry\Dsh.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Dsh.E2b\Dsh.E2b.csproj" />
     <ProjectReference Include="..\..\src\Dsh.SessionQuery\Dsh.SessionQuery.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Inspection\Dsh.Inspection.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Memory\Dsh.Memory.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Pty\Dsh.Pty.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />

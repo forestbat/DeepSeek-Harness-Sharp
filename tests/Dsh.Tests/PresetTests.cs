@@ -1,9 +1,11 @@
 using System.Text.Json.Nodes;
+using Dsh.Inspection;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Presets;
+using Dsh.Ptc;
 
 namespace Dsh.Tests;
 
@@ -17,13 +19,17 @@ public class PresetTests
         public CommandsService Commands { get; }
         public PresetController Presets { get; }
 
-        public Harness()
+        public Harness(bool creative = false, bool ptc = false)
         {
             Prompt = new SystemPrompt(Ctx, new SystemPromptConfig());
             Tools = new ToolRuntime(Ctx);
             Tools.Register(EchoTool("bash"));
             Tools.Register(EchoTool("read"));
             Commands = new CommandsService(Ctx);
+            if (ptc)
+                Ctx.Provide(IToolPresentation.ServiceName, new FakePtcTransport());
+            if (creative)
+                CreativeToolset.Register(Ctx);
             Presets = PresetController.Register(Ctx);
         }
 
@@ -38,6 +44,23 @@ public class PresetTests
                     (_, value) => [new TextBlock(value.GetProperty("ran").GetString()!)]),
                 Execute = (_, _) => Task.FromResult<object?>(new { ran = "yes" }),
             };
+    }
+
+    private sealed class FakePtcTransport : IToolPresentation
+    {
+        public ToolDefinition TransportDefinition { get; } = new()
+        {
+            Name = PtcTransport.RunCodeName,
+            Description = "run_code tool",
+            Parameters = new JsonObject(),
+            Output = new ToolOutputDefinition(new JsonObject(), (_, _) => []),
+            Execute = (_, _) => Task.FromResult<object?>(null),
+        };
+
+        public bool IsAvailable => true;
+        public string TransportToolName => PtcTransport.RunCodeName;
+        public string SdkSection(ScopeKey? scope) => "";
+        public string TransportOnlySection(ScopeKey? scope) => "";
     }
 
     private sealed class FakeAgent : IAgent
@@ -202,5 +225,68 @@ public class PresetTests
         Assert.Equal(InteractionPreset.Minimal, PresetController.PresetOf(agent.Session));
         var failed = await harness.Commands.Execute(agent, "/preset ptc", TestContext.Current.CancellationToken);
         Assert.IsType<CommandResult.Error>(failed?.Result);
+    }
+
+    [Fact]
+    public void Set_Creative_Exposes_Creative_And_Standard_Tools()
+    {
+        var harness = new Harness(creative: true);
+        var agent = new FakeAgent(harness.Ctx);
+        var result = harness.Presets.Set(agent, "creative");
+        Assert.IsType<CommandResult.Success>(result);
+        Assert.Equal(InteractionPreset.Creative, PresetController.PresetOf(agent.Session));
+        var names = harness.Tools.Schemas(agent.ScopeKey).Select(tool => tool.Name).Order().ToList();
+        Assert.Equal(["bash", "cordis_inspect_list", "cordis_inspect_query", "plugin_manager", "read"], names);
+    }
+
+    [Theory]
+    [InlineData("standard", new[] { "bash", "read" })]
+    [InlineData("minimal", new[] { "bash" })]
+    public void Switching_From_Creative_Removes_Creative_Tools(string preset, string[] expected)
+    {
+        var harness = new Harness(creative: true);
+        var agent = new FakeAgent(harness.Ctx);
+        harness.Presets.Set(agent, "creative");
+        Assert.IsType<CommandResult.Success>(harness.Presets.Set(agent, preset));
+        var names = harness.Tools.Schemas(agent.ScopeKey).Select(tool => tool.Name).Order().ToList();
+        Assert.Equal(expected.Order().ToList(), names);
+    }
+
+    [Fact]
+    public void Switching_To_Ptc_Removes_Creative_Tools()
+    {
+        var harness = new Harness(creative: true, ptc: true);
+        var agent = new FakeAgent(harness.Ctx);
+        harness.Presets.Set(agent, "creative");
+        Assert.IsType<CommandResult.Success>(harness.Presets.Set(agent, "ptc"));
+        var names = harness.Tools.Schemas(agent.ScopeKey).Select(tool => tool.Name).ToList();
+        Assert.Contains(PtcTransport.RunCodeName, names);
+        Assert.DoesNotContain("plugin_manager", names);
+        Assert.DoesNotContain("cordis_inspect_list", names);
+        Assert.DoesNotContain("cordis_inspect_query", names);
+    }
+
+    [Fact]
+    public async Task Creative_Guidance_Section_Is_Scoped()
+    {
+        var harness = new Harness(creative: true);
+        var agent = new FakeAgent(harness.Ctx);
+        harness.Presets.Set(agent, "creative");
+        var guidance = harness.Ctx.Get<ICreativeToolset>(ICreativeToolset.ServiceName)!.GuidanceSection;
+        var scoped = await harness.Prompt.Assemble(new AssembleContext(agent.ScopeKey));
+        Assert.Contains(scoped.Sections, section => section.Name == guidance.Name);
+        var other = await harness.Prompt.Assemble(new AssembleContext(new ScopeKey()));
+        Assert.DoesNotContain(other.Sections, section => section.Name == guidance.Name);
+    }
+
+    [Fact]
+    public void Set_Creative_Without_Toolset_Is_NotReady()
+    {
+        var harness = new Harness();
+        var agent = new FakeAgent(harness.Ctx);
+        var result = harness.Presets.Set(agent, "creative");
+        var error = Assert.IsType<CommandResult.Error>(result);
+        Assert.Contains("未就绪", error.Text);
+        Assert.Equal(InteractionPreset.Standard, PresetController.PresetOf(agent.Session));
     }
 }

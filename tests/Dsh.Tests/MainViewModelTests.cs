@@ -249,16 +249,17 @@ public sealed class MainViewModelTests
         var approval = environment.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName)!;
         environment.Agent.Session.Append(new TurnStartPayload(1));
 
-        viewModel.SetModeCommand.Execute("readonly");
-        Assert.Equal(ApprovalPolicy.Never, approval.EffectivePolicy(environment.Agent.Session));
-        Assert.Equal("只读（自动拒绝）", viewModel.Composer.PermissionLabel);
-
         viewModel.SetModeCommand.Execute("full");
         Assert.Equal(ApprovalPolicy.Auto, approval.EffectivePolicy(environment.Agent.Session));
         Assert.Equal("Full access", viewModel.Composer.PermissionLabel);
 
         viewModel.SetModeCommand.Execute("standard");
         Assert.Equal(ApprovalPolicy.Ask, approval.EffectivePolicy(environment.Agent.Session));
+        Assert.Equal("Ask（每次审批）", viewModel.Composer.PermissionLabel);
+
+        viewModel.SetModeCommand.Execute("readonly");
+        Assert.Equal(ApprovalPolicy.Ask, approval.EffectivePolicy(environment.Agent.Session));
+        Assert.Equal("Ask（每次审批）", viewModel.Composer.PermissionLabel);
     }
 
     [Fact]

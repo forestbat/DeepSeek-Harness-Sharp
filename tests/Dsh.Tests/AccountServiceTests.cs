@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Dsh.Account;
 using Dsh.Boot;
+using Dsh.Llm;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -151,6 +152,58 @@ public sealed class AccountServiceTests
         Assert.True(service.Enabled);
         var parameters = HarnessSettings.Load(home.Home).Plugins["@deepseek-ai/dsh-account"].Parameters;
         Assert.Equal(true, parameters["accountEnabled"]);
+    }
+
+    [Fact]
+    public void InferenceToken_IsReleasedOnlyForTheConfiguredInferenceOrigin()
+    {
+        using var home = new AccountTempHome();
+        new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", Origin));
+        var ctx = new Context();
+        using var service = new AccountService(ctx, Config(enabled: true), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+
+        Assert.True(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
+        Assert.Equal("grant-token", service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
+        Assert.Null(service.TryGetToken(new Uri("https://api.deepseek.com.evil.test")));
+        Assert.Null(service.TryGetToken(new Uri("https://proxy.test")));
+        Assert.Null(service.TryGetToken(new Uri("http://api.deepseek.com")));
+        Assert.False(service.Covers(new Uri("https://proxy.test")));
+        Assert.Same(service, ctx.Get<IInferenceCredentials>(IInferenceCredentials.ServiceName, false));
+    }
+
+    [Fact]
+    public void InferenceToken_RequiresSignedInGrant()
+    {
+        using var home = new AccountTempHome();
+        using var service = new AccountService(new Context(), Config(enabled: true), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+
+        Assert.Null(service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
+    }
+
+    [Fact]
+    public void InferenceToken_IsNotReleasedWhenDisabled()
+    {
+        using var home = new AccountTempHome();
+        new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", Origin));
+        using var service = new AccountService(new Context(), Config(enabled: false), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+
+        Assert.False(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
+        Assert.Null(service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
+    }
+
+    [Fact]
+    public void InferenceToken_RequiresMatchingIssuer()
+    {
+        using var home = new AccountTempHome();
+        new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", "https://other.test"));
+        using var service = new AccountService(new Context(), Config(enabled: true), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+
+        Assert.True(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
+        Assert.Null(service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
     }
 
     private static void StartCallback(string redirectUri, string code, string state)
