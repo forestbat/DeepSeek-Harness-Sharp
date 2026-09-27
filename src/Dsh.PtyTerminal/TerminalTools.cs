@@ -4,7 +4,7 @@ using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
 
-namespace Dsh.Terminal;
+namespace Dsh.PtyTerminal;
 
 public sealed record TerminalToolsConfig
 {

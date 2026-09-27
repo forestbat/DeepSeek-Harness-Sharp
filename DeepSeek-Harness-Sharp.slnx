@@ -40,6 +40,7 @@
     <Project Path="src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj" />
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
+    <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
     <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
     <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />
@@ -47,7 +48,6 @@
     <Project Path="src/Dsh.Skills/Dsh.Skills.csproj" />
     <Project Path="src/Dsh.Subagent/Dsh.Subagent.csproj" />
     <Project Path="src/Dsh.Telemetry/Dsh.Telemetry.csproj" />
-    <Project Path="src/Dsh.Terminal/Dsh.Terminal.csproj" />
     <Project Path="src/Dsh.Tools/Dsh.Tools.csproj" />
     <Project Path="src/Dsh.Tui/Dsh.Tui.csproj" />
     <Project Path="src/Dsh.Web/Dsh.Web.csproj" />

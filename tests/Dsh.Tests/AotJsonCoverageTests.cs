@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Dsh.Jobs;
-using Dsh.Terminal;
+using Dsh.PtyTerminal;
 using Dsh.Tools;
 using Dsh.Workflow;
 

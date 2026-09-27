@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Dsh.Terminal;
+namespace Dsh.PtyTerminal;
 
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

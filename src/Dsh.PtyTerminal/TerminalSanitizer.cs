@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Dsh.Terminal;
+namespace Dsh.PtyTerminal;
 
 public static class TerminalPrompt
 {

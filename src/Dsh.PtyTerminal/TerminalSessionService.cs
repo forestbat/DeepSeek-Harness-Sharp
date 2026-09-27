@@ -1,7 +1,7 @@
 using Dsh.Runtime;
 using Dsh.Core;
 
-namespace Dsh.Terminal;
+namespace Dsh.PtyTerminal;
 
 public sealed class TerminalSessionService : Service
 {

@@ -1,4 +1,4 @@
-using Dsh.Terminal;
+using Dsh.PtyTerminal;
 
 namespace Dsh.Tests;
 
@@ -11,7 +11,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void AppendWrapsAcrossTheRingTailAndKeepsOrder()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 8);
+        var buffer = new TerminalOutputBuffer(maxBytes: 8);
         buffer.Append("abcde");
         buffer.Append("fghij");
         Assert.Equal("cdefghij", buffer.Snapshot().Text);
@@ -21,7 +21,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void SmallChunksAcrossManyWrapsKeepTheTailIntact()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 10);
+        var buffer = new TerminalOutputBuffer(maxBytes: 10);
         for (var index = 0; index < 100; index++)
             buffer.Append(index.ToString());
         Assert.Equal("9596979899", buffer.Snapshot().Text);
@@ -30,7 +30,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void MaxLinesEvictsCompleteLeadingLines()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024, maxLines: 3);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024, maxLines: 3);
         buffer.Append("a\nb\nc\nd\ne");
         Assert.Equal("c\nd\ne", buffer.Snapshot().Text);
         Assert.True(buffer.Snapshot().Truncated);
@@ -39,7 +39,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void MaxLinesCountsTrailingEmptyLine()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024, maxLines: 2);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024, maxLines: 2);
         buffer.Append("a\nb\n");
         Assert.Equal("b\n", buffer.Snapshot().Text);
     }
@@ -47,7 +47,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ConsumeReturnsAndClearsOnlyLiveContent()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 16);
+        var buffer = new TerminalOutputBuffer(maxBytes: 16);
         buffer.Append("first\n");
         var consumed = buffer.Consume();
         Assert.Equal("first\n", consumed.Delta);
@@ -60,7 +60,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ByteBudgetDropsWholeMultibyteRunes()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 5);
+        var buffer = new TerminalOutputBuffer(maxBytes: 5);
         buffer.Append("ééé");
         var snapshot = buffer.Snapshot();
         Assert.Equal("éé", snapshot.Text);
@@ -70,7 +70,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ByteBudgetNeverLeavesALoneSurrogate()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 5);
+        var buffer = new TerminalOutputBuffer(maxBytes: 5);
         buffer.Append("😀😀");
         var snapshot = buffer.Snapshot();
         Assert.Equal("😀", snapshot.Text);
@@ -80,7 +80,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ReadReturnsLinesCountedFromTheTail()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024);
         buffer.Append("l0\nl1\nl2\nl3\nl4");
 
         var tail = buffer.Read(offset: 0, count: 2, maxBytes: 1024);
@@ -104,7 +104,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ReadPastTotalLinesReturnsEmptyAtTheRequestedOffset()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024);
         buffer.Append("only");
         var result = buffer.Read(offset: 4, count: 10, maxBytes: 1024);
         Assert.Equal("", result.Text);
@@ -117,7 +117,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ReadKeepsTrailingNewlineWhenTheLastLineIsEmpty()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024);
         buffer.Append("a\nb\n");
         var result = buffer.Read(offset: 0, count: 5, maxBytes: 1024);
         Assert.Equal("a\nb\n", result.Text);
@@ -128,7 +128,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ReadTruncatesToTheByteBudgetFromTheTail()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 1024);
+        var buffer = new TerminalOutputBuffer(maxBytes: 1024);
         buffer.Append("aaaa\nbbbb");
         var result = buffer.Read(offset: 0, count: 2, maxBytes: 5);
         Assert.Equal("\nbbbb", result.Text);
@@ -139,7 +139,7 @@ public class BoundedTextBufferTests
     [Fact]
     public void ReadReportsTruncationFromEviction()
     {
-        var buffer = new BoundedTextBuffer(maxBytes: 8);
+        var buffer = new TerminalOutputBuffer(maxBytes: 8);
         buffer.Append("abcde");
         buffer.Append("fghij");
         var result = buffer.Read(offset: 0, count: 10, maxBytes: 8);

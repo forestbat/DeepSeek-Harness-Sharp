@@ -14,11 +14,11 @@ public sealed class PluginReferenceRulesTests
     };
 
     private static readonly HashSet<string> PluginAllowedTargets =
-        ["Dsh.Runtime", "Dsh.Plugins.Abstractions", "Dsh.Core", "Dsh.Llm", "Dsh.Interaction", "Dsh.Boot", "Dsh.Ptc", "Dsh.Presets"];
+        ["Dsh.Runtime", "Dsh.Plugins.Abstractions", "Dsh.Core", "Dsh.Llm", "Dsh.Interaction", "Dsh.Boot", "Dsh.Ptc", "Dsh.Presets", "Dsh.Pty"];
 
     private static readonly HashSet<string> FeaturePlugins =
     [
-        "Dsh.Interaction", "Dsh.Tools", "Dsh.Jobs", "Dsh.Terminal", "Dsh.Persistence", "Dsh.Compaction",
+        "Dsh.Interaction", "Dsh.Tools", "Dsh.Jobs", "Dsh.PtyTerminal", "Dsh.Persistence", "Dsh.Compaction",
         "Dsh.Subagent", "Dsh.Goal", "Dsh.Interaction.AskUser", "Dsh.Skills", "Dsh.PlanMode",
         "Dsh.SessionQuery", "Dsh.Mcp", "Dsh.Memory", "Dsh.AgentInstructions", "Dsh.Checkpoints",
         "Dsh.IdeHistory", "Dsh.Web", "Dsh.Workflow", "Dsh.Telemetry", "Dsh.E2b", "Dsh.Presets",

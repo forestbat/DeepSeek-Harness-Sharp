@@ -1,4 +1,4 @@
-﻿<Project>
+<Project>
 
   <!--
     宿主 exe 共用的发布配置: 由最终发布的 exe 项目导入。
@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <Target Name="CopyPluginAndSurfaceAssemblies" AfterTargets="Build">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\Dsh.Core\Dsh.Core.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Persistence\Dsh.Persistence.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Mcp\Dsh.Mcp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tools\Dsh.Tools.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction\Dsh.Interaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Skills\Dsh.Skills.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Goal\Dsh.Goal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Compaction\Dsh.Compaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Jobs\Dsh.Jobs.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Subagent\Dsh.Subagent.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.PlanMode\Dsh.PlanMode.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Web\Dsh.Web.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Workflow\Dsh.Workflow.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Terminal\Dsh.Terminal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm\Dsh.Llm.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tui\Dsh.Tui.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Acp\Dsh.Acp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Lsp\Dsh.Lsp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Sdk\Dsh.Sdk.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Pty\Dsh.Pty.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.IdeHistory\Dsh.IdeHistory.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\src\Dsh.Core\Dsh.Core.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Persistence\Dsh.Persistence.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Mcp\Dsh.Mcp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tools\Dsh.Tools.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction\Dsh.Interaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Skills\Dsh.Skills.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Goal\Dsh.Goal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Compaction\Dsh.Compaction.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Jobs\Dsh.Jobs.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Subagent\Dsh.Subagent.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.PlanMode\Dsh.PlanMode.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Web\Dsh.Web.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Workflow\Dsh.Workflow.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.PtyTerminal\Dsh.PtyTerminal.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm\Dsh.Llm.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Llm.Anthropic\Dsh.Llm.Anthropic.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Tui\Dsh.Tui.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Acp\Dsh.Acp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Lsp\Dsh.Lsp.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Sdk\Dsh.Sdk.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Pty\Dsh.Pty.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj;$(MSBuildThisFileDirectory)..\src\Dsh.IdeHistory\Dsh.IdeHistory.csproj" Targets="Build" Properties="Configuration=$(Configuration)" RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
     <ItemGroup>
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Core\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Persistence\bin\$(Configuration)\net10.0\*.dll" />
@@ -33,7 +33,7 @@
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.PlanMode\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Web\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Workflow\bin\$(Configuration)\net10.0\*.dll" />
-      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Terminal\bin\$(Configuration)\net10.0\*.dll" />
+      <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.PtyTerminal\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Interaction.AskUser\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm\bin\$(Configuration)\net10.0\*.dll" />
       <PluginAndSurfaceAssemblies Include="$(MSBuildThisFileDirectory)..\src\Dsh.Llm.DeepSeek\bin\$(Configuration)\net10.0\*.dll" />
@@ -52,3 +52,4 @@
   </Target>
 
 </Project>
+

@@ -45,7 +45,7 @@
     <ProjectReference Include="..\..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Plugins.Native.Host\Dsh.Plugins.Native.Host.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Jobs\Dsh.Jobs.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.Terminal\Dsh.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.PtyTerminal\Dsh.PtyTerminal.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj" />
     <ProjectReference Include="..\..\src\Dsh.IdeHistory\Dsh.IdeHistory.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Tui\Dsh.Tui.csproj" />

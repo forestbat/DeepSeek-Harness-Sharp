@@ -1,4 +1,4 @@
-using Dsh.Terminal;
+using Dsh.PtyTerminal;
 
 namespace Dsh.Tests;
 

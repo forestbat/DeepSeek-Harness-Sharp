@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using Dsh.Core;
 using Dsh.Llm;
 
-namespace Dsh.Terminal;
+namespace Dsh.PtyTerminal;
 
 [JsonConverter(typeof(BrandJsonConverter<TerminalSessionId>))]
 public readonly record struct TerminalSessionId(string Value) : IBrand<TerminalSessionId>
