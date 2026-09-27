@@ -3,7 +3,10 @@ param(
     [string]$Session = "",
     [string]$Out = "artifacts/gpu-screenshots/gui.png",
     [int]$WaitSeconds = 8,
-    [switch]$KeepOpen
+    [switch]$KeepOpen,
+    # 捕获目标可换: 默认 GUI 启动器; 传 -ExePath/-ExeArguments 可截 GPU 窗口(dsh tui --gpu)等其它进程。
+    [string]$ExePath = "",
+    [string]$ExeArguments = ""
 )
 
 # 后台截图 GUI: 不激活窗口, 不注入输入, 不占用用户的鼠标键盘。
@@ -27,12 +30,19 @@ public class Win32GuiShot {
 [Win32GuiShot]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root "DshGuiHost\bin\Debug\net10.0\dsh-gui.exe"
-if (-not (Test-Path $exe)) { throw "先构建 GUI 启动器: dotnet build DshGuiHost\DshGuiHost.csproj" }
+$exe = if ($ExePath.Length -gt 0) { $ExePath } else { Join-Path $root "DshGuiHost\bin\Debug\net10.0\dsh-gui.exe" }
+if (-not (Test-Path $exe)) { throw "先构建目标启动器: $exe" }
 
 $arguments = @()
-if ($DshHome.Length -gt 0) { $arguments += @("--home", $DshHome) }
-if ($Session.Length -gt 0) { $arguments += @("--session", $Session) }
+if ($ExeArguments.Length -gt 0)
+{
+    $arguments += $ExeArguments.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+}
+else
+{
+    if ($DshHome.Length -gt 0) { $arguments += @("--home", $DshHome) }
+    if ($Session.Length -gt 0) { $arguments += @("--session", $Session) }
+}
 $errorLog = Join-Path $root "artifacts\capture-gui.err"
 Remove-Item $errorLog -ErrorAction SilentlyContinue
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $root -RedirectStandardError $errorLog -PassThru
