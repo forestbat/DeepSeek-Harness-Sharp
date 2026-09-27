@@ -88,7 +88,27 @@ public class GlyphAtlasTests
         var latinBottom = LastSetRow(atlas, 'A');
         var cjkBottom = LastSetRow(atlas, '中');
 
-        Assert.InRange(Math.Abs(latinBottom - cjkBottom), 0, 2);
+        // 度量只取主字体、回退字体字形按同一基线绘制; 回退字体自身墨水底边可差 1~3px(YaHei UI/Noto CJK 实测),
+        // 故这里断言"大致共享基线且不出格": 差值 ≤4px, 且 CJK 墨水底边必须在格内(不被裁)。
+        Assert.InRange(Math.Abs(latinBottom - cjkBottom), 0, 4);
+        Assert.True(cjkBottom < atlas.GlyphHeight, $"CJK 墨水底边 {cjkBottom} 超出行高 {atlas.GlyphHeight}");
+    }
+
+    [Fact]
+    public void Wide_Glyph_Bakes_Into_Second_Slot_Without_Clipping()
+    {
+        var atlas = CreateIsolated();
+        var rightHalfInk = 0;
+        for (var y = 0; y < atlas.GlyphHeight; y++)
+        {
+            for (var x = atlas.GlyphWidth; x < atlas.GlyphWidth * 2; x++)
+            {
+                if (atlas.IsPixelSet('中', x, y))
+                    rightHalfInk++;
+            }
+        }
+
+        Assert.True(rightHalfInk > 0, "宽字形应烘进第二个槽(自然尺寸, 不被单格宽裁剪)");
     }
 
     private static int LastSetRow(GlyphAtlas atlas, char character)

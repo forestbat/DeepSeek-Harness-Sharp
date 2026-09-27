@@ -1,4 +1,5 @@
 using SixLabors.Fonts;
+using SixLabors.Fonts.Unicode;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Drawing.Text;
@@ -8,19 +9,24 @@ namespace Dsh.Tui;
 
 public readonly record struct GlyphUv(float MinX, float MinY, float MaxX, float MaxY);
 
+/**
+ * 字形图集: 度量照抄 Alacritty/crossfont —— 格宽 = floor(advance('0')),
+ * 格高 = floor(max(字体声明行高, ascent − descent)), 基线距格顶 = 格高 + descent(负值);
+ * 宽字形占同一行的两个连续槽(位图按自然尺寸烘焙, 绝不缩放), 窄字形占一槽。
+ */
 public sealed class GlyphAtlas
 {
-    // 默认值对齐 Rider 终端(JediTerm, JetBrains Mono 13pt@96dpi): 格 = charWidth('W') 10px × 行高 16px, 字身 17.33px。
-    public const int DefaultGlyphWidth = 10;
-    public const int DefaultGlyphHeight = 16;
-    public const float DefaultFontSize = 17.333f;
-    /** 默认字号(磅): 即 Rider/JetBrains IDE 终端的默认字号。 */
-    public const double DefaultFontSizePt = 13;
     public const int Columns = 128;
     public const int Rows = 64;
     public const int Capacity = Columns * Rows;
 
-    private const string CacheMagic = "DSHGLYF1";
+    /** 默认字号(磅): 即 Rider/JetBrains IDE 终端的默认字号; 格尺寸由字体度量推导, 不硬编码。 */
+    public const double DefaultFontSizePt = 13;
+
+    private const string CacheMagic = "DSHGLYF3";
+
+    /** 字号(磅)→ 六线字号(px, Dpi=72 下 1pt=1px)。 */
+    private const float DefaultFontSize = 17.333f;
 
     private static readonly Lazy<GlyphAtlas> SharedInstance = new(() => new GlyphAtlas());
     private static readonly Lazy<FontFamily> SharedFamily = new(ResolveFontFamily);
@@ -34,6 +40,7 @@ public sealed class GlyphAtlas
     private readonly int[] _mapUpload = new int[char.MaxValue + 1];
     private readonly byte[] _bakedBitmap = new byte[(char.MaxValue + 1) / 8];
     private readonly char[] _slotChars = new char[Capacity];
+    private readonly bool[] _slotPairTail = new bool[Capacity];
     private readonly long[] _slotTicks = new long[Capacity];
     private readonly GlyphUv[] _uvs = BuildUvs();
     private readonly byte[] _textureData;
@@ -41,15 +48,15 @@ public sealed class GlyphAtlas
     private readonly string _cachePath;
     private readonly float _fontSize;
     private readonly Font _font;
-    private readonly Lazy<float> _offsetY;
+    private readonly float _originY;
     private int _nextSlot;
     private bool _cacheDirty;
     private long _accessCounter;
 
-    /** 字形槽像素宽(默认 16, 随字号缩放)。 */
+    /** 字符格像素宽(字体 advance('0') 向下取整)。 */
     public int GlyphWidth { get; }
 
-    /** 字形槽像素高(默认 20, 随字号缩放)。 */
+    /** 字符格像素高(max(声明行高, ascent − descent) 向下取整)。 */
     public int GlyphHeight { get; }
 
     public int MapVersion { get; private set; }
@@ -77,17 +84,21 @@ public sealed class GlyphAtlas
             BakeSlow(character);
     }
 
-    /** fontSizePt 为字号(磅, 默认 13pt = 10x16 格/17.33px 字身, 对齐 Rider 终端)。缓存按格尺寸分文件, 互不污染。 */
+    /** fontSizePt 为字号(磅, 默认 13pt); 缓存按格尺寸分文件, 互不污染。 */
     public GlyphAtlas(string? cachePath = null, double fontSizePt = DefaultFontSizePt)
     {
         if (!double.IsFinite(fontSizePt) || fontSizePt <= 0)
             fontSizePt = DefaultFontSizePt;
         var ratio = fontSizePt / DefaultFontSizePt;
-        GlyphWidth = Math.Max(4, (int)Math.Round(DefaultGlyphWidth * ratio));
-        GlyphHeight = Math.Max(5, (int)Math.Round(DefaultGlyphHeight * ratio));
         _fontSize = DefaultFontSize * (float)ratio;
         _font = SharedFamily.Value.CreateFont(_fontSize);
-        _offsetY = new Lazy<float>(() => MeasureVerticalOffset(CreateOptions()));
+        var metrics = _font.FontMetrics;
+        var horizontal = metrics.HorizontalMetrics;
+        var pixelsPerUnit = _font.Size / metrics.UnitsPerEm;
+        var descentPixels = horizontal.Descender * pixelsPerUnit;
+        GlyphWidth = Math.Max(1, (int)Math.Floor(TextMeasurer.MeasureAdvance("0", CreateOptions()).Width));
+        GlyphHeight = Math.Max(1, (int)Math.Floor(Math.Max(horizontal.LineHeight, horizontal.Ascender - horizontal.Descender) * pixelsPerUnit));
+        _originY = GlyphHeight + descentPixels - MeasureLayoutBaseline();
         _textureData = new byte[Columns * GlyphWidth * Rows * GlyphHeight];
         _cachePath = cachePath ?? DefaultCachePath(fontSizePt);
         LoadCache();
@@ -123,7 +134,10 @@ public sealed class GlyphAtlas
 
     public bool IsPixelSet(char character, int x, int y)
     {
-        if ((uint)x >= GlyphWidth || (uint)y >= GlyphHeight)
+        if (ShouldFallback(character))
+            character = '?';
+        var maxX = TerminalTextWidth.IsWide(character) ? GlyphWidth * 2 : GlyphWidth;
+        if ((uint)x >= (uint)maxX || (uint)y >= (uint)GlyphHeight)
             throw new ArgumentOutOfRangeException(nameof(x));
         var slot = GetGlyphIndex(character);
         return _textureData[((slot / Columns) * GlyphHeight + y) * AtlasWidth + ((slot % Columns) * GlyphWidth + x)] != 0;
@@ -204,13 +218,16 @@ public sealed class GlyphAtlas
             var slot = _map[character];
             if (slot >= 0)
                 return slot;
-            slot = _nextSlot < Capacity ? _nextSlot++ : EvictOldest();
-            Bake(character, slot);
+            var wide = TerminalTextWidth.IsWide(character);
+            slot = AllocateSlot(wide);
+            Bake(character, slot, wide);
             _slotChars[slot] = character;
             _slotTicks[slot] = ++_accessCounter;
+            if (wide)
+                _slotTicks[slot + 1] = _slotTicks[slot];
             _map[character] = slot;
             _bakedBitmap[character >> 3] |= (byte)(1 << (character & 7));
-            _mapUpload[character] = (slot + 1) | (TerminalTextWidth.IsWide(character) ? int.MinValue : 0);
+            _mapUpload[character] = (slot + 1) | (wide ? int.MinValue : 0);
             MapVersion++;
             _dirtySlots.Add(slot);
             _cacheDirty = true;
@@ -218,28 +235,86 @@ public sealed class GlyphAtlas
         }
     }
 
-    private int EvictOldest()
+    /** 宽字形需要同一行内两个连续槽, 行尾剩单列时让到下一行; 容量不足走 LRU 驱逐。 */
+    private int AllocateSlot(bool wide)
     {
-        var oldest = 0;
-        for (var slot = 1; slot < Capacity; slot++)
+        if (wide && _nextSlot % Columns == Columns - 1)
+            _nextSlot++;
+        if (_nextSlot + (wide ? 2 : 1) <= Capacity)
         {
-            if (_slotTicks[slot] < _slotTicks[oldest])
-                oldest = slot;
+            var slot = _nextSlot;
+            _nextSlot += wide ? 2 : 1;
+            if (wide)
+                _slotPairTail[slot + 1] = true;
+            return slot;
         }
-        _map[_slotChars[oldest]] = -1;
-        _bakedBitmap[_slotChars[oldest] >> 3] &= (byte)~(1 << (_slotChars[oldest] & 7));
-        _mapUpload[_slotChars[oldest]] = 0;
-        MapVersion++;
-        return oldest;
+        return EvictOldest(wide);
     }
 
-    private void Bake(char character, int slot)
+    private int EvictOldest(bool wide)
     {
-        using var image = new Image<Rgba32>(GlyphWidth, GlyphHeight);
+        while (true)
+        {
+            var oldest = -1;
+            for (var slot = 0; slot < Capacity; slot++)
+            {
+                if (_slotPairTail[slot] || _slotChars[slot] == '\0')
+                    continue;
+                if (oldest < 0 || _slotTicks[slot] < _slotTicks[oldest])
+                    oldest = slot;
+            }
+            if (oldest < 0)
+            {
+                // 理论上不可达(容量内总有头槽); 兜底复位, 保证调用方拿到可用槽
+                Array.Fill(_map, -1);
+                Array.Clear(_bakedBitmap);
+                Array.Clear(_slotChars);
+                Array.Clear(_slotPairTail);
+                _nextSlot = 0;
+                MapVersion++;
+                return AllocateSlot(wide);
+            }
+            FreeSlot(oldest);
+            if (!wide)
+                return oldest;
+            if (oldest % Columns <= Columns - 2 && IsFreeSlot(oldest + 1))
+            {
+                _slotPairTail[oldest + 1] = true;
+                return oldest;
+            }
+        }
+    }
+
+    private void FreeSlot(int slot)
+    {
+        var character = _slotChars[slot];
+        _slotChars[slot] = '\0';
+        _slotPairTail[slot] = false;
+        _slotTicks[slot] = 0;
+        if (character == '\0')
+            return;
+        if (TerminalTextWidth.IsWide(character) && slot + 1 < Capacity)
+        {
+            _slotPairTail[slot + 1] = false;
+            _slotChars[slot + 1] = '\0';
+        }
+        _map[character] = -1;
+        _bakedBitmap[character >> 3] &= (byte)~(1 << (character & 7));
+        _mapUpload[character] = 0;
+        MapVersion++;
+    }
+
+    private bool IsFreeSlot(int slot)
+        => _slotChars[slot] == '\0' && !_slotPairTail[slot];
+
+    private void Bake(char character, int slot, bool wide)
+    {
+        var slotWidth = wide ? GlyphWidth * 2 : GlyphWidth;
+        using var image = new Image<Rgba32>(slotWidth, GlyphHeight);
         using (var canvas = image.Frames.RootFrame.CreateCanvas(Configuration.Default, new DrawingOptions()))
         {
             var options = CreateOptions();
-            options.Origin = new PointF(0, _offsetY.Value);
+            options.Origin = new PointF(0, _originY);
             BakeGlyphs(canvas, character, options);
         }
 
@@ -254,6 +329,8 @@ public sealed class GlyphAtlas
                     _textureData[((slotY + y) * AtlasWidth) + slotX + x] = rowSpan[x].A;
             }
         });
+        if (wide)
+            _dirtySlots.Add(slot + 1);
     }
 
     private void LoadCache()
@@ -298,6 +375,11 @@ public sealed class GlyphAtlas
                 }
                 _slotChars[slot] = character;
                 _slotTicks[slot] = ++_accessCounter;
+                if (TerminalTextWidth.IsWide(character) && slot + 1 < Capacity)
+                {
+                    _slotPairTail[slot + 1] = true;
+                    _slotTicks[slot + 1] = _slotTicks[slot];
+                }
                 _map[character] = slot;
                 _bakedBitmap[character >> 3] |= (byte)(1 << (character & 7));
                 _mapUpload[character] = (slot + 1) | (TerminalTextWidth.IsWide(character) ? int.MinValue : 0);
@@ -408,34 +490,48 @@ public sealed class GlyphAtlas
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh", "cache", name);
     }
 
-    private float MeasureVerticalOffset(TextOptions options)
+    /** 布局基线位置: 以 'H' 大写字母脚底(即基线)实测, 避免假设 SixLabors 的行盒口径。 */
+    private float MeasureLayoutBaseline()
     {
-        var probe = TextBuilder.GenerateGlyphs("Hg中", options);
-        if (probe.Count == 0)
-            return 0f;
-        var top = probe.Min(glyph => glyph.Bounds.Y);
-        var bottom = probe.Max(glyph => glyph.Bounds.Y + glyph.Bounds.Height);
-        return ((GlyphHeight - (bottom - top)) / 2f) - top;
+        var glyphs = TextBuilder.GenerateGlyphs("H", new TextOptions(_font));
+        return glyphs.Count > 0 ? glyphs[0].Bounds.Y + glyphs[0].Bounds.Height : GlyphHeight * 0.8f;
     }
 
     private static IReadOnlyList<FontFamily> ResolveFallbackFamilies()
     {
         // JetBrains 宿主进程(例如 Rider 启动的终端、测试、调试子进程)会劫持字体解析环境(Linux: FONTCONFIG_PATH 指向 JBR 内置 fontconfig;Windows 同样验证过),
         // 导致此处只能看到 JBR 自带字体,CJK 回退全部失效、宽字渲染为 tofu;真实终端会话不受影响,在该宿主内跑测试需显式恢复(如 FONTCONFIG_PATH=/etc/fonts)。
+        // 简体优先, 其次繁体/日文, 最后符号与 emoji: SixLabors 逐字挑"第一个覆盖该字的族", 顺序即优先级。
+        // 名称按各平台实际可解析的形式列出(YaHei 基础名在部分机器上解析失败, UI 变体可解析; Noto Sans SC 才是本机实体)。
         string[] names =
         [
+            "Microsoft YaHei UI",
             "Microsoft YaHei",
+            "Noto Sans SC",
+            "Noto Serif SC",
+            "Source Han Sans SC",
+            "思源黑体",
             "DengXian",
+            "DengXian Light",
             "SimSun",
-            "MS Gothic",
+            "SimHei",
+            "KaiTi",
+            "FangSong",
+            "Microsoft JhengHei UI",
+            "Microsoft JhengHei",
+            "Noto Sans TC",
+            "Noto Sans HK",
             "PingFang SC",
             "Hiragino Sans GB",
+            "MS Gothic",
             "Noto Sans Mono CJK SC",
             "Noto Sans Mono CJK TC",
             "Noto Sans CJK SC",
             "Noto Sans CJK TC",
             "Noto Sans CJK JP",
             "WenQuanYi Micro Hei",
+            "WenQuanYi Zen Hei",
+            "Droid Sans Fallback",
             "Segoe UI Symbol",
             "Segoe UI Emoji",
             "Apple Color Emoji",
@@ -449,7 +545,35 @@ public sealed class GlyphAtlas
                 families.Add(family);
         }
 
-        return families;
+        // 名字解析在部分环境(宿主机字体劫持/字体名与文件族名不一致)会漏掉真正的简中字体, 也可能让日文字体排在前面;
+        // 以 CJK 区抽样覆盖数降序稳定排序, 让覆盖面最广的族优先(名称顺序仅作同分时的稳定次序)。
+        return families
+            .OrderByDescending(Coverage)
+            .ToList();
+    }
+
+    private const int CjkProbeStart = 0x4E00;
+    private const int CjkProbeEnd = 0x9FFF;
+    /** 抽样步长取与区块长度互质的质数, 保证样本均匀铺满整个 CJK 区。*/
+    private const int CjkProbeStride = 37;
+
+    private static int Coverage(FontFamily family)
+    {
+        try
+        {
+            var font = family.CreateFont(DefaultFontSize);
+            var covered = 0;
+            for (var codePoint = CjkProbeStart; codePoint <= CjkProbeEnd; codePoint += CjkProbeStride)
+            {
+                if (font.TryGetGlyphs(new CodePoint(codePoint), out Glyph? glyph) && glyph is not null)
+                    covered++;
+            }
+            return covered;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     private static bool IsUsableFamily(FontFamily family)
