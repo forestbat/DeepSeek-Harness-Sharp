@@ -108,7 +108,10 @@ public sealed class LoopbackCallbackServer : IAsyncDisposable
 
     private static Uri? TryParseTarget(string target)
     {
-        if (Uri.TryCreate(target, UriKind.Absolute, out var absolute))
+        // 源相对目标(以 '/' 开头)在 Unix 上会被 Uri 当成 file: 绝对 URI 解析, 并把 '?' 转义进路径(查询丢失) →
+        // 只有 http(s) 绝对 URI 才直接采用, 其余一律补 http://127.0.0.1 前缀(Windows 上 TryCreate 本就失败, 行为不变)
+        if (Uri.TryCreate(target, UriKind.Absolute, out var absolute)
+            && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps))
             return absolute;
         return Uri.TryCreate($"http://127.0.0.1{target}", UriKind.Absolute, out var relative) ? relative : null;
     }

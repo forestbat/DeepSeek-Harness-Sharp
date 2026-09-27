@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
@@ -45,14 +46,31 @@ public sealed class PtcScriptHostClient
         _maxPendingCalls = maxPendingCalls;
     }
 
-    public async Task<PtcRunOutcome> RunAsync(string program, long timeoutMs, CancellationToken signal)
+    /**
+     * 自旋脚本宿主的启动命令: 常规是当前 apphost; 若当前进程是 dotnet 驱动(`dotnet exec` / `dotnet test`),
+     * 直接把它当宿主会变成 `dotnet --ptc-host`(驱动收到未知参数报错, 帧非法), 故改为 `dotnet <入口程序集> --ptc-host`。
+     * 两处入口(HarnessEntrypoint 与测试工程)都按"参数中任意位置出现 --ptc-host"派发宿主, 因此两种形式都成立。
+     */
+    public static (string FileName, string[] Arguments)? ResolveHostCommand()
     {
         var host = Environment.ProcessPath;
         if (string.IsNullOrEmpty(host))
+            return null;
+        var entryAssembly = Assembly.GetEntryAssembly()?.Location;
+        if (string.Equals(Path.GetFileNameWithoutExtension(host), "dotnet", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(entryAssembly))
+            return (host, [entryAssembly, PtcScriptHost.HostArgument]);
+        return (host, [PtcScriptHost.HostArgument]);
+    }
+
+    public async Task<PtcRunOutcome> RunAsync(string program, long timeoutMs, CancellationToken signal)
+    {
+        var command = ResolveHostCommand();
+        if (command is null)
             return new PtcRunOutcome(false, PtcFailureKinds.SandboxUnavailable, "the harness executable path is unavailable", null, null, "");
         using var handle = _subprocess.Spawn(new SubprocessSpawnSpec
         {
-            Argv = [host, PtcScriptHost.HostArgument],
+            Argv = [command.Value.FileName, .. command.Value.Arguments],
             Cwd = _cwd,
             RedirectStandardInput = true,
             Signal = signal,

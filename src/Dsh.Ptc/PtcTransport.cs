@@ -37,7 +37,7 @@ public sealed class PtcTransport : Service, IToolPresentation
 
     public string TransportToolName => RunCodeName;
 
-    public bool IsAvailable => Environment.ProcessPath is not null;
+    public bool IsAvailable => PtcScriptHostClient.ResolveHostCommand() is not null;
 
     public string SdkSection(ScopeKey? scope)
         => _tools.PresentationMode(scope) == ToolPresentationMode.Native

@@ -18,7 +18,7 @@ internal static class PtcHostShim
     internal static void Initialize()
     {
         var args = Environment.GetCommandLineArgs();
-        if (args.Length > 1 && args[1] == PtcScriptHost.HostArgument)
+        if (args.Any(argument => argument == PtcScriptHost.HostArgument))
             Environment.Exit(PtcScriptHost.RunAsync(args.Skip(1).ToArray()).GetAwaiter().GetResult());
     }
 }
