@@ -36,6 +36,7 @@ public sealed class ChatWindow : IDisposable
     private IReadOnlyList<PtyDaemonSessionDto> _daemonPtys = [];
     private PaneNode _paneTree = new PaneLeaf(0);
     private PaneLayout _paneLayout;
+    private SplitDivider? _dividerDrag;
     private ConsoleRect _paneArea;
     private int _focusedPaneId;
     private int _inputPaneId;
@@ -121,6 +122,9 @@ public sealed class ChatWindow : IDisposable
 
     public bool ExitRequested => _exitRequested;
 
+    /** UI 事件入队时的唤醒回调: 主循环阻塞等输入期间, agent 流式事件经它唤醒重绘。 */
+    internal Action? WakeHook { get; set; }
+
     public int RenderVersion { get; private set; }
 
     public int CursorScreenX => InputPane.CursorScreenX;
@@ -187,6 +191,9 @@ public sealed class ChatWindow : IDisposable
     public void HandleKey(ConsoleKeyInfo key)
     {
         RenderVersion++;
+        // 无键名也无字符的事件(纯修饰键按下等)不携带任何意图, 放行会误消费 Ctrl+X 前缀与审批态。
+        if (key.Key == ConsoleKey.NoName && key.KeyChar == '\0')
+            return;
         if (_overviewActive)
         {
             HandleOverviewKey(key);
@@ -196,6 +203,26 @@ public sealed class ChatWindow : IDisposable
         if (_agentsActive)
         {
             HandleAgentListKey(key);
+            return;
+        }
+
+        // 焦点在 shell 窗格: 按键直达 PTY(含 Ctrl+C 交给 shell), 只有 Ctrl+X 前缀仍归窗口。
+        var shell = FocusedPane as ShellPane;
+        if (shell is not null)
+        {
+            if (_ctrlXPrefix)
+            {
+                _ctrlXPrefix = false;
+                HandleCtrlXKey(key);
+                return;
+            }
+            if (key.Key == ConsoleKey.X && (key.Modifiers & ConsoleModifiers.Control) != 0)
+            {
+                _ctrlXPrefix = true;
+                SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · Q 退出");
+                return;
+            }
+            shell.HandleKey(key);
             return;
         }
 
@@ -219,7 +246,7 @@ public sealed class ChatWindow : IDisposable
             {
                 case ConsoleKey.X:
                     _ctrlXPrefix = true;
-                    input.StatusText = "Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话 · A 子代理 · W 总览 · + 分屏 · - 关窗格 · 方向键/O 切窗格";
+                    SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话 · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · 方向键/O 切窗格 · Q 退出");
                     return;
                 case ConsoleKey.C:
                     if (input.Busy)
@@ -260,6 +287,7 @@ public sealed class ChatWindow : IDisposable
     private void HandleCtrlXKey(ConsoleKeyInfo key)
     {
         var input = InputPane;
+        key = NormalizeSubcommandKey(key);
         switch (key.Key)
         {
             case ConsoleKey.N:
@@ -283,6 +311,12 @@ public sealed class ChatWindow : IDisposable
                 return;
             case ConsoleKey.W:
                 OpenOverview();
+                return;
+            case ConsoleKey.T:
+                AddShellPane();
+                return;
+            case ConsoleKey.Q:
+                RequestExit();
                 return;
             case ConsoleKey.OemPlus or ConsoleKey.Add:
                 SplitFocusedPane();
@@ -310,9 +344,24 @@ public sealed class ChatWindow : IDisposable
         input.RefreshMenuStatus();
     }
 
+    private void SetCtrlXHint(string hint)
+    {
+        var target = FocusedPane as ShellPane;
+        if (target is not null)
+            target.StatusText = hint;
+        else
+            InputPane.StatusText = hint;
+    }
+
     public void InsertText(string text)
     {
         RenderVersion++;
+        // 焦点在 shell 窗格时粘贴内容直达 PTY(对齐终端行为), 不进 AI 输入行。
+        if (FocusedPane is ShellPane shell)
+        {
+            shell.HandleText(text);
+            return;
+        }
         InputPane.InsertText(text);
     }
 
@@ -339,6 +388,11 @@ public sealed class ChatWindow : IDisposable
         var input = InputPane;
         if (input.PendingApproval is not null)
             return;
+        if (_panes.Count > 1 && FindDividerAt(cellX, cellY) is { } divider)
+        {
+            _dividerDrag = divider;
+            return;
+        }
         if (layout.Input.Contains(cellX, cellY))
         {
             input.HandleInputClick(cellX, layout.Input);
@@ -348,7 +402,12 @@ public sealed class ChatWindow : IDisposable
         if (_panes.Count == 1)
         {
             if (layout.Main.Contains(cellX, cellY))
-                input.StickToBottom = false;
+            {
+                if (FocusedPane.TryToggleFoldAt(cellY, layout.Main))
+                    return;
+                if (TryResolveTranscript(cellX, cellY, layout, out var pane, out var rect))
+                    pane.BeginSelection(cellX, cellY, rect);
+            }
             return;
         }
 
@@ -361,7 +420,96 @@ public sealed class ChatWindow : IDisposable
             return;
         }
 
+        if (TryResolveTranscript(cellX, cellY, layout, out var target, out var transcript))
+        {
+            if (target.TryToggleFoldAt(cellY, transcript))
+                return;
+            target.BeginSelection(cellX, cellY, transcript);
+            return;
+        }
         FocusedPane.StickToBottom = false;
+    }
+
+    /** 指针拖动: 分隔线上按下则调整窗格比例, 否则扩展文本选择(阶段 3.2)。 */
+    public void HandleMouseDrag(int cellX, int cellY, UiLayout layout)
+    {
+        RenderVersion++;
+        if (_dividerDrag is { } divider)
+        {
+            DragDivider(divider, cellX, cellY);
+            return;
+        }
+        if (TryResolveTranscript(cellX, cellY, layout, out var pane, out var rect))
+            pane.ExtendSelection(cellX, cellY, rect);
+    }
+
+    /** 指针释放: 结束分隔线拖动或文本选择(有选中文本则写入剪贴板)。 */
+    public string? HandleMouseRelease(int cellX, int cellY, UiLayout layout)
+    {
+        RenderVersion++;
+        if (_dividerDrag is not null)
+        {
+            _dividerDrag = null;
+            return null;
+        }
+        if (!TryResolveTranscript(cellX, cellY, layout, out var pane, out _))
+            return null;
+        var text = pane.FinishSelection();
+        if (text is not null)
+            _ = Clipboard.TrySetTextAsync(text);
+        return text;
+    }
+
+    /** 命中分隔线(含左右/上下各 1 格容差, 便于抓取)。 */
+    private SplitDivider? FindDividerAt(int cellX, int cellY)
+    {
+        foreach (var divider in _paneLayout.Dividers)
+        {
+            var hit = divider.Orientation == SplitOrientation.Vertical
+                ? Math.Abs(cellX - divider.X) <= 1 && cellY >= divider.Y && cellY < divider.Y + divider.Length
+                : Math.Abs(cellY - divider.Y) <= 1 && cellX >= divider.X && cellX < divider.X + divider.Length;
+            if (hit)
+                return divider;
+        }
+        return null;
+    }
+
+    /** 拖动分隔线: 指针轴向坐标换算成比例(两侧至少各留 MinimumPaneExtent 格), 立即重算布局。 */
+    private void DragDivider(SplitDivider divider, int cellX, int cellY)
+    {
+        if (!PaneTree.TryGetRatio(_paneTree, divider.Path, out var currentRatio))
+            return;
+        var along = divider.Orientation == SplitOrientation.Vertical ? cellX : cellY;
+        var ratio = LayoutEngine.RatioForDrag(divider, along, currentRatio);
+        if (Math.Abs(ratio - currentRatio) < 1e-9)
+            return;
+        _paneTree = PaneTree.Resize(_paneTree, divider.Path, ratio);
+        _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
+    }
+
+    /** 命中 transcript 的窗格与矩形(单窗格=主区, 多窗格=去掉头部行的窗格体)。 */
+    private bool TryResolveTranscript(int cellX, int cellY, UiLayout layout, out ChatPane pane, out ConsoleRect rect)
+    {
+        pane = null!;
+        rect = default;
+        if (_panes.Count == 1)
+        {
+            if (FocusedPane is not ChatPane single || !layout.Main.Contains(cellX, cellY))
+                return false;
+            pane = single;
+            rect = layout.Main;
+            return true;
+        }
+
+        var hit = _paneLayout.HitTest(cellX, cellY);
+        if (hit is null || !_panes.TryGetValue(hit.Value, out var view) || view is not ChatPane chatPane)
+            return false;
+        var placement = _paneLayout.Panes.FirstOrDefault(candidate => candidate.PaneId == hit.Value);
+        if (placement.Rect.Width <= 0 || placement.Rect.Height <= 1)
+            return false;
+        rect = new ConsoleRect(placement.Rect.X, placement.Rect.Y + 1, placement.Rect.Width, placement.Rect.Height - 1);
+        pane = chatPane;
+        return rect.Contains(cellX, cellY);
     }
 
     public void Draw(CellGrid grid, UiLayout layout)
@@ -369,6 +517,7 @@ public sealed class ChatWindow : IDisposable
         grid.Clear();
         _paneArea = new ConsoleRect(0, 0, grid.Width, Math.Max(0, layout.Main.Height));
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
+        SyncShellPaneSizes();
 
         if (_panes.Count == 1)
         {
@@ -410,7 +559,12 @@ public sealed class ChatWindow : IDisposable
     {
         lock (_gate)
             _pendingActions.Enqueue(action);
+        WakeHook?.Invoke();
     }
+
+    /** 外部(如 shell 输出泵)请求重绘: 只推版本号, 真正的合并由主循环完成。 */
+    internal void Invalidate()
+        => RenderVersion++;
 
     internal IReadOnlyList<SessionInfo> CurrentSessions()
     {
@@ -747,12 +901,51 @@ public sealed class ChatWindow : IDisposable
     internal void AddPane(AgentLoopAgent agent, SplitOrientation? orientation)
     {
         var id = _nextPaneId++;
-        SplitPaneAt(orientation, id);
-        _panes[id] = new ChatPane(this, id, agent);
-        _focusedPaneId = id;
-        _inputPaneId = id;
+        AddPane(new ChatPane(this, id, agent), orientation);
+    }
+
+    /** 通用加入窗格: 分割树按 pane.Id 落位; shell 窗格不参与输入行绑定。 */
+    internal void AddPane(ITuiPane pane, SplitOrientation? orientation)
+    {
+        SplitPaneAt(orientation, pane.Id);
+        _panes[pane.Id] = pane;
+        _focusedPaneId = pane.Id;
+        if (pane is ChatPane)
+            _inputPaneId = pane.Id;
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
         RenderVersion++;
+    }
+
+    /** 打开一个真 shell 窗格(Dsh.Pty): 终端内形态的临时 shell 与独立窗口形态的终端本体共用。 */
+    internal async void AddShellPane()
+    {
+        var shell = PtyShell.Resolve();
+        if (!PtyShell.Exists(shell))
+        {
+            InputPane.AppendRaw($"  shell unavailable: {shell}\n");
+            return;
+        }
+
+        var id = _nextPaneId++;
+        var columns = Math.Max(20, _paneArea.Width);
+        var rows = Math.Max(4, _paneArea.Height - 1);
+        try
+        {
+            var session = await PtyHost.Default.StartAsync(new PtyStartInfo
+            {
+                FileName = shell,
+                Arguments = PtyShell.Arguments(shell),
+                WorkingDirectory = InputPane.CurrentCwd(),
+                Environment = PtyShell.ChildEnvironment(),
+                Rows = rows,
+                Columns = columns,
+            });
+            QueueAction(() => AddPane(new ShellPane(this, id, session, columns, rows), null));
+        }
+        catch (Exception error)
+        {
+            QueueAction(() => InputPane.AppendRaw($"  shell failed: {error.Message}\n"));
+        }
     }
 
     internal bool CloseFocusedPane()
@@ -840,7 +1033,42 @@ public sealed class ChatWindow : IDisposable
         _focusedPaneId = paneId;
         if (_panes[paneId] is ChatPane)
             _inputPaneId = paneId;
+        if (_panes[paneId] is ShellPane shell)
+            shell.StatusText = "shell 窗格: 按键直达 shell · Ctrl+X - 关闭 · Ctrl+X 方向键/O 切窗格";
         RenderVersion++;
+    }
+
+    /** 窗格尺寸变化时同步给 shell 窗格(PTY 需要按真实行列折行)。 */
+    private void SyncShellPaneSizes()
+    {
+        foreach (var placement in _paneLayout.Panes)
+        {
+            if (!_panes.TryGetValue(placement.PaneId, out var pane) || pane is not ShellPane shell)
+                continue;
+            shell.Resize(placement.Rect.Width, Math.Max(1, placement.Rect.Height - 1));
+        }
+    }
+
+    /**
+     * Ctrl+X 子命令按键归一: Unix/pty 宿主对 '+'/'-' 只给字符、不上报 OemPlus/OemMinus(Windows conhost 才会),
+     * 统一按字符补齐 ConsoleKey, 保证分屏/关窗格在两类宿主上行为一致。
+     */
+    private static ConsoleKeyInfo NormalizeSubcommandKey(ConsoleKeyInfo key)
+    {
+        var target = key.KeyChar switch
+        {
+            '+' => ConsoleKey.OemPlus,
+            '-' => ConsoleKey.OemMinus,
+            _ => (ConsoleKey?)null,
+        };
+        if (target is null || key.Key == target)
+            return key;
+        return new ConsoleKeyInfo(
+            key.KeyChar,
+            target.Value,
+            (key.Modifiers & ConsoleModifiers.Shift) != 0,
+            (key.Modifiers & ConsoleModifiers.Alt) != 0,
+            (key.Modifiers & ConsoleModifiers.Control) != 0);
     }
 
     private async void SplitFocusedPane()
@@ -891,7 +1119,7 @@ public sealed class ChatWindow : IDisposable
     {
         foreach (var pane in _panes.Values)
         {
-            if (string.Equals(pane.Session.Id.Value, sessionId, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(pane.Session?.Id.Value, sessionId, StringComparison.OrdinalIgnoreCase))
                 return pane;
         }
         return null;
@@ -904,6 +1132,7 @@ public sealed class ChatWindow : IDisposable
     {
         lock (_gate)
             _pendingEvents.Enqueue((pane, sessionEvent));
+        WakeHook?.Invoke();
     }
 
     private void ClearExitConfirm()
@@ -998,8 +1227,9 @@ public sealed class ChatWindow : IDisposable
             if (!_panes.TryGetValue(id, out var pane))
                 continue;
             var marker = id == _focusedPaneId ? "* " : "  ";
+            var target = pane.Session is { } session ? session.Id.Value : pane.PaneTitle;
             _overviewItems.Add(new OverviewItem(
-                $"  {marker}pane {id} · {pane.Session.Id}",
+                $"  {marker}pane {id} · {target}",
                 OverviewTargetKind.Pane,
                 id,
                 null));

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
@@ -10,11 +11,37 @@ internal static class UnixPtyNative
     private const ulong Tiocswinsz = 0x5414;
     private const int Sigterm = 15;
     private const int Sigkill = 9;
+
+    /**
+     * openpty 的归属随 glibc 变化: 2.34 起并入 libc, 且发行版通常只装 libutil.so.1(无开发用符号链接 libutil.so),
+     * 直接 DllImport("libutil") 在 Ubuntu 24.04 一类系统上会 DllNotFound。按 libutil → libutil.so.1 → libc 依次解析。
+     */
+    static UnixPtyNative()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(UnixPtyNative).Assembly, ResolveLibrary);
+    }
+
+    private static IntPtr ResolveLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        if (libraryName != "libutil")
+            return IntPtr.Zero;
+        foreach (var candidate in new[] { "libutil", "libutil.so.1", "libc" })
+        {
+            if (NativeLibrary.TryLoad(candidate, assembly, searchPath, out var handle))
+                return handle;
+        }
+        return IntPtr.Zero;
+    }
     private const int Wnohang = 1;
+    private const int ORdwr = 2;
+    /** glibc/musl 一致: 让子进程成为新会话首进程, 从而能在 open 从端时取得控制终端(job control 前提)。 */
+    private const short PosixSpawnSetsid = 0x80;
+    /** 不透明类型的保守容量: glibc 2.39 的 posix_spawnattr_t 含两个 sigset_t(共 256 字节)加调度参数, 已超 256。 */
+    private const int SpawnAttrBytes = 1024;
 
     public static (int MasterFd, int Pid) Spawn(PtyStartInfo info)
     {
-        var (master, slave) = OpenPty(info.Rows, info.Columns);
+        var (master, slave, slaveName) = OpenPty(info.Rows, info.Columns);
         var allocated = new List<IntPtr>();
         try
         {
@@ -29,14 +56,26 @@ internal static class UnixPtyNative
             allocated.Add(envp);
             allocated.AddRange(envStrings);
 
+            var slavePath = AllocAnsi(slaveName);
+            allocated.Add(slavePath);
+
             var initError = posix_spawn_file_actions_init(out var actions);
             if (initError != 0)
                 throw new Win32Exception(initError, "posix_spawn_file_actions_init failed");
+            // attr 是不透明类型, 尺寸随实现变化: 用零填充缓冲 + 官方 init/destroy 访问。
+            var attributes = Marshal.AllocHGlobal(SpawnAttrBytes);
+            Marshal.Copy(new byte[SpawnAttrBytes], 0, attributes, SpawnAttrBytes);
+            var attributesReady = posix_spawnattr_init(attributes) == 0;
+            if (attributesReady)
+                posix_spawnattr_setflags(attributes, PosixSpawnSetsid);
             try
             {
-                ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, slave, 0), "posix_spawn_file_actions_adddup2(stdin)");
-                ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, slave, 1), "posix_spawn_file_actions_adddup2(stdout)");
-                ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, slave, 2), "posix_spawn_file_actions_adddup2(stderr)");
+                // 用 addopen 而不是 adddup2: 子进程以新会话首进程身份 open 从端, 内核才会把该 tty 设为其控制终端。
+                ThrowIfSpawnActionError(
+                    posix_spawn_file_actions_addopen(ref actions, 0, slavePath, ORdwr, 0),
+                    "posix_spawn_file_actions_addopen(stdin)");
+                ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, 0, 1), "posix_spawn_file_actions_adddup2(stdout)");
+                ThrowIfSpawnActionError(posix_spawn_file_actions_adddup2(ref actions, 0, 2), "posix_spawn_file_actions_adddup2(stderr)");
 
                 if (info.WorkingDirectory is { } workingDirectory)
                 {
@@ -47,7 +86,13 @@ internal static class UnixPtyNative
                         "posix_spawn_file_actions_addchdir_np");
                 }
 
-                var spawnError = posix_spawnp(out var pid, file, ref actions, IntPtr.Zero, argv, envp);
+                var spawnError = posix_spawnp(
+                    out var pid,
+                    file,
+                    ref actions,
+                    attributesReady ? attributes : IntPtr.Zero,
+                    argv,
+                    envp);
                 if (spawnError != 0)
                     throw new Win32Exception(spawnError, "posix_spawnp failed");
 
@@ -55,6 +100,9 @@ internal static class UnixPtyNative
             }
             finally
             {
+                if (attributesReady)
+                    posix_spawnattr_destroy(attributes);
+                Marshal.FreeHGlobal(attributes);
                 posix_spawn_file_actions_destroy(ref actions);
             }
         }
@@ -65,7 +113,7 @@ internal static class UnixPtyNative
         }
     }
 
-    private static (int Master, int Slave) OpenPty(int rows, int cols)
+    private static (int Master, int Slave, string SlaveName) OpenPty(int rows, int cols)
     {
         var winsize = AllocWinsize(new Winsize
         {
@@ -77,7 +125,9 @@ internal static class UnixPtyNative
         {
             if (openpty(out var master, out var slave, nameBuffer, IntPtr.Zero, winsize) != 0)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "openpty failed");
-            return (master, slave);
+            var slaveName = Marshal.PtrToStringUTF8(nameBuffer)
+                ?? throw new InvalidOperationException("openpty did not report the slave name");
+            return (master, slave, slaveName);
         }
         finally
         {
@@ -215,6 +265,18 @@ internal static class UnixPtyNative
 
     [DllImport("libc.so.6", SetLastError = true)]
     private static extern int posix_spawnp(out int pid, IntPtr file, ref PosixSpawnFileActions fileActions, IntPtr attrp, IntPtr argv, IntPtr envp);
+
+    [DllImport("libc.so.6", SetLastError = true)]
+    private static extern int posix_spawn_file_actions_addopen(ref PosixSpawnFileActions fileActions, int fd, IntPtr path, int oflag, int mode);
+
+    [DllImport("libc.so.6", SetLastError = true)]
+    private static extern int posix_spawnattr_init(IntPtr attributes);
+
+    [DllImport("libc.so.6", SetLastError = true)]
+    private static extern int posix_spawnattr_destroy(IntPtr attributes);
+
+    [DllImport("libc.so.6", SetLastError = true)]
+    private static extern int posix_spawnattr_setflags(IntPtr attributes, short flags);
 
     [DllImport("libc.so.6", SetLastError = true)]
     private static extern int posix_spawn_file_actions_init(out PosixSpawnFileActions fileActions);

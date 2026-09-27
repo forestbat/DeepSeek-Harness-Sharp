@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
@@ -6,40 +7,61 @@ namespace Dsh.Tui;
 
 public static class TuiRunner
 {
+    /** 渲染合并窗口: leading(空闲后首事件立即渲) + trailing(窗口内到点渲最新态), 见阶段 1.4 拍板。 */
+    private const int FrameIntervalMs = 10;
+
     public static async Task<int> Run(
         HarnessApp app,
-        string cwd)
+        string cwd,
+        bool gpu = false,
+        bool shell = false,
+        string? gpuScreenshot = null)
     {
-        if (IsGpuRequested())
-            return RunGpuSync(app, cwd);
+        if (gpu)
+            return RunGpuSync(app, cwd, shell, gpuScreenshot);
 
-        var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-        var handle = await agents.Create(new CreateAgentOptions(
-            SessionId.Create($"session-{Guid.NewGuid()}"),
-            cwd,
-            new AgentOptions(app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort))));
-        var agent = (AgentLoopAgent)handle.Agent;
-        await agent.WhenIdle();
+        // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
+        var signalGuards = RegisterSignalRestore(rawMode);
+        try
+        {
+            var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+            var handle = await agents.Create(new CreateAgentOptions(
+                SessionId.Create($"session-{Guid.NewGuid()}"),
+                cwd,
+                new AgentOptions(app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort))));
+            var agent = (AgentLoopAgent)handle.Agent;
+            await agent.WhenIdle();
 
-        if (Console.IsInputRedirected)
-            return await RunNonInteractiveAsync(app, agent);
+            if (Console.IsInputRedirected)
+                return await RunNonInteractiveAsync(app, agent);
 
-        return await RunInteractiveAsync(app, agent);
+            return await RunInteractiveAsync(app, agent, shell);
+        }
+        finally
+        {
+            if (signalGuards is not null)
+                foreach (var guard in signalGuards)
+                    guard.Dispose();
+        }
     }
 
-    private static bool IsGpuRequested()
+    /** Unix 信号兜底: SIGTERM/SIGHUP/SIGINT 时先恢复终端再退出, 不给宿主留 raw+备用屏幕残骸。 */
+    private static List<PosixSignalRegistration>? RegisterSignalRestore(TerminalRawMode? rawMode)
     {
-        if (string.Equals(Environment.GetEnvironmentVariable("DSH_TUI_GPU"), "1", StringComparison.Ordinal))
-            return true;
-
-        var args = Environment.GetCommandLineArgs();
-        for (var i = 1; i < args.Length; i++)
+        if (rawMode is null || OperatingSystem.IsWindows())
+            return null;
+        var guards = new List<PosixSignalRegistration>(3);
+        foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGINT })
         {
-            if (string.Equals(args[i], "--gpu", StringComparison.Ordinal))
-                return true;
+            guards.Add(PosixSignalRegistration.Create(signal, context =>
+            {
+                context.Cancel = true;
+                rawMode.Dispose();
+                Environment.Exit(128 + (int)signal);
+            }));
         }
-
-        return false;
+        return guards;
     }
 
     private static async Task<int> RunNonInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
@@ -59,15 +81,20 @@ public static class TuiRunner
         return 0;
     }
 
-    private static async Task<int> RunInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
+    private static async Task<int> RunInteractiveAsync(HarnessApp app, AgentLoopAgent agent, bool startShell = false)
     {
         SetConsoleInteractive(true);
-        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
         using var inputSource = CreateInputSource();
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
         using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName));
+        if (startShell)
+            chat.AddShellPane();
+        if (inputSource is not null)
+            chat.WakeHook = inputSource.Wake;
+        var seenVersion = -1;
+        var nextFrameAt = 0L;
         try
         {
             while (!chat.ExitRequested)
@@ -81,10 +108,18 @@ public static class TuiRunner
                 }
 
                 var layout = LayoutEngine.Calculate(size.Width, size.Height);
-                chat.Draw(grid, layout);
-                await Console.Out.WriteAsync(renderer.RenderToBuffer(grid, chat.CursorScreenX, chat.CursorScreenY, forceFull));
-                await Console.Out.FlushAsync();
-                forceFull = false;
+                if (forceFull || chat.RenderVersion != seenVersion)
+                {
+                    // trailing 窗口内继续吃输入, 到点渲最新状态
+                    if (inputSource is not null && Environment.TickCount64 < nextFrameAt)
+                        DrainInputUntil(chat, inputSource, nextFrameAt, layout);
+                    chat.Draw(grid, layout);
+                    await Console.Out.WriteAsync(renderer.RenderToBuffer(grid, chat.CursorScreenX, chat.CursorScreenY, forceFull));
+                    await Console.Out.FlushAsync();
+                    forceFull = false;
+                    seenVersion = chat.RenderVersion;
+                    nextFrameAt = Environment.TickCount64 + FrameIntervalMs;
+                }
 
                 if (chat.ExitRequested)
                     break;
@@ -95,21 +130,14 @@ public static class TuiRunner
                     continue;
                 }
 
-                var inputEvent = inputSource.Read();
+                var inputEvent = inputSource.Read(Timeout.Infinite);
                 if (inputEvent is null)
-                    break;
-                if (inputEvent.Value.IsMouse)
                 {
-                    var mouse = inputEvent.Value.Mouse!.Value;
-                    if (mouse.IsWheel)
-                        chat.HandleMouseWheel(mouse.WheelDelta, mouse.X, mouse.Y, layout);
-                    else if (mouse.Pressed && mouse.Button == 0)
-                        chat.HandleMouseClick(mouse.X, mouse.Y, layout);
+                    if (inputSource.EndOfStream)
+                        break;
+                    continue;
                 }
-                else
-                {
-                    chat.HandleKey(inputEvent.Value.Key);
-                }
+                DispatchInput(chat, inputEvent.Value, layout);
             }
         }
         finally
@@ -122,6 +150,35 @@ public static class TuiRunner
         return 0;
     }
 
+    private static void DispatchInput(ChatWindow chat, TerminalInputEvent inputEvent, UiLayout layout)
+    {
+        if (inputEvent.IsMouse)
+        {
+            var mouse = inputEvent.Mouse!.Value;
+            if (mouse.IsWheel)
+                chat.HandleMouseWheel(mouse.WheelDelta, mouse.X, mouse.Y, layout);
+            else if (mouse.IsMove)
+                chat.HandleMouseDrag(mouse.X, mouse.Y, layout);
+            else if (mouse.Pressed)
+                chat.HandleMouseClick(mouse.X, mouse.Y, layout);
+            else
+                chat.HandleMouseRelease(mouse.X, mouse.Y, layout);
+            return;
+        }
+        chat.HandleKey(inputEvent.Key);
+    }
+
+    private static void DrainInputUntil(ChatWindow chat, ITerminalInputSource inputSource, long deadline, UiLayout layout)
+    {
+        while (Environment.TickCount64 < deadline)
+        {
+            var inputEvent = inputSource.Read((int)(deadline - Environment.TickCount64));
+            if (inputEvent is null)
+                return;
+            DispatchInput(chat, inputEvent.Value, layout);
+        }
+    }
+
     /**
      * 输入源按平台选择: Unix 原始字节 + SGR 鼠标, Windows 控制台输入记录(ReadConsoleInputW)。
      * 句柄不可用时返回 null, 调用方回退到 Console.ReadKey(无鼠标)。
@@ -129,18 +186,10 @@ public static class TuiRunner
     private static ITerminalInputSource? CreateInputSource()
         => OperatingSystem.IsWindows()
             ? WindowsConsoleInputReader.TryCreate()
-            : new TerminalInputReader(Console.OpenStandardInput());
+            : new TerminalInputReader();
 
-    private static int RunGpuSync(HarnessApp app, string cwd)
+    private static int RunGpuSync(HarnessApp app, string cwd, bool startShell, string? gpuScreenshot = null)
     {
-        try
-        {
-            Console.Clear();
-        }
-        catch (IOException)
-        {
-        }
-
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),
@@ -151,15 +200,15 @@ public static class TuiRunner
 
         try
         {
-            if (!GpuRenderer.TryDetectDisplay(out var unavailableReason))
-                return ReturnGpuUnavailable(app, agent, unavailableReason);
             // Linux 进程内选卡靠 PRIME 变量, 必须在 GLFW/Mesa 初始化之前设置; Windows 的 WGL 无进程内选卡 API, 不做处理。
             if (OperatingSystem.IsLinux())
                 GpuCatalog.ApplyPrimeSelection(GpuCatalog.LoadSelectedAdapter(app.Home));
             var atlas = CreateAtlasForTerminal();
             var prewarm = Task.Run(() => atlas.Prewarm());
             using var chat = new ChatWindow(app.Ctx, agent, app.Home);
-            using var renderer = new GpuRenderer(chat, atlas);
+            using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot);
+            if (startShell)
+                chat.AddShellPane();
             renderer.Run();
             try
             {
@@ -184,18 +233,22 @@ public static class TuiRunner
         Console.Error.WriteLine($"GPU unavailable: {reason}");
         if (Console.IsInputRedirected)
             return 1;
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
         return RunInteractiveAsync(app, agent).GetAwaiter().GetResult();
     }
 
     /**
-     * GPU 渲染的字号跟随终端: 启动时向终端查询字符格子的像素尺寸(CSI 16 t), 按格高比例换算字号(默认档 13pt = 16px 格高);
+     * GPU 渲染的字号对齐宿主终端格尺寸: 以本机默认图集的格尺寸为基准, 宽/高两个方向各算一个比例, 取较紧者。
      * 终端不支持该查询或输出被重定向时用共享默认图集。用户想改字号就调终端字号, 重启 dsh 生效。
      */
     private static GlyphAtlas CreateAtlasForTerminal()
     {
         if (TerminalFontProbe.QueryCellPixelSize() is not { Height: > 0 } cell)
             return GlyphAtlas.Shared;
-        var pt = GlyphAtlas.DefaultFontSizePt * cell.Height / GlyphAtlas.DefaultGlyphHeight;
+        var shared = GlyphAtlas.Shared;
+        var pt = GlyphAtlas.DefaultFontSizePt * Math.Min(
+            cell.Height / (double)shared.GlyphHeight,
+            cell.Width / (double)shared.GlyphWidth);
         return Math.Abs(pt - GlyphAtlas.DefaultFontSizePt) < 0.5 ? GlyphAtlas.Shared : new GlyphAtlas(fontSizePt: pt);
     }
 

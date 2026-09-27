@@ -1,4 +1,4 @@
-﻿using Dsh.Boot;
+using Dsh.Boot;
 using Dsh.Plugins;
 using Dsh.Ptc;
 
@@ -9,12 +9,15 @@ public static class HarnessEntrypoint
 {
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length > 0 && args[0] == PtcScriptHost.HostArgument)
+        if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
 
         string? home = null;
         string? resumeSessionId = null;
         var dumpConfig = false;
+        var gpu = false;
+        var shell = false;
+        string? gpuScreenshot = null;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
         {
@@ -30,6 +33,13 @@ public static class HarnessEntrypoint
                     dumpConfig = true;
                     break;
                 case "--gpu":
+                    gpu = true;
+                    break;
+                case "--shell":
+                    shell = true;
+                    break;
+                case "--gpu-screenshot" when index + 1 < args.Length:
+                    gpuScreenshot = args[++index];
                     break;
                 case "--help" or "-h":
                     PrintUsage();
@@ -81,7 +91,7 @@ public static class HarnessEntrypoint
                     }
                     if (subcommand == "daemon")
                         return await BootCli.RunTuiDaemonAsync();
-                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId);
+                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot);
                 }
             case "gui":
                 // 组合插件之前先摘掉自己的控制台
@@ -89,8 +99,10 @@ public static class HarnessEntrypoint
                 return await RunEntrypointAsync(harnessHome, "gui", "@deepseek-ai/dsh-gui", resumeSessionId);
             case "headless":
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)));
+            case "register-terminal":
+                return await TerminalEntryRegistration.RegisterAsync(Console.Out);
             case null:
-                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui");
+                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot);
             default:
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
         }
@@ -103,20 +115,37 @@ public static class HarnessEntrypoint
                    dsh tui [list | attach <id>]
                    dsh gui [--session <id>]
                    dsh headless "task"
+                   dsh register-terminal    (Linux: 注册为桌面环境的默认终端)
 
             Options:
               --home <path>      harness home (default: $DSH_HOME or ~/.dsh)
               --session <id>     open an existing session (gui) or resume one (tui)
-              --gpu              run the TUI with the GPU renderer
+              --gpu              open the standalone terminal window with the GPU renderer
+              --shell            start with a real shell pane (Dsh.Pty) in the focused slot
+              --gpu-screenshot <path>  capture the GPU frame buffer to PNG/TIFF and exit
               --dump-config      print the resolved harness configuration and exit
               -h, --help         show this help
             """);
     }
 
-    private static async Task<int> RunEntrypointAsync(HarnessHome home, string entrypoint, string entrypointPlugin, string? resumeSessionId = null)
+    private static async Task<int> RunEntrypointAsync(
+        HarnessHome home,
+        string entrypoint,
+        string entrypointPlugin,
+        string? resumeSessionId = null,
+        bool gpu = false,
+        bool shell = false,
+        string? gpuScreenshot = null)
     {
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui", EntrypointPlugin: entrypointPlugin);
         using var app = await ConfigBoot.Compose(options);
-        return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(home, Directory.GetCurrentDirectory(), resumeSessionId));
+        return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(
+            home,
+            Directory.GetCurrentDirectory(),
+            resumeSessionId,
+            gpu,
+            shell,
+            gpuScreenshot));
     }
 }
+

@@ -5,6 +5,9 @@ namespace Dsh.Pty;
 
 public static class PtyConsoleBridge
 {
+    /** 被桥接进程可能开过鼠标上报(?1000/?1002/?1006)且仍在 daemon 中运行, detach 时替它复位宿主终端。 */
+    private const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
     public static async Task RunAsync(PtySession session, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -21,6 +24,17 @@ public static class PtyConsoleBridge
         finally
         {
             session.Detach();
+            if (!Console.IsOutputRedirected)
+            {
+                try
+                {
+                    await Console.Out.WriteAsync(MouseDisableSequence);
+                    await Console.Out.FlushAsync();
+                }
+                catch (IOException)
+                {
+                }
+            }
         }
     }
 
