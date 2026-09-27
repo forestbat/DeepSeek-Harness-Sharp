@@ -1,10 +1,14 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Dsh.Tui;
 
-public readonly record struct TerminalMouseEvent(int X, int Y, int Button, bool Pressed)
+/** 鼠标/指针事件: Pressed 表示有键按下(拖动中的移动也为真); IsMove 区分移动与按下/释放。 */
+public readonly record struct TerminalMouseEvent(int X, int Y, int Button, bool Pressed, bool IsMove = false)
 {
     public bool IsWheel => Button is 64 or 65;
+
+    public bool IsDrag => IsMove && Button != 3;
 
     public int WheelDelta => Button switch
     {
@@ -26,8 +30,16 @@ public readonly record struct TerminalInputEvent(ConsoleKeyInfo Key, TerminalMou
 /** 平台无关的输入源: Unix 走原始字节 + SGR, Windows 走控制台输入记录; 两者产出同一事件类型。 */
 internal interface ITerminalInputSource : IDisposable
 {
-    /** 阻塞直到一个键或鼠标事件; 流结束或失败返回 null。 */
-    TerminalInputEvent? Read();
+    /**
+     * 阻塞直到一个键或鼠标事件; timeoutMs 超时或被 Wake 唤醒返回 null。
+     * 返回 null 后用 EndOfStream 区分流结束(结束才退出主循环)。
+     */
+    TerminalInputEvent? Read(int timeoutMs);
+
+    bool EndOfStream { get; }
+
+    /** 从任意线程唤醒阻塞中的 Read, 用于 UI 事件驱动的重绘。 */
+    void Wake();
 }
 
 /** 原始字节增量解码: 键盘转义序列与 SGR 鼠标事件, 跨读取块保持状态。 */
@@ -165,17 +177,39 @@ public sealed class TerminalInputParser
             return true;
         }
 
+        // X10/legacy 鼠标: ESC [ M 后紧跟 Cb Cx Cy 三个原始字节, 不消费就会落成文本
+        if (final == 'M' && parameters.Length == 0)
+        {
+            if (_pending.Count < consumed + 3)
+                return false;
+            input = TerminalInputEvent.FromMouse(ParseX10Mouse(_pending[consumed], _pending[consumed + 1], _pending[consumed + 2]));
+            consumed += 3;
+            return true;
+        }
+
         input = TerminalInputEvent.FromKey(CsiKey(final, parameters));
         return true;
+    }
+
+    private static TerminalMouseEvent ParseX10Mouse(byte cb, byte cx, byte cy)
+    {
+        var raw = cb - 32;
+        var button = (raw & 64) != 0 ? 64 + (raw & 1) : raw & 3;
+        var moved = (raw & 32) != 0;
+        return new TerminalMouseEvent(Math.Max(0, cx - 33), Math.Max(0, cy - 33), button, (raw & 3) != 3, moved);
     }
 
     private static TerminalMouseEvent ParseSgrMouse(string parameters, bool pressed)
     {
         var parts = parameters[1..].Split(';');
-        var button = parts.Length > 0 && int.TryParse(parts[0], out var value) ? value : 0;
+        var raw = parts.Length > 0 && int.TryParse(parts[0], out var value) ? value : 0;
         var x = parts.Length > 1 && int.TryParse(parts[1], out var px) ? px - 1 : 0;
         var y = parts.Length > 2 && int.TryParse(parts[2], out var py) ? py - 1 : 0;
-        return new TerminalMouseEvent(x, y, button, pressed);
+        // 位 6 = 滚轮; 位 5 = 移动(1002 拖动/1003 全量跟踪), 按钮号在低 2 位(3 = 无键)
+        var button = (raw & 64) != 0 ? 64 + (raw & 1) : raw & 3;
+        var moved = (raw & 32) != 0;
+        var actionPressed = (raw & 64) != 0 ? pressed : pressed && (raw & 3) != 3;
+        return new TerminalMouseEvent(x, y, button, actionPressed, moved);
     }
 
     private static ConsoleKeyInfo ControlKey(byte value)
@@ -237,24 +271,116 @@ public sealed class TerminalInputParser
     }
 }
 
-/** 阻塞读取原始字节并逐个解码为键或鼠标事件; 仅在 Unix 终端后端使用。 */
-internal sealed class TerminalInputReader(Stream input) : ITerminalInputSource
+/** 阻塞读取原始字节并逐个解码为键或鼠标事件; 仅在 Unix 终端后端使用。自管道承载 UI 重绘的跨线程唤醒。 */
+internal sealed class TerminalInputReader : ITerminalInputSource
 {
+    private const short PollIn = 0x0001;
+    private const int FSetFl = 4;
+    private const int ONonBlock = 0x800;
+    private const int StdinFd = 0;
+    private static readonly byte[] WakeByte = [0];
+
     private readonly TerminalInputParser _parser = new();
     private readonly byte[] _buffer = new byte[1024];
+    private readonly byte[] _wakeDrain = new byte[64];
+    private readonly int _wakeRead;
+    private readonly int _wakeWrite;
+    private bool _disposed;
 
-    public TerminalInputEvent? Read()
+    public TerminalInputReader()
+    {
+        var pipeFds = new int[2];
+        if (pipe(pipeFds) != 0)
+            throw new InvalidOperationException($"pipe() failed, errno={Marshal.GetLastWin32Error()}");
+        (_wakeRead, _wakeWrite) = (pipeFds[0], pipeFds[1]);
+        fcntl(_wakeRead, FSetFl, ONonBlock);
+        fcntl(_wakeWrite, FSetFl, ONonBlock);
+    }
+
+    public bool EndOfStream { get; private set; }
+
+    public TerminalInputEvent? Read(int timeoutMs)
     {
         while (true)
         {
             if (_parser.TryParse(out var inputEvent))
                 return inputEvent;
-            var read = input.Read(_buffer, 0, _buffer.Length);
-            if (read <= 0)
+            if (EndOfStream)
                 return null;
+            var fds = new[]
+            {
+                new PollFd { Fd = 0, Events = PollIn },
+                new PollFd { Fd = _wakeRead, Events = PollIn },
+            };
+            var ready = poll(fds, fds.Length, timeoutMs);
+            if (ready == 0)
+                return null;
+            if (ready < 0)
+            {
+                EndOfStream = true;
+                return null;
+            }
+            if (fds[1].Revents != 0)
+            {
+                DrainWake();
+                return null;
+            }
+            if (fds[0].Revents == 0)
+                continue;
+            // 直接 read(2) 读 fd 0: 经 .NET 的 Console 流读 pty 在 Linux 上会阻塞不返回(实测 poll 报可读后流读仍挂住)
+            var read = readBytes(StdinFd, _buffer, _buffer.Length);
+            if (read <= 0)
+            {
+                EndOfStream = true;
+                return null;
+            }
             _parser.Append(_buffer.AsSpan(0, read));
         }
     }
 
-    public void Dispose() => input.Dispose();
+    public void Wake()
+    {
+        if (!_disposed)
+            write(_wakeWrite, WakeByte, 1);
+    }
+
+    private void DrainWake()
+    {
+        while (readBytes(_wakeRead, _wakeDrain, _wakeDrain.Length) > 0)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        close(_wakeRead);
+        close(_wakeWrite);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PollFd
+    {
+        public int Fd;
+        public short Events;
+        public short Revents;
+    }
+
+    [DllImport("libc", EntryPoint = "read", SetLastError = true)]
+    private static extern int readBytes(int fd, [Out] byte[] buf, int count);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int poll([In, Out] PollFd[] fds, int nfds, int timeout);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int pipe([Out] int[] pipefd);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fcntl(int fd, int cmd, int arg);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int write(int fd, byte[] buf, int count);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int fd);
 }

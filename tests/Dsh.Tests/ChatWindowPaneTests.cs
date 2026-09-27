@@ -149,6 +149,28 @@ public sealed class ChatWindowPaneTests : IDisposable
     }
 
     [Fact]
+    public async Task CtrlX_Plus_Splits_Even_With_Modifier_Keydown_And_Char_Only_Plus()
+    {
+        var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
+        var layout = LayoutEngine.Calculate(120, 40);
+        _ = DrawFrameReturningGrid(chat, layout);
+
+        PressCtrl(chat, ConsoleKey.X);
+        // 宿主会先送一条 Shift 按下(无键名无字符), 随后 '+' 在 Unix/pty 上只带字符不带键名
+        chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.NoName, true, false, false));
+        chat.HandleKey(new ConsoleKeyInfo('+', ConsoleKey.NoName, true, false, false));
+
+        for (var attempt = 0; attempt < 500 && chat.PaneCount < 3; attempt++)
+        {
+            chat.DrainUi();
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(3, chat.PaneCount);
+        chat.Dispose();
+    }
+
+    [Fact]
     public async Task CtrlX_Plus_Splits_A_New_Session()
     {
         var (chat, _, _, first, _) = await CreateChatWithTwoAgents();

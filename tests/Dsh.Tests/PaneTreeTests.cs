@@ -170,6 +170,37 @@ public class PaneTreeTests
         Assert.Equal(SplitOrientation.Horizontal, PaneTree.ChooseOrientation(new ConsoleRect(0, 0, 20, 80)));
     }
 
+    [Fact]
+    public void Resize_Replaces_Ratio_At_Path_And_Keeps_Root_Ratio()
+    {
+        var root = PaneTree.Split(new PaneLeaf(0), 0, 1, SplitOrientation.Vertical);
+        var nested = PaneTree.Split(root, 1, 2, SplitOrientation.Horizontal);
+
+        var resized = PaneTree.Resize(nested, "S", 0.7);
+
+        Assert.True(PaneTree.TryGetRatio(resized, "S", out var nestedRatio));
+        Assert.Equal(0.7, nestedRatio, 3);
+        Assert.True(PaneTree.TryGetRatio(resized, "", out var rootRatio));
+        Assert.Equal(PaneTree.DefaultRatio, rootRatio, 3);
+        Assert.Equal(nested, PaneTree.Resize(nested, "SF", 0.9));
+        Assert.False(PaneTree.TryGetRatio(nested, "SS", out _));
+    }
+
+    [Fact]
+    public void RatioForDrag_Clamps_Both_Orientations_And_Keeps_Ratio_When_Too_Small()
+    {
+        var vertical = new SplitDivider(SplitOrientation.Vertical, "", 40, 0, 33, 0, 79);
+        Assert.Equal(50d / 78, LayoutEngine.RatioForDrag(vertical, 50, 0.5), 6);
+        Assert.Equal(LayoutEngine.MinimumPaneExtent / 78d, LayoutEngine.RatioForDrag(vertical, 0, 0.5), 6);
+        Assert.Equal((78 - LayoutEngine.MinimumPaneExtent) / 78d, LayoutEngine.RatioForDrag(vertical, 200, 0.5), 6);
+
+        var horizontal = new SplitDivider(SplitOrientation.Horizontal, "", 0, 10, 79, 0, 33);
+        Assert.Equal(15d / 32, LayoutEngine.RatioForDrag(horizontal, 15, 0.5), 6);
+
+        var tiny = new SplitDivider(SplitOrientation.Horizontal, "", 0, 4, 79, 0, 9);
+        Assert.Equal(0.5, LayoutEngine.RatioForDrag(tiny, 8, 0.5), 6);
+    }
+
     private static PaneNode TwoByTwo()
         => new PaneSplit(
             SplitOrientation.Vertical,

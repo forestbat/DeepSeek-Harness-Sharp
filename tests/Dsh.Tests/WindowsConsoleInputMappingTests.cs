@@ -62,12 +62,12 @@ public class WindowsConsoleInputMappingTests
     }
 
     [Fact]
-    public void Modifier_Only_Key_Has_No_Name()
+    public void Modifier_Only_Key_Is_Not_A_Key()
     {
-        var key = WindowsConsoleInputReader.MapKey(VirtualKeyShift, '\0', ShiftPressed, keyDown: true);
-
-        Assert.NotNull(key);
-        Assert.Equal(ConsoleKey.NoName, key.Value.Key);
+        // 放行会让 Shift+'+' 的 Shift 按下吃掉 Ctrl+X 前缀(真实缺陷)
+        Assert.Null(WindowsConsoleInputReader.MapKey(VirtualKeyShift, '\0', ShiftPressed, keyDown: true));
+        Assert.Null(WindowsConsoleInputReader.MapKey(0x11, '\0', LeftCtrlPressed, keyDown: true));
+        Assert.Null(WindowsConsoleInputReader.MapKey(0x12, '\0', LeftAltPressed, keyDown: true));
     }
 
     [Fact]
@@ -115,9 +115,26 @@ public class WindowsConsoleInputMappingTests
     }
 
     [Fact]
-    public void Pointer_Move_Is_Ignored()
+    public void Pointer_Move_With_Held_Button_Is_A_Drag()
     {
-        Assert.Null(WindowsConsoleInputReader.MapMouse(2, 3, 0, MouseMoved));
+        var mouse = WindowsConsoleInputReader.MapMouse(2, 3, 0x0001, MouseMoved);
+
+        Assert.NotNull(mouse);
+        Assert.True(mouse.Value.IsMove);
+        Assert.True(mouse.Value.IsDrag);
+        Assert.True(mouse.Value.Pressed);
+        Assert.Equal(0, mouse.Value.Button);
+    }
+
+    [Fact]
+    public void Pointer_Move_Without_Button_Has_No_Button()
+    {
+        var mouse = WindowsConsoleInputReader.MapMouse(2, 3, 0, MouseMoved);
+
+        Assert.NotNull(mouse);
+        Assert.True(mouse.Value.IsMove);
+        Assert.False(mouse.Value.Pressed);
+        Assert.Equal(3, mouse.Value.Button);
     }
 
     [Fact]

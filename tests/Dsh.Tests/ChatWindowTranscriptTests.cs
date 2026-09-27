@@ -9,6 +9,7 @@ using Dsh.Tui;
 namespace Dsh.Tests;
 
 /** TUI 会话流渲染: 历史回放、重复渲染守卫、非流式补渲染、审批提示参数。 */
+[Collection("RenderBench")] // 分隔线出图用 GL, 与其它 GL 用例串行
 public sealed class ChatWindowTranscriptTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
@@ -290,6 +291,211 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
     }
 
+    /** 鼠标点击 fold 头行切换折叠, 与键盘 Tab/Enter 走同一入口(阶段 3.1)。 */
+    [Fact]
+    public async Task MouseClick_On_CodeFence_FoldRow_Toggles_Expansion()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        var text = "前言\n```\n代码甲\n代码乙\n```\n后语";
+        agent.Session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, text)));
+        agent.Session.Append(
+            new AssistantMessagePayload(1, 1, MessageFactory.CreateAssistantMessage([new TextBlock(text)], "p", "m")),
+            new SurfaceOp.Append());
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        chat.DrainUi();
+
+        var layout = LayoutEngine.Calculate(120, 40);
+        var collapsed = DrawRows(chat, layout);
+        Assert.DoesNotContain(collapsed, row => row.Contains("代码甲", StringComparison.Ordinal));
+        var foldRow = collapsed.FindIndex(row => row.Contains("```", StringComparison.Ordinal));
+        Assert.True(foldRow >= 0, "折叠态应有 ``` 预览行");
+
+        chat.HandleMouseClick(2, foldRow, layout);
+        var expanded = DrawRows(chat, layout);
+        Assert.Contains(expanded, row => row.Contains("代码甲", StringComparison.Ordinal));
+
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        var recollapsed = DrawRows(chat, layout);
+        Assert.DoesNotContain(recollapsed, row => row.Contains("代码甲", StringComparison.Ordinal));
+    }
+
+    /** 拖动选择: 选中文本被提取并高亮(阶段 3.2)。 */
+    [Fact]
+    public async Task MouseDrag_SelectsTranscriptText_AndHighlightsIt()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        const string text = "第一行内容\n第二行内容";
+        agent.Session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, text)));
+        agent.Session.Append(
+            new AssistantMessagePayload(1, 1, MessageFactory.CreateAssistantMessage([new TextBlock(text)], "p", "m")),
+            new SurfaceOp.Append());
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        chat.DrainUi();
+
+        var layout = LayoutEngine.Calculate(120, 40);
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, layout);
+        var rows = Rows(grid);
+        var first = rows.FindIndex(row => row.Contains("第一行内容", StringComparison.Ordinal));
+        var second = rows.FindIndex(row => row.Contains("第二行内容", StringComparison.Ordinal));
+        Assert.True(first >= 0 && second > first, "两行正文都应渲染");
+
+        chat.HandleMouseClick(0, first, layout);
+        chat.HandleMouseDrag(40, second, layout);
+        var highlighted = new CellGrid(120, 40);
+        chat.Draw(highlighted, layout);
+        Assert.Contains(
+            Enumerable.Range(0, 10),
+            column => (highlighted[column, second].Style & CellStyle.Reverse) != 0);
+
+        var selected = chat.HandleMouseRelease(40, second, layout);
+        Assert.Equal("第一行内容\n第二行内容", selected);
+    }
+
+    /** 双 Ctrl+C 退出: 键盘事件(C+Control)直投 HandleKey, 不依赖平台输入源。 */
+    [Fact]
+    public async Task DoubleCtrlC_RequestsExit()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+
+        chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.C, false, false, true));
+        Assert.False(chat.ExitRequested);
+
+        chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.C, false, false, true));
+        Assert.True(chat.ExitRequested);
+    }
+
+    /** TUI diff 卡片配色(阶段 4 补齐"红删绿增"): 增行绿底、删行红底、标题青色加粗。 */
+    [Fact]
+    public async Task TuiDiffCard_RendersGreenAddsRedDeletesAndTitle()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var callId = ToolCallId.Create("call-diff");
+        agent.Session.Append(new TurnStartPayload(1));
+        var callSeq = agent.Session.Seq;
+        agent.Session.Append(new ToolCallPayload(
+            1, 1, callId, "str_replace_editor", """{"command":"str_replace","path":"src/sample.cs"}"""));
+        using var meta = System.Text.Json.JsonDocument.Parse(
+            """{"card":"diff","title":"edit src/sample.cs","diffs":[{"path":"src/sample.cs","oldText":"第一行\n第二行\n","newText":"第一行\n改过的第二行\n新增行\n"}]}""");
+        agent.Session.Append(
+            new ToolResultPayload(
+                1,
+                1,
+                MessageFactory.CreateToolResultMessage(callId, [new TextBlock("applied")], false),
+                null,
+                meta.RootElement.Clone()),
+            new SurfaceOp.Append(),
+            [callSeq]);
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        chat.DrainUi();
+
+        var layout = LayoutEngine.Calculate(120, 40);
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, layout);
+        var folded = Rows(grid);
+        Assert.Contains(folded, row => row.Contains("edit src/sample.cs", StringComparison.Ordinal));
+        Assert.DoesNotContain(folded, row => row.Contains("改过的第二行", StringComparison.Ordinal));
+
+        // diff 卡片默认折叠: Tab 选中 + Enter 展开后再断言配色
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        var expanded = new CellGrid(120, 40);
+        chat.Draw(expanded, layout);
+        var rows = Rows(expanded);
+        var title = rows.FindIndex(row => row.Contains("edit src/sample.cs", StringComparison.Ordinal));
+        var added = rows.FindIndex(row => row.Contains("改过的第二行", StringComparison.Ordinal));
+        var removed = rows.FindIndex(row =>
+            row.Contains("第二行", StringComparison.Ordinal) && !row.Contains("改过的", StringComparison.Ordinal));
+        var inserted = rows.FindIndex(row => row.Contains("新增行", StringComparison.Ordinal));
+        Assert.True(
+            title >= 0 && added >= 0 && removed >= 0 && inserted >= 0,
+            "diff 卡片各行都应渲染\n" + string.Join('\n', rows.Where(row => row.Trim().Length > 0)));
+        Assert.Equal(AnsiColor.Green, expanded[0, added].Background);
+        Assert.Equal(AnsiColor.Green, expanded[0, inserted].Background);
+        Assert.Equal(AnsiColor.Red, expanded[0, removed].Background);
+        Assert.Equal(AnsiColor.BrightCyan, expanded[0, title].Foreground);
+        Assert.True((expanded[0, title].Style & CellStyle.Bold) != 0);
+    }
+
+    /** 鼠标拖动分隔线调整窗格比例: 分隔线跟手, 且两侧不小于最小格数。 */
+    [Fact]
+    public async Task MouseDrag_OnDivider_ResizesPanes()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        var layout = LayoutEngine.Calculate(120, 40);
+
+        chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.X, false, false, true));
+        chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.OemPlus, false, false, false));
+        chat.DrainUi();
+        var divider = FindPaneDividerColumn(chat, layout);
+        Assert.True(divider > 0, "分屏后应有分隔线");
+
+        chat.HandleMouseClick(divider, 1, layout);
+        chat.HandleMouseDrag(divider + 6, 1, layout);
+        chat.HandleMouseRelease(divider + 6, 1, layout);
+        Assert.Equal(divider + 6, FindPaneDividerColumn(chat, layout));
+
+        // 拖拽后的屏幕出图(工程自身渲染管线)
+        var captured = new CellGrid(120, 40);
+        chat.Draw(captured, layout);
+        var screen = new char[120, 40];
+        for (var y = 0; y < 40; y++)
+        {
+            for (var x = 0; x < 120; x++)
+            {
+                var character = captured[x, y].Character;
+                screen[x, y] = character == '\0' ? ' ' : character;
+            }
+        }
+
+        TuiScreenCaptureTests.SavePng(screen, $"tui-screen-split-{(OperatingSystem.IsWindows() ? "windows" : "linux")}.png");
+
+        // 拖到最左: 左侧窗格至少保留 MinimumPaneExtent 格
+        chat.HandleMouseClick(divider + 6, 1, layout);
+        chat.HandleMouseDrag(0, 1, layout);
+        chat.HandleMouseRelease(0, 1, layout);
+        Assert.Equal(LayoutEngine.MinimumPaneExtent, FindPaneDividerColumn(chat, layout));
+    }
+
+    /** 在窗格区域内找竖直分隔线的屏幕列(右侧固定面板的分隔线不在 Main 内, 天然排除)。 */
+    private static int FindPaneDividerColumn(ChatWindow chat, UiLayout layout)
+    {
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, layout);
+        for (var y = 0; y < layout.Main.Bottom; y++)
+        {
+            for (var x = 1; x < layout.Main.Width; x++)
+            {
+                if (grid[x, y].Character == '│')
+                    return x;
+            }
+        }
+        return -1;
+    }
+
+    private static List<string> Rows(CellGrid grid)
+    {
+        var lines = new List<string>();
+        for (var y = 0; y < grid.Height; y++)
+        {
+            var chars = new char[grid.Width];
+            for (var x = 0; x < grid.Width; x++)
+                chars[x] = grid[x, y].Character;
+            lines.Add(new string(chars).Replace("\0", ""));
+        }
+        return lines;
+    }
+
     private static void Type(ChatWindow chat, string text)
     {
         foreach (var character in text)
@@ -314,20 +520,13 @@ public sealed class ChatWindowTranscriptTests : IDisposable
     }
 
     private static string DrawFrame(ChatWindow chat)
+        => string.Join('\n', DrawRows(chat, LayoutEngine.Calculate(120, 40)));
+
+    private static List<string> DrawRows(ChatWindow chat, UiLayout layout)
     {
-        var layout = LayoutEngine.Calculate(120, 40);
         var grid = new CellGrid(120, 40);
         chat.Draw(grid, layout);
-        var lines = new List<string>();
-        for (var y = 0; y < grid.Height; y++)
-        {
-            var chars = new char[grid.Width];
-            for (var x = 0; x < grid.Width; x++)
-                chars[x] = grid[x, y].Character;
-            lines.Add(new string(chars).Replace("\0", ""));
-        }
-
-        return string.Join('\n', lines);
+        return Rows(grid);
     }
 
     private static int Count(string haystack, string needle)

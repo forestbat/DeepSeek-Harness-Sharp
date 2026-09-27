@@ -159,4 +159,93 @@ public class TerminalInputParserTests
         Assert.Contains("h", TerminalRawMode.MouseEnableSequenceForTests);
         Assert.Contains("l", TerminalRawMode.MouseDisableSequenceForTests);
     }
+
+    [Fact]
+    public void X10_Mouse_Press_Is_Consumed_Not_Leaked_As_Text()
+    {
+        var parser = new TerminalInputParser();
+        // X10: ESC [ M Cb Cx Cy; 左键点 (36,13)(1 基) → Cb=32+0, Cx=32+36='D', Cy=32+13='-'
+        parser.Append("\u001b[M D-"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.True(input.IsMouse);
+        var mouse = input.Mouse!.Value;
+        Assert.Equal(0, mouse.Button);
+        Assert.True(mouse.Pressed);
+        Assert.Equal(35, mouse.X);
+        Assert.Equal(12, mouse.Y);
+        Assert.False(parser.TryParse(out _));
+    }
+
+    [Fact]
+    public void X10_Mouse_Split_Payload_Is_Buffered()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("\u001b[M "u8);
+
+        Assert.False(parser.TryParse(out _));
+        parser.Append("D-"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.True(input.IsMouse);
+        Assert.Equal(35, input.Mouse!.Value.X);
+    }
+
+    [Fact]
+    public void Sgr_Drag_Reports_Move_With_Held_Button()
+    {
+        var parser = new TerminalInputParser();
+        // SGR: CSI < b;x;y M, b=32 表示带键移动(1002 拖动)
+        parser.Append("\u001b[<32;11;5M"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        var mouse = input.Mouse!.Value;
+        Assert.True(mouse.IsMove);
+        Assert.True(mouse.IsDrag);
+        Assert.Equal(0, mouse.Button);
+        Assert.Equal(10, mouse.X);
+        Assert.Equal(4, mouse.Y);
+    }
+
+    [Fact]
+    public void Sgr_Release_Is_Not_Pressed()
+    {
+        var parser = new TerminalInputParser();
+        parser.Append("\u001b[<0;11;5m"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        var mouse = input.Mouse!.Value;
+        Assert.False(mouse.Pressed);
+        Assert.False(mouse.IsMove);
+        Assert.Equal(0, mouse.Button);
+    }
+
+    [Fact]
+    public void X10_Motion_Reports_Move()
+    {
+        var parser = new TerminalInputParser();
+        // X10: Cb = 32 + 32(移动位) + 0(左键) = '@', Cx='D', Cy='-'
+        parser.Append("\u001b[M@D-"u8);
+
+        Assert.True(parser.TryParse(out var input));
+        var mouse = input.Mouse!.Value;
+        Assert.True(mouse.IsMove);
+        Assert.True(mouse.Pressed);
+        Assert.Equal(35, mouse.X);
+        Assert.Equal(12, mouse.Y);
+    }
+
+    [Theory]
+    [InlineData(0x03, ConsoleKey.C)]
+    [InlineData(0x18, ConsoleKey.X)]
+    [InlineData(0x01, ConsoleKey.A)]
+    public void Control_Letter_Bytes_Carry_Control_Modifier(byte value, ConsoleKey expected)
+    {
+        var parser = new TerminalInputParser();
+        parser.Append([value]);
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.Equal(expected, input.Key.Key);
+        Assert.True((input.Key.Modifiers & ConsoleModifiers.Control) != 0);
+    }
 }

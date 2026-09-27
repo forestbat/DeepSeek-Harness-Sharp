@@ -20,6 +20,9 @@ public static class LayoutEngine
     public const int MaximumRightPanelWidth = 40;
     public const int InputHeight = 2;
 
+    /** 拖动分隔线时两侧窗格各自至少要留的格数。 */
+    public const int MinimumPaneExtent = 4;
+
     private const double RightPanelRatio = 0.32;
     private const int StatusHeight = 1;
     private const int DividerRows = 2;
@@ -51,11 +54,21 @@ public static class LayoutEngine
     {
         var panes = new List<PanePlacement>();
         var dividers = new List<SplitDivider>();
-        EvaluatePanesInto(root, area, panes, dividers);
+        EvaluatePanesInto(root, "", area, panes, dividers);
         return new PaneLayout(panes, dividers);
     }
 
-    private static void EvaluatePanesInto(PaneNode node, ConsoleRect area, List<PanePlacement> panes, List<SplitDivider> dividers)
+    /** 拖动分隔线时把指针位置换算成合法 Ratio(两侧都至少保留 MinimumPaneExtent 格); 区域过小时维持原比例。 */
+    public static double RatioForDrag(SplitDivider divider, int pointerAlong, double currentRatio)
+    {
+        var available = divider.SpanTotal - 1;
+        if (available < (2 * MinimumPaneExtent) + 1)
+            return currentRatio;
+        var extent = Math.Clamp(pointerAlong - divider.SpanStart, MinimumPaneExtent, available - MinimumPaneExtent);
+        return (double)extent / available;
+    }
+
+    private static void EvaluatePanesInto(PaneNode node, string path, ConsoleRect area, List<PanePlacement> panes, List<SplitDivider> dividers)
     {
         switch (node)
         {
@@ -67,9 +80,9 @@ public static class LayoutEngine
                 var available = Math.Max(0, area.Width - 1);
                 var firstWidth = FirstPaneExtent(available, split.Ratio);
                 var secondWidth = available - firstWidth;
-                dividers.Add(new SplitDivider(SplitOrientation.Vertical, area.X + firstWidth, area.Y, area.Height));
-                EvaluatePanesInto(split.First, new ConsoleRect(area.X, area.Y, firstWidth, area.Height), panes, dividers);
-                EvaluatePanesInto(split.Second, new ConsoleRect(area.X + firstWidth + 1, area.Y, secondWidth, area.Height), panes, dividers);
+                dividers.Add(new SplitDivider(SplitOrientation.Vertical, path, area.X + firstWidth, area.Y, area.Height, area.X, area.Width));
+                EvaluatePanesInto(split.First, path + "F", new ConsoleRect(area.X, area.Y, firstWidth, area.Height), panes, dividers);
+                EvaluatePanesInto(split.Second, path + "S", new ConsoleRect(area.X + firstWidth + 1, area.Y, secondWidth, area.Height), panes, dividers);
                 return;
             }
             case PaneSplit split:
@@ -77,9 +90,9 @@ public static class LayoutEngine
                 var available = Math.Max(0, area.Height - 1);
                 var firstHeight = FirstPaneExtent(available, split.Ratio);
                 var secondHeight = available - firstHeight;
-                dividers.Add(new SplitDivider(SplitOrientation.Horizontal, area.X, area.Y + firstHeight, area.Width));
-                EvaluatePanesInto(split.First, new ConsoleRect(area.X, area.Y, area.Width, firstHeight), panes, dividers);
-                EvaluatePanesInto(split.Second, new ConsoleRect(area.X, area.Y + firstHeight + 1, area.Width, secondHeight), panes, dividers);
+                dividers.Add(new SplitDivider(SplitOrientation.Horizontal, path, area.X, area.Y + firstHeight, area.Width, area.Y, area.Height));
+                EvaluatePanesInto(split.First, path + "F", new ConsoleRect(area.X, area.Y, area.Width, firstHeight), panes, dividers);
+                EvaluatePanesInto(split.Second, path + "S", new ConsoleRect(area.X, area.Y + firstHeight + 1, area.Width, secondHeight), panes, dividers);
                 return;
             }
             default:

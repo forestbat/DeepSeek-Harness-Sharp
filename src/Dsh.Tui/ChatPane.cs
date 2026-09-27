@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
@@ -76,6 +77,12 @@ public sealed class ChatPane : ITuiPane
 
     public string? SelectedFoldKey { get; set; }
 
+    private bool _selectionActive;
+    private int _selectionAnchorRow;
+    private int _selectionAnchorColumn;
+    private int _selectionRow;
+    private int _selectionColumn;
+
     public TaskCompletionSource<object?>? PendingApproval { get; private set; }
 
     public TaskCompletionSource<object?>? PendingQuestions { get; private set; }
@@ -128,8 +135,7 @@ public sealed class ChatPane : ITuiPane
                 var selected = FindSelectedFold();
                 if (selected is not null)
                 {
-                    selected.Collapsed = !selected.Collapsed;
-                    Renderer.BumpVersion();
+                    ToggleFold(selected);
                     SelectedFoldKey = null;
                     return;
                 }
@@ -474,6 +480,8 @@ public sealed class ChatPane : ITuiPane
             if (lineIndex >= wrapped.Count)
                 break;
             CellText.Draw(grid, rect.X, rect.Y + row, wrapped[lineIndex]);
+            ApplyTintHighlight(grid, rect, row, lineIndex);
+            ApplySelectionHighlight(grid, rect, row, lineIndex);
         }
 
         if (CommandMenu?.IsActive == true || _mentionActive)
@@ -1058,6 +1066,177 @@ public sealed class ChatPane : ITuiPane
         }
 
         return Input.Length;
+    }
+
+    /** 指针按下: 锚定选择起点(阶段 3.2 拖动选择); 单击不拖动时在释放阶段判空。 */
+    public void BeginSelection(int cellX, int cellY, ConsoleRect rect)
+    {
+        var (row, column) = ToSelectionPoint(cellX, cellY, rect);
+        _selectionAnchorRow = row;
+        _selectionAnchorColumn = column;
+        _selectionRow = row;
+        _selectionColumn = column;
+        _selectionActive = true;
+        StickToBottom = false;
+    }
+
+    /** 拖动: 移动选择游标。 */
+    public void ExtendSelection(int cellX, int cellY, ConsoleRect rect)
+    {
+        if (!_selectionActive)
+            return;
+        var (row, column) = ToSelectionPoint(cellX, cellY, rect);
+        _selectionRow = row;
+        _selectionColumn = column;
+    }
+
+    /** 释放: 结束选择并返回选中文本(空选择返回 null, 调用方据此决定是否写剪贴板)。 */
+    public string? FinishSelection()
+    {
+        var text = HasNonEmptySelection() ? ExtractSelection() : null;
+        _selectionActive = false;
+        return text;
+    }
+
+    public void ClearSelection() => _selectionActive = false;
+
+    private (int Row, int Column) ToSelectionPoint(int cellX, int cellY, ConsoleRect rect)
+    {
+        var row = ScrollOffset + Math.Clamp(cellY - rect.Y, 0, Math.Max(0, rect.Height - 1));
+        var column = Math.Clamp(cellX - rect.X, 0, Math.Max(0, rect.Width - 1));
+        return (row, column);
+    }
+
+    private bool HasNonEmptySelection()
+        => _selectionActive && (_selectionAnchorRow != _selectionRow || _selectionAnchorColumn != _selectionColumn);
+
+    private (int FirstRow, int FirstColumn, int LastRow, int LastColumn) OrderedSelection()
+    {
+        var anchorBeforeCursor = _selectionAnchorRow < _selectionRow
+            || (_selectionAnchorRow == _selectionRow && _selectionAnchorColumn <= _selectionColumn);
+        return anchorBeforeCursor
+            ? (_selectionAnchorRow, _selectionAnchorColumn, _selectionRow, _selectionColumn)
+            : (_selectionRow, _selectionColumn, _selectionAnchorRow, _selectionAnchorColumn);
+    }
+
+    private string? ExtractSelection()
+    {
+        var lines = _wrapCacheLines;
+        if (lines is null || lines.Count == 0)
+            return null;
+        var (firstRow, firstColumn, lastRow, lastColumn) = OrderedSelection();
+        firstRow = Math.Max(0, firstRow);
+        lastRow = Math.Min(lines.Count - 1, lastRow);
+        if (lastRow < firstRow)
+            return null;
+        var builder = new StringBuilder();
+        for (var row = firstRow; row <= lastRow; row++)
+        {
+            var line = lines[row];
+            var start = row == firstRow ? Math.Min(firstColumn, line.Length) : 0;
+            var end = row == lastRow ? Math.Min(lastColumn + 1, line.Length) : line.Length;
+            if (end > start)
+                builder.Append(line, start, end - start);
+            if (row < lastRow)
+                builder.Append('\n');
+        }
+        var text = builder.ToString().TrimEnd(' ', '\n');
+        return text.Length == 0 ? null : text;
+    }
+
+    /** diff 卡片行着色(红删绿增 + 标题强调), 与 GUI diff 卡片语义一致; 其它行不着色。 */
+    private void ApplyTintHighlight(CellGrid grid, ConsoleRect rect, int row, int wrappedIndex)
+    {
+        var offset = SourceOffsetAt(wrappedIndex);
+        if (offset is null)
+            return;
+        var lineIndex = LineIndexOf(Renderer.LineStarts, Renderer.CompletedLines.Count, Renderer.TailStart, offset.Value);
+        var tints = Renderer.LineTints;
+        if (lineIndex < 0 || lineIndex >= tints.Count)
+            return;
+        var (foreground, background, style) = tints[lineIndex] switch
+        {
+            TranscriptTint.DiffAdded => (AnsiColor.Black, AnsiColor.Green, CellStyle.None),
+            TranscriptTint.DiffRemoved => (AnsiColor.BrightWhite, AnsiColor.Red, CellStyle.None),
+            TranscriptTint.DiffTitle => (AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold),
+            _ => (AnsiColor.Default, AnsiColor.Default, CellStyle.None),
+        };
+        if (foreground == AnsiColor.Default && background == AnsiColor.Default && style == CellStyle.None)
+            return;
+        for (var column = 0; column < rect.Width; column++)
+        {
+            var x = rect.X + column;
+            if (x < 0 || x >= grid.Width)
+                continue;
+            var cell = grid[x, rect.Y + row];
+            grid[x, rect.Y + row] = new Cell(cell.Character, foreground, background, style);
+        }
+    }
+
+    /** 选择高亮: 反显样式, CPU/GPU 两路渲染自动同效。 */
+    private void ApplySelectionHighlight(CellGrid grid, ConsoleRect rect, int row, int lineIndex)
+    {
+        if (!HasNonEmptySelection())
+            return;
+        var (firstRow, firstColumn, lastRow, lastColumn) = OrderedSelection();
+        if (lineIndex < firstRow || lineIndex > lastRow)
+            return;
+        var start = lineIndex == firstRow ? firstColumn : 0;
+        var end = lineIndex == lastRow ? lastColumn : rect.Width - 1;
+        for (var column = Math.Max(0, start); column <= Math.Min(end, rect.Width - 1); column++)
+        {
+            var x = rect.X + column;
+            if (x < 0 || x >= grid.Width)
+                continue;
+            var cell = grid[x, rect.Y + row];
+            grid[x, rect.Y + row] = new Cell(cell.Character, cell.Foreground, cell.Background, cell.Style | CellStyle.Reverse);
+        }
+    }
+
+    /** 命中 fold 头行(折叠态=预览行, 展开态=首行)时切换折叠; 命中返回 true。 */
+    public bool TryToggleFoldAt(int cellY, ConsoleRect rect)
+    {
+        var wrappedIndex = ScrollOffset + (cellY - rect.Y);
+        var offset = SourceOffsetAt(wrappedIndex);
+        if (offset is null)
+            return false;
+        var fold = Renderer.Folds.FirstOrDefault(candidate => candidate.Start == offset.Value && candidate.End > candidate.Start);
+        if (fold is null)
+            return false;
+        ToggleFold(fold);
+        return true;
+    }
+
+    /** 键盘(Enter)与鼠标点击共用同一切换入口。 */
+    public void ToggleFold(TranscriptFold fold)
+    {
+        fold.Collapsed = !fold.Collapsed;
+        Renderer.BumpVersion();
+    }
+
+    /** 视觉行 → 源偏移: rows 的 FlatStart 升序, 二分找最后一个不超过 wrappedIndex 的行。 */
+    private int? SourceOffsetAt(int wrappedIndex)
+    {
+        var rows = _visualRows;
+        if (_wrapCacheLines is null || rows.Count == 0 || wrappedIndex < 0 || wrappedIndex >= _wrapCacheLines.Count)
+            return null;
+        var low = 0;
+        var high = rows.Count - 1;
+        var found = -1;
+        while (low <= high)
+        {
+            var middle = (low + high) / 2;
+            if (rows[middle].FlatStart <= wrappedIndex)
+            {
+                found = middle;
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+        return found < 0 ? null : rows[found].SourceStart;
     }
 
     private TranscriptFold? FindSelectedFold()

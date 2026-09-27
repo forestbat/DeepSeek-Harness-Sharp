@@ -80,6 +80,9 @@ internal sealed class SubagentPane : ITuiPane
         }
     }
 
+    /** 只读子会话窗格不参与折叠交互。 */
+    public bool TryToggleFoldAt(int cellY, ConsoleRect rect) => false;
+
     public void HandleMouseWheel(int delta)
     {
         if (delta > 0)

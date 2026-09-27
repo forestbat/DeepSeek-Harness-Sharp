@@ -15,7 +15,18 @@ public sealed record PaneSplit(SplitOrientation Orientation, double Ratio, PaneN
 
 public readonly record struct PanePlacement(int PaneId, ConsoleRect Rect);
 
-public readonly record struct SplitDivider(SplitOrientation Orientation, int X, int Y, int Length);
+/**
+ * 分隔线: Path 从根起用 'F'/'S' 标识所属 PaneSplit(供拖动改比例时定位节点);
+ * SpanStart/SpanTotal 是该分割所占区域的轴向起止(竖分割看 X/Width, 横分割看 Y/Height)。
+ */
+public readonly record struct SplitDivider(
+    SplitOrientation Orientation,
+    string Path,
+    int X,
+    int Y,
+    int Length,
+    int SpanStart,
+    int SpanTotal);
 
 public sealed record PaneLayout(IReadOnlyList<PanePlacement> Panes, IReadOnlyList<SplitDivider> Dividers)
 {
@@ -77,6 +88,41 @@ public static class PaneTree
     /** 按当前窗格矩形长宽比自动选分割方向: 宽则左右并排, 高则上下堆叠。 */
     public static SplitOrientation ChooseOrientation(ConsoleRect rect)
         => rect.Width >= rect.Height ? SplitOrientation.Vertical : SplitOrientation.Horizontal;
+
+    /** 按路径(从根起 'F'/'S' 序列)定位分割节点并替换其 Ratio; 路径缺失时原样返回。 */
+    public static PaneNode Resize(PaneNode root, string path, double ratio)
+        => root switch
+        {
+            PaneSplit split when path.Length == 0 => split with { Ratio = ratio },
+            PaneSplit split when path[0] == 'F' => split with { First = Resize(split.First, path[1..], ratio) },
+            PaneSplit split when path[0] == 'S' => split with { Second = Resize(split.Second, path[1..], ratio) },
+            _ => root,
+        };
+
+    /** 取路径对应分割节点的当前比例; 路径缺失时返回 false。 */
+    public static bool TryGetRatio(PaneNode root, string path, out double ratio)
+    {
+        ratio = DefaultRatio;
+        while (true)
+        {
+            if (root is not PaneSplit split)
+                return false;
+            if (path.Length == 0)
+            {
+                ratio = split.Ratio;
+                return true;
+            }
+            root = path[0] switch
+            {
+                'F' => split.First,
+                'S' => split.Second,
+                _ => null!,
+            };
+            if (root is null)
+                return false;
+            path = path[1..];
+        }
+    }
 
     public static int? FindNeighbor(PaneLayout layout, int fromPaneId, FocusDirection direction)
     {

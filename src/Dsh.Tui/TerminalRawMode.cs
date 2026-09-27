@@ -29,9 +29,15 @@ public sealed class TerminalRawMode : IDisposable
     private const ulong MacIexten = 0x00000400;
     private const ulong MacOpost = 0x00000001;
 
-    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1006h";
+    /** ?1002 = 拖动(button-event)跟踪, 文本选择需要; ?1006 = SGR 扩展坐标。 */
+    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
-    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1000l";
+    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+    /** 备用屏幕接管: 进 ?1049h + 藏光标 ?25l; 退出反向恢复, 主屏现场(shell 提示符/滚动历史)原样奉还。 */
+    internal const string ScreenEnterSequence = "\x1b[?1049h\x1b[?25l";
+
+    internal const string ScreenExitSequence = "\x1b[?25h\x1b[?1049l";
 
     private const uint EnableProcessedInput = 0x0001;
     private const uint EnableLineInput = 0x0002;
@@ -85,10 +91,10 @@ public sealed class TerminalRawMode : IDisposable
         if (!_active)
             return;
 
+        // 先恢复终端可见状态(鼠标/备用屏幕/光标), 再恢复输入模式
+        WriteSequence(_mouseEnabled ? MouseDisableSequence + ScreenExitSequence : ScreenExitSequence);
         if (_original is not null)
         {
-            if (_mouseEnabled)
-                WriteMouseSequence(MouseDisableSequence);
             var buffer = Marshal.AllocHGlobal(_original.Length);
             try
             {
@@ -151,14 +157,23 @@ public sealed class TerminalRawMode : IDisposable
             Console.CursorVisible = false;
             var handle = GetStdHandle(StdInputHandle);
             if (handle == 0 || handle == -1 || !GetConsoleMode(handle, out var original))
+            {
+                WriteSequence(ScreenEnterSequence);
                 return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            }
             var mode = (original
                 & ~(EnableProcessedInput | EnableLineInput | EnableEchoInput | EnableQuickEditMode | EnableVirtualTerminalInput))
                 | EnableExtendedFlags;
             if (enableMouse)
                 mode |= EnableMouseInput;
             if (!SetConsoleMode(handle, mode))
+            {
+                WriteSequence(ScreenEnterSequence);
                 return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            }
+            // 丢掉接管前排队的陈旧输入(可能是残留鼠标跟踪留下的 X10 字节)
+            FlushConsoleInputBuffer(handle);
+            WriteSequence(enableMouse ? MouseEnableSequence + ScreenEnterSequence : ScreenEnterSequence);
             return new TerminalRawMode(
                 true,
                 restoreTreatControlCAsInput: restoreTreatControlCAsInput,
@@ -192,8 +207,7 @@ public sealed class TerminalRawMode : IDisposable
             Marshal.Copy(raw, 0, buffer, size);
             if (tcsetattr(0, TcsaNow, buffer) != 0)
                 return null;
-            if (enableMouse)
-                WriteMouseSequence(MouseEnableSequence);
+            WriteSequence(enableMouse ? MouseEnableSequence + ScreenEnterSequence : ScreenEnterSequence);
             return new TerminalRawMode(true, original, mouseEnabled: enableMouse);
         }
         finally
@@ -202,7 +216,7 @@ public sealed class TerminalRawMode : IDisposable
         }
     }
 
-    private static void WriteMouseSequence(string sequence)
+    private static void WriteSequence(string sequence)
     {
         try
         {
@@ -272,4 +286,7 @@ public sealed class TerminalRawMode : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetConsoleMode(nint hConsoleHandle, uint dwMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FlushConsoleInputBuffer(nint hConsoleInput);
 }
