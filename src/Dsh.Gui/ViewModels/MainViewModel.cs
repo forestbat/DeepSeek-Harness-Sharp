@@ -57,6 +57,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly List<MessageViewModel> _lastUserMessages = [];
     private IReadOnlyList<string> _skillNames = [];
     private readonly Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
+    private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
     private CancellationTokenSource? _contentSearch;
 
     private AgentLoopAgent _agent;
@@ -1283,6 +1284,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             MessageKind.Tool,
             false));
         message.Detail = call.Arguments;
+        _pendingToolCalls[call.CallId] = (call.Name, call.Arguments);
         if (isSubagent)
         {
             message.IsSubagentTool = true;
@@ -1349,6 +1351,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var label = result.Error is null ? "结果" : $"错误 {result.Error.Code}";
         var message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
         message.Detail = text;
+        _pendingToolCalls.Remove(result.Message.Block.ToolCallId, out var pending);
+        if (result.Error is null && DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text) is { } card)
+            message.SetDiff(card);
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);
     }
 

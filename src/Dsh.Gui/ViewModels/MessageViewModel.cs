@@ -3,6 +3,8 @@ using Avalonia.Layout;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
 
 namespace Dsh.Gui.ViewModels;
@@ -81,7 +83,27 @@ public sealed partial class MessageViewModel : ObservableObject
 
     public bool ShowMarkdown => IsAssistant && ShowBody;
 
-    public bool ShowPlainBody => ShowBody && !IsAssistant;
+    public bool ShowPlainBody => ShowBody && !IsAssistant && !HasDiff;
+
+    /** 工具结果命中 diff 提取时挂载的卡片; 展开时替代纯文本正文。 */
+    public DiffCard? Diff { get; private set; }
+
+    public bool HasDiff => Diff is not null;
+
+    public bool ShowDiff => HasDiff && ShowBody;
+
+    /** diff 卡片自身的展开态(卡片内 chevron 控制; 独立于消息折叠, 置于 VM 以免列表虚拟化后丢失)。 */
+    [ObservableProperty]
+    private bool _isDiffExpanded = true;
+
+    public void SetDiff(DiffCard diff)
+    {
+        Diff = diff;
+        OnPropertyChanged(nameof(HasDiff));
+        OnPropertyChanged(nameof(ShowDiff));
+        OnPropertyChanged(nameof(ShowPlainBody));
+        OnPropertyChanged(nameof(Preview));
+    }
 
     public bool ShowPreview => IsFoldable && !IsExpanded;
 
@@ -127,6 +149,8 @@ public sealed partial class MessageViewModel : ObservableObject
     {
         get
         {
+            if (Diff is { } diff)
+                return $"{diff.Title} (+{diff.Added} -{diff.Removed})";
             var flat = Flatten(Text);
             return flat.Length <= PreviewChars ? flat : flat[..PreviewChars] + "…";
         }
@@ -180,6 +204,7 @@ public sealed partial class MessageViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowPlainBody));
         OnPropertyChanged(nameof(ShowPreview));
         OnPropertyChanged(nameof(ShowDetail));
+        OnPropertyChanged(nameof(ShowDiff));
         OnPropertyChanged(nameof(ShowSubagentStream));
         OnPropertyChanged(nameof(ShowSubagentEmpty));
     }
@@ -193,3 +218,4 @@ public sealed partial class MessageViewModel : ObservableObject
     [RelayCommand]
     private void ToggleFold() => IsExpanded = !IsExpanded;
 }
+

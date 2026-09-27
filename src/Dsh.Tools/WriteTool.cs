@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
@@ -47,12 +48,30 @@ public static class WriteTool
                 (_, value) =>
                 {
                     var result = DshJson.Deserialize<WriteResultValue>(value)
-                                    ?? throw new JsonException("write result value is malformed");
+                                     ?? throw new JsonException("write result value is malformed");
                     return [new TextBlock(FormatWriteOutput(result.Path, result.Operation))];
-                }),
+                },
+                (args, value) => PresentDiffMeta(args, value)),
             Execute = Execute,
         });
         return new CompositeDisposable(section, registration);
+    }
+
+    internal static JsonElement PresentDiffMeta(JsonElement args, JsonElement value)
+    {
+        var result = DshJson.Deserialize<WriteResultValue>(value)
+                         ?? throw new JsonException("write result value is malformed");
+        var path = args.TryGetProperty("file_path", out var pathElement) && pathElement.ValueKind == JsonValueKind.String
+            ? pathElement.GetString() ?? result.Path
+            : result.Path;
+        var view = new JsonObject
+        {
+            ["card"] = "diff",
+            ["title"] = $"{result.Operation} {path}",
+            ["diffs"] = new JsonArray(new JsonObject { ["path"] = path, ["oldText"] = result.Before, ["newText"] = result.After }),
+            ["locations"] = new JsonArray(new JsonObject { ["path"] = path }),
+        };
+        return JsonDocument.Parse(view.ToJsonString()).RootElement;
     }
 
     internal static string FormatWriteOutput(string displayPath, string operation)

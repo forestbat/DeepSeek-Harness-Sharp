@@ -181,6 +181,8 @@
                 <TextBlock Text="子代理暂无工具调用" Classes="Tertiary" IsVisible="{Binding ShowSubagentEmpty}" />
 
                 <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding ShowMarkdown}" />
+                <views:DiffView Card="{Binding Diff}" IsVisible="{Binding ShowDiff}"
+                                IsCardExpanded="{Binding IsDiffExpanded, Mode=TwoWay}" />
                 <TextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
                 <TextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
                            FontFamily="{DynamicResource Font.Mono}" />

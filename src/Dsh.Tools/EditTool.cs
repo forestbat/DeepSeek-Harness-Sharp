@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
@@ -48,13 +49,31 @@ public static class EditTool
                 (args, value) =>
                 {
                     var result = DshJson.Deserialize<EditResultValue>(value)
-                                    ?? throw new JsonException("edit result value is malformed");
+                                     ?? throw new JsonException("edit result value is malformed");
                     var replaceAll = args.TryGetProperty("replace_all", out var flag) && flag.ValueKind == JsonValueKind.True;
                     return [new TextBlock(FormatEditOutput(result.Path, replaceAll))];
-                }),
+                },
+                (args, value) => PresentDiffMeta(args, value, "edit")),
             Execute = Execute,
         });
         return new CompositeDisposable(section, registration);
+    }
+
+    internal static JsonElement PresentDiffMeta(JsonElement args, JsonElement value, string verb)
+    {
+        var result = DshJson.Deserialize<EditResultValue>(value)
+                         ?? throw new JsonException("edit result value is malformed");
+        var path = args.TryGetProperty("file_path", out var pathElement) && pathElement.ValueKind == JsonValueKind.String
+            ? pathElement.GetString() ?? result.Path
+            : result.Path;
+        var view = new JsonObject
+        {
+            ["card"] = "diff",
+            ["title"] = $"{verb} {path}",
+            ["diffs"] = new JsonArray(new JsonObject { ["path"] = path, ["oldText"] = result.Before, ["newText"] = result.After }),
+            ["locations"] = new JsonArray(new JsonObject { ["path"] = path }),
+        };
+        return JsonDocument.Parse(view.ToJsonString()).RootElement;
     }
 
     internal static string FormatEditOutput(string displayPath, bool replaceAll)

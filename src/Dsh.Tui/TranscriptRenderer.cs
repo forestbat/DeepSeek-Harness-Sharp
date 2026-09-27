@@ -1,5 +1,6 @@
 using System.Text;
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
 
 namespace Dsh.Tui;
@@ -13,6 +14,9 @@ public sealed class TranscriptRenderer
     private readonly StringBuilder _buffer = new();
     private readonly List<TranscriptFold> _folds = [];
     private readonly List<string> _lines = [];
+    private readonly List<TranscriptTint> _tints = [];
+    private TranscriptTint _pendingTint;
+    private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
     private readonly List<int> _lineStarts = [];
     private readonly StringBuilder _tail = new();
     private int _tailStart;
@@ -25,6 +29,9 @@ public sealed class TranscriptRenderer
 
     /** 已完成行(不含换行符)与每行在全文中的起始偏移, 随 Append 增量维护; 供 wrap 缓存免物化全文。UI 线程亲和, 与 Version 同一时序读取。 */
     public IReadOnlyList<string> CompletedLines => _lines;
+
+    /** 与 CompletedLines 对齐的行级着色提示(diff 卡片用红删绿增; 其余行 None)。 */
+    internal IReadOnlyList<TranscriptTint> LineTints => _tints;
 
     public IReadOnlyList<int> LineStarts => _lineStarts;
 
@@ -107,11 +114,21 @@ public sealed class TranscriptRenderer
                 CloseReasoning();
                 CloseAssistant();
                 _assistantStreamed = false;
+                _pendingToolCalls[call.CallId] = (call.Name, call.Arguments);
                 Append($"⚙ {call.Name} {Preview(call.Arguments, ToolArgumentsPreviewChars)}\n");
                 break;
             case ToolResultPayload result:
                 {
                     var text = MessageText.Flatten(result.Message.Content);
+                    _pendingToolCalls.Remove(result.Message.Block.ToolCallId, out var pending);
+                    var card = result.Error is null
+                        ? DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text)
+                        : null;
+                    if (card is not null)
+                    {
+                        AppendDiffCard(card, foldToolResult);
+                        break;
+                    }
                     var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
                     var start = _buffer.Length;
                     Append($"  {label}{text}\n");
@@ -278,6 +295,64 @@ public sealed class TranscriptRenderer
         }
     }
 
+    /** diff 卡片命中时替换原始结果文本: 标题栏即折叠 preview, 展开为双列行号 + +/- 标记的行列表。 */
+    private void AppendDiffCard(DiffCard card, bool fold)
+    {
+        var start = _buffer.Length;
+        var title = $"  ⤿ {card.Title} (+{card.Added} -{card.Removed})";
+        _pendingTint = TranscriptTint.DiffTitle;
+        Append($"{title}\n");
+        var numberWidth = LineNumberWidth(card.Lines);
+        foreach (var line in card.Lines)
+        {
+            _pendingTint = line.Kind switch
+            {
+                DiffLineKind.Add => TranscriptTint.DiffAdded,
+                DiffLineKind.Delete => TranscriptTint.DiffRemoved,
+                _ => TranscriptTint.None,
+            };
+            Append(FormatDiffLine(line, numberWidth));
+        }
+        _pendingTint = TranscriptTint.None;
+        if (fold)
+        {
+            _folds.Add(new TranscriptFold
+            {
+                Start = start,
+                End = _buffer.Length,
+                Label = "diff",
+                Preview = title,
+            });
+        }
+    }
+
+    private static int LineNumberWidth(IReadOnlyList<DiffLine> lines)
+    {
+        var max = 0;
+        foreach (var line in lines)
+            max = Math.Max(max, Math.Max(line.OldLine ?? 0, line.NewLine ?? 0));
+        var width = 1;
+        while (max >= 10)
+        {
+            max /= 10;
+            width++;
+        }
+        return width;
+    }
+
+    private static string FormatDiffLine(DiffLine line, int width)
+    {
+        var marker = line.Kind switch
+        {
+            DiffLineKind.Add => "+",
+            DiffLineKind.Delete => "-",
+            _ => " ",
+        };
+        var oldNo = line.OldLine?.ToString().PadLeft(width) ?? new string(' ', width);
+        var newNo = line.NewLine?.ToString().PadLeft(width) ?? new string(' ', width);
+        return $"  {oldNo} {newNo} {marker} {line.Text}\n";
+    }
+
     private static string Preview(string text, int limit)
     {
         var flat = text.Replace("\r\n", " ").Replace('\n', ' ').Trim();
@@ -309,6 +384,7 @@ public sealed class TranscriptRenderer
             }
             _tail.Append(text.AsSpan(position, newline - position));
             _lines.Add(_tail.ToString());
+            _tints.Add(_pendingTint);
             _lineStarts.Add(_tailStart);
             _tail.Clear();
             _tailStart = baseOffset + newline + 1;
@@ -316,3 +392,4 @@ public sealed class TranscriptRenderer
         }
     }
 }
+

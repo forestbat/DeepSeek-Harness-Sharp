@@ -354,6 +354,58 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         }
     });
 
+    /** diff 卡片真实渲染截图(阶段 4): 折叠态与展开态各一张, 供与参考图 artifacts/bugs/7925849368c492dfb053dda75d5b683f.png 对照。 */
+    [Fact]
+    public async Task DiffCard_RendersCollapsedAndExpanded() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
+            var window = new MainWindow(environment.App, environment.Agent);
+            var viewModel = window.ViewModel!;
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var before = string.Join('\n', Enumerable.Range(0, 12).Select(index => $"line {index}")) + "\n";
+            var after = before.Replace("line 3\n", "line 3 changed\n").Replace("line 7\n", "line 7 changed\n") + "added tail\n";
+            var card = new DiffCard("edit src/sample.cs", "pairs", DiffCardExtractor.DiffLines(before, after));
+            var message = new MessageViewModel("结果", before, MessageKind.Result, false);
+            message.SetDiff(card);
+            viewModel.Messages.Add(message);
+            Dispatcher.UIThread.RunJobs();
+
+            var diffView = window.GetVisualDescendants().OfType<DiffView>().Single();
+            message.IsExpanded = false;
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(message.ShowPreview);
+            Capture(window, "headless-diff-card-collapsed");
+
+            message.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "+3");
+            Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "-2");
+            Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "line 3 changed");
+            Capture(window, "headless-diff-card-expanded");
+
+            // 卡片内 chevron: 点击只隐藏 diff 行, 标题与计数保留
+            var chevron = diffView.GetVisualDescendants().OfType<Button>().Single();
+            chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(message.IsDiffExpanded);
+            Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "+3");
+            var changedLine = diffView.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(block => block.Text == "line 3 changed");
+            Assert.NotNull(changedLine);
+            Assert.False(changedLine.IsEffectivelyVisible);
+            Capture(window, "headless-diff-card-chevron-collapsed");
+
+            chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(message.IsDiffExpanded);
+            Assert.True(changedLine.IsEffectivelyVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+
     private static double LargestFont(Visual root)
         => root.GetVisualDescendants().OfType<TextBlock>().Max(block => block.FontSize);
 
