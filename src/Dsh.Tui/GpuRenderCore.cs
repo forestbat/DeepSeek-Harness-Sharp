@@ -114,50 +114,17 @@ public sealed class GpuRenderCore : IDisposable
         GL.BindBuffer(BufferTarget.TextureBuffer, 0);
     }
 
-    public void RenderFrame(GlyphAtlas atlas, int gridWidth, int gridHeight)
-        => RenderFrame(atlas, gridWidth, gridHeight, null);
-
     /**
-     * 脏行裁剪渲染: dirtyRows 为 null/空、或脏行合计达到半屏时走整帧路径(行为与旧版一致);
-     * 否则按脏行带绘制, 用 uInstanceBase 把实例区间偏移到该行带, 只绘制这些行的格。
-     * 背景趟对每个格都写不透明色, 脏行因此被完整重绘, 无需清屏, 脏区外旧内容保持不动(故不需要 scissor)。
-     * 不设行带数上限: 半屏规则已把行带数限制在 rows/2 以内, 实测(240x67 与 480x135, 见 pane-dirty-band-crossover.md)
-     * 该范围内脏行路径始终快于整帧, 每带仅约 6 µs 提交开销。
+     * 恒全帧重绘: 双缓冲交换链下后备缓冲是两帧前的内容, 脏行不重绘的假设不成立(曾致浮层多重高亮/内容丢失)。
+     * 性能不受影响: 一次 instanced draw 画完全部格, 增量性保留在上传侧(只 UploadCells 脏行)。
      */
-    public void RenderFrame(GlyphAtlas atlas, int gridWidth, int gridHeight, IReadOnlyList<(int Start, int Count)>? dirtyRows)
+    public void RenderFrame(GlyphAtlas atlas, int gridWidth, int gridHeight)
     {
         PrepareFrame(atlas, gridWidth, gridHeight);
-        var dirtyTotal = 0;
-        if (dirtyRows is not null)
-        {
-            foreach (var (_, count) in dirtyRows)
-                dirtyTotal += count;
-        }
-        if (dirtyRows is null || dirtyRows.Count == 0 || dirtyTotal * 2 >= gridHeight)
-        {
-            GL.Disable(EnableCap.ScissorTest);
-            GL.Clear(ClearBufferMask.ColorBufferBit);
-            GL.Uniform1i(_instanceBaseLocation, 0);
-            DrawPasses(gridWidth * gridHeight);
-        }
-        else
-        {
-            // 按趟外层循环: 脏行带互不重叠, 背景趟全部画完再画字形趟, 结果与逐带绘制一致但状态切换更少。
-            GL.Uniform1f(_texEnabledLocation, 0f);
-            GL.Uniform1i(_passLocation, 0);
-            foreach (var (start, count) in dirtyRows)
-            {
-                GL.Uniform1i(_instanceBaseLocation, start * gridWidth);
-                DrawInstances(count * gridWidth);
-            }
-            GL.Uniform1f(_texEnabledLocation, 1f);
-            GL.Uniform1i(_passLocation, 1);
-            foreach (var (start, count) in dirtyRows)
-            {
-                GL.Uniform1i(_instanceBaseLocation, start * gridWidth);
-                DrawInstances(count * gridWidth);
-            }
-        }
+        GL.Disable(EnableCap.ScissorTest);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.Uniform1i(_instanceBaseLocation, 0);
+        DrawPasses(gridWidth * gridHeight);
         GL.BindVertexArray(0);
     }
 
@@ -325,13 +292,14 @@ public sealed class GpuRenderCore : IDisposable
                     }
                     int slot = (mapped & 0x7FFFFFFF) - 1;
                     span = mapped < 0 ? 2.0 : 1.0;
+                    int slotSpan = mapped < 0 ? 2 : 1;
                     color = fg == 0 ? uDefaultForeground : uPalette[fg];
                     if ((style & 2) != 0)
                         color = vec4(color.rgb * 0.5, color.a);
                     int slotCol = slot - (slot / uAtlasCells.x) * uAtlasCells.x;
                     int slotRow = slot / uAtlasCells.x;
                     uv0 = vec2(slotCol * uCellPixels.x, slotRow * uCellPixels.y) / vec2(uAtlasPixels);
-                    uv1 = vec2((slotCol + 1) * uCellPixels.x, (slotRow + 1) * uCellPixels.y) / vec2(uAtlasPixels);
+                    uv1 = vec2((slotCol + slotSpan) * uCellPixels.x, (slotRow + 1) * uCellPixels.y) / vec2(uAtlasPixels);
                 }
                 vec2 cellPos = vec2(cx, cy) + aCorner * vec2(span, 1.0);
                 vec2 ndc = vec2(cellPos.x / float(uGridSize.x) * 2.0 - 1.0, 1.0 - cellPos.y / float(uGridSize.y) * 2.0);

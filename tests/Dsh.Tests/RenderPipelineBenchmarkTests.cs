@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Dsh.Core;
 using Dsh.Runtime;
-using Dsh.Terminal;
+using Dsh.PtyTerminal;
 using Dsh.Tui;
 using OpenTK.Graphics.OpenGL;
 
@@ -20,9 +20,6 @@ public class RenderPipelineBenchmarkTests
     private const int CorpusLines = 4000;
     private const int SparseRowsPerFrame = 6;
     private const int Seed = 20260916;
-    /** 格像素尺寸跟随图集默认值(字号默认档), 使各档 viewport 与真实渲染一致。 */
-    private const int CellPixelWidth = GlyphAtlas.DefaultGlyphWidth;
-    private const int CellPixelHeight = GlyphAtlas.DefaultGlyphHeight;
 
     private static readonly (int Width, int Height, string Label, int Frames)[] Tiers =
     [
@@ -36,7 +33,7 @@ public class RenderPipelineBenchmarkTests
     [Trait("Category", "GpuStress")]
     public void Render_Pipeline_Benchmark()
     {
-        using var egl = HeadlessGl.Create(Tiers[^1].Width * CellPixelWidth, Tiers[^1].Height * CellPixelHeight);
+        using var egl = HeadlessGl.Create(Tiers[^1].Width * GlyphAtlas.Shared.GlyphWidth, Tiers[^1].Height * GlyphAtlas.Shared.GlyphHeight);
         var atlas = GlyphAtlas.Shared;
         atlas.Prewarm();
         var core = new GpuRenderCore();
@@ -56,7 +53,7 @@ public class RenderPipelineBenchmarkTests
 
         foreach (var (width, height, label, frames) in Tiers)
         {
-            GL.Viewport(0, 0, width * CellPixelWidth, height * CellPixelHeight);
+            GL.Viewport(0, 0, width * GlyphAtlas.Shared.GlyphWidth, height * GlyphAtlas.Shared.GlyphHeight);
 
             var grid = new CellGrid(width, height);
             var previous = new CellGrid(width, height);
@@ -158,7 +155,7 @@ public class RenderPipelineBenchmarkTests
     }
 
     /**
-     * 终端消费侧压测: 消费方是本仓库自己的 PTY + 终端会话读路径(PipeTerminalSession 的输出泵与 BoundedTextBuffer),
+     * 终端消费侧压测: 消费方是本仓库自己的 PTY + 终端会话读路径(PtyTerminalSession 的输出泵与 TerminalOutputBuffer),
      * 不是外部终端。ANSI 流先落到临时文件, 再由会话内的 cat 经由 PTY 回灌, 计时到我们的读路径解析出哨兵为止。
      */
     [Fact]
@@ -176,19 +173,15 @@ public class RenderPipelineBenchmarkTests
         var temp = Path.Combine(Path.GetTempPath(), $"dsh-terminal-bench-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);
         var ctx = new Context();
-        var subprocess = new SubprocessService(ctx);
         var agents = new AgentRegistry(ctx);
         var terminals = new TerminalSessionService(ctx);
         try
         {
-            TerminalBash.Register(ctx, new TerminalBashConfig
+            PtyTerminalPlugin.Register(ctx, new PtyTerminalConfig
             {
-                BackendType = "shell",
-                ShellDialect = ShellDialect.Bash,
                 Rows = height,
                 Cols = width,
                 PollIntervalMs = 10,
-                ExactProbeAfterMs = 20,
                 IdleSilenceMs = 100,
                 HandoffGraceMs = 100,
                 TimeoutMs = 180_000,
@@ -210,7 +203,7 @@ public class RenderPipelineBenchmarkTests
                     terminals, agent, temp, directory, label, lines, file, frames, width, height, report,
                     TestContext.Current.CancellationToken);
             }
-            report.AppendLine("口径说明: 计时从会话内 cat 经 PTY/管道回灌开始, 到该 session 的滚动缓冲抵达哨兵为止; 消费侧是本仓库自己的 PipeTerminalSession 输出泵 + TerminalSanitizer + BoundedTextBuffer。每个场景使用独立会话(场景间 kill 旧会话), 因此前一个场景未结束的 send 不会干扰后一个场景。这是压力测试: 流规模(百 MB 到 GB 级)刻意远超本路径的有界容量(子进程收集器 64 KiB 窗口/64 MiB spill、scrollback 1 MiB), 超出部分由有界设计丢弃; 若哨兵未出现, 说明尾部也没能抵达读路径。哨兵探测轮询间隔 10 ms。");
+            report.AppendLine("口径说明: 计时从会话内 cat 经真 PTY 回灌开始, 到该 session 的滚动缓冲抵达哨兵为止; 消费侧是本仓库自己的 PtyTerminalSession 输出泵 + TerminalSanitizer + TerminalOutputBuffer。每个场景使用独立会话(场景间 kill 旧会话), 因此前一个场景未结束的 send 不会干扰后一个场景。这是压力测试: 流规模(百 MB 到 GB 级)刻意远超本路径的有界容量(scrollback 1 MiB), 超出部分由有界设计丢弃; 若哨兵未出现, 说明尾部也没能抵达读路径。哨兵探测轮询间隔 10 ms。");
             WriteReport("render-terminal-benchmark.md", report);
         }
         finally
@@ -221,16 +214,6 @@ public class RenderPipelineBenchmarkTests
             }
             catch (IOException)
             {
-            }
-            try
-            {
-                subprocess.Dispose();
-            }
-            catch (Exception error)
-            {
-                report.AppendLine();
-                report.AppendLine($"(压测尾清理失败: {error.GetType().Name}: {error.Message})");
-                WriteReport("render-terminal-benchmark.md", report);
             }
         }
     }

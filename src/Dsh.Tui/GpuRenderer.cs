@@ -1,22 +1,24 @@
 using OpenTK.Graphics.OpenGL;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
-using OpenTK.Windowing.GraphicsLibraryFramework;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
 namespace Dsh.Tui;
 
-public sealed class GpuRenderer : IDisposable
+/**
+ * GPU 终端渲染器: 维护格栅/布局/脏行上传, 对当前 GL 上下文(RenderFrame)画格, 再交给表面宿主呈现。
+ * 窗口/上下文/交换/输入循环全在 IGlSurfaceHost 实现里; 本类不引用 GLFW 或 DRM。
+ */
+public sealed class GpuRenderer : IDisposable, IGpuHostClient
 {
     /** TDR 重建上限: 60 秒内连续丢 3 次上下文说明驱动在反复复位, 放弃重建, 抛出后由 TuiRunner 回退 CPU 渲染。 */
     private const int MaxRebuildAttempts = 3;
+    /** 输入行光标闪烁半周期(终端习惯值): 半周期亮、半周期灭。 */
+    private const int CursorBlinkMs = 500;
     private static readonly TimeSpan RebuildInterval = TimeSpan.FromSeconds(60);
 
     private readonly GlyphAtlas _atlas;
     private readonly ChatWindow _chat;
-    private GameWindow _window;
+    private IGlSurfaceHostRunner _host;
     private GpuRenderCore _core = new();
     private CellGrid _grid;
     private UiLayout _layout;
@@ -24,12 +26,14 @@ public sealed class GpuRenderer : IDisposable
     private uint[] _packedCells = new uint[80 * 25];
     private readonly List<(int Start, int Count)> _dirtyRanges = [];
     private int _seenRenderVersion = -1;
+    private bool _cursorLit = true;
     private float _mouseX;
     private float _mouseY;
+    private bool _leftButtonDown;
     private bool _disposed;
     private bool _contextLost;
     private readonly List<DateTime> _rebuilds = [];
-    private readonly string? _screenshotPath = Environment.GetEnvironmentVariable("DSH_GPU_SCREENSHOT");
+    private readonly string? _screenshotPath;
     private bool _screenshotTaken;
 
     public static bool TryDetectDisplay(out string reason)
@@ -58,65 +62,29 @@ public sealed class GpuRenderer : IDisposable
         return dot < 0 ? value : value[..dot];
     }
 
-    public GpuRenderer(ChatWindow chat, GlyphAtlas? atlas = null)
+    /** screenshotPath: 渲染首帧后把帧缓冲写盘并退出(裸 TTY 上没有 X/外部截图工具时唯一可行的取证手段)。 */
+    public GpuRenderer(ChatWindow chat, GlyphAtlas? atlas = null, string? screenshotPath = null)
     {
         ArgumentNullException.ThrowIfNull(chat);
         _chat = chat;
         _atlas = atlas ?? GlyphAtlas.Shared;
-        // OpenTK 的 GLFW"主线程"认定要求入口方法在调用栈上且非线程池线程; async Main 的续体不满足, 直接关掉该检查(GLFW 在 Windows/X11/Wayland 对调用线程无要求)。
-        GLFWProvider.CheckForMainThread = false;
-        RequestRobustnessOnAmd();
-        _window = CreateWindow();
-        HookEvents(_window);
+        _screenshotPath = screenshotPath;
+        _host = GpuHostFactory.CreateWindowHost(_atlas);
         _grid = new CellGrid(80, 25);
         _layout = LayoutEngine.Calculate(_grid.Width, _grid.Height);
     }
 
-    /** AMD 驱动在高负载下可能会 TDR(超时复位): 有 AMD 卡在场时请求 robust 上下文, TDR 后表现为 GL_CONTEXT_LOST 而非进程崩溃; 其他厂商不请求, 避免无谓开销。测试基建(HeadlessGl)也走这个函数。 */
-    public static void RequestRobustnessOnAmd()
-    {
-        if (!GpuCatalog.ListAdapters().Any(adapter => adapter.Vendor.Equals("AMD", StringComparison.OrdinalIgnoreCase)))
-            return;
-        GLFWProvider.EnsureInitialized();
-        GLFW.WindowHint(WindowHintRobustness.ContextRobustness, Robustness.LoseContextOnReset);
-    }
-
-    private GameWindow CreateWindow()
-    {
-        var settings = new NativeWindowSettings
-        {
-            ClientSize = new Vector2i(80 * _atlas.GlyphWidth, 25 * _atlas.GlyphHeight),
-            Title = "dsh --gpu",
-            API = ContextAPI.OpenGL,
-            Profile = ContextProfile.Core,
-            APIVersion = new Version(3, 3),
-        };
-        return new GameWindow(GameWindowSettings.Default, settings);
-    }
-
-    private void HookEvents(GameWindow window)
-    {
-        window.Load += OnLoad;
-        window.Resize += OnResize;
-        window.RenderFrame += OnRenderFrame;
-        window.KeyDown += OnKeyDown;
-        window.TextInput += OnTextInput;
-        window.MouseMove += OnMouseMove;
-        window.MouseDown += OnMouseDown;
-        window.MouseWheel += OnMouseWheel;
-    }
-
-    /** 主循环: 窗口因 TDR 上下文丢失而关闭时重建窗口与 GL 资源再续跑; 用户退出则直接返回。 */
+    /** 主循环: 宿主因 TDR 上下文丢失而关闭时重建宿主与 GL 资源再续跑; 用户退出则直接返回。 */
     public void Run()
     {
         while (true)
         {
             _contextLost = false;
-            _window.Run();
+            _host.Run(this);
             if (!_contextLost)
                 return;
             RegisterRebuild();
-            RebuildWindow();
+            RebuildHost();
         }
     }
 
@@ -129,16 +97,15 @@ public sealed class GpuRenderer : IDisposable
             throw new InvalidOperationException($"GPU context lost {MaxRebuildAttempts} times within {RebuildInterval.TotalSeconds:F0}s (driver reset); giving up GPU rendering");
     }
 
-    /** GL 对象不跨上下文共享: 换窗口即全部重建, 网格状态清空触发整屏重绘。 */
-    private void RebuildWindow()
+    /** GL 对象不跨上下文共享: 换宿主即全部重建, 网格状态清空触发整屏重绘。 */
+    private void RebuildHost()
     {
-        _window.Dispose();
+        _host.Dispose();
         _core.Dispose();
         _core = new GpuRenderCore();
         _lastGrid = null;
         _seenRenderVersion = -1;
-        _window = CreateWindow();
-        HookEvents(_window);
+        _host = GpuHostFactory.CreateWindowHost(_atlas);
     }
 
     public void Dispose()
@@ -148,20 +115,20 @@ public sealed class GpuRenderer : IDisposable
         _disposed = true;
         _core.Dispose();
         _atlas.SaveCacheIfDirty();
-        _window.Dispose();
+        _host.Dispose();
     }
 
-    private void OnLoad()
+    public void OnLoaded()
     {
+        _host.MakeCurrent();
         _core.Initialize(_atlas);
         Console.Error.WriteLine($"gpu renderer: {GL.GetString(StringName.Renderer)} ({GL.GetString(StringName.Version)})");
+        var size = _host.Size;
+        OnResize(size.Width, size.Height);
     }
 
-    private void OnResize(ResizeEventArgs e)
+    public void OnResize(int width, int height)
     {
-        var framebufferSize = _window.FramebufferSize;
-        var width = Math.Max(1, framebufferSize.X);
-        var height = Math.Max(1, framebufferSize.Y);
         GL.Viewport(0, 0, width, height);
         var gridWidth = Math.Max(1, width / _atlas.GlyphWidth);
         var gridHeight = Math.Max(1, height / _atlas.GlyphHeight);
@@ -176,23 +143,25 @@ public sealed class GpuRenderer : IDisposable
         }
     }
 
-    private void OnRenderFrame(FrameEventArgs e)
+    public bool OnFrame()
     {
         _chat.DrainUi();
         if (_chat.ExitRequested)
-        {
-            _window.Close();
-            return;
-        }
+            return true;
 
-        if (_chat.RenderVersion == _seenRenderVersion
-            && _lastGrid is not null
-            && _lastGrid.Width == _grid.Width
-            && _lastGrid.Height == _grid.Height)
-            return;
+        var cursorLit = IsCursorLit(Environment.TickCount64);
+        var gridChanged = _chat.RenderVersion != _seenRenderVersion
+            || _lastGrid is null
+            || _lastGrid.Width != _grid.Width
+            || _lastGrid.Height != _grid.Height;
+        // 内容没变也要按闪烁相位重绘: 否则输入行光标永远不闪。
+        if (!gridChanged && cursorLit == _cursorLit)
+            return false;
+        _cursorLit = cursorLit;
         _seenRenderVersion = _chat.RenderVersion;
 
         _chat.Draw(_grid, _layout);
+        DrawCursor(_grid, _chat.CursorScreenX, _chat.CursorScreenY, cursorLit);
         _core.EnsureCellCapacity(_grid.Width * _grid.Height);
         if (CellPacker.CollectDirtyRowRanges(_grid, _lastGrid, _dirtyRanges) > 0)
         {
@@ -206,7 +175,7 @@ public sealed class GpuRenderer : IDisposable
         _lastGrid ??= new CellGrid(_grid.Width, _grid.Height);
         (_grid, _lastGrid) = (_lastGrid, _grid);
 
-        _core.RenderFrame(_atlas, _grid.Width, _grid.Height, _dirtyRanges);
+        _core.RenderFrame(_atlas, _grid.Width, _grid.Height);
 
         if (!_screenshotTaken && _screenshotPath is not null)
         {
@@ -215,72 +184,93 @@ public sealed class GpuRenderer : IDisposable
             _chat.RequestExit();
         }
 
-        _window.SwapBuffers();
+        _host.Present();
 
-        // robust 上下文下 TDR 的表现: GetError 报 CONTEXT_LOST(0x0507, ErrorCode 枚举未收录该值, 按 All 原始常量比较), 之后的 GL 调用全是空操作; 关闭窗口交回 Run() 重建。
+        // robust 上下文下 TDR 的表现: GetError 报 CONTEXT_LOST(0x0507, ErrorCode 枚举未收录该值, 按 All 原始常量比较), 之后的 GL 调用全是空操作; 关闭宿主交回 Run() 重建。
         if ((All)GL.GetError() == All.ContextLost)
         {
             _contextLost = true;
-            _window.Close();
+            return true;
         }
+        return false;
     }
 
-    private void OnKeyDown(KeyboardKeyEventArgs e)
+    /** 闪烁相位: 亮/灭各占一个半周期。抽成纯函数便于单测, 不受挂钟抖动影响。 */
+    internal static bool IsCursorLit(long tickCount)
+        => tickCount / CursorBlinkMs % 2 == 0;
+
+    /** 把光标所在格反显成块状光标(真实终端行为); 不可见或越界时原样返回。 */
+    internal static void DrawCursor(CellGrid grid, int x, int y, bool visible)
     {
-        if (e.Control && e.Key == Keys.V)
+        if (!visible || (uint)x >= (uint)grid.Width || (uint)y >= (uint)grid.Height)
+            return;
+        var cell = grid[x, y];
+        grid[x, y] = cell with { Style = cell.Style | CellStyle.Reverse };
+    }
+
+    public void OnKey(ConsoleKeyInfo key)
+    {
+        if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
         {
-            var clipboard = _window.ClipboardString;
-            if (clipboard.Length > 0)
+            var clipboard = _host.ReadClipboard();
+            if (!string.IsNullOrEmpty(clipboard))
                 _chat.InsertText(clipboard);
             return;
         }
 
-        if (!TryMapKey(e.Key, out var consoleKey))
+        _chat.HandleKey(key);
+    }
+
+    public void OnText(char character)
+    {
+        if (character == '\0')
             return;
-
-        _chat.HandleKey(new ConsoleKeyInfo('\0', consoleKey, e.Shift, e.Alt, e.Control));
+        _chat.HandleKey(new ConsoleKeyInfo(character, ConsoleKey.NoName, false, false, false));
     }
 
-    private void OnTextInput(TextInputEventArgs e)
+    public void OnMouseMove(float x, float y)
     {
-        var text = e.AsString;
-        if (text.Length == 0)
-            return;
-        _chat.HandleKey(new ConsoleKeyInfo(text[0], ConsoleKey.NoName, false, false, false));
+        _mouseX = x;
+        _mouseY = y;
+        if (_leftButtonDown)
+            _chat.HandleMouseDrag((int)(_mouseX / _atlas.GlyphWidth), (int)(_mouseY / _atlas.GlyphHeight), _layout);
     }
 
-    private void OnMouseMove(MouseMoveEventArgs e)
+    public void OnMouseButton(bool pressed, float x, float y)
     {
-        _mouseX = e.X;
-        _mouseY = e.Y;
+        _mouseX = x;
+        _mouseY = y;
+        var cellX = (int)(x / _atlas.GlyphWidth);
+        var cellY = (int)(y / _atlas.GlyphHeight);
+        if (pressed)
+        {
+            _leftButtonDown = true;
+            _chat.HandleMouseClick(cellX, cellY, _layout);
+        }
+        else
+        {
+            _leftButtonDown = false;
+            _chat.HandleMouseRelease(cellX, cellY, _layout);
+        }
     }
 
-    private void OnMouseDown(MouseButtonEventArgs e)
+    public void OnMouseWheel(float deltaY)
     {
-        if (e.Button != MouseButton.Left || !e.IsPressed)
+        if (deltaY == 0)
             return;
         var cellX = (int)(_mouseX / _atlas.GlyphWidth);
         var cellY = (int)(_mouseY / _atlas.GlyphHeight);
-        _chat.HandleMouseClick(cellX, cellY, _layout);
-    }
-
-    private void OnMouseWheel(MouseWheelEventArgs e)
-    {
-        if (e.OffsetY == 0)
-            return;
-        var cellX = (int)(_mouseX / _atlas.GlyphWidth);
-        var cellY = (int)(_mouseY / _atlas.GlyphHeight);
-        _chat.HandleMouseWheel((int)e.OffsetY, cellX, cellY, _layout);
+        _chat.HandleMouseWheel((int)deltaY, cellX, cellY, _layout);
     }
 
     private void SaveScreenshot(string path)
     {
-        var size = _window.FramebufferSize;
-        if (size.X <= 0 || size.Y <= 0)
+        var size = _host.Size;
+        if (size.Width <= 0 || size.Height <= 0)
             return;
-        var pixels = new byte[size.X * size.Y * 4];
-        GL.ReadPixels(0, 0, size.X, size.Y, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
-        using var image = new Image<Rgba32>(size.X, size.Y);
+        var pixels = new byte[size.Width * size.Height * 4];
+        GL.ReadPixels(0, 0, size.Width, size.Height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+        using var image = new Image<Rgba32>(size.Width, size.Height);
         image.ProcessPixelRows(accessor =>
         {
             for (var y = 0; y < accessor.Height; y++)
@@ -299,69 +289,5 @@ public sealed class GpuRenderer : IDisposable
         else
             image.SaveAsPng(path);
     }
-
-
-    private static bool TryMapKey(Keys key, out ConsoleKey consoleKey)
-    {
-        if (key is >= Keys.A and <= Keys.Z)
-        {
-            consoleKey = ConsoleKey.A + (key - Keys.A);
-            return true;
-        }
-
-        if (key is >= Keys.D0 and <= Keys.D9)
-        {
-            consoleKey = ConsoleKey.D0 + (key - Keys.D0);
-            return true;
-        }
-
-        switch (key)
-        {
-            case Keys.Enter:
-                consoleKey = ConsoleKey.Enter;
-                return true;
-            case Keys.Escape:
-                consoleKey = ConsoleKey.Escape;
-                return true;
-            case Keys.Tab:
-                consoleKey = ConsoleKey.Tab;
-                return true;
-            case Keys.Backspace:
-                consoleKey = ConsoleKey.Backspace;
-                return true;
-            case Keys.Delete:
-                consoleKey = ConsoleKey.Delete;
-                return true;
-            case Keys.Up:
-                consoleKey = ConsoleKey.UpArrow;
-                return true;
-            case Keys.Down:
-                consoleKey = ConsoleKey.DownArrow;
-                return true;
-            case Keys.Left:
-                consoleKey = ConsoleKey.LeftArrow;
-                return true;
-            case Keys.Right:
-                consoleKey = ConsoleKey.RightArrow;
-                return true;
-            case Keys.Home:
-                consoleKey = ConsoleKey.Home;
-                return true;
-            case Keys.End:
-                consoleKey = ConsoleKey.End;
-                return true;
-            case Keys.PageUp:
-                consoleKey = ConsoleKey.PageUp;
-                return true;
-            case Keys.PageDown:
-                consoleKey = ConsoleKey.PageDown;
-                return true;
-            case Keys.Space:
-                consoleKey = ConsoleKey.Spacebar;
-                return true;
-            default:
-                consoleKey = default;
-                return false;
-        }
-    }
 }
+
