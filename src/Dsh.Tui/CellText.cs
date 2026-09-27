@@ -31,9 +31,12 @@ internal static class CellText
                 break;
             if (character == '\0')
                 continue;
-            grid[column, y] = new Cell(character, foreground, background, style);
             var width = TerminalTextWidth.Of(character);
-            if (width == 2 && column + 1 < grid.Width)
+            // 末列画不下宽字符: 画了会让终端 auto-wrap 顶滚视口, 整行丢弃
+            if (width == 2 && column + 1 >= grid.Width)
+                break;
+            grid[column, y] = new Cell(character, foreground, background, style);
+            if (width == 2)
                 grid[column + 1, y] = new Cell('\0', foreground, background, style);
             column += width;
         }

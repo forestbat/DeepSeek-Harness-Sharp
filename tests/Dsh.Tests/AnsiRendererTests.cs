@@ -92,6 +92,75 @@ public class AnsiRendererTests
         AssertScreenMatches(terminal, rightBorder);
     }
 
+    [Fact]
+    public void Unchanged_Frame_Emits_Only_Sync_Markers()
+    {
+        var grid = new CellGrid(40, 8);
+        WriteText(grid, 0, 1, "static content");
+        var renderer = new AnsiRenderer();
+        renderer.Render(grid, 3, 2, forceFull: true);
+
+        var second = renderer.Render(grid, 3, 2);
+
+        Assert.Equal("\x1b[?2026h\x1b[?2026l", second);
+    }
+
+    [Fact]
+    public void Style_State_Machine_Emits_Fullwidth_Style_Once_Per_Frame()
+    {
+        var grid = new CellGrid(40, 8);
+        for (var y = 0; y < 8; y++)
+            for (var x = 0; x < 40; x++)
+                grid[x, y] = new Cell('a', AnsiColor.Red, AnsiColor.Default, CellStyle.Bold);
+        var renderer = new AnsiRenderer();
+
+        var frame = renderer.Render(grid, 0, 0, forceFull: true);
+
+        Assert.Equal(1, CountOccurrences(frame, "\x1b[1;31;49m"));
+        Assert.Equal(1, CountOccurrences(frame, "\x1b[0m"));
+        Assert.Equal("\x1b[?2026h\x1b[?2026l", renderer.Render(grid, 0, 0));
+    }
+
+    [Fact]
+    public void Diff_Style_Change_Emits_Only_Delta_Attributes()
+    {
+        var grid = new CellGrid(20, 4);
+        WriteText(grid, 0, 0, "aaaa");
+        var renderer = new AnsiRenderer();
+        renderer.Render(grid, 0, 0, forceFull: true);
+
+        grid[1, 0] = new Cell('a', AnsiColor.Default, AnsiColor.Default, CellStyle.Bold);
+        var diff = renderer.Render(grid, 0, 0);
+
+        Assert.Contains("\x1b[1m", diff);
+        Assert.DoesNotContain("39", diff);
+    }
+
+    [Fact]
+    public void Cursor_Unchanged_Is_Not_Reemitted()
+    {
+        var grid = new CellGrid(20, 4);
+        var renderer = new AnsiRenderer();
+        renderer.Render(grid, 5, 2, forceFull: true);
+        WriteText(grid, 0, 0, "x");
+
+        var diff = renderer.Render(grid, 5, 2);
+
+        Assert.Equal(1, CountOccurrences(diff, "H"));
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+        return count;
+    }
+
     private static void WriteText(CellGrid grid, int x, int y, string text)
     {
         foreach (var character in text)
@@ -137,137 +206,4 @@ public class AnsiRendererTests
         Assert.True(mismatches.Count == 0, string.Join('\n', mismatches.Take(10)));
     }
 
-    private sealed class VirtualTerminal
-    {
-        private readonly bool[,] _wideRightHalf;
-
-        public VirtualTerminal(int width, int height)
-        {
-            Width = width;
-            Height = height;
-            Screen = new char[width, height];
-            _wideRightHalf = new bool[width, height];
-            for (var y = 0; y < height; y++)
-                for (var x = 0; x < width; x++)
-                    Screen[x, y] = ' ';
-        }
-
-        public int Width { get; }
-
-        public int Height { get; }
-
-        public char[,] Screen { get; }
-
-        private int CursorX { get; set; }
-
-        private int CursorY { get; set; }
-
-        private bool WrapPending { get; set; }
-
-        public void Feed(string output)
-        {
-            var index = 0;
-            while (index < output.Length)
-            {
-                var character = output[index];
-                if (character == '\x1b')
-                {
-                    index = ConsumeEscape(output, index);
-                    continue;
-                }
-                if (character == '\r')
-                {
-                    CursorX = 0;
-                    WrapPending = false;
-                    index++;
-                    continue;
-                }
-                if (character == '\n')
-                {
-                    CursorY = Math.Min(Height - 1, CursorY + 1);
-                    WrapPending = false;
-                    index++;
-                    continue;
-                }
-                Put(character);
-                index++;
-            }
-        }
-
-        private int ConsumeEscape(string output, int index)
-        {
-            var cursor = index + 1;
-            if (cursor >= output.Length || output[cursor] != '[')
-                return cursor;
-            cursor++;
-            var start = cursor;
-            while (cursor < output.Length && !char.IsLetter(output[cursor]))
-                cursor++;
-            if (cursor >= output.Length)
-                return cursor;
-            var final = output[cursor];
-            var parameters = output[start..cursor];
-            cursor++;
-            switch (final)
-            {
-                case 'H':
-                    {
-                        var parts = parameters.Split(';');
-                        var row = parts.Length > 0 && int.TryParse(parts[0], out var parsedRow) ? parsedRow : 1;
-                        var column = parts.Length > 1 && int.TryParse(parts[1], out var parsedColumn) ? parsedColumn : 1;
-                        CursorY = Math.Clamp(row - 1, 0, Height - 1);
-                        CursorX = Math.Clamp(column - 1, 0, Width - 1);
-                        WrapPending = false;
-                        break;
-                    }
-                case 'J':
-                    if (parameters is "" or "2")
-                    {
-                        for (var y = 0; y < Height; y++)
-                            for (var x = 0; x < Width; x++)
-                            {
-                                Screen[x, y] = ' ';
-                                _wideRightHalf[x, y] = false;
-                            }
-                        CursorX = 0;
-                        CursorY = 0;
-                    }
-                    break;
-                case 'K':
-                    for (var x = CursorX; x < Width; x++)
-                    {
-                        Screen[x, CursorY] = ' ';
-                        _wideRightHalf[x, CursorY] = false;
-                    }
-                    break;
-            }
-            return cursor;
-        }
-
-        private void Put(char character)
-        {
-            if (WrapPending)
-            {
-                CursorX = 0;
-                CursorY = Math.Min(Height - 1, CursorY + 1);
-                WrapPending = false;
-            }
-            if (_wideRightHalf[CursorX, CursorY] && CursorX > 0)
-                Screen[CursorX - 1, CursorY] = ' ';
-            Screen[CursorX, CursorY] = character;
-            _wideRightHalf[CursorX, CursorY] = false;
-            var advance = TerminalTextWidth.IsWide(character) ? 2 : 1;
-            if (advance == 2 && CursorX + 1 < Width)
-            {
-                Screen[CursorX + 1, CursorY] = ' ';
-                _wideRightHalf[CursorX + 1, CursorY] = true;
-            }
-            CursorX += advance;
-            if (CursorX >= Width)
-            {
-                CursorX = Width - 1;
-                WrapPending = true;
-            }
-        }
-    }
 }
