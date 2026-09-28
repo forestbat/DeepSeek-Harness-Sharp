@@ -271,12 +271,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         GpuAdapters.Clear();
         GpuAdapters.Add(new GpuAdapterOption(GpuPreference.AutoAdapter, "自动（系统默认）"));
-        foreach (var adapter in GpuPreference.ListAdapters())
-            GpuAdapters.Add(new GpuAdapterOption(adapter.Name, $"{adapter.Name}（{adapter.Detail}）"));
-        if (saved.Length > 0 && !GpuAdapters.Any(option => option.Value == saved))
-            GpuAdapters.Add(new GpuAdapterOption(saved, $"{saved}（当前不可用，仍按它启动）"));
-        SelectedGpuAdapterOption = GpuAdapters.FirstOrDefault(option => option.Value == saved) ?? GpuAdapters[0];
-        GpuCurrent = $"{GpuPreference.DescribeCurrent()} · 本机识别 {GpuAdapters.Count - 1} 张卡";
+        var adapters = GpuPreference.ListAdapters();
+        // 落盘用 PCI slot(同名多卡唯一可区分); 早期版本存的是显示名, 按目录定位后仍选中同一张卡。
+        foreach (var adapter in adapters)
+            GpuAdapters.Add(new GpuAdapterOption(GpuPreference.SelectionIdOf(adapter), $"{adapter.Name}（{adapter.Detail}）"));
+        var matched = GpuPreference.IndexOfSelection(adapters, saved);
+        if (matched >= 0)
+            SelectedGpuAdapterOption = GpuAdapters[matched + 1];
+        else
+        {
+            if (saved.Length > 0)
+                GpuAdapters.Add(new GpuAdapterOption(saved, $"{saved}（当前不可用，仍按它启动）"));
+            SelectedGpuAdapterOption = GpuAdapters[0];
+        }
+        GpuCurrent = $"{GpuPreference.DescribeCurrent()} · 本机识别 {adapters.Count} 张卡";
         GpuHint = OperatingSystem.IsLinux()
             ? "Linux 用 PRIME 选择器表达偏好（DRI_PRIME / __NV_PRIME_RENDER_OFFLOAD），部分驱动或容器里可能不生效；保存后重启生效。"
             : "选择的是交给渲染后端使用的显卡（例如 NVIDIA 独显 / AMD 集显）；保存后重启生效，后端不认这张卡时会回退到默认卡。";

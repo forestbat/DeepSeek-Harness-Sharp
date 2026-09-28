@@ -847,9 +847,8 @@ public sealed class ChatWindow : IDisposable
             for (var index = 0; index < adapters.Count; index++)
             {
                 var kind = GpuCatalog.IsDiscrete(adapters[index]) ? "discrete" : "integrated";
-                // 选卡值在 Linux 是 PCI slot: 列表里也给出 slot, 否则同名多卡看不出选的是哪张
-                var slot = GpuCatalog.LooksLikePciSlot(adapters[index].Id) ? $" @{adapters[index].Id}" : "";
-                pane.AppendRaw($"    {index + 1}. {adapters[index].Name} ({kind}, {adapters[index].Detail}{slot})\n");
+                // Detail 里已带 PCI slot(就是选卡值), 同名多卡因此能看出选的是哪张
+                pane.AppendRaw($"    {index + 1}. {adapters[index].Name} ({kind}, {adapters[index].Detail})\n");
             }
             pane.AppendRaw("  usage: /gpu <number> — takes effect after restart\n");
             return;

@@ -166,8 +166,12 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             if (OperatingSystem.IsWindows())
             {
                 // 本机是 AMD 780M + NVIDIA 4060 Laptop: 列表必须给出真实显卡而不是"渲染后端"。
-                Assert.Contains(adapters, option => option.Value.Contains("780M", StringComparison.OrdinalIgnoreCase));
-                Assert.Contains(adapters, option => option.Value.Contains("RTX 4060", StringComparison.OrdinalIgnoreCase));
+                // 落盘值是 PCI slot(同名多卡唯一可区分), 卡名在 Label 里。
+                var amd = adapters.First(option => option.Label.Contains("780M", StringComparison.OrdinalIgnoreCase));
+                var nvidia = adapters.First(option => option.Label.Contains("RTX 4060", StringComparison.OrdinalIgnoreCase));
+                Assert.True(GpuPreference.LooksLikePciSlot(amd.Value), $"AMD 卡的落盘值不是 PCI slot: {amd.Value}");
+                Assert.True(GpuPreference.LooksLikePciSlot(nvidia.Value), $"NVIDIA 卡的落盘值不是 PCI slot: {nvidia.Value}");
+                Assert.NotEqual(amd.Value, nvidia.Value);
             }
 
             var target = adapters[^1];

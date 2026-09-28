@@ -9,6 +9,8 @@ public sealed record GpuAdapterInfo(string Id, string Name, string Vendor, strin
 
 /**
  * 显卡目录: 枚举本机显卡(Windows 显示类驱动注册表 / Linux /sys/class/drm)、按显存架构分辨核显(UMA)/独显、保存用户选卡。
+ * 选卡标识用 PCI slot(同名多卡唯一可区分): Linux 取 sysfs 的 PCI_SLOT_NAME, Windows 由显示类子键回查 Enum\PCI 的设备实例,
+ * 拿不到 slot 时退回设备实例路径(设备实例 ID), 再退回注册表键名与显示名。
  * 选卡持久化在 settings.yaml 的 plugins."@deepseek-ai/dsh-gui".gpu.adapter, GUI 设置页与 TUI /gpu 命令共用同一键, 重启进程后生效。
  */
 public static class GpuCatalog
@@ -16,9 +18,15 @@ public static class GpuCatalog
     public const string AutoAdapter = "auto";
 
     private const string GpuSettingsPackage = "@deepseek-ai/dsh-gui";
-    private const string DisplayClassKey = @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    private const string DisplayClassGuid = "{4d36e968-e325-11ce-bfc1-08002be10318}";
+    private const string DisplayClassKey = @"SYSTEM\CurrentControlSet\Control\Class\" + DisplayClassGuid;
     private const string DriverDescValue = "DriverDesc";
     private const string MatchingDeviceIdValue = "MatchingDeviceId";
+    private const string PciEnumKey = @"SYSTEM\CurrentControlSet\Enum\PCI";
+    private const string DeviceDriverValue = "Driver";
+    private const string DeviceLocationValue = "LocationInformation";
+    private const string PciDomain = "0000";
+    private const int LocationParts = 3;
     private const string DrmRoot = "/sys/class/drm";
     private const string DrmDeviceRoot = "/dev/dri";
 
@@ -215,16 +223,70 @@ public static class GpuCatalog
             if (subKey?.GetValue(DriverDescValue) is not string driverDesc || driverDesc.Length == 0)
                 continue;
             var deviceId = subKey.GetValue(MatchingDeviceIdValue) as string ?? "";
+            var identity = WindowsDeviceIdentity(name);
             var vendor = VendorOf(deviceId);
-            adapters.Add(new GpuAdapterInfo(name, driverDesc, vendor, $"{vendor} · {ShortDeviceId(deviceId)}", ProbeWindowsUma(deviceId)));
+            var id = identity.PciSlot ?? identity.DeviceInstancePath ?? name;
+            adapters.Add(new GpuAdapterInfo(id, driverDesc, vendor, $"{vendor} · {identity.PciSlot ?? ShortDeviceId(deviceId)}", ProbeWindowsUma(deviceId)));
         }
         return
         [
             .. adapters
                 .Where(adapter => !IsVirtual(adapter.Name))
-                .OrderBy(adapter => adapter.Name, StringComparer.OrdinalIgnoreCase),
+                .OrderBy(adapter => adapter.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(adapter => adapter.Id, StringComparer.OrdinalIgnoreCase),
         ];
     }
+
+    /** Windows LocationInformation → PCI slot: 只认尾部括号里的 (总线,设备,功能) 三元组, 格式串随系统语言变, 元组不变。 */
+    public static string? ParsePciLocation(string? locationInformation)
+    {
+        if (locationInformation is null)
+            return null;
+        var open = locationInformation.LastIndexOf('(');
+        var close = locationInformation.LastIndexOf(')');
+        if (open < 0 || close <= open)
+            return null;
+        var parts = locationInformation[(open + 1)..close].Split(',');
+        if (parts.Length != LocationParts)
+            return null;
+        if (!TryParseLocationPart(parts[0], out var bus)
+            || !TryParseLocationPart(parts[1], out var device)
+            || !TryParseLocationPart(parts[2], out var function))
+            return null;
+        return $"{PciDomain}:{bus:X2}:{device:X2}.{function}";
+    }
+
+    /**
+     * 显示类驱动子键("0000") → (PCI slot, 设备实例路径)。
+     * Enum\PCI 下每个设备实例的 Driver 值回指它的显示类子键, 这是子键与物理设备之间唯一可靠的链接;
+     * 非 PCI 设备(虚拟显示适配器)查不到, 返回 (null, null)。
+     */
+    [SupportedOSPlatform("windows")]
+    private static (string? PciSlot, string? DeviceInstancePath) WindowsDeviceIdentity(string classSubKeyName)
+    {
+        using var root = Registry.LocalMachine.OpenSubKey(PciEnumKey);
+        if (root is null)
+            return (null, null);
+        var expectedDriver = $@"{DisplayClassGuid}\{classSubKeyName}";
+        foreach (var hardwareId in root.GetSubKeyNames())
+        {
+            using var hardwareKey = root.OpenSubKey(hardwareId);
+            if (hardwareKey is null)
+                continue;
+            foreach (var instanceId in hardwareKey.GetSubKeyNames())
+            {
+                using var instanceKey = hardwareKey.OpenSubKey(instanceId);
+                if (instanceKey?.GetValue(DeviceDriverValue) is not string driver
+                    || !driver.Equals(expectedDriver, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                return (ParsePciLocation(instanceKey.GetValue(DeviceLocationValue) as string), $@"PCI\{hardwareId}\{instanceId}");
+            }
+        }
+        return (null, null);
+    }
+
+    private static bool TryParseLocationPart(string text, out int value)
+        => int.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) && value >= 0;
 
     [SupportedOSPlatform("linux")]
     private static IReadOnlyList<GpuAdapterInfo> ListLinuxAdapters()
@@ -266,7 +328,7 @@ public static class GpuCatalog
     }
 
     /**
-     * 适配器 Id 是否为 PCI slot 形态(仅 Linux)。同名多卡(如集群里一批同型号)只有 slot 能区分,
+     * 适配器 Id 是否为 PCI slot 形态(Windows 与 Linux 同形)。同名多卡(如集群里一批同型号)只有 slot 能区分,
      * 选卡值因此优先用 slot: 卡号(cardN)会随枚举次序变化, slot 不会。
      */
     public static bool LooksLikePciSlot(string id)
