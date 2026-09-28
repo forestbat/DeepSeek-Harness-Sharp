@@ -119,6 +119,10 @@ public static class TuiRunner
                     forceFull = false;
                     seenVersion = chat.RenderVersion;
                     nextFrameAt = Environment.TickCount64 + FrameIntervalMs;
+                    // DrainInputUntil 可能已消费唤醒字节, 但对应 UI 动作还没执行;
+                    // 若直接落到下面的阻塞 Read, 这次唤醒就丢了, 输出泵的 Invalidate 会被 _wakePending 挡死(shell 输出饿死)。
+                    // 先回环顶 DrainUi, 确认无待办再阻塞。
+                    continue;
                 }
 
                 if (chat.ExitRequested)
@@ -209,7 +213,31 @@ public static class TuiRunner
             using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot);
             if (startShell)
                 chat.AddShellPane();
-            renderer.Run();
+            // 进程信号兜底: 裸 TTY(GBM)形态没有窗口关闭事件, 收到信号也要走完正常 Dispose 恢复控制台(KD_TEXT/VT_AUTO/dropMaster)
+            var exitSignal = 0;
+            var signalGuards = new List<PosixSignalRegistration>(4);
+            if (!OperatingSystem.IsWindows())
+            {
+                // PosixSignal 枚举值是平台中立常量而非 Linux 信号编号, 退出码要用真实编号
+                foreach (var (signal, signo) in new[] { (PosixSignal.SIGTERM, 15), (PosixSignal.SIGHUP, 1), (PosixSignal.SIGINT, 2), (PosixSignal.SIGQUIT, 3) })
+                {
+                    signalGuards.Add(PosixSignalRegistration.Create(signal, context =>
+                    {
+                        context.Cancel = true;
+                        exitSignal = signo;
+                        renderer.RequestClose();
+                    }));
+                }
+            }
+            try
+            {
+                renderer.Run();
+            }
+            finally
+            {
+                foreach (var guard in signalGuards)
+                    guard.Dispose();
+            }
             try
             {
                 prewarm.GetAwaiter().GetResult();
@@ -220,7 +248,7 @@ public static class TuiRunner
             }
             var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
             sessions.Flush(agent.Session).GetAwaiter().GetResult();
-            return 0;
+            return exitSignal != 0 ? 128 + exitSignal : 0;
         }
         catch (Exception error)
         {

@@ -15,10 +15,14 @@ public static class PluginUnloader
         return weak;
     }
 
+    /**
+     * 等待 ALC 被回收。maxRounds 默认 MaxGcRounds(生产报告口径: 收不回就如实报"仍被引用");
+     * 满载环境下的验证用例可放宽轮数——那只是 GC 延迟, 不是泄漏。
+     */
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool WaitForCollection(WeakReference weak, out string? report)
+    public static bool WaitForCollection(WeakReference weak, out string? report, int maxRounds = MaxGcRounds)
     {
-        for (var round = 0; round < MaxGcRounds && weak.IsAlive; round++)
+        for (var round = 0; round < maxRounds && weak.IsAlive; round++)
         {
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
@@ -28,7 +32,7 @@ public static class PluginUnloader
         }
         if (weak.IsAlive)
         {
-            report = $"load context is still referenced after {MaxGcRounds} GC rounds";
+            report = $"load context is still referenced after {maxRounds} GC rounds";
             return false;
         }
         report = null;

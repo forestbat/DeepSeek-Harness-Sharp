@@ -118,6 +118,9 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _host.Dispose();
     }
 
+    /** 进程信号(SIGTERM/SIGINT 等)驱动的关闭: 裸 TTY 没有窗口关闭事件, 让宿主循环正常退出走 Dispose 恢复控制台。 */
+    public void RequestClose() => _host.RequestClose();
+
     public void OnLoaded()
     {
         _host.MakeCurrent();

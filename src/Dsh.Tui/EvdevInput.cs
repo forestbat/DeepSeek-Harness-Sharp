@@ -5,13 +5,12 @@ namespace Dsh.Tui;
 internal enum EvdevEventKind
 {
     Key,
-    Text,
     MouseMove,
     MouseButton,
     MouseWheel,
 }
 
-internal readonly record struct EvdevEvent(EvdevEventKind Kind, ConsoleKeyInfo Key, char Text, float X, float Y, bool Pressed, float Wheel);
+internal readonly record struct EvdevEvent(EvdevEventKind Kind, ConsoleKeyInfo Key, float X, float Y, bool Pressed, float Wheel);
 
 /**
  * 裸 TTY 的第三个输入后端: 直读 /dev/input/event*(evdev), 产出与 GLFW 路径同形的键/文本/鼠标事件。
@@ -53,6 +52,19 @@ internal sealed class EvdevInput : IDisposable
         [108] = ConsoleKey.DownArrow,
         [105] = ConsoleKey.LeftArrow,
         [106] = ConsoleKey.RightArrow,
+        // F1-F10 连续(59-68), F11/F12 在 87/88; VT 切换热键 Ctrl+Alt+Fn 由宿主拦在这层之上
+        [59] = ConsoleKey.F1,
+        [60] = ConsoleKey.F2,
+        [61] = ConsoleKey.F3,
+        [62] = ConsoleKey.F4,
+        [63] = ConsoleKey.F5,
+        [64] = ConsoleKey.F6,
+        [65] = ConsoleKey.F7,
+        [66] = ConsoleKey.F8,
+        [67] = ConsoleKey.F9,
+        [68] = ConsoleKey.F10,
+        [87] = ConsoleKey.F11,
+        [88] = ConsoleKey.F12,
     };
 
     private static readonly Dictionary<ushort, char> LetterKeys = new()
@@ -67,6 +79,22 @@ internal sealed class EvdevInput : IDisposable
     {
         [2] = '1', [3] = '2', [4] = '3', [5] = '4', [6] = '5',
         [7] = '6', [8] = '7', [9] = '8', [10] = '9', [11] = '0',
+    };
+
+    /** 标点键(US 布局): 按下档/Shift 档。缺了它裸 TTY 上连路径都敲不出来。 */
+    private static readonly Dictionary<ushort, (char Plain, char Shifted)> PunctuationKeys = new()
+    {
+        [12] = ('-', '_'),
+        [13] = ('=', '+'),
+        [26] = ('[', '{'),
+        [27] = (']', '}'),
+        [39] = (';', ':'),
+        [40] = ('\'', '"'),
+        [41] = ('`', '~'),
+        [43] = ('\\', '|'),
+        [51] = (',', '<'),
+        [52] = ('.', '>'),
+        [53] = ('/', '?'),
     };
 
     private readonly List<SafeFileHandle> _handles = [];
@@ -193,7 +221,7 @@ internal sealed class EvdevInput : IDisposable
                 _deltaY += value;
                 return false;
             case RelWheel when value != 0:
-                _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseWheel, default, '\0', _mouseX, _mouseY, false, Math.Sign(value)));
+                _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseWheel, default, _mouseX, _mouseY, false, Math.Sign(value)));
                 return true;
             default:
                 return false;
@@ -208,7 +236,7 @@ internal sealed class EvdevInput : IDisposable
         _mouseY = Math.Clamp(_mouseY + _deltaY, 0, _screenHeight - 1);
         _deltaX = 0;
         _deltaY = 0;
-        _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseMove, default, '\0', _mouseX, _mouseY, false, 0));
+        _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseMove, default, _mouseX, _mouseY, false, 0));
         return true;
     }
 
@@ -217,7 +245,7 @@ internal sealed class EvdevInput : IDisposable
         UpdateModifier(code, value);
         if (code == BtnLeft)
         {
-            _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseButton, default, '\0', _mouseX, _mouseY, value != 0, 0));
+            _ready.Enqueue(new EvdevEvent(EvdevEventKind.MouseButton, default, _mouseX, _mouseY, value != 0, 0));
             return true;
         }
         if (value == 0)
@@ -225,23 +253,24 @@ internal sealed class EvdevInput : IDisposable
 
         if (NamedKeys.TryGetValue(code, out var named))
         {
-            _ready.Enqueue(KeyEvent(named));
-            if (named == ConsoleKey.Spacebar && !_ctrl && !_alt)
-                _ready.Enqueue(TextEvent(' '));
+            _ready.Enqueue(named == ConsoleKey.Spacebar
+                ? PrintableEvent(ConsoleKey.Spacebar, ' ')
+                : KeyEvent(named));
             return true;
         }
         if (LetterKeys.TryGetValue(code, out var letter))
         {
-            _ready.Enqueue(KeyEvent(ConsoleKey.A + (letter - 'a')));
-            if (!_ctrl && !_alt)
-                _ready.Enqueue(TextEvent(_shift ? char.ToUpperInvariant(letter) : letter));
+            _ready.Enqueue(PrintableEvent(ConsoleKey.A + (letter - 'a'), _shift ? char.ToUpperInvariant(letter) : letter));
             return true;
         }
         if (DigitKeys.TryGetValue(code, out var digit))
         {
-            _ready.Enqueue(KeyEvent(ConsoleKey.D0 + (digit - '0')));
-            if (!_ctrl && !_alt)
-                _ready.Enqueue(TextEvent(_shift ? ShiftedDigits[digit - '1'] : digit));
+            _ready.Enqueue(PrintableEvent(ConsoleKey.D0 + (digit - '0'), _shift ? ShiftedDigits[digit - '1'] : digit));
+            return true;
+        }
+        if (PunctuationKeys.TryGetValue(code, out var punctuation))
+        {
+            _ready.Enqueue(PrintableEvent(ConsoleKey.NoName, _shift ? punctuation.Shifted : punctuation.Plain));
             return true;
         }
         return false;
@@ -265,8 +294,12 @@ internal sealed class EvdevInput : IDisposable
     }
 
     private EvdevEvent KeyEvent(ConsoleKey key)
-        => new(EvdevEventKind.Key, new ConsoleKeyInfo('\0', key, _shift, _alt, _ctrl), '\0', 0, 0, false, 0);
+        => new(EvdevEventKind.Key, new ConsoleKeyInfo('\0', key, _shift, _alt, _ctrl), 0, 0, false, 0);
 
-    private static EvdevEvent TextEvent(char character)
-        => new(EvdevEventKind.Text, new ConsoleKeyInfo(character, ConsoleKey.NoName, false, false, false), character, 0, 0, false, 0);
+    /** 可打印键: 与 VT 后端同构的单事件(Key + KeyChar); Ctrl/Alt 组合键不带字符(对齐 VT 的 ControlKey)。 */
+    private EvdevEvent PrintableEvent(ConsoleKey key, char character)
+    {
+        var withChar = !_ctrl && !_alt;
+        return new EvdevEvent(EvdevEventKind.Key, new ConsoleKeyInfo(withChar ? character : '\0', key, _shift, _alt, _ctrl), 0, 0, false, 0);
+    }
 }

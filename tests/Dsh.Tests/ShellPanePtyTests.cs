@@ -24,8 +24,7 @@ public sealed class ShellPanePtyTests
         harness.SaveTranscript();
         Assert.Contains("shell · ", started);
 
-        // 分块输入(每块 3 字符 + 间隔): 模拟真人击键。宿主一次灌入整串时, Linux 输入读取器会丢掉
-        // 同一批里的尾部字符(已单独记录为待查项), 与本用例要验证的 shell 窗格能力无关。
+        // 分块输入(每块 3 字符 + 间隔): 模拟真人击键。整串一次性灌入的路径由 ShellPane_Accepts_Single_Burst_Input 覆盖。
         foreach (var chunk in Chunk("echo dsh-$(echo pty)", 3))
         {
             await harness.WriteTextAsync(chunk);
@@ -44,6 +43,33 @@ public sealed class ShellPanePtyTests
         await harness.WriteTextAsync("-");
         var closed = await WaitForScreenMissingAsync(harness, "shell · ", TimeSpan.FromSeconds(10));
         Assert.DoesNotContain("shell · ", closed);
+    }
+
+    /**
+     * 回归: 宿主把整串(20 字符 + 回车)一次性写入时, 界面曾不显示命令输出(根因: TuiRunner 渲染帧内
+     * DrainInputUntil 消费了唤醒字节却未执行对应 UI 动作, 随后直接阻塞在 Read, 输出泵的 Invalidate
+     * 被 _wakePending 挡死——并非输入丢字符)。与分块用例同路径, 只是输入为单次写入。
+     */
+    [Fact]
+    public async Task ShellPane_Accepts_Single_Burst_Input()
+    {
+        var shell = Dsh.Pty.PtyShell.Resolve();
+        if (Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase))
+            Assert.Skip("cmd.exe 不支持 $(...) 子表达式, 换 pwsh/bash 后本条测试才有意义");
+
+        using var harness = await PtyTuiHarness.StartAsync("--shell");
+        if (harness is null)
+            return;
+
+        var started = await harness.WaitForAsync("shell · ", TimeSpan.FromSeconds(60));
+        Assert.Contains("shell · ", started);
+
+        const string command = "echo dsh-$(echo pty)";
+        await harness.WriteTextAsync(command);
+        await harness.WriteBytesAsync(0x0d);
+        var executed = await WaitForScreenAsync(harness, "dsh-pty", TimeSpan.FromSeconds(30));
+        harness.SaveTranscript();
+        Assert.True(executed.Contains("dsh-pty", StringComparison.Ordinal), $"整串灌入后屏幕上未见到命令输出:\n{executed}");
     }
 
     private static IEnumerable<string> Chunk(string text, int size)

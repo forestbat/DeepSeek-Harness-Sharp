@@ -174,9 +174,11 @@ public sealed class PluginScheduler
 
     private bool IsStale(PluginActivation activation) => activation.IsStale(ProviderSnapshot());
 
-    public async Task AwaitTransitionsAsync(TimeSpan? timeout = null)
+    /** 等待所有进行中的迁移落地; 返回值表示本轮是否真有迁移被等到(调用方据此决定是否再评估一轮)。 */
+    public async Task<bool> AwaitTransitionsAsync(TimeSpan? timeout = null)
     {
         var deadline = timeout is { } limit ? DateTime.UtcNow + limit : (DateTime?)null;
+        var awaited = false;
         while (true)
         {
             var waits = Snapshot()
@@ -184,7 +186,8 @@ public sealed class PluginScheduler
                 .Select(activation => activation.WaitAsync())
                 .ToArray();
             if (waits.Length == 0)
-                return;
+                return awaited;
+            awaited = true;
             var remaining = deadline is { } until ? until - DateTime.UtcNow : (TimeSpan?)null;
             if (remaining is { } left && left <= TimeSpan.Zero)
                 throw new TimeoutException("plugin transitions did not settle in time");
@@ -233,7 +236,9 @@ public sealed class PluginScheduler
         {
             var changed = RebuildStaleDependents();
             changed |= ActivateEligible();
-            await AwaitTransitionsAsync().ConfigureAwait(false);
+            // 迁移(如 Deactivating→Pending)在等待期间才落地: 新 Pending 的激活本轮尚未评估, 必须再跑一轮
+            if (await AwaitTransitionsAsync().ConfigureAwait(false))
+                changed = true;
             if (!changed)
                 break;
         }

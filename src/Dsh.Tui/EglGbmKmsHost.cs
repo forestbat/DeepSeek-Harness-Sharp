@@ -39,6 +39,7 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
     private VtConsole? _vt;
     private EvdevInput? _input;
     private bool _closeRequested;
+    private bool _vtReleased;
     private bool _disposed;
 
     public (int Width, int Height) Size => ((int)_width, (int)_height);
@@ -99,6 +100,8 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
 
     public void Present()
     {
+        if (_vtReleased)
+            return;
         if (!Egl.SwapBuffers(_display, _surface))
             throw new InvalidOperationException($"eglSwapBuffers 失败, err={Egl.GetError()}");
         var bo = GbmNative.gbm_surface_lock_front_buffer(_gbmSurface);
@@ -141,16 +144,22 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         client.OnResize((int)_width, (int)_height);
         while (!_closeRequested)
         {
+            HandleVtSignals();
             if (_input is { DeviceCount: > 0 } input)
             {
                 while (input.Read(10, out var inputEvent))
-                    Dispatch(client, inputEvent);
+                {
+                    // 切走期间按键照样到达 evdev: 丢弃, 不替别的 VT 消费输入
+                    if (!_vtReleased)
+                        Dispatch(client, inputEvent);
+                }
             }
             else
             {
                 Thread.Sleep(10);
             }
-            if (client.OnFrame())
+            // 切走期间不渲染不翻页: 已 drop master, KMS 调用只会被拒绝
+            if (!_vtReleased && client.OnFrame())
                 break;
         }
     }
@@ -168,15 +177,23 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         CleanupNative();
     }
 
-    private static void Dispatch(IGpuHostClient client, EvdevEvent inputEvent)
+    private void Dispatch(IGpuHostClient client, EvdevEvent inputEvent)
     {
         switch (inputEvent.Kind)
         {
             case EvdevEventKind.Key:
-                client.OnKey(inputEvent.Key);
-                break;
-            case EvdevEventKind.Text:
-                client.OnText(inputEvent.Text);
+                // Ctrl+Alt+Fn 是 VT 切换热键: K_OFF 下内核不处理, 由我们发起 VT_ACTIVATE
+                // (武装了 VT_PROCESS 时内核回发释放信号, 走 HandleVtSignals 的握手)
+                var key = inputEvent.Key;
+                if (_vt is not null
+                    && key.Key is >= ConsoleKey.F1 and <= ConsoleKey.F12
+                    && (key.Modifiers & ConsoleModifiers.Control) != 0
+                    && (key.Modifiers & ConsoleModifiers.Alt) != 0)
+                {
+                    _vt.ActivateVt(key.Key - ConsoleKey.F1 + 1);
+                    return;
+                }
+                client.OnKey(key);
                 break;
             case EvdevEventKind.MouseMove:
                 client.OnMouseMove(inputEvent.X, inputEvent.Y);
@@ -186,6 +203,28 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
                 break;
             case EvdevEventKind.MouseWheel:
                 client.OnMouseWheel(inputEvent.Wheel);
+                break;
+        }
+    }
+
+    /** VT_PROCESS 握手: 释放请求→交出 master 放行; 切回→重新接管并用最近一帧恢复画面。 */
+    private void HandleVtSignals()
+    {
+        if (_vt is null)
+            return;
+        switch (_vt.TakePendingSignal())
+        {
+            case 1:
+                DrmNative.drmDropMaster(_drmFd);
+                _vt.AckRelease();
+                _vtReleased = true;
+                break;
+            case 2:
+                DrmNative.drmSetMaster(_drmFd);
+                if (_prevFb != 0)
+                    DrmNative.drmModeSetCrtc(_drmFd, _crtcId, _prevFb, 0, 0, _connectors, _connectors.Length, _modePtr);
+                _vt.AckAcquire();
+                _vtReleased = false;
                 break;
         }
     }
