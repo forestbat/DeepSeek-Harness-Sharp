@@ -83,6 +83,9 @@ public static class TerminalEntryRegistration
 
     private static void SetExecutable(string path)
     {
+        // SetUnixFileMode 在 Windows 上不受支持; 本入口整体仅 Linux 可达, 这里显式守卫以标明平台边界
+        if (OperatingSystem.IsWindows())
+            return;
         try
         {
             File.SetUnixFileMode(

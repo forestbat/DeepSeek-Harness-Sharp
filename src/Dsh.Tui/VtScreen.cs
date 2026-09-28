@@ -11,6 +11,9 @@ internal sealed class VtScreen
     private const int TabWidth = 8;
     private const int DefaultScrollbackLines = 2000;
 
+    /** 渲染行缓冲的栈上限: 一行不超过这么多格就用栈缓冲, 否则退回堆数组。 */
+    private const int StackRowCells = 256;
+
     private readonly Decoder _decoder = Encoding.UTF8.GetDecoder();
     private readonly List<Cell[]> _scrollback = [];
     private readonly StringBuilder _csi = new();
@@ -122,6 +125,8 @@ internal sealed class VtScreen
     public void Render(CellGrid grid, ConsoleRect rect, int scrollOffset = 0)
     {
         var rows = Math.Min(rect.Height, Height);
+        // stackalloc 必须在循环外: 循环内的栈分配要到方法返回才回收, 满屏渲染会按行数线性吃栈(CA2014)
+        Span<Cell> stackRow = stackalloc Cell[StackRowCells];
         for (var y = 0; y < rows; y++)
         {
             var source = y - scrollOffset;
@@ -129,7 +134,7 @@ internal sealed class VtScreen
                 ? _lines.AsSpan(source * Width, Width)
                 : ScrollbackRow(-source - 1);
             var width = Math.Min(rect.Width, line.Length);
-            Span<Cell> buffer = width <= 256 ? stackalloc Cell[width] : new Cell[width];
+            var buffer = width <= StackRowCells ? stackRow[..width] : new Cell[width];
             for (var x = 0; x < width; x++)
                 buffer[x] = line[x];
             grid.SetRow(rect.Y + y, buffer);

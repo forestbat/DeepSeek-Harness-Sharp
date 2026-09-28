@@ -50,13 +50,13 @@ public sealed class PtyInteractiveShellTests
                     {
                         if (session.Status != PtySessionStatus.Running)
                             return;
-                        await Task.Delay(20, CancellationToken.None);
+                        await Task.Delay(20, TestContext.Current.CancellationToken);
                         continue;
                     }
                     lock (output)
                         output.Append(Encoding.UTF8.GetString(buffer, 0, read));
                 }
-            });
+            }, TestContext.Current.CancellationToken);
 
             await session.WriteAsync("echo probe-$(echo ok)\n"u8.ToArray(), TestContext.Current.CancellationToken);
             var text = await WaitForAsync(output, "probe-ok", TimeSpan.FromSeconds(20));
