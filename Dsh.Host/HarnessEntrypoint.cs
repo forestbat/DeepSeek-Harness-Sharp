@@ -18,6 +18,7 @@ public static class HarnessEntrypoint
         var gpu = false;
         var shell = false;
         string? gpuScreenshot = null;
+        string? gpuCard = null;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
         {
@@ -40,6 +41,9 @@ public static class HarnessEntrypoint
                     break;
                 case "--gpu-screenshot" when index + 1 < args.Length:
                     gpuScreenshot = args[++index];
+                    break;
+                case "--gpu-card" when index + 1 < args.Length:
+                    gpuCard = args[++index];
                     break;
                 case "--help" or "-h":
                     PrintUsage();
@@ -91,7 +95,7 @@ public static class HarnessEntrypoint
                     }
                     if (subcommand == "daemon")
                         return await BootCli.RunTuiDaemonAsync();
-                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot);
+                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard);
                 }
             case "gui":
                 // 组合插件之前先摘掉自己的控制台
@@ -102,7 +106,7 @@ public static class HarnessEntrypoint
             case "register-terminal":
                 return await TerminalEntryRegistration.RegisterAsync(Console.Out);
             case null:
-                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot);
+                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot, gpuCard);
             default:
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
         }
@@ -123,6 +127,7 @@ public static class HarnessEntrypoint
               --gpu              open the standalone terminal window with the GPU renderer
               --shell            start with a real shell pane (Dsh.Pty) in the focused slot
               --gpu-screenshot <path>  capture the GPU frame buffer to PNG/TIFF and exit
+              --gpu-card <N|path>      pick the DRM card for bare-TTY GBM/KMS (e.g. 1 or /dev/dri/card1)
               --dump-config      print the resolved harness configuration and exit
               -h, --help         show this help
             """);
@@ -135,7 +140,8 @@ public static class HarnessEntrypoint
         string? resumeSessionId = null,
         bool gpu = false,
         bool shell = false,
-        string? gpuScreenshot = null)
+        string? gpuScreenshot = null,
+        string? gpuCard = null)
     {
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui", EntrypointPlugin: entrypointPlugin);
         using var app = await ConfigBoot.Compose(options);
@@ -145,7 +151,8 @@ public static class HarnessEntrypoint
             resumeSessionId,
             gpu,
             shell,
-            gpuScreenshot));
+            gpuScreenshot,
+            gpuCard));
     }
 }
 

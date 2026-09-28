@@ -109,10 +109,12 @@ public class ChatWindowMenuTests : IDisposable
         await Task.Delay(300, TestContext.Current.CancellationToken);
         chat.DrainUi();
 
+        // 选卡值由 GpuCatalog.SelectionIdOf 决定: Linux 用 PCI slot(同名多卡可区分), Windows 用显示名
+        var stored = GpuCatalog.SelectionIdOf(adapters[0]);
         frame = DrawFrame(chat);
-        Assert.Contains($"gpu: selected {adapters[0].Name}", frame);
+        Assert.Contains($"gpu: selected {stored}", frame);
         // 与 GUI 设置页读同一个键(plugins.@deepseek-ai/dsh-gui 的 gpu.adapter)。
-        Assert.Equal(adapters[0].Name, GpuCatalog.LoadSelectedAdapter(HarnessHome.Resolve(_homeDir)));
+        Assert.Equal(stored, GpuCatalog.LoadSelectedAdapter(HarnessHome.Resolve(_homeDir)));
     }
 
     [Fact]

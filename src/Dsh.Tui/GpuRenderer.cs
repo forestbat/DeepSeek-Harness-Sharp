@@ -34,6 +34,8 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
     private bool _contextLost;
     private readonly List<DateTime> _rebuilds = [];
     private readonly string? _screenshotPath;
+    private readonly string? _gpuCard;
+    private readonly string? _preferredCard;
     private bool _screenshotTaken;
 
     public static bool TryDetectDisplay(out string reason)
@@ -62,14 +64,19 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         return dot < 0 ? value : value[..dot];
     }
 
-    /** screenshotPath: 渲染首帧后把帧缓冲写盘并退出(裸 TTY 上没有 X/外部截图工具时唯一可行的取证手段)。 */
-    public GpuRenderer(ChatWindow chat, GlyphAtlas? atlas = null, string? screenshotPath = null)
+    /**
+     * screenshotPath: 渲染首帧后把帧缓冲写盘并退出(裸 TTY 上没有 X/外部截图工具时唯一可行的取证手段)。
+     * gpuCard: `--gpu-card` 显式指定的 DRM 卡(严格); preferredCard: 设置里选的卡(不可用时回退扫描)。两者仅 GBM/KMS 形态使用。
+     */
+    public GpuRenderer(ChatWindow chat, GlyphAtlas? atlas = null, string? screenshotPath = null, string? gpuCard = null, string? preferredCard = null)
     {
         ArgumentNullException.ThrowIfNull(chat);
         _chat = chat;
         _atlas = atlas ?? GlyphAtlas.Shared;
         _screenshotPath = screenshotPath;
-        _host = GpuHostFactory.CreateWindowHost(_atlas);
+        _gpuCard = gpuCard;
+        _preferredCard = preferredCard;
+        _host = GpuHostFactory.CreateWindowHost(_atlas, gpuCard, preferredCard);
         _grid = new CellGrid(80, 25);
         _layout = LayoutEngine.Calculate(_grid.Width, _grid.Height);
     }
@@ -105,7 +112,7 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _core = new GpuRenderCore();
         _lastGrid = null;
         _seenRenderVersion = -1;
-        _host = GpuHostFactory.CreateWindowHost(_atlas);
+        _host = GpuHostFactory.CreateWindowHost(_atlas, _gpuCard, _preferredCard);
     }
 
     public void Dispose()

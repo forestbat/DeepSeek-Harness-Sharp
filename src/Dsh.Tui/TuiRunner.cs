@@ -15,10 +15,11 @@ public static class TuiRunner
         string cwd,
         bool gpu = false,
         bool shell = false,
-        string? gpuScreenshot = null)
+        string? gpuScreenshot = null,
+        string? gpuCard = null)
     {
         if (gpu)
-            return RunGpuSync(app, cwd, shell, gpuScreenshot);
+            return RunGpuSync(app, cwd, shell, gpuScreenshot, gpuCard);
 
         // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞
         using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
@@ -192,7 +193,7 @@ public static class TuiRunner
             ? WindowsConsoleInputReader.TryCreate()
             : new TerminalInputReader();
 
-    private static int RunGpuSync(HarnessApp app, string cwd, bool startShell, string? gpuScreenshot = null)
+    private static int RunGpuSync(HarnessApp app, string cwd, bool startShell, string? gpuScreenshot = null, string? gpuCard = null)
     {
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = agents.Create(new CreateAgentOptions(
@@ -205,12 +206,18 @@ public static class TuiRunner
         try
         {
             // Linux 进程内选卡靠 PRIME 变量, 必须在 GLFW/Mesa 初始化之前设置; Windows 的 WGL 无进程内选卡 API, 不做处理。
+            string? preferredCard = null;
             if (OperatingSystem.IsLinux())
-                GpuCatalog.ApplyPrimeSelection(GpuCatalog.LoadSelectedAdapter(app.Home));
+            {
+                var selected = GpuCatalog.LoadSelectedAdapter(app.Home);
+                GpuCatalog.ApplyPrimeSelection(selected);
+                // GBM/KMS 不看 PRIME 变量, 得把同一个选卡偏好落到具体卡节点上(不可用时宿主会回退扫描)
+                preferredCard = GpuCatalog.ResolveDrmCardPath(selected);
+            }
             var atlas = CreateAtlasForTerminal();
             var prewarm = Task.Run(() => atlas.Prewarm());
             using var chat = new ChatWindow(app.Ctx, agent, app.Home);
-            using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot);
+            using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot, gpuCard, preferredCard);
             if (startShell)
                 chat.AddShellPane();
             // 进程信号兜底: 裸 TTY(GBM)形态没有窗口关闭事件, 收到信号也要走完正常 Dispose 恢复控制台(KD_TEXT/VT_AUTO/dropMaster)

@@ -10,12 +10,13 @@ namespace Dsh.Tui;
  * 管线: drmSetMaster → KDSETMODE(KD_GRAPHICS) → drmModeGetResources 选 connector/encoder/CRTC/preferred mode
  * → gbm_create_device → eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA) → gbm_surface_create(XRGB8888, SCANOUT|RENDERING)
  * → eglCreateWindowSurface → 每帧 eglSwapBuffers + gbm_surface_lock_front_buffer + drmModeAddFB2 + PageFlip。
- * 未在裸金属 DRM/TTY 上实跑(开发机为 Windows/WSL, 无 /dev/dri), 需真机验证。
  */
 internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
 {
     private const int EglPlatformGbmMesa = 0x31D7;
-    private const string DrmCardPrefix = "/dev/dri/card";
+    private const string DrmDeviceRoot = "/dev/dri";
+    private const string DrmCardName = "card";
+    private const string DrmCardPrefix = $"{DrmDeviceRoot}/{DrmCardName}";
 
     private readonly SafeFileHandle? _drmHandle;
     private readonly int _drmFd;
@@ -44,14 +45,17 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
 
     public (int Width, int Height) Size => ((int)_width, (int)_height);
 
-    private EglGbmKmsHost()
+    /** 一张卡的可用 KMS 配置(探测结果, 提交前不写实例字段)。 */
+    private readonly record struct KmsSelection(uint CrtcId, uint ConnectorId, uint Width, uint Height, DrmNative.DrmModeModeInfo Mode);
+
+    private EglGbmKmsHost(string? cardOverride, string? preferredCard)
     {
-        _drmHandle = OpenCard();
+        _drmHandle = SelectCard(cardOverride, preferredCard);
         _drmFd = (int)_drmHandle.DangerousGetHandle();
         if (DrmNative.drmSetMaster(_drmFd) != 0)
         {
             var errno = Marshal.GetLastWin32Error();
-            _drmHandle.Dispose();
+            CleanupNative();
             throw new InvalidOperationException($"drmSetMaster 失败, errno={errno}");
         }
 
@@ -59,7 +63,6 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         try
         {
             _vt = VtConsole.EnterGraphicsMode();
-            InitializeKms();
             InitializeGbmEgl();
             _input = new EvdevInput(_width, _height);
         }
@@ -70,7 +73,11 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         }
     }
 
-    public static bool TryCreate([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out EglGbmKmsHost? host, out string reason)
+    public static bool TryCreate(
+        string? cardOverride,
+        string? preferredCard,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out EglGbmKmsHost? host,
+        out string reason)
     {
         host = null;
         if (!OperatingSystem.IsLinux())
@@ -80,7 +87,7 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         }
         try
         {
-            host = new EglGbmKmsHost();
+            host = new EglGbmKmsHost(cardOverride, preferredCard);
             reason = "";
             return true;
         }
@@ -90,6 +97,10 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
             return false;
         }
     }
+
+    /** `--gpu-card` 的值: 纯卡号(1 → /dev/dri/card1)或卡节点路径原样使用。 */
+    internal static string NormalizeCardPath(string value)
+        => value.StartsWith('/') ? value : $"{DrmCardPrefix}{value}";
 
     public void MakeCurrent()
     {
@@ -229,39 +240,105 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         }
     }
 
-    private static SafeFileHandle OpenCard()
+    /**
+     * 选卡: `--gpu-card` 严格指定(打不开/无显示输出就直接失败, 不偷偷换卡);
+     * 否则把设置里选的卡当首选, 不可用时回退扫描(按 connected+有 mode 挑), 避免多卡机上默认开错卡。
+     */
+    private SafeFileHandle SelectCard(string? cardOverride, string? preferredCard)
     {
-        for (var index = 0; index < 10; index++)
+        if (cardOverride is { Length: > 0 } strict)
         {
-            var path = $"{DrmCardPrefix}{index}";
-            if (!File.Exists(path))
-                continue;
-            try
+            var path = NormalizeCardPath(strict);
+            var handle = TryOpenCard(path);
+            if (handle is null)
+                throw new InvalidOperationException($"无法打开显式指定的显卡 {path} (需要 video 组或 root 权限)");
+            if (!TryProbeKms((int)handle.DangerousGetHandle(), out var selection, out var probeReason))
             {
-                return File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+                handle.Dispose();
+                throw new InvalidOperationException($"显式指定的显卡 {path} 不可用: {probeReason}");
             }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            ApplySelection(selection, path);
+            return handle;
         }
-        throw new InvalidOperationException($"找不到可打开的 {DrmCardPrefix}N (需要 video 组或 root 权限)");
+
+        var candidates = new List<string>();
+        if (preferredCard is { Length: > 0 } preferred)
+            candidates.Add(preferred);
+        candidates.AddRange(EnumerateCardNodes());
+        var tried = new List<string>();
+        foreach (var path in candidates.Distinct(StringComparer.Ordinal))
+        {
+            var handle = TryOpenCard(path);
+            if (handle is null)
+            {
+                tried.Add($"{path}({(File.Exists(path) ? "打不开, 需要 video 组或 root" : "不存在")})");
+                continue;
+            }
+            if (!TryProbeKms((int)handle.DangerousGetHandle(), out var selection, out var probeReason))
+            {
+                handle.Dispose();
+                tried.Add($"{path}({probeReason})");
+                continue;
+            }
+            ApplySelection(selection, path);
+            return handle;
+        }
+        throw new InvalidOperationException($"没有可上屏的 DRM 卡: {string.Join("; ", tried)}");
     }
 
-    private void InitializeKms()
+    /** `/dev/dri` 下实际存在的卡节点(cardN), 按卡号升序。 */
+    private static IEnumerable<string> EnumerateCardNodes()
     {
-        var resourcesPtr = DrmNative.drmModeGetResources(_drmFd);
+        if (!Directory.Exists(DrmDeviceRoot))
+            return [];
+        try
+        {
+            return
+            [
+                .. Directory.EnumerateFiles(DrmDeviceRoot)
+                    .Select(Path.GetFileName)
+                    .Where(GpuCatalog.IsCardNodeName)
+                    .OrderBy(name => long.TryParse(name.AsSpan(DrmCardName.Length), out var index) ? index : long.MaxValue)
+                    .Select(name => $"{DrmDeviceRoot}/{name}"),
+            ];
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    private static SafeFileHandle? TryOpenCard(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+        try
+        {
+            return File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /** 探测一张卡上是否有可用输出(connected connector + preferred mode + 可用 CRTC); 不改实例状态。 */
+    private static bool TryProbeKms(int fd, out KmsSelection selection, out string reason)
+    {
+        selection = default;
+        var resourcesPtr = DrmNative.drmModeGetResources(fd);
         if (resourcesPtr == IntPtr.Zero)
-            throw new InvalidOperationException($"drmModeGetResources 失败, errno={Marshal.GetLastWin32Error()}");
+        {
+            reason = $"drmModeGetResources 失败, errno={Marshal.GetLastWin32Error()}";
+            return false;
+        }
         try
         {
             var resources = Marshal.PtrToStructure<DrmNative.DrmModeRes>(resourcesPtr)!;
             for (var index = 0; index < resources.CountConnectors; index++)
             {
                 var connectorId = DrmNative.ReadUInt32(resources.Connectors, index);
-                var connectorPtr = DrmNative.drmModeGetConnector(_drmFd, connectorId);
+                var connectorPtr = DrmNative.drmModeGetConnector(fd, connectorId);
                 if (connectorPtr == IntPtr.Zero)
                     continue;
                 try
@@ -269,8 +346,10 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
                     var connector = Marshal.PtrToStructure<DrmNative.DrmModeConnector>(connectorPtr)!;
                     if (connector.Connection != DrmNative.DrmModeConnected || connector.CountModes == 0)
                         continue;
-                    SelectConnector(resources, connector);
-                    return;
+                    var mode = ChooseMode(connector);
+                    selection = new KmsSelection(PickCrtc(fd, resources, connector), connector.ConnectorId, mode.Hdisplay, mode.Vdisplay, mode);
+                    reason = "";
+                    return true;
                 }
                 finally
                 {
@@ -282,18 +361,19 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         {
             DrmNative.drmModeFreeResources(resourcesPtr);
         }
-        throw new InvalidOperationException("没有已连接且带 mode 的显示输出");
+        reason = "没有已连接且带 mode 的显示输出";
+        return false;
     }
 
-    private void SelectConnector(DrmNative.DrmModeRes resources, DrmNative.DrmModeConnector connector)
+    private void ApplySelection(KmsSelection selection, string path)
     {
-        var mode = ChooseMode(connector);
-        _crtcId = PickCrtc(resources, connector);
-        _width = mode.Hdisplay;
-        _height = mode.Vdisplay;
+        _crtcId = selection.CrtcId;
+        _width = selection.Width;
+        _height = selection.Height;
+        _connectors = [selection.ConnectorId];
         _modePtr = Marshal.AllocHGlobal(Marshal.SizeOf<DrmNative.DrmModeModeInfo>());
-        Marshal.StructureToPtr(mode, _modePtr, false);
-        _connectors = [connector.ConnectorId];
+        Marshal.StructureToPtr(selection.Mode, _modePtr, false);
+        Console.Error.WriteLine($"gbm/kms: 上屏卡 {path} ({selection.Width}x{selection.Height})");
     }
 
     private static DrmNative.DrmModeModeInfo ChooseMode(DrmNative.DrmModeConnector connector)
@@ -307,11 +387,11 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         return DrmNative.ReadMode(connector.Modes, 0);
     }
 
-    private uint PickCrtc(DrmNative.DrmModeRes resources, DrmNative.DrmModeConnector connector)
+    private static uint PickCrtc(int fd, DrmNative.DrmModeRes resources, DrmNative.DrmModeConnector connector)
     {
         if (connector.EncoderId == 0)
             throw new InvalidOperationException("connector 没有绑定 encoder");
-        var encoderPtr = DrmNative.drmModeGetEncoder(_drmFd, connector.EncoderId);
+        var encoderPtr = DrmNative.drmModeGetEncoder(fd, connector.EncoderId);
         if (encoderPtr == IntPtr.Zero)
             throw new InvalidOperationException($"drmModeGetEncoder({connector.EncoderId}) 失败");
         try

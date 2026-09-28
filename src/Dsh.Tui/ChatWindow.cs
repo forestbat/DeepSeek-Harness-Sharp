@@ -847,7 +847,9 @@ public sealed class ChatWindow : IDisposable
             for (var index = 0; index < adapters.Count; index++)
             {
                 var kind = GpuCatalog.IsDiscrete(adapters[index]) ? "discrete" : "integrated";
-                pane.AppendRaw($"    {index + 1}. {adapters[index].Name} ({kind}, {adapters[index].Detail})\n");
+                // 选卡值在 Linux 是 PCI slot: 列表里也给出 slot, 否则同名多卡看不出选的是哪张
+                var slot = GpuCatalog.LooksLikePciSlot(adapters[index].Id) ? $" @{adapters[index].Id}" : "";
+                pane.AppendRaw($"    {index + 1}. {adapters[index].Name} ({kind}, {adapters[index].Detail}{slot})\n");
             }
             pane.AppendRaw("  usage: /gpu <number> — takes effect after restart\n");
             return;
@@ -857,7 +859,7 @@ public sealed class ChatWindow : IDisposable
         if (argument.Equals("auto", StringComparison.OrdinalIgnoreCase) || argument == "0")
             selected = GpuCatalog.AutoAdapter;
         else if (int.TryParse(argument, out var index) && index >= 1 && index <= adapters.Count)
-            selected = adapters[index - 1].Name;
+            selected = GpuCatalog.SelectionIdOf(adapters[index - 1]);
         else
         {
             pane.AppendRaw($"  gpu: invalid selection '{argument}' (run /gpu to list)\n");

@@ -14,7 +14,7 @@ public sealed class Plugin : IDshPlugin, IDshEntrypoint
     public IDisposable Apply(Context ctx, object? config) => new CallbackDisposable();
 
     public Task<int> RunAsync(HarnessApp app, PluginEntrypointOptions options, CancellationToken cancellationToken)
-        => TuiRunner.Run(app, options.Cwd, options.Gpu, options.Shell, options.GpuScreenshotPath);
+        => TuiRunner.Run(app, options.Cwd, options.Gpu, options.Shell, options.GpuScreenshotPath, options.GpuCard);
 
     private sealed class CallbackDisposable : IDisposable
     {

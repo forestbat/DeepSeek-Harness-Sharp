@@ -126,9 +126,10 @@ public static class GpuPreference
         if (!Directory.Exists(DrmRoot))
             return [];
         var adapters = new List<GpuAdapterInfo>();
-        foreach (var card in Directory.EnumerateDirectories(DrmRoot, "card[0-9]*"))
+        // 注意: .NET 的目录搜索模式只认 * 和 ?, 不支持 [0-9](实测 "card[0-9]*" 匹配 0 条), 只能全量枚举后按名过滤
+        foreach (var card in Directory.EnumerateDirectories(DrmRoot))
         {
-            if (Path.GetFileName(card).Contains('-'))
+            if (!IsCardNodeName(Path.GetFileName(card)))
                 continue;
             var ueventPath = Path.Combine(card, "device", "uevent");
             if (!File.Exists(ueventPath))
@@ -237,10 +238,12 @@ public static class GpuPreference
         Environment.SetEnvironmentVariable("__GLX_VENDOR_LIBRARY_NAME", null);
         if (preferred.Equals(AutoAdapter, StringComparison.OrdinalIgnoreCase))
             return;
-        var matches = ListLinuxAdapters().Where(adapter => preferred.Equals(adapter.Name, StringComparison.OrdinalIgnoreCase)).ToList();
-        var adapter = matches.Count > 0
-            ? matches[0]
-            : ListLinuxAdapters().FirstOrDefault(candidate => preferred.Contains(candidate.Vendor, StringComparison.OrdinalIgnoreCase));
+        // 选卡值可能是 PCI slot(同名多卡唯一可区分的形式, TUI /gpu 在 Linux 就存它), 也可能仍是显示名
+        var adapters = ListLinuxAdapters();
+        var adapter = LooksLikePciSlot(preferred)
+            ? adapters.FirstOrDefault(candidate => string.Equals(candidate.Id, preferred, StringComparison.OrdinalIgnoreCase))
+            : adapters.FirstOrDefault(candidate => preferred.Equals(candidate.Name, StringComparison.OrdinalIgnoreCase))
+                ?? adapters.FirstOrDefault(candidate => preferred.Contains(candidate.Vendor, StringComparison.OrdinalIgnoreCase));
         if (adapter is null)
             return;
         if (adapter.Vendor.Equals("NVIDIA", StringComparison.OrdinalIgnoreCase))
@@ -254,6 +257,10 @@ public static class GpuPreference
 
     private static bool LooksLikePciSlot(string id)
         => id.Count(character => character == ':') == 2 && id.Contains('.');
+
+    /** /sys/class/drm 下的卡节点名: cardN(排除 cardN-输出名 与 renderD*)。 */
+    private static bool IsCardNodeName(string name)
+        => name.StartsWith("card", StringComparison.Ordinal) && name.Length > 4 && name[4..].All(char.IsAsciiDigit);
 
     private static bool IsFourDigits(string value)
         => value.Length == 4 && value.All(char.IsAsciiDigit);

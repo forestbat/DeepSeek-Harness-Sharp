@@ -20,6 +20,7 @@ public static class GpuCatalog
     private const string DriverDescValue = "DriverDesc";
     private const string MatchingDeviceIdValue = "MatchingDeviceId";
     private const string DrmRoot = "/sys/class/drm";
+    private const string DrmDeviceRoot = "/dev/dri";
 
     /** 虚拟显示适配器(远程桌面/串流工具装出来的)不参与选择。 */
     private static readonly string[] VirtualAdapterTokens =
@@ -146,10 +147,7 @@ public static class GpuCatalog
         Environment.SetEnvironmentVariable("__GLX_VENDOR_LIBRARY_NAME", null);
         if (preferred.Equals(AutoAdapter, StringComparison.OrdinalIgnoreCase))
             return;
-        var matches = ListLinuxAdapters().Where(adapter => preferred.Equals(adapter.Name, StringComparison.OrdinalIgnoreCase)).ToList();
-        var adapter = matches.Count > 0
-            ? matches[0]
-            : ListLinuxAdapters().FirstOrDefault(candidate => preferred.Contains(candidate.Vendor, StringComparison.OrdinalIgnoreCase));
+        var adapter = FindLinuxAdapter(preferred);
         if (adapter is null)
             return;
         if (adapter.Vendor.Equals("NVIDIA", StringComparison.OrdinalIgnoreCase))
@@ -159,6 +157,47 @@ public static class GpuCatalog
         }
         if (LooksLikePciSlot(adapter.Id))
             Environment.SetEnvironmentVariable("DRI_PRIME", $"pci-{adapter.Id}");
+    }
+
+    /**
+     * 把设置里选的适配器解析成 GBM/KMS 要开的卡节点(/dev/dri/cardN)。
+     * 选卡只记 PCI slot, 靠 by-path 符号链接映射到卡号; auto/匹配不到/无链接时返回 null(交给宿主自动扫描)。
+     */
+    [SupportedOSPlatform("linux")]
+    public static string? ResolveDrmCardPath(string preferred)
+    {
+        if (preferred.Equals(AutoAdapter, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var adapter = FindLinuxAdapter(preferred);
+        if (adapter is null || !LooksLikePciSlot(adapter.Id))
+            return null;
+        var link = $"{DrmDeviceRoot}/by-path/pci-{adapter.Id}-card";
+        try
+        {
+            if (!File.Exists(link))
+                return null;
+            return File.ResolveLinkTarget(link, returnFinalTarget: true)?.FullName;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * 设置里的选卡值 → 适配器: 先按 PCI slot 精确匹配(同名多卡只能这样区分),
+     * 再按名字精确匹配, 最后按厂商名包含匹配。
+     */
+    [SupportedOSPlatform("linux")]
+    private static GpuAdapterInfo? FindLinuxAdapter(string preferred)
+    {
+        var adapters = ListLinuxAdapters();
+        if (LooksLikePciSlot(preferred))
+            return adapters.FirstOrDefault(candidate => string.Equals(candidate.Id, preferred, StringComparison.OrdinalIgnoreCase));
+        var matches = adapters.Where(adapter => preferred.Equals(adapter.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Count > 0
+            ? matches[0]
+            : adapters.FirstOrDefault(candidate => preferred.Contains(candidate.Vendor, StringComparison.OrdinalIgnoreCase));
     }
 
     [SupportedOSPlatform("windows")]
@@ -193,9 +232,10 @@ public static class GpuCatalog
         if (!Directory.Exists(DrmRoot))
             return [];
         var adapters = new List<GpuAdapterInfo>();
-        foreach (var card in Directory.EnumerateDirectories(DrmRoot, "card[0-9]*"))
+        // 注意: .NET 的目录搜索模式只认 * 和 ?, 不支持 [0-9](实测 "card[0-9]*" 匹配 0 条), 只能全量枚举后按名过滤
+        foreach (var card in Directory.EnumerateDirectories(DrmRoot))
         {
-            if (Path.GetFileName(card).Contains('-'))
+            if (!IsCardNodeName(Path.GetFileName(card)))
                 continue;
             var ueventPath = Path.Combine(card, "device", "uevent");
             if (!File.Exists(ueventPath))
@@ -225,8 +265,20 @@ public static class GpuCatalog
         return GpuArchitectureProbe.QueryUmaWindows(vendorId, deviceId);
     }
 
-    private static bool LooksLikePciSlot(string id)
+    /**
+     * 适配器 Id 是否为 PCI slot 形态(仅 Linux)。同名多卡(如集群里一批同型号)只有 slot 能区分,
+     * 选卡值因此优先用 slot: 卡号(cardN)会随枚举次序变化, slot 不会。
+     */
+    public static bool LooksLikePciSlot(string id)
         => id.Count(character => character == ':') == 2 && id.Contains('.');
+
+    /** 选卡值: Linux 用 PCI slot, 其余(Windows 注册表键等)用显示名。列表展示与落盘都走它, 保证同一套规则。 */
+    public static string SelectionIdOf(GpuAdapterInfo adapter)
+        => LooksLikePciSlot(adapter.Id) ? adapter.Id : adapter.Name;
+
+    /** /sys/class/drm 或 /dev/dri 下的卡节点名: cardN(排除 cardN-输出名 与 renderD*)。 */
+    internal static bool IsCardNodeName(string? name)
+        => name is { Length: > 4 } && name.StartsWith("card", StringComparison.Ordinal) && name[4..].All(char.IsAsciiDigit);
 
     private static bool IsFourDigits(string value)
         => value.Length == 4 && value.All(char.IsAsciiDigit);
