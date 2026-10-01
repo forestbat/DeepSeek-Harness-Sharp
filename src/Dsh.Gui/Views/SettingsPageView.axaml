@@ -103,8 +103,14 @@
                   <Button Classes="Ghost" Content="删除" Command="{Binding Preferences.RemoveProviderCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
                   <Button Classes="Ghost" Content="测试连接" Command="{Binding Preferences.TestConnectionCommand}" IsEnabled="{Binding !Preferences.IsWorking}" />
                 </StackPanel>
+                <AutoCompleteBox ItemsSource="{Binding Preferences.ProviderChoices}"
+                                 SelectedItem="{Binding Preferences.SelectedProviderChoice}"
+                                 FilterMode="Contains"
+                                 MinimumPrefixLength="0"
+                                 PlaceholderText="选择模型提供者（协议族 或 models.dev 目录，输入即搜索）" />
                 <TextBox Text="{Binding Preferences.ProviderName}" PlaceholderText="name，例如 deepseek" />
-                <TextBox Text="{Binding Preferences.ProviderType}" PlaceholderText="type，例如 openai-compatible / deepseek / anthropic" />
+                <AutoCompleteBox Text="{Binding Preferences.ProviderType}" ItemsSource="{Binding Preferences.ProviderTypeChoices}"
+                                 PlaceholderText="type（协议），例如 openai-compatible / openai-compatible(response) / anthropic-messages" />
                 <TextBox Text="{Binding Preferences.ProviderBaseUrl}" PlaceholderText="baseUrl，例如 https://api.deepseek.com" />
                 <TextBox Text="{Binding Preferences.ProviderApiKey}" PlaceholderText="apiKey" />
                 <TextBox Text="{Binding Preferences.ProviderModelIds}" PlaceholderText="modelIds，逗号或空格分隔（可选）" />

@@ -5,7 +5,7 @@ using Dsh.Runtime;
 
 namespace Dsh.Llm.OpenAi;
 
-/** OpenAI 兼容 wire 适配器插件:登记 openai-compatible / openai-responses 两个 wire 的工厂。 */
+/** OpenAI 兼容 wire 适配器插件: 登记 openai-compatible 族; Chat Completions 与 Responses 由 apiStyle 区分。 */
 public sealed class Plugin : IDshPlugin
 {
     internal const string Package = "@deepseek-ai/dsh-llm-openai";
@@ -25,7 +25,6 @@ internal sealed class OpenAiAdapterFactory : ILlmAdapterFactory
     public IReadOnlyList<LlmWireDefinition> Wires { get; } =
     [
         new("openai-compatible", DefaultApiKeyEnv: "OPENAI_API_KEY"),
-        new("openai-responses", DefaultApiKeyEnv: "OPENAI_API_KEY"),
     ];
 
     public LlmAdapter Create(ResolvedLlmProvider provider)
@@ -34,5 +33,5 @@ internal sealed class OpenAiAdapterFactory : ILlmAdapterFactory
             Endpoint.NormalizeBaseUrl(provider.BaseUrl),
             provider.ApiKey,
             provider.Models,
-            useResponses: string.Equals(provider.Wire, "openai-responses", StringComparison.OrdinalIgnoreCase));
+            useResponses: string.Equals(provider.ApiStyle, ProviderApiStyles.Responses, StringComparison.OrdinalIgnoreCase));
 }

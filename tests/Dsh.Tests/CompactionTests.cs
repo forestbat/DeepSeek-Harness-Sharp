@@ -393,18 +393,23 @@ public class CompactionTests
     }
 
     [Fact]
-    public async Task CompactCommand_UsageAndEmptyHistory()
+    public async Task CompactCommand_EmptyHistoryAndPromptFollowup()
     {
         using var harness = new Harness(contextWindow: 1_000_000, turnText: "ok");
         var agent = await harness.CreateAgent("compaction-command-edge");
 
-        var usage = await harness.Commands.Execute(agent, "/compact now", TestContext.Current.CancellationToken);
-        Assert.NotNull(usage);
-        Assert.Equal("Usage: /compact (no arguments)", Assert.IsType<CommandResult.Error>(usage.Result).Text);
+        // 命令 + 提示词: compact 不拒绝多余文本, 其余文本是"压缩后继续"的提示词。
+        var withPrompt = await harness.Commands.Execute(agent, "/compact now", TestContext.Current.CancellationToken);
+        Assert.NotNull(withPrompt);
+        var prompted = Assert.IsType<CommandResult.Success>(withPrompt.Result);
+        Assert.Equal("No compactable history yet.", prompted.Text);
+        Assert.Equal("now", prompted.FollowupPrompt);
 
         var empty = await harness.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
         Assert.NotNull(empty);
-        Assert.Equal("No compactable history yet.", Assert.IsType<CommandResult.Success>(empty.Result).Text);
+        var plain = Assert.IsType<CommandResult.Success>(empty.Result);
+        Assert.Equal("No compactable history yet.", plain.Text);
+        Assert.Null(plain.FollowupPrompt);
         Assert.Equal(0, harness.Adapter.CompactionCalls);
         Assert.DoesNotContain(agent.Session.SnapshotEvents(), e => e.Type == CompactionEventTypes.Start);
     }

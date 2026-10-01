@@ -41,7 +41,7 @@ public sealed class AnthropicAdapter : LlmAdapter
 
     public override LlmProviderInfo ProviderInfo { get; }
 
-    public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, "anthropic");
+    public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, ProviderTypes.AnthropicMessages);
 
     public override IReadOnlyList<LlmModelInfo> ListModels()
         => _modelIds

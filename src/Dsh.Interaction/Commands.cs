@@ -1,6 +1,6 @@
 #pragma warning disable CA2255
 using Dsh.Plugins;
-using System.Runtime.CompilerServices;
+using Dsh.Llm;
 using System.Text.RegularExpressions;
 using Dsh.Runtime;
 using Dsh.Core;
@@ -14,9 +14,8 @@ public sealed record CommandArgumentSchema(
     string Kind,
     string? Hint = null,
     string? Flag = null,
-    IReadOnlyList<string>? Choices = null);
-
-public sealed record CommandOptionSchema(string Name, string Hint, string? ValueHint = null);
+    IReadOnlyList<string>? Choices = null,
+    bool Required = false);
 
 public sealed record CommandMenuSchema(string Prompt, string? SearchHint = null);
 
@@ -26,7 +25,8 @@ public sealed record CommandDescriptor(
     CommandInputDescriptor? Input = null,
     IReadOnlyList<CommandDescriptor>? Subcommands = null,
     IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas = null,
-    CommandMenuSchema? MenuSchema = null);
+    CommandMenuSchema? MenuSchema = null,
+    bool AcceptsPrompt = false);
 
 public static class CommandMenuCatalog
 {
@@ -54,14 +54,15 @@ public static class CommandMenuCatalog
                     MenuSchema: new CommandMenuSchema("Add provider", "provider name"),
                     ArgumentSchemas:
                     [
-                        new CommandArgumentSchema("name", "text", "Provider name"),
-                        new CommandArgumentSchema("base-url", "text", "Base URL", Flag: "--base-url"),
-                        new CommandArgumentSchema("api-key", "text", "API key", Flag: "--api-key"),
-                        new CommandArgumentSchema("type", "select", "Provider type", Flag: "--type",
-                            Choices: ["openai-compatible", "openai-responses", "anthropic", "deepseek"]),
-                        new CommandArgumentSchema("model-ids", "text", "Model ids (comma-separated)", Flag: "--model-ids"),
+                        new CommandArgumentSchema("name", "text", "Provider name", Required: true),
+                        new CommandArgumentSchema("base-url", "text", "Base URL", Flag: "--base-url", Required: true),
+                        new CommandArgumentSchema("api-key", "text", "API key", Flag: "--api-key", Required: true),
+                        new CommandArgumentSchema("type", "select", "Provider type (protocol)", Flag: "--type",
+                            Choices: [.. ProviderTypes.All]),
+                        new CommandArgumentSchema("model-ids", "text", "Model ids (comma-separated, or <all>)", Flag: "--model-ids"),
                     ]),
                 new CommandDescriptor("list", "List providers"),
+                new CommandDescriptor("catalog", "Browse/search the models.dev provider catalog (query, --page N, --all, refresh)"),
                 new CommandDescriptor("remove", "Remove provider",
                     MenuSchema: new CommandMenuSchema("Remove provider", "provider name"),
                     ArgumentSchemas: [new CommandArgumentSchema("provider", "select", "Provider name")]),
@@ -98,14 +99,15 @@ public static class CommandMenuCatalog
 
 public abstract record CommandResult
 {
-    public sealed record Success(string? Text = null, long? SourceEventSeq = null) : CommandResult;
+    /** FollowupPrompt: "命令 + 提示词"里的提示词。命令结束(成功或失败)后由前端作为下一步用户消息发出。 */
+    public sealed record Success(string? Text = null, long? SourceEventSeq = null, string? FollowupPrompt = null) : CommandResult;
 
-    public sealed record Error(string Text) : CommandResult;
+    public sealed record Error(string Text, string? FollowupPrompt = null) : CommandResult;
 }
 
 public sealed record CommandExecution(string CommandId, CommandResult Result);
 
-public sealed record ParsedCommand(string Name, string RawInput);
+public sealed record ParsedCommand(string Name, string RawInput, string? Selector = null);
 
 public sealed record CommandInvocation(
     string CommandId,
@@ -121,6 +123,7 @@ public sealed record CommandDefinition
     public IReadOnlyList<CommandDescriptor>? Subcommands { get; init; }
     public IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas { get; init; }
     public CommandMenuSchema? MenuSchema { get; init; }
+    public bool AcceptsPrompt { get; init; }
     public bool RecordInput { get; init; } = true;
     public required Func<CommandInvocation, Task<CommandResult>> Handler { get; init; }
 }
@@ -149,7 +152,8 @@ public sealed partial class CommandsService : Service
     [GeneratedRegex("^[a-z][a-z0-9_-]*$", RegexOptions.Compiled)]
     private static partial Regex CommandName();
 
-    [GeneratedRegex(@"^/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])", RegexOptions.Compiled)]
+    /** 命令名后可选跟冒号选择器(如 /skill:NAME 提示词): 选择器并入 RawInput 交给处理函数。 */
+    [GeneratedRegex(@"^/([a-z][a-z0-9_-]*)(?::([^\s]+))?(?=$|[\t\n\r ])", RegexOptions.Compiled)]
     private static partial Regex CommandLine();
 
     private sealed class CommandLayer
@@ -178,7 +182,10 @@ public sealed partial class CommandsService : Service
     public static ParsedCommand? ParseCommand(string line)
     {
         var match = CommandLine().Match(line);
-        return match.Success ? new ParsedCommand(match.Groups[1].Value, line[match.Length..]) : null;
+        if (!match.Success)
+            return null;
+        var selector = match.Groups[2].Success ? match.Groups[2].Value : null;
+        return new ParsedCommand(match.Groups[1].Value, line[match.Length..], selector);
     }
 
     public IDisposable Register(CommandDefinition definition, ScopeKey? scope = null)
@@ -197,7 +204,8 @@ public sealed partial class CommandsService : Service
                 definition.Input,
                 definition.Subcommands,
                 definition.ArgumentSchemas,
-                definition.MenuSchema))
+                definition.MenuSchema,
+                definition.AcceptsPrompt))
             .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)];
 
     public CommandDefinition? Find(IAgent agent, string name)
@@ -213,12 +221,13 @@ public sealed partial class CommandsService : Service
             return null;
         signal.ThrowIfCancellationRequested();
         var commandId = MintCommandId();
+        var rawInput = parsed.Selector is { Length: > 0 } selector ? selector + parsed.RawInput : parsed.RawInput;
         agent.Session.Append(new CommandRunPayload(
-            commandId, parsed.Name, command.RecordInput ? parsed.RawInput : null, "user"));
+            commandId, parsed.Name, command.RecordInput ? rawInput : null, "user"));
         CommandResult result;
         try
         {
-            var invocation = new CommandInvocation(commandId, agent, parsed.RawInput, signal);
+            var invocation = new CommandInvocation(commandId, agent, rawInput, signal);
             result = NormalizeResult(parsed.Name, await RunHandler(command.Handler, invocation, signal));
         }
         catch (Exception error)

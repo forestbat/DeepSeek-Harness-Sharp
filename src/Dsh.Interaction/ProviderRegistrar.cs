@@ -13,7 +13,7 @@ namespace Dsh.Interaction;
 public sealed class ProviderRegistrar : IDisposable
 {
     /** settings.yaml 缺省的类型:绝大多数厂商只写 baseUrl/apiKey 即可;DeepSeek 专属行为需显式 `type: deepseek`。 */
-    public const string DefaultWire = "openai-compatible";
+    public const string DefaultWire = ProviderTypes.OpenAiCompatible;
 
     private readonly Context _ctx;
     private readonly HarnessOptions _options;
@@ -117,11 +117,19 @@ public sealed class ProviderRegistrar : IDisposable
         if (llm is null || factories is null || credentials is null)
             return new ProviderRegistrationResult(null, Error: "LLM runtime or adapter factory registry is not available");
 
-        var wire = string.IsNullOrWhiteSpace(provider.Type) ? DefaultWire : provider.Type.Trim();
+        var resolution = ProviderTypes.Parse(provider.Type);
+        var wire = resolution.Wire;
+        var canonicalType = ProviderTypes.Canonical(provider.Type);
+        var configuredType = provider.Type?.Trim() ?? "";
+        if (configuredType.Length > 0 && !string.Equals(configuredType, canonicalType, StringComparison.Ordinal))
+        {
+            ctx.Logger.Warn("%s", $"provider \"{id}\": type \"{configuredType}\" normalized to \"{canonicalType}\" — update settings.yaml");
+        }
+
         if (!factories.TryResolve(wire, out var source, out var factory))
         {
             return new ProviderRegistrationResult(null, Wire: wire,
-                Error: $"provider \"{id}\" skipped: no adapter plugin serves type \"{wire}\" (known: {KnownWires(factories)})");
+                Error: $"provider \"{id}\" skipped: no adapter plugin serves type \"{wire}\" (known: {KnownTypes(factories)})");
         }
         var definition = factories.DefinitionFor(wire);
         var baseUrl = (isDefault ? options.BaseUrl : null)
@@ -144,6 +152,14 @@ public sealed class ProviderRegistrar : IDisposable
                 Error: $"provider \"{id}\" skipped: API key is not configured "
                     + $"(set providers.{id}.options.apiKey or environment variable {apiKeyEnv}); requests using it will fail with NO_ADAPTER");
         }
+        // 旧 settings 把 OpenAI 风格单列在 options.apiStyle; 类型名已能表达风格, 这里只做兼容读取并提示迁移。
+        var legacyStyle = string.Equals(wire, DefaultWire, StringComparison.OrdinalIgnoreCase) ? provider.Options?.ApiStyle : null;
+        if (legacyStyle is { Length: > 0 })
+        {
+            ctx.Logger.Warn("%s", $"provider \"{id}\": options.apiStyle is deprecated; "
+                + $"use type \"{ProviderTypes.OpenAiCompatibleResponses}\" for the Responses style");
+        }
+
         var resolved = new ResolvedLlmProvider(
             id,
             wire,
@@ -151,7 +167,8 @@ public sealed class ProviderRegistrar : IDisposable
             apiKeyEnv,
             resolvedKey,
             provider.Models.Select(model => new ProviderModelSpec(
-                model.Key, model.Value.Name, model.Value.SystemPromptUpdate, model.Value.Reasoning == true)).ToList());
+                model.Key, model.Value.Name, model.Value.SystemPromptUpdate, model.Value.Reasoning == true)).ToList(),
+            resolution.ApiStyle ?? legacyStyle);
         return new ProviderRegistrationResult(llm.RegisterAdapter([id], factory!.Create(resolved)), wire, source);
     }
 
@@ -163,16 +180,23 @@ public sealed class ProviderRegistrar : IDisposable
         return ctx.Get<IInferenceCredentials>(IInferenceCredentials.ServiceName, false)?.Covers(destination) is true;
     }
 
-    /** 当前可供 `type` 使用的 wire 列表(未知类型报错时提示用户)。 */
-    public static string KnownWires(LlmAdapterFactoryRegistry factories)
+    /** 当前可供 `type` 使用的类型名(未知类型报错时提示用户)。 */
+    public static string KnownTypes(LlmAdapterFactoryRegistry factories)
     {
-        var wires = new SortedSet<string>(StringComparer.Ordinal);
+        var types = KnownTypeList(factories);
+        return types.Count == 0 ? "none" : string.Join(", ", types);
+    }
+
+    /** 已注册适配器能服务的 `type` 候选(协议族 + 自定义别名), 供 `--type` 候选等动态展示。 */
+    public static IReadOnlyList<string> KnownTypeList(LlmAdapterFactoryRegistry factories)
+    {
+        var wires = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (_, factory) in factories.ListAll())
         {
             foreach (var definition in factory.Wires)
                 wires.Add(definition.Wire);
         }
-        return wires.Count == 0 ? "none" : string.Join(", ", wires);
+        return [.. ProviderTypes.All.Where(type => wires.Contains(ProviderTypes.Parse(type).Wire))];
     }
 
     private static string EnvironmentName(string providerId)

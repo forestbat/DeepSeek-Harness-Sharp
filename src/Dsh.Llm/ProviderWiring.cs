@@ -2,6 +2,13 @@ using Dsh.Runtime;
 
 namespace Dsh.Llm;
 
+/** OpenAI 兼容族内的 API 风格: Chat Completions 与 Responses 同属 openai-compatible, 只是风格不同。 */
+public static class ProviderApiStyles
+{
+    public const string ChatCompletions = "chat-completions";
+    public const string Responses = "responses";
+}
+
 /** 适配器插件声明能服务的 wire 类型,以及该 wire 未配置时的默认值。 */
 public sealed record LlmWireDefinition(
     string Wire,
@@ -22,7 +29,8 @@ public sealed record ResolvedLlmProvider(
     string BaseUrl,
     string ApiKeyEnv,
     string? ApiKey,
-    IReadOnlyList<ProviderModelSpec> Models);
+    IReadOnlyList<ProviderModelSpec> Models,
+    string? ApiStyle = null);
 
 /** 适配器插件在 Apply 中登记它:宿主按 provider 的 wire 类型选择工厂并构造适配器。 */
 public interface ILlmAdapterFactory

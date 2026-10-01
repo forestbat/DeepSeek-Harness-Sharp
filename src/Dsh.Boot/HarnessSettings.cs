@@ -137,6 +137,10 @@ public sealed class ProviderOptions
 
     [YamlMember(Alias = "apiKeyEnv")]
     public string? ApiKeyEnv { get; set; }
+
+    /** 已废弃: OpenAI 族风格改写进 `type`(如 openai-compatible(response)); 仅为兼容读取旧 settings 保留。 */
+    [YamlMember(Alias = "apiStyle")]
+    public string? ApiStyle { get; set; }
 }
 
 public sealed class ProviderModelSettings

@@ -5,7 +5,7 @@ using Dsh.Runtime;
 
 namespace Dsh.Llm.Anthropic;
 
-/** Anthropic wire 适配器插件:登记 anthropic 工厂。 */
+/** Anthropic wire 适配器插件:登记 anthropic-messages 工厂。 */
 public sealed class Plugin : IDshPlugin
 {
     internal const string Package = "@deepseek-ai/dsh-llm-anthropic";
@@ -24,7 +24,7 @@ internal sealed class AnthropicAdapterFactory : ILlmAdapterFactory
 {
     public IReadOnlyList<LlmWireDefinition> Wires { get; } =
     [
-        new("anthropic", DefaultApiKeyEnv: "ANTHROPIC_API_KEY"),
+        new(ProviderTypes.AnthropicMessages, DefaultApiKeyEnv: "ANTHROPIC_API_KEY"),
     ];
 
     public LlmAdapter Create(ResolvedLlmProvider provider)

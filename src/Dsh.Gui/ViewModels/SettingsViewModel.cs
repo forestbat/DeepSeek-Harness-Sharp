@@ -6,6 +6,8 @@ using Dsh.Account;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Gui.Services;
+using Dsh.Interaction;
+using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
@@ -168,8 +170,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _providerName = "";
 
+    /** 选择模型提供者: 前 7 项是协议族/自定义(只填 type), 其后是 models.dev 目录 provider(带出 name/baseUrl/type/models)。 */
     [ObservableProperty]
-    private string _providerType = "openai-compatible";
+    private IReadOnlyList<ProviderChoiceViewModel> _providerChoices = [];
+
+    [ObservableProperty]
+    private ProviderChoiceViewModel? _selectedProviderChoice;
+
+    [ObservableProperty]
+    private string _providerType = ProviderTypes.OpenAiCompatible;
+
+    /** `type` 的可选值(协议族 + custom 别名), 供下拉补全。 */
+    public IReadOnlyList<string> ProviderTypeChoices { get; } = ProviderTypes.All;
 
     [ObservableProperty]
     private string _providerBaseUrl = "";
@@ -351,6 +363,34 @@ public sealed partial class SettingsViewModel : ObservableObject
         PersistAppearance();
     }
 
+    /**
+     * 选中协议族/自定义: 只填 type(视为自定义端点, name/baseUrl 仍由用户填)。
+     * 选中目录 provider: 带出 name/baseUrl/type/models, 用户只需再填 apiKey。
+     */
+    partial void OnSelectedProviderChoiceChanged(ProviderChoiceViewModel? value)
+    {
+        if (value is null)
+            return;
+        if (value.IsProtocolFamily)
+        {
+            ProviderType = value.Type ?? ProviderTypes.OpenAiCompatible;
+            Status = $"已选协议族 {ProviderType}（自定义端点，请自行填写 name/baseUrl）";
+            return;
+        }
+
+        var entry = ProviderCatalog.LoadCached(_home).Providers
+            .FirstOrDefault(candidate => string.Equals(candidate.Id, value.ProviderId, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            return;
+        ProviderName = entry.Id;
+        ProviderBaseUrl = entry.BaseUrl ?? "";
+        ProviderType = entry.Type ?? ProviderTypes.OpenAiCompatible;
+        ProviderModelIds = ProviderCatalog.AllModelsMarker;
+        Status = entry.BaseUrl is null
+            ? $"已按目录填入 {entry.Id}（该 provider 没有公开固定 baseUrl，请自行填写）"
+            : $"已按目录填入 {entry.Id}，补 apiKey 即可保存";
+    }
+
     [RelayCommand]
     private async Task SaveProviderAsync()
     {
@@ -366,7 +406,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                 Status = await RunAsync($"/provider remove {ProviderName.Trim()}");
             var modelIds = ProviderModelIds.Trim();
             var suffix = modelIds.Length > 0 ? $" --model-ids {modelIds}" : "";
-            Status = await RunAsync($"/provider add {ProviderName.Trim()} --base-url {ProviderBaseUrl.Trim()} --api-key {ProviderApiKey.Trim()} --type {ProviderType}{suffix}");
+            var type = ProviderTypes.Canonical(ProviderType);
+            Status = await RunAsync($"/provider add {ProviderName.Trim()} --base-url {ProviderBaseUrl.Trim()} --api-key {ProviderApiKey.Trim()} --type {type}{suffix}");
             LoadHarnessSettings();
         }
         finally
@@ -572,7 +613,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
         Providers.Clear();
         foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
-            Providers.Add(new ProviderRowViewModel(providerName, providerEntry.Type ?? "openai-compatible", providerEntry.Options?.BaseUrl ?? "", providerEntry.Models.Count));
+            Providers.Add(new ProviderRowViewModel(providerName, ProviderTypes.Canonical(providerEntry.Type), providerEntry.Options?.BaseUrl ?? "", providerEntry.Models.Count));
+        ProviderChoices = ProviderChoiceViewModel.Build(ProviderCatalog.LoadCached(_home));
         SelectedProvider = Providers.FirstOrDefault();
         AutoApprove = settings.Safety?.AutoApprove ?? false;
         BlacklistText = string.Join(Environment.NewLine, settings.Safety?.Blacklist ?? []);
@@ -648,6 +690,33 @@ public sealed partial class SettingsNavItemViewModel(SettingsSection section, st
 }
 
 public sealed record ProviderRowViewModel(string Name, string Type, string BaseUrl, int ModelCount);
+
+/**
+ * "选择模型提供者"下拉的一项。
+ * 协议族条目只有 Type(选中只填 type); 目录条目带 ProviderId(选中按目录带出 name/baseUrl/type/models)。
+ * Display 带段前缀: 目录 id 与类型名会重名(openai/anthropic/deepseek 两边都有), 不区分就会歧义。
+ */
+public sealed record ProviderChoiceViewModel(string Display, string? ProviderId, string? Type)
+{
+    public const string ProtocolPrefix = "协议族 · ";
+
+    public const string CatalogPrefix = "目录 · ";
+
+    public bool IsProtocolFamily => ProviderId is null;
+
+    /** 前 7 项协议族/自定义, 其后按 id 排序的目录 provider。 */
+    public static IReadOnlyList<ProviderChoiceViewModel> Build(ProviderCatalogSnapshot catalog)
+        => [
+            .. ProviderTypes.All.Select(type => new ProviderChoiceViewModel($"{ProtocolPrefix}{type}", null, type)),
+            .. catalog.Providers
+                .Where(entry => entry.Type is not null)
+                .OrderBy(entry => entry.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => new ProviderChoiceViewModel($"{CatalogPrefix}{entry.Id}", entry.Id, entry.Type)),
+        ];
+
+    /** AutoCompleteBox 按 ToString() 过滤, 因此筛选词匹配的是带前缀的显示名。 */
+    public override string ToString() => Display;
+}
 
 public sealed record McpRowViewModel(string Name, string Transport, string Target, bool Enabled);
 
