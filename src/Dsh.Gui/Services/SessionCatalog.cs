@@ -12,9 +12,19 @@ public sealed class SessionCatalog(Context ctx)
         var nodes = new Dictionary<string, SessionNodeViewModel>(StringComparer.Ordinal);
         var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, strict: false);
         foreach (var snapshot in persistence?.List() ?? [])
+        {
+            if (snapshot.Header.IsSubagent)
+                continue;
             nodes[snapshot.Header.Id.Value] = Create(snapshot.Header, null);
+        }
+
         foreach (var agent in LiveAgents())
+        {
+            if (agent.Session.Header.IsSubagent)
+                continue;
             nodes[agent.Id.Value] = Create(agent.Session.Header, agent);
+        }
+
         return [.. nodes.Values.OrderByDescending(node => node.CreatedAt)];
     }
 

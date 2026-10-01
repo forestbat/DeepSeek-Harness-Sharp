@@ -988,9 +988,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task RunCommandAsync(string text)
     {
-        var output = await _bridge.RunAsync(_agent, text);
+        var execution = await _bridge.ExecuteAsync(_agent, text);
+        if (execution is null)
+        {
+            // 首 token 不是已知命令: 用户为自己的输入负责, 整行当普通消息发给模型。
+            _agent.Followup(MessageFactory.CreateUserText(ExpandMentions(text)));
+            return;
+        }
+
+        var output = execution.Result switch
+        {
+            CommandResult.Success { Text: { } successText } => successText,
+            CommandResult.Error error => error.Text,
+            _ => "",
+        };
         if (output.Length > 0)
             AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
+
+        // 命令 + 提示词: 命令带的提示词作为下一步用户消息发出。
+        var followup = execution.Result switch
+        {
+            CommandResult.Success success => success.FollowupPrompt,
+            CommandResult.Error error => error.FollowupPrompt,
+            _ => null,
+        };
+        if (followup is { Length: > 0 } prompt)
+            _agent.Followup(MessageFactory.CreateUserText(ExpandMentions(prompt)));
     }
 
     private async Task NewSessionAsync()

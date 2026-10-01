@@ -209,4 +209,25 @@ public sealed class GuiComponentTests
         Assert.True(freeDecision.CanSubmit);
         Assert.Equal("按我的方案来", freeDecision.BuildAnswer()!.Answers[0].Custom);
     }
+
+    /** 选择模型提供者: 前 7 项是协议族(只带 Type), 其后是按 id 排序、带 ProviderId 的目录 provider; 两类都带段前缀。 */
+    [Fact]
+    public void ProviderChoices_Put_Protocol_Families_First_And_Tag_Both_Kinds()
+    {
+        var snapshot = ProviderCatalog.Parse(ProviderCatalogTests.Fixture);
+
+        var choices = ProviderChoiceViewModel.Build(snapshot);
+        var protocols = choices.Take(ProviderTypes.All.Count).ToList();
+
+        Assert.Equal(ProviderTypes.All, protocols.Select(choice => choice.Type));
+        Assert.All(protocols, choice => Assert.Null(choice.ProviderId));
+        Assert.All(protocols, choice => Assert.StartsWith(ProviderChoiceViewModel.ProtocolPrefix, choice.Display, StringComparison.Ordinal));
+
+        var catalog = choices.Skip(ProviderTypes.All.Count).ToList();
+        Assert.Equal(
+            ["anthropic", "kimi-code-plan-global", "openai", "zhipuai-coding-plan"],
+            catalog.Select(choice => choice.ProviderId));
+        Assert.All(catalog, choice => Assert.NotNull(choice.Type));
+        Assert.All(catalog, choice => Assert.StartsWith(ProviderChoiceViewModel.CatalogPrefix, choice.Display, StringComparison.Ordinal));
+    }
 }
