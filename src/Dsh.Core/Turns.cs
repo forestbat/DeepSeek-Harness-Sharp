@@ -172,6 +172,12 @@ public sealed record SessionHeader
     public string? SubagentMode { get; init; }
     public string? SubagentLabel { get; init; }
 
+    /**
+     * 子代理会话: 只按 Origin 判定。
+     * "从检查点恢复"的会话也有 ParentSession, 但 Origin 为空, 属正常会话, 不能在会话列表里隐藏。
+     */
+    public bool IsSubagent => string.Equals(Origin, "subagent", StringComparison.Ordinal);
+
     public void Validate()
     {
         if (Version != SessionFormatVersion)

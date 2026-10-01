@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
@@ -58,16 +59,23 @@ public sealed class MemoryCaptureTests
         var session = fixture.NewSession("capture-1");
 
         fixture.AppendTurn(session);
+        var digestPath = Path.Combine(fixture.SidecarDir, "sessions", "capture-1.md");
+        var auditPath = Path.Combine(fixture.SidecarDir, "decisions.jsonl");
+        // 摘要/consolidation/audit 各由异步链路落盘: 断言涉及的每个产物都就绪后再断言, 避免读到半成品。
         await WaitFor(() => File.Exists(fixture.MemoryPath)
-            && File.ReadAllText(fixture.MemoryPath).Contains("repo.layout"));
+            && ReadShared(fixture.MemoryPath).Contains("- repo.layout :: src holds the preset plugin packages (")
+            && File.Exists(digestPath)
+            && ReadShared(digestPath).Contains("- topic :: refactor")
+            && File.Exists(auditPath)
+            && ReadShared(auditPath).Contains("\"source\":\"capture\""));
 
         Assert.Equal(1, fixture.Adapter.DigestCalls);
         Assert.Equal(1, fixture.Adapter.OpsCalls);
-        var digest = File.ReadAllText(Path.Combine(fixture.SidecarDir, "sessions", "capture-1.md"));
+        var digest = ReadShared(digestPath);
         Assert.Contains("- topic :: refactor", digest);
-        var memoryText = File.ReadAllText(fixture.MemoryPath);
+        var memoryText = ReadShared(fixture.MemoryPath);
         Assert.Contains("- repo.layout :: src holds the preset plugin packages (", memoryText);
-        var audit = File.ReadAllText(Path.Combine(fixture.SidecarDir, "decisions.jsonl"));
+        var audit = ReadShared(auditPath);
         Assert.Contains("\"source\":\"capture\"", audit);
     }
 
@@ -94,10 +102,18 @@ public sealed class MemoryCaptureTests
         fixture.AppendTurn(session);
         fixture.AppendTurn(session, turn: 2);
         await WaitFor(() => File.Exists(fixture.MemoryPath)
-            && File.ReadAllText(fixture.MemoryPath).Contains("repo.layout"));
+            && ReadShared(fixture.MemoryPath).Contains("repo.layout"));
         await Task.Delay(500, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, fixture.Adapter.DigestCalls);
+    }
+
+    /** 读产品正在异步追加写的产物: 必须允许共享写, 否则全量并行跑到这里会撞上"文件被另一个进程占用"而假失败。 */
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
     private static async Task WaitFor(Func<bool> condition)

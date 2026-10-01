@@ -60,11 +60,6 @@ public sealed record WorkflowAgentEndInfo(
     SessionId ChildId,
     string Outcome);
 
-public sealed record WorkflowResultInfo(
-    string StopReason,
-    string? Error,
-    int AgentsStarted);
-
 public static class WorkflowErrorCodes
 {
     public const string ScriptParse = "SCRIPT_PARSE";
@@ -84,12 +79,6 @@ public sealed class WorkflowError(string message, string code, Exception? innerE
     : HarnessException(message, code, innerException)
 {
     public bool Fatal { get; } = fatal;
-}
-
-public static class WorkflowFatal
-{
-    public static bool IsFatalWorkflowError(Exception? error)
-        => error is WorkflowError { Fatal: true };
 }
 
 public abstract class WorkflowEngine(Context ctx) : Service(ctx, ServiceName)

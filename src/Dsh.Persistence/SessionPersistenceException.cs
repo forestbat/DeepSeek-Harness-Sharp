@@ -9,7 +9,7 @@ public static class SessionErrorCodes
     public const string AlreadyOwned = "SessionAlreadyOwned";
     public const string FormatUnsupported = "SessionFormatUnsupported";
     public const string HandleClosed = "SessionHandleClosed";
-    public const string OwnershipLost = "SessionOwnershipLost";
+
     public const string Corruption = "SessionCorruption";
     public const string NotFound = "SessionNotFound";
     public const string ReadOnly = "SessionReadOnly";
@@ -51,13 +51,6 @@ public sealed class SessionReadOnlyException(SessionId sessionId, string operati
 {
     public SessionId SessionId { get; } = sessionId;
     public override string Code => SessionErrorCodes.ReadOnly;
-}
-
-public sealed class SessionOwnershipLostException(SessionId sessionId)
-    : SessionPersistenceException($"session \"{sessionId}\": write ownership was lost; close this handle and reopen")
-{
-    public SessionId SessionId { get; } = sessionId;
-    public override string Code => SessionErrorCodes.OwnershipLost;
 }
 
 public sealed class SessionHandleClosedException(SessionId sessionId, string operation)

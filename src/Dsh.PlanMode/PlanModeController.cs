@@ -73,8 +73,9 @@ public sealed class PlanModeController : Service
         commands?.Register(new CommandDefinition
         {
             Name = "plan",
-            Description = "Enter or leave plan mode",
+            Description = "Enter or leave plan mode; a trailing message becomes the task to plan",
             Input = new CommandInputDescriptor("[off|message]", Images: true),
+            AcceptsPrompt = true,
             Handler = invocation => Task.FromResult(HandleCommand(invocation)),
         });
 
