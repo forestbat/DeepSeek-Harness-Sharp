@@ -122,6 +122,23 @@ public static class GpuCatalog
         return gpu.GetValueOrDefault("adapter") as string is { Length: > 0 } adapter ? adapter : AutoAdapter;
     }
 
+    /**
+     * 独立窗口形态是否垂直同步(settings.yaml 的 plugins."@deepseek-ai/dsh-gui".gpu.vsync, 缺省 true)。
+     * 不写死: 关掉会按显卡最快速度空转(实测上万 fps), 开着则跟显示器刷新同步; 具体取值由用户配置。
+     */
+    public static bool LoadVsync(HarnessHome home)
+    {
+        if (HarnessSettings.Load(home).Plugins.GetValueOrDefault(GpuSettingsPackage)?.Parameters is not { } parameters
+            || parameters.GetValueOrDefault("gpu") is not IReadOnlyDictionary<string, object?> gpu)
+            return true;
+        return gpu.GetValueOrDefault("vsync") switch
+        {
+            bool value => value,
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => true,
+        };
+    }
+
     /** 保存选卡, 保留该插件段里的其余参数(backend 等)。 */
     public static void SaveSelectedAdapter(HarnessHome home, string adapter)
     {

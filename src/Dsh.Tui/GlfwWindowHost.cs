@@ -9,11 +9,13 @@ namespace Dsh.Tui;
 public sealed class GlfwWindowHost : IGlSurfaceHostRunner
 {
     private readonly GameWindow _window;
+    private readonly bool _vsync;
     private IGpuHostClient? _client;
     private bool _disposed;
 
-    public GlfwWindowHost(int clientWidth, int clientHeight, bool visible = true, string title = "dsh --gpu")
+    public GlfwWindowHost(int clientWidth, int clientHeight, bool visible = true, string title = "dsh --gpu", bool vsync = true)
     {
+        _vsync = vsync;
         // OpenTK 的 GLFW"主线程"认定要求入口方法在调用栈上且非线程池线程; async Main 的续体不满足, 直接关掉该检查(GLFW 在 Windows/X11/Wayland 对调用线程无要求)。
         GLFWProvider.CheckForMainThread = false;
         RequestRobustnessOnAmd();
@@ -34,6 +36,8 @@ public sealed class GlfwWindowHost : IGlSurfaceHostRunner
     {
         _window.Context.MakeCurrent();
         OpenTK.Graphics.GLLoader.LoadBindings(new GLFWBindingsContext());
+        // 垂直同步由 settings.yaml 的 gpu.vsync 决定(缺省开): 关掉时帧循环按显卡最快速度空转, 开着跟刷新同步。
+        _window.VSync = _vsync ? VSyncMode.On : VSyncMode.Off;
     }
 
     public void Present() => _window.SwapBuffers();

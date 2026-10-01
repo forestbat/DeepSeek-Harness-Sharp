@@ -36,7 +36,10 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
     private readonly string? _screenshotPath;
     private readonly string? _gpuCard;
     private readonly string? _preferredCard;
+    private readonly string? _capturePlanPath;
+    private CapturePlanRunner? _capturePlan;
     private bool _screenshotTaken;
+    private readonly bool _vsync;
 
     public static bool TryDetectDisplay(out string reason)
     {
@@ -66,9 +69,17 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
 
     /**
      * screenshotPath: 渲染首帧后把帧缓冲写盘并退出(裸 TTY 上没有 X/外部截图工具时唯一可行的取证手段)。
+     * capturePlanPath: 脚本化按键 + 多帧拍帧; 给定后宿主窗口隐藏(不抢前台), 计划跑完即退出。
      * gpuCard: `--gpu-card` 显式指定的 DRM 卡(严格); preferredCard: 设置里选的卡(不可用时回退扫描)。两者仅 GBM/KMS 形态使用。
      */
-    public GpuRenderer(ChatWindow chat, GlyphAtlas? atlas = null, string? screenshotPath = null, string? gpuCard = null, string? preferredCard = null)
+    public GpuRenderer(
+        ChatWindow chat,
+        GlyphAtlas? atlas = null,
+        string? screenshotPath = null,
+        string? gpuCard = null,
+        string? preferredCard = null,
+        string? capturePlanPath = null,
+        bool vsync = true)
     {
         ArgumentNullException.ThrowIfNull(chat);
         _chat = chat;
@@ -76,7 +87,17 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _screenshotPath = screenshotPath;
         _gpuCard = gpuCard;
         _preferredCard = preferredCard;
-        _host = GpuHostFactory.CreateWindowHost(_atlas, gpuCard, preferredCard);
+        _capturePlanPath = capturePlanPath;
+        _vsync = vsync;
+        if (capturePlanPath is { Length: > 0 })
+        {
+            var steps = CapturePlan.Parse(File.ReadAllText(capturePlanPath));
+            if (steps.Count == 0)
+                throw new InvalidOperationException($"capture plan \"{capturePlanPath}\" 里没有任何指令");
+            _capturePlan = new CapturePlanRunner(steps);
+        }
+
+        _host = GpuHostFactory.CreateWindowHost(_atlas, gpuCard, preferredCard, hidden: _capturePlan is not null, vsync: _vsync);
         _grid = new CellGrid(80, 25);
         _layout = LayoutEngine.Calculate(_grid.Width, _grid.Height);
     }
@@ -112,7 +133,7 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _core = new GpuRenderCore();
         _lastGrid = null;
         _seenRenderVersion = -1;
-        _host = GpuHostFactory.CreateWindowHost(_atlas, _gpuCard, _preferredCard);
+        _host = GpuHostFactory.CreateWindowHost(_atlas, _gpuCard, _preferredCard, vsync: _vsync);
     }
 
     public void Dispose()
@@ -159,13 +180,15 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         if (_chat.ExitRequested)
             return true;
 
-        var cursorLit = IsCursorLit(Environment.TickCount64);
+        // 截图与捕获计划要确定性: 固定按"亮"画光标, 否则拍到的帧可能刚好落在灭相位。
+        var cursorLit = _capturePlan is not null || _screenshotPath is not null || IsCursorLit(Environment.TickCount64);
         var gridChanged = _chat.RenderVersion != _seenRenderVersion
             || _lastGrid is null
             || _lastGrid.Width != _grid.Width
             || _lastGrid.Height != _grid.Height;
         // 内容没变也要按闪烁相位重绘: 否则输入行光标永远不闪。
-        if (!gridChanged && cursorLit == _cursorLit)
+        // 画面没变也要推进捕获计划(按键/拍帧按时间走), 否则脚本会卡在空闲帧上。
+        if (_capturePlan is null && !gridChanged && cursorLit == _cursorLit)
             return false;
         _cursorLit = cursorLit;
         _seenRenderVersion = _chat.RenderVersion;
@@ -194,6 +217,8 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
             _chat.RequestExit();
         }
 
+        RunCapturePlanStep();
+
         _host.Present();
 
         // robust 上下文下 TDR 的表现: GetError 报 CONTEXT_LOST(0x0507, ErrorCode 枚举未收录该值, 按 All 原始常量比较), 之后的 GL 调用全是空操作; 关闭宿主交回 Run() 重建。
@@ -209,13 +234,19 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
     internal static bool IsCursorLit(long tickCount)
         => tickCount / CursorBlinkMs % 2 == 0;
 
-    /** 把光标所在格反显成块状光标(真实终端行为); 不可见或越界时原样返回。 */
-    internal static void DrawCursor(CellGrid grid, int x, int y, bool visible)
+    /**
+     * 光标覆盖层: 亮相位把光标格反显成块状光标(真实终端行为), 灭相位**清掉**该格的反显。
+     * 必须是对称的: 面板(DrawInput)会无条件把光标格设成反显, 只加不清的话相位切换看不出差别, 光标就永远不闪。
+     */
+    internal static void DrawCursor(CellGrid grid, int x, int y, bool lit)
     {
-        if (!visible || (uint)x >= (uint)grid.Width || (uint)y >= (uint)grid.Height)
+        if ((uint)x >= (uint)grid.Width || (uint)y >= (uint)grid.Height)
             return;
         var cell = grid[x, y];
-        grid[x, y] = cell with { Style = cell.Style | CellStyle.Reverse };
+        grid[x, y] = cell with
+        {
+            Style = lit ? cell.Style | CellStyle.Reverse : cell.Style & ~CellStyle.Reverse,
+        };
     }
 
     public void OnKey(ConsoleKeyInfo key)
@@ -270,7 +301,35 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
             return;
         var cellX = (int)(_mouseX / _atlas.GlyphWidth);
         var cellY = (int)(_mouseY / _atlas.GlyphHeight);
-        _chat.HandleMouseWheel((int)deltaY, cellX, cellY, _layout);
+                    _chat.HandleMouseWheel(deltaY, cellX, cellY, _layout);
+    }
+
+    /** 捕获计划: 到期的一步按键或拍帧; 计划跑完即退出(与单帧 --gpu-screenshot 同样的收尾)。 */
+    private void RunCapturePlanStep()
+    {
+        if (_capturePlan is not { } plan || plan.Next(Environment.TickCount64) is not { } step)
+            return;
+        switch (step.Action)
+        {
+            case CapturePlanAction.Keys:
+                foreach (var character in step.Value)
+                    _chat.HandleKey(CaptureKeys.ToKeyInfo(character));
+                break;
+            case CapturePlanAction.Capture:
+                SaveScreenshot(CaptureFramePath(step.Value));
+                break;
+        }
+
+        if (plan.IsFinished)
+            _chat.RequestExit();
+    }
+
+    /** 帧写到计划文件旁边(取证产物只落工程内路径)。 */
+    private string CaptureFramePath(string name)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(_capturePlanPath!)) ?? ".";
+        var file = name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? name : $"{name}.png";
+        return Path.Combine(directory, file);
     }
 
     private void SaveScreenshot(string path)

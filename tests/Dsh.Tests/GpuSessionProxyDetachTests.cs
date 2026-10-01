@@ -22,7 +22,7 @@ public sealed class GpuSessionProxyDetachTests
             new PtyDaemonStartParams
             {
                 FileName = shell,
-                Arguments = PtyShell.Arguments(shell),
+                Arguments = [.. PtyShell.Arguments(shell)],
                 Rows = 24,
                 Columns = 80,
             },
@@ -30,14 +30,12 @@ public sealed class GpuSessionProxyDetachTests
         try
         {
             var atlas = GlyphAtlas.Shared;
-            using (var windowHost = GpuHostFactory.CreateWindowHost(atlas, hidden: true))
-            using (var proxy = new GpuSessionProxy(session.Id, atlas, windowHost))
-            {
-                var running = Task.Run(proxy.Run, cancellationToken);
-                await Task.Delay(2500, cancellationToken);
-                windowHost.RequestClose();
-                await running.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            }
+            using var windowHost = GpuHostFactory.CreateWindowHost(atlas, hidden: true);
+            var proxy = new GpuSessionProxy(session.Id, atlas, windowHost);
+            // GL 上下文与创建它的线程绑定: 宿主循环必须在同一线程跑, 关窗口从定时器线程触发。
+            using var closer = new Timer(_ => windowHost.RequestClose(), null, 2500, Timeout.Infinite);
+            proxy.Run();
+            proxy.Dispose();
 
             // 关窗口之后: proxy 已退出, 会话必须还在(否则"关窗口=detach"就是空话)
             var status = (await PtyDaemonClient.ListAsync(cancellationToken: cancellationToken))
@@ -57,6 +55,47 @@ public sealed class GpuSessionProxyDetachTests
                 // 会话已自行退出
             }
         }
+    }
+
+    /**
+     * 会话自己结束(/exit、两次 Ctrl+C、进程退出)时窗口必须自动关掉, 而不是留下一个黑框让用户手动关。
+     * 旧实现只在 `_tunnel.IsCancellationRequested` 时返回"该关窗口", 而那个标志只有窗口关闭后才置位(鸡生蛋)。
+     */
+    [Fact]
+    public async Task Session_Exit_Closes_Window_Automatically()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await EnsureDaemonAsync(cancellationToken);
+
+        // 起一个稍后自己退出的会话(必须活过 attach, 否则测不到"会话结束后隧道收口"这条路径)。
+        // 之后没有任何人关窗口。
+        var session = await PtyDaemonClient.StartAsync(
+            new PtyDaemonStartParams
+            {
+                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                Arguments = OperatingSystem.IsWindows()
+                    ? ["/c", "ping -n 4 127.0.0.1 > nul"]
+                    : ["-c", "sleep 3"],
+                Rows = 24,
+                Columns = 80,
+            },
+            cancellationToken);
+        await Task.Delay(500, cancellationToken);
+
+        var atlas = GlyphAtlas.Shared;
+        using var windowHost = GpuHostFactory.CreateWindowHost(atlas, hidden: true);
+        var proxy = new GpuSessionProxy(session.Id, atlas, windowHost);
+        // 兜底关窗: 万一回归了也别把用例挂死, 只是断言会失败并说明是兜底关的。
+        var safety = new Timer(_ => windowHost.RequestClose(), null, 15000, Timeout.Infinite);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        proxy.Run();
+        watch.Stop();
+        proxy.Dispose();
+        safety.Dispose();
+
+        Assert.True(
+            watch.Elapsed < TimeSpan.FromSeconds(10),
+            $"会话结束后 GPU 窗口没有自动关闭(耗时 {watch.Elapsed.TotalSeconds:F1}s, 靠兜底才关)");
     }
 
     /** 用 CLI 拉起 daemon: 测试进程自己调 EnsureRunningAsync 会去 spawn Dsh.Tests.exe, 起不来。 */

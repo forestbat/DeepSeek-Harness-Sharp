@@ -32,6 +32,7 @@ internal sealed class GpuSessionProxy : IGpuHostClient
     private int _mouseCellX;
     private int _mouseCellY;
     private bool _leftDown;
+    private volatile bool _sessionEnded;
 
     public GpuSessionProxy(string sessionId, GlyphAtlas atlas, IGlSurfaceHostRunner host)
     {
@@ -49,11 +50,23 @@ internal sealed class GpuSessionProxy : IGpuHostClient
     /** 后台接会话隧道(输出喂 VtScreen, 输入来自窗口), 前台跑窗口循环; 窗口关闭或会话结束即收尾。 */
     public void Run()
     {
-        var tunnel = Task.Run(() => PtyDaemonClient.AttachAsync(
-            _sessionId,
-            new InputPipe(this),
-            new ScreenPipe(this),
-            _tunnel.Token));
+        var tunnel = Task.Run(async () =>
+        {
+            try
+            {
+                await PtyDaemonClient.AttachAsync(
+                    _sessionId,
+                    new InputPipe(this),
+                    new ScreenPipe(this),
+                    _tunnel.Token);
+            }
+            finally
+            {
+                // 会话自己结束(/exit、两次 Ctrl+C)时隧道会正常收流结束: 此时必须让窗口跟着关掉,
+                // 否则只剩一个黑框(会话画面已经清空)且只能手动关。_tunnel 只在窗口关闭后才取消, 指望不上。
+                _sessionEnded = true;
+            }
+        });
         try
         {
             _host.Run(this);
@@ -143,7 +156,9 @@ internal sealed class GpuSessionProxy : IGpuHostClient
         _lastGrid ??= new CellGrid(_grid.Width, _grid.Height);
         (_grid, _lastGrid) = (_lastGrid, _grid);
         _core.RenderFrame(_atlas, _grid.Width, _grid.Height);
-        return _tunnel.IsCancellationRequested;
+        // 必须交换缓冲: 只画后缓冲不 present, 窗口会一直显示未初始化内容(白屏, resize 后露出黑区)。
+        _host.Present();
+        return _tunnel.IsCancellationRequested || _sessionEnded;
     }
 
     public void OnKey(ConsoleKeyInfo key)

@@ -31,7 +31,9 @@ public sealed class GlyphAtlas
     private static readonly Lazy<GlyphAtlas> SharedInstance = new(() => new GlyphAtlas());
     private static readonly Lazy<FontFamily> SharedFamily = new(ResolveFontFamily);
     private static readonly object FallbackGate = new();
-    private static IReadOnlyList<FontFamily> _fallbackFamilies = ResolveFallbackFamilies();
+    /** 回退族懒解析(P3): 纯拉丁/框线文本不触发; 结果按字体清单指纹缓存(P2)。 */
+    private static readonly Lazy<IReadOnlyList<FontFamily>> FallbackFamiliesLazy = new(ResolveFallbackFamilies);
+    private static IReadOnlyList<FontFamily>? _fallbackOverride;
 
     public static GlyphAtlas Shared => SharedInstance.Value;
 
@@ -96,7 +98,7 @@ public sealed class GlyphAtlas
         var horizontal = metrics.HorizontalMetrics;
         var pixelsPerUnit = _font.Size / metrics.UnitsPerEm;
         var descentPixels = horizontal.Descender * pixelsPerUnit;
-        GlyphWidth = Math.Max(1, (int)Math.Floor(TextMeasurer.MeasureAdvance("0", CreateOptions()).Width));
+        GlyphWidth = Math.Max(1, (int)Math.Floor(TextMeasurer.MeasureAdvance("0", CreateOptions("0")).Width));
         GlyphHeight = Math.Max(1, (int)Math.Floor(Math.Max(horizontal.LineHeight, horizontal.Ascender - horizontal.Descender) * pixelsPerUnit));
         _originY = GlyphHeight + descentPixels - MeasureLayoutBaseline();
         _textureData = new byte[Columns * GlyphWidth * Rows * GlyphHeight];
@@ -313,7 +315,7 @@ public sealed class GlyphAtlas
         using var image = new Image<Rgba32>(slotWidth, GlyphHeight);
         using (var canvas = image.Frames.RootFrame.CreateCanvas(Configuration.Default, new DrawingOptions()))
         {
-            var options = CreateOptions();
+            var options = CreateOptions(character.ToString());
             options.Origin = new PointF(0, _originY);
             BakeGlyphs(canvas, character, options);
         }
@@ -426,7 +428,7 @@ public sealed class GlyphAtlas
         var text = character.ToString();
         if (TryBakeGlyphs(canvas, text, options))
             return;
-        var retry = CreateOptions();
+        var retry = CreateOptions(text);
         retry.Origin = options.Origin;
         TryBakeGlyphs(canvas, text, retry);
     }
@@ -453,11 +455,11 @@ public sealed class GlyphAtlas
     {
         lock (FallbackGate)
         {
-            var current = Volatile.Read(ref _fallbackFamilies);
+            var current = FallbackFamilies;
             var usable = current.Where(family => CanRenderWith(family, character)).ToList();
             if (usable.Count == current.Count)
                 return false;
-            Volatile.Write(ref _fallbackFamilies, usable);
+            Volatile.Write(ref _fallbackOverride, usable);
             return true;
         }
     }
@@ -474,13 +476,34 @@ public sealed class GlyphAtlas
         }
     }
 
-    private static IReadOnlyList<FontFamily> FallbackFamilies => Volatile.Read(ref _fallbackFamilies);
+    private static IReadOnlyList<FontFamily> FallbackFamilies
+        => Volatile.Read(ref _fallbackOverride) ?? FallbackFamiliesLazy.Value;
 
-    private TextOptions CreateOptions()
+    /** 文本里含主字体没有的字形时才挂回退链: 纯拉丁/框线文本不解析、不加载回退族。 */
+    private TextOptions CreateOptions(string text)
         => new(_font)
         {
-            FallbackFontFamilies = FallbackFamilies,
+            FallbackFontFamilies = NeedsFallback(text) ? FallbackFamilies : [],
         };
+
+    private bool NeedsFallback(string text)
+    {
+        try
+        {
+            foreach (var character in text)
+            {
+                if (character <= '\u007F' || _font.TryGetGlyphs(new CodePoint(character), out _))
+                    continue;
+                return true;
+            }
+
+            return false;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
 
     private static string DefaultCachePath(double fontSizePt)
     {
@@ -501,16 +524,60 @@ public sealed class GlyphAtlas
     {
         // JetBrains 宿主进程(例如 Rider 启动的终端、测试、调试子进程)会劫持字体解析环境(Linux: FONTCONFIG_PATH 指向 JBR 内置 fontconfig;Windows 同样验证过),
         // 导致此处只能看到 JBR 自带字体,CJK 回退全部失效、宽字渲染为 tofu;真实终端会话不受影响,在该宿主内跑测试需显式恢复(如 FONTCONFIG_PATH=/etc/fonts)。
-        // 简体优先, 其次繁体/日文, 最后符号与 emoji: SixLabors 逐字挑"第一个覆盖该字的族", 顺序即优先级。
-        // 名称按各平台实际可解析的形式列出(YaHei 基础名在部分机器上解析失败, UI 变体可解析; Noto Sans SC 才是本机实体)。
-        string[] names =
+        var cachePath = GlyphFallbackCache.DefaultPath;
+        var cacheKey = GlyphFallbackCache.Key(
+            DefaultFontSize,
+            [.. SystemFonts.Families.Select(family => family.Name).OrderBy(name => name, StringComparer.Ordinal)]);
+        if (GlyphFallbackCache.TryLoad(cachePath, cacheKey) is { Count: > 0 } cachedNames)
+        {
+            var cachedFamilies = new List<FontFamily>(cachedNames.Count);
+            foreach (var cachedName in cachedNames)
+            {
+                if (SystemFonts.TryGet(cachedName, out var cachedFamily))
+                    cachedFamilies.Add(cachedFamily);
+            }
+
+            if (cachedFamilies.Count > 0)
+                return cachedFamilies;
+        }
+
+        var families = new List<FontFamily>();
+        foreach (var name in PlatformCandidateNames())
+        {
+            if (SystemFonts.TryGet(name, out var family) && IsUsableFamily(family))
+                families.Add(family);
+        }
+
+        // 名字解析在部分环境(宿主机字体劫持/字体名与文件族名不一致)会漏掉真正的简中字体, 也可能让日文字体排在前面;
+        // 以 CJK 区抽样覆盖数降序稳定排序, 让覆盖面最广的族优先(名称顺序仅作同分时的稳定次序)。
+        // 评分要逐族加载字体(实测本机 30 个候选中每个 ~0.27s, 全评约 8s), 因此一旦出现满覆盖族就停止评分:
+        // 满覆盖已是上限, 其后的族按名称优先级直接排在后面兜 emoji/符号(它们对 CJK 覆盖为 0, 评分也不会前移)。
+        var ranked = new List<FontFamily>();
+        var tail = new List<FontFamily>();
+        var fullCoverage = false;
+        foreach (var family in families)
+        {
+            if (fullCoverage)
+            {
+                tail.Add(family);
+                continue;
+            }
+
+            ranked.Add(family);
+            fullCoverage = Coverage(family) >= CjkProbeSamples;
+        }
+
+        var resolved = ranked.OrderByDescending(Coverage).ToList();
+        GlyphFallbackCache.Save(cachePath, cacheKey, [.. resolved.Select(family => family.Name), .. tail.Select(family => family.Name)]);
+        return [.. resolved, .. tail];
+    }
+
+    /** 候选字体族(顺序即优先级): 简体优先, 其次繁体/日文, 最后符号与 emoji。按平台只列本平台可能存在的族, 少做无谓的加载与评分。 */
+    private static string[] PlatformCandidateNames() => OperatingSystem.IsWindows()
+        ?
         [
             "Microsoft YaHei UI",
             "Microsoft YaHei",
-            "Noto Sans SC",
-            "Noto Serif SC",
-            "Source Han Sans SC",
-            "思源黑体",
             "DengXian",
             "DengXian Light",
             "SimSun",
@@ -519,43 +586,46 @@ public sealed class GlyphAtlas
             "FangSong",
             "Microsoft JhengHei UI",
             "Microsoft JhengHei",
-            "Noto Sans TC",
-            "Noto Sans HK",
-            "PingFang SC",
-            "Hiragino Sans GB",
             "MS Gothic",
-            "Noto Sans Mono CJK SC",
-            "Noto Sans Mono CJK TC",
-            "Noto Sans CJK SC",
-            "Noto Sans CJK TC",
-            "Noto Sans CJK JP",
-            "WenQuanYi Micro Hei",
-            "WenQuanYi Zen Hei",
-            "Droid Sans Fallback",
+            "Noto Sans SC",
             "Segoe UI Symbol",
             "Segoe UI Emoji",
-            "Apple Color Emoji",
-            "Noto Color Emoji",
-        ];
-
-        var families = new List<FontFamily>();
-        foreach (var name in names)
-        {
-            if (SystemFonts.TryGet(name, out var family) && IsUsableFamily(family))
-                families.Add(family);
-        }
-
-        // 名字解析在部分环境(宿主机字体劫持/字体名与文件族名不一致)会漏掉真正的简中字体, 也可能让日文字体排在前面;
-        // 以 CJK 区抽样覆盖数降序稳定排序, 让覆盖面最广的族优先(名称顺序仅作同分时的稳定次序)。
-        return families
-            .OrderByDescending(Coverage)
-            .ToList();
-    }
+        ]
+        : OperatingSystem.IsMacOS()
+            ?
+            [
+                "PingFang SC",
+                "Hiragino Sans GB",
+                "Source Han Sans SC",
+                "思源黑体",
+                "Noto Sans SC",
+                "Apple Color Emoji",
+                "Noto Color Emoji",
+            ]
+            :
+            [
+                "Noto Sans SC",
+                "Noto Serif SC",
+                "Noto Sans CJK SC",
+                "Noto Sans CJK TC",
+                "Noto Sans CJK JP",
+                "Noto Sans Mono CJK SC",
+                "Noto Sans Mono CJK TC",
+                "Source Han Sans SC",
+                "思源黑体",
+                "WenQuanYi Micro Hei",
+                "WenQuanYi Zen Hei",
+                "Droid Sans Fallback",
+                "Noto Color Emoji",
+            ];
 
     private const int CjkProbeStart = 0x4E00;
     private const int CjkProbeEnd = 0x9FFF;
     /** 抽样步长取与区块长度互质的质数, 保证样本均匀铺满整个 CJK 区。*/
     private const int CjkProbeStride = 37;
+
+    /** CJK 抽样探针的样本数: 满覆盖(全部样本都命中)即评分的上限。 */
+    private const int CjkProbeSamples = ((CjkProbeEnd - CjkProbeStart) / CjkProbeStride) + 1;
 
     private static int Coverage(FontFamily family)
     {
@@ -565,7 +635,7 @@ public sealed class GlyphAtlas
             var covered = 0;
             for (var codePoint = CjkProbeStart; codePoint <= CjkProbeEnd; codePoint += CjkProbeStride)
             {
-                if (font.TryGetGlyphs(new CodePoint(codePoint), out Glyph? glyph) && glyph is not null)
+                if (font.TryGetGlyphs(new CodePoint(codePoint), out _))
                     covered++;
             }
             return covered;
@@ -576,6 +646,7 @@ public sealed class GlyphAtlas
         }
     }
 
+    /** 渲染探针判定可用性: 只校验可加载不够——某些族(TryGetMetrics 成功)进 FallbackFontFamilies 后会让整条回退链产出空字形。 */
     private static bool IsUsableFamily(FontFamily family)
     {
         try

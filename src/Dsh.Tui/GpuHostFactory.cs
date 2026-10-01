@@ -6,10 +6,15 @@ namespace Dsh.Tui;
  */
 internal static class GpuHostFactory
 {
-    public static IGlSurfaceHostRunner CreateWindowHost(GlyphAtlas atlas, string? gpuCard = null, string? preferredCard = null)
+    public static IGlSurfaceHostRunner CreateWindowHost(
+        GlyphAtlas atlas,
+        string? gpuCard = null,
+        string? preferredCard = null,
+        bool hidden = false,
+        bool vsync = true)
     {
         if (OperatingSystem.IsWindows() || GpuRenderer.TryDetectDisplay(out var displayReason))
-            return new GlfwWindowHost(80 * atlas.GlyphWidth, 25 * atlas.GlyphHeight);
+            return new GlfwWindowHost(80 * atlas.GlyphWidth, 25 * atlas.GlyphHeight, visible: !hidden, vsync: vsync);
         if (EglGbmKmsHost.TryCreate(gpuCard, preferredCard, out var gbmHost, out var drmReason))
             return gbmHost;
         throw new InvalidOperationException($"{displayReason}; {drmReason}");

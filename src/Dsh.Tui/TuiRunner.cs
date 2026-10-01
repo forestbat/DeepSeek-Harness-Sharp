@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Tui.Services;
 
 namespace Dsh.Tui;
 
@@ -10,18 +11,35 @@ public static class TuiRunner
     /** 渲染合并窗口: leading(空闲后首事件立即渲) + trailing(窗口内到点渲最新态), 见阶段 1.4 拍板。 */
     private const int FrameIntervalMs = 10;
 
+    /** detach 交接时携带"未发送的输入"的变量名: 旧 TUI 写, 新 TUI 读一次后立即清除。 */
+    internal const string DetachDraftVariable = "DSH_DETACH_DRAFT";
+
+    /** 空闲时复查会话尺寸的间隔: 终端(尤其 ConPTY)被 resize 不会打断阻塞读, 只能定期醒来对比。 */
+    private const int ResizePollMilliseconds = 1000;
+
     public static async Task<int> Run(
         HarnessApp app,
         string cwd,
         bool gpu = false,
         bool shell = false,
         string? gpuScreenshot = null,
-        string? gpuCard = null)
+        string? gpuCard = null,
+        string? gpuCapturePlan = null)
     {
+        // 渲染前先声明控制台按 UTF-8 解释: daemon 脱离终端后创建的伪控制台默认取系统 OEM 代码页, 会把画面中文读成乱码。
+        ConsoleCodePage.EnsureUtf8();
+        if (gpu && gpuScreenshot is null && gpuCapturePlan is null && ShouldRunAsProxy())
+            return await TuiProxy.RunAsync(app, shell, gpu: true);
         if (gpu)
-            return RunGpuSync(app, cwd, shell, gpuScreenshot, gpuCard);
+            return RunGpuSync(app, cwd, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
 
-        // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞
+        // 终端交互形态默认走"会话常驻 daemon + 本进程当 proxy"; 常驻会话本体(DSH_PTY_CHILD)与非交互(重定向)例外。
+        if (ShouldRunAsProxy())
+            return await TuiProxy.RunAsync(app, shell);
+
+        // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞。
+        // 鼠标上报照常开: 终端形态下这是拖拽/滚轮/点击的唯一来源(序列会被 proxy 转给宿主终端)。只会发 X10 的
+        // 终端(如 Rider 内置终端)由客户端丢报文并让终端停发(SGR 能穿过 ConPTY, 原样放行)。
         using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
         var signalGuards = RegisterSignalRestore(rawMode);
         try
@@ -65,9 +83,22 @@ public static class TuiRunner
         return guards;
     }
 
+    /** 终端交互形态默认走 proxy(会话常驻 daemon); 常驻会话本体与非交互(输入/输出被重定向)留在本进程渲染。 */
+    private static bool ShouldRunAsProxy()
+        => !Console.IsInputRedirected
+            && !Console.IsOutputRedirected
+            && !IsResidentChild();
+
+    /** 常驻会话(daemon 的 pty 里那个 TUI 本体): 它的终端不是用户终端, 鼠标上报等终端能力都不适用。 */
+    private static bool IsResidentChild()
+        => string.Equals(
+            Environment.GetEnvironmentVariable(PtySessionProtocol.ChildVariable),
+            "1",
+            StringComparison.Ordinal);
+
     private static async Task<int> RunNonInteractiveAsync(HarnessApp app, AgentLoopAgent agent)
     {
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName));
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName), new TuiSettings(app.Home));
         chat.DrainUi();
         var size = GetConsoleSize();
         var layout = LayoutEngine.Calculate(size.Width, size.Height);
@@ -89,11 +120,31 @@ public static class TuiRunner
         var renderer = new AnsiRenderer();
         var grid = new CellGrid(80, 25);
         var forceFull = true;
-        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName));
+        using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName), new TuiSettings(app.Home));
+        var draft = Environment.GetEnvironmentVariable(DetachDraftVariable);
+        if (!string.IsNullOrEmpty(draft))
+        {
+            Environment.SetEnvironmentVariable(DetachDraftVariable, null);
+            chat.SeedDraft(draft);
+        }
         if (startShell)
             chat.AddShellPane();
         if (inputSource is not null)
             chat.WakeHook = inputSource.Wake;
+
+        // 终端尺寸变化(尤其 attach/resize 之后)不会打断阻塞读: 定时盯住尺寸, 一变就唤醒主循环重排,
+        // 否则画面按旧几何继续绘制(表现为 attach 后输入区下方留一大片空白)。
+        using var sizeWatch = new Timer(
+            _ =>
+            {
+                var size = GetConsoleSize();
+                if (size.Width != grid.Width || size.Height != grid.Height)
+                    chat.WakeHook?.Invoke();
+            },
+            null,
+            ResizePollMilliseconds,
+            ResizePollMilliseconds);
+
         var seenVersion = -1;
         var nextFrameAt = 0L;
         try
@@ -117,6 +168,13 @@ public static class TuiRunner
                     chat.Draw(grid, layout);
                     await Console.Out.WriteAsync(renderer.RenderToBuffer(grid, chat.CursorScreenX, chat.CursorScreenY, forceFull));
                     await Console.Out.FlushAsync();
+                    if (chat.DetachRequested)
+                    {
+                        // 常驻会话: 只通知 proxy 离开, 自己接着跑(标记是 OSC, 不会污染画面)。
+                        chat.ClearDetachRequest();
+                        await Console.Out.WriteAsync(PtySessionProtocol.DetachMarker);
+                        await Console.Out.FlushAsync();
+                    }
                     forceFull = false;
                     seenVersion = chat.RenderVersion;
                     nextFrameAt = Environment.TickCount64 + FrameIntervalMs;
@@ -135,7 +193,9 @@ public static class TuiRunner
                     continue;
                 }
 
-                var inputEvent = inputSource.Read(Timeout.Infinite);
+                // 用带超时的读而不是无限阻塞: 会话空闲时也要定期醒来看尺寸是否被 attach/resize 改过, 否则画面按旧几何绘制,
+                // 表现为"attach 后输入区上方/下方留一大片空白"。超时返回 null 时会回到循环顶重新取尺寸并按需重绘。
+                var inputEvent = inputSource.Read(ResizePollMilliseconds);
                 if (inputEvent is null)
                 {
                     if (inputSource.EndOfStream)
@@ -193,7 +253,13 @@ public static class TuiRunner
             ? WindowsConsoleInputReader.TryCreate()
             : new TerminalInputReader();
 
-    private static int RunGpuSync(HarnessApp app, string cwd, bool startShell, string? gpuScreenshot = null, string? gpuCard = null)
+    private static int RunGpuSync(
+        HarnessApp app,
+        string cwd,
+        bool startShell,
+        string? gpuScreenshot = null,
+        string? gpuCard = null,
+        string? gpuCapturePlan = null)
     {
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = agents.Create(new CreateAgentOptions(
@@ -216,8 +282,8 @@ public static class TuiRunner
             }
             var atlas = CreateAtlasForTerminal();
             var prewarm = Task.Run(() => atlas.Prewarm());
-            using var chat = new ChatWindow(app.Ctx, agent, app.Home);
-            using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot, gpuCard, preferredCard);
+            using var chat = new ChatWindow(app.Ctx, agent, app.Home, settings: new TuiSettings(app.Home));
+            using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot, gpuCard, preferredCard, gpuCapturePlan, vsync: GpuCatalog.LoadVsync(app.Home));
             if (startShell)
                 chat.AddShellPane();
             // 进程信号兜底: 裸 TTY(GBM)形态没有窗口关闭事件, 收到信号也要走完正常 Dispose 恢复控制台(KD_TEXT/VT_AUTO/dropMaster)
@@ -225,6 +291,8 @@ public static class TuiRunner
             var signalGuards = new List<PosixSignalRegistration>(4);
             if (!OperatingSystem.IsWindows())
             {
+                // 信号兜底只持有弱引用: 注册可能比 using(renderer) 活得更久, 避免在已释放对象上调用。
+                var rendererRef = new WeakReference<GpuRenderer>(renderer);
                 // PosixSignal 枚举值是平台中立常量而非 Linux 信号编号, 退出码要用真实编号
                 foreach (var (signal, signo) in new[] { (PosixSignal.SIGTERM, 15), (PosixSignal.SIGHUP, 1), (PosixSignal.SIGINT, 2), (PosixSignal.SIGQUIT, 3) })
                 {
@@ -232,7 +300,8 @@ public static class TuiRunner
                     {
                         context.Cancel = true;
                         exitSignal = signo;
-                        renderer.RequestClose();
+                        if (rendererRef.TryGetTarget(out var running))
+                            running.RequestClose();
                     }));
                 }
             }
@@ -276,7 +345,7 @@ public static class TuiRunner
      * GPU 渲染的字号对齐宿主终端格尺寸: 以本机默认图集的格尺寸为基准, 宽/高两个方向各算一个比例, 取较紧者。
      * 终端不支持该查询或输出被重定向时用共享默认图集。用户想改字号就调终端字号, 重启 dsh 生效。
      */
-    private static GlyphAtlas CreateAtlasForTerminal()
+    internal static GlyphAtlas CreateAtlasForTerminal()
     {
         if (TerminalFontProbe.QueryCellPixelSize() is not { Height: > 0 } cell)
             return GlyphAtlas.Shared;
@@ -301,6 +370,11 @@ public static class TuiRunner
 
     private static (int Width, int Height) GetConsoleSize()
     {
+        // 常驻会话的尺寸以 daemon 为准(它写尺寸文件, 与 tmux 的 server 同角色):
+        // ConPTY 子进程在 ResizePseudoConsole 之后读不到新的窗口尺寸, 只信 Console.WindowWidth 会导致画面按旧几何绘制、下方留白。
+        if (SessionSizeFromDaemon() is { } size)
+            return size;
+
         try
         {
             return (Math.Max(1, Console.WindowWidth), Math.Max(1, Console.WindowHeight));
@@ -312,6 +386,29 @@ public static class TuiRunner
         catch (ArgumentOutOfRangeException)
         {
             return (80, 25);
+        }
+    }
+
+    private static (int Width, int Height)? SessionSizeFromDaemon()
+    {
+        var id = Environment.GetEnvironmentVariable(PtySessionProtocol.SessionVariable);
+        if (string.IsNullOrEmpty(id))
+            return null;
+        try
+        {
+            var parts = File.ReadAllText(PtyDaemonPaths.SessionSizeFile(id))
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 2
+                && int.TryParse(parts[0], out var columns)
+                && int.TryParse(parts[1], out var rows)
+                && columns > 0
+                && rows > 0
+                ? (columns, rows)
+                : null;
+        }
+        catch (IOException)
+        {
+            return null;
         }
     }
 }
