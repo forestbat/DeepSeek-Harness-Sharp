@@ -29,6 +29,15 @@ public sealed class ChatPane : ITuiPane
     private int _mentionIndex;
     private int _mentionStart;
     private bool _mentionActive;
+    /** Ctrl+P 唤起命令选单时暂存的提示词: 选中命令后接到命令后面。 */
+    private string _promptText = "";
+    private readonly ScrollWheel _wheel = new();
+
+    /** 右栏(单窗格侧栏)自己的滚动状态: 内容行数常超屏, 需要独立于正文的滚动偏移。 */
+    private readonly ScrollWheel _rightPanelWheel = new();
+
+    private int _rightPanelScroll;
+    private int _rightPanelRows = 1;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
     private bool _sessionRenamedSubscribed;
@@ -189,6 +198,8 @@ public sealed class ChatPane : ITuiPane
                 {
                     CommandMenu.Back();
                     SyncCommandMenuInput();
+                    if (CommandMenu.IsActive != true)
+                        RestorePromptInput();
                 }
                 else
                 {
@@ -211,10 +222,47 @@ public sealed class ChatPane : ITuiPane
                 return;
             }
 
+            if (key.Key == ConsoleKey.Home && CommandMenu?.IsActive == true)
+            {
+                CommandMenu.MoveHome();
+                RefreshMenuStatus();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.End && CommandMenu?.IsActive == true)
+            {
+                CommandMenu.MoveEnd();
+                RefreshMenuStatus();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.PageUp && CommandMenu?.IsActive == true)
+            {
+                CommandMenu.MovePage(-1, MenuPageRows());
+                RefreshMenuStatus();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.PageDown && CommandMenu?.IsActive == true)
+            {
+                CommandMenu.MovePage(1, MenuPageRows());
+                RefreshMenuStatus();
+                return;
+            }
+
             if (key.Key == ConsoleKey.Enter)
             {
                 if (CommandMenu?.IsActive == true)
                 {
+                    // 参数阶段: 回车=采纳当前参数(输入/高亮候选/预置)并走到下一条待填参数, 全部满足才回填完整命令;
+                    // 命令/子命令阶段: 有候选=选中高亮项; 无候选才是"浮层没得选", 按输入原样发送(未知命令/普通提示词)。
+                    if (CommandMenu.Stage == CommandMenuState.MenuStage.Argument
+                        || CommandMenu.Candidates.Count > 0)
+                    {
+                        ConfirmCommandMenu();
+                        return;
+                    }
+
                     CommandMenu.Close();
                     RefreshMenuStatus();
                     Submit();
@@ -233,6 +281,15 @@ public sealed class ChatPane : ITuiPane
 
             if (key.Key == ConsoleKey.Tab && CommandMenu?.IsActive == true)
             {
+                // 参数阶段: Tab 在所有参数之间循环(走到最后一条回到第一条), 不结束命令也不退回上一级; 收尾交给回车。
+                if (CommandMenu.Stage == CommandMenuState.MenuStage.Argument)
+                {
+                    if (!ApplyProviderAddPreset())
+                        CommandMenu.MoveToNextArgument();
+                    RefreshMenuStatus();
+                    return;
+                }
+
                 ConfirmCommandMenu();
                 return;
             }
@@ -260,10 +317,16 @@ public sealed class ChatPane : ITuiPane
                 Cursor = Math.Min(Input.Length, Cursor + 1);
                 break;
             case ConsoleKey.Home:
-                Cursor = 0;
+                if (Input.Length > 0)
+                    Cursor = 0;
+                else
+                    JumpToTranscriptHead();
                 break;
             case ConsoleKey.End:
-                Cursor = Input.Length;
+                if (Input.Length > 0)
+                    Cursor = Input.Length;
+                else
+                    JumpToTranscriptTail();
                 break;
             case ConsoleKey.Backspace:
                 if (Cursor > 0)
@@ -314,18 +377,19 @@ public sealed class ChatPane : ITuiPane
     }
 
     /** 鼠标滚轮只作用于收到的 pane; 由调用方按命中测试路由。 */
-    public void HandleMouseWheel(int delta)
+    public void HandleMouseWheel(float delta)
     {
         if (PendingApproval is not null)
             return;
-        if (delta > 0)
+        var lines = _wheel.Scroll(delta);
+        if (lines > 0)
         {
             StickToBottom = false;
-            ScrollOffset = Math.Max(0, ScrollOffset - 10);
+            ScrollOffset = Math.Max(0, ScrollOffset - lines);
         }
-        else if (delta < 0)
+        else if (lines < 0)
         {
-            ScrollOffset += 10;
+            ScrollOffset += -lines;
         }
     }
 
@@ -492,35 +556,152 @@ public sealed class ChatPane : ITuiPane
     {
         if (CommandMenu?.IsActive == true)
         {
-            PopupList.Draw(grid, rect, CommandMenu.Prompt, CommandMenu.Candidates, CommandMenu.SelectedIndex);
+            // 参数阶段画"说明 + 候选"面板; 命令/子命令阶段只在有候选时画列表(无候选不画空浮层)。
+            var headers = CommandMenuPanelLines();
+            if (headers.Count > 0)
+                PopupList.Draw(grid, rect, CommandMenuTitle(), headers, CommandMenu.Candidates, CommandMenu.SelectedIndex);
+            else if (CommandMenu.Candidates.Count > 0)
+                PopupList.Draw(grid, rect, CommandMenuTitle(), CommandMenu.Candidates, CommandMenu.SelectedIndex);
+            return;
         }
-        else if (_mentionActive)
+
+        if (_mentionActive)
         {
             PopupList.Draw(grid, rect, $"@ {_mentionCandidates.Count} candidates", _mentionCandidates, _mentionIndex);
         }
     }
+
+    /** 参数面板说明行: ▸ 当前参数(含已输入值) · ✓ 已填 · · 待填; 每行给出 flag/名称、含义与必填。 */
+    private IReadOnlyList<string> CommandMenuPanelLines()
+    {
+        if (CommandMenu?.IsActive != true || CommandMenu.Stage != CommandMenuState.MenuStage.Argument)
+            return [];
+
+        var schemas = CommandMenu.ArgumentSchemas;
+        if (schemas.Count == 0)
+            return [];
+
+        var values = CommandMenu.ArgumentValues;
+        var lines = new List<string>(schemas.Count);
+        for (var index = 0; index < schemas.Count; index++)
+        {
+            var schema = schemas[index];
+            var prefill = CommandMenu.PrefilledValue(index);
+            var typed = index == CommandMenu.ArgumentIndex ? CommandMenu.Query : null;
+            var value = typed is { Length: > 0 } ? typed
+                : index < values.Count && values[index].Length > 0 ? values[index]
+                : prefill ?? "";
+            // 标记: ▸ 当前参数 · ✓ 已有值(手输/已采纳/预置) · · 还没值。
+            var marker = index == CommandMenu.ArgumentIndex
+                ? "▸"
+                : value.Length > 0 ? "✓" : "·";
+            var filled = value.Length > 0 ? $" = {value}" : "";
+            var autoFilled = prefill is { Length: > 0 }
+                && typed is not { Length: > 0 }
+                && string.Equals(value, prefill, StringComparison.Ordinal);
+            var tag = schema.Required && value.Length == 0
+                ? " (必填)"
+                : autoFilled ? " (自动填好)" : "";
+            lines.Add($"{marker} {ArgumentLabel(schema)}{filled}  {schema.Hint}{tag}");
+        }
+
+        return lines;
+    }
+
+    private static string ArgumentLabel(CommandArgumentSchema schema)
+        => schema.Flag is { Length: > 0 } flag ? flag : schema.Name;
+
+    /** 浮层标题带筛选与位置计数, 便于在数百个候选(如模型)里定位; 参数面板标题用命令全路径。 */
+    private string CommandMenuTitle()
+    {
+        var count = CommandMenu!.Candidates.Count;
+        var argumentStage = CommandMenu.Stage == CommandMenuState.MenuStage.Argument;
+        var label = argumentStage
+            ? $"/{CommandMenu.CurrentCommand?.Name}{(CommandMenu.CurrentSubcommand is { } sub ? $" {sub.Name}" : "")}"
+            : CommandMenu.Prompt;
+        if (count == 0)
+        {
+            if (argumentStage)
+                return label;
+            return CommandMenu.Query.Length > 0
+                ? $"{label} — 无匹配 \"{CommandMenu.Query}\""
+                : $"{label} — 无候选项";
+        }
+
+        var position = $"{CommandMenu.SelectedIndex + 1}/{count}";
+        return CommandMenu.Query.Length > 0
+            ? $"{label} — {position} 匹配 \"{CommandMenu.Query}\""
+            : $"{label} — {position}";
+    }
+
+    /** 浮层翻页步长: 参数面板要扣掉说明行。 */
+    private int MenuPageRows()
+        => PopupList.PageRowsFor(CommandMenu?.Stage == CommandMenuState.MenuStage.Argument
+            ? CommandMenu.ArgumentSchemas.Count
+            : 0);
 
     public void DrawRightPanel(CellGrid grid, ConsoleRect rect)
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
 
-        var row = rect.Y;
+        var lines = RightPanelLines();
+        _rightPanelRows = rect.Height;
+        // 内容超屏时按滚动偏移切窗口, 让窄终端也能看到下面的段落(滚轮在 ChatWindow 里路由过来)。
+        _rightPanelScroll = Math.Clamp(_rightPanelScroll, 0, Math.Max(0, lines.Count - rect.Height));
+        for (var index = 0; index < rect.Height && _rightPanelScroll + index < lines.Count; index++)
+        {
+            var line = lines[_rightPanelScroll + index];
+            var y = rect.Y + index;
+            if (line.Separator)
+            {
+                for (var x = rect.X; x < rect.Right && x < grid.Width; x++)
+                    grid[x, y] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+                continue;
+            }
+
+            CellText.Draw(grid, rect.X, y, line.Text,
+                line.Header ? AnsiColor.BrightCyan : AnsiColor.Default,
+                AnsiColor.Default,
+                line.Header ? CellStyle.Bold : CellStyle.Dim);
+        }
+    }
+
+    /** 右栏滚动偏移(自顶部的行数), 供测试断言。 */
+    internal int RightPanelScrollOffset => _rightPanelScroll;
+
+    /** 右栏滚轮: 返回是否真的滚动了(供调用方决定要不要重绘)。 */
+    public bool ScrollRightPanel(float delta)
+    {
+        var lines = _rightPanelWheel.Scroll(delta);
+        if (lines == 0)
+            return false;
+        var maximum = Math.Max(0, RightPanelLines().Count - _rightPanelRows);
+        var next = Math.Clamp(_rightPanelScroll - lines, 0, maximum);
+        if (next == _rightPanelScroll)
+            return false;
+        _rightPanelScroll = next;
+        return true;
+    }
+
+    private List<RightPanelLine> RightPanelLines()
+    {
+        var lines = new List<RightPanelLine>();
         var (provider, model) = CurrentModel(Agent);
-        DrawPanelSection(grid, rect, ref row, "上下文",
+        AddPanelSection(lines, "上下文",
         [
             $"session: {Agent.Id}",
             $"title: {Agent.Session.Header.Title ?? "-"}",
             $"cwd: {Agent.Session.Header.Cwd ?? "-"}",
             $"model: {provider}/{model}",
         ]);
-        DrawPanelSection(grid, rect, ref row, "MCP", _window.McpLines());
-        DrawPanelSection(grid, rect, ref row, "计划", ["使用 /plan 管理"]);
-        DrawPanelSection(grid, rect, ref row, "输出", ["暂无"]);
-        DrawPanelSection(grid, rect, ref row, "快捷键",
+        AddPanelSection(lines, "MCP", _window.McpLines());
+        AddPanelSection(lines, "计划", ["使用 /plan 管理"]);
+        AddPanelSection(lines, "输出", ["暂无"]);
+        AddPanelSection(lines, "快捷键",
         [
             "Enter 发送 · / 命令 · @ 引用",
-            "Tab 补全/折叠 · Esc 取消",
+            "Tab 下一个参数/折叠 · Esc 取消",
             "↑/↓ 历史 · PgUp/PgDn 滚动",
             "Ctrl+C×2 退出",
             "Ctrl+X N 新会话 · S 会话",
@@ -528,28 +709,18 @@ public sealed class ChatPane : ITuiPane
             "Ctrl+X W 总览 · + 分屏 · - 关闭",
             "Ctrl+X 方向键/O 切窗格",
         ]);
+        return lines;
     }
 
-    private static void DrawPanelSection(CellGrid grid, ConsoleRect rect, ref int row, string header, IReadOnlyList<string> lines)
+    private static void AddPanelSection(List<RightPanelLine> lines, string header, IReadOnlyList<string> content)
     {
-        if (row >= rect.Bottom)
-            return;
-        if (row > rect.Y && row + 1 < rect.Bottom)
-        {
-            for (var x = rect.X; x < rect.Right && x < grid.Width; x++)
-                grid[x, row] = new Cell('─', AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
-            row++;
-        }
-        CellText.Draw(grid, rect.X, row, header, AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
-        row++;
-        foreach (var line in lines)
-        {
-            if (row >= rect.Bottom)
-                return;
-            CellText.Draw(grid, rect.X, row, line, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
-            row++;
-        }
+        if (lines.Count > 0)
+            lines.Add(new RightPanelLine("", Separator: true, Header: false));
+        lines.Add(new RightPanelLine(header, Separator: false, Header: true));
+        lines.AddRange(content.Select(text => new RightPanelLine(text, Separator: false, Header: false)));
     }
+
+    private sealed record RightPanelLine(string Text, bool Separator, bool Header);
 
     public void DrawInput(CellGrid grid, ConsoleRect rect)
     {
@@ -572,12 +743,14 @@ public sealed class ChatPane : ITuiPane
 
         var visible = Input.AsSpan(textStart);
 
-        CellText.Draw(grid, rect.X, rect.Y, prompt, AnsiColor.Default, AnsiColor.Default, PendingApproval is null ? CellStyle.None : CellStyle.Bold);
-        CellText.Draw(grid, rect.X + prompt.Length, rect.Y, visible);
+        // 输入行与说明行锚在输入区底部(上沿往上拖时, 多出来的空行留在上方, 说明行始终紧贴状态行)。
+        var inputRow = rect.Height >= 2 ? rect.Bottom - 2 : rect.Y;
+        CellText.Draw(grid, rect.X, inputRow, prompt, AnsiColor.Default, AnsiColor.Default, PendingApproval is null ? CellStyle.None : CellStyle.Bold);
+        CellText.Draw(grid, rect.X + prompt.Length, inputRow, visible);
 
         var caretColumn = TerminalTextWidth.Of(Input.AsSpan(textStart, caret - textStart));
         var cursorX = rect.X + Math.Min(prompt.Length + caretColumn, rect.Width - 1);
-        var cursorY = rect.Y;
+        var cursorY = inputRow;
         cursorX = Math.Clamp(cursorX, 0, grid.Width - 1);
         cursorY = Math.Clamp(cursorY, 0, grid.Height - 1);
         var cursorCell = grid[cursorX, cursorY];
@@ -587,10 +760,10 @@ public sealed class ChatPane : ITuiPane
 
         if (rect.Height < 2)
             return;
-        var infoY = rect.Y + 1;
+        var infoY = inputRow + 1;
         if (infoY >= grid.Height)
             return;
-        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 补全 · Ctrl+X 会话";
+        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 下一个参数 · Ctrl+X 会话";
         CellText.Draw(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
         var (currentProvider, currentModel) = CurrentModel(Agent);
         var preset = CurrentPreset(Agent);
@@ -776,6 +949,8 @@ public sealed class ChatPane : ITuiPane
         {
             if (CommandMenu?.IsActive == true)
                 CommandMenu.Close();
+            // 回到普通输入(浮层关闭)时丢弃 Ctrl+P 暂存的提示词, 避免误接到别的命令后面。
+            _promptText = "";
             DeleteConfirmSessionId = null;
             if (TryGetMentionToken(text, out var start, out var token))
             {
@@ -802,12 +977,27 @@ public sealed class ChatPane : ITuiPane
         return new CommandMenuState(descriptors, CommandCandidates);
     }
 
-    private IReadOnlyList<string> CommandCandidates(CommandDescriptor descriptor)
+    private IReadOnlyList<string> CommandCandidates(
+        CommandDescriptor command,
+        CommandDescriptor? subcommand,
+        CommandArgumentSchema? schema)
     {
         try
         {
+            // `/provider add` 的 name 候选: 先给 models.dev 目录(选中即带出 baseUrl/type/models), 再给协议族/自定义条目。
+            if (string.Equals(command.Name, "provider", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(subcommand?.Name, "add", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(schema?.Name, "name", StringComparison.OrdinalIgnoreCase))
+                return [.. _window.ProviderCatalogCandidates, .. ProviderTypes.All];
+
+            // 有子命令时按子命令名给候选(如 provider remove), 否则按命令名。
+            var descriptor = subcommand ?? command;
             var settings = HarnessSettings.Load(_window.Home);
-            return descriptor.Name switch
+            return schema?.Name switch
+            {
+                // provider 的 --type 候选按已注册适配器动态取(插件启用/停用后依然正确)。
+                "type" => KnownProviderTypes(),
+                _ => descriptor.Name switch
             {
                 "model" => settings.Providers
                     .OrderBy(entry => entry.Key, StringComparer.Ordinal)
@@ -820,12 +1010,19 @@ public sealed class ChatPane : ITuiPane
                 "skill" => _window.SkillCandidates,
                 "reasoning" => ReasoningEffortCandidates(),
                 _ => [],
+                },
             };
         }
         catch (Exception)
         {
             return [];
         }
+    }
+
+    private IReadOnlyList<string> KnownProviderTypes()
+    {
+        var factories = _window.Ctx.Get<LlmAdapterFactoryRegistry>(LlmAdapterFactoryRegistry.ServiceName, false);
+        return factories is null ? [] : ProviderRegistrar.KnownTypeList(factories);
     }
 
     private IReadOnlyList<string> ReasoningEffortCandidates()
@@ -879,6 +1076,19 @@ public sealed class ChatPane : ITuiPane
         }
     }
 
+    /** 输入行为空时 Home/End 直达记录头/尾(有内容时留给输入光标)。 */
+    private void JumpToTranscriptHead()
+    {
+        StickToBottom = false;
+        ScrollOffset = 0;
+    }
+
+    private void JumpToTranscriptTail()
+    {
+        ScrollOffset = 0;
+        StickToBottom = true;
+    }
+
     private void MoveMenuSelection(int direction)
     {
         if (CommandMenu?.IsActive == true)
@@ -898,19 +1108,93 @@ public sealed class ChatPane : ITuiPane
 
     private void ConfirmCommandMenu()
     {
-        var completed = CommandMenu!.Confirm();
-        if (completed is not null)
+        var typed = Input.TrimEnd();
+        if (ApplyProviderAddPreset())
         {
-            CommandMenu.Close();
-            Input = completed;
-            Cursor = Input.Length;
             RefreshMenuStatus();
-            Submit();
             return;
         }
 
-        SyncCommandMenuInput();
+        var completed = CommandMenu!.Confirm();
+        if (completed is null)
+        {
+            SyncCommandMenuInput();
+            RefreshMenuStatus();
+            return;
+        }
+
+        CommandMenu.Close();
+        // Ctrl+P 场景: 已有提示词在选中命令后接到命令后面(命令落到首 token)。
+        var text = _promptText.Length > 0 ? $"{completed} {_promptText}" : completed;
+        _promptText = "";
+        Input = text;
+        Cursor = Input.Length;
         RefreshMenuStatus();
+        // 浮层只负责"选中/确定/补全": 手敲内容已经等于浮层给出的完整命令(浮层没提供新信息)才直接发送;
+        // 由浮层补全或选中参数得到的命令先回填并关浮层, 等下一次回车再发送。
+        if (string.Equals(text, typed, StringComparison.Ordinal))
+            Submit();
+    }
+
+    /**
+     * `/provider add` 第一步选单的语义: 选中目录 provider → 带出 baseUrl/type/models(输入行为空时按 Enter 采纳);
+     * 选中协议族条目(openai-compatible / anthropic / custom(...)) → 视为自定义端点, 只带出 type, provider 名仍由用户填。
+     * 返回 true 表示这次回车被当作预置消费掉(不要再走 Confirm)。
+     */
+    private bool ApplyProviderAddPreset()
+    {
+        if (CommandMenu is not { Stage: CommandMenuState.MenuStage.Argument } menu
+            || menu.ArgumentIndex != 0
+            || !string.Equals(menu.CurrentCommand?.Name, "provider", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(menu.CurrentSubcommand?.Name, "add", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(menu.CurrentArgumentSchema?.Name, "name", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var candidates = menu.Candidates;
+        var value = candidates.Count > 0 ? candidates[menu.SelectedIndex] : menu.Query;
+        if (value.Length == 0)
+            return false;
+
+        if (ProviderTypes.All.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            menu.Prefill("type", ProviderTypes.Canonical(value));
+            menu.ApplyInput(menu.Prefix);
+            Input = menu.Prefix;
+            Cursor = Input.Length;
+            return true;
+        }
+
+        if (_window.FindCatalogProvider(value) is not { } entry)
+            return false;
+        menu.Prefill("base-url", entry.BaseUrl);
+        menu.Prefill("type", entry.Type);
+        menu.Prefill("model-ids", ProviderCatalog.AllModelsMarker);
+        return false;
+    }
+
+    /** Ctrl+P: 已输入提示词时唤出"能跟提示词"的命令选单; 选中后命令落到首 token, 原文本成为提示词。 */
+    internal void OpenPromptCommandMenu()
+    {
+        var commands = _window.Ctx.Get<CommandsService>(CommandsService.ServiceName)?.List(Agent) ?? [];
+        var descriptors = CommandMenuCatalog.Enrich(commands)
+            .Where(command => command.AcceptsPrompt)
+            .ToList();
+        if (descriptors.Count == 0)
+            return;
+
+        _promptText = Input.Trim();
+        CommandMenu = new CommandMenuState(descriptors, CommandCandidates);
+        RefreshMenuStatus();
+    }
+
+    /** 取消 Ctrl+P 浮层时把待用提示词放回输入行, 避免用户输入被吞掉。 */
+    private void RestorePromptInput()
+    {
+        if (_promptText.Length == 0)
+            return;
+        Input = _promptText;
+        Cursor = Input.Length;
+        _promptText = "";
     }
 
     private void SyncCommandMenuInput()
@@ -944,7 +1228,21 @@ public sealed class ChatPane : ITuiPane
     {
         if (CommandMenu?.IsActive == true)
         {
-            StatusText = $"{CommandMenu.Prompt} — ↑/↓ 移动 · Tab 选择 · Enter 发送 · Esc 返回";
+            // 有候选: 选中/补全(不发送); 无候选: 浮层没得选, 回车按输入原样发送。
+            if (CommandMenu.Candidates.Count > 0)
+            {
+                StatusText = CommandMenu.Stage == CommandMenuState.MenuStage.Argument
+                    ? $"{CommandMenu.Prompt} — ↑/↓ 移动 · PgUp/PgDn 翻页 · 输入筛选 · Enter 选中 · Tab 下一个参数 · Esc 返回"
+                    : $"{CommandMenu.Prompt} — ↑/↓ 移动 · PgUp/PgDn 翻页 · 输入筛选 · Enter/Tab 选中 · Esc 返回";
+                return;
+            }
+
+            var hasPrefill = CommandMenu.PrefilledValue(CommandMenu.ArgumentIndex) is { Length: > 0 };
+            StatusText = hasPrefill
+                ? $"{CommandMenu.Prompt} — Enter 采纳预置并继续 · Tab 下一个参数 · 输入可改写 · Esc 返回"
+                : CommandMenu.CurrentArgumentSchema?.Required == false
+                    ? $"{CommandMenu.Prompt} — Enter 跳过 · Tab 下一个参数 · 输入可填写 · Esc 返回"
+                    : $"{CommandMenu.Prompt} — 必填 · 输入后 Enter · Tab 下一个参数 · Esc 返回";
             return;
         }
 
@@ -991,6 +1289,14 @@ public sealed class ChatPane : ITuiPane
             return;
         }
 
+        SendUserText(text);
+    }
+
+    /** 把文本作为用户消息发出: 普通输入与"命令 + 提示词"的提示词共用同一条路径。 */
+    internal void SendUserText(string text)
+    {
+        if (text.Length == 0)
+            return;
         var expandedText = _window.MentionResolver.ExpandMentions(text, CurrentCwd(), _window.CurrentSessions());
         SetBusy(true);
         Agent.Followup(MessageFactory.CreateUserText(expandedText));

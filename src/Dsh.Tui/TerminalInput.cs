@@ -42,17 +42,34 @@ internal interface ITerminalInputSource : IDisposable
     void Wake();
 }
 
-/** 原始字节增量解码: 键盘转义序列与 SGR 鼠标事件, 跨读取块保持状态。 */
+/**
+ * 原始字节增量解码: 键盘转义序列与鼠标报文, 跨读取块保持状态。
+ * 鼠标报文由 MouseReport 整条识别并丢弃/还原 —— 绝不允许报文里的字节落成"键入文本"。
+ */
 public sealed class TerminalInputParser
 {
     private const byte Escape = 0x1b;
     private readonly List<byte> _pending = [];
     private readonly Queue<TerminalInputEvent> _ready = new();
 
+    /** 只挂着一个孤立 ESC: 调用方可以用更短的超时把它当真实按键冲刷出来。 */
+    public bool HasPendingEscape => _pending.Count == 1 && _pending[0] == Escape;
+
     public void Append(ReadOnlySpan<byte> bytes)
     {
         foreach (var value in bytes)
             _pending.Add(value);
+    }
+
+    /** 静默期到达: 挂起的孤立 ESC 是用户真的按了 Esc(不是被切开的报文报头), 当按键交出。 */
+    public bool TryFlushPendingEscape(out TerminalInputEvent input)
+    {
+        input = default;
+        if (!HasPendingEscape)
+            return false;
+        _pending.Clear();
+        input = TerminalInputEvent.FromKey(new ConsoleKeyInfo('\0', ConsoleKey.Escape, false, false, false));
+        return true;
     }
 
     public bool TryParse(out TerminalInputEvent input)
@@ -69,12 +86,28 @@ public sealed class TerminalInputParser
             if (_pending.Count == 0)
                 return false;
             var first = _pending[0];
+            if (first == Escape || first == (byte)'[')
+            {
+                var match = MouseReport.Match(CollectionsMarshal.AsSpan(_pending));
+                if (match.Status == MouseReportStatus.Matched)
+                {
+                    _pending.RemoveRange(0, match.Consumed);
+                    input = TerminalInputEvent.FromMouse(match.Mouse);
+                    return true;
+                }
+
+                if (match.Status == MouseReportStatus.NeedMore && _pending.Count <= MouseReport.MaxLength)
+                    return false;   // 等报文剩余字节; 超长会落到下面的普通解析, 不吞用户输入
+            }
+
             if (first == Escape)
             {
+                if (_pending.Count < 2)
+                    return false;   // 只有 ESC: 挂起, 等下一个字节或静默期冲刷
                 if (!TryParseEscape(out input, out var consumed))
                     return false;
                 _pending.RemoveRange(0, consumed);
-                if (input.Mouse is not null || input.Key.KeyChar != '\0' || input.Key.Key != ConsoleKey.NoName)
+                if (input.IsMouse || input.Key.KeyChar != '\0' || input.Key.Key != ConsoleKey.NoName)
                     return true;
                 continue;
             }
@@ -126,13 +159,6 @@ public sealed class TerminalInputParser
     {
         input = default;
         consumed = 0;
-        if (_pending.Count < 2)
-        {
-            consumed = 1;
-            input = TerminalInputEvent.FromKey(new ConsoleKeyInfo('\0', ConsoleKey.Escape, false, false, false));
-            return true;
-        }
-
         var second = _pending[1];
         if (second == (byte)'[')
             return TryParseCsi(out input, out consumed);
@@ -169,47 +195,9 @@ public sealed class TerminalInputParser
             return false;
 
         var parameters = Encoding.ASCII.GetString(_pending.ToArray(), 2, end - 2);
-        var final = (char)_pending[end];
+        input = TerminalInputEvent.FromKey(CsiKey((char)_pending[end], parameters));
         consumed = end + 1;
-        if ((final == 'M' || final == 'm') && parameters.StartsWith('<'))
-        {
-            input = TerminalInputEvent.FromMouse(ParseSgrMouse(parameters, final == 'M'));
-            return true;
-        }
-
-        // X10/legacy 鼠标: ESC [ M 后紧跟 Cb Cx Cy 三个原始字节, 不消费就会落成文本
-        if (final == 'M' && parameters.Length == 0)
-        {
-            if (_pending.Count < consumed + 3)
-                return false;
-            input = TerminalInputEvent.FromMouse(ParseX10Mouse(_pending[consumed], _pending[consumed + 1], _pending[consumed + 2]));
-            consumed += 3;
-            return true;
-        }
-
-        input = TerminalInputEvent.FromKey(CsiKey(final, parameters));
         return true;
-    }
-
-    private static TerminalMouseEvent ParseX10Mouse(byte cb, byte cx, byte cy)
-    {
-        var raw = cb - 32;
-        var button = (raw & 64) != 0 ? 64 + (raw & 1) : raw & 3;
-        var moved = (raw & 32) != 0;
-        return new TerminalMouseEvent(Math.Max(0, cx - 33), Math.Max(0, cy - 33), button, (raw & 3) != 3, moved);
-    }
-
-    private static TerminalMouseEvent ParseSgrMouse(string parameters, bool pressed)
-    {
-        var parts = parameters[1..].Split(';');
-        var raw = parts.Length > 0 && int.TryParse(parts[0], out var value) ? value : 0;
-        var x = parts.Length > 1 && int.TryParse(parts[1], out var px) ? px - 1 : 0;
-        var y = parts.Length > 2 && int.TryParse(parts[2], out var py) ? py - 1 : 0;
-        // 位 6 = 滚轮; 位 5 = 移动(1002 拖动/1003 全量跟踪), 按钮号在低 2 位(3 = 无键)
-        var button = (raw & 64) != 0 ? 64 + (raw & 1) : raw & 3;
-        var moved = (raw & 32) != 0;
-        var actionPressed = (raw & 64) != 0 ? pressed : pressed && (raw & 3) != 3;
-        return new TerminalMouseEvent(x, y, button, actionPressed, moved);
     }
 
     private static ConsoleKeyInfo ControlKey(byte value)
@@ -278,6 +266,10 @@ internal sealed class TerminalInputReader : ITerminalInputSource
     private const int FSetFl = 4;
     private const int ONonBlock = 0x800;
     private const int StdinFd = 0;
+
+    /** 挂起孤立 ESC 时的等待上限: 超过它还没等到后续字节, 就认为用户真的按了 Esc。 */
+    private const int EscapeFlushMilliseconds = 30;
+
     private static readonly byte[] WakeByte = [0];
 
     private readonly TerminalInputParser _parser = new();
@@ -312,19 +304,27 @@ internal sealed class TerminalInputReader : ITerminalInputSource
                 new PollFd { Fd = 0, Events = PollIn },
                 new PollFd { Fd = _wakeRead, Events = PollIn },
             };
-            var ready = poll(fds, fds.Length, timeoutMs);
+            var wait = _parser.HasPendingEscape ? Math.Min(timeoutMs, EscapeFlushMilliseconds) : timeoutMs;
+            var ready = poll(fds, fds.Length, wait);
             if (ready == 0)
+            {
+                if (_parser.TryFlushPendingEscape(out var escape))
+                    return escape;
                 return null;
+            }
+
             if (ready < 0)
             {
                 EndOfStream = true;
                 return null;
             }
+
             if (fds[1].Revents != 0)
             {
                 DrainWake();
                 return null;
             }
+
             if (fds[0].Revents == 0)
                 continue;
             // 直接 read(2) 读 fd 0: 经 .NET 的 Console 流读 pty 在 Linux 上会阻塞不返回(实测 poll 报可读后流读仍挂住)
@@ -334,6 +334,7 @@ internal sealed class TerminalInputReader : ITerminalInputSource
                 EndOfStream = true;
                 return null;
             }
+
             _parser.Append(_buffer.AsSpan(0, read));
         }
     }

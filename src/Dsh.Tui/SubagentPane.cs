@@ -12,6 +12,7 @@ internal sealed class SubagentPane : ITuiPane
     private const int FooterHeight = 1;
 
     private readonly ChatWindow _window;
+    private readonly ScrollWheel _wheel = new();
     private readonly SubagentDirectory _directory;
     private Session _session;
     private int _wrapVersion = -1;
@@ -75,6 +76,14 @@ internal sealed class SubagentPane : ITuiPane
             case ConsoleKey.Escape:
                 _window.CloseSubagentView(this);
                 return true;
+            case ConsoleKey.Home:
+                StickToBottom = false;
+                ScrollOffset = 0;
+                return true;
+            case ConsoleKey.End:
+                ScrollOffset = 0;
+                StickToBottom = true;
+                return true;
             default:
                 return false;
         }
@@ -83,16 +92,17 @@ internal sealed class SubagentPane : ITuiPane
     /** 只读子会话窗格不参与折叠交互。 */
     public bool TryToggleFoldAt(int cellY, ConsoleRect rect) => false;
 
-    public void HandleMouseWheel(int delta)
+    public void HandleMouseWheel(float delta)
     {
-        if (delta > 0)
+        var lines = _wheel.Scroll(delta);
+        if (lines > 0)
         {
             StickToBottom = false;
-            ScrollOffset = Math.Max(0, ScrollOffset - 10);
+            ScrollOffset = Math.Max(0, ScrollOffset - lines);
         }
-        else if (delta < 0)
+        else if (lines < 0)
         {
-            ScrollOffset += 10;
+            ScrollOffset += -lines;
         }
     }
 

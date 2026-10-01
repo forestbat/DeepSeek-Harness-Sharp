@@ -18,7 +18,7 @@ public class WindowsConsoleInputMappingTests
     [Fact]
     public void Letter_Key_Maps_To_Letter_With_Char()
     {
-        var key = WindowsConsoleInputReader.MapKey(VirtualKeyA, 'a', 0, keyDown: true);
+        var key = Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyA, 'a', 0, keyDown: true);
 
         Assert.NotNull(key);
         Assert.Equal(ConsoleKey.A, key.Value.Key);
@@ -28,7 +28,7 @@ public class WindowsConsoleInputMappingTests
     [Fact]
     public void Arrow_Key_Maps_Without_Char()
     {
-        var key = WindowsConsoleInputReader.MapKey(VirtualKeyUp, '\0', 0, keyDown: true);
+        var key = Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyUp, '\0', 0, keyDown: true);
 
         Assert.NotNull(key);
         Assert.Equal(ConsoleKey.UpArrow, key.Value.Key);
@@ -38,7 +38,7 @@ public class WindowsConsoleInputMappingTests
     [Fact]
     public void Control_Modifier_Is_Reported()
     {
-        var key = WindowsConsoleInputReader.MapKey(VirtualKeyC, '\u0003', LeftCtrlPressed, keyDown: true);
+        var key = Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyC, '\u0003', LeftCtrlPressed, keyDown: true);
 
         Assert.NotNull(key);
         Assert.Equal(ConsoleKey.C, key.Value.Key);
@@ -48,7 +48,7 @@ public class WindowsConsoleInputMappingTests
     [Fact]
     public void Shift_And_Alt_Modifiers_Are_Reported()
     {
-        var key = WindowsConsoleInputReader.MapKey(VirtualKeyA, 'A', ShiftPressed | LeftAltPressed, keyDown: true);
+        var key = Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyA, 'A', ShiftPressed | LeftAltPressed, keyDown: true);
 
         Assert.NotNull(key);
         Assert.True((key.Value.Modifiers & ConsoleModifiers.Shift) != 0);
@@ -58,16 +58,16 @@ public class WindowsConsoleInputMappingTests
     [Fact]
     public void Key_Up_Is_Ignored()
     {
-        Assert.Null(WindowsConsoleInputReader.MapKey(VirtualKeyA, 'a', 0, keyDown: false));
+        Assert.Null(Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyA, 'a', 0, keyDown: false));
     }
 
     [Fact]
     public void Modifier_Only_Key_Is_Not_A_Key()
     {
         // 放行会让 Shift+'+' 的 Shift 按下吃掉 Ctrl+X 前缀(真实缺陷)
-        Assert.Null(WindowsConsoleInputReader.MapKey(VirtualKeyShift, '\0', ShiftPressed, keyDown: true));
-        Assert.Null(WindowsConsoleInputReader.MapKey(0x11, '\0', LeftCtrlPressed, keyDown: true));
-        Assert.Null(WindowsConsoleInputReader.MapKey(0x12, '\0', LeftAltPressed, keyDown: true));
+        Assert.Null(Dsh.Pty.WindowsConsoleRecord.MapKey(VirtualKeyShift, '\0', ShiftPressed, keyDown: true));
+        Assert.Null(Dsh.Pty.WindowsConsoleRecord.MapKey(0x11, '\0', LeftCtrlPressed, keyDown: true));
+        Assert.Null(Dsh.Pty.WindowsConsoleRecord.MapKey(0x12, '\0', LeftAltPressed, keyDown: true));
     }
 
     [Fact]
@@ -146,3 +146,4 @@ public class WindowsConsoleInputMappingTests
         Assert.False(mouse.Value.Pressed);
     }
 }
+

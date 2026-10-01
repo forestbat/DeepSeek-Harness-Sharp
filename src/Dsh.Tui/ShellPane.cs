@@ -10,9 +10,8 @@ namespace Dsh.Tui;
  */
 internal sealed class ShellPane : ITuiPane
 {
-    private const int ScrollStep = 3;
-
     private readonly ChatWindow _window;
+    private readonly ScrollWheel _wheel = new();
     private readonly PtySession _session;
     private readonly VtScreen _screen;
     private readonly CancellationTokenSource _pump = new();
@@ -69,10 +68,10 @@ internal sealed class ShellPane : ITuiPane
 
     public bool TryToggleFoldAt(int cellY, ConsoleRect rect) => false;
 
-    public void HandleMouseWheel(int delta)
+    public void HandleMouseWheel(float delta)
     {
         var maximum = Math.Max(0, _screen.ScrollbackCount);
-        _scrollOffset = Math.Clamp(_scrollOffset + (delta > 0 ? ScrollStep : -ScrollStep), 0, maximum);
+        _scrollOffset = Math.Clamp(_scrollOffset + _wheel.Scroll(delta), 0, maximum);
         if (_scrollOffset == 0)
             StickToBottom = true;
         _window.Invalidate();

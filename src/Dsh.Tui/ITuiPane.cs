@@ -26,5 +26,5 @@ internal interface ITuiPane : IDisposable
     /** 点击落在 fold 头行(折叠态=预览行, 展开态=首行)时切换折叠; 命中返回 true。 */
     bool TryToggleFoldAt(int cellY, ConsoleRect rect);
 
-    void HandleMouseWheel(int delta);
+    void HandleMouseWheel(float delta);
 }

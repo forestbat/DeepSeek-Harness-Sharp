@@ -71,13 +71,19 @@ public class TerminalInputParserTests
         Assert.Equal(expected, input.Key.Key);
     }
 
+    /**
+     * 孤立 ESC 必须先挂起: 立刻当 Esc 键上报的话, 被读边界切开的鼠标报文(ESC 单独一段)会把剩下的
+     * `[M`+3 / `[<…M` 字节漏成键入文本。静默期由调用方用 TryFlushPendingEscape 冲刷成真正的 Esc 键。
+     */
     [Fact]
-    public void Lone_Escape_Is_Escape_Key()
+    public void Lone_Escape_Is_Held_Then_Flushed_As_Escape_Key()
     {
         var parser = new TerminalInputParser();
         parser.Append([0x1b]);
 
-        Assert.True(parser.TryParse(out var input));
+        Assert.True(parser.HasPendingEscape);
+        Assert.False(parser.TryParse(out _));
+        Assert.True(parser.TryFlushPendingEscape(out var input));
         Assert.Equal(ConsoleKey.Escape, input.Key.Key);
     }
 

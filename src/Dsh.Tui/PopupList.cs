@@ -2,17 +2,43 @@ namespace Dsh.Tui;
 
 public static class PopupList
 {
-    public const int MaxPopupHeight = 12;
+    public const int MaxPopupHeight = 16;
+
+    /** 浮层可见的候选项行数(减去标题与边框): 翻页步长。 */
+    public const int PageRows = MaxPopupHeight - 2;
+
+    /** 带说明行(参数面板)时的翻页步长: 候选可见行数 = 浮层高度 - 标题 - 边框 - 说明行。 */
+    public static int PageRowsFor(int headerCount) => Math.Max(1, MaxPopupHeight - 2 - Math.Max(0, headerCount));
 
     public static void Draw(CellGrid grid, ConsoleRect area, string title, IReadOnlyList<string> items, int selectedIndex)
+        => Draw(grid, area, title, [], items, selectedIndex);
+
+    /**
+     * 说明行 + 候选列表共用一个浮层: 说明行常驻在标题下方(参数面板), 候选在其下滚动。
+     * 说明行以 "▸" 开头表示当前正在填的参数(加粗高亮), 其余按暗色绘制。
+     */
+    public static void Draw(
+        CellGrid grid,
+        ConsoleRect area,
+        string title,
+        IReadOnlyList<string> headerLines,
+        IReadOnlyList<string> items,
+        int selectedIndex)
     {
         if (area.Width <= 0 || area.Height <= 0)
             return;
 
         var contentWidth = items.Count == 0 ? TerminalTextWidth.Of(title) : items.Max(TerminalTextWidth.Of);
         contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(title));
+        foreach (var header in headerLines)
+            contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(header));
         var width = Math.Min(area.Width, contentWidth + 4);
-        var height = Math.Min(MaxPopupHeight, Math.Min(area.Height, Math.Max(1, items.Count) + 2));
+        var maxHeight = Math.Min(MaxPopupHeight, area.Height);
+        var headerCount = Math.Min(headerLines.Count, Math.Max(0, maxHeight - 3));
+        var itemRows = items.Count == 0
+            ? headerCount > 0 ? 0 : 1
+            : Math.Min(items.Count, Math.Max(0, maxHeight - 2 - headerCount));
+        var height = Math.Min(maxHeight, 2 + headerCount + itemRows);
         if (width < 4 || height < 3)
             return;
 
@@ -25,15 +51,28 @@ public static class PopupList
         DrawBorder(grid, x, y, width, height);
         DrawText(grid, x + 1, y, Truncate(title, width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
 
+        for (var row = 0; row < headerCount; row++)
+        {
+            var header = headerLines[row];
+            var current = header.StartsWith('▸');
+            DrawText(grid, x + 1, y + 1 + row, Truncate(header, width - 2),
+                current ? AnsiColor.BrightCyan : AnsiColor.Default,
+                AnsiColor.Default,
+                current ? CellStyle.Bold : CellStyle.Dim);
+        }
+
+        var candidateTop = y + 1 + headerCount;
         if (items.Count == 0)
         {
-            DrawText(grid, x + 1, y + 1, "  (空)", AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            if (headerCount == 0)
+                DrawText(grid, x + 1, candidateTop, "  (空)", AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
             return;
         }
 
-        var visibleCount = height - 2;
-        var first = Math.Max(0, Math.Min(selectedIndex - visibleCount + 1, items.Count - visibleCount));
-        first = Math.Clamp(first, 0, Math.Max(0, items.Count - visibleCount));
+        var visibleCount = height - 2 - headerCount;
+        if (visibleCount <= 0)
+            return;
+        var first = Math.Clamp(selectedIndex - visibleCount + 1, 0, Math.Max(0, items.Count - visibleCount));
         for (var row = 0; row < visibleCount; row++)
         {
             var itemIndex = first + row;
@@ -41,7 +80,7 @@ public static class PopupList
                 break;
             var selected = itemIndex == selectedIndex;
             var text = $"{(selected ? "› " : "  ")}{Truncate(items[itemIndex], width - 4)}";
-            DrawText(grid, x + 1, y + 1 + row, text,
+            DrawText(grid, x + 1, candidateTop + row, text,
                 selected ? AnsiColor.Black : AnsiColor.Default,
                 selected ? AnsiColor.BrightCyan : AnsiColor.Default,
                 selected ? CellStyle.Bold : CellStyle.None);

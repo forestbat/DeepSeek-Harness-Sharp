@@ -1,13 +1,5 @@
 namespace Dsh.Tui;
 
-public readonly record struct ConsoleRect(int X, int Y, int Width, int Height)
-{
-    public int Right => X + Width;
-
-    public int Bottom => Y + Height;
-
-    public bool Contains(int x, int y) => x >= X && x < Right && y >= Y && y < Bottom;
-}
 
 public readonly record struct UiLayout(
     ConsoleRect Main,
@@ -20,6 +12,14 @@ public static class LayoutEngine
     public const int MaximumRightPanelWidth = 40;
     public const int InputHeight = 2;
 
+    /** 输入栏高度(含信息行)的可拖范围: 最小 2 行, 且至少给正文留 MinimumTranscriptRows 行。 */
+    public const int MinimumInputHeight = 2;
+    public const int MinimumTranscriptRows = 4;
+
+    /** 侧栏(单窗格右栏)可拖范围: 最小 10 列(拖到最窄也留一条抓得回来的分割线), 正文至少保留 MinimumTranscriptWidth 列。 */
+    public const int MinimumRightPanelWidth = 10;
+    public const int MinimumTranscriptWidth = 12;
+
     /** 拖动分隔线时两侧窗格各自至少要留的格数。 */
     public const int MinimumPaneExtent = 4;
 
@@ -27,25 +27,46 @@ public static class LayoutEngine
     private const int StatusHeight = 1;
     private const int DividerRows = 2;
 
-    public static UiLayout Calculate(int consoleWidth, int consoleHeight)
+    /** 侧栏宽度夹取(0=隐藏); 放不下"最小正文+最小右栏"时隐藏, 免得把正文挤没。 */
+    public static int ClampRightPanelWidth(int consoleWidth, int width)
+    {
+        var maximum = consoleWidth - 1 - MinimumTranscriptWidth;
+        return maximum < MinimumRightPanelWidth ? 0 : Math.Clamp(width, MinimumRightPanelWidth, maximum);
+    }
+
+    /** 输入栏高度夹取: 至少 MinimumInputHeight 行, 且保留 MinimumTranscriptRows 行正文。 */
+    public static int ClampInputHeight(int consoleHeight, int height)
+    {
+        var maximum = Math.Max(MinimumInputHeight, consoleHeight - StatusHeight - DividerRows - MinimumTranscriptRows);
+        return Math.Clamp(height, MinimumInputHeight, maximum);
+    }
+
+    /**
+     * 计算布局。`rightPanelWidth` / `inputHeight` 为用户拖出来的覆盖值, 传 null 用默认(比例/常量);
+     * 两者都在这里统一夹取, 保证绘制、命中测试、拖动三处拿到的是同一个布局。
+     */
+    public static UiLayout Calculate(int consoleWidth, int consoleHeight, int? rightPanelWidth = null, int? inputHeight = null)
     {
         var width = Math.Max(1, consoleWidth);
         var height = Math.Max(1, consoleHeight);
 
-        var rightPanelWidth = Math.Min(MaximumRightPanelWidth, (int)(width * RightPanelRatio));
-        rightPanelWidth = Math.Clamp(rightPanelWidth, 0, Math.Max(0, width - 2));
+        var panelWidth = rightPanelWidth is { } requested
+            ? ClampRightPanelWidth(width, requested)
+            : Math.Clamp(Math.Min(MaximumRightPanelWidth, (int)(width * RightPanelRatio)), 0, Math.Max(0, width - 2));
 
-        var dividerColumn = rightPanelWidth > 0 ? 1 : 0;
-        var mainWidth = width - rightPanelWidth - dividerColumn;
+        var dividerColumn = panelWidth > 0 ? 1 : 0;
+        var mainWidth = width - panelWidth - dividerColumn;
 
-        var bodyHeight = Math.Max(0, height - StatusHeight - InputHeight - DividerRows);
-        var inputY = Math.Min(bodyHeight + 1, Math.Max(0, height - InputHeight));
-        var statusY = Math.Min(inputY + InputHeight + 1, Math.Max(0, height - StatusHeight));
+        var rows = inputHeight is { } requestedRows ? ClampInputHeight(height, requestedRows) : InputHeight;
+
+        var bodyHeight = Math.Max(0, height - StatusHeight - rows - DividerRows);
+        var inputY = Math.Min(bodyHeight + 1, Math.Max(0, height - rows));
+        var statusY = Math.Min(inputY + rows + 1, Math.Max(0, height - StatusHeight));
 
         return new UiLayout(
             new ConsoleRect(0, 0, mainWidth, bodyHeight),
-            new ConsoleRect(mainWidth + dividerColumn, 0, rightPanelWidth, bodyHeight),
-            new ConsoleRect(0, inputY, width, InputHeight),
+            new ConsoleRect(mainWidth + dividerColumn, 0, panelWidth, bodyHeight),
+            new ConsoleRect(0, inputY, width, rows),
             new ConsoleRect(0, statusY, width, StatusHeight));
     }
 

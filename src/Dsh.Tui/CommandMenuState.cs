@@ -12,12 +12,13 @@ public sealed class CommandMenuState
     }
 
     private readonly IReadOnlyList<CommandDescriptor> _commands;
-    private readonly Func<CommandDescriptor, IReadOnlyList<string>>? _candidateProvider;
+    private readonly Func<CommandDescriptor, CommandDescriptor?, CommandArgumentSchema?, IReadOnlyList<string>>? _candidateProvider;
     private IReadOnlyList<CommandDescriptor> _rootFiltered = [];
     private IReadOnlyList<CommandDescriptor> _subFiltered = [];
     private IReadOnlyList<string> _argumentCandidates = [];
     private IReadOnlyList<CommandArgumentSchema> _argumentSchemas = [];
     private readonly List<string> _argumentValues = [];
+    private readonly List<string?> _argumentPrefills = [];
     private CommandDescriptor? _command;
     private CommandDescriptor? _subcommand;
     private string _prefix = "/";
@@ -26,7 +27,7 @@ public sealed class CommandMenuState
 
     public CommandMenuState(
         IReadOnlyList<CommandDescriptor> commands,
-        Func<CommandDescriptor, IReadOnlyList<string>>? candidateProvider = null)
+        Func<CommandDescriptor, CommandDescriptor?, CommandArgumentSchema?, IReadOnlyList<string>>? candidateProvider = null)
     {
         _commands = commands;
         _candidateProvider = candidateProvider;
@@ -57,6 +58,35 @@ public sealed class CommandMenuState
         => Stage == MenuStage.Argument && _argumentIndex >= 0 && _argumentIndex < _argumentSchemas.Count
             ? _argumentSchemas[_argumentIndex]
             : null;
+
+    /** 参数面板数据: 当前命令的全部参数定义与已填值(与 _argumentIndex 对应)。 */
+    public IReadOnlyList<CommandArgumentSchema> ArgumentSchemas => _argumentSchemas;
+
+    public IReadOnlyList<string> ArgumentValues => _argumentValues;
+
+    /** 预置值: 由"先选目录 provider 再自动带出 baseUrl/type/models"这类流程写入; 输入行为空时按 Enter 即采纳。 */
+    public string? PrefilledValue(int index)
+        => index >= 0 && index < _argumentPrefills.Count ? _argumentPrefills[index] : null;
+
+    /** 给某个参数预置值(按参数名匹配, 含 flag 名与位置名); 找不到该参数时忽略。 */
+    public void Prefill(string argumentName, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        for (var index = 0; index < _argumentSchemas.Count; index++)
+        {
+            var schema = _argumentSchemas[index];
+            if (!string.Equals(schema.Name, argumentName, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(schema.Flag, argumentName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            while (_argumentPrefills.Count <= index)
+                _argumentPrefills.Add(null);
+            _argumentPrefills[index] = value;
+            if (index == _argumentIndex)
+                UpdateArgumentCandidates();
+            return;
+        }
+    }
 
     public string Prompt => Stage switch
     {
@@ -119,6 +149,19 @@ public sealed class CommandMenuState
         SelectedIndex = Math.Min(Candidates.Count - 1, SelectedIndex + 1);
     }
 
+    /** Home/End: 跳候选首/尾(与 PgUp/PgDn 翻页配套)。 */
+    public void MoveHome() => SelectedIndex = 0;
+
+    public void MoveEnd() => SelectedIndex = Math.Max(0, Candidates.Count - 1);
+
+    /** 大候选列表(数百模型)翻页; rows 取浮层可见行数。 */
+    public void MovePage(int direction, int rows)
+    {
+        if (Candidates.Count == 0 || rows <= 0)
+            return;
+        SelectedIndex = Math.Clamp(SelectedIndex + direction * rows, 0, Candidates.Count - 1);
+    }
+
     public string? Confirm()
     {
         if (!IsActive)
@@ -130,6 +173,40 @@ public sealed class CommandMenuState
             MenuStage.Argument => ConfirmArgument(),
             _ => null,
         };
+    }
+
+    /**
+     * Tab 语义: 采纳当前参数后循环到下一条参数(走到最后一条再按回到第一条), 永不结束命令, 也不退回上一级菜单。
+     * 循环覆盖所有参数(含可选), 便于用户回头修改(例如把 --model-ids 从 <c>&lt;all&gt;</c> 改成具体几个模型)。
+     */
+    public bool MoveToNextArgument()
+    {
+        if (!IsActive || Stage != MenuStage.Argument)
+            return false;
+        // Tab 离开时只保留"已经有的值", 不替用户挑候选(否则路过 --type 就悄悄变成第一个协议族)。
+        KeepArgument();
+        var next = NextArgumentIndex(_argumentIndex);
+        if (next == _argumentIndex)
+            return false;
+        _argumentIndex = next;
+        _query = "";
+        UpdateArgumentCandidates();
+        return true;
+    }
+
+    /** 保留当前参数已有值: 手输(含高亮候选)或预置; 都没有就什么都不写, 等用户用 Enter 确认。 */
+    private void KeepArgument()
+    {
+        if (_query.Length > 0)
+        {
+            SetValue(_argumentIndex, _argumentCandidates.Count > 0 ? _argumentCandidates[SelectedIndex] : _query);
+            return;
+        }
+
+        if (RecordedValue(_argumentIndex) is not null)
+            return;
+        if (PrefilledValue(_argumentIndex) is { Length: > 0 } prefill)
+            SetValue(_argumentIndex, prefill);
     }
 
     public bool Back()
@@ -145,6 +222,7 @@ public sealed class CommandMenuState
                 _argumentCandidates = [];
                 _argumentSchemas = [];
                 _argumentValues.Clear();
+                _argumentPrefills.Clear();
                 _argumentIndex = 0;
                 _command = null;
                 _subcommand = null;
@@ -163,7 +241,7 @@ public sealed class CommandMenuState
                 if (_argumentIndex > 0)
                 {
                     _argumentIndex--;
-                    if (_argumentValues.Count > _argumentIndex)
+                    while (_argumentValues.Count > _argumentIndex)
                         _argumentValues.RemoveAt(_argumentValues.Count - 1);
                     _query = "";
                     UpdateArgumentCandidates();
@@ -187,6 +265,7 @@ public sealed class CommandMenuState
                 }
                 _argumentSchemas = [];
                 _argumentValues.Clear();
+                _argumentPrefills.Clear();
                 _argumentIndex = 0;
                 return true;
             default:
@@ -202,6 +281,7 @@ public sealed class CommandMenuState
         _argumentCandidates = [];
         _argumentSchemas = [];
         _argumentValues.Clear();
+        _argumentPrefills.Clear();
         _argumentIndex = 0;
         _command = null;
         _subcommand = null;
@@ -298,27 +378,26 @@ public sealed class CommandMenuState
 
     private string? ConfirmArgument()
     {
-        var schema = CurrentArgumentSchema;
-        if (schema is null)
+        if (!AcceptArgument())
             return null;
-        string? value;
-        if (_argumentCandidates.Count > 0)
+        var next = NextPendingIndex(_argumentIndex);
+        if (next >= 0)
         {
-            value = _argumentCandidates[SelectedIndex];
-        }
-        else if (_query.Length > 0)
-        {
-            value = _query;
-        }
-        else
-        {
+            for (var index = _argumentIndex + 1; index < next; index++)
+                RecordPrefill(index);
+            _argumentIndex = next;
+            _query = "";
+            UpdateArgumentCandidates();
             return null;
         }
 
-        _argumentValues.Add(value);
-        if (_argumentIndex + 1 < _argumentSchemas.Count)
+        // 后面没有待填参数: 先把跳过的参数按预置值补齐, 再检查还有没有空缺的必填参数。
+        for (var index = 0; index < _argumentSchemas.Count; index++)
+            RecordPrefill(index);
+        var missing = FirstMissingRequired();
+        if (missing >= 0)
         {
-            _argumentIndex++;
+            _argumentIndex = missing;
             _query = "";
             UpdateArgumentCandidates();
             return null;
@@ -326,6 +405,82 @@ public sealed class CommandMenuState
 
         return BuildCommand();
     }
+
+    /**
+     * 采纳当前参数: 手输内容 > 高亮候选 > 该参数已记录的值(回头修改时保留, 输入任意字符即可改写) > 预置值 > 候选。
+     * 必填且以上皆无时返回 false(停在原地)。
+     */
+    private bool AcceptArgument()
+    {
+        var schema = CurrentArgumentSchema;
+        if (schema is null)
+            return false;
+        string value;
+        if (_query.Length > 0)
+            value = _argumentCandidates.Count > 0 ? _argumentCandidates[SelectedIndex] : _query;
+        else if (RecordedValue(_argumentIndex) is { } recorded)
+            value = recorded;
+        else if (PrefilledValue(_argumentIndex) is { Length: > 0 } prefill)
+            value = prefill;
+        else if (_argumentCandidates.Count > 0)
+            value = _argumentCandidates[SelectedIndex];
+        else if (schema.Required)
+            return false;
+        else
+            value = "";
+        SetValue(_argumentIndex, value);
+        return true;
+    }
+
+    /** 该参数已记录的非空值(空的表示还没采纳过)。 */
+    private string? RecordedValue(int index)
+        => index < _argumentValues.Count && _argumentValues[index].Length > 0 ? _argumentValues[index] : null;
+
+    /** 按位置记录参数值(跳过的参数也要占位, 否则构造命令时错位)。 */
+    private void SetValue(int index, string value)
+    {
+        while (_argumentValues.Count <= index)
+            _argumentValues.Add("");
+        _argumentValues[index] = value;
+    }
+
+    /** 跳过的参数按其预置值补齐; 没有预置就保持空缺(必填空缺由 FirstMissingRequired 兜住)。 */
+    private void RecordPrefill(int index)
+    {
+        if (index < _argumentValues.Count && _argumentValues[index].Length > 0)
+            return;
+        if (PrefilledValue(index) is { Length: > 0 } prefill)
+            SetValue(index, prefill);
+    }
+
+    /** 是否已满足: 已记录非空值, 或有非空预置值(预置值可被直接采纳)。 */
+    private bool IsSatisfied(int index)
+        => RecordedValue(index) is not null || PrefilledValue(index) is { Length: > 0 };
+
+    /** 当前参数之后第一条未满足的参数; 没有则 -1。 */
+    private int NextPendingIndex(int from)
+    {
+        for (var index = from + 1; index < _argumentSchemas.Count; index++)
+        {
+            if (!IsSatisfied(index))
+                return index;
+        }
+        return -1;
+    }
+
+    /** 第一条仍为空缺的必填参数; 没有则 -1。 */
+    private int FirstMissingRequired()
+    {
+        for (var index = 0; index < _argumentSchemas.Count; index++)
+        {
+            if (_argumentSchemas[index].Required
+                && (index >= _argumentValues.Count || _argumentValues[index].Length == 0))
+                return index;
+        }
+        return -1;
+    }
+
+    private int NextArgumentIndex(int from) => from + 1 < _argumentSchemas.Count ? from + 1 : 0;
 
     private bool EnterCommandFollowup()
     {
@@ -381,7 +536,9 @@ public sealed class CommandMenuState
         for (var index = 0; index < _argumentSchemas.Count; index++)
         {
             var schema = _argumentSchemas[index];
-            var value = _argumentValues[index];
+            var value = index < _argumentValues.Count ? _argumentValues[index] : "";
+            if (value.Length == 0)
+                continue;   // 跳过的可选参数不出现在命令里
             if (schema.Flag is { } flag)
             {
                 parts.Add(flag);
@@ -426,12 +583,30 @@ public sealed class CommandMenuState
         }
         else
         {
-            var provided = _candidateProvider?.Invoke(source);
+            var provided = _candidateProvider?.Invoke(_command!, _subcommand, schema);
             var pool = provided is { Count: > 0 } ? provided : schema.Choices ?? [];
             _argumentCandidates = pool
                 .Where(candidate => candidate.Contains(_query, StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }
         SelectedIndex = 0;
+        if (_query.Length == 0)
+        {
+            // 回看已填参数(或目录预置)时把当前值置为高亮项: 空回车/Tab 保留原值, 输入任意字符才改为筛选。
+            HighlightCandidate(RecordedValue(_argumentIndex) ?? PrefilledValue(_argumentIndex));
+        }
+    }
+
+    private void HighlightCandidate(string? value)
+    {
+        if (value is not { Length: > 0 })
+            return;
+        for (var index = 0; index < _argumentCandidates.Count; index++)
+        {
+            if (!string.Equals(_argumentCandidates[index], value, StringComparison.Ordinal))
+                continue;
+            SelectedIndex = index;
+            return;
+        }
     }
 }

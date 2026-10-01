@@ -79,7 +79,7 @@ public class CommandMenuStateTests
     {
         var state = new CommandMenuState(
             Commands,
-            descriptor => descriptor.Name == "remove" ? ["alpha", "beta"] : []);
+            (_, subcommand, _) => subcommand?.Name == "remove" ? ["alpha", "beta"] : []);
         state.ApplyInput("/provider");
         state.Confirm();
         state.ApplyInput("/provider remove");
@@ -97,7 +97,7 @@ public class CommandMenuStateTests
     {
         var state = new CommandMenuState(
             Commands,
-            descriptor => descriptor.Name == "model"
+            (descriptor, _, _) => descriptor.Name == "model"
                 ? ["deepseek/deepseek-v4", "openai/gpt-5"]
                 : []);
         state.ApplyInput("/model");
@@ -114,7 +114,7 @@ public class CommandMenuStateTests
     {
         var state = new CommandMenuState(
             Commands,
-            descriptor => descriptor.Name == "remove" ? ["alpha"] : []);
+            (_, subcommand, _) => subcommand?.Name == "remove" ? ["alpha"] : []);
         state.ApplyInput("/provider");
         state.Confirm();
         state.ApplyInput("/provider remove");
@@ -168,7 +168,81 @@ public class CommandMenuStateTests
         state.ApplyInput("/provider add claude-3");
         var completed = state.Confirm();
 
-        Assert.Equal("/provider add acme --base-url https://example.com --api-key secret --type anthropic --model-ids claude-3", completed);
+        Assert.Equal("/provider add acme --base-url https://example.com --api-key secret --type anthropic-messages --model-ids claude-3", completed);
+    }
+
+    /** 预置值(目录 provider 带出的 baseUrl/type/models)在输入行为空时被采纳, 可选参数可空回车跳过。 */
+    [Fact]
+    public void Prefill_Is_Accepted_On_Empty_Input_And_Optional_Argument_Is_Skipped()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("provider", "Manage providers")]);
+        var state = new CommandMenuState(descriptors);
+
+        state.ApplyInput("/provider");
+        state.Confirm();
+        state.ApplyInput("/provider add");
+        state.Confirm();
+        state.Prefill("base-url", "https://api.deepseek.com");
+        state.Prefill("type", "deepseek");
+
+        state.ApplyInput("/provider add acme");
+        Assert.Null(state.Confirm());
+        Assert.Equal("https://api.deepseek.com", state.PrefilledValue(1));
+        // base-url/type 已有预置值 → 回车直接跳过它们, 落到唯一还需输入的必填 api-key。
+        Assert.Equal(2, state.ArgumentIndex);
+
+        state.ApplyInput("/provider add secret");
+        Assert.Null(state.Confirm());
+        // type 有预置值被跳过; model-ids 可选且无值, 回车停在这里等用户决定填或跳过。
+        Assert.Equal(4, state.ArgumentIndex);
+
+        var completed = state.Confirm();
+
+        Assert.Equal("/provider add acme --base-url https://api.deepseek.com --api-key secret --type deepseek", completed);
+    }
+
+    /** Tab 在所有参数之间循环(含可选, 便于回头修改), 走到最后一条再按回到第一条; 回看已填参数时空回车保留原值。 */
+    [Fact]
+    public void Tab_Cycles_All_Arguments_And_Keeps_Recorded_Values()
+    {
+        var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("provider", "Manage providers")]);
+        var state = new CommandMenuState(descriptors, (_, _, schema) =>
+            string.Equals(schema?.Name, "name", StringComparison.Ordinal) ? ["302ai", "acme", "zhipuai"] : []);
+
+        state.ApplyInput("/provider");
+        state.Confirm();
+        state.ApplyInput("/provider add");
+        state.Confirm();
+        state.ApplyInput("/provider add acme");
+        Assert.Null(state.Confirm());
+        Assert.Equal(1, state.ArgumentIndex);
+
+        // 可选参数也必须在循环里, 否则用户改不了 --type / --model-ids。
+        Assert.True(state.MoveToNextArgument());
+        Assert.Equal(2, state.ArgumentIndex);
+        Assert.True(state.MoveToNextArgument());
+        Assert.Equal(3, state.ArgumentIndex);
+        Assert.True(state.MoveToNextArgument());
+        Assert.Equal(4, state.ArgumentIndex);
+        Assert.True(state.MoveToNextArgument());
+        Assert.Equal(0, state.ArgumentIndex);
+
+        // 回到 name: 空回车保留已记录的 acme, 不会被候选列表默认高亮的 302ai 覆盖。
+        Assert.Null(state.Confirm());
+        Assert.Equal(1, state.ArgumentIndex);
+
+        state.ApplyInput("/provider add https://example.com");
+        Assert.Null(state.Confirm());
+        state.ApplyInput("/provider add secret");
+        Assert.Null(state.Confirm());
+        state.ApplyInput("/provider add anthropic-messages");
+        Assert.Null(state.Confirm());
+        Assert.Equal(4, state.ArgumentIndex);
+        state.ApplyInput("/provider add claude-3");
+
+        Assert.Equal(
+            "/provider add acme --base-url https://example.com --api-key secret --type anthropic-messages --model-ids claude-3",
+            state.Confirm());
     }
 
     [Fact]
@@ -194,7 +268,7 @@ public class CommandMenuStateTests
     {
         var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("reasoning", "Show or set reasoning effort")]);
         var state = new CommandMenuState(descriptors,
-            descriptor => descriptor.Name == "reasoning" ? ["low", "high"] : []);
+            (descriptor, _, _) => descriptor.Name == "reasoning" ? ["low", "high"] : []);
 
         state.ApplyInput("/reasoning");
         Assert.Null(state.Confirm());
@@ -211,7 +285,7 @@ public class CommandMenuStateTests
     {
         var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("skill", "List or inspect a skill")]);
         var state = new CommandMenuState(descriptors,
-            descriptor => descriptor.Name == "skill" ? ["review-code", "ship-it"] : []);
+            (descriptor, _, _) => descriptor.Name == "skill" ? ["review-code", "ship-it"] : []);
 
         state.ApplyInput("/skill");
         Assert.Null(state.Confirm());
@@ -227,7 +301,7 @@ public class CommandMenuStateTests
     {
         var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("session", "List or delete persistent sessions")]);
         var state = new CommandMenuState(descriptors,
-            descriptor => descriptor.Name == "session" ? ["session-aaa", "session-bbb"] : []);
+            (descriptor, _, _) => descriptor.Name == "session" ? ["session-aaa", "session-bbb"] : []);
 
         state.ApplyInput("/session ");
         Assert.Equal(CommandMenuState.MenuStage.Argument, state.Stage);
@@ -242,7 +316,7 @@ public class CommandMenuStateTests
     {
         var descriptors = CommandMenuCatalog.Enrich([new CommandDescriptor("model", "List or switch model")]);
         var state = new CommandMenuState(descriptors,
-            _ => Enumerable.Range(0, 500).Select(index => $"provider/m{index:000}").ToList());
+            (_, _, _) => Enumerable.Range(0, 500).Select(index => $"provider/m{index:000}").ToList());
 
         state.ApplyInput("/model");
         state.Confirm();

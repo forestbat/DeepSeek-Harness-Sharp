@@ -1,6 +1,5 @@
 using Dsh.Boot;
 using Dsh.Tui.Services;
-using Xunit;
 
 namespace Dsh.Tests;
 
@@ -18,39 +17,42 @@ public sealed class TuiSettingsTests : IDisposable
     }
 
     [Fact]
-    public void Load_Without_Section_Keeps_Default_And_Clamps_Absurd_Values()
+    public void Read_Without_Section_Keeps_Default_And_Clamps_Absurd_Values()
     {
         var home = HarnessHome.Resolve(_homeDir);
+        var settings = new TuiSettings(home);
 
-        Assert.Null(new TuiSettings(home).Load().SidebarWidth);
+        Assert.Null(settings.SidebarWidth);
 
-        var settings = HarnessSettings.Load(home);
-        settings.Plugins[TuiSettings.Package] = new PluginSetting
+        var raw = HarnessSettings.Load(home);
+        raw.Plugins[TuiSettings.Package] = new PluginSetting
         {
             Enabled = true,
             Parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["sidebarWidth"] = 9999L },
         };
-        settings.SavePlugins(home);
+        raw.SavePlugins(home);
 
-        Assert.Equal(TuiSettings.MaximumSidebarWidth, new TuiSettings(home).Load().SidebarWidth);
+        Assert.Equal(TuiSettings.MaximumSidebarWidth, settings.SidebarWidth);
     }
 
     [Fact]
-    public void Save_Round_Trips_And_Keeps_Other_Plugins()
+    public void Write_Round_Trips_And_Keeps_Other_Plugins()
     {
         var home = HarnessHome.Resolve(_homeDir);
-        var settings = HarnessSettings.Load(home);
-        settings.Plugins["@deepseek-ai/dsh-gui"] = new PluginSetting
+        var raw = HarnessSettings.Load(home);
+        raw.Plugins["@deepseek-ai/dsh-gui"] = new PluginSetting
         {
             Enabled = false,
             Parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["theme"] = "light" },
         };
-        settings.SavePlugins(home);
+        raw.SavePlugins(home);
 
-        var tui = new TuiSettings(home);
-        tui.Save(tui.Load() with { SidebarWidth = 30 });
+        var settings = new TuiSettings(home);
+        settings.SidebarWidth = 30;
+        settings.InputHeight = 6;
 
-        Assert.Equal(30, tui.Load().SidebarWidth);
+        Assert.Equal(30, settings.SidebarWidth);
+        Assert.Equal(6, settings.InputHeight);
         var reloaded = HarnessSettings.Load(home);
         Assert.Equal("light", reloaded.Plugins["@deepseek-ai/dsh-gui"].Parameters["theme"]);
         Assert.False(reloaded.Plugins["@deepseek-ai/dsh-gui"].Enabled);

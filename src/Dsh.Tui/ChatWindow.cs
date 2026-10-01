@@ -6,6 +6,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Pty;
 using Dsh.Subagent;
+using Dsh.Tui.Services;
 
 namespace Dsh.Tui;
 
@@ -32,11 +33,18 @@ public sealed class ChatWindow : IDisposable
     private readonly List<SubagentNode> _agentItems = [];
     private IReadOnlyList<SessionInfo>? _sessionInfos;
     private IReadOnlyList<string> _skillCandidates = [];
+    private IReadOnlyList<string> _providerCatalogCandidates = [];
+    private ProviderCatalogSnapshot? _providerCatalog;
     private IReadOnlyList<string>? _mcpPanelLines;
     private IReadOnlyList<PtyDaemonSessionDto> _daemonPtys = [];
     private PaneNode _paneTree = new PaneLeaf(0);
     private PaneLayout _paneLayout;
     private SplitDivider? _dividerDrag;
+    private bool _rightPanelDrag;
+    private bool _inputDrag;
+    private int? _rightPanelWidth;
+    private int? _inputHeight;
+    private readonly TuiSettings? _settings;
     private ConsoleRect _paneArea;
     private int _focusedPaneId;
     private int _inputPaneId;
@@ -55,13 +63,17 @@ public sealed class ChatWindow : IDisposable
     private readonly Func<bool> _subagentStartSubscription;
     private readonly Func<bool> _subagentEndSubscription;
 
-    public ChatWindow(Context ctx, AgentLoopAgent agent, HarnessHome home, ISessionPersistence? persistence = null)
+    public ChatWindow(Context ctx, AgentLoopAgent agent, HarnessHome home, ISessionPersistence? persistence = null, TuiSettings? settings = null)
     {
         _ctx = ctx;
         _home = home;
         _persistence = persistence;
+        _settings = settings;
+        _rightPanelWidth = settings?.SidebarWidth;
+        _inputHeight = settings?.InputHeight;
         _subagents = new SubagentDirectory(ctx);
         LoadSkillCandidates();
+        LoadProviderCatalogCandidates();
 
         _panes[0] = new ChatPane(this, 0, agent);
         _focusedPaneId = 0;
@@ -138,6 +150,9 @@ public sealed class ChatWindow : IDisposable
     internal MentionResolver MentionResolver => _mentionResolver;
 
     internal IReadOnlyList<string> SkillCandidates => _skillCandidates;
+
+    /** models.dev 目录里当前有适配器可服务的 provider 名(`/provider add` 的候选)。 */
+    internal IReadOnlyList<string> ProviderCatalogCandidates => _providerCatalogCandidates;
 
     internal SubagentDirectory Subagents => _subagents;
 
@@ -265,6 +280,10 @@ public sealed class ChatWindow : IDisposable
                     _exitConfirmAt = Environment.TickCount64;
                     input.StatusText = "再按一次 Ctrl+C 退出";
                     return;
+                case ConsoleKey.P:
+                    ClearExitConfirm();
+                    input.OpenPromptCommandMenu();
+                    return;
                 default:
                     ClearExitConfirm();
                     break;
@@ -299,7 +318,7 @@ public sealed class ChatWindow : IDisposable
                 input.RefreshMenus();
                 return;
             case ConsoleKey.D:
-                RunSlashCommand(input, "/detach");
+                RequestDetach(input);
                 return;
             case ConsoleKey.K:
                 input.Input = "/session delete ";
@@ -365,16 +384,20 @@ public sealed class ChatWindow : IDisposable
         InputPane.InsertText(text);
     }
 
-    public void HandleMouseWheel(int delta)
+    public void HandleMouseWheel(float delta)
     {
         RenderVersion++;
         FocusedPane.HandleMouseWheel(delta);
     }
 
     /** 鼠标滚轮按指针所在 pane 路由; 无命中时回退焦点 pane。 */
-    public void HandleMouseWheel(int delta, int cellX, int cellY, UiLayout layout)
+    public void HandleMouseWheel(float delta, int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        layout = Effective(layout);
+        // 单窗格时指针落在右栏上: 滚右栏内容(窄终端里才看得到下面的段落), 不再滚正文。
+        if (_panes.Count == 1 && layout.RightPanel.Contains(cellX, cellY) && InputPane.ScrollRightPanel(delta))
+            return;
         var target = _panes.Count > 1 ? _paneLayout.HitTest(cellX, cellY) : null;
         if (target is { } id && _panes.TryGetValue(id, out var pane))
             pane.HandleMouseWheel(delta);
@@ -385,12 +408,30 @@ public sealed class ChatWindow : IDisposable
     public void HandleMouseClick(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        layout = Effective(layout);
         var input = InputPane;
         if (input.PendingApproval is not null)
             return;
         if (_panes.Count > 1 && FindDividerAt(cellX, cellY) is { } divider)
         {
             _dividerDrag = divider;
+            return;
+        }
+
+        // 单窗格: 右栏竖线(拖宽度)和输入栏上沿(拖高度)都可拖(以前只有多窗格的窗格树分割线参与拖动)。
+        var dividerColumn = _panes.Count == 1 ? RightPanelDividerColumn(layout) : -1;
+        if (dividerColumn >= 0
+            && Math.Abs(cellX - dividerColumn) <= 1
+            && cellY >= layout.Main.Y
+            && cellY < layout.Main.Bottom)
+        {
+            _rightPanelDrag = true;
+            return;
+        }
+
+        if (cellY < layout.Input.Y && cellY >= layout.Input.Y - 2)
+        {
+            _inputDrag = true;
             return;
         }
         if (layout.Input.Contains(cellX, cellY))
@@ -434,6 +475,17 @@ public sealed class ChatWindow : IDisposable
     public void HandleMouseDrag(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        layout = Effective(layout);
+        if (_inputDrag)
+        {
+            DragInputHeight(cellY, layout);
+            return;
+        }
+        if (_rightPanelDrag)
+        {
+            DragRightPanel(cellX, layout);
+            return;
+        }
         if (_dividerDrag is { } divider)
         {
             DragDivider(divider, cellX, cellY);
@@ -447,6 +499,19 @@ public sealed class ChatWindow : IDisposable
     public string? HandleMouseRelease(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        layout = Effective(layout);
+        if (_inputDrag)
+        {
+            _inputDrag = false;
+            SaveLayoutSizes();
+            return null;
+        }
+        if (_rightPanelDrag)
+        {
+            _rightPanelDrag = false;
+            SaveLayoutSizes();
+            return null;
+        }
         if (_dividerDrag is not null)
         {
             _dividerDrag = null;
@@ -459,6 +524,61 @@ public sealed class ChatWindow : IDisposable
             _ = Clipboard.TrySetTextAsync(text);
         return text;
     }
+
+    /** 控制台总列数: 正文宽 + 竖分割线 + 右栏宽(没有右栏就没有竖线)。 */
+    private static int ConsoleWidthOf(UiLayout layout)
+        => layout.Main.Width + layout.RightPanel.Width + (layout.RightPanel.Width > 0 ? 1 : 0);
+
+    /**
+     * 把宿主给的默认布局换成带用户覆盖值(侧栏宽度/输入栏高度)的布局。
+     * 绘制、命中测试、拖动都先过这里, 三处共用同一个夹取口径, 不会再出现"线在 A 处、可拖位置在 B 处"。
+     */
+    private UiLayout Effective(UiLayout layout)
+    {
+        // 没有用户覆盖值就不要重算: 直接用宿主给的布局, 免得与宿主计算出现任何偏差。
+        if (_rightPanelWidth is null && _inputHeight is null)
+            return layout;
+        var width = Math.Max(layout.Main.Right, layout.RightPanel.Right);
+        var height = Math.Max(layout.Status.Bottom, layout.Input.Bottom);
+        return LayoutEngine.Calculate(width, height, _rightPanelWidth, _inputHeight);
+    }
+
+    /** 单窗格右栏竖分割线所在列; 没有右栏时返回 -1。 */
+    private static int RightPanelDividerColumn(UiLayout layout)
+        => layout.RightPanel.Width > 0 ? layout.RightPanel.X - 1 : -1;
+
+    /** 拖动侧栏分割线: 指针列换算成右栏宽度(夹取由 LayoutEngine 统一负责)。 */
+    private void DragRightPanel(int cellX, UiLayout layout)
+        => _rightPanelWidth = LayoutEngine.ClampRightPanelWidth(ConsoleWidthOf(layout), ConsoleWidthOf(layout) - 1 - cellX);
+
+    /** 拖动输入栏上沿: 指针行换算成输入栏高度(夹取由 LayoutEngine 统一负责)。 */
+    private void DragInputHeight(int cellY, UiLayout layout)
+    {
+        var height = Math.Max(layout.Status.Bottom, layout.Input.Bottom);
+        // 让输入栏上沿落在指针下一行: Layout 里 Input.Y = 控制台高 - DividerRows(2) - 行数, 故 行数 = 高 - 3 - 指针行。
+        _inputHeight = LayoutEngine.ClampInputHeight(height, height - 3 - cellY);
+    }
+
+    /** 拖动结束后把侧栏宽度/输入栏高度写回 settings.yaml, 下次启动沿用(失败只记日志, 不影响当前会话)。 */
+    private void SaveLayoutSizes()
+    {
+        if (_settings is null)
+            return;
+        try
+        {
+            if (_rightPanelWidth is { } width)
+                _settings.SidebarWidth = width;
+            if (_inputHeight is { } rows)
+                _settings.InputHeight = rows;
+        }
+        catch (Exception error)
+        {
+            _ctx.LoggerFor("tui").Warn($"failed to save layout sizes: {error.Message}");
+        }
+    }
+
+    /** 单窗格右栏的滚动偏移(供测试断言; 滚轮在右栏上滚动的是它而不是正文)。 */
+    internal int RightPanelScrollOffset => InputPane.RightPanelScrollOffset;
 
     /** 命中分隔线(含左右/上下各 1 格容差, 便于抓取)。 */
     private SplitDivider? FindDividerAt(int cellX, int cellY)
@@ -515,6 +635,7 @@ public sealed class ChatWindow : IDisposable
     public void Draw(CellGrid grid, UiLayout layout)
     {
         grid.Clear();
+        layout = Effective(layout);
         _paneArea = new ConsoleRect(0, 0, grid.Width, Math.Max(0, layout.Main.Height));
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
         SyncShellPaneSizes();
@@ -522,9 +643,15 @@ public sealed class ChatWindow : IDisposable
         if (_panes.Count == 1)
         {
             var only = _panes.Values.First();
-            only.DrawTranscript(grid, layout.Main);
-            if (only is ChatPane chatPane)
+            if (only is ChatPane chatPane && layout.RightPanel.Width > 0)
+            {
+                only.DrawTranscript(grid, layout.Main);
                 chatPane.DrawRightPanel(grid, layout.RightPanel);
+            }
+            else
+            {
+                only.DrawTranscript(grid, layout.Main);
+            }
         }
         else
         {
@@ -579,6 +706,9 @@ public sealed class ChatWindow : IDisposable
             {
                 foreach (var snapshot in _persistence.List())
                 {
+                    // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致)。
+                    if (snapshot.Header.IsSubagent)
+                        continue;
                     var info = SessionInfo.FromSnapshot(snapshot);
                     if (seen.Add(info.Id))
                         result.Add(info);
@@ -592,6 +722,8 @@ public sealed class ChatWindow : IDisposable
 
         foreach (var agent in _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.List() ?? [])
         {
+            if (agent.Session.Header.IsSubagent)
+                continue;
             var info = new SessionInfo(agent.Id.ToString(), agent.Session.Header.Title, null);
             if (seen.Add(info.Id))
                 result.Add(info);
@@ -658,26 +790,42 @@ public sealed class ChatWindow : IDisposable
                 var commands = _ctx.Get<CommandsService>(CommandsService.ServiceName);
                 if (commands is null)
                 {
-                    pane.AppendRaw($"  unknown command: {text} (available: /quit, /exit)\n");
+                    // 无法判断是不是命令: 按普通消息发出(与"写错了"同一处理)。
+                    pane.SendUserText(text);
                     break;
                 }
 
                 try
                 {
                     var execution = await commands.Execute(pane.Agent, text);
-                    string? resultText = null;
                     if (execution is null)
-                        resultText = $"  unknown command: {text}\n";
-                    else if (execution.Result is CommandResult.Success { Text: { } successText } && successText.Length > 0)
-                        resultText = $"  {successText}\n";
-                    else if (execution.Result is CommandResult.Error error)
-                        resultText = $"  {error.Text}\n";
+                    {
+                        // 首 token 不是已知命令: 用户为自己的输入负责, 整行当普通消息发给模型。
+                        pane.SendUserText(text);
+                        break;
+                    }
 
+                    string? resultText = execution.Result switch
+                    {
+                        CommandResult.Success { Text: { } successText } when successText.Length > 0 => $"  {successText}\n",
+                        CommandResult.Error error => $"  {error.Text}\n",
+                        _ => null,
+                    };
                     if (resultText is not null)
                     {
                         var captured = resultText;
                         QueueAction(() => pane.AppendRaw(captured));
                     }
+
+                    // 命令 + 提示词: 提示词由命令决定(成功或失败都可能带), 作为下一步用户消息发出。
+                    var followup = execution.Result switch
+                    {
+                        CommandResult.Success success => success.FollowupPrompt,
+                        CommandResult.Error error => error.FollowupPrompt,
+                        _ => null,
+                    };
+                    if (followup is { Length: > 0 } prompt)
+                        pane.SendUserText(prompt);
                 }
                 catch (Exception error)
                 {
@@ -868,14 +1016,64 @@ public sealed class ChatWindow : IDisposable
         pane.AppendRaw($"  gpu: selected {(selected == GpuCatalog.AutoAdapter ? "auto (system default)" : selected)} — takes effect after restart\n");
     }
 
+    /** Ctrl+X D: 常驻会话(跑在 daemon 的 pty 上)只放 proxy 走, 自己继续跑; 非常驻(进程内 TUI)沿用 /detach 交接。 */
+    private void RequestDetach(ChatPane pane)
+    {
+        if (IsResidentChild())
+        {
+            DetachRequested = true;
+            pane.AppendRaw("  detached: 会话继续在 daemon 里运行(`dsh tui attach` 可接回)\n");
+            return;
+        }
+
+        RunSlashCommand(pane, "/detach");
+    }
+
+    private static bool IsResidentChild()
+        => string.Equals(
+            Environment.GetEnvironmentVariable(PtySessionProtocol.ChildVariable),
+            "1",
+            StringComparison.Ordinal);
+
+    internal bool DetachRequested { get; private set; }
+
+    internal void ClearDetachRequest() => DetachRequested = false;
+
+    /** 交接草稿: detach 走的是新起的 TUI 进程, 未发送的输入只存在旧进程内存里, 由环境变量带过来恢复。 */
+    internal void SeedDraft(string text)
+    {
+        var input = InputPane;
+        input.Input = text;
+        input.Cursor = text.Length;
+        input.RefreshMenus();
+    }
+
     private async Task DetachSession(ChatPane pane, string text)
     {
         var commandLine = text["/detach".Length..].Trim();
+        // 常驻会话: 不带参数的 /detach 与 Ctrl+X D 同义 —— 只放 proxy 走, 自己继续跑。
+        if (commandLine.Length == 0 && IsResidentChild())
+        {
+            RequestDetach(pane);
+            return;
+        }
+
         var parts = commandLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        var fileName = parts.Length == 0
-            ? Environment.GetEnvironmentVariable("SHELL") ?? "/bin/sh"
-            : parts[0];
-        var arguments = parts.Length > 1 ? new[] { parts[1] } : [];
+        // 缺省: 把**当前这个 TUI 会话**交给 daemon 里的一个新 TUI 继续跑(等价 tmux 的 detach/attach 语义),
+        // 这样 attach 回来看到的是完整 TUI 画面(侧栏/输入行/状态行), 而不是一个空 shell;
+        // 显式 `/detach <cmd> ...` 仍按命令起一个普通会话。
+        var executable = Environment.ProcessPath;
+        var isDotnetHost = executable is not null
+            && string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase);
+        var fileName = parts.Length > 0 ? parts[0] : executable ?? PtyShell.Resolve();
+        var arguments = parts.Length > 0
+            ? parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            : isDotnetHost
+                ? [Environment.GetCommandLineArgs()[0], "tui", "--session", pane.Agent.Id.ToString(), "--home", _home.Root]
+                : ["tui", "--session", pane.Agent.Id.ToString(), "--home", _home.Root];
+        // 不带命令 = 起的还是 TUI 本体, 它要鼠标(拖动分隔线/滚轮); 带命令 = 任意命令/普通 shell, 不能打开
+        // 宿主终端上报(Unix 上代理原样透传, 报文会被当成命令敲进那个程序)。
+        var wantsMouse = parts.Length == 0;
 
         try
         {
@@ -885,10 +1083,15 @@ public sealed class ChatWindow : IDisposable
                 FileName = fileName,
                 Arguments = [.. arguments],
                 WorkingDirectory = pane.CurrentCwd(),
+                Rows = Math.Max(4, _paneArea.Height),
+                Columns = Math.Max(20, _paneArea.Width),
                 Environment = new Dictionary<string, string?>
                 {
                     ["DSH_DETACHED_SESSION_ID"] = pane.Agent.Id.ToString(),
+                    [PtySessionProtocol.ChildVariable] = "1",
+                    [TuiRunner.DetachDraftVariable] = string.IsNullOrEmpty(pane.Input) ? null : pane.Input,
                 },
+                WantsMouse = wantsMouse,
             });
             pane.AppendRaw($"  detached: {session.Id} — {session.Command} (daemon PTY)\n");
             RequestExit();
@@ -1385,7 +1588,7 @@ public sealed class ChatWindow : IDisposable
 
     private void DrawDividers(CellGrid grid, UiLayout layout)
     {
-        var verticalX = _panes.Count == 1 && layout.RightPanel.Width > 0 ? layout.RightPanel.X - 1 : -1;
+        var verticalX = _panes.Count == 1 ? RightPanelDividerColumn(layout) : -1;
         DrawHorizontalDivider(grid, layout.Input.Y - 1, verticalX, layout.Main.Bottom, layout.Input.Y);
         DrawHorizontalDivider(grid, layout.Status.Y - 1, verticalX, layout.Input.Bottom, layout.Status.Y);
         if (verticalX < 0 || layout.Main.Height <= 0)
@@ -1460,6 +1663,37 @@ public sealed class ChatWindow : IDisposable
             return;
         _ = LoadSkillCandidatesAsync(catalog);
     }
+
+    /** 先读缓存(菜单立即可用), 过期再后台刷新; 失败只记日志, 候选退回缓存内容。 */
+    private void LoadProviderCatalogCandidates()
+    {
+        _providerCatalog = ProviderCatalog.LoadCached(_home);
+        _providerCatalogCandidates = CatalogCandidates(_providerCatalog);
+        _ = RefreshProviderCatalogCandidatesAsync();
+    }
+
+    private async Task RefreshProviderCatalogCandidatesAsync()
+    {
+        try
+        {
+            var snapshot = await ProviderCatalog.LoadAsync(_home, refresh: false);
+            _providerCatalog = snapshot;
+            _providerCatalogCandidates = CatalogCandidates(snapshot);
+            if (snapshot.Error is { Length: > 0 } error)
+                _ctx.LoggerFor("tui").Warn($"provider catalog: {error}");
+        }
+        catch (Exception error)
+        {
+            _ctx.LoggerFor("tui").Warn($"failed to refresh provider catalog: {error.Message}");
+        }
+    }
+
+    /** 目录里的一条 provider(按 id 查): `/provider add` 选中它后自动带出 baseUrl/type/models。 */
+    internal ProviderCatalogEntry? FindCatalogProvider(string id)
+        => _providerCatalog?.Providers.FirstOrDefault(entry => string.Equals(entry.Id, id, StringComparison.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<string> CatalogCandidates(ProviderCatalogSnapshot snapshot)
+        => [.. snapshot.Providers.Where(provider => provider.Type is not null).Select(provider => provider.Id)];
 
     private async Task LoadSkillCandidatesAsync(ISkillCatalog catalog)
     {

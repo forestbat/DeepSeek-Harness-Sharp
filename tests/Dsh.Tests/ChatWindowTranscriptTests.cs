@@ -5,6 +5,7 @@ using Dsh.Llm;
 using Dsh.Presets;
 using Dsh.Runtime;
 using Dsh.Tui;
+using Dsh.Tui.Services;
 
 namespace Dsh.Tests;
 
@@ -458,7 +459,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             }
         }
 
-        TuiScreenCaptureTests.SavePng(screen, $"tui-screen-split-{(OperatingSystem.IsWindows() ? "windows" : "linux")}.png");
+        TuiScreenshot.SavePng(screen, $"tui-screen-split-{(OperatingSystem.IsWindows() ? "windows" : "linux")}.png");
 
         // 拖到最左: 左侧窗格至少保留 MinimumPaneExtent 格
         chat.HandleMouseClick(divider + 6, 1, layout);
@@ -468,6 +469,110 @@ public sealed class ChatWindowTranscriptTests : IDisposable
     }
 
     /** 在窗格区域内找竖直分隔线的屏幕列(右侧固定面板的分隔线不在 Main 内, 天然排除)。 */
+    /** 侧栏宽度要跨进程沿用: 拖完写进 settings.yaml, 新起的 ChatWindow 直接量出拖出来的宽度。 */
+    [Fact]
+    public async Task RightPanelWidth_Persists_Across_ChatWindows()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        var layout = LayoutEngine.Calculate(120, 40);
+        var settings = new TuiSettings(home);
+        settings.SidebarWidth = 30;
+
+        using (var chat = new ChatWindow(ctx, agent, home, null, settings))
+        {
+            chat.DrainUi();
+            var grid = new CellGrid(120, 40);
+            chat.Draw(grid, layout);
+            Assert.Equal('│', grid[120 - 1 - 30, 1].Character);
+        }
+
+        using (var chat = new ChatWindow(ctx, agent, home, null, settings))
+        {
+            chat.DrainUi();
+            var divider = 120 - 1 - 30;
+            chat.HandleMouseClick(divider, 1, layout);
+            chat.HandleMouseDrag(divider + 8, 1, layout);
+            chat.HandleMouseRelease(divider + 8, 1, layout);
+        }
+
+        Assert.Equal(22, settings.SidebarWidth);
+
+        using (var chat = new ChatWindow(ctx, agent, home, null, new TuiSettings(home)))
+        {
+            chat.DrainUi();
+            var grid = new CellGrid(120, 40);
+            chat.Draw(grid, layout);
+            Assert.Equal('│', grid[120 - 1 - 22, 1].Character);
+        }
+    }
+
+    /** 输入栏上沿可用鼠标上下拖动改高度: 拖完输入行变高(含信息行), 状态行仍在最后一行。 */
+    [Fact]
+    public async Task MouseDrag_OnInputDivider_ResizesInputBar()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        var layout = LayoutEngine.Calculate(120, 40);
+        Assert.Equal(LayoutEngine.InputHeight, layout.Input.Height);
+
+        var dividerRow = layout.Input.Y - 1;
+        chat.HandleMouseClick(10, dividerRow, layout);
+        chat.HandleMouseDrag(10, dividerRow - 4, layout);
+        chat.HandleMouseRelease(10, dividerRow - 4, layout);
+
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, layout);
+        var grown = LayoutEngine.Calculate(120, 40, null, 6);
+        Assert.Equal(6, grown.Input.Height);
+
+        var rows = Rows(grid);
+        // 输入行与说明行锚在输入区底部: 多出来的空行留在上方, 说明行紧贴状态行(layout.Input.Bottom - 1)。
+        Assert.Contains("Enter 发送", rows[grown.Input.Bottom - 1]);
+        Assert.DoesNotContain("Enter 发送", rows[grown.Input.Y + 1]);
+        Assert.Equal(40, rows.Count);
+    }
+
+    /** 输入栏高度要跨进程沿用: 写进 settings.yaml 后, 新起的 ChatWindow 直接量出拖出来的高度。 */
+    [Fact]
+    public async Task InputHeight_Persists_Across_ChatWindows()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        var settings = new TuiSettings(home);
+        settings.InputHeight = 6;
+
+        using var chat = new ChatWindow(ctx, agent, home, null, settings);
+        chat.DrainUi();
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, LayoutEngine.Calculate(120, 40));
+
+        var grown = LayoutEngine.Calculate(120, 40, null, 6);
+        Assert.Contains("Enter 发送", Rows(grid)[grown.Input.Bottom - 1]);
+    }
+
+    /** 右栏内容超屏时可用滚轮滚动(窄终端里才看得到下面的段落), 偏移从顶部起算。 */
+    [Fact]
+    public async Task MouseWheel_OnRightPanel_ScrollsItsContent()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        var layout = LayoutEngine.Calculate(120, 16);
+
+        var before = new CellGrid(120, 16);
+        chat.Draw(before, layout);
+        Assert.Contains("上下文", string.Join('\n', Rows(before)));
+        Assert.Equal(0, chat.RightPanelScrollOffset);
+
+        for (var step = 0; step < 5; step++)
+            chat.HandleMouseWheel(-3, layout.RightPanel.X + 2, 1, layout);
+
+        var after = new CellGrid(120, 16);
+        chat.Draw(after, layout);
+        Assert.True(chat.RightPanelScrollOffset > 0);
+        Assert.DoesNotContain("上下文", string.Join('\n', Rows(after)));
+    }
+
     private static int FindPaneDividerColumn(ChatWindow chat, UiLayout layout)
     {
         var grid = new CellGrid(120, 40);
@@ -481,6 +586,39 @@ public sealed class ChatWindowTranscriptTests : IDisposable
             }
         }
         return -1;
+    }
+
+    /** 单窗格(默认布局)的右栏分割线也要能用鼠标拖动: 拖动后竖线跟手, 且左侧正文不小于最小宽度。 */
+    [Fact]
+    public async Task MouseDrag_OnRightPanelDivider_ResizesSidebar()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+        var layout = LayoutEngine.Calculate(120, 40);
+        var divider = layout.Main.X + layout.Main.Width;
+
+        var before = new CellGrid(120, 40);
+        chat.Draw(before, layout);
+        Assert.Equal('│', before[divider, 1].Character);
+
+        chat.HandleMouseClick(divider, 1, layout);
+        chat.HandleMouseDrag(divider - 10, 1, layout);
+        chat.HandleMouseRelease(divider - 10, 1, layout);
+
+        var after = new CellGrid(120, 40);
+        chat.Draw(after, layout);
+        Assert.Equal('│', after[divider - 10, 1].Character);
+        Assert.NotEqual('│', after[divider, 1].Character);
+
+        // 拖到最右: 右栏收缩到最小宽度 10, 分割线仍在(不会把侧栏拖没了导致再也拖不回来)。
+        chat.HandleMouseClick(divider - 10, 1, layout);
+        chat.HandleMouseDrag(119, 1, layout);
+        chat.HandleMouseRelease(119, 1, layout);
+
+        var clamped = new CellGrid(120, 40);
+        chat.Draw(clamped, layout);
+        Assert.Equal('│', clamped[120 - 1 - 10, 1].Character);
     }
 
     private static List<string> Rows(CellGrid grid)
