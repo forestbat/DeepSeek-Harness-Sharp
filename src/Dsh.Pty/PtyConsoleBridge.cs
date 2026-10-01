@@ -6,7 +6,10 @@ namespace Dsh.Pty;
 public static class PtyConsoleBridge
 {
     /** 被桥接进程可能开过鼠标上报(?1000/?1002/?1006)且仍在 daemon 中运行, detach 时替它复位宿主终端。 */
-    private const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+    /** 请求宿主终端上报鼠标(按钮事件 + SGR 编码); 代理在 attach 时主动发出。 */
+    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
     public static async Task RunAsync(PtySession session, CancellationToken cancellationToken = default)
     {
@@ -98,16 +101,33 @@ internal sealed class PtyRawMode : IDisposable
     private const ulong MacIexten = 0x00000400;
     private const ulong MacOpost = 0x00000001;
 
+    private const uint EnableProcessedInput = 0x0001;
+    private const uint EnableLineInput = 0x0002;
+    private const uint EnableEchoInput = 0x0004;
+    private const uint EnableMouseInput = 0x0010;
+
+    private const uint EnableVirtualTerminalInput = 0x0200;
+    private const int StdInputHandle = -10;
+
     private readonly bool _active;
     private readonly byte[]? _original;
     private readonly bool _restoreTreatControlCAsInput;
+    private readonly nint _consoleInputHandle;
+    private readonly uint? _consoleInputMode;
     private bool _disposed;
 
-    private PtyRawMode(bool active, byte[]? original = null, bool restoreTreatControlCAsInput = false)
+    private PtyRawMode(
+        bool active,
+        byte[]? original = null,
+        bool restoreTreatControlCAsInput = false,
+        nint consoleInputHandle = 0,
+        uint? consoleInputMode = null)
     {
         _active = active;
         _original = original;
         _restoreTreatControlCAsInput = restoreTreatControlCAsInput;
+        _consoleInputHandle = consoleInputHandle;
+        _consoleInputMode = consoleInputMode;
     }
 
     public static PtyRawMode? TryEnable()
@@ -143,6 +163,8 @@ internal sealed class PtyRawMode : IDisposable
 
         try
         {
+            if (_consoleInputMode is { } mode && _consoleInputHandle != 0)
+                SetConsoleMode(_consoleInputHandle, mode);
             Console.TreatControlCAsInput = _restoreTreatControlCAsInput;
             Console.CursorVisible = true;
         }
@@ -161,7 +183,20 @@ internal sealed class PtyRawMode : IDisposable
             var restoreTreatControlCAsInput = Console.TreatControlCAsInput;
             Console.TreatControlCAsInput = true;
             Console.CursorVisible = false;
-            return new PtyRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+            var input = GetStdHandle(StdInputHandle);
+            if (input == 0 || !GetConsoleMode(input, out var originalMode))
+                return new PtyRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+
+            // 关掉行/回显/本地处理与鼠标输入记录: 否则宿主的鼠标上报会被控制台当成输入记录回显成 "^[[M…" 文本,
+            // 混进 attach 画面。同时打开 VT 输入, 让终端的转义序列原样送达会话(鼠标报文由客户端过滤器整条丢弃)。
+            var mode = originalMode
+                & ~(EnableEchoInput | EnableLineInput | EnableProcessedInput | EnableMouseInput);
+            SetConsoleMode(input, mode | EnableVirtualTerminalInput);
+            return new PtyRawMode(
+                true,
+                restoreTreatControlCAsInput: restoreTreatControlCAsInput,
+                consoleInputHandle: input,
+                consoleInputMode: originalMode);
         }
         catch (IOException)
         {
@@ -241,4 +276,13 @@ internal sealed class PtyRawMode : IDisposable
 
     [DllImport("libc", SetLastError = true)]
     private static extern int tcsetattr(int fd, int optionalActions, IntPtr termios);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(nint hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(nint hConsoleHandle, uint dwMode);
 }

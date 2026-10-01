@@ -3,12 +3,12 @@ namespace Dsh.Pty;
 /**
  * 从宿主终端输入字节流里摘出鼠标报文, 其余字节原样透传。
  *
- * 为什么必须由代理自己解析: ConPTY 的 VT 输入解析器只把 SGR(`ESC[<Cb;Cx;CyM/m`)翻成 MOUSE_EVENT 记录,
- * 对 legacy X10(`ESC[M`+3 字节)会把 `CSI M` 当普通 CSI 吃掉、再把 3 个载荷字节当字符泄漏出来 ——
- * 这正是 Rider/JediTerm 这类只发 X10 的终端在输入行留下 `@4;@5;` 乱码的原因。
+ * 为什么必须由代理自己解析: ConPTY 的 VT 输入解析器只把 SGR 形式的鼠标报文翻成 MOUSE_EVENT 记录,
+ * 对 legacy X10 形式则把 CSI M 当普通 CSI 吃掉、再把 3 个载荷字节当字符泄漏出来 ——
+ * 这正是 Rider/JediTerm 这类只发 X10 的终端在输入行留下 "@4;@5;" 乱码的原因。
  * 代理的控制台保留 VTI(原始字节透传)时报文是完整的, 解析在本地完成。详见项目记忆 conpty_mouse_x10_vs_sgr。
  *
- * 两种编码都认**带 ESC 与不带 ESC**的形态(ConPTY 有时吃掉前导); 单独的 ESC 立即透传, 不拖住 Esc 键。
+ * 两种编码都认带 ESC 与不带 ESC 的形态(ConPTY 有时吃掉前导); 单独的 ESC 立即透传, 不拖住 Esc 键。
  */
 public sealed class MouseReportParser
 {
@@ -17,9 +17,9 @@ public sealed class MouseReportParser
     private const int WheelDelta = 120;
 
     // Win32 MOUSE_EVENT 常量
-    private const uint FromLeft1stButton = 0x0001;
-    private const uint FromLeft2ndButton = 0x0004;
-    private const uint RightmostButton = 0x0002;
+    private const uint LeftButtonPressed = 0x0001;
+    private const uint MiddleButtonPressed = 0x0004;
+    private const uint RightButtonPressed = 0x0002;
     private const uint MouseMoved = 0x0001;
     private const uint MouseWheeled = 0x0004;
 
@@ -103,7 +103,7 @@ public sealed class MouseReportParser
         return consumed == 0 ? 0 : consumed + (bracket - start);
     }
 
-    /** X10: `[ M` + Cb + Cx + Cy; 坐标与键值都带 32 偏移。bracket 指向 '['。 */
+    /** X10: bracket 后是 M 再跟 Cb/Cx/Cy 三个字节; 坐标与键值都带 32 偏移。 */
     private static int ParseX10(List<byte> buffer, int bracket, List<PtyMouseEvent> events)
     {
         if (bracket + 4 >= buffer.Count)
@@ -115,7 +115,7 @@ public sealed class MouseReportParser
         return 5;
     }
 
-    /** SGR: `[ < Cb ; Cx ; Cy` + (M|m); Cb 无偏移, 坐标 1-based, `m` 是释放。bracket 指向 '['。 */
+    /** SGR: bracket 后是小于号再跟 Cb;Cx;Cy, 以 M 或 m 结束; Cb 无偏移, 坐标 1-based, m 是释放。 */
     private static int ParseSgr(List<byte> buffer, int bracket, List<PtyMouseEvent> events)
     {
         var index = bracket + 2;
@@ -191,9 +191,9 @@ public sealed class MouseReportParser
             ? 0u
             : button switch
             {
-                0 => FromLeft1stButton,
-                1 => FromLeft2ndButton,
-                _ => RightmostButton,
+                0 => LeftButtonPressed,
+                1 => MiddleButtonPressed,
+                _ => RightButtonPressed,
             };
         var flags = (buttons & 0x20) != 0 ? MouseMoved : 0u;
         return new PtyMouseEvent(x, y, state, flags);

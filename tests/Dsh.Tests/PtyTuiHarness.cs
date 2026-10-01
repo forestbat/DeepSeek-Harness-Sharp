@@ -1,6 +1,8 @@
 using System.Net.Sockets;
 using System.Text;
+using Dsh.Boot;
 using Dsh.Pty;
+using Dsh.Tui.Services;
 
 namespace Dsh.Tests;
 
@@ -119,7 +121,60 @@ internal sealed class PtyTuiHarness : IDisposable
         _ = _pump;
         _host.StopAsync(Session.Id.ToString()).GetAwaiter().GetResult();
         _host.Dispose();
-        Directory.Delete(Home, recursive: true);
+        // 本夹具起的 TUI 只是 proxy: 真正的会话常驻 daemon 且以本夹具的 home 为家, 不结束它会占住日志目录导致删除失败。
+        StopResidentSessions();
+        for (var attempt = 0; attempt < 20 && Directory.Exists(Home); attempt++)
+        {
+            try
+            {
+                Directory.Delete(Home, recursive: true);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
+    /** 结束本夹具 home 下的常驻会话(daemon 里 Command 含本 home 的那些)。 */
+    private void StopResidentSessions()
+    {
+        try
+        {
+            foreach (var session in PtyDaemonClient.ListAsync().GetAwaiter().GetResult()
+                         .Where(candidate => candidate.Command.Contains(Home, StringComparison.OrdinalIgnoreCase)))
+            {
+                for (var press = 0; press < 2; press++)
+                {
+                    try
+                    {
+                        using var keys = new MemoryStream([0x03]);
+                        PtyDaemonClient.AttachAsync(session.Id, keys, Stream.Null).GetAwaiter().GetResult();
+                    }
+                    catch (Exception)
+                    {
+                        break;
+                    }
+
+                    Thread.Sleep(50);
+                }
+
+                for (var attempt = 0; attempt < 40; attempt++)
+                {
+                    var status = PtyDaemonClient.ListAsync().GetAwaiter().GetResult()
+                        .FirstOrDefault(candidate => candidate.Id == session.Id)
+                        ?.Status;
+                    if (status is null || !string.Equals(status, "Running", StringComparison.Ordinal))
+                        break;
+                    Thread.Sleep(25);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // daemon 未运行: 没有常驻会话需要收尾
+        }
     }
 
     private async Task PumpAsync()
@@ -140,7 +195,7 @@ internal sealed class PtyTuiHarness : IDisposable
             if (read == 0)
             {
                 // 无数据(ConPTY 空闲时也返回 0), 不能当成 EOF
-                await Task.Delay(20);
+                await Task.Delay(5);
                 continue;
             }
             lock (_text)
@@ -189,6 +244,18 @@ internal sealed class PtyTuiHarness : IDisposable
             else if (Directory.Exists(source))
                 CopyDirectory(source, Path.Combine(home, name));
         }
+
+        // 用例断言的是默认布局几何: 去掉上一层会话里拖出来的 TUI 布局参数(侧栏宽度/输入栏高度),
+        // 否则同一用例会因为开发机上拖过侧栏而失败。
+        var harnessHome = new HarnessHome(home);
+        var settings = HarnessSettings.Load(harnessHome);
+        if (settings.Plugins.TryGetValue(TuiSettings.Package, out var tui))
+        {
+            tui.Parameters.Remove("sidebarWidth");
+            tui.Parameters.Remove("inputHeight");
+            settings.SavePlugins(harnessHome);
+        }
+
         return home;
     }
 

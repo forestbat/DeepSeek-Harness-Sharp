@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using Dsh.Tui;
 
 namespace Dsh.Tests;
@@ -179,56 +179,6 @@ public class MouseReportInputTests
         Assert.Equal(ConsoleKey.Escape, flushed[0].Key.Key);
     }
 
-    [Theory]
-    [InlineData("\u001b[?1000h")]
-    [InlineData("\u001b[?1002h")]
-    [InlineData("\u001b[?1006h")]
-    public void Mouse_Enable_Sequences_Are_Dropped_At_Every_Split(string sequence)
-    {
-        var bytes = Encoding.ASCII.GetBytes($"AB{sequence}CD");
-        for (var split = 1; split < bytes.Length; split++)
-        {
-            var filter = new Dsh.Pty.MouseModeFilter();
-            var output = new List<byte>();
-            output.AddRange(filter.Filter(bytes.AsSpan(0, split)));
-            output.AddRange(filter.Filter(bytes.AsSpan(split)));
-
-            Assert.Equal("ABCD", Encoding.ASCII.GetString(output.ToArray()));
-        }
-    }
-
-    /** 关闭序列必须放行: attach 时要靠它复位"上一次运行把终端留在鼠标模式"的终端。 */
-    [Theory]
-    [InlineData("\u001b[?1000l")]
-    [InlineData("\u001b[?1002l")]
-    [InlineData("\u001b[?1006l")]
-    public void Mouse_Disable_Sequences_Are_Kept_At_Every_Split(string sequence)
-    {
-        var bytes = Encoding.ASCII.GetBytes($"AB{sequence}CD");
-        for (var split = 1; split < bytes.Length; split++)
-        {
-            var filter = new Dsh.Pty.MouseModeFilter();
-            var output = new List<byte>();
-            output.AddRange(filter.Filter(bytes.AsSpan(0, split)));
-            output.AddRange(filter.Filter(bytes.AsSpan(split)));
-
-            Assert.Equal($"AB{sequence}CD", Encoding.ASCII.GetString(output.ToArray()));
-        }
-    }
-
-    [Theory]
-    [InlineData("\u001b[?25l")]
-    [InlineData("\u001b[?1049h")]
-    [InlineData("\u001b[?2026h")]
-    [InlineData("\u001b[?2004h")]
-    public void Non_Mouse_Modes_Are_Kept(string sequence)
-    {
-        var filter = new Dsh.Pty.MouseModeFilter();
-        var output = filter.Filter(Encoding.ASCII.GetBytes($"A{sequence}B"));
-
-        Assert.Equal($"A{sequence}B", Encoding.ASCII.GetString(output));
-    }
-
     private static void Drain(TerminalInputParser parser, List<char> leaked, ref int mice)
     {
         while (parser.TryParse(out var input))
@@ -242,5 +192,98 @@ public class MouseReportInputTests
             if (input.Key.KeyChar != '\0')
                 leaked.Add(input.Key.KeyChar);
         }
+    }
+}
+
+
+/** 代理必须从字节流里摘出鼠标报文(X10 与 SGR), 既不漏进会话, 又要把它们变成可注入的鼠标事件。 */
+public class MouseReportParserTests
+{
+    [Theory]
+    [InlineData("\u001b[M D-")]
+    [InlineData("\u001b[M@D-")]
+    public void X10_Report_Is_Parsed_And_Stripped(string report)
+    {
+        var bytes = System.Text.Encoding.ASCII.GetBytes($"AB{report}CD");
+        for (var split = 1; split < bytes.Length; split++)
+        {
+            var parser = new Dsh.Pty.MouseReportParser();
+            var events = new List<Dsh.Pty.PtyMouseEvent>();
+            var output = new List<byte>();
+            output.AddRange(parser.Push(bytes.AsSpan(0, split), events));
+            output.AddRange(parser.Push(bytes.AsSpan(split), events));
+
+            // 单独的 ESC 会立即透传(不拖住 Esc 键), 所以比较时把它剔掉; 报文本身不得泄漏成字面字符。
+            Assert.Equal("ABCD", System.Text.Encoding.ASCII.GetString(output.ToArray()).Replace("\u001b", ""));
+            Assert.Single(events);
+        }
+    }
+
+    [Theory]
+    [InlineData("\u001b[<32;11;5M")]
+    [InlineData("\u001b[<0;3;3m")]
+    [InlineData("\u001b[<64;3;3M")]
+    public void Sgr_Report_Is_Parsed_And_Stripped(string report)
+    {
+        var bytes = System.Text.Encoding.ASCII.GetBytes($"AB{report}CD");
+        for (var split = 1; split < bytes.Length; split++)
+        {
+            var parser = new Dsh.Pty.MouseReportParser();
+            var events = new List<Dsh.Pty.PtyMouseEvent>();
+            var output = new List<byte>();
+            output.AddRange(parser.Push(bytes.AsSpan(0, split), events));
+            output.AddRange(parser.Push(bytes.AsSpan(split), events));
+
+            // 同 X10: 边界正好切开 ESC 时它会先透传出去, 比较时剔除。
+            Assert.Equal("ABCD", System.Text.Encoding.ASCII.GetString(output.ToArray()).Replace("\u001b", ""));
+            Assert.Single(events);
+        }
+    }
+
+    [Fact]
+    public void X10_Left_Drag_Carries_Moved_Flag_And_Zero_Based_Coords()
+    {
+        var parser = new Dsh.Pty.MouseReportParser();
+        var events = new List<Dsh.Pty.PtyMouseEvent>();
+        var bytes = System.Text.Encoding.ASCII.GetBytes("\u001b[M@4;");
+
+        _ = parser.Push(bytes, events);
+
+        var mouse = Assert.Single(events);
+        Assert.Equal(19, mouse.X);
+        Assert.Equal(26, mouse.Y);
+        Assert.Equal(0x0001u, mouse.ButtonState);
+        Assert.Equal(0x0001u, mouse.EventFlags);
+    }
+
+    [Fact]
+    public void Sgr_Wheel_Report_Carries_Wheel_Flag()
+    {
+        var parser = new Dsh.Pty.MouseReportParser();
+        var events = new List<Dsh.Pty.PtyMouseEvent>();
+
+        _ = parser.Push(System.Text.Encoding.ASCII.GetBytes("\u001b[<64;3;3M"), events);
+
+        var mouse = Assert.Single(events);
+        Assert.Equal(0x0004u, mouse.EventFlags);
+        Assert.Equal(120u << 16, mouse.ButtonState);
+    }
+
+    [Theory]
+    [InlineData("hello")]
+    [InlineData("[abc]")]
+    [InlineData("\u001b[A")]
+    [InlineData("\u001b[5~")]
+    [InlineData("\u001b")]
+    public void Normal_Input_Is_Kept(string text)
+    {
+        var parser = new Dsh.Pty.MouseReportParser();
+        var events = new List<Dsh.Pty.PtyMouseEvent>();
+        var output = parser.Push(System.Text.Encoding.ASCII.GetBytes(text), events);
+        if (output.Length != System.Text.Encoding.ASCII.GetByteCount(text))
+            output = [.. output, .. parser.Push(ReadOnlySpan<byte>.Empty, events)];
+
+        Assert.Empty(events);
+        Assert.Equal(text, System.Text.Encoding.ASCII.GetString(output));
     }
 }

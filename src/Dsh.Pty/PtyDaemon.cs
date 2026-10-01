@@ -207,16 +207,24 @@ public sealed class PtyDaemon : IAsyncDisposable
 
                     try
                     {
+                        var id = parameters.Id ?? $"pty-{Guid.NewGuid():N}";
+                        var environment = new Dictionary<string, string?>(
+                            parameters.Environment ?? new Dictionary<string, string?>())
+                        {
+                            [PtySessionProtocol.SessionVariable] = id,
+                        };
                         var startInfo = new PtyStartInfo
                         {
                             FileName = parameters.FileName,
                             Arguments = parameters.Arguments,
                             WorkingDirectory = parameters.WorkingDirectory,
-                            Environment = parameters.Environment,
+                            Environment = environment,
                             Rows = parameters.Rows,
                             Columns = parameters.Columns,
+                            WantsMouse = parameters.WantsMouse,
                         };
-                        var session = await _host.StartAsync(startInfo, parameters.Id, cancellationToken);
+                        var session = await _host.StartAsync(startInfo, id, cancellationToken);
+                        WriteSessionSize(session);
                         await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
                     }
                     catch (Exception error)
@@ -224,6 +232,40 @@ public sealed class PtyDaemon : IAsyncDisposable
                         await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = error.Message }, cancellationToken);
                     }
 
+                    return false;
+                }
+
+            case "resize":
+                {
+                    var id = request.Id;
+                    var session = id is null ? null : _host.Get(id);
+                    if (session is null)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        return false;
+                    }
+
+                    if (request.Params is { } size)
+                        session.Resize(size.Rows, size.Columns);
+                    WriteSessionSize(session);
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
+                    return false;
+                }
+
+            case "mouse":
+                {
+                    // 终端代理把宿主终端的鼠标事件送进来: 注入常驻会话的控制台输入缓冲, 不能写 pty
+                    // (ConPTY 不翻译鼠标转义序列, 写 pty 只会在记录读取型 TUI 里变成乱码文本)。
+                    var id = request.Id;
+                    var session = id is null ? null : _host.Get(id);
+                    if (session is null)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        return false;
+                    }
+
+                    session.InjectMouse(new PtyMouseEvent(request.MouseX, request.MouseY, request.MouseButtonState, request.MouseEventFlags));
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
                     return false;
                 }
 
@@ -249,10 +291,13 @@ public sealed class PtyDaemon : IAsyncDisposable
                         return false;
                     }
 
+                    // 新 proxy 接管前先丢掉队列里的历史输出(含早先的 detach 标记): 画面由快照重建, 历史字节只会误导。
+                    session.DrainPendingOutput();
                     session.Attach();
                     try
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);                        // 状态重建: 用会话的 VT 屏全量重绘(清屏+定位+SGR+光标), 空闲/全屏程序接管后都是正确画面。
+                        await stream.WriteAsync(session.Snapshot(), cancellationToken);
                         await TunnelAsync(session, stream, cancellationToken);
                     }
                     finally
@@ -351,5 +396,24 @@ public sealed class PtyDaemon : IAsyncDisposable
             Status = info.Status.ToString(),
             ExitCode = info.ExitCode,
             IsAttached = info.IsAttached,
+            Columns = info.Columns,
+            Rows = info.Rows,
+            WantsMouse = info.WantsMouse,
         };
+
+    /** 会话尺寸落盘: ConPTY 子进程读不到 resize 后的窗口尺寸, 由尺寸的权威方(daemon)写文件给常驻 TUI 自己读。 */
+    private static void WriteSessionSize(PtySession session)
+    {
+        try
+        {
+            var info = session.ToInfo();
+            Directory.CreateDirectory(PtyDaemonPaths.RunDirectory());
+            File.WriteAllText(
+                PtyDaemonPaths.SessionSizeFile(session.Id.ToString()),
+                $"{info.Columns} {info.Rows}");
+        }
+        catch (IOException)
+        {
+        }
+    }
 }

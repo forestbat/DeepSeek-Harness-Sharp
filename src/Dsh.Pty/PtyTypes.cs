@@ -25,9 +25,12 @@ public sealed record PtyStartInfo
 
     public int Rows { get; init; } = 24;
 
-    public int Columns { get; init; } = 80;
+        public int Columns { get; init; } = 80;
 
-    public string Command => string.Join(' ', new[] { FileName }.Concat(Arguments));
+        /** 子进程要鼠标事件(常驻 TUI); 终端形态的代理据此才打开宿主终端的上报, 见 PtyDaemonClient.AttachAsync。 */
+        public bool WantsMouse { get; init; }
+
+        public string Command => string.Join(' ', new[] { FileName }.Concat(Arguments));
 }
 
 public sealed record PtySessionInfo(
@@ -37,4 +40,7 @@ public sealed record PtySessionInfo(
     int? Pid,
     PtySessionStatus Status,
     int? ExitCode,
-    bool IsAttached);
+    bool IsAttached,
+    int Columns = 0,
+    int Rows = 0,
+    bool WantsMouse = false);

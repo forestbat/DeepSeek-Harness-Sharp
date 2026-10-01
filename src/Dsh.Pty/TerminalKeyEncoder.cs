@@ -1,13 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Dsh.Tui;
+namespace Dsh.Pty;
 
 /**
  * 把窗口按键编码成 xterm 风格 VT 输入字节, 供 shell 窗格写进 PTY。
  * 只做编码: 控制键、方向键/编辑键/F 键、可打印字符(含 CJK 的 UTF-8)。
  */
-internal static class TerminalKeyEncoder
+public static class TerminalKeyEncoder
 {
     private const int BufferSize = 16;
 

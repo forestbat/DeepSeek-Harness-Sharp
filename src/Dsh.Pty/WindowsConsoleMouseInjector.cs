@@ -104,7 +104,8 @@ internal static class WindowsConsoleMouseInjector
         nint hTemplateFile);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool WriteConsoleInputW(nint hConsoleInput, [Out] InputRecord[] lpBuffer, uint nLength, out uint lpNumberOfEventsWritten);
+    // 注意: 这里不能标 [Out] —— 那会让封送层只准备一块清零的缓冲区, 写进去的记录全是 0。
+    private static extern bool WriteConsoleInputW(nint hConsoleInput, InputRecord[] lpBuffer, uint nLength, out uint lpNumberOfEventsWritten);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(nint hObject);

@@ -1,5 +1,4 @@
 using Dsh.Boot;
-using Dsh.Pty;
 
 namespace Dsh.Tui;
 
@@ -29,21 +28,22 @@ internal static class TuiProxy
             Rows = rows,
             Columns = columns,
             Environment = new Dictionary<string, string?> { [PtySessionProtocol.ChildVariable] = "1" },
+            // 常驻 TUI 要鼠标(拖动分隔线/滚轮): 终端形态的代理据此打开宿主终端上报。
+            WantsMouse = true,
         });
 
         if (gpu)
         {
             // 独立窗口形态: 窗口只渲染会话画面, 关窗口即 detach(会话继续跑)。
             var atlas = TuiRunner.CreateAtlasForTerminal();
-            using var windowHost = GpuHostFactory.CreateWindowHost(atlas);
+            using var windowHost = GpuHostFactory.CreateWindowHost(atlas, vsync: GpuCatalog.LoadVsync(app.Home));
             new GpuSessionProxy(session.Id, atlas, windowHost).Run();
             return 0;
         }
 
         // 终端形态: 接管本终端, 输出即会话画面, 输入原样进会话; 常驻会话发 detach 标记或退出时本进程就结束。
-        await PtyDaemonClient.AttachAsync(
+        await PtyDaemonClient.AttachConsoleAsync(
             session.Id,
-            Console.OpenStandardInput(),
             Console.OpenStandardOutput(),
             CancellationToken.None);
         return 0;
