@@ -18,6 +18,7 @@ public static class HarnessEntrypoint
         var gpu = false;
         var shell = false;
         string? gpuScreenshot = null;
+        string? gpuCapturePlan = null;
         string? gpuCard = null;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
@@ -42,6 +43,9 @@ public static class HarnessEntrypoint
                 case "--gpu-screenshot" when index + 1 < args.Length:
                     gpuScreenshot = args[++index];
                     break;
+                case "--gpu-capture-plan" when index + 1 < args.Length:
+                    gpuCapturePlan = args[++index];
+                    break;
                 case "--gpu-card" when index + 1 < args.Length:
                     gpuCard = args[++index];
                     break;
@@ -49,6 +53,13 @@ public static class HarnessEntrypoint
                     PrintUsage();
                     return 0;
                 default:
+                    // 未知的 --选项 必须报错: 否则会被当成任务提示词喂给 headless(例如把 `dsh tui list` 误写成
+                    // `dsh --tui list`), 表现为"什么都没打印然后卡住"。
+                    if (args[index].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        await Console.Error.WriteLineAsync($"dsh: unknown option \"{args[index]}\" (try --help)");
+                        return 2;
+                    }
                     positional.Add(args[index]);
                     break;
             }
@@ -91,11 +102,19 @@ public static class HarnessEntrypoint
                             await Console.Error.WriteLineAsync("dsh: tui attach requires a session id");
                             return 1;
                         }
-                        return await BootCli.RunTuiAttachAsync(positional[2]);
+
+                        // tmux 式语义: id 先当 daemon 的 PTY 会话接管; 不是的话按 harness 会话恢复进窗口。
+                        var target = positional[2];
+                        if (await BootCli.IsDaemonPtyAsync(target))
+                            return await BootCli.RunTuiAttachAsync(target);
+                        await Console.Out.WriteLineAsync($"dsh: {target} 不是 daemon 里的 PTY 会话, 按 harness 会话恢复"
+                            + (gpu ? "到独立 GPU 窗口" : "进本终端 TUI")
+                            + "(要独立窗口加 --gpu)");
+                        return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", target, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
                     }
                     if (subcommand == "daemon")
                         return await BootCli.RunTuiDaemonAsync();
-                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard);
+                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
                 }
             case "gui":
                 // 组合插件之前先摘掉自己的控制台
@@ -106,7 +125,7 @@ public static class HarnessEntrypoint
             case "register-terminal":
                 return await TerminalEntryRegistration.RegisterAsync(Console.Out);
             case null:
-                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot, gpuCard);
+                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
             default:
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
         }
@@ -116,7 +135,8 @@ public static class HarnessEntrypoint
     {
         Console.WriteLine("""
             Usage: dsh [options] [task...]
-                   dsh tui [list | attach <id>]
+                   dsh tui [list | attach <pty-id>]
+                   dsh tui --session <id> [--gpu]   (恢复 harness 会话; --gpu 开独立窗口)
                    dsh gui [--session <id>]
                    dsh headless "task"
                    dsh register-terminal    (Linux: 注册为桌面环境的默认终端)
@@ -127,9 +147,15 @@ public static class HarnessEntrypoint
               --gpu              open the standalone terminal window with the GPU renderer
               --shell            start with a real shell pane (Dsh.Pty) in the focused slot
               --gpu-screenshot <path>  capture the GPU frame buffer to PNG/TIFF and exit
+              --gpu-capture-plan <file>  drive scripted keys and capture multiple GPU frames (hidden window)
               --gpu-card <N|path>      pick the DRM card for bare-TTY GBM/KMS (e.g. 1 or /dev/dri/card1)
               --dump-config      print the resolved harness configuration and exit
               -h, --help         show this help
+
+            tui attach 的 <id> 两种都支持(tmux 习惯):
+              · daemon 里的 PTY 会话(由 /detach 产生, 见 dsh tui list) —— 直接接管它的字节流;
+              · harness 会话 —— 恢复进窗口(本终端 TUI; 加 --gpu 开独立窗口)。
+            注: 另一个 TUI 进程内的 shell 窗格无法跨进程 attach。
             """);
     }
 
@@ -141,7 +167,8 @@ public static class HarnessEntrypoint
         bool gpu = false,
         bool shell = false,
         string? gpuScreenshot = null,
-        string? gpuCard = null)
+        string? gpuCard = null,
+        string? gpuCapturePlan = null)
     {
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui", EntrypointPlugin: entrypointPlugin);
         using var app = await ConfigBoot.Compose(options);
@@ -152,6 +179,7 @@ public static class HarnessEntrypoint
             gpu,
             shell,
             gpuScreenshot,
+            gpuCapturePlan,
             gpuCard));
     }
 }

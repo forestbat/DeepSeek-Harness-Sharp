@@ -14,6 +14,8 @@ public sealed record HarnessHome(string Root)
 
     public string LogsPath => SubPath("logs");
 
+    public string CachePath => SubPath("cache");
+
     public string AgentPresetsPath => SubPath(".agent-presets");
 
     public string SubPath(string segment) => Path.Combine(Root, segment);

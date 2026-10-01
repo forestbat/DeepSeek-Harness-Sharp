@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Dsh.Runtime;
 
@@ -76,29 +77,61 @@ public static class BootCli
         }
     }
 
+    /** 该 id 是否是 daemon 里活着的 PTY 会话; 只查不拉起 daemon(attach harness 会话时不该凭空起 daemon)。 */
+    public static async Task<bool> IsDaemonPtyAsync(string id, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var clientType = RequireType("Dsh.Pty.PtyDaemonClient", "Dsh.Pty");
+            if (!await (Task<bool>)InvokeStatic(clientType, "IsRunningAsync", cancellationToken)!)
+                return false;
+            var task = (Task)InvokeStatic(clientType, "ListAsync", cancellationToken)!;
+            await task;
+            var sessions = task.GetType().GetProperty("Result")!.GetValue(task)!;
+            foreach (var session in (IEnumerable)sessions)
+            {
+                if (string.Equals(Prop(session, "Id") as string, id, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+        catch (Exception error) when (IsPtyDaemonNotRunning(error))
+        {
+            return false;
+        }
+    }
+
     public static async Task<int> RunTuiAttachAsync(string id)
     {
         try
         {
             var clientType = RequireType("Dsh.Pty.PtyDaemonClient", "Dsh.Pty");
             await (Task)InvokeStatic(clientType, "EnsureRunningAsync", CancellationToken.None)!;
-            await (Task)InvokeStatic(clientType, "AttachAsync", id, Console.OpenStandardInput(), Console.OpenStandardOutput(), CancellationToken.None)!;
+            // 进入原始字节流前先留一句回声: 会话若已结束或立刻 EOF, 否则用户只会看到"什么都没发生就回到提示符"。
+            await Console.Out.WriteLineAsync($"dsh: attaching to {id} (daemon PTY; 会话退出或 Ctrl+C 即离开)");
+            // 走 AttachConsoleAsync 而不是 AttachAsync: Windows 上鼠标报文要由代理解析(ConPTY 不翻译 X10), 并按平台取原始字节
+            await (Task)InvokeStatic(clientType, "AttachConsoleAsync", id, Console.OpenStandardOutput(), CancellationToken.None)!;
+            await Console.Out.WriteLineAsync($"dsh: detached from {id}");
             return 0;
         }
         catch (Exception error) when (IsPtyDaemonNotRunning(error))
         {
-            Console.Error.WriteLine("daemon not running");
+            await Console.Error.WriteLineAsync("daemon not running");
             return 1;
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine($"dsh: attach failed: {error.Message}");
+            await Console.Error.WriteLineAsync($"dsh: attach failed: {error.Message}");
+            await Console.Error.WriteLineAsync(
+                "dsh: attach 只用于 daemon 里的 PTY 会话(由 /detach 产生); 恢复 harness 会话请用 `dsh tui --session <id>`(或 `dsh gui --session <id>`)。");
             return 1;
         }
     }
 
     public static async Task<int> RunTuiDaemonAsync()
     {
+        DetachFromTerminal();
         var daemonType = RequireType("Dsh.Pty.PtyDaemon", "Dsh.Pty");
         await using var daemon = (IAsyncDisposable)Activator.CreateInstance(daemonType, [null, null, null])!;
         await (Task)InvokeMethod(daemon, "StartAsync")!;
@@ -119,6 +152,29 @@ public static class BootCli
         }
         return 0;
     }
+
+    /** PosixSignalRegistration 被 GC 会失效, 常驻 daemon 必须持有它。 */
+    private static IDisposable? _daemonSignalGuard;
+
+    /**
+     * daemon 必须脱离启动它的终端: 否则关掉那个终端/GPU 窗口时(Windows 的 console close / Unix 的 SIGHUP)
+     * 它可能被一起收走, 里面被守护的 PTY 会话也就没了。
+     * Windows: 丢掉控制台(FreeConsole); Unix: 忽略 SIGHUP。
+     */
+    private static void DetachFromTerminal()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            _ = FreeConsole();
+            return;
+        }
+
+        _daemonSignalGuard ??= PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => context.Cancel = true);
+    }
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FreeConsole();
 
     private static IDisposable InvokeStaticDisposable(string typeName, string assemblyName, string methodName, Context ctx)
     {

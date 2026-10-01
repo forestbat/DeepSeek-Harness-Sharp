@@ -70,6 +70,8 @@ DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe gui --sessio
       workspaceView: solution   # solution|filesystem
       sidebarVisible: true
       gpu: { enabled: true, adapter: auto, backend: auto }   # adapter 选显卡(设置页会列出本机识别到的卡), backend 是高级项: auto|opengl|vulkan|software,改动重启生效
+      # `dsh tui --gpu` 的独立窗口还会读同一段的 vsync(缺省 true): true 跟显示器刷新同步,
+      # false 让帧循环按显卡最快速度跑(空转吃一个核, 一般只在测延迟/性能时关)
       window: { rememberBounds: true }
   ```
 
