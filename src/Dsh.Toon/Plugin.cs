@@ -21,11 +21,13 @@ public sealed class Plugin : IDshPlugin
 
     public string[] Inject => [LlmRuntime.ServiceName, SystemPrompt.ServiceName, ToolRuntime.ServiceName];
 
+    public Type ConfigType => typeof(ToonPluginConfig);
+
     public IDisposable Apply(Context ctx, object? config)
     {
-        var resolved = ToonPluginConfig.Resolve(config);
-        var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-        var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
+        var resolved = config as ToonPluginConfig ?? ToonPluginConfig.Resolve(config);
+        var tools = ctx.Get<ToolRuntime>()!;
+        var prompt = ctx.Get<SystemPrompt>()!;
         var global = new EventOptions { Global = true };
         var disposables = new List<IDisposable>();
         if (resolved.Output)

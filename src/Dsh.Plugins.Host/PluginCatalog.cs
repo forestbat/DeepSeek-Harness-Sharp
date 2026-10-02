@@ -66,7 +66,8 @@ public sealed class PluginCatalog
 
     private sealed record PluginHolder(PluginDescriptor Descriptor, Func<IDshPlugin> Create)
     {
-        /** 与旧反射路径同语义:探测实例取 Inject,每次 Apply 构造新实例。 */
+        /** 与旧反射路径同语义:探测实例取 Inject/InjectTypes/ConfigType,每次 Apply 构造新实例。
+         *  声明了 ConfigType 的插件在 Apply 前把 parameters 绑定成该类型,未知字段在激活期 WARN。 */
         public PluginDefinition ToDefinition()
         {
             var probe = Create();
@@ -74,8 +75,15 @@ public sealed class PluginCatalog
             {
                 Name = Descriptor.Package,
                 Inject = probe.Inject,
-                Apply = (ctx, config) => Create().Apply(ctx, config),
+                InjectTypes = probe.InjectTypes,
+                ConfigType = probe.ConfigType,
+                Apply = (ctx, config) => Create().Apply(ctx, BindConfig(probe.ConfigType, config, ctx)),
             };
         }
+
+        private static object? BindConfig(Type? configType, object? config, Context ctx)
+            => configType is null
+                ? config
+                : PluginConfigBinding.Bind(configType, config, message => ctx.LoggerFor("config").Warn("%s", message));
     }
 }

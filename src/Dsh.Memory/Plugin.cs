@@ -12,12 +12,14 @@ public sealed class Plugin : IDshPlugin
 {
     public string[] Inject => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, LlmRuntime.ServiceName, SessionStore.ServiceName];
 
+    public Type ConfigType => typeof(MemoryPluginConfig);
+
     public IDisposable Apply(Context ctx, object? config)
     {
         var options = ctx.GetProp("harnessOptions") as HarnessOptions
             ?? throw new InvalidOperationException("harnessOptions is required for the memory plugin");
         var cwd = options.Cwd ?? Environment.CurrentDirectory;
-        var store = MemoryStoreFactory.Create(MemoryPluginConfig.Resolve(config), cwd);
+        var store = MemoryStoreFactory.Create(config as MemoryPluginConfig ?? MemoryPluginConfig.Resolve(config), cwd);
         var memory = new ProjectMemory(store, ProjectMemory.SidecarDirFor(ProjectRoot.Resolve(cwd)));
         ctx.Provide(MemoryServices.Store, store);
         ctx.Provide(MemoryServices.ProjectMemory, memory);
