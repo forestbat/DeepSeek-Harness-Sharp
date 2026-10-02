@@ -24,7 +24,6 @@ public sealed class HarnessSettingsTests
                 models:
                   custom-model:
                     name: Custom Model
-                    reasoning: true
                     tool_call: true
             skills:
               paths: [a]
@@ -58,7 +57,6 @@ public sealed class HarnessSettingsTests
             var model = Assert.Single(provider.Models);
             Assert.Equal("custom-model", model.Key);
             Assert.Equal("Custom Model", model.Value.Name);
-            Assert.True(model.Value.Reasoning);
             Assert.True(model.Value.ToolCall);
             Assert.Equal(["a"], settings.Skills?.Paths);
             Assert.Equal(["b"], settings.Skills?.Urls);

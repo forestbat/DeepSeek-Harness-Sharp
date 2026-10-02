@@ -11,12 +11,11 @@ namespace Dsh.Llm.OpenAi;
 
 public sealed class OpenAiCompatibleAdapter : LlmAdapter
 {
-    private static readonly ReasoningEffortTable ReasoningTable = ReasoningEffortTable.Load();
     private static readonly IReadOnlyList<string> ReasoningKeys = ["reasoning", "reasoning_content", "thinking"];
 
     private readonly string _providerId;
     private readonly IReadOnlyList<ProviderModelSpec> _models;
-    private readonly IReadOnlySet<string> _reasoningModels;
+    private readonly IModelReasoningSource _modelsDev;
     private readonly IModelReasoningSource _metadata;
     private readonly OpenAIClient _openAi;
     private readonly bool _useResponses;
@@ -37,7 +36,7 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         _providerId = providerId;
         ProviderInfo = new LlmProviderInfo(providerId, "OpenAI-Compatible");
         _models = models ?? [];
-        _reasoningModels = _models.Where(model => model.Reasoning).Select(model => model.Id).ToHashSet(StringComparer.Ordinal);
+        _modelsDev = new ModelsDevReasoningSource(baseUrl: baseUrl);
         _useResponses = useResponses;
 
         var options = new OpenAIClientOptions
@@ -68,12 +67,10 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             .Select(model => new LlmModelInfo(_providerId, model.Id, model.Name ?? model.Id, null, ["text"]))
             .ToList();
 
-    /** 解析顺序: 端点 /models 的实时元数据 → provider 专属静态表 → settings 的 reasoning: true 通用回退。 */
+    /** 解析顺序: 端点 /models 的实时元数据 → 内置 models.dev 快照(baseUrl 主机名命中 provider)。 */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
-        var reasoning = _metadata.ReasoningFor(model)
-            ?? ReasoningTable.Resolve(_providerId, model)
-            ?? (_reasoningModels.Contains(model) ? ReasoningEffortTable.DefaultReasoning : null);
+        var reasoning = _metadata.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model);
         return new LlmResolvedModelInfo(
             _providerId,
             model,

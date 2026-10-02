@@ -27,11 +27,9 @@ providers:
     models:
       deepseek-v4-flash:
         name: DeepSeek V4 Flash
-        reasoning: true
         tool_call: true
       deepseek-v4-pro:
         name: DeepSeek V4 Pro
-        reasoning: true
         tool_call: true
 
 # 技能目录
@@ -44,7 +42,15 @@ rules: []
 
 # 插件开关:true/false 或 {enabled: true, ...插件参数}
 # 插件发现即启用;只有这里显式禁用的插件才会关闭。/plugins 命令会改写本段。
-plugins: {}
+# 项目记忆 @deepseek-ai/dsh-memory 默认关闭,用 /memory on 开启;
+# 参数:file(记忆文件路径)、backend(file|mongo)、capture(回合末自动捕获,默认 true)、mongo(connectionString/database/collection/key)。
+# 快照恢复点 @deepseek-ai/dsh-checkpoints 默认关闭,改 true 开启;参数:max_points、keep_days。
+# TOON 编码面 @deepseek-ai/dsh-toon 默认关闭(实验性:工具结果/调用改用 TOON 文本,输出侧会缓冲流式渲染);
+# 参数:output(默认 true)、input(逗号分隔的工具名白名单,这些工具的结果以 TOON 进上下文)。
+plugins:
+  "@deepseek-ai/dsh-memory": false
+  "@deepseek-ai/dsh-toon": false
+  "@deepseek-ai/dsh-checkpoints": false
 
 # MCP 服务器
 mcp:
@@ -55,21 +61,10 @@ mcp:
     url: null
     enabled: true
 
-# 项目记忆开关（/memory on|off）
-memory:
-  enabled: false
-  # file: .dsh-memory.md
-
 # 自动压缩选项
 compaction:
   auto: true
   prune: true
-
-# 快照恢复点(shadow git,默认关闭)
-checkpoints:
-  enabled: false
-  max_points: 256
-  keep_days: 15
 
 # 日志
 logging:

@@ -33,12 +33,6 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "safety")]
     public SafetySettings? Safety { get; set; }
 
-    [YamlMember(Alias = "memory")]
-    public MemorySettings? Memory { get; set; }
-
-    [YamlMember(Alias = "checkpoints")]
-    public CheckpointsSettings? Checkpoints { get; set; }
-
     [YamlMember(Alias = "logging")]
     public LoggingSettings? Logging { get; set; }
 
@@ -48,6 +42,10 @@ public sealed class HarnessSettings
     private const string MinimalSettingsTemplate = """
         global_default_model: deepseek-official/deepseek-v4-flash
         compaction_model: deepseek-official/deepseek-v4-flash
+        plugins:
+          "@deepseek-ai/dsh-memory": false
+          "@deepseek-ai/dsh-checkpoints": false
+          "@deepseek-ai/dsh-toon": false
         """;
 
     public static string LoadTemplate(string? baseDirectory = null)
@@ -148,9 +146,6 @@ public sealed class ProviderModelSettings
     [YamlMember(Alias = "name")]
     public string? Name { get; set; }
 
-    [YamlMember(Alias = "reasoning")]
-    public bool? Reasoning { get; set; }
-
     [YamlMember(Alias = "tool_call")]
     public bool? ToolCall { get; set; }
 
@@ -189,57 +184,6 @@ public sealed class SafetySettings
 
     [YamlMember(Alias = "blacklist")]
     public List<string> Blacklist { get; set; } = [];
-}
-
-public sealed class MemorySettings
-{
-    [YamlMember(Alias = "enabled")]
-    public bool Enabled { get; set; }
-
-    [YamlMember(Alias = "file")]
-    public string? File { get; set; }
-
-    /** 后端:file(默认,markdown 文件)或 mongo。 */
-    [YamlMember(Alias = "backend")]
-    public string? Backend { get; set; }
-
-    /** 回合末自动捕获(会话摘要 + 记忆整固);缺省 true,仅在 enabled 时生效。 */
-    [YamlMember(Alias = "capture")]
-    public bool? Capture { get; set; }
-
-    [YamlMember(Alias = "mongo")]
-    public MemoryMongoSettings? Mongo { get; set; }
-}
-
-public sealed class MemoryMongoSettings
-{
-    [YamlMember(Alias = "connectionString")]
-    public string ConnectionString { get; set; } = "mongodb://localhost:27017";
-
-    [YamlMember(Alias = "database")]
-    public string Database { get; set; } = "dsh_memory";
-
-    [YamlMember(Alias = "collection")]
-    public string Collection { get; set; } = "memory";
-
-    /** 文档 key;缺省 project。 */
-    [YamlMember(Alias = "key")]
-    public string? Key { get; set; }
-}
-
-public sealed class CheckpointsSettings
-{
-    public const int DefaultMaxPoints = 256;
-    public const int DefaultKeepDays = 15;
-
-    [YamlMember(Alias = "enabled")]
-    public bool Enabled { get; set; }
-
-    [YamlMember(Alias = "max_points")]
-    public int MaxPoints { get; set; } = DefaultMaxPoints;
-
-    [YamlMember(Alias = "keep_days")]
-    public int KeepDays { get; set; } = DefaultKeepDays;
 }
 
 public sealed class LoggingSettings

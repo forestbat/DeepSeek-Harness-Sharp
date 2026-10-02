@@ -6,6 +6,10 @@
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/models-dev.json" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

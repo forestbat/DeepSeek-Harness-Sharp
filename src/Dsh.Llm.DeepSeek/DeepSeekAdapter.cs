@@ -60,7 +60,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
         new(OffEffort, "Off", "Use for simple tasks that do not need reasoning."),
     ];
 
-    private static readonly ReasoningEffortTable ReasoningTable = ReasoningEffortTable.Load();
+    private readonly ModelsDevReasoningSource _modelsDev;
 
     private readonly DeepSeekAdapterOptions _config;
     private readonly HttpClient _http;
@@ -70,6 +70,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
         ProviderInfo = new LlmProviderInfo(providerId, "DeepSeek");
         _config = config;
         _http = config.HttpClient ?? new HttpClient();
+        _modelsDev = new ModelsDevReasoningSource("deepseek");
     }
 
     public override LlmProviderInfo ProviderInfo { get; }
@@ -98,7 +99,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
                 "INVALID_MODEL_INFO"));
         }
         var contextWindow = configured?.ContextWindow ?? connection.DefaultContextWindow;
-        var reasoning = ReasoningTable.Resolve(ProviderInfo.Id, model);
+        var reasoning = _modelsDev.ReasoningFor(model);
         reasoning ??= connection.Defaults.Thinking == "disabled"
             ? new LlmModelReasoningInfo(OffOnlyReasoningEfforts, OffEffort)
             : new LlmModelReasoningInfo(ReasoningEfforts, connection.Defaults.ReasoningEffort switch

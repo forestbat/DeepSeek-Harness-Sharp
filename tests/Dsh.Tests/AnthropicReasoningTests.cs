@@ -52,14 +52,14 @@ public class AnthropicReasoningTests
     }
 
     [Fact]
-    public void ResolveModel_Falls_Back_To_Builtin_Table()
+    public void ResolveModel_Falls_Back_To_ModelsDev()
     {
         var adapter = new AnthropicAdapter("anthropic", "https://example.invalid", "sk-test", ["claude-opus-5"]);
 
         var info = adapter.ResolveModel("claude-opus-5");
 
-        Assert.Equal(["low", "medium", "high"], info.Reasoning!.Efforts.Select(effort => effort.Id.Value));
-        Assert.Equal("high", info.Reasoning.DefaultEffort?.ToString());
+        Assert.Equal(["low", "medium", "high", "xhigh", "max"], info.Reasoning!.Efforts.Select(effort => effort.Id.Value));
+        Assert.Equal("medium", info.Reasoning.DefaultEffort?.ToString());
     }
 
     [Fact]

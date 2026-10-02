@@ -167,7 +167,7 @@ public sealed class ProviderRegistrar : IDisposable
             apiKeyEnv,
             resolvedKey,
             provider.Models.Select(model => new ProviderModelSpec(
-                model.Key, model.Value.Name, model.Value.SystemPromptUpdate, model.Value.Reasoning == true)).ToList(),
+                model.Key, model.Value.Name, model.Value.SystemPromptUpdate)).ToList(),
             resolution.ApiStyle ?? legacyStyle);
         return new ProviderRegistrationResult(llm.RegisterAdapter([id], factory!.Create(resolved)), wire, source);
     }

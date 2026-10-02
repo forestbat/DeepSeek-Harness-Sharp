@@ -515,19 +515,19 @@ public sealed class MainViewModelTests
             logging:
               file: false
             providers:
-              pa:
+              deepseek:
                 type: openai-compatible
                 options:
-                  baseUrl: https://example.invalid
+                  baseUrl: https://api.deepseek.com
                   apiKey: sk-test
                 models:
                   deepseek-flash:
-                    reasoning: true
+                    name: DeepSeek Flash
             """);
         using var viewModel = new MainViewModel(environment.App, environment.Agent);
 
-        viewModel.SwitchModelCommand.Execute("pa/deepseek-flash");
-        for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "pa/deepseek-flash"; attempt++)
+        viewModel.SwitchModelCommand.Execute("deepseek/deepseek-flash");
+        for (var attempt = 0; attempt < 200 && viewModel.Composer.ModelLabel != "deepseek/deepseek-flash"; attempt++)
         {
             Dispatcher.UIThread.RunJobs();
             await Task.Delay(5, TestContext.Current.CancellationToken);

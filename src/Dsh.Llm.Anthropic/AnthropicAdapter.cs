@@ -12,7 +12,7 @@ public sealed class AnthropicAdapter : LlmAdapter
     private readonly IReadOnlyList<string> _modelIds;
     private readonly HttpClient _http;
     private readonly IModelReasoningSource _metadataSource;
-    private readonly ReasoningEffortTable _reasoningEfforts = ReasoningEffortTable.Load();
+    private readonly IModelReasoningSource _modelsDev;
 
     public AnthropicAdapter(
         string providerId,
@@ -27,6 +27,7 @@ public sealed class AnthropicAdapter : LlmAdapter
         _apiKey = apiKey;
         _modelIds = modelIds ?? [];
         _http = httpClient ?? new HttpClient();
+        _modelsDev = new ModelsDevReasoningSource("anthropic");
         if (metadataSource is not null)
         {
             _metadataSource = metadataSource;
@@ -48,10 +49,10 @@ public sealed class AnthropicAdapter : LlmAdapter
             .Select(id => new LlmModelInfo(ProviderInfo.Id, id, id, null, ["text"]))
             .ToList();
 
-    /** 解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 anthropic 静态表。 */
+    /** 解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 models.dev 快照。 */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
-        var reasoning = _metadataSource.ReasoningFor(model) ?? _reasoningEfforts.Resolve(ProviderInfo.Id, model);
+        var reasoning = _metadataSource.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model);
         return new LlmResolvedModelInfo(ProviderInfo.Id, model, model, null, ["text"], null, null, reasoning);
     }
 
