@@ -72,6 +72,38 @@ public sealed class PtcRuntimeTests
         Assert.DoesNotContain("public static Task<JsonNode?> run_code(", first);
     }
 
+    [Fact]
+    public void SdkRender_NonIdentifierTool_DeclaredAsCallForm()
+    {
+        var odd = new ToolSchema("my-tool", "Odd tool", ObjectSchema(("x", "string", true)));
+        var alpha = new ToolSchema("alpha", "Alpha tool", ObjectSchema(("x", "string", true)));
+
+        var rendered = PtcSdkRenderer.Render([odd, alpha]);
+
+        Assert.Contains("public static Task<JsonNode?> alpha(", rendered);
+        Assert.DoesNotContain("public static Task<JsonNode?> my-tool(", rendered);
+        Assert.Contains("""await tools.call("my-tool", args)""", rendered);
+        Assert.Contains("tools.call", rendered);
+    }
+
+    [Fact]
+    public async Task RunCode_CallForm_ReachesNonIdentifierTool()
+    {
+        using var harness = new Harness();
+        var agent = new FakeAgent(harness.Ctx);
+        RegisterEcho(harness.Tools, "my-tool");
+        using var presentation = harness.Tools.PresentAs(ToolPresentationMode.Ptc, agent.ScopeKey);
+
+        var result = await RunCode(harness.Tools, agent, """
+            var r = await tools.call("my-tool", new JsonObject { ["text"] = "hi" });
+            return r;
+            """, timeoutMs: 20000);
+
+        Assert.False(result.IsError, TextOf(result));
+        var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+        Assert.Equal("hi", value.GetProperty("result").GetProperty("echoed").GetString());
+    }
+
     private sealed class CompositionHome : IDisposable
     {
         public CompositionHome(string settings)
@@ -101,7 +133,7 @@ public sealed class PtcRuntimeTests
     [Fact]
     public async Task PtcScope_ProjectsOnlyRunCodeAndSdkSections()
     {
-        using var home = new CompositionHome("plugins: {}\n");
+        using var home = new CompositionHome("plugins: { \"@deepseek-ai/dsh-toon\": false }\n");
         using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
         var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
@@ -118,7 +150,7 @@ public sealed class PtcRuntimeTests
     [Fact]
     public async Task BothScope_ProjectsNativePlusRunCode()
     {
-        using var home = new CompositionHome("plugins: {}\n");
+        using var home = new CompositionHome("plugins: { \"@deepseek-ai/dsh-toon\": false }\n");
         using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
         var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
@@ -139,6 +171,7 @@ public sealed class PtcRuntimeTests
         using var home = new CompositionHome("""
             plugins:
               "@deepseek-ai/dsh-ptc": false
+              "@deepseek-ai/dsh-toon": false
             """);
         using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
         var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;

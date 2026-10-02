@@ -14,13 +14,14 @@ public static class PtcSdkRenderer
         Only `run_code` can be called directly; every other tool is callable only from inside the program.
         The body may use `await` and may `return` a `JsonNode`; print with `Console.WriteLine`. Only what you print or return is returned to you.
         A tool call looks like `await tools.bash(new JsonObject { ["command"] = "..." })`; it returns `JsonNode?` and throws `ToolCallError` (with a `ToolName` property) when the tool fails.
+        Tools whose names are not valid C# identifiers have no method; call them as `await tools.call("<name>", new JsonObject { ... })`.
         The program runs under a wall-clock timeout; an unhandled exception is reported back to you as a failure so you can correct the program.
         """;
 
     public static string Render(IReadOnlyList<ToolSchema> schemas)
     {
         var ordered = schemas
-            .Where(schema => schema.Name != PtcTransport.RunCodeName && PtcToolNaming.IsCallable(schema.Name))
+            .Where(schema => schema.Name != PtcTransport.RunCodeName)
             .OrderBy(schema => schema.Name, StringComparer.Ordinal)
             .ToList();
         var builder = new StringBuilder();
@@ -52,7 +53,14 @@ public static class PtcSdkRenderer
                 builder.Append('\n');
             }
         }
-        builder.Append("    public static Task<JsonNode?> ").Append(schema.Name).Append("(JsonObject args);\n");
+        if (PtcToolNaming.IsCallable(schema.Name))
+        {
+            builder.Append("    public static Task<JsonNode?> ").Append(schema.Name).Append("(JsonObject args);\n");
+        }
+        else
+        {
+            builder.Append("    // not a C# identifier — call as await tools.call(\"").Append(schema.Name).Append("\", args)\n");
+        }
     }
 
     private static string Project(JsonNode? schema, int depth)

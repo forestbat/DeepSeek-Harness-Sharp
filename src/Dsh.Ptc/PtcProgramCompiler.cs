@@ -49,8 +49,12 @@ public static class PtcProgramCompiler
             if (bindings.Count > 0)
             {
                 builder.Append("public static class tools\n{\n");
+                AppendCallDispatcher(builder);
                 foreach (var name in bindings.OrderBy(name => name, StringComparer.Ordinal))
-                    AppendBinding(builder, name);
+                {
+                    if (PtcToolNaming.IsCallable(name))
+                        AppendBinding(builder, name);
+                }
                 builder.Append("}\n\n");
             }
             builder.Append("public static class __Program\n{\n");
@@ -58,6 +62,16 @@ public static class PtcProgramCompiler
             builder.Append(program);
             builder.Append("\n        return null;\n    }\n}\n");
             return builder.ToString();
+        }
+
+        /** 字符串调用形式: 名字不是合法 C# 标识符的工具没有方法绑定, 一律经 tools.call 到达。 */
+        private static void AppendCallDispatcher(StringBuilder builder)
+        {
+            builder.Append("    public static async Task<JsonNode?> call(string name, JsonObject args)\n    {\n");
+            builder.Append("        var envelope = JsonNode.Parse(await __PtcBridge.Call(name, args))!;\n");
+            builder.Append("        if (!envelope[\"ok\"]!.GetValue<bool>())\n");
+            builder.Append("            throw new ToolCallError(name, envelope[\"message\"]?.GetValue<string>() ?? \"tool call failed\");\n");
+            builder.Append("        return envelope[\"value\"];\n    }\n");
         }
 
         private static void AppendBinding(StringBuilder builder, string name)

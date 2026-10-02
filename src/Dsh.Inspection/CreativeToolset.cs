@@ -17,7 +17,7 @@ public sealed class CreativeToolset : Service, ICreativeToolset
     private CreativeToolset(Context ctx) : base(ctx, ICreativeToolset.ServiceName)
     {
         Tools = [.. ToolCordis.Definitions(ctx), ToolPluginManager.Definition(ctx)];
-        GuidanceSection = PromptSection.Literal("creative:guidance", InspectionPromptOrders.Creative, GuidanceText);
+        GuidanceSection = PromptSection.Literal("creative:guidance", GuidanceText);
     }
 
     public IReadOnlyList<ToolDefinition> Tools { get; }

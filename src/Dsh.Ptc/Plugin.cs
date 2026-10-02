@@ -9,9 +9,6 @@ namespace Dsh.Ptc;
 /** PTC 插件: 注册 toolPresentation 服务与 tools:sdk / tools:ptc-only 动态提示词段。 */
 public sealed class Plugin : IDshPlugin
 {
-    private const int ToolsSdkOrder = 5000;
-    private const int PtcOnlyOrder = 800;
-
     public string[] Inject =>
         [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SubprocessService.ServiceName];
 
@@ -24,12 +21,10 @@ public sealed class Plugin : IDshPlugin
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var sdk = systemPrompt.Section(new PromptSection(
             "tools:sdk",
-            ToolsSdkOrder,
             context => transport.SdkSection(context.Scope),
             Dynamic: true));
         var ptcOnly = systemPrompt.Section(new PromptSection(
             "tools:ptc-only",
-            PtcOnlyOrder,
             context => transport.TransportOnlySection(context.Scope),
             Dynamic: true));
         return new Bundle(sdk, ptcOnly);

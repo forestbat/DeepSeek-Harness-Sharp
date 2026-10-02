@@ -36,16 +36,19 @@ public sealed class ToolRuntime : Service
 {
     public const string ServiceName = "tools";
 
+    /** 一条工具注册:definition 携带的最终名字(重名消解后)与注册来源包名(null = Apply 之外注册,归属未知)。 */
+    private sealed record ToolEntry(ToolDefinition Definition, string? Owner);
+
     private sealed class ToolLayer
     {
-        public NamedEntries<ToolDefinition> Tools { get; }
+        public NamedEntries<ToolEntry> Tools { get; }
         public AnonymousEntries<ToolRestriction> Restrictions { get; } = new();
         public AnonymousEntries<Func<ToolExecution, string?>> Guards { get; } = new();
         public ToolPresentationMode? Mode { get; set; }
 
         public ToolLayer(ScopeKey? scope)
         {
-            Tools = new NamedEntries<ToolDefinition>(name => new InvalidOperationException(scope is null
+            Tools = new NamedEntries<ToolEntry>(name => new InvalidOperationException(scope is null
                 ? $"tool \"{name}\" is already registered (for a per-agent variant, register through that agent's agent.ctx instead)"
                 : $"tool \"{name}\" is already registered in this scope"));
         }
@@ -82,10 +85,61 @@ public sealed class ToolRuntime : Service
         }
         if (definition.TimeoutMs is <= 0)
             throw new ArgumentException("tool \"definition.Name\" timeoutMs must be a positive finite number");
+        if (!IsSimpleIdentifier(definition.Name))
+        {
+            Ctx.LoggerFor("tools").Warn(
+                $"tool \"{definition.Name}\" is not a C# identifier; in PTC mode it is only callable as tools.call(\"{definition.Name}\", args)");
+        }
+        var owner = PluginApplyScope.CurrentPlugin;
+        var registeredName = definition.Name;
         return _layers.Effect(Ctx, scope,
-            layer => layer.Tools.Insert(definition.Name, definition),
-            layer => layer.Tools.Remove(definition.Name));
+            layer =>
+            {
+                var existing = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
+                if (existing.Value is not null)
+                {
+                    registeredName = ResolveNameConflict(registeredName, owner, existing.Value, layer);
+                }
+                var entry = registeredName == definition.Name
+                    ? new ToolEntry(definition, owner)
+                    : new ToolEntry(new ToolDefinition
+                    {
+                        Name = registeredName,
+                        Description = definition.Description,
+                        Parameters = definition.Parameters,
+                        Output = definition.Output,
+                        Execute = definition.Execute,
+                        FinalizeContent = definition.FinalizeContent,
+                        TimeoutMs = definition.TimeoutMs,
+                        IsConcurrencySafe = definition.IsConcurrencySafe,
+                    }, owner);
+                layer.Tools.Insert(registeredName, entry);
+            },
+            layer => layer.Tools.Remove(registeredName));
     }
+
+    /**
+     * 重名消解: 先注册者保留短名, 后注册者改名为「包名末段-工具名」并 WARN 告知双方。
+     * 同一插件重复注册同名是 bug, 仍然抛错; 归属未知(非 Apply 路径)时没有可用的改名前缀, 也抛错。
+     */
+    private string ResolveNameConflict(string name, string? owner, ToolEntry existing, ToolLayer layer)
+    {
+        var suffix = owner?.Split('/')[^1];
+        if (suffix is null || existing.Owner == owner)
+            throw new InvalidOperationException($"tool \"{name}\" is already registered");
+        var renamed = $"{suffix}-{name}";
+        if (layer.Tools.Entries.Any(entry => entry.Key == renamed))
+            throw new InvalidOperationException($"tool \"{name}\" is already registered, and the renamed form \"{renamed}\" is taken as well");
+        Ctx.LoggerFor("tools").Warn(
+            $"tool \"{name}\" from <{owner}> conflicts with the one from <{existing.Owner ?? "unknown"}>; it is now visible as \"{renamed}\" — both authors should pick distinct names");
+        return renamed;
+    }
+
+    /** PTC 以工具名生成 C# 方法名, 这里只做字符形状判断(关键字由 PTC 侧发射绑定时再过滤)。 */
+    private static bool IsSimpleIdentifier(string name)
+        => name.Length > 0
+           && (char.IsLetter(name[0]) || name[0] == '_')
+           && name.All(character => char.IsLetterOrDigit(character) || character == '_');
 
     public IDisposable Restrict(ToolRestriction filter)
         => Restrict(filter, DshScope.ScopeOf(Ctx)
@@ -196,14 +250,14 @@ public sealed class ToolRuntime : Service
         var own = scope is null ? null : _layers.LayerFor(scope);
         var inherited = new Dictionary<string, ToolDefinition>();
         var globalEntries = _layers.Global.Tools.Entries;
-        foreach (var (name, definition) in globalEntries)
-            inherited[name] = definition;
+        foreach (var (name, entry) in globalEntries)
+            inherited[name] = entry.Definition;
         foreach (var layer in layers)
         {
             if (ReferenceEquals(layer, own))
                 continue;
-            foreach (var (name, definition) in layer.Tools.Entries)
-                inherited[name] = definition;
+            foreach (var (name, entry) in layer.Tools.Entries)
+                inherited[name] = entry.Definition;
         }
         var visible = new Dictionary<string, ToolDefinition>();
         var knownNames = new HashSet<string>();
@@ -217,10 +271,10 @@ public sealed class ToolRuntime : Service
         }
         if (own is not null)
         {
-            foreach (var (name, definition) in own.Tools.Entries)
+            foreach (var (name, entry) in own.Tools.Entries)
             {
                 knownNames.Add(name);
-                visible[name] = definition;
+                visible[name] = entry.Definition;
             }
         }
         if (ModeFor(scope) != ToolPresentationMode.Native
@@ -347,15 +401,6 @@ public sealed class ToolRuntime : Service
             projected["error"] = failure.Error.Message;
         return projected;
     }
-
-    private static JsonObject ToJsonObject(object? value) => value switch
-    {
-        null => new JsonObject(),
-        JsonObject existing => (JsonObject)existing.DeepClone(),
-        JsonNode node => JsonNode.Parse(node.ToJsonString())!.AsObject(),
-        JsonElement element => JsonNode.Parse(element.GetRawText())!.AsObject(),
-        _ => DshJson.ToNodeRuntime(value)!.AsObject(),
-    };
 
     public ToolExecutionModeKind ExecutionModeKind(ToolExecutionInput exec)
     {

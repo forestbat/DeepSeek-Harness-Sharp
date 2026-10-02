@@ -5,16 +5,30 @@ namespace Dsh.Core;
 
 public sealed record AssembleContext(ScopeKey? Scope = null, CancellationToken Signal = default, IAgent? Agent = null);
 
-public sealed record PromptSection(string Name, int Order, Func<AssembleContext, string> Text, bool Complete = false, bool Dynamic = false)
+/**
+ * 提示词段: Name 全局唯一; After/Before 声明相对位置(目标段不存在时该约束忽略)。
+ * 均不声明的段落在组装时按注册序追加在尾部。
+ */
+public sealed record PromptSection(
+    string Name,
+    Func<AssembleContext, string> Text,
+    bool Complete = false,
+    bool Dynamic = false,
+    IReadOnlyList<string>? After = null,
+    IReadOnlyList<string>? Before = null)
 {
-    public static PromptSection Literal(string name, int order, string text, bool complete = false)
-        => new(name, order, _ => text, complete);
+    public static PromptSection Literal(string name, string text, bool complete = false)
+        => new(name, _ => text, complete);
 }
 
-public sealed record PromptContext(string Name, int Order, Func<AssembleContext, string> Text)
+public sealed record PromptContext(
+    string Name,
+    Func<AssembleContext, string> Text,
+    IReadOnlyList<string>? After = null,
+    IReadOnlyList<string>? Before = null)
 {
-    public static PromptContext Literal(string name, int order, string text)
-        => new(name, order, _ => text);
+    public static PromptContext Literal(string name, string text)
+        => new(name, _ => text);
 }
 
 public sealed record AssembledSection(string Name, string Text, bool Dynamic = false);
@@ -29,45 +43,49 @@ public sealed record PromptAssembly(
     IReadOnlyList<ToolSchema> Tools,
     IReadOnlyDictionary<string, string?> Variables);
 
-public static class PromptOrders
+/**
+ * 内置段的基准顺序(由旧全局数字优先级迁移而来): 在册段按列表先后排列。
+ * 不在表内的段(第三方插件)用 PromptSection.After/Before 自定位; 都不声明时按注册序追加在尾部。
+ */
+public static class PromptSpine
 {
-    public const int HarnessIdentity = -1000;
-    public const int HarnessSource = -900;
-    public const int WebSurface = -800;
-    public const int DeploymentPersona = 0;
-    public const int AgentInstructions = 100;
-    public const int PlanPolicy = 500;
-    public const int TeamPolicy = 600;
-    public const int FileReference = 900;
-    public const int ToolBash = 1000;
-    public const int ToolPwsh = 1010;
-    public const int ToolRead = 1100;
-    public const int ToolWrite = 1200;
-    public const int ToolEdit = 1300;
-    public const int ToolGlob = 1400;
-    public const int ToolGrep = 1500;
-    public const int ToolJobs = 1600;
-    public const int ToolPty = 1700;
-    public const int ToolWebSearch = 2000;
-    public const int ToolWebFetch = 2100;
-    public const int ToolLsp = 2200;
-    public const int ToolSessionQuery = 2300;
-    public const int ToolCompact = 2350;
-    public const int ToolGoal = 2400;
-    public const int ToolE2b = 2500;
-    public const int ToolMemorySave = 2550;
-    public const int ToolWorkflow = 2600;
-    public const int ToolRalph = 2700;
-    public const int ToolSubagent = 2800;
-    public const int ToolBoard = 2850;
-    public const int ToolReport = 2900;
-    public const int DeliverableFileReferences = 9000;
-    public const int StructuredOutput = 9900;
+    public static readonly IReadOnlyList<string> Sections =
+    [
+        "harness:identity",
+        "deployment:persona",
+        "agent-instructions",
+        "plan:policy",
+        "memory:policy",
+        "tools:ptc-only",
+        "tool:bash",
+        "tool:pwsh",
+        "tool:read",
+        "tool:write",
+        "tool:edit",
+        "tool:glob",
+        "tool:grep",
+        "tool:jobs",
+        "tool:pty",
+        "tool:web_search",
+        "tool:web_fetch",
+        "tool:session_search",
+        "tool:compact",
+        "tool:goal",
+        "tool:e2b_run",
+        "tool:memory_save",
+        "tool:workflow",
+        "tool:ralph",
+        "creative:guidance",
+        "tools:sdk",
+    ];
 
-    public const int ContextSandboxPolicy = 110;
-    public const int ContextApprovalPolicy = 115;
-    public const int ContextSubagentDelegation = 120;
-    public const int ContextBoardCoordination = 130;
+    public static readonly IReadOnlyList<string> Contexts =
+    [
+        "memory:project",
+        "approval:policy",
+        "subagent:delegation",
+        "board:coordination",
+    ];
 }
 
 public sealed class SystemPromptConfig
@@ -84,20 +102,24 @@ public sealed class SystemPrompt : Service
     public const string PersonaSection = "deployment:persona";
     public const string ToolOrderRest = "<unlisted-tools>";
 
+    private sealed record SequencedSection(long Seq, PromptSection Section);
+
+    private sealed record SequencedContext(long Seq, PromptContext Context);
+
     private sealed class PromptLayer
     {
-        public NamedEntries<PromptSection> Sections { get; }
-        public NamedEntries<PromptContext> Contexts { get; }
+        public NamedEntries<SequencedSection> Sections { get; }
+        public NamedEntries<SequencedContext> Contexts { get; }
         public AnonymousEntries<bool> RuntimeContextSuppressors { get; } = new();
         public AnonymousEntries<Func<AssembleContext, ToolProviderResult>> ToolProviders { get; } = new();
         public NamedEntries<Func<AssembleContext, string?>> Variables { get; }
 
         public PromptLayer(ScopeKey? scope)
         {
-            Sections = new NamedEntries<PromptSection>(name => new InvalidOperationException(scope is null
+            Sections = new NamedEntries<SequencedSection>(name => new InvalidOperationException(scope is null
                 ? $"prompt section \"{name}\" is already registered (for a per-agent override, register through that agent's agent.ctx instead)"
                 : $"prompt section \"{name}\" is already registered in this scope"));
-            Contexts = new NamedEntries<PromptContext>(name => new InvalidOperationException(scope is null
+            Contexts = new NamedEntries<SequencedContext>(name => new InvalidOperationException(scope is null
                 ? $"prompt context \"{name}\" is already registered (for a per-agent override, register through that agent's agent.ctx instead)"
                 : $"prompt context \"{name}\" is already registered in this scope"));
             Variables = new NamedEntries<Func<AssembleContext, string?>>(name => new InvalidOperationException(scope is null
@@ -108,6 +130,9 @@ public sealed class SystemPrompt : Service
 
     private readonly ScopedLayers<PromptLayer> _layers;
     private readonly IReadOnlyList<string>? _toolOrder;
+    private long _sequence;
+
+    private long NextSeq() => Interlocked.Increment(ref _sequence);
 
     public SystemPrompt(Context ctx, SystemPromptConfig config) : base(ctx, ServiceName)
     {
@@ -117,10 +142,9 @@ public sealed class SystemPrompt : Service
         {
             Section(PromptSection.Literal(
                 "harness:identity",
-                PromptOrders.HarnessIdentity,
                 "You are an AI agent powered by DeepSeek Harness."));
         }
-        Section(PromptSection.Literal(PersonaSection, PromptOrders.DeploymentPersona, config.Persona));
+        Section(PromptSection.Literal(PersonaSection, config.Persona));
         if (!config.IncludeRuntimeContext)
             SuppressRuntimeContext();
     }
@@ -142,24 +166,24 @@ public sealed class SystemPrompt : Service
 
     public IDisposable Section(PromptSection section)
         => _layers.Effect(Ctx, null,
-            layer => layer.Sections.Insert(section.Name, section),
+            layer => layer.Sections.Insert(section.Name, new SequencedSection(NextSeq(), section)),
             layer => layer.Sections.Remove(section.Name));
 
     /** 按 scope(如 agent.ScopeKey)注册段: 同名段遮蔽全局层, 仅对该 scope 及其子 scope 生效。 */
     public IDisposable Section(PromptSection section, ScopeKey scope)
         => _layers.Effect(Ctx, scope,
-            layer => layer.Sections.Insert(section.Name, section),
+            layer => layer.Sections.Insert(section.Name, new SequencedSection(NextSeq(), section)),
             layer => layer.Sections.Remove(section.Name));
 
     public IDisposable ReplacePersona(string text, bool complete = false)
     {
         _layers.Global.Sections.Remove(PersonaSection);
-        return Section(PromptSection.Literal(PersonaSection, PromptOrders.DeploymentPersona, text, complete));
+        return Section(PromptSection.Literal(PersonaSection, text, complete));
     }
 
     public IDisposable Context(PromptContext context)
         => _layers.Effect(Ctx, null,
-            layer => layer.Contexts.Insert(context.Name, context),
+            layer => layer.Contexts.Insert(context.Name, new SequencedContext(NextSeq(), context)),
             layer => layer.Contexts.Remove(context.Name));
 
     public IDisposable SuppressRuntimeContext()
@@ -214,10 +238,13 @@ public sealed class SystemPrompt : Service
             foreach (var name in result.KnownNames ?? result.Schemas.Select(tool => tool.Name).ToList())
                 knownNames.Add(name);
         }
-        var sectionDefinitions = sectionByName.Values
-            .OrderBy(section => section.Order)
-            .ThenBy(section => section.Name, StringComparer.Ordinal)
-            .ToList();
+        var sectionDefinitions = OrderByConstraints(
+            sectionByName.Values.Select(entry => (entry.Seq, entry.Section)).ToList(),
+            section => section.Name,
+            section => section.After,
+            section => section.Before,
+            PromptSpine.Sections,
+            "section");
         var completeSections = sectionDefinitions.Where(section => section.Complete).ToList();
         if (completeSections.Count > 1)
         {
@@ -236,8 +263,13 @@ public sealed class SystemPrompt : Service
             sections,
             runtimeContextSuppressed
                 ? []
-                : contextByName.Values
-                    .OrderBy(entry => entry.Order)
+                : OrderByConstraints(
+                        contextByName.Values.Select(entry => (entry.Seq, entry.Context)).ToList(),
+                        entry => entry.Name,
+                        entry => entry.After,
+                        entry => entry.Before,
+                        PromptSpine.Contexts,
+                        "context")
                     .Select(entry => new AssembledContext(entry.Name, entry.Text(context)))
                     .ToList(),
             OrderTools(collected, _toolOrder, knownNames),
@@ -253,6 +285,90 @@ public sealed class SystemPrompt : Service
             Sections = completeSection is null ? transformed.Sections : [completeSection],
             Contexts = runtimeContextSuppressed ? [] : transformed.Contexts,
         };
+    }
+
+    /**
+     * 命名段拓扑排序: 边来自脊柱(在册段相邻连边)与段自带的 After/Before 约束(目标缺席的约束忽略)。
+     * 就绪集中无定位信息的段排在有定位者之后, 同级按注册序; 成环时按注册序打破并 WARN。
+     */
+    private List<T> OrderByConstraints<T>(
+        IReadOnlyList<(long Seq, T Value)> entries,
+        Func<T, string> nameOf,
+        Func<T, IReadOnlyList<string>?> afterOf,
+        Func<T, IReadOnlyList<string>?> beforeOf,
+        IReadOnlyList<string> spine,
+        string kind)
+    {
+        var index = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < entries.Count; i++)
+            index[nameOf(entries[i].Value)] = i;
+        var positioned = new bool[entries.Count];
+        var edges = new List<(int Earlier, int Later)>();
+        void Link(string earlier, string later)
+        {
+            if (earlier == later || !index.TryGetValue(earlier, out var from) || !index.TryGetValue(later, out var to))
+                return;
+            positioned[from] = true;
+            positioned[to] = true;
+            edges.Add((from, to));
+        }
+        var present = spine.Where(index.ContainsKey).ToList();
+        for (var i = 1; i < present.Count; i++)
+            Link(present[i - 1], present[i]);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var (_, value) = entries[i];
+            foreach (var earlier in afterOf(value) ?? [])
+                Link(earlier, nameOf(value));
+            foreach (var later in beforeOf(value) ?? [])
+                Link(nameOf(value), later);
+        }
+        var indegree = new int[entries.Count];
+        var outgoing = new List<int>?[entries.Count];
+        foreach (var (earlier, later) in edges)
+        {
+            indegree[later]++;
+            (outgoing[earlier] ??= []).Add(later);
+        }
+        var comparer = Comparer<int>.Create((a, b) =>
+        {
+            var zone = (positioned[a] ? 0 : 1).CompareTo(positioned[b] ? 0 : 1);
+            return zone != 0 ? zone : entries[a].Seq.CompareTo(entries[b].Seq);
+        });
+        var ready = new SortedSet<int>(comparer);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (indegree[i] == 0)
+                ready.Add(i);
+        }
+        var ordered = new List<T>(entries.Count);
+        var emitted = new bool[entries.Count];
+        while (ordered.Count < entries.Count)
+        {
+            if (ready.Count == 0)
+            {
+                var cycle = Enumerable.Range(0, entries.Count)
+                    .Where(i => !emitted[i])
+                    .Select(i => $"\"{nameOf(entries[i].Value)}\"")
+                    .ToList();
+                Ctx.LoggerFor("systemPrompt").Warn(
+                    $"prompt {kind} ordering constraints form a cycle ({string.Join(", ", cycle)}); breaking it by registration order — declare consistent before/after to fix");
+                var fallback = Enumerable.Range(0, entries.Count).Where(i => !emitted[i]).MinBy(i => entries[i].Seq);
+                ready.Add(fallback);
+            }
+            var current = ready.Min;
+            ready.Remove(current);
+            if (emitted[current])
+                continue;
+            emitted[current] = true;
+            ordered.Add(entries[current].Value);
+            foreach (var next in outgoing[current] ?? [])
+            {
+                if (--indegree[next] == 0)
+                    ready.Add(next);
+            }
+        }
+        return ordered;
     }
 
     private static IReadOnlyList<ToolSchema> OrderTools(

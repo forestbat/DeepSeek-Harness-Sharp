@@ -102,7 +102,7 @@ public sealed class PtcTransport : Service, IToolPresentation
         var timeoutMs = ResolveTimeout(arguments);
         var bindings = _tools.Schemas(exec.Agent?.ScopeKey)
             .Select(schema => schema.Name)
-            .Where(name => name != RunCodeName && PtcToolNaming.IsCallable(name))
+            .Where(name => name != RunCodeName)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
         var dispatcher = new PtcSubDispatch(_tools, exec);
