@@ -11,6 +11,8 @@
     <Nullable>enable</Nullable>
     <!-- 产出 deps.json: 加载器按它解析插件目录里的私有第三方依赖。 -->
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- 开裁剪分析器: 插件里写反射(如绕过绑定的手动反序列化)在编译期就告警, 而不是部署后才发现。 -->
+    <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
 
   <ItemGroup>

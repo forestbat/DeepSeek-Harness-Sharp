@@ -17,24 +17,39 @@ namespace DshPluginTemplate;
 public sealed class Plugin : IDshPlugin
 {
     /**
-     * Inject 声明服务图边: 本插件需要的服务名。
+     * Inject/InjectTypes 声明服务图边: 本插件需要的服务。
      * 宿主用它做两件事: 拓扑排序决定 Apply 先后; 服务被重新提供时反查依赖方触发热重载。
      * 依赖缺失时插件停在 Pending 并在启动 WARN 里列出缺什么、谁能提供, 不会静默失败。
+     * 优先用 InjectTypes 按契约类型声明: 类型拼错在编译期就报, 字符串名只在同一契约有多个实现时用于按名消歧。
      */
-    public string[] Inject => [SystemPrompt.ServiceName];
+    public string[] Inject => [];
+
+    public Type[] InjectTypes => [typeof(SystemPrompt)];
+
+    /**
+     * ConfigType 声明插件自带配置类型: settings.yaml 里本包名下的参数段会被绑定成该类型再交给 Apply。
+     * 字段名拼错或类型不匹配的项在激活期 WARN 并指出已知字段, 不再静默吞掉。
+     * 配置类型须有公共无参构造(带默认值的 record 即可)。
+     */
+    public Type ConfigType => typeof(TemplateConfig);
 
     /**
      * Apply 是效果安装点, 在依赖全部就绪后被调用。
-     * ctx.Get<T>(服务名) 取依赖的服务; config 是 settings.yaml 里 plugins.<包名>.parameters 的参数表。
+     * ctx.Get 的泛型重载按类型取唯一服务(多个候选时传入服务名按名消歧); config 已是绑定好的 ConfigType 实例。
      * 这里注册一个提示词段作为示范: 段名全局唯一, 未声明 After/Before 的段按注册序追加在尾部。
      */
     public IDisposable Apply(Context ctx, object? config)
     {
-        var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        return prompt.Section(PromptSection.Literal(
-            "template:hello",
-            "This deployment includes the example template plugin."));
+        var options = config as TemplateConfig ?? new TemplateConfig();
+        var prompt = ctx.Get<SystemPrompt>()!;
+        return prompt.Section(PromptSection.Literal("template:hello", options.Message));
     }
+}
+
+/** 模板配置: settings.yaml 里 plugins."@example/dsh-plugin-template".message 覆盖默认文案。 */
+public sealed record TemplateConfig
+{
+    public string Message { get; init; } = "This deployment includes the example template plugin.";
 }
 
 /*
@@ -46,4 +61,5 @@ public sealed class Plugin : IDshPlugin
  * 共享依赖判据: 你的某个程序集的类型会跨插件边界流动(作为服务返回值、事件载荷、共享基类)时,
  * 用 [assembly: DshSharedDependency("程序集名")] 声明, 该程序集不拷进插件目录, 由全进程共享池加载。
  * 纯内部实现一律私有, 各带一份反而干净。
+ * 类型化注入的契约类型必须跨插件同一份: 契约放共享依赖程序集, 否则双方各持一份类型身份, 按类型匹配永远落空。
  */
