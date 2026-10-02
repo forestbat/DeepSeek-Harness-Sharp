@@ -72,4 +72,13 @@ internal sealed class ServiceTable(IServiceRegistry registry)
     }
 
     internal IServiceRegistry Registry => registry;
+
+    /** 启动 Pending 汇总用:报告服务的提供者与提供者状态;未注册返回 null。 */
+    internal (string OwnerName, ActivationState OwnerState)? DescribeProvider(string name)
+    {
+        lock (_sync)
+            return _services.TryGetValue(name, out var impl)
+                ? (impl.Owner.Name, impl.Owner.State)
+                : null;
+    }
 }

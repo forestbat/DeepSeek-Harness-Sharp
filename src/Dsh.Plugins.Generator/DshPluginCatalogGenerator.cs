@@ -17,6 +17,7 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
     private const string AttributeMetadataName = "Dsh.Plugins.DshPluginAttribute";
     private const string EntryAttributeMetadataName = "Dsh.Plugins.DshEntrypointAttribute";
     private const string InitializerAttributeMetadataName = "Dsh.Plugins.DshPluginInitializerAttribute";
+    private const string SharedDependencyMetadataName = "Dsh.Plugins.DshSharedDependencyAttribute";
     private const string JsonContextMetadataName = "System.Text.Json.Serialization.JsonSerializerContext";
     private const string BootstrapTypeSuffix = ".Generated.DshPluginBootstrap";
     private const string HostPropertyName = "build_property.DshPluginHost";
@@ -56,6 +57,14 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor MissingPackageName = new(
+        "DSHPLUGIN005",
+        "插件包名缺失",
+        "程序集含 IDshPlugin 实现,但没有 [assembly: DshPlugin] 声明且程序集名不可用,无法确定包名",
+        "DshPlugins",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var input = context.CompilationProvider.Combine(context.AnalyzerConfigOptionsProvider);
@@ -80,7 +89,7 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
             ? []
             : DescribeAssembly(context, compilation.Assembly, pluginInterface, pluginAttribute, entryAttribute);
         if (own.Count > 0)
-            context.AddSource(ManifestHintName, Templates.RenderManifest(Deduplicate(own)));
+            context.AddSource(ManifestHintName, Templates.RenderManifest(Deduplicate(own), DescribeSharedDependencies(compilation)));
 
         var isHost = options.GlobalOptions.TryGetValue(HostPropertyName, out var value)
             && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
@@ -150,6 +159,22 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
             .ToList();
     }
 
+    /** 程序集声明的共享依赖(DshSharedDependency):清单携带,加载器据此把这些程序集解析进共享上下文。 */
+    private static List<string> DescribeSharedDependencies(Compilation compilation)
+    {
+        var sharedAttribute = compilation.GetTypeByMetadataName(SharedDependencyMetadataName);
+        if (sharedAttribute is null)
+            return [];
+        return compilation.Assembly.GetAttributes()
+            .Where(attribute => attribute.AttributeClass is not null
+                && SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, sharedAttribute))
+            .Select(attribute => attribute.ConstructorArguments.FirstOrDefault().Value as string)
+            .Where(name => !string.IsNullOrEmpty(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
+    }
+
     private static bool DerivesFrom(INamedTypeSymbol type, INamedTypeSymbol baseType)
     {
         for (var current = type.BaseType; current is not null; current = current.BaseType)
@@ -187,6 +212,12 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
         INamedTypeSymbol pluginAttribute,
         INamedTypeSymbol? entryAttribute)
     {
+        var pluginTypes = EnumerateTypes(assembly.GlobalNamespace)
+            .Where(type => type.TypeKind == TypeKind.Class && !type.IsAbstract && !type.IsStatic && ImplementsPlugin(type, pluginInterface))
+            .ToList();
+        if (pluginTypes.Count == 0)
+            return [];
+
         var packages = assembly.GetAttributes()
             .Where(attribute => attribute.AttributeClass is not null
                 && SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, pluginAttribute))
@@ -194,12 +225,17 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
             .Where(package => !string.IsNullOrEmpty(package))
             .Distinct(StringComparer.Ordinal)
             .ToList();
+        // [assembly: DshPlugin] 只是包名的覆盖声明;缺省从程序集名推导,只有连程序集名都不可得才报。
         if (packages.Count == 0)
-            return [];
+        {
+            if (string.IsNullOrEmpty(assembly.Name))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(MissingPackageName, Location.None));
+                return [];
+            }
+            packages = [assembly.Name];
+        }
 
-        var pluginTypes = EnumerateTypes(assembly.GlobalNamespace)
-            .Where(type => type.TypeKind == TypeKind.Class && !type.IsAbstract && !type.IsStatic && ImplementsPlugin(type, pluginInterface))
-            .ToList();
         if (pluginTypes.Count != 1)
         {
             context.ReportDiagnostic(Diagnostic.Create(

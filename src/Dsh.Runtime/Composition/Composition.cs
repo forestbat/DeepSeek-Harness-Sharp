@@ -26,12 +26,8 @@ public sealed class Composition
             root.Scheduler.Register(entry.Definition, entry.Config);
 
         await root.Scheduler.SettleAsync();
-        var failures = CollectFailures(root);
-        if (failures.Count > 0)
-        {
-            throw new RuntimeException("BOOT_FAILED",
-                $"boot failed with {failures.Count} activation error(s):\n{string.Join('\n', failures)}");
-        }
+        WarnPending(root);
+        WarnFailed(root);
         root.Emit(new CompositionReadyNotification());
         return new Composition(root);
     }
@@ -46,20 +42,43 @@ public sealed class Composition
             activation.DisposeEffectsAsync().GetAwaiter().GetResult();
     }
 
-    private static List<string> CollectFailures(Context root)
+    /** 依赖未满足而停在 Pending 的插件不进失败列表,但必须显式 WARN:缺哪个服务、谁能提供,一眼可查。 */
+    private static void WarnPending(Context root)
     {
-        var failures = new List<string>();
-        foreach (var activation in root.Scheduler.Snapshot())
+        var pending = root.Scheduler.Snapshot()
+            .Where(activation => activation.State == ActivationState.Pending)
+            .ToList();
+        if (pending.Count == 0)
+            return;
+        var logger = root.LoggerFor("composition");
+        foreach (var activation in pending)
         {
-            if (activation.State != ActivationState.Failed)
-                continue;
-            failures.Add($"  - plugin <{activation.Name}>: {activation.Error}");
+            var missing = activation.Inject
+                .Where(name => !root.IsServiceInjectable(name))
+                .Select(name => DescribeMissing(root, name))
+                .ToList();
+            logger.Warn($"plugin <{activation.Name}> pending (dependencies missing): {string.Join(", ", missing)}");
         }
-        foreach (var message in root.Logger.Buffer)
-        {
-            if (message.Type == LoggerType.Error)
-                failures.Add($"  - log <{message.Name}>: {message.Text}");
-        }
-        return failures;
+    }
+
+    private static string DescribeMissing(Context root, string service)
+    {
+        var provider = root.ServiceTable.DescribeProvider(service);
+        return provider is null
+            ? $"{service} (no provider registered; providing plugin not installed or not activated)"
+            : $"{service} (provided by <{provider.Value.OwnerName}>, state: {provider.Value.OwnerState})";
+    }
+
+    /** 单个插件 Apply 失败不拖垮整个进程:落 Failed 态并 WARN 汇总;入口插件的失败在入口解析处显式终止。 */
+    private static void WarnFailed(Context root)
+    {
+        var failed = root.Scheduler.Snapshot()
+            .Where(activation => activation.State == ActivationState.Failed)
+            .ToList();
+        if (failed.Count == 0)
+            return;
+        var logger = root.LoggerFor("composition");
+        foreach (var activation in failed)
+            logger.Warn($"plugin <{activation.Name}> failed to activate: {activation.Error}");
     }
 }

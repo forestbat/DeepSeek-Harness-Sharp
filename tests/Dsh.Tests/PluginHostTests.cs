@@ -1,3 +1,4 @@
+using System.Reflection;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Plugins;
@@ -29,6 +30,96 @@ public sealed class PluginHostTests
         await activation.WaitAsync();
         Assert.True(TestPlugin.Applied);
         Assert.Equal(ActivationState.Active, activation.State);
+    }
+
+    [Fact]
+    public void Register_DuplicatePackage_ThrowsAndKeepsFirst()
+    {
+        var host = new PluginHost();
+        host.Catalog.Register(PluginDescriptor.For("dup/pkg", PluginForm.ManagedAssembly), () => new TestPlugin());
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            host.Catalog.Register(PluginDescriptor.For("dup/pkg", PluginForm.NativeLibrary), () => new TestPlugin()));
+
+        Assert.Contains("dup/pkg", error.Message);
+        Assert.True(host.Catalog.TryDescribe("dup/pkg", out var descriptor));
+        Assert.Equal(PluginForm.ManagedAssembly, descriptor.Form);
+    }
+
+    [Fact]
+    public void Scan_LoadsPluginFromPerPackageSubdirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-scan-{Guid.NewGuid():N}");
+        var pluginDir = Path.Combine(root, "plugins", "Dsh.Tests");
+        Directory.CreateDirectory(pluginDir);
+        try
+        {
+            File.Copy(
+                Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
+                Path.Combine(pluginDir, "Dsh.Tests.dll"));
+            var host = new PluginHost();
+
+            var result = host.Scan(Path.Combine(root, "plugins"), null);
+
+            Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
+            Assert.DoesNotContain(result.Skipped, skip => skip.Reason.Contains("平铺"));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Scan_FlatLayoutStillLoadsButWarns()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-scan-{Guid.NewGuid():N}");
+        var pluginsDir = Path.Combine(root, "plugins");
+        Directory.CreateDirectory(pluginsDir);
+        try
+        {
+            File.Copy(
+                Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
+                Path.Combine(pluginsDir, "Dsh.Tests.dll"));
+            var host = new PluginHost();
+
+            var result = host.Scan(pluginsDir, null);
+
+            Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
+            Assert.Contains(result.Skipped, skip => skip.Reason.Contains("平铺"));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void SharedPool_LoadsOnceAndRejectsMajorVersionMismatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-pool-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var pool = new SharedAssemblyPool(root);
+            var source = typeof(Dsh.Core.ToolRuntime).Assembly.Location;
+            var name = typeof(Dsh.Core.ToolRuntime).Assembly.GetName();
+
+            var first = pool.ResolveOrLoad(name, () => source);
+            var second = pool.ResolveOrLoad(name, () => throw new InvalidOperationException("must not reload"));
+            Assert.Same(first, second);
+
+            var conflict = new AssemblyName(name.Name!) { Version = new Version(999, 0) };
+            var error = Assert.Throws<InvalidOperationException>(() =>
+            {
+                _ = pool.ResolveOrLoad(conflict, () => source);
+            });
+            Assert.Contains(name.Name!, error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 }
 

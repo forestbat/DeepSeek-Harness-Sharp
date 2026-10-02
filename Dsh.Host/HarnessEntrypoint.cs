@@ -112,22 +112,22 @@ public static class HarnessEntrypoint
                         await Console.Out.WriteLineAsync($"dsh: {target} 不是 daemon 里的 PTY 会话, 按 harness 会话恢复"
                             + (gpu ? "到独立 GPU 窗口" : "进本终端 TUI")
                             + "(要独立窗口加 --gpu)");
-                        return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", target, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
+                        return await RunEntrypointAsync(harnessHome, "tui", target, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
                     }
                     if (subcommand == "daemon")
                         return await BootCli.RunTuiDaemonAsync();
-                    return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
+                    return await RunEntrypointAsync(harnessHome, "tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
                 }
             case "gui":
                 // 组合插件之前先摘掉自己的控制台
                 ConsoleWindow.DetachIfOwned();
-                return await RunEntrypointAsync(harnessHome, "gui", "@deepseek-ai/dsh-gui", resumeSessionId);
+                return await RunEntrypointAsync(harnessHome, "gui", resumeSessionId);
             case "headless":
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)));
             case "register-terminal":
                 return await TerminalEntryRegistration.RegisterAsync(Console.Out);
             case null:
-                return await RunEntrypointAsync(harnessHome, "tui", "@deepseek-ai/dsh-tui", null, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
+                return await RunEntrypointAsync(harnessHome, "tui", null, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
             default:
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
         }
@@ -164,7 +164,6 @@ public static class HarnessEntrypoint
     private static async Task<int> RunEntrypointAsync(
         HarnessHome home,
         string entrypoint,
-        string entrypointPlugin,
         string? resumeSessionId = null,
         bool gpu = false,
         bool shell = false,
@@ -172,7 +171,7 @@ public static class HarnessEntrypoint
         string? gpuCard = null,
         string? gpuCapturePlan = null)
     {
-        var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui", EntrypointPlugin: entrypointPlugin);
+        var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui");
         using var app = await ConfigBoot.Compose(options);
         return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(
             home,

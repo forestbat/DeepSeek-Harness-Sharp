@@ -13,8 +13,7 @@ public sealed record HarnessOptions(
     string? ApiKeyEnv = null,
     string? ApiKey = null,
     string? ReasoningEffort = null,
-    bool IsTui = false,
-    string? EntrypointPlugin = null);
+    bool IsTui = false);
 
 public sealed class HarnessApp : IDisposable
 {
@@ -30,7 +29,8 @@ public sealed class HarnessApp : IDisposable
 
     internal void Track(IDisposable disposable) => _disposables.Add(disposable);
 
-    /** 运行入口插件:按描述符 Entry 找到登记项,工厂实例须实现 IDshEntrypoint。 */
+    /** 运行入口插件:按描述符 Entry 在已激活插件中解析,工厂实例须实现 IDshEntrypoint。
+     *  只查激活者:被禁用/挂起的入口插件不占用入口名,替代插件才能接管。 */
     public async Task<int> RunEntrypointAsync(
         string name,
         PluginEntrypointOptions options,
@@ -38,8 +38,24 @@ public sealed class HarnessApp : IDisposable
     {
         var catalog = Ctx.GetProp("pluginCatalog") as PluginCatalog
             ?? throw new RuntimeException("PLUGIN_CATALOG_MISSING", "the plugin catalog is not available");
-        var descriptor = catalog.Descriptors.FirstOrDefault(entry => entry.Entry == name)
-            ?? throw new RuntimeException("UNKNOWN_ENTRYPOINT", $"unknown plugin entrypoint '{name}'");
+        var active = Composition?.Activations
+            .Where(activation => activation.State == ActivationState.Active)
+            .Select(activation => activation.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        bool IsRunnable(PluginDescriptor descriptor) => active is null || active.Contains(descriptor.Package);
+        var descriptor = catalog.Descriptors.FirstOrDefault(entry => entry.Entry == name && IsRunnable(entry));
+        if (descriptor is null)
+        {
+            var inactive = catalog.Descriptors.FirstOrDefault(entry => entry.Entry == name);
+            if (inactive is not null)
+                throw new RuntimeException("ENTRYPOINT_NOT_ACTIVE",
+                    $"entrypoint '{name}' is provided by plugin '{inactive.Package}', which is not active (disabled, pending or failed)");
+            var available = string.Join(", ", catalog.Descriptors
+                .Where(entry => entry.Entry is not null && IsRunnable(entry))
+                .Select(entry => entry.Entry));
+            throw new RuntimeException("UNKNOWN_ENTRYPOINT",
+                $"unknown plugin entrypoint '{name}' (available active entrypoints: {available})");
+        }
         if (!catalog.TryGet(descriptor.Package, out var create) || create() is not IDshEntrypoint entrypoint)
         {
             throw new RuntimeException("ENTRYPOINT_NOT_RUNNABLE",

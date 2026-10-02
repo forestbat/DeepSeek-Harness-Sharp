@@ -16,9 +16,15 @@ public sealed class DefaultCompositionTests
             var home = HarnessHome.Resolve(Path.Combine(directory, "home"));
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory));
             var composition = app.Composition!;
-            Assert.Equal(ActivationState.Active, composition.Find("@deepseek-ai/dsh-checkpoints")?.State);
+            // memory 与 checkpoints 默认禁用(见默认 settings 模板),打开后才参与组合。
+            Assert.Null(composition.Find("@deepseek-ai/dsh-checkpoints"));
+            Assert.Null(composition.Find("@deepseek-ai/dsh-memory"));
+            var unhealthy = composition.Activations
+                .Where(activation => activation.State == ActivationState.Failed)
+                .Select(activation => $"{activation.Name}={activation.State}:{activation.Error}")
+                .ToList();
+            Assert.True(unhealthy.Count == 0, string.Join(" | ", unhealthy));
             Assert.Equal(ActivationState.Active, composition.Find("@deepseek-ai/dsh-ide-history")?.State);
-            Assert.Equal(ActivationState.Active, composition.Find("@deepseek-ai/dsh-core")?.State);
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName);
             Assert.NotNull(tools);
             Assert.NotNull(tools.Get("ide_history"));
@@ -33,8 +39,6 @@ public sealed class DefaultCompositionTests
             Assert.Equal(ActivationState.Active, composition.Find("@deepseek-ai/dsh-tool-session-query")?.State);
             Assert.NotNull(tools.Get("session_search"));
             Assert.NotNull(app.Ctx.Get<Dsh.SessionQuery.SessionQueryService>(Dsh.SessionQuery.SessionQueryService.ServiceName, false));
-            Assert.NotNull(app.Ctx.Get<Dsh.Core.IMemoryStore>(Dsh.Core.MemoryServices.Store, false));
-            Assert.NotNull(tools.Get("memory_save"));
 
             var settings = File.ReadAllText(Path.Combine(home.Root, "settings.yaml"));
             Assert.Contains("plugins:", settings);
@@ -62,9 +66,37 @@ public sealed class DefaultCompositionTests
             using var app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
                 Cwd: directory,
-                IsTui: true,
-                EntrypointPlugin: "@deepseek-ai/dsh-tui"));
+                IsTui: true));
             Assert.Equal(ActivationState.Active, app.Composition!.Find("@deepseek-ai/dsh-tui")?.State);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DisabledEntrypointPlugin_StaysInactive()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"dsh-entrypoint-off-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var home = HarnessHome.Resolve(Path.Combine(directory, "home"));
+            var settings = HarnessSettings.Load(home);
+            settings.Plugins["@deepseek-ai/dsh-tui"] = new PluginSetting { Enabled = false };
+            settings.SavePlugins(home);
+            using var app = await ConfigBoot.Compose(new HarnessOptions(
+                home,
+                Cwd: directory,
+                IsTui: true));
+            Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tui"));
         }
         finally
         {

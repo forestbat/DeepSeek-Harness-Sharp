@@ -123,6 +123,10 @@ public sealed class HotPlugTests
             catch (IOException)
             {
             }
+            // /plugins add 现在会把程序集拷进 plugins/ 目录,清掉避免影响后续进程的 Compose 扫描。
+            var installed = Path.Combine(AppContext.BaseDirectory, "plugins", "Dsh.Tests");
+            if (Directory.Exists(installed))
+                Directory.Delete(installed, true);
         }
     }
 

@@ -26,9 +26,12 @@ public static class ConfigBoot
         var pluginHost = new PluginHost();
         pluginHost.RegisterCompiledIn();
         var pluginsDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
+        pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
         var discovery = pluginHost.Scan(pluginsDirectory, ResolveNativeBridge());
         foreach (var skip in discovery.Skipped)
             ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
+        foreach (var notice in pluginHost.SharedPool.DrainNotices())
+            ctx.LoggerFor("loader").Warn("%s", notice);
         ctx.SetOwn("pluginCatalog", pluginHost.Catalog);
 
         // 零配置不兜底:没配 provider/model 就留空,启动照常,首次发起 LLM 请求时才报错。
@@ -51,7 +54,7 @@ public static class ConfigBoot
 
         try
         {
-            var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, options, settings));
+            var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
             ctx.LoggerFor("boot").Info("composition ready: %d plugin(s), home %s", composition.Activations.Count, options.Home.Root);
             var manager = new HarnessPluginManager(pluginHost, composition, options.Home, settings, discovery.Managed);
@@ -69,7 +72,6 @@ public static class ConfigBoot
     private static List<PluginEntry> BuildEntries(
         Context ctx,
         PluginHost host,
-        HarnessOptions options,
         HarnessSettings settings)
     {
         var plugins = settings.Plugins;
@@ -84,18 +86,12 @@ public static class ConfigBoot
                 ctx.LoggerFor("loader").Error("%s", $"plugin not found: {name}");
                 continue;
             }
-            entries.Add(new PluginEntry(definition!, setting is { Parameters.Count: > 0 } ? setting.Parameters : DomainSectionFor(name, settings)));
+            entries.Add(new PluginEntry(definition!, setting is { Parameters.Count: > 0 } ? setting.Parameters : null));
         }
         foreach (var name in plugins.Keys)
         {
             if (!host.Catalog.PackageNames.Contains(name, StringComparer.Ordinal))
                 ctx.LoggerFor("loader").Error("%s", $"plugin not found: {name}");
-        }
-        if (options.EntrypointPlugin is { Length: > 0 } entrypoint
-            && !entries.Any(entry => entry.Definition.Name == entrypoint)
-            && host.Catalog.TryCreateDefinition(entrypoint, out var entryDefinition))
-        {
-            entries.Add(new PluginEntry(entryDefinition!, null));
         }
         return entries;
     }
@@ -108,14 +104,6 @@ public static class ConfigBoot
             ? plugin => (IDshPlugin)create.Invoke(null, [plugin])!
             : null;
     }
-
-    /** 域插件的顶层配置段随插件加载注入 config(可空);plugins 段里的显式参数优先于顶层段。 */
-    private static object? DomainSectionFor(string package, HarnessSettings settings) => package switch
-    {
-        "@deepseek-ai/dsh-memory" => settings.Memory,
-        "@deepseek-ai/dsh-checkpoints" => settings.Checkpoints,
-        _ => null,
-    };
 
     /** 桥程序集默认不随宿主启动加载:先从已加载程序集查找,再按名加载;AOT 下已在镜像中,直接命中。 */
     private static Type? FindNativeBridge()

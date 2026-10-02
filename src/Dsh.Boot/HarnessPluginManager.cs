@@ -12,6 +12,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly HarnessHome _home;
     private readonly HarnessSettings _settings;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly HashSet<string> _leaked = new(StringComparer.Ordinal);
 
     public HarnessPluginManager(
@@ -26,7 +27,11 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _home = home;
         _settings = settings;
         foreach (var entry in loadedOnStart)
+        {
             _loadedContexts[entry.Package] = entry.Context;
+            if (entry.SharedDependencies.Count > 0)
+                _sharedDependencies[entry.Package] = entry.SharedDependencies;
+        }
     }
 
     public IReadOnlyList<string> PackageNames => _host.Catalog.PackageNames
@@ -123,26 +128,40 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             return $"plugin file not found: {path}";
         if (!RuntimeFeature.IsDynamicCodeSupported)
             return "NativeAOT build cannot load managed plugins at runtime; compile the plugin into the image or ship it as a native library";
+        // 先落盘再装载:plugins/<程序集名>/ 目录是重启后的发现入口,只装进程不拷贝会导致重启即丢。
+        string installPath;
+        try
+        {
+            installPath = PluginInstall.Install(path, Path.Combine(AppContext.BaseDirectory, "plugins"));
+        }
+        catch (InvalidOperationException error)
+        {
+            return $"plugin install failed: {error.Message}";
+        }
         PluginLoadResult result;
         try
         {
-            result = _host.TryLoad(path);
+            result = _host.TryLoad(installPath);
         }
         catch (Exception error) when (error is BadImageFormatException or FileLoadException)
         {
-            return $"assembly load failed: {path}: {error.Message}";
+            return $"assembly load failed: {installPath}: {error.Message}";
         }
         if (result.Packages.Count == 0)
         {
             var reasons = string.Join("; ", result.Skipped.Select(skip => skip.Reason));
-            return reasons.Length == 0 ? $"assembly has no DSH plugin: {path}" : $"plugin load skipped: {reasons}";
+            return reasons.Length == 0 ? $"assembly has no DSH plugin: {installPath}" : $"plugin load skipped: {reasons}";
         }
         var messages = new List<string>();
         foreach (var package in result.Packages)
         {
             _loadedContexts[package] = result.Context!;
+            if (result.SharedDependencies.Count > 0)
+                _sharedDependencies[package] = result.SharedDependencies;
             messages.Add(await ActivateAsync(package));
         }
+        foreach (var notice in _host.SharedPool?.DrainNotices() ?? [])
+            messages.Add($"note: {notice}");
         return string.Join('\n', messages);
     }
 
@@ -173,6 +192,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         if (!reclaim || !_loadedContexts.Remove(package, out var context))
             return (null, leaked);
         _host.Catalog.Remove(package);
+        if (_sharedDependencies.Remove(package, out var shared))
+            _host.SharedPool?.Release(shared);
         var weak = PluginUnloader.Unload(context);
         Release(ref context);
         return (weak, leaked);

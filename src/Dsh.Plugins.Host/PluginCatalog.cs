@@ -13,8 +13,14 @@ public sealed class PluginCatalog
     public IReadOnlyList<PluginDescriptor> Descriptors
         => _plugins.Values.Select(holder => holder.Descriptor).ToList();
 
+    /** 包名全局唯一:后登记者拒绝,先登记者优先;重复登记是打包/组合错误,必须显式抛错而非静默覆盖。 */
     public void Register(PluginDescriptor descriptor, Func<IDshPlugin> create)
-        => _plugins[descriptor.Package] = new PluginHolder(descriptor, create);
+    {
+        if (_plugins.TryGetValue(descriptor.Package, out var existing))
+            throw new InvalidOperationException(
+                $"duplicate plugin package: {descriptor.Package} (already registered as {existing.Descriptor.Form}, refused {descriptor.Form})");
+        _plugins[descriptor.Package] = new PluginHolder(descriptor, create);
+    }
 
     public bool TryDescribe(string packageName, [NotNullWhen(true)] out PluginDescriptor? descriptor)
     {

@@ -18,3 +18,11 @@ public sealed class DshEntrypointAttribute(string name) : Attribute
  *  取代 [ModuleInitializer] 隐式自注册——裁剪/AOT 下更可控,也不需要全局 NoWarn。 */
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class DshPluginInitializerAttribute : Attribute;
+
+/** 声明一个程序集级共享依赖:该程序集的类型会跨插件边界流动(服务契约/事件载荷),
+ *  加载器把它解析进全进程唯一的共享上下文,而不是插件目录里的私有副本。 */
+[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+public sealed class DshSharedDependencyAttribute(string assemblyName) : Attribute
+{
+    public string AssemblyName { get; } = assemblyName;
+}

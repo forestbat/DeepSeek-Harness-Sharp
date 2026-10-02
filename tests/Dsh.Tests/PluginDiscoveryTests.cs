@@ -24,7 +24,10 @@ public sealed class PluginDiscoveryTests
     /** 扫描与断言独立成方法: 返回后 host/catalog 的强引用随栈帧消失, ALC 才可能被回收。 */
     private static void ScanAndUnload(string source, string folder)
     {
-        File.Copy(source, Path.Combine(folder, "Dsh.Goal.dll"));
+        // 每插件一个目录是规范布局:目录名只是发现入口,包名以清单为准。
+        var pluginDir = Path.Combine(folder, "Dsh.Goal");
+        Directory.CreateDirectory(pluginDir);
+        File.Copy(source, Path.Combine(pluginDir, "Dsh.Goal.dll"));
         var host = new PluginHost();
 
         var result = host.Scan(folder, nativeBridge: null);

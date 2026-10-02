@@ -214,6 +214,7 @@ public sealed class PluginActivation
 
     private ApplyOutcome Apply()
     {
+        PluginApplyScope.Enter(Name);
         try
         {
             var result = _definition.Apply(Ctx, Config);
@@ -226,6 +227,10 @@ public sealed class PluginActivation
             Error = DeepestMessage(error);
             Ctx.Logger.Error("%s", error);
             return new ApplyOutcome(Error);
+        }
+        finally
+        {
+            PluginApplyScope.Exit();
         }
     }
 

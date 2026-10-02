@@ -39,14 +39,36 @@ public class RuntimeCompositionTests
     }
 
     [Fact]
-    public async Task Start_ActivationFailureFailsBoot()
+    public async Task Start_ActivationFailureIsIsolated()
     {
         var ctx = new Context();
-        var error = await Assert.ThrowsAsync<RuntimeException>(() => Composition.StartAsync(ctx,
+        var composition = await Composition.StartAsync(ctx,
         [
             new PluginEntry(PluginDefinition.From((_, _) => throw new InvalidOperationException("kaboom"), "broken"), null),
-        ]));
-        Assert.Equal("BOOT_FAILED", error.Code);
-        Assert.Contains("kaboom", error.Message);
+            new PluginEntry(PluginDefinition.From((_, _) => null, "healthy"), null),
+        ]);
+
+        Assert.Equal(ActivationState.Failed, composition.Find("broken")!.State);
+        Assert.Equal(ActivationState.Active, composition.Find("healthy")!.State);
+        Assert.Contains(ctx.Logger.Buffer, message =>
+            message.Type == LoggerType.Warn
+            && message.Text.Contains("broken")
+            && message.Text.Contains("kaboom"));
+    }
+
+    [Fact]
+    public async Task Start_PendingPluginWarnsWithMissingServices()
+    {
+        var ctx = new Context();
+        var composition = await Composition.StartAsync(ctx,
+        [
+            new PluginEntry(PluginDefinition.From((_, _) => null, "needs-service", ["missing/svc"]), null),
+        ]);
+
+        Assert.Equal(ActivationState.Pending, composition.Find("needs-service")!.State);
+        Assert.Contains(ctx.Logger.Buffer, message =>
+            message.Type == LoggerType.Warn
+            && message.Text.Contains("needs-service")
+            && message.Text.Contains("missing/svc"));
     }
 }
