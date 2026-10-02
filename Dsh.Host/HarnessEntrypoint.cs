@@ -42,9 +42,11 @@ public static class HarnessEntrypoint
                     break;
                 case "--gpu-screenshot" when index + 1 < args.Length:
                     gpuScreenshot = args[++index];
+                    gpu = true;
                     break;
                 case "--gpu-capture-plan" when index + 1 < args.Length:
                     gpuCapturePlan = args[++index];
+                    gpu = true;
                     break;
                 case "--gpu-card" when index + 1 < args.Length:
                     gpuCard = args[++index];
