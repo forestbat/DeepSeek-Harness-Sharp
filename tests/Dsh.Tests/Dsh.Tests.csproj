@@ -35,6 +35,7 @@
     <ProjectReference Include="..\..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Toon\Dsh.Toon.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Compaction\Dsh.Compaction.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Persistence\Dsh.Persistence.csproj" />
@@ -69,6 +70,7 @@
     <ProjectReference Include="..\..\src\Dsh.Memory\Dsh.Memory.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Pty\Dsh.Pty.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
   </ItemGroup>
 
 </Project>
