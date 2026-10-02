@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 引入插件生成器: 产出本程序集的 DshPluginManifest, 宿主靠它免反射地发现插件。 -->
+  <!-- 没有这行 import, 编译照样通过但宿主扫不到这个插件, 这是唯一无法被诊断覆盖的显式要求。 -->
+  <!-- 把模板复制出本仓库后, 把这里的相对路径换成你本地的生成器 props 路径或对应的包引用。 -->
+  <Import Project="..\..\src\Dsh.Plugins.Generator\DshPluginPackage.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- 产出 deps.json: 加载器按它解析插件目录里的私有第三方依赖。 -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 插件只面向抽象与运行时编程: Abstractions 是契约面, Core 提供服务/工具/提示词的注册点。 -->
+    <!-- 这两个程序集随宿主镜像分发, 打包时不会也不应拷进插件目录(见下面的 PackPluginLayout)。 -->
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    打包目标: 把主 dll、deps.json 与私有第三方依赖拷成 plugins/<目录名>/ 布局。
+    目录名约定为包名把 / 换成 __(如 @example__dsh-plugin-template), 加载后仍以清单里的包名为准。
+    随宿主镜像分发的程序集(本仓库即全部 Dsh.*)一律不随插件打包: 拷进去会在加载时被识别为文件形态插件, 制造出第二份类型身份。
+    你的类型若会跨插件边界流动(作为服务契约或事件载荷出现在别的插件里), 不要放这里, 去看 README 的共享依赖一节。
+  -->
+  <Target Name="PackPluginLayout" AfterTargets="Build">
+    <ItemGroup>
+      <_PluginPayload Include="$(TargetDir)$(AssemblyName).dll" />
+      <_PluginPayload Include="$(TargetDir)$(AssemblyName).deps.json" />
+      <!-- 模板自身没有私有第三方依赖; 引入宿主镜像没有的库时在这里逐个列出, 例如: -->
+      <!-- <_PluginPayload Include="$(TargetDir)SomeLib.dll" /> -->
+    </ItemGroup>
+    <Copy SourceFiles="@(_PluginPayload)" DestinationFolder="$(TargetDir)plugin\" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
