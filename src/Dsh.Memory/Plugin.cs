@@ -17,11 +17,11 @@ public sealed class Plugin : IDshPlugin
         var options = ctx.GetProp("harnessOptions") as HarnessOptions
             ?? throw new InvalidOperationException("harnessOptions is required for the memory plugin");
         var cwd = options.Cwd ?? Environment.CurrentDirectory;
-        var store = MemoryStoreFactory.Create(config as MemorySettings, cwd);
+        var store = MemoryStoreFactory.Create(MemoryPluginConfig.Resolve(config), cwd);
         var memory = new ProjectMemory(store, ProjectMemory.SidecarDirFor(ProjectRoot.Resolve(cwd)));
         ctx.Provide(MemoryServices.Store, store);
         ctx.Provide(MemoryServices.ProjectMemory, memory);
-        var tool = MemorySaveTool.Register(ctx, options, memory);
+        var tool = MemorySaveTool.Register(ctx, memory);
         var capture = new MemoryCapture(ctx, memory, options);
         return new Bundle(store as IDisposable, tool, capture);
     }

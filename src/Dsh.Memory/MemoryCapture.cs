@@ -57,10 +57,7 @@ public sealed class MemoryCapture : Service, IDisposable
     }
 
     private bool IsEnabled()
-    {
-        var memory = HarnessSettings.Load(_options.Home).Memory;
-        return memory?.Enabled == true && memory.Capture != false;
-    }
+        => MemoryPluginConfig.CaptureEnabled(HarnessSettings.Load(_options.Home));
 
     private async Task ProcessAsync()
     {

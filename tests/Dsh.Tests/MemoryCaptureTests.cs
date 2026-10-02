@@ -141,10 +141,15 @@ public sealed class MemoryCaptureTests
             Directory.CreateDirectory(_cwd);
             var home = new HarnessHome(Path.Combine(_root, "home"));
             Directory.CreateDirectory(home.Root);
-            File.WriteAllText(Path.Combine(home.Root, "settings.yaml"), $"""
-                memory:
-                  enabled: {(memoryEnabled ? "true" : "false")}
-                """);
+            // 捕获开关现在挂在插件参数上:plugins."@deepseek-ai/dsh-memory".capture。
+            File.WriteAllText(Path.Combine(home.Root, "settings.yaml"), memoryEnabled
+                ? "global_default_model: fake/fake\n"
+                : """
+                  plugins:
+                    "@deepseek-ai/dsh-memory":
+                      enabled: true
+                      capture: false
+                  """);
             var ctx = new Context();
             _sessions = new SessionStore(ctx);
             var llm = new LlmRuntime(ctx);

@@ -12,7 +12,7 @@ public sealed class MemoryPluginTests
     [Fact]
     public void Factory_UsesFileBackendByDefault()
     {
-        var store = MemoryStoreFactory.Create(new MemorySettings(), Path.GetTempPath());
+        var store = MemoryStoreFactory.Create(MemoryPluginConfig.Resolve(null), Path.GetTempPath());
 
         var file = Assert.IsType<FileMemoryStore>(store);
         Assert.EndsWith(".dsh-memory.md", file.Description);
@@ -21,11 +21,11 @@ public sealed class MemoryPluginTests
     [Fact]
     public void Factory_UsesMongoBackendWhenConfigured()
     {
-        var store = MemoryStoreFactory.Create(new MemorySettings
+        var store = MemoryStoreFactory.Create(MemoryPluginConfig.Resolve(new Dictionary<string, object?>
         {
-            Backend = "mongo",
-            Mongo = new MemoryMongoSettings { Database = "dsh", Collection = "memory", Key = "k1" },
-        }, Path.GetTempPath());
+            ["backend"] = "mongo",
+            ["mongo"] = new Dictionary<string, object?> { ["database"] = "dsh", ["collection"] = "memory", ["key"] = "k1" },
+        }), Path.GetTempPath());
 
         var mongo = Assert.IsType<MongoTextStore>(store);
         Assert.Equal("dsh.memory#k1", mongo.Description);
@@ -52,9 +52,9 @@ public sealed class MemoryPluginTests
     }
 
     [Fact]
-    public async Task SaveTool_RememberCorrectForgetSkip_WhenEnabled()
+    public async Task SaveTool_RememberCorrectForgetSkip()
     {
-        using var fixture = new ToolFixture(enabled: true);
+        using var fixture = new ToolFixture();
 
         var remembered = await fixture.Execute("""{"action":"remember","key":"build.command","text":"dotnet build","section":"Commands"}""");
         Assert.IsType<ToolExecutionResult.Success>(remembered);
@@ -77,20 +77,9 @@ public sealed class MemoryPluginTests
     }
 
     [Fact]
-    public async Task SaveTool_FailsWhenMemoryDisabled()
-    {
-        using var fixture = new ToolFixture(enabled: false);
-
-        var result = await fixture.Execute("""{"action":"remember","key":"a","text":"b"}""");
-
-        Assert.IsType<ToolExecutionResult.Failure>(result);
-        Assert.False(File.Exists(fixture.MemoryPath));
-    }
-
-    [Fact]
     public async Task SaveTool_RequiresTextForRemember()
     {
-        using var fixture = new ToolFixture(enabled: true);
+        using var fixture = new ToolFixture();
 
         var result = await fixture.Execute("""{"action":"remember","key":"a"}""");
 
@@ -103,25 +92,18 @@ public sealed class MemoryPluginTests
         private readonly ToolRuntime _tools;
         private readonly IDisposable _tool;
 
-        public ToolFixture(bool enabled)
+        public ToolFixture()
         {
             _root = Path.Combine(Path.GetTempPath(), $"dsh-memory-tool-{Guid.NewGuid():N}");
             Directory.CreateDirectory(_root);
             MemoryPath = Path.Combine(_root, "memory.md");
-            File.WriteAllText(Path.Combine(_root, "settings.yaml"), $"""
-                memory:
-                  enabled: {(enabled ? "true" : "false")}
-                  file: {MemoryPath}
-                """);
-            var home = HarnessHome.Resolve(_root);
-            var options = new HarnessOptions(home, _root);
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
             _tools = new ToolRuntime(ctx);
             var memory = new ProjectMemory(
                 new FileMemoryStore(MemoryPath),
                 Path.Combine(_root, ".dsh-memory"));
-            _tool = MemorySaveTool.Register(ctx, options, memory);
+            _tool = MemorySaveTool.Register(ctx, memory);
         }
 
         public string MemoryPath { get; }

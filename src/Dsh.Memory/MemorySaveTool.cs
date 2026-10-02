@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -20,11 +19,11 @@ public static class MemorySaveTool
         + "forget (remove a record by key), or skip (decline out-of-scope content). "
         + "Records are timestamped automatically; the injected index is capped at 8192 bytes, so read the memory file directly when you need full content.";
 
-    public static IDisposable Register(Context ctx, HarnessOptions options, ProjectMemory memory)
+    public static IDisposable Register(Context ctx, ProjectMemory memory)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:memory_save", PromptOrders.ToolMemorySave, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:memory_save", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
@@ -67,7 +66,7 @@ public static class MemorySaveTool
                         $"memory {value.GetProperty("action").GetString()}: {value.GetProperty("key").GetString()}"
                         + $" (section: {value.GetProperty("section").GetString()}, replaced: {value.GetProperty("replaced").GetBoolean()})"),
                 ]),
-            Execute = (args, exec) => Execute(args, exec, options, memory),
+            Execute = (args, exec) => Execute(args, exec, memory),
         });
         return new Registration(registration, section);
     }
@@ -75,11 +74,8 @@ public static class MemorySaveTool
     private static async Task<object?> Execute(
         JsonElement args,
         ToolRunContext exec,
-        HarnessOptions options,
         ProjectMemory memory)
     {
-        if (HarnessSettings.Load(options.Home).Memory?.Enabled != true)
-            throw new InvalidOperationException("project memory is disabled; run /memory on first");
         var action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
         var key = args.TryGetProperty("key", out var keyElement) ? keyElement.GetString() : null;
         var text = args.TryGetProperty("text", out var textElement) ? textElement.GetString() : null;

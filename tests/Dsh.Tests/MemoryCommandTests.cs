@@ -4,50 +4,68 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Memory;
+using Dsh.Plugins;
 
 namespace Dsh.Tests;
 
 public sealed class MemoryCommandTests
 {
     [Fact]
-    public async Task ToggleOnOff_PersistsSettingAndChangesPrompt()
+    public async Task ToggleOnOff_DrivesPluginManager()
     {
         var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
         var projectDir = Path.Combine(root, "project");
         Directory.CreateDirectory(projectDir);
-        var home = new HarnessHome(Path.Combine(root, "home"));
         try
         {
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
             var commands = CommandsService.Register(ctx);
-            var options = new HarnessOptions(home, Cwd: projectDir);
-            ctx.Provide(MemoryServices.ProjectMemory, new ProjectMemory(
-                new FileMemoryStore(Path.Combine(projectDir, ".dsh-memory.md")),
-                Path.Combine(projectDir, ".dsh-memory")));
-            using var registration = MemoryCommand.Register(ctx, options);
+            var plugins = new FakePluginManager();
+            ctx.Provide("pluginManager", plugins);
+            using var registration = MemoryCommand.Register(ctx);
             var agent = new FakeAgent(ctx);
 
             var enabled = await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
             Assert.NotNull(enabled);
             Assert.IsType<CommandResult.Success>(enabled.Result);
-            Assert.True(HarnessSettings.Load(home).Memory?.Enabled == true);
+            Assert.Equal(["enable:@deepseek-ai/dsh-memory"], plugins.Calls);
 
-            var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
+            var disabled = await commands.Execute(agent, "/memory off", TestContext.Current.CancellationToken);
+            Assert.NotNull(disabled);
+            Assert.IsType<CommandResult.Success>(disabled.Result);
+            Assert.Equal(["enable:@deepseek-ai/dsh-memory", "disable:@deepseek-ai/dsh-memory"], plugins.Calls);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task PromptSections_FollowProjectMemoryPresence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
+        var projectDir = Path.Combine(root, "project");
+        Directory.CreateDirectory(projectDir);
+        try
+        {
+            var ctx = new Context();
+            var systemPrompt = new SystemPrompt(ctx, new SystemPromptConfig());
+            _ = CommandsService.Register(ctx);
+            using var registration = MemoryCommand.Register(ctx);
+
+            var empty = await systemPrompt.Assemble(new AssembleContext());
+            Assert.DoesNotContain("Project memory is enabled", PromptRender.RenderPrompt(empty));
+
+            ctx.Provide(MemoryServices.ProjectMemory, new ProjectMemory(
+                new FileMemoryStore(Path.Combine(projectDir, ".dsh-memory.md")),
+                Path.Combine(projectDir, ".dsh-memory")));
             var assembly = await systemPrompt.Assemble(new AssembleContext());
             var prompt = PromptRender.RenderPrompt(assembly);
             Assert.Contains("Project memory is enabled", prompt);
             Assert.Contains(".dsh-memory.md", prompt);
             Assert.Contains(assembly.Contexts, context => context.Text.Contains("Project memory"));
-
-            var disabled = await commands.Execute(agent, "/memory off", TestContext.Current.CancellationToken);
-            Assert.NotNull(disabled);
-            Assert.IsType<CommandResult.Success>(disabled.Result);
-            Assert.False(HarnessSettings.Load(home).Memory?.Enabled == true);
-
-            assembly = await systemPrompt.Assemble(new AssembleContext());
-            Assert.DoesNotContain("Project memory is enabled", PromptRender.RenderPrompt(assembly));
-            Assert.DoesNotContain(assembly.Contexts, context => context.Text.Contains("Project memory"));
         }
         finally
         {
@@ -61,14 +79,12 @@ public sealed class MemoryCommandTests
         var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
         var projectDir = Path.Combine(root, "project");
         Directory.CreateDirectory(projectDir);
-        var home = new HarnessHome(Path.Combine(root, "home"));
         try
         {
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
             var commands = CommandsService.Register(ctx);
-            var options = new HarnessOptions(home, Cwd: projectDir);
-            using var registration = MemoryCommand.Register(ctx, options);
+            using var registration = MemoryCommand.Register(ctx);
             var agent = new FakeAgent(ctx);
 
             var hidden = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
@@ -80,7 +96,6 @@ public sealed class MemoryCommandTests
             var memory = new ProjectMemory(new FileMemoryStore(Path.Combine(projectDir, ".dsh-memory.md")), sidecar);
             ctx.Provide(MemoryServices.ProjectMemory, memory);
             await memory.WriteDigestAsync(SessionId.Create("s-1"), "topic", "summary text", TestContext.Current.CancellationToken);
-            await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
 
             var shown = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
 
@@ -101,22 +116,19 @@ public sealed class MemoryCommandTests
     {
         var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        var home = new HarnessHome(Path.Combine(root, "home"));
         try
         {
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
             var commands = CommandsService.Register(ctx);
-            var options = new HarnessOptions(home, Cwd: root);
-            using var registration = MemoryCommand.Register(ctx, options);
+            using var registration = MemoryCommand.Register(ctx);
             var agent = new FakeAgent(ctx);
 
-            await commands.Execute(agent, "/memory on", TestContext.Current.CancellationToken);
             var shown = await commands.Execute(agent, "/memory show", TestContext.Current.CancellationToken);
 
             Assert.NotNull(shown);
             var error = Assert.IsType<CommandResult.Error>(shown.Result);
-            Assert.Contains("memory plugin is not loaded", error.Text);
+            Assert.Contains("/memory on", error.Text);
         }
         finally
         {
@@ -129,24 +141,47 @@ public sealed class MemoryCommandTests
     {
         var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        var home = new HarnessHome(Path.Combine(root, "home"));
         try
         {
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
             var commands = CommandsService.Register(ctx);
-            using var registration = MemoryCommand.Register(ctx, new HarnessOptions(home, Cwd: root));
+            using var registration = MemoryCommand.Register(ctx);
             var agent = new FakeAgent(ctx);
 
             var result = await commands.Execute(agent, "/memory maybe", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
             Assert.IsType<CommandResult.Error>(result.Result);
-            Assert.False(HarnessSettings.Load(home).Memory?.Enabled == true);
         }
         finally
         {
             Directory.Delete(root, true);
+        }
+    }
+
+    private sealed class FakePluginManager : IPluginManager
+    {
+        public List<string> Calls { get; } = [];
+
+        public IReadOnlyList<string> PackageNames => [];
+
+        public string Describe(string package) => "unknown";
+
+        public Task<string> AddAsync(string packageOrPath) => Task.FromResult("");
+
+        public Task<string> RemoveAsync(string package, bool force = false) => Task.FromResult("");
+
+        public Task<string> DisableAsync(string package)
+        {
+            Calls.Add($"disable:{package}");
+            return Task.FromResult("disabled");
+        }
+
+        public Task<string> EnableAsync(string package)
+        {
+            Calls.Add($"enable:{package}");
+            return Task.FromResult("enabled");
         }
     }
 
