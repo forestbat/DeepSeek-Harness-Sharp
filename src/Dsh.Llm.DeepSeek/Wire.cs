@@ -24,9 +24,27 @@ public sealed record WireMessage(
     [property: JsonPropertyName("tool_calls")] IReadOnlyList<WireToolCall>? ToolCalls = null,
     [property: JsonPropertyName("tool_call_id")] string? ToolCallId = null);
 
-public sealed record WireToolCall(string Id, string Name, string Arguments);
+public sealed record WireToolCall(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("function")] WireToolCallFunction Function)
+{
+    [JsonPropertyName("type")] public string Type => "function";
+}
 
-public sealed record WireTool(string Name, string Description, JsonObject Parameters);
+public sealed record WireToolCallFunction(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("arguments")] string Arguments);
+
+public sealed record WireTool(
+    [property: JsonPropertyName("function")] WireToolFunction Function)
+{
+    [JsonPropertyName("type")] public string Type => "function";
+}
+
+public sealed record WireToolFunction(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("parameters")] JsonObject Parameters);
 
 public sealed class WireChunk
 {

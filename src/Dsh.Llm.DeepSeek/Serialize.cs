@@ -53,7 +53,7 @@ public static class WireSerialize
         var reasoning = string.Concat(message.Content.OfType<ReasoningBlock>().Select(block => block.Text));
         var toolCalls = message.Content
             .OfType<ToolCallBlock>()
-            .Select(block => new WireToolCall(block.Id.Value, block.Name, block.Arguments))
+            .Select(block => new WireToolCall(block.Id.Value, new WireToolCallFunction(block.Name, block.Arguments)))
             .ToList();
         return new WireMessage(
             "assistant",
@@ -108,7 +108,7 @@ public static class WireSerialize
             Thinking = thinking is null ? null : new JsonObject { ["type"] = thinking },
             ReasoningEffort = reasoningEffort,
             Tools = options.Tools is { Count: > 0 } tools
-                ? tools.Select(tool => new WireTool(tool.Name, tool.Description, tool.Parameters)).ToList()
+                ? tools.Select(tool => new WireTool(new WireToolFunction(tool.Name, tool.Description, tool.Parameters))).ToList()
                 : null,
             Temperature = options.Temperature,
             MaxTokens = options.MaxTokens,
