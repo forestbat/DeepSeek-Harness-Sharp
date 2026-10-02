@@ -85,7 +85,6 @@ public static class ToolWorkflow
         }, new EventOptions { Global = true });
         var prompt = systemPrompt.Section(PromptSection.Literal(
             $"tool:{resolved.ToolName}",
-            PromptOrders.ToolWorkflow,
             $"Use the {resolved.ToolName} tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a C# program (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls."));
         var registration = tools.Register(BuildDefinition(workflow, recorder, resolved));
         return new DisposeBundle([prompt, registration, new FuncDispose(agentStartSubscription), new FuncDispose(agentEndSubscription)]);

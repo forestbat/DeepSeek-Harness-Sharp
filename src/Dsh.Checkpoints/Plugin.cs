@@ -21,18 +21,8 @@ public sealed class Plugin(string packageName) : IDshPlugin
     public IDisposable Apply(Context ctx, object? config)
     {
         var homeRoot = ctx.GetProp("dshHomePath") as string ?? HarnessHome.Resolve().Root;
-        var policy = CheckpointPolicy.Resolve(config);
-        if (!policy.Enabled)
-            return new NoopDisposable();
-        var service = new CheckpointService(ctx, policy, homeRoot);
+        var service = new CheckpointService(ctx, CheckpointPolicy.Resolve(config), homeRoot);
         return new DisposableBundle(service, CheckpointCommand.Register(ctx, service));
-    }
-
-    private sealed class NoopDisposable : IDisposable
-    {
-        public void Dispose()
-        {
-        }
     }
 
     private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable

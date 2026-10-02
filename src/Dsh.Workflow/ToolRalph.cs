@@ -146,7 +146,6 @@ public static class ToolRalph
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var prompt = systemPrompt.Section(PromptSection.Literal(
             "tool:ralph",
-            PromptOrders.ToolRalph,
             "Use the ralph tool ONLY when the direct human explicitly asks for a Ralph loop or fresh-agent iterative execution. Each Ralph round starts a fresh child with no conversation seed and uses the shared workspace as durable memory. Completion and blockers are worker reports, not independent evaluation. Use same-session goal tools for ordinary long-running objectives, and plain subagents or workflows for bounded delegation and fan-out."));
         var registration = tools.Register(BuildDefinition(workflow, subagents, resolved));
         return new DisposeBundle([prompt, registration]);

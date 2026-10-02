@@ -142,7 +142,7 @@ public sealed class PresetController : Service
                 "minimal preset requires a registered persistent shell tool (bash/pwsh), but neither is registered");
         }
         holder.Effects.Add(systemPrompt.Section(
-            PromptSection.Literal(SystemPrompt.PersonaSection, PromptOrders.DeploymentPersona, MinimalPersona, complete: true),
+            PromptSection.Literal(SystemPrompt.PersonaSection, MinimalPersona, complete: true),
             agent.ScopeKey));
         holder.Effects.Add(systemPrompt.SuppressRuntimeContext(agent.ScopeKey));
         holder.Effects.Add(tools.Restrict(new ToolRestriction(Allow: shell), agent.ScopeKey));

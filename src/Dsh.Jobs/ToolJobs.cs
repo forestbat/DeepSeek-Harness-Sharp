@@ -134,7 +134,7 @@ public static class ToolJobs
 
         disposables.Add(jobs.AttachController(PluginName));
 
-        disposables.Add(systemPrompt.Section(PromptSection.Literal("tool:jobs", PromptOrders.ToolJobs, SectionText)));
+        disposables.Add(systemPrompt.Section(PromptSection.Literal("tool:jobs", SectionText)));
 
         disposables.Add(jobs.OnJobDone((snapshot, owner) =>
         {

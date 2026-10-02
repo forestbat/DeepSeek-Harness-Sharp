@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -9,26 +8,24 @@ namespace Dsh.Checkpoints;
 
 public sealed record CheckpointPolicy
 {
-    public required bool Enabled { get; init; }
+    public const int DefaultMaxPoints = 256;
+    public const int DefaultKeepDays = 15;
+
     public required int MaxPoints { get; init; }
     public required int KeepDays { get; init; }
 
-    /** config 为 Boot 注入的顶层 checkpoints 段,或 plugins 段里的显式参数表(优先并取代顶层段),均可空。 */
+    /** config 即 plugins."@deepseek-ai/dsh-checkpoints" 的参数表(可空);功能的开关即插件自身的 enabled。 */
     public static CheckpointPolicy Resolve(object? config)
     {
-        var section = config as CheckpointsSettings;
-        var enabled = section?.Enabled ?? false;
-        var maxPoints = section?.MaxPoints ?? CheckpointsSettings.DefaultMaxPoints;
-        var keepDays = section?.KeepDays ?? CheckpointsSettings.DefaultKeepDays;
+        var maxPoints = DefaultMaxPoints;
+        var keepDays = DefaultKeepDays;
         if (config is IReadOnlyDictionary<string, object?> map)
         {
-            enabled = map.TryGetValue("enabled", out var enabledValue) && enabledValue is bool flag ? flag : enabled;
             maxPoints = map.TryGetValue("max_points", out var maxValue) && maxValue is long max ? (int)max : maxPoints;
             keepDays = map.TryGetValue("keep_days", out var keepValue) && keepValue is long keep ? (int)keep : keepDays;
         }
         return new CheckpointPolicy
         {
-            Enabled = enabled,
             MaxPoints = Math.Max(1, maxPoints),
             KeepDays = Math.Max(1, keepDays),
         };

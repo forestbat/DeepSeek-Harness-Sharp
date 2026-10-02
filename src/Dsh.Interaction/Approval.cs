@@ -1,4 +1,3 @@
-#pragma warning disable CA2255
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
@@ -67,7 +66,6 @@ public sealed class ApprovalService : Service, IApprovalService
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false);
         systemPrompt?.Context(PromptContext.Literal(
             "approval:policy",
-            PromptOrders.ContextApprovalPolicy,
             _config.Policy switch
             {
                 ApprovalPolicy.Never => NeverSentence,

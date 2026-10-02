@@ -1,28 +1,25 @@
 using Dsh.Runtime;
-using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Plugins;
 
 namespace Dsh.Interaction;
 
 public static class MemoryCommand
 {
+    private const string MemoryPackage = "@deepseek-ai/dsh-memory";
     private const string MemorySectionName = "memory:policy";
     private const string MemoryContextName = "memory:project";
-    private const int MemoryPolicyOrder = 550;
-    private const int MemoryContextOrder = 105;
 
-    public static IDisposable Register(Context ctx, HarnessOptions options)
+    public static IDisposable Register(Context ctx)
     {
         var commands = ctx.Get<CommandsService>(CommandsService.ServiceName, false)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         systemPrompt.Section(new PromptSection(
             MemorySectionName,
-            MemoryPolicyOrder,
-            _ => MemoryPolicyText(ctx, options)));
+            _ => MemoryPolicyText(ctx)));
         systemPrompt.Context(new PromptContext(
             MemoryContextName,
-            MemoryContextOrder,
-            _ => MemoryContextText(ctx, options)));
+            _ => MemoryContextText(ctx)));
 
         return commands.Register(new CommandDefinition
         {
@@ -36,12 +33,10 @@ public static class MemoryCommand
                 {
                     case "on":
                     case "off":
-                        return Toggle(options, raw == "on");
+                        return await Toggle(ctx, raw == "on");
                     case "show":
-                        if (!IsEnabled(options))
-                            return new CommandResult.Error("project memory is disabled; run /memory on first");
                         if (ResolveMemory(ctx) is not { } memoryToShow)
-                            return new CommandResult.Error("project memory is unavailable; the memory plugin is not loaded");
+                            return new CommandResult.Error("project memory is unavailable; run /memory on first");
                         return new CommandResult.Success(await memoryToShow.ShowAsync(invocation.Signal));
                     default:
                         return new CommandResult.Error("usage: /memory on | /memory off | /memory show");
@@ -50,37 +45,17 @@ public static class MemoryCommand
         });
     }
 
-    private static CommandResult Toggle(HarnessOptions options, bool enabled)
+    /** 记忆的启用即插件的启用:enable/disable 由插件管理器执行并持久化,效果当场装卸。 */
+    private static async Task<CommandResult> Toggle(Context ctx, bool enabled)
     {
-        var settings = HarnessSettings.Load(options.Home);
-        var updated = new HarnessSettings
-        {
-            GlobalDefaultModel = settings.GlobalDefaultModel,
-            CompactionModel = settings.CompactionModel,
-            Subagent = settings.Subagent,
-            Providers = settings.Providers,
-            Skills = settings.Skills,
-            Rules = settings.Rules,
-            McpServers = settings.McpServers,
-            Compaction = settings.Compaction,
-            Safety = settings.Safety,
-            Memory = new MemorySettings
-            {
-                Enabled = enabled,
-                File = settings.Memory?.File,
-                Backend = settings.Memory?.Backend,
-                Capture = settings.Memory?.Capture,
-                Mongo = settings.Memory?.Mongo,
-            },
-        };
-        updated.Save(options.Home);
-        return new CommandResult.Success($"project memory {(enabled ? "on" : "off")}");
+        if (ctx.Get<IPluginManager>("pluginManager") is not { } plugins)
+            return new CommandResult.Error("plugin manager is not available in this host");
+        var message = enabled ? await plugins.EnableAsync(MemoryPackage) : await plugins.DisableAsync(MemoryPackage);
+        return new CommandResult.Success($"project memory {(enabled ? "on" : "off")} ({message})");
     }
 
-    private static string MemoryPolicyText(Context ctx, HarnessOptions options)
+    private static string MemoryPolicyText(Context ctx)
     {
-        if (!IsEnabled(options))
-            return "";
         if (ResolveMemory(ctx) is not { } memory)
             return "";
         return $"""
@@ -90,10 +65,8 @@ public static class MemoryCommand
             """;
     }
 
-    private static string MemoryContextText(Context ctx, HarnessOptions options)
+    private static string MemoryContextText(Context ctx)
     {
-        if (!IsEnabled(options))
-            return "";
         if (ResolveMemory(ctx) is not { } memory)
             return "";
         try
@@ -108,7 +81,4 @@ public static class MemoryCommand
 
     private static ProjectMemory? ResolveMemory(Context ctx)
         => ctx.Get<ProjectMemory>(MemoryServices.ProjectMemory, false);
-
-    private static bool IsEnabled(HarnessOptions options)
-        => HarnessSettings.Load(options.Home).Memory?.Enabled == true;
 }

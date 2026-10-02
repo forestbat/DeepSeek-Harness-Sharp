@@ -31,7 +31,7 @@ public static class ToolE2bTool
             ?? throw new InvalidOperationException("e2b service is not registered");
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:e2b_run", PromptOrders.ToolE2b, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:e2b_run", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,

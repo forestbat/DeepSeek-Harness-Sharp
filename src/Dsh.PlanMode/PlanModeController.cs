@@ -56,7 +56,7 @@ public sealed class PlanModeController : Service
 
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)
             ?? throw new InvalidOperationException("plan-mode requires the systemPrompt service");
-        systemPrompt.Section(new PromptSection("plan:policy", PromptOrders.PlanPolicy, context =>
+        systemPrompt.Section(new PromptSection("plan:policy", context =>
         {
             if (context.Agent is null)
                 return "";

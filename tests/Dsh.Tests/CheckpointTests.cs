@@ -18,7 +18,7 @@ public sealed class CheckpointTests
             File.WriteAllText(Path.Combine(project, "a.txt"), "one");
             var ctx = new Context();
             var sessions = new SessionStore(ctx);
-            var policy = new CheckpointPolicy { Enabled = true, MaxPoints = 256, KeepDays = 15 };
+            var policy = new CheckpointPolicy { MaxPoints = 256, KeepDays = 15 };
             using var service = new CheckpointService(ctx, policy, home);
             var header = Header(project);
             var session = sessions.Create(id: header.Id, header: header);
@@ -57,7 +57,7 @@ public sealed class CheckpointTests
             File.WriteAllText(Path.Combine(project, "gone.txt"), "to-be-deleted");
             var ctx = new Context();
             var sessions = new SessionStore(ctx);
-            var policy = new CheckpointPolicy { Enabled = true, MaxPoints = 256, KeepDays = 15 };
+            var policy = new CheckpointPolicy { MaxPoints = 256, KeepDays = 15 };
             using var service = new CheckpointService(ctx, policy, home);
             var header = Header(project);
             var session = sessions.Create(id: header.Id, header: header);
@@ -94,7 +94,7 @@ public sealed class CheckpointTests
             File.WriteAllText(Path.Combine(project, "a.txt"), "one");
             var ctx = new Context();
             var sessions = new SessionStore(ctx);
-            var policy = new CheckpointPolicy { Enabled = true, MaxPoints = 2, KeepDays = 15 };
+            var policy = new CheckpointPolicy { MaxPoints = 2, KeepDays = 15 };
             using var service = new CheckpointService(ctx, policy, home);
             var header = Header(project);
             var session = sessions.Create(id: header.Id, header: header);
@@ -160,21 +160,18 @@ public sealed class CheckpointTests
     }
 
     [Fact]
-    public void Policy_ResolveReadsSettingsAndConfig()
+    public void Policy_ResolveReadsParameters()
     {
-        var section = new CheckpointsSettings { Enabled = true, MaxPoints = 4, KeepDays = 7 };
-        Assert.True(CheckpointPolicy.Resolve(section).Enabled);
-        Assert.Equal(4, CheckpointPolicy.Resolve(section).MaxPoints);
-        var overridden = CheckpointPolicy.Resolve(new Dictionary<string, object?>
+        var policy = CheckpointPolicy.Resolve(new Dictionary<string, object?>
         {
-            ["enabled"] = false,
             ["max_points"] = 2L,
             ["keep_days"] = 1L,
         });
-        Assert.False(overridden.Enabled);
-        Assert.Equal(2, overridden.MaxPoints);
-        Assert.Equal(1, overridden.KeepDays);
-        Assert.False(CheckpointPolicy.Resolve(null).Enabled);
+        Assert.Equal(2, policy.MaxPoints);
+        Assert.Equal(1, policy.KeepDays);
+        var defaults = CheckpointPolicy.Resolve(null);
+        Assert.Equal(CheckpointPolicy.DefaultMaxPoints, defaults.MaxPoints);
+        Assert.Equal(CheckpointPolicy.DefaultKeepDays, defaults.KeepDays);
     }
 
     private static SessionHeader Header(string cwd) => new()

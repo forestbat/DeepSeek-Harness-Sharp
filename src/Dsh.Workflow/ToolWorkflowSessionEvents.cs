@@ -1,4 +1,3 @@
-#pragma warning disable CA2255
 using Dsh.Plugins;
 using System.Runtime.CompilerServices;
 using Dsh.Core;

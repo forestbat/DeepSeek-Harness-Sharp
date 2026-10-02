@@ -36,7 +36,7 @@ public static class WebFetchTool
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:web_fetch", PromptOrders.ToolWebFetch, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:web_fetch", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,

@@ -141,7 +141,7 @@ public static class GlobTool
         var resolved = caps ?? new GlobToolCaps();
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:glob", PromptOrders.ToolGlob, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:glob", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
@@ -249,7 +249,7 @@ public static class GrepTool
         var resolved = caps ?? new GrepToolCaps();
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:grep", PromptOrders.ToolGrep, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:grep", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,

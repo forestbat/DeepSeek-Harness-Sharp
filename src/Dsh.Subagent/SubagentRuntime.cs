@@ -19,7 +19,6 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
     {
         ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)?.Context(new PromptContext(
             DelegationContextName,
-            PromptOrders.ContextSubagentDelegation,
             context => context.Scope is { } scope && IsChildScope(scope)
                 ? ChildCompositionSupport.DelegationContextText
                 : ""));

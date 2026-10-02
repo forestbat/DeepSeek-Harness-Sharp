@@ -1,4 +1,3 @@
-#pragma warning disable CA2255
 using Dsh.Plugins;
 using Dsh.Llm;
 using System.Text.RegularExpressions;

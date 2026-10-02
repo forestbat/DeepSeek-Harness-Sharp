@@ -19,7 +19,7 @@ public static class WriteTool
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:write", PromptOrders.ToolWrite, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:write", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,

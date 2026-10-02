@@ -167,7 +167,6 @@ public static class ProviderCommand
             McpServers = settings.McpServers,
             Compaction = settings.Compaction,
             Safety = settings.Safety,
-            Memory = settings.Memory,
         };
         updated.Save(home);
         return Task.FromResult<CommandResult>(new CommandResult.Success($"removed provider \"{name}\""));
@@ -239,7 +238,6 @@ public static class ProviderCommand
             McpServers = settings.McpServers,
             Compaction = settings.Compaction,
             Safety = settings.Safety,
-            Memory = settings.Memory,
         };
         updated.Save(home);
         var options = new HarnessOptions(home, Environment.CurrentDirectory);

@@ -30,7 +30,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         return systemPrompt.Section(new PromptSection(
             "agent-instructions",
-            PromptOrders.AgentInstructions,
             _ => AgentInstructionsText.Render(options.Home, options.Cwd)));
     }
 }

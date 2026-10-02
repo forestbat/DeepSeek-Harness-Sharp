@@ -28,7 +28,7 @@ public static class ReadTool
         var resolved = caps ?? new ReadToolCaps();
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:read", PromptOrders.ToolRead, SectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:read", SectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,

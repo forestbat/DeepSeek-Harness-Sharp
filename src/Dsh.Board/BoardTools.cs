@@ -42,7 +42,7 @@ public static class BoardTools
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var board = ctx.Get<SwarmBoard>(SwarmBoard.ServiceName)!;
         ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)?.Context(
-            PromptContext.Literal(CoordinationContextName, PromptOrders.ContextBoardCoordination, CoordinationInstructions));
+            PromptContext.Literal(CoordinationContextName, CoordinationInstructions));
         var notifier = BoardNotifier.Attach(ctx, board);
         return new DisposeBundle([tools.Register(PostDefinition(board)), tools.Register(ReadDefinition(board)), notifier]);
     }

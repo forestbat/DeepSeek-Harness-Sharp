@@ -26,7 +26,7 @@ public static class WebSearchTool
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var sectionText = fetchEnabled ? string.Format(SectionTextWithFetch, maxQueries) : string.Format(SectionTextWithoutFetch, maxQueries);
-        var section = systemPrompt.Section(PromptSection.Literal("tool:web_search", PromptOrders.ToolWebSearch, sectionText));
+        var section = systemPrompt.Section(PromptSection.Literal("tool:web_search", sectionText));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
