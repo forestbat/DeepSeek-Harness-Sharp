@@ -15,6 +15,9 @@ public sealed class PluginActivation
 
     public string Name { get; }
     public IReadOnlyList<string> Inject { get; }
+
+    /** 类型化依赖边:激活时按可赋值性解析成服务名并捕获,此后与名字边走同一套失效/重建机制。 */
+    public IReadOnlyList<Type> InjectTypes { get; }
     public object? Config { get; }
     public Context Ctx { get; private set; } = null!;
 
@@ -43,6 +46,7 @@ public sealed class PluginActivation
         _definition = definition;
         Name = definition.Name ?? "anonymous";
         Inject = definition.Inject;
+        InjectTypes = definition.InjectTypes;
         Config = config;
         Lifecycle = new PluginLifecycle(this);
     }
@@ -52,6 +56,7 @@ public sealed class PluginActivation
         _definition = PluginDefinition.From(static (_, _) => null, name);
         Name = name;
         Inject = [];
+        InjectTypes = [];
         State = ActivationState.Active;
         _settled.TrySetResult();
     }
@@ -145,12 +150,21 @@ public sealed class PluginActivation
 
     internal void ClearError() => Error = null;
 
+    /** 调度器反查用:声明的名字边 + 激活时捕获的类型边(已落成服务名)。 */
+    internal bool DependsOn(string serviceName)
+        => Inject.Contains(serviceName, StringComparer.Ordinal) || _dependencyOwners.ContainsKey(serviceName);
+
     /** 依赖可用性:注入项存在且当前可注入(供激活资格判定)。 */
     internal bool DependenciesAvailable(IReadOnlyDictionary<string, PluginActivation> providers)
     {
         foreach (var name in Inject)
         {
             if (!providers.ContainsKey(name) || !Ctx.Root.IsServiceInjectable(name))
+                return false;
+        }
+        foreach (var type in InjectTypes)
+        {
+            if (!Ctx.Root.IsServiceInjectable(type))
                 return false;
         }
         return true;
@@ -177,6 +191,12 @@ public sealed class PluginActivation
         {
             if (providers.TryGetValue(name, out var owner))
                 snapshot[name] = owner;
+        }
+        foreach (var type in InjectTypes)
+        {
+            var resolved = Ctx.Root.ServiceTable.ResolveName(type);
+            if (resolved is not null && providers.TryGetValue(resolved, out var owner))
+                snapshot[resolved] = owner;
         }
         _dependencyOwners = snapshot;
     }

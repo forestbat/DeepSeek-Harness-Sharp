@@ -95,6 +95,9 @@ public sealed class Context
 
     public T? Get<T>(string name, bool strict = true) where T : class => ServiceTable.Get(name, strict) as T;
 
+    /** 类型化注入:按契约类型取唯一激活服务;多个候选抛 AMBIGUOUS_SERVICE(按名消歧),无候选返回 null。 */
+    public T? Get<T>(bool strict = true) where T : class => ServiceTable.GetByType(typeof(T), strict) as T;
+
     public EffectHandle Provide(string name, object? value = null, Func<bool>? check = null)
         => ServiceTable.Provide(this, name, value, check);
 
@@ -133,6 +136,8 @@ public sealed class Context
         => Root.Scheduler.Register(definition, config);
 
     internal bool IsServiceInjectable(string name) => ServiceTable.IsInjectable(name);
+
+    internal bool IsServiceInjectable(Type type) => ServiceTable.IsInjectable(type);
 
     public override string ToString() => $"Context <{Activation.Name}>";
 }

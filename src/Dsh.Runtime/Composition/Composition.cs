@@ -56,6 +56,9 @@ public sealed class Composition
             var missing = activation.Inject
                 .Where(name => !root.IsServiceInjectable(name))
                 .Select(name => DescribeMissing(root, name))
+                .Concat(activation.InjectTypes
+                    .Where(type => !root.IsServiceInjectable(type))
+                    .Select(type => DescribeMissing(root, type)))
                 .ToList();
             logger.Warn($"plugin <{activation.Name}> pending (dependencies missing): {string.Join(", ", missing)}");
         }
@@ -67,6 +70,15 @@ public sealed class Composition
         return provider is null
             ? $"{service} (no provider registered; providing plugin not installed or not activated)"
             : $"{service} (provided by <{provider.Value.OwnerName}>, state: {provider.Value.OwnerState})";
+    }
+
+    /** 类型边缺失:列出全部可赋值候选及其提供者状态;零候选说明提供方未安装,多候选是歧义需按名消歧。 */
+    private static string DescribeMissing(Context root, Type type)
+    {
+        var candidates = root.ServiceTable.DescribeCandidates(type);
+        return candidates.Count == 0
+            ? $"{type.Name} (no service assignable to {type.Name} registered)"
+            : $"{type.Name} (ambiguous or inactive candidates: {string.Join("; ", candidates)})";
     }
 
     /** 单个插件 Apply 失败不拖垮整个进程:落 Failed 态并 WARN 汇总;入口插件的失败在入口解析处显式终止。 */

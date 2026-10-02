@@ -317,9 +317,9 @@ public sealed class PluginScheduler
 
     private List<PluginActivation> DependentsOf(PluginActivation provider)
     {
-        var services = provider.ProvidedNames.ToHashSet(StringComparer.Ordinal);
+        var services = provider.ProvidedNames;
         var direct = Snapshot()
-            .Where(candidate => !ReferenceEquals(candidate, provider) && candidate.Inject.Any(services.Contains))
+            .Where(candidate => !ReferenceEquals(candidate, provider) && services.Any(candidate.DependsOn))
             .ToList();
         return Expand(direct);
     }
@@ -327,7 +327,7 @@ public sealed class PluginScheduler
     private List<PluginActivation> DependentsOfProvider(string serviceName)
     {
         var direct = Snapshot()
-            .Where(candidate => candidate.Inject.Contains(serviceName, StringComparer.Ordinal))
+            .Where(candidate => candidate.DependsOn(serviceName))
             .ToList();
         return Expand(direct);
     }
@@ -345,9 +345,9 @@ public sealed class PluginScheduler
             var services = current.ProvidedNames;
             foreach (var candidate in snapshot)
             {
-                if (candidate.Inject.Count == 0 || seen.Contains(candidate))
+                if (seen.Contains(candidate))
                     continue;
-                if (candidate.Inject.Any(services.Contains))
+                if (services.Any(candidate.DependsOn))
                 {
                     seen.Add(candidate);
                     ordered.Add(candidate);
