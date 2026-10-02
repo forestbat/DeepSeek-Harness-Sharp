@@ -35,10 +35,23 @@ internal static class TuiProxy
         if (gpu)
         {
             // 独立窗口形态: 窗口只渲染会话画面, 关窗口即 detach(会话继续跑)。
+            // 宿主创建失败(无显示服务器/无 DRM/终端不支持图像协议)时打印原因并回退到下面的终端形态, 不抛未捕获异常。
             var atlas = TuiRunner.CreateAtlasForTerminal();
-            using var windowHost = GpuHostFactory.CreateWindowHost(atlas, vsync: GpuCatalog.LoadVsync(app.Home));
-            new GpuSessionProxy(session.Id, atlas, windowHost).Run();
-            return 0;
+            IGlSurfaceHostRunner? windowHost = null;
+            try
+            {
+                windowHost = GpuHostFactory.CreateWindowHost(atlas, vsync: GpuCatalog.LoadVsync(app.Home));
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"GPU unavailable: {error.Message}");
+            }
+            if (windowHost is not null)
+            {
+                using (windowHost)
+                    new GpuSessionProxy(session.Id, atlas, windowHost).Run();
+                return 0;
+            }
         }
 
         // 终端形态: 接管本终端, 输出即会话画面, 输入原样进会话; 常驻会话发 detach 标记或退出时本进程就结束。

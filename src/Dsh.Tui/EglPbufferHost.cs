@@ -16,9 +16,10 @@ public sealed class EglPbufferHost : IGlSurfaceHost
 
     private readonly EGLDisplay _display;
     private readonly EGLContext _context;
-    private readonly EGLSurface _surface;
-    private readonly int _width;
-    private readonly int _height;
+    private readonly EGLConfig _config;
+    private EGLSurface _surface;
+    private int _width;
+    private int _height;
     private bool _disposed;
 
     /** 选中的 GL 设备的 GL_RENDERER 字符串。 */
@@ -29,9 +30,10 @@ public sealed class EglPbufferHost : IGlSurfaceHost
 
     public (int Width, int Height) Size => (_width, _height);
 
-    private EglPbufferHost(EGLDisplay display, EGLContext context, EGLSurface surface, int width, int height, string renderer, IReadOnlyList<string> enumeratedDevices)
+    private EglPbufferHost(EGLDisplay display, EGLConfig config, EGLContext context, EGLSurface surface, int width, int height, string renderer, IReadOnlyList<string> enumeratedDevices)
     {
         _display = display;
+        _config = config;
         _context = context;
         _surface = surface;
         _width = width;
@@ -42,6 +44,7 @@ public sealed class EglPbufferHost : IGlSurfaceHost
 
     public static EglPbufferHost Create(int width, int height)
     {
+        EnsureEglLoadable();
         var queryDevices = Marshal.GetDelegateForFunctionPointer<QueryDevicesExt>(Egl.GetProcAddress("eglQueryDevicesEXT"));
         var count = new int[1];
         if (queryDevices(0, null, count) == 0 || count[0] == 0)
@@ -85,7 +88,7 @@ public sealed class EglPbufferHost : IGlSurfaceHost
             throw new InvalidOperationException($"eglMakeCurrent 失败, err={Egl.GetError()}");
         chosen.DropProbeSurface();
         GLLoader.LoadBindings(new EglBindingsContext());
-        return new EglPbufferHost(chosen.Display, chosen.Context, surface, width, height, chosen.Renderer, enumerated);
+        return new EglPbufferHost(chosen.Display, chosen.Config, chosen.Context, surface, width, height, chosen.Renderer, enumerated);
     }
 
     public void MakeCurrent()
@@ -93,6 +96,24 @@ public sealed class EglPbufferHost : IGlSurfaceHost
         if (!Egl.MakeCurrent(_display, _surface, _surface, _context))
             throw new InvalidOperationException($"eglMakeCurrent 失败, err={Egl.GetError()}");
         GLLoader.LoadBindings(new EglBindingsContext());
+    }
+
+    /** 复用同一 EGL 上下文重建 pbuffer 表面: GL 对象不失效, 只改渲染尺寸。 */
+    public void Resize(int width, int height)
+    {
+        if (width == _width && height == _height)
+            return;
+        Egl.MakeCurrent(_display, default, default, default);
+        Egl.DestroySurface(_display, _surface);
+        int[] surfaceAttribs = [0x3057, width, 0x3056, height, 0x3038];
+        var surface = Egl.CreatePbufferSurface(_display, _config, surfaceAttribs);
+        if (surface.Value == IntPtr.Zero)
+            throw new InvalidOperationException($"eglCreatePbufferSurface 失败, err={Egl.GetError()}");
+        if (!Egl.MakeCurrent(_display, surface, surface, _context))
+            throw new InvalidOperationException($"eglMakeCurrent 失败, err={Egl.GetError()}");
+        _surface = surface;
+        _width = width;
+        _height = height;
     }
 
     public void Present()
@@ -198,6 +219,53 @@ public sealed class EglPbufferHost : IGlSurfaceHost
             Egl.DestroySurface(Display, _probeSurface);
             _probeSurface = default;
         }
+    }
+
+    /** OpenTK 只按 libEGL.so / libEGL 加载, 而发行版通常只装带版本号的 libEGL.so.1; 缺失时在程序目录补一个指向系统库的符号链接(无需 root)。 */
+    private static void EnsureEglLoadable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        if (TryLoadEgl("libEGL.so"))
+            return;
+        var target = FindSystemEgl();
+        var link = Path.Combine(AppContext.BaseDirectory, "libEGL.so");
+        if (target is not null)
+        {
+            try
+            {
+                File.Delete(link);
+                File.CreateSymbolicLink(link, target);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+        if (TryLoadEgl(link))
+            return;
+        throw new InvalidOperationException("libEGL.so 无法加载: 系统缺 libEGL.so 符号链接, 且程序目录不可写(需 libegl-dev 或将程序目录设为可写)");
+    }
+
+    private static bool TryLoadEgl(string path)
+    {
+        if (!NativeLibrary.TryLoad(path, out var handle))
+            return false;
+        NativeLibrary.Free(handle);
+        return true;
+    }
+
+    private static string? FindSystemEgl()
+    {
+        foreach (var directory in (string[])["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib64", "/lib"])
+        {
+            var candidate = Path.Combine(directory, "libEGL.so.1");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
     }
 
     private static int ScoreRenderer(string renderer)

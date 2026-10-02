@@ -97,7 +97,7 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
             _capturePlan = new CapturePlanRunner(steps);
         }
 
-        _host = GpuHostFactory.CreateWindowHost(_atlas, gpuCard, preferredCard, hidden: _capturePlan is not null, vsync: _vsync);
+        _host = GpuHostFactory.CreateWindowHost(_atlas, gpuCard, preferredCard, hidden: _capturePlan is not null, vsync: _vsync, headlessCapture: _screenshotPath is not null || _capturePlan is not null);
         _grid = new CellGrid(80, 25);
         _layout = LayoutEngine.Calculate(_grid.Width, _grid.Height);
     }
@@ -133,7 +133,7 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _core = new GpuRenderCore();
         _lastGrid = null;
         _seenRenderVersion = -1;
-        _host = GpuHostFactory.CreateWindowHost(_atlas, _gpuCard, _preferredCard, vsync: _vsync);
+        _host = GpuHostFactory.CreateWindowHost(_atlas, _gpuCard, _preferredCard, vsync: _vsync, headlessCapture: _screenshotPath is not null || _capturePlan is not null);
     }
 
     public void Dispose()
