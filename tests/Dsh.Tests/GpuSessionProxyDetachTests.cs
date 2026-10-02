@@ -30,7 +30,7 @@ public sealed class GpuSessionProxyDetachTests
         try
         {
             var atlas = GlyphAtlas.Shared;
-            using var windowHost = GpuHostFactory.CreateWindowHost(atlas, hidden: true);
+            using var windowHost = CreateGpuHostOrSkip(atlas);
             var proxy = new GpuSessionProxy(session.Id, atlas, windowHost);
             // GL 上下文与创建它的线程绑定: 宿主循环必须在同一线程跑, 关窗口从定时器线程触发。
             using var closer = new Timer(_ => windowHost.RequestClose(), null, 2500, Timeout.Infinite);
@@ -83,7 +83,7 @@ public sealed class GpuSessionProxyDetachTests
         await Task.Delay(500, cancellationToken);
 
         var atlas = GlyphAtlas.Shared;
-        using var windowHost = GpuHostFactory.CreateWindowHost(atlas, hidden: true);
+        using var windowHost = CreateGpuHostOrSkip(atlas);
         var proxy = new GpuSessionProxy(session.Id, atlas, windowHost);
         // 兜底关窗: 万一回归了也别把用例挂死, 只是断言会失败并说明是兜底关的。
         var safety = new Timer(_ => windowHost.RequestClose(), null, 15000, Timeout.Infinite);
@@ -99,6 +99,20 @@ public sealed class GpuSessionProxyDetachTests
     }
 
     /** 用 CLI 拉起 daemon: 测试进程自己调 EnsureRunningAsync 会去 spawn Dsh.Tests.exe, 起不来。 */
+    /** 三种宿主(窗口/GBM/终端贴图)在当前环境都不可用时不算回归: 守卫环境, 不验语义。 */
+    private static IGlSurfaceHostRunner CreateGpuHostOrSkip(GlyphAtlas atlas)
+    {
+        try
+        {
+            return GpuHostFactory.CreateWindowHost(atlas, hidden: true);
+        }
+        catch (InvalidOperationException error)
+        {
+            Assert.Skip($"无可用 GPU 宿主: {error.Message}");
+            throw;
+        }
+    }
+
     private static async Task EnsureDaemonAsync(CancellationToken cancellationToken)
     {
         try
