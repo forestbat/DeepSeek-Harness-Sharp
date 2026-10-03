@@ -24,25 +24,54 @@ public static class MemoryCommand
         return commands.Register(new CommandDefinition
         {
             Name = "memory",
-            Description = "Enable, disable, or show project memory",
-            Input = new CommandInputDescriptor("on|off|show"),
-            Handler = async invocation =>
-            {
-                var raw = invocation.RawInput.Trim();
-                switch (raw)
-                {
-                    case "on":
-                    case "off":
-                        return await Toggle(ctx, raw == "on");
-                    case "show":
-                        if (ResolveMemory(ctx) is not { } memoryToShow)
-                            return new CommandResult.Error("project memory is unavailable; run /memory on first");
-                        return new CommandResult.Success(await memoryToShow.ShowAsync(invocation.Signal));
-                    default:
-                        return new CommandResult.Error("usage: /memory on | /memory off | /memory show");
-                }
-            },
+            Description = "Enable, disable, show, search, or forget project memory",
+            Input = new CommandInputDescriptor("on|off|show|forget <key>|find <query>"),
+            Handler = invocation => HandleAsync(ctx, invocation),
         });
+    }
+
+    private static async Task<CommandResult> HandleAsync(Context ctx, CommandInvocation invocation)
+    {
+        var raw = invocation.RawInput.Trim();
+        switch (raw)
+        {
+            case "on":
+            case "off":
+                return await Toggle(ctx, raw == "on");
+            case "show":
+                if (ResolveMemory(ctx) is not { } memoryToShow)
+                    return new CommandResult.Error("project memory is unavailable; run /memory on first");
+                return new CommandResult.Success(await memoryToShow.ShowAsync(invocation.Signal));
+        }
+        var space = raw.IndexOf(' ');
+        var verb = space < 0 ? raw : raw[..space];
+        var argument = space < 0 ? "" : raw[(space + 1)..].Trim();
+        if (ResolveMemory(ctx) is not { } memory)
+            return new CommandResult.Error("project memory is unavailable; run /memory on first");
+        return verb switch
+        {
+            "forget" => await ForgetAsync(memory, argument, invocation.Signal),
+            "find" => await FindAsync(memory, argument, invocation.Signal),
+            _ => new CommandResult.Error("usage: /memory on | off | show | forget <key> | find <query>"),
+        };
+    }
+
+    private static async Task<CommandResult> ForgetAsync(ProjectMemory memory, string key, CancellationToken signal)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return new CommandResult.Error("usage: /memory forget <key>");
+        var result = await memory.ForgetAsync(new MemoryForgetRequest([key], null, null, false), "cli", signal);
+        return new CommandResult.Success($"forgotten: {string.Join(", ", result.Keys)}");
+    }
+
+    private static async Task<CommandResult> FindAsync(ProjectMemory memory, string query, CancellationToken signal)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new CommandResult.Error("usage: /memory find <query>");
+        var matches = await memory.FindAsync(query, null, signal);
+        if (matches.Count == 0)
+            return new CommandResult.Success($"no memory records match \"{query}\"");
+        return new CommandResult.Success(string.Join('\n', matches.Select(match => $"[{match.Section}] {match.Key} :: {match.Text}")));
     }
 
     /** 记忆的启用即插件的启用:enable/disable 由插件管理器执行并持久化,效果当场装卸。 */
@@ -60,7 +89,7 @@ public static class MemoryCommand
             return "";
         return $"""
             Project memory is enabled (store: {memory.Description}).
-            Maintain it with the memory_save tool: remember (upsert a record), correct (record a correction), forget (remove by key), skip (out-of-scope content).
+            Maintain it with the memory_save tool: remember (upsert a record), correct (record a correction), forget (remove by key(s) or text query), skip (out-of-scope content).
             Records are timestamped automatically; the injected index is capped at 8192 bytes, so read the memory file directly when you need full content.
             """;
     }

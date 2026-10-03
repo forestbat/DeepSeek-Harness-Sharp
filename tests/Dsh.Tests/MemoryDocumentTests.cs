@@ -75,13 +75,22 @@ public sealed class MemoryDocumentTests
     }
 
     [Fact]
-    public void Remove_DeletesFirstMatchAcrossSections()
+    public void RemoveWhere_DeletesAllMatchesAndHonorsSection()
     {
-        var doc = MemoryDocument.Parse("## Facts\n- a :: 1\n\n## Corrections\n- a :: 2\n");
+        var doc = MemoryDocument.Parse("## Facts\n- a :: 1\n- keep :: x\n\n## Corrections\n- a :: 2\n");
 
-        Assert.Equal("Facts", doc.Remove("A"));
-        Assert.Equal("Corrections", doc.Remove("a"));
-        Assert.Null(doc.Remove("a"));
+        var removed = doc.RemoveWhere(null, record => string.Equals(record.Key, "a", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(["Facts", "Corrections"], removed.Select(entry => entry.Section));
+        Assert.Equal(["1", "2"], removed.Select(entry => entry.Record.Text));
+        Assert.Equal("keep", doc.FindSection("Facts")?.Records.Single().Key);
+        Assert.Empty(doc.FindSection("Corrections")!.Records);
+
+        var scoped = doc.RemoveWhere("Facts", _ => true);
+
+        Assert.Single(scoped);
+        Assert.Equal("Facts", scoped[0].Section);
+        Assert.Equal("keep", scoped[0].Record.Key);
     }
 
     [Theory]

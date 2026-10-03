@@ -10,12 +10,19 @@ public sealed record SessionDigest(SessionId Id, string Topic, string Summary, D
 
 public sealed record MemoryAuditEntry(string At, string Action, string Key, string Section, string? Text, string Source);
 
+public sealed record MemoryForgetRequest(IReadOnlyList<string>? Keys, string? Query, string? Section, bool DryRun);
+
+public sealed record MemoryForgetResult(string Action, IReadOnlyList<string> Keys, IReadOnlyList<string> Sections, int Count, bool DryRun);
+
+public sealed record MemoryMatch(string Key, string Section, string Text);
+
 /** 项目记忆的记录级视图:在 IMemoryStore 的整段文本之上提供 remember/correct/forget、注入索引、会话摘要与审计。 */
 public sealed class ProjectMemory
 {
     public const int DefaultIndexBudgetBytes = 8192;
     public const int MaxRecentDigests = 5;
     public const int ShowDigestsLimit = 20;
+    public const int MinQueryLength = 2;
     public const string FactsSection = "Facts";
     public const string CorrectionsSection = "Corrections";
     public const string SidecarDirName = ".dsh-memory";
@@ -57,20 +64,90 @@ public sealed class ProjectMemory
     {
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException("memory forget requires a non-empty key");
+        var result = await ForgetAsync(new MemoryForgetRequest([key.Trim()], null, null, false), source, cancellationToken);
+        return new MemoryOpResult("forget", key.Trim(), result.Sections.Count > 0 ? result.Sections[0] : "", true);
+    }
+
+    /** 批量/条件删除:按 keys 精确匹配 key,或按 query 在正文中做大小写不敏感子串匹配;`section` 为可选节过滤;`dryRun` 只返回命中不落盘。 */
+    public async Task<MemoryForgetResult> ForgetAsync(MemoryForgetRequest request, string source, CancellationToken cancellationToken = default)
+    {
+        var keys = NormalizeKeys(request.Keys);
+        var query = string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim();
+        if (keys.Count == 0 && query is null)
+            throw new InvalidOperationException("memory forget requires keys or a query");
+        if (query is not null && query.Length < MinQueryLength)
+            throw new InvalidOperationException($"memory forget query must be at least {MinQueryLength} characters");
+        var section = string.IsNullOrWhiteSpace(request.Section) ? null : request.Section.Trim();
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var doc = await LoadAsync(cancellationToken);
-            var section = doc.Remove(key.Trim())
-                ?? throw new InvalidOperationException($"no memory record with key \"{key.Trim()}\"");
-            await SaveAsync(doc, cancellationToken);
-            await AuditAsync(new MemoryAuditEntry(Now(), "forget", key.Trim(), section, null, source), cancellationToken);
-            return new MemoryOpResult("forget", key.Trim(), section, true);
+            var removed = doc.RemoveWhere(section, record => Matches(record, keys, query));
+            if (removed.Count == 0 && !request.DryRun)
+                throw new InvalidOperationException(DescribeMiss(keys, query, section));
+            if (!request.DryRun && removed.Count > 0)
+            {
+                await SaveAsync(doc, cancellationToken);
+                foreach (var (removedSection, record) in removed)
+                    await AuditAsync(new MemoryAuditEntry(Now(), "forget", record.Key, removedSection, null, source), cancellationToken);
+            }
+            return new MemoryForgetResult(
+                "forget",
+                [.. removed.Select(entry => entry.Record.Key)],
+                [.. removed.Select(entry => entry.Section).Distinct(StringComparer.OrdinalIgnoreCase)],
+                removed.Count,
+                request.DryRun);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /** 只读检索:返回 key/section/text 命中,不修改文件。 */
+    public async Task<IReadOnlyList<MemoryMatch>> FindAsync(string query, string? section, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < MinQueryLength)
+            throw new InvalidOperationException($"memory find query must be at least {MinQueryLength} characters");
+        var trimmed = query.Trim();
+        var sectionFilter = string.IsNullOrWhiteSpace(section) ? null : section.Trim();
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var doc = await LoadAsync(cancellationToken);
+            var matches = new List<MemoryMatch>();
+            foreach (var current in doc.Sections)
+            {
+                if (sectionFilter is not null && !string.Equals(current.Name, sectionFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                matches.AddRange(current.Records
+                    .Where(record => Matches(record, [], trimmed))
+                    .Select(record => new MemoryMatch(record.Key, current.Name, record.Text)));
+            }
+            return matches;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static List<string> NormalizeKeys(IReadOnlyList<string>? keys)
+        => keys is null
+            ? []
+            : [.. keys.Where(key => !string.IsNullOrWhiteSpace(key)).Select(key => key.Trim())];
+
+    private static bool Matches(MemoryRecord record, IReadOnlyList<string> keys, string? query)
+        => keys.Count > 0
+            ? keys.Any(key => string.Equals(key, record.Key, StringComparison.OrdinalIgnoreCase))
+            : record.Text.Contains(query!, StringComparison.OrdinalIgnoreCase);
+
+    private static string DescribeMiss(IReadOnlyList<string> keys, string? query, string? section)
+    {
+        var selector = keys.Count > 0 ? $"key \"{string.Join(", ", keys)}\"" : $"query \"{query}\"";
+        return section is null
+            ? $"no memory record matching {selector}"
+            : $"no memory record matching {selector} in section \"{section}\"";
     }
 
     public async Task<string> BuildIndexAsync(int budgetBytes = DefaultIndexBudgetBytes, CancellationToken cancellationToken = default)

@@ -84,22 +84,28 @@ public sealed partial class MemoryDocument
         return false;
     }
 
-    /** 跨全部节按 key(忽略大小写)删除第一条匹配记录;返回被删记录所在节名,未找到返回 null。 */
-    public string? Remove(string key)
+    /** 跨节删除全部匹配记录;`sectionName` 非空时只在该节内删除。返回被删记录(节名 + 记录),按文件顺序。 */
+    public List<(string Section, MemoryRecord Record)> RemoveWhere(string? sectionName, Func<MemoryRecord, bool> predicate)
     {
+        var removed = new List<(string, MemoryRecord)>();
         foreach (var section in Sections)
         {
-            for (var index = 0; index < section.Entries.Count; index++)
+            if (sectionName is not null && !string.Equals(section.Name, sectionName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            for (var index = 0; index < section.Entries.Count;)
             {
-                if (section.Entries[index].Record is { } record
-                    && string.Equals(record.Key, key, StringComparison.OrdinalIgnoreCase))
+                if (section.Entries[index].Record is { } record && predicate(record))
                 {
+                    removed.Add((section.Name, record));
                     section.Entries.RemoveAt(index);
-                    return section.Name;
+                }
+                else
+                {
+                    index++;
                 }
             }
         }
-        return null;
+        return removed;
     }
 
     public string Render()

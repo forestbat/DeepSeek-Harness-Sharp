@@ -86,6 +86,24 @@ public sealed class MemoryPluginTests
         Assert.IsType<ToolExecutionResult.Failure>(result);
     }
 
+    [Fact]
+    public async Task SaveTool_ForgetByKeysAndDryRun()
+    {
+        using var fixture = new ToolFixture();
+        _ = await fixture.Execute("""{"action":"remember","key":"a","text":"alpha dotnet","section":"Facts"}""");
+        _ = await fixture.Execute("""{"action":"remember","key":"b","text":"beta dotnet","section":"Commands"}""");
+
+        var preview = await fixture.Execute("""{"action":"forget","query":"dotnet","dry_run":true}""");
+        Assert.IsType<ToolExecutionResult.Success>(preview);
+        Assert.Contains("dotnet", File.ReadAllText(fixture.MemoryPath));
+
+        var removed = await fixture.Execute("""{"action":"forget","keys":["a","b"]}""");
+        Assert.IsType<ToolExecutionResult.Success>(removed);
+        var text = File.ReadAllText(fixture.MemoryPath);
+        Assert.DoesNotContain("alpha dotnet", text);
+        Assert.DoesNotContain("beta dotnet", text);
+    }
+
     private sealed class ToolFixture : IDisposable
     {
         private readonly string _root;

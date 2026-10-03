@@ -138,6 +138,56 @@ public sealed class ProjectMemoryTests
         Assert.Contains("s-1", show);
     }
 
+    [Fact]
+    public async Task ForgetByQueryAndSection_DryRunThenDelete()
+    {
+        using var fixture = new Fixture();
+        var memory = fixture.Memory;
+        await memory.RememberAsync("build.command", "dotnet build", "Commands", "tool", TestContext.Current.CancellationToken);
+        await memory.RememberAsync("build.test", "dotnet test", "Commands", "tool", TestContext.Current.CancellationToken);
+        await memory.RememberAsync("notes", "dotnet is the toolchain", "Facts", "tool", TestContext.Current.CancellationToken);
+
+        var preview = await memory.ForgetAsync(new MemoryForgetRequest(null, "dotnet", "Commands", true), "cli", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, preview.Count);
+        Assert.True(preview.DryRun);
+        Assert.Contains("dotnet build", File.ReadAllText(fixture.MemoryPath));
+
+        var removed = await memory.ForgetAsync(new MemoryForgetRequest(null, "dotnet", "Commands", false), "cli", TestContext.Current.CancellationToken);
+
+        Assert.Equal(["build.command", "build.test"], removed.Keys);
+        Assert.Equal(["Commands"], removed.Sections);
+        var text = File.ReadAllText(fixture.MemoryPath);
+        Assert.DoesNotContain("build.command", text);
+        Assert.DoesNotContain("build.test", text);
+        Assert.Contains("dotnet is the toolchain", text);
+    }
+
+    [Fact]
+    public async Task Find_ReturnsMatchesWithoutMutating()
+    {
+        using var fixture = new Fixture();
+        var memory = fixture.Memory;
+        await memory.RememberAsync("build.command", "dotnet build", "Commands", "tool", TestContext.Current.CancellationToken);
+        await memory.RememberAsync("other", "unrelated", "Facts", "tool", TestContext.Current.CancellationToken);
+
+        var matches = await memory.FindAsync("dotnet", null, TestContext.Current.CancellationToken);
+
+        var match = Assert.Single(matches);
+        Assert.Equal("build.command", match.Key);
+        Assert.Equal("Commands", match.Section);
+        Assert.Contains("build.command", File.ReadAllText(fixture.MemoryPath));
+    }
+
+    [Fact]
+    public async Task ForgetByQuery_ShortQuery_Throws()
+    {
+        using var fixture = new Fixture();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => fixture.Memory.ForgetAsync(new MemoryForgetRequest(null, "d", null, false), "cli", TestContext.Current.CancellationToken));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string _root;
