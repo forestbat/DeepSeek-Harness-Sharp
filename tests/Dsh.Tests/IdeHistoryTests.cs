@@ -4,8 +4,10 @@ using Dsh.IdeHistory;
 
 namespace Dsh.Tests;
 
-public sealed class IdeHistoryTests
+public sealed class IdeHistoryTests(ITestOutputHelper output)
 {
+    private readonly ITestOutputHelper _output = output;
+
     [Fact]
     public void VSCode_ReadsSyntheticStore()
     {
@@ -70,6 +72,33 @@ public sealed class IdeHistoryTests
             var store = Assert.Single(provider.Discover());
             Assert.Empty(provider.List(store, "app.py", 10));
             Assert.Single(provider.List(store, "other.py", 10));
+        }
+        finally
+        {
+            DeleteQuietly(home);
+        }
+    }
+
+    [Fact]
+    public void VSCode_ParsesWindowsDriveUri()
+    {
+        var home = CreateTempDirectory("vscode");
+        try
+        {
+            var historyDir = Path.Combine(home, ".config", "Code", "User", "History", "abc123");
+            Directory.CreateDirectory(historyDir);
+            File.WriteAllText(Path.Combine(historyDir, "v1.txt"), "x");
+            File.WriteAllText(Path.Combine(historyDir, "entries.json"), """
+                {
+                  "version": 1,
+                  "resource": "file:///c%3A/Users/dev/project/app.py",
+                  "entries": [ { "id": "v1.txt", "timestamp": 1780000001000 } ]
+                }
+                """);
+            var provider = new VsCodeLocalHistoryProvider(home);
+            var store = Assert.Single(provider.Discover());
+            var entry = Assert.Single(provider.List(store, null, 10));
+            Assert.Equal("c:/Users/dev/project/app.py", entry.Path);
         }
         finally
         {
@@ -206,13 +235,19 @@ public sealed class IdeHistoryTests
         var provider = new JetBrainsLocalHistoryProvider();
         var stores = provider.Discover();
         if (stores.Count == 0)
+        {
+            _output.WriteLine("no JetBrains local history store discovered on this machine; test is passing vacuously");
             return;
+        }
         var samples = stores
             .SelectMany(store => provider.List(store, null, 200).Select(entry => (Store: store, Entry: entry)))
             .ToList();
+        _output.WriteLine($"discovered {stores.Count} store(s), sampled {samples.Count} entries, skipped {provider.SkippedRecords}");
         if (samples.Count == 0)
             return;
-        Assert.All(samples, sample => Assert.StartsWith("/", sample.Entry.Path));
+        Assert.All(samples, sample => Assert.True(
+            sample.Entry.Path.StartsWith('/') || (sample.Entry.Path.Length > 2 && sample.Entry.Path[1] == ':'),
+            $"unexpected path form: {sample.Entry.Path}"));
         Assert.All(samples, sample => Assert.True(sample.Entry.Timestamp > 1_400_000_000_000));
         Assert.True(provider.SkippedRecords * 4 < samples.Count,
             $"too many undecodable records: {provider.SkippedRecords} of {samples.Count}");
@@ -231,6 +266,27 @@ public sealed class IdeHistoryTests
             .Select(sample => provider.Read(sample.Store, sample.Entry)?.Bytes)
             .Count(bytes => bytes is { Length: > 0 } && !bytes.Contains((byte)0));
         Assert.True(textual > 0, "no readable text content recovered from the local JetBrains store");
+    }
+
+    [Fact]
+    public void VSCode_ReadsLocalStoreWhenPresent()
+    {
+        var provider = new VsCodeLocalHistoryProvider();
+        var stores = provider.Discover();
+        if (stores.Count == 0)
+        {
+            _output.WriteLine("no VS Code local history store discovered on this machine; test is passing vacuously");
+            return;
+        }
+        var samples = stores
+            .SelectMany(store => provider.List(store, null, 100).Select(entry => (Store: store, Entry: entry)))
+            .ToList();
+        _output.WriteLine($"discovered {stores.Count} store(s), sampled {samples.Count} entries");
+        if (samples.Count == 0)
+            return;
+        Assert.All(samples, sample => Assert.True(sample.Entry.Timestamp > 1_400_000_000_000));
+        var recovered = samples.Count(sample => provider.Read(sample.Store, sample.Entry) is not null);
+        Assert.True(recovered > 0, $"failed to read content for all {samples.Count} sampled entries; last error: {provider.LastReadError}");
     }
 
     private static class SyntheticContentStore

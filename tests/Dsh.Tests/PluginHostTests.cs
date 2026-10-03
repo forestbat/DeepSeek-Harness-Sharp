@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Plugins;
@@ -52,22 +54,29 @@ public sealed class PluginHostTests
         var root = Path.Combine(Path.GetTempPath(), $"dsh-scan-{Guid.NewGuid():N}");
         var pluginDir = Path.Combine(root, "plugins", "Dsh.Tests");
         Directory.CreateDirectory(pluginDir);
+        File.Copy(
+            Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
+            Path.Combine(pluginDir, "Dsh.Tests.dll"));
+        var weak = ScanPerPackageAndUnload(pluginDir);
         try
         {
-            File.Copy(
-                Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
-                Path.Combine(pluginDir, "Dsh.Tests.dll"));
-            var host = new PluginHost();
-
-            var result = host.Scan(Path.Combine(root, "plugins"), null);
-
-            Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
-            Assert.DoesNotContain(result.Skipped, skip => skip.Reason.Contains("平铺"));
+            // Windows 上被装载的程序集持有内存映射(ERROR_ACCESS_DENIED),必须先回收 ALC 才能删目录。
+            Assert.True(PluginUnloader.WaitForCollection(weak, out var report, maxRounds: 60), report);
         }
         finally
         {
             Directory.Delete(root, true);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ScanPerPackageAndUnload(string pluginDir)
+    {
+        var host = new PluginHost();
+        var result = host.Scan(Path.GetDirectoryName(pluginDir)!, null);
+        Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
+        Assert.DoesNotContain(result.Skipped, skip => skip.Reason.Contains("平铺"));
+        return PluginUnloader.Unload(Assert.Single(result.Managed).Context);
     }
 
     [Fact]
@@ -76,22 +85,28 @@ public sealed class PluginHostTests
         var root = Path.Combine(Path.GetTempPath(), $"dsh-scan-{Guid.NewGuid():N}");
         var pluginsDir = Path.Combine(root, "plugins");
         Directory.CreateDirectory(pluginsDir);
+        File.Copy(
+            Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
+            Path.Combine(pluginsDir, "Dsh.Tests.dll"));
+        var weak = ScanFlatAndUnload(pluginsDir);
         try
         {
-            File.Copy(
-                Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll"),
-                Path.Combine(pluginsDir, "Dsh.Tests.dll"));
-            var host = new PluginHost();
-
-            var result = host.Scan(pluginsDir, null);
-
-            Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
-            Assert.Contains(result.Skipped, skip => skip.Reason.Contains("平铺"));
+            Assert.True(PluginUnloader.WaitForCollection(weak, out var report, maxRounds: 60), report);
         }
         finally
         {
             Directory.Delete(root, true);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ScanFlatAndUnload(string pluginsDir)
+    {
+        var host = new PluginHost();
+        var result = host.Scan(pluginsDir, null);
+        Assert.Contains(result.Managed, plugin => plugin.Package == "test/local");
+        Assert.Contains(result.Skipped, skip => skip.Reason.Contains("平铺"));
+        return PluginUnloader.Unload(Assert.Single(result.Managed).Context);
     }
 
     [Fact]
@@ -102,8 +117,8 @@ public sealed class PluginHostTests
         try
         {
             var pool = new SharedAssemblyPool(root);
-            var source = typeof(Dsh.Core.ToolRuntime).Assembly.Location;
-            var name = typeof(Dsh.Core.ToolRuntime).Assembly.GetName();
+            var source = typeof(ToolRuntime).Assembly.Location;
+            var name = typeof(ToolRuntime).Assembly.GetName();
 
             var first = pool.ResolveOrLoad(name, () => source);
             var second = pool.ResolveOrLoad(name, () => throw new InvalidOperationException("must not reload"));

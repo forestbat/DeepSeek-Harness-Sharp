@@ -116,17 +116,22 @@ public sealed class HotPlugTests
         }
         finally
         {
-            try
-            {
-                Directory.Delete(dir, true);
-            }
-            catch (IOException)
-            {
-            }
+            DeleteBestEffort(dir);
             // /plugins add 现在会把程序集拷进 plugins/ 目录,清掉避免影响后续进程的 Compose 扫描。
-            var installed = Path.Combine(AppContext.BaseDirectory, "plugins", "Dsh.Tests");
-            if (Directory.Exists(installed))
-                Directory.Delete(installed, true);
+            // Windows 下同进程其他用例可能已把这份拷贝装进 ALC(内存映射删不掉),清不动就留给下次构建清理。
+            DeleteBestEffort(Path.Combine(AppContext.BaseDirectory, "plugins", "Dsh.Tests"));
+        }
+    }
+
+    private static void DeleteBestEffort(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
