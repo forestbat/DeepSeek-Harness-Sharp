@@ -8,7 +8,7 @@ using Dsh.Runtime;
 
 namespace Dsh.SessionQuery;
 
-/** 会话检索:@deepseek-ai/dsh-session-query 提供检索服务并注册 /sessions 命令,
+/** 会话检索:@deepseek-ai/dsh-session-query 提供检索服务并注册 /session-query 命令,
  *  @deepseek-ai/dsh-tool-session-query 暴露 session_search 工具。 */
 public sealed class Plugin(string packageName) : IDshPlugin
 {
