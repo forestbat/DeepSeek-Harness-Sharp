@@ -53,6 +53,22 @@ public sealed class PtyDaemonRequest
     public uint MouseButtonState { get; set; }
 
     public uint MouseEventFlags { get; set; }
+
+    /** method=identify/publish-panes: 常驻 TUI 上报自己的 agent 会话 id。 */
+    public string? AgentSessionId { get; set; }
+
+    /** method=publish-panes: 常驻 TUI 发布的窗格目录与尾行。 */
+    public List<PtyPaneSnapshotDto>? Panes { get; set; }
+
+    /** method=control-send: 目标窗格与输入内容。 */
+    public int PaneId { get; set; }
+
+    public string? Kind { get; set; }
+
+    public string? Payload { get; set; }
+
+    /** method=control-read: 只取该 seq 之后的新控制消息。 */
+    public long SinceSeq { get; set; }
 }
 
 public sealed class PtyDaemonStartParams
@@ -72,6 +88,38 @@ public sealed class PtyDaemonStartParams
     public int Columns { get; set; } = 80;
 
     public bool WantsMouse { get; set; }
+}
+
+public sealed class PtyPaneSnapshotDto
+{
+    public int Id { get; set; }
+
+    public string Kind { get; set; } = "";
+
+    public string Title { get; set; } = "";
+
+    public string? SessionId { get; set; }
+
+    public string? PtyId { get; set; }
+
+    public string? Command { get; set; }
+
+    public bool Focused { get; set; }
+
+    public bool Exited { get; set; }
+
+    public List<string>? Lines { get; set; }
+}
+
+public sealed class PtyControlMessageDto
+{
+    public long Seq { get; set; }
+
+    public string Kind { get; set; } = "";
+
+    public int PaneId { get; set; }
+
+    public string Payload { get; set; } = "";
 }
 
 public sealed class PtyDaemonSessionDto
@@ -95,6 +143,12 @@ public sealed class PtyDaemonSessionDto
     public int Rows { get; set; }
 
     public bool WantsMouse { get; set; }
+
+    /** 该 pty 里常驻 TUI 上报的 agent 会话 id(identify/publish-panes 写入); 无则 null。 */
+    public string? AgentSessionId { get; set; }
+
+    /** 该 pty 发布的窗格目录与尾行快照(publish-panes 写入); 无则 null。 */
+    public List<PtyPaneSnapshotDto>? Panes { get; set; }
 }
 
 public sealed class PtyDaemonResponse
@@ -106,6 +160,11 @@ public sealed class PtyDaemonResponse
     public List<PtyDaemonSessionDto>? Sessions { get; set; }
 
     public PtyDaemonSessionDto? Session { get; set; }
+
+    /** method=control-read: 新控制消息; method=control-send: 分配到的 seq。 */
+    public List<PtyControlMessageDto>? Controls { get; set; }
+
+    public long Seq { get; set; }
 }
 
 internal static class PtyDaemonJson

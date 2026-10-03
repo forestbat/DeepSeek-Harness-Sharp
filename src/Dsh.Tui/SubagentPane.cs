@@ -30,6 +30,8 @@ internal sealed class SubagentPane : ITuiPane
 
     public int Id { get; }
 
+    public TuiPaneKind Kind => TuiPaneKind.Subagent;
+
     public Session Session => _session;
 
     private TranscriptRenderer Renderer { get; set; } = new();
@@ -45,6 +47,17 @@ internal sealed class SubagentPane : ITuiPane
     public string StatusText => "子代理查看: ←/→ 兄弟 · ↑ 父会话 · Esc 关闭";
 
     private string Label => SubagentDescriptorPayload.IdentityOf(_session)?.Label ?? _session.Id.Value;
+
+    /** 窗格目录/读取工具用的稳定标签(与页脚展示的 Label 同一来源)。 */
+    internal string SubagentLabel => Label;
+
+    public IReadOnlyList<string> SnapshotLines() => Renderer.SnapshotLines();
+
+    public bool HasOverlay => false;
+
+    public void DrawOverlay(CellGrid grid, ConsoleRect rect)
+    {
+    }
 
     public void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false)
     {

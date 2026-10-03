@@ -91,12 +91,16 @@ public class ToolsTests : IDisposable
         }
 
         private Task<ToolExecutionResult> Bash2(string command, long? timeoutMs = null)
-            => _outer.Execute("bash", JsonSerializer.Serialize(new
+        {
+            if (!BashProbe.IsAvailable)
+                Assert.Skip("bash 不可用(WSL/Git Bash 无响应), 跳过依赖外部 shell 的用例");
+            return _outer.Execute("bash", JsonSerializer.Serialize(new
             {
                 command,
                 description = "Run test command",
                 timeoutMs,
             }, DshJson.Options));
+        }
 
         [Fact]
         public async Task Echo_ReturnsStdoutAndZeroExit()

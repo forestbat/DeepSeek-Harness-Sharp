@@ -30,6 +30,275 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Contains("Commands", frame);
     }
 
+    [Theory]
+    [InlineData("/new")]
+    [InlineData("/resume")]
+    [InlineData("/detach")]
+    [InlineData("/gpu")]
+    public async Task Slash_Filters_Popup_To_Tui_Local_Commands(string typed)
+    {
+        using var chat = await CreateChat();
+
+        Type(chat, typed);
+
+        var frame = DrawFrame(chat);
+        Assert.Contains(typed[1..], frame);
+    }
+
+    [Fact]
+    public async Task LocalCommandDescriptors_Expose_Exit_But_Not_Quit()
+    {
+        using var chat = await CreateChat();
+
+        var names = chat.LocalCommandDescriptors.Select(descriptor => descriptor.Name).ToList();
+
+        Assert.Contains("exit", names);
+        Assert.Contains("new", names);
+        Assert.Contains("resume", names);
+        Assert.Contains("detach", names);
+        Assert.Contains("gpu", names);
+        Assert.DoesNotContain("quit", names);
+    }
+
+    /** 命令浮层每条命令右侧带解说词(本地命令描述)。 */
+    [Fact]
+    public async Task Slash_Menu_Shows_Command_Descriptions()
+    {
+        using var chat = await CreateChat();
+        Type(chat, "/");
+        var frame = DrawFrame(chat);
+        Assert.Contains("exit", frame);
+        Assert.Contains("退出 TUI", frame);
+        Assert.Contains("detach", frame);
+        Assert.Contains("脱离会话交给 daemon", frame);
+    }
+
+    /** 正文区滚轮在命令浮层打开时滚动候选(与 ↑/↓ 等价)。 */
+    [Fact]
+    public async Task Wheel_Scrolls_Command_Menu()
+    {
+        using var chat = await CreateChat();
+        var layout = LayoutEngine.Calculate(100, 30);
+        Type(chat, "/");
+        var grid = DrawGrid(chat, 100, 30);
+        var before = SelectedRow(grid, layout);
+        Assert.True(before >= 0, "浮层应有选中项");
+
+        // 滚轮向下 = delta<0 → 高亮下移。
+        chat.HandleMouseWheel(-3, 5, 5, layout);
+        chat.HandleMouseWheel(-3, 5, 5, layout);
+
+        var after = SelectedRow(DrawGrid(chat, 100, 30), layout);
+        Assert.True(after > before, $"滚轮向下后选中项应下移: {before} -> {after}");
+    }
+
+    private static int SelectedRow(CellGrid grid, UiLayout layout)
+    {
+        for (var y = layout.Main.Y; y < layout.Main.Bottom; y++)
+        {
+            for (var x = layout.Main.X; x < layout.Main.Right; x++)
+            {
+                if (grid[x, y].Character == '›')
+                    return y;
+            }
+        }
+
+        return -1;
+    }
+
+    [Fact]
+    public async Task Slash_Menu_Popup_Border_Is_Intact()
+    {
+        using var chat = await CreateChat();
+
+        Type(chat, "/");
+
+        var lines = DrawFrame(chat).Split('\n');
+        var top = Array.FindIndex(lines, line => line.Contains('┌'));
+        Assert.True(top >= 0, "命令浮层未绘制");
+        Assert.Contains('┐', lines[top]);
+        var bottom = Array.FindLastIndex(lines, line => line.Contains('└'));
+        Assert.True(bottom >= top, "命令浮层下边框缺失");
+        Assert.Contains('┘', lines[bottom]);
+    }
+
+    [Fact]
+    public async Task Popup_Interior_Does_Not_Show_Transcript_Text()
+    {
+        var cjk = string.Concat(Enumerable.Repeat("项目记忆与快捷键", 8));
+        using var chat = await CreateChat((_, commands) => commands.Register(new CommandDefinition
+        {
+            Name = "cjk",
+            Description = "dump cjk",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(cjk)),
+        }));
+
+        Type(chat, "/cjk");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("项目记忆"));
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        await Task.Delay(30, TestContext.Current.CancellationToken);
+
+        Type(chat, "/");
+        var grid = DrawGrid(chat, 100, 30);
+
+        int top = -1, left = -1, right = -1, bottom = -1;
+        for (var y = 0; y < grid.Height; y++)
+        {
+            for (var x = 0; x < grid.Width; x++)
+            {
+                var glyph = grid[x, y].Character;
+                if (glyph == '┌') { top = y; left = x; }
+                if (glyph == '┐' && y == top) right = x;
+                if (glyph == '└') bottom = y;
+            }
+        }
+
+        Assert.True(top >= 0 && bottom > top && left >= 0 && right > left, "命令浮层未找到边框");
+        var mainWidth = LayoutEngine.Calculate(100, 30).Main.Width;
+        // 浮层覆盖的整行(含边框行)都不应残留正文: 否则正文会从浮层左右两侧露出来。
+        for (var y = top; y <= bottom; y++)
+        {
+            var row = RowText(grid, y, 0, mainWidth);
+            Assert.DoesNotContain("项目", row);
+            Assert.DoesNotContain("快捷", row);
+        }
+    }
+
+    /** 正文与右侧栏不得互相越界: 正文列不出现右栏独有标记, 且分隔列是竖线。 */
+    [Fact]
+    public async Task Transcript_And_Right_Panel_Do_Not_Bleed_Across_Divider()
+    {
+        var cjk = string.Concat(Enumerable.Repeat("项目记忆与快捷键测试", 8));
+        using var chat = await CreateChat((_, commands) => commands.Register(new CommandDefinition
+        {
+            Name = "cjk",
+            Description = "dump cjk",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(cjk)),
+        }));
+
+        Type(chat, "/cjk");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("项目记忆"));
+
+        const int width = 200;
+        const int height = 50;
+        var layout = LayoutEngine.Calculate(width, height);
+        var grid = DrawGrid(chat, width, height);
+        var divider = layout.RightPanel.X - 1;
+        for (var y = layout.Main.Y; y < layout.Main.Bottom; y++)
+        {
+            var main = RowText(grid, y, layout.Main.X, layout.Main.Width);
+            Assert.DoesNotContain("使用 /plan 管理", main);
+            Assert.DoesNotContain("Ctrl+X N 新会话", main);
+            Assert.DoesNotContain("Git 变更", main);
+            Assert.Equal('│', grid[divider, y].Character);
+        }
+    }
+
+    /** 侧栏被拖得很宽(持久化 sidebarWidth)时, 正文不得越过分隔线写进右栏。 */
+    [Fact]
+    public async Task Wide_Sidebar_Does_Not_Overflow_Transcript_Into_Panel()
+    {
+        var cjk = string.Concat(Enumerable.Repeat("项目记忆与快捷键测试", 8));
+        using var chat = await CreateChat((_, commands) => commands.Register(new CommandDefinition
+        {
+            Name = "cjk",
+            Description = "dump cjk",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(cjk)),
+        }));
+
+        Type(chat, "/cjk");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("项目记忆"));
+
+        const int width = 200;
+        const int height = 25;
+        var layout = LayoutEngine.Calculate(width, height);
+        var divider = layout.RightPanel.X - 1;
+        chat.HandleMouseClick(divider, 1, layout);
+        chat.HandleMouseDrag(29, 1, layout);
+        chat.HandleMouseRelease(29, 1, layout);
+
+        var effective = LayoutEngine.Calculate(width, height, 170, null);
+        var grid = DrawGrid(chat, width, height);
+        for (var y = 0; y < effective.Main.Height; y++)
+        {
+            var main = RowText(grid, y, 0, effective.Main.Width);
+            Assert.DoesNotContain("使用 /plan 管理", main);
+            Assert.DoesNotContain("Ctrl+X N 新会话", main);
+        }
+    }
+
+    /** 用真实持久化布局参数(sidebarWidth=49, inputHeight=2)横扫宽度: 任何宽度下正文都不该出现右栏内容。 */
+    [Fact]
+    public async Task Transcript_Never_Shows_Panel_Content_Across_Widths()
+    {
+        using var chat = await CreateChat((_, commands) => commands.Register(new CommandDefinition
+        {
+            Name = "cjk",
+            Description = "dump cjk",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(string.Concat(Enumerable.Repeat("项目记忆与快捷键测试", 10)))),
+        }));
+
+        Type(chat, "/cjk");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("项目记忆"));
+
+        for (var width = 40; width <= 260; width++)
+        {
+            var layout = LayoutEngine.Calculate(width, 30, 49, 2);
+            var grid = new CellGrid(width, 30);
+            chat.Draw(grid, layout);
+            for (var y = 0; y < layout.Main.Height; y++)
+            {
+                var main = RowText(grid, y, 0, layout.Main.Width);
+                Assert.True(
+                    !main.Contains("使用 /plan 管理") && !main.Contains("Ctrl+X N 新会话"),
+                    $"width={width} y={y} 正文区出现右栏内容: [{main}]");
+            }
+        }
+    }
+
+    /** 多行命令输出(内嵌 \n)必须切成独立网格行, 绝不能把 '\n' 当格子写进网格(否则终端渲染时会真换行, 内容错位/互相插入)。 */
+    [Fact]
+    public async Task MultiLine_Command_Output_Splits_Into_Rows()
+    {
+        using var chat = await CreateChat((_, commands) => commands.Register(new CommandDefinition
+        {
+            Name = "multi",
+            Description = "multiline",
+            Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success("第一行\n第二行\r\n第三行")),
+        }));
+
+        Type(chat, "/multi");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("第一行"));
+
+        var grid = DrawGrid(chat, 100, 30);
+        for (var y = 0; y < grid.Height; y++)
+            for (var x = 0; x < grid.Width; x++)
+                Assert.True(grid[x, y].Character is not ('\n' or '\r'), $"网格 ({x},{y}) 含控制字符");
+
+        var rows = DrawFrame(chat).Split('\n');
+        Assert.Contains(rows, row => row.Contains("第一行"));
+        Assert.Contains(rows, row => row.Contains("第二行"));
+        Assert.Contains(rows, row => row.Contains("第三行"));
+    }
+
+    [Fact]
+    public void WrapSingleLine_Splits_Embedded_Newlines()
+    {
+        var output = new List<string>();
+        ChatPane.WrapSingleLine("a\nb", 10, output);
+        Assert.Equal(["a", "b"], output);
+
+        output.Clear();
+        ChatPane.WrapSingleLine("a\r\nb", 10, output);
+        Assert.Equal(["a", "b"], output);
+    }
+
     [Fact]
     public async Task Slash_m_Filters_Popup_To_Matching_Commands()
     {
@@ -90,33 +359,45 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Contains(SentUserTexts(), text => text == "/xyz");
     }
 
+    /** /gpu 是二级选单: 回车进参数浮层列出 auto 与各卡, 选中只回填命令, 再回车才写入。 */
     [Fact]
-    public async Task Gpu_Lists_Adapters_And_Persists_Selection()
+    public async Task Gpu_Opens_Selection_Menu_And_Persists_Choice()
     {
         using var chat = await CreateChat();
 
         Type(chat, "/gpu");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => DrawFrame(chat).Contains("gpu: current = auto (system default)"));
 
+        var labels = GpuCatalog.SelectionLabels();
         var frame = DrawFrame(chat);
-        Assert.Contains("gpu: current = auto (system default)", frame);
-        Assert.Contains("usage: /gpu <number>", frame);
+        Assert.Contains(labels[0], frame);
+        // 不是直接执行: 停在参数选单, 没有打印 usage/note。
+        Assert.DoesNotContain("usage: /gpu <number|name>", frame);
 
-        // 无显卡环境(纯 CI)只验证列表分支; 有卡环境继续验证选卡落盘。
-        var adapters = GpuCatalog.ListAdapters();
-        if (adapters.Count == 0)
-            return;
+        // 选中高亮项(auto) → 只回填命令, 不执行。
+        Press(chat, ConsoleKey.Enter);
+        frame = DrawFrame(chat);
+        Assert.Contains($"> /gpu {labels[0]}", frame);
 
-        Type(chat, "/gpu 1");
+        // 再回车才执行并写入。
         Press(chat, ConsoleKey.Enter);
         await SettleAsync(chat, () => DrawFrame(chat).Contains("gpu: selected"));
+        Assert.Contains("gpu: selected auto (system default)", DrawFrame(chat));
+        Assert.Equal(GpuCatalog.AutoAdapter, GpuCatalog.LoadSelectedAdapter(HarnessHome.Resolve(_homeDir)));
 
-        // 选卡值由 GpuCatalog.SelectionIdOf 决定: Linux 用 PCI slot(同名多卡可区分), Windows 用显示名
+        // 有卡环境: 选第二项(第一张卡)并验证落盘。
+        var adapters = GpuCatalog.ListAdapters();
+        if (adapters.Count == 0 || labels.Count < 2)
+            return;
+
+        Type(chat, "/gpu");
+        Press(chat, ConsoleKey.Enter);
+        Press(chat, ConsoleKey.DownArrow);
+        Press(chat, ConsoleKey.Enter);
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => DrawFrame(chat).Contains("gpu: selected"));
         var stored = GpuCatalog.SelectionIdOf(adapters[0]);
-        frame = DrawFrame(chat);
-        Assert.Contains($"gpu: selected {stored}", frame);
-        // 与 GUI 设置页读同一个键(plugins.@deepseek-ai/dsh-gui 的 gpu.adapter)。
+        Assert.Contains($"gpu: selected {stored}", DrawFrame(chat));
         Assert.Equal(stored, GpuCatalog.LoadSelectedAdapter(HarnessHome.Resolve(_homeDir)));
     }
 
@@ -126,6 +407,7 @@ public class ChatWindowMenuTests : IDisposable
         using var chat = await CreateChat();
 
         Type(chat, "/gpu 999");
+        Press(chat, ConsoleKey.Enter);
         Press(chat, ConsoleKey.Enter);
         await SettleAsync(chat, () => DrawFrame(chat).Contains("gpu: invalid selection '999'"));
 
@@ -829,9 +1111,7 @@ public class ChatWindowMenuTests : IDisposable
 
     private static string DrawFrame(ChatWindow chat)
     {
-        var layout = LayoutEngine.Calculate(100, 30);
-        var grid = new CellGrid(100, 30);
-        chat.Draw(grid, layout);
+        var grid = DrawGrid(chat, 100, 30);
         var lines = new List<string>();
         for (var y = 0; y < grid.Height; y++)
         {
@@ -842,6 +1122,22 @@ public class ChatWindowMenuTests : IDisposable
         }
 
         return string.Join('\n', lines);
+    }
+
+    private static CellGrid DrawGrid(ChatWindow chat, int width, int height)
+    {
+        var layout = LayoutEngine.Calculate(width, height);
+        var grid = new CellGrid(width, height);
+        chat.Draw(grid, layout);
+        return grid;
+    }
+
+    private static string RowText(CellGrid grid, int y, int startX, int width)
+    {
+        var chars = new char[width];
+        for (var x = 0; x < width; x++)
+            chars[x] = grid[startX + x, y].Character;
+        return new string(chars).Replace("\0", "");
     }
 
     public void Dispose()

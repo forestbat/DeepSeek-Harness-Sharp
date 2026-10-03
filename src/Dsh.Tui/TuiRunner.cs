@@ -121,6 +121,8 @@ public static class TuiRunner
         var grid = new CellGrid(80, 25);
         var forceFull = true;
         using var chat = new ChatWindow(app.Ctx, agent, app.Home, app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName), new TuiSettings(app.Home));
+        chat.RegisterPaneTools();
+        using var paneBridge = PaneBridge.Mount(chat);
         var draft = Environment.GetEnvironmentVariable(DetachDraftVariable);
         if (!string.IsNullOrEmpty(draft))
         {
@@ -283,6 +285,8 @@ public static class TuiRunner
             var atlas = CreateAtlasForTerminal();
             var prewarm = Task.Run(() => atlas.Prewarm());
             using var chat = new ChatWindow(app.Ctx, agent, app.Home, settings: new TuiSettings(app.Home));
+            chat.RegisterPaneTools();
+            using var paneBridge = PaneBridge.Mount(chat);
             using var renderer = new GpuRenderer(chat, atlas, gpuScreenshot, gpuCard, preferredCard, gpuCapturePlan, vsync: GpuCatalog.LoadVsync(app.Home));
             if (startShell)
                 chat.AddShellPane();

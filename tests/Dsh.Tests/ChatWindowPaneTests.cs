@@ -110,6 +110,20 @@ public sealed class ChatWindowPaneTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyPaneInput_Focus_SwitchesFocusedPane()
+    {
+        var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
+        var layout = LayoutEngine.Calculate(120, 40);
+        _ = DrawFrameReturningGrid(chat, layout);
+
+        var result = chat.ApplyPaneInput("focus", 1, "");
+
+        Assert.Equal(1, chat.FocusedPaneId);
+        Assert.Contains("focused pane 1", result);
+        chat.Dispose();
+    }
+
+    [Fact]
     public async Task CtrlX_W_Opens_Overview_And_Escape_Closes()
     {
         var (chat, _, _, first, second) = await CreateChatWithTwoAgents();
@@ -123,12 +137,31 @@ public sealed class ChatWindowPaneTests : IDisposable
         Assert.Contains("总览 PTY", frame);
         Assert.Contains("PTY", frame);
         Assert.Contains("会话", frame);
-        Assert.Contains("窗格", frame);
+        Assert.Contains("pane 0", frame);
         Assert.Contains(first.Id.ToString(), frame);
         Assert.Contains(second.Id.ToString(), frame);
 
         Press(chat, ConsoleKey.Escape);
         Assert.DoesNotContain("总览 PTY", DrawFrame(chat));
+        chat.Dispose();
+    }
+
+    /** 总览的会话行必须标出所属 pty(没有则显式 none), 否则无法判断会话跑在哪个 pty。 */
+    [Fact]
+    public async Task CtrlX_W_Overview_Shows_Session_Pty_Attribution()
+    {
+        var (chat, _, _, first, second) = await CreateChatWithTwoAgents();
+        var layout = LayoutEngine.Calculate(120, 40);
+        _ = DrawFrameReturningGrid(chat, layout);
+
+        PressCtrl(chat, ConsoleKey.X);
+        Press(chat, ConsoleKey.W);
+
+        var lines = DrawFrame(chat).Split('\n');
+        // 浮层内容行带边框, 用 Contains 判定; 每个会话一条 "pty ..." 归属行。
+        Assert.True(lines.Count(line => line.Contains("pty ")) >= 2, "会话行下应各有一行 pty 归属");
+        Assert.Contains(lines, line => line.Contains(first.Id.ToString()));
+        Assert.Contains(lines, line => line.Contains(second.Id.ToString()));
         chat.Dispose();
     }
 
@@ -141,10 +174,13 @@ public sealed class ChatWindowPaneTests : IDisposable
 
         PressCtrl(chat, ConsoleKey.X);
         Press(chat, ConsoleKey.W);
-        Press(chat, ConsoleKey.UpArrow);
+        Press(chat, ConsoleKey.DownArrow);
+        Press(chat, ConsoleKey.DownArrow);
         Press(chat, ConsoleKey.Enter);
 
-        Assert.Equal(0, chat.FocusedPaneId);
+        // 方向键只在可选行间移动: Enter 必然激活某个窗格/会话并关闭总览(None 行会被跳过)。
+        Assert.Contains(chat.FocusedPaneId, new[] { 0, 1 });
+        Assert.DoesNotContain("总览 PTY", DrawFrame(chat));
         chat.Dispose();
     }
 

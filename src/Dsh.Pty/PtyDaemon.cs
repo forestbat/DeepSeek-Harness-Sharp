@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Dsh.Pty;
 
@@ -17,6 +19,24 @@ public sealed class PtyDaemon : IAsyncDisposable
     private TcpListener? _tcpListener;
     private Task? _acceptLoop;
     private bool _started;
+
+    private static readonly TimeSpan ControlReadTimeout = TimeSpan.FromSeconds(30);
+
+    /** 每个 pty 的跨进程归属与输入通道: agent 会话 id、窗格快照、控制消息队列。 */
+    private readonly ConcurrentDictionary<string, PtyRemoteState> _remote = new(StringComparer.Ordinal);
+
+    private sealed class PtyRemoteState
+    {
+        public volatile string? AgentSessionId;
+
+        public volatile List<PtyPaneSnapshotDto>? Panes;
+
+        public readonly Channel<PtyControlMessageDto> Controls = Channel.CreateUnbounded<PtyControlMessageDto>();
+
+        public long Seq;
+    }
+
+    private PtyRemoteState RemoteFor(string id) => _remote.GetOrAdd(id, _ => new PtyRemoteState());
 
     public PtyDaemon(PtyHost? host = null, string? socketPath = null, string? portFile = null)
     {
@@ -190,12 +210,16 @@ public sealed class PtyDaemon : IAsyncDisposable
         switch (request.Method)
         {
             case "list":
-                await WriteResponseAsync(stream, new PtyDaemonResponse
                 {
-                    Ok = true,
-                    Sessions = _host.List().Select(ToDto).ToList(),
-                }, cancellationToken);
-                return false;
+                    var sessions = _host.List();
+                    PruneRemote(sessions);
+                    await WriteResponseAsync(stream, new PtyDaemonResponse
+                    {
+                        Ok = true,
+                        Sessions = sessions.Select(ToDto).ToList(),
+                    }, cancellationToken);
+                    return false;
+                }
 
             case "start":
                 {
@@ -308,6 +332,69 @@ public sealed class PtyDaemon : IAsyncDisposable
                     return true;
                 }
 
+            case "identify":
+                {
+                    if (request.Id is not { Length: > 0 } id)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "identify requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    RemoteFor(id).AgentSessionId = request.AgentSessionId;
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
+                    return false;
+                }
+
+            case "publish-panes":
+                {
+                    if (request.Id is not { Length: > 0 } id)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "publish-panes requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    var remote = RemoteFor(id);
+                    if (request.AgentSessionId is { Length: > 0 } sessionId)
+                        remote.AgentSessionId = sessionId;
+                    remote.Panes = request.Panes;
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
+                    return false;
+                }
+
+            case "control-send":
+                {
+                    if (request.Id is not { Length: > 0 } id)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "control-send requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    var remote = RemoteFor(id);
+                    var seq = Interlocked.Increment(ref remote.Seq);
+                    remote.Controls.Writer.TryWrite(new PtyControlMessageDto
+                    {
+                        Seq = seq,
+                        Kind = request.Kind ?? "text",
+                        PaneId = request.PaneId,
+                        Payload = request.Payload ?? "",
+                    });
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Seq = seq }, cancellationToken);
+                    return false;
+                }
+
+            case "control-read":
+                {
+                    if (request.Id is not { Length: > 0 } id)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "control-read requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    var controls = await ReadControlsAsync(RemoteFor(id), request.SinceSeq, cancellationToken);
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Controls = controls }, cancellationToken);
+                    return false;
+                }
+
             default:
                 await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"unknown method: {request.Method}" }, cancellationToken);
                 return false;
@@ -386,8 +473,9 @@ public sealed class PtyDaemon : IAsyncDisposable
         }
     }
 
-    private static PtyDaemonSessionDto ToDto(PtySessionInfo info)
-        => new()
+    private PtyDaemonSessionDto ToDto(PtySessionInfo info)
+    {
+        var dto = new PtyDaemonSessionDto
         {
             Id = info.Id.ToString(),
             Command = info.Command,
@@ -400,6 +488,56 @@ public sealed class PtyDaemon : IAsyncDisposable
             Rows = info.Rows,
             WantsMouse = info.WantsMouse,
         };
+        if (_remote.TryGetValue(info.Id.Value, out var remote))
+        {
+            dto.AgentSessionId = remote.AgentSessionId;
+            dto.Panes = remote.Panes;
+        }
+        return dto;
+    }
+
+    /** 清掉已不存在的 pty 的归属与输入通道, 避免 list 长期累积。 */
+    private void PruneRemote(IReadOnlyList<PtySessionInfo> sessions)
+    {
+        if (_remote.IsEmpty)
+            return;
+        var alive = sessions.Select(info => info.Id.Value).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in _remote.Keys)
+        {
+            if (!alive.Contains(id))
+                _remote.TryRemove(id, out _);
+        }
+    }
+
+    /** 取 sinceSeq 之后的新控制消息; 无消息时最长等待 ControlReadTimeout(长轮询)。 */
+    private static async Task<List<PtyControlMessageDto>> ReadControlsAsync(PtyRemoteState remote, long sinceSeq, CancellationToken cancellationToken)
+    {
+        var messages = new List<PtyControlMessageDto>();
+        Drain(remote, sinceSeq, messages);
+        if (messages.Count > 0)
+            return messages;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ControlReadTimeout);
+        try
+        {
+            if (await remote.Controls.Reader.WaitToReadAsync(timeout.Token))
+                Drain(remote, sinceSeq, messages);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+        }
+        return messages;
+    }
+
+    private static void Drain(PtyRemoteState remote, long sinceSeq, List<PtyControlMessageDto> messages)
+    {
+        while (remote.Controls.Reader.TryRead(out var message))
+        {
+            if (message.Seq > sinceSeq)
+                messages.Add(message);
+        }
+    }
 
     /** 会话尺寸落盘: ConPTY 子进程读不到 resize 后的窗口尺寸, 由尺寸的权威方(daemon)写文件给常驻 TUI 自己读。 */
     private static void WriteSessionSize(PtySession session)

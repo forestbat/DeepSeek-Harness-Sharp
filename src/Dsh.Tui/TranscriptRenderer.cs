@@ -54,6 +54,18 @@ public sealed class TranscriptRenderer
 
     public IReadOnlyList<TranscriptFold> Folds => _folds;
 
+    /** 线程安全快照(完成行+非空尾行的拷贝): 非 UI 线程的读取方(窗格读取工具)走这里, 不碰 UI 亲和的 CompletedLines/Tail。 */
+    public IReadOnlyList<string> SnapshotLines()
+    {
+        lock (_buffer)
+        {
+            var lines = new List<string>(_lines);
+            if (_tail.Length > 0)
+                lines.Add(_tail.ToString());
+            return lines;
+        }
+    }
+
     public void BumpVersion()
     {
         Version++;

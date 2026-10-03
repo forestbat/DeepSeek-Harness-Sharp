@@ -80,7 +80,10 @@ public class JobsTests : IDisposable
     }
 
     private string StartBashJob(IAgent? owner, string command, int? outputLimitBytes = null)
-        => _jobs.Start(new JobStart
+    {
+        if (!BashProbe.IsAvailable)
+            Assert.Skip("bash 不可用(WSL/Git Bash 无响应), 跳过依赖外部 shell 的用例");
+        return _jobs.Start(new JobStart
         {
             Kind = "bash",
             Label = command,
@@ -105,6 +108,7 @@ public class JobsTests : IDisposable
                     });
             },
         });
+    }
 
     private static async Task<JobOutcome> AwaitDone(SubprocessHandle handle)
     {

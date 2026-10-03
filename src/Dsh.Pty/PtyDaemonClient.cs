@@ -371,6 +371,34 @@ public static class PtyDaemonClient
         }
     }
 
+    /** 上报本 pty 里常驻 TUI 的 agent 会话 id(跨进程归属)。 */
+    public static Task IdentifyAsync(string id, string agentSessionId, CancellationToken cancellationToken = default)
+        => IdentifyAsync(id, agentSessionId, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    public static Task IdentifyAsync(string id, string agentSessionId, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+        => SendAsync(socketPath, portFile, new PtyDaemonRequest { Method = "identify", Id = id, AgentSessionId = agentSessionId }, cancellationToken);
+
+    /** 发布本 pty 的窗格目录与尾行快照, 供其他进程读取。 */
+    public static Task PublishPanesAsync(string id, string agentSessionId, IReadOnlyList<PtyPaneSnapshotDto> panes, CancellationToken cancellationToken = default)
+        => PublishPanesAsync(id, agentSessionId, panes, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    public static Task PublishPanesAsync(string id, string agentSessionId, IReadOnlyList<PtyPaneSnapshotDto> panes, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+        => SendAsync(socketPath, portFile, new PtyDaemonRequest { Method = "publish-panes", Id = id, AgentSessionId = agentSessionId, Panes = [.. panes] }, cancellationToken);
+
+    /** 向目标 pty 的常驻 TUI 派发一条窗格输入(focus/text/key), 返回分配到的 seq。 */
+    public static Task<long> ControlSendAsync(string id, string kind, int paneId, string payload, CancellationToken cancellationToken = default)
+        => ControlSendAsync(id, kind, paneId, payload, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    public static async Task<long> ControlSendAsync(string id, string kind, int paneId, string payload, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+        => (await SendAsync(socketPath, portFile, new PtyDaemonRequest { Method = "control-send", Id = id, Kind = kind, PaneId = paneId, Payload = payload }, cancellationToken)).Seq;
+
+    /** 长轮询取 sinceSeq 之后的新控制消息; 无消息时 daemon 侧最长等待 30s。 */
+    public static Task<IReadOnlyList<PtyControlMessageDto>> ControlReadAsync(string id, long sinceSeq, CancellationToken cancellationToken = default)
+        => ControlReadAsync(id, sinceSeq, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    public static async Task<IReadOnlyList<PtyControlMessageDto>> ControlReadAsync(string id, long sinceSeq, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+        => (await SendAsync(socketPath, portFile, new PtyDaemonRequest { Method = "control-read", Id = id, SinceSeq = sinceSeq }, cancellationToken)).Controls ?? [];
+
     /** 调整 daemon 里会话的尺寸(tmux 语义): attach 前按客户端终端尺寸调用, 免得画面下方留一大片空白。 */
     public static Task ResizeAsync(string id, int rows, int columns, CancellationToken cancellationToken = default)
         => ResizeAsync(id, rows, columns, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
@@ -419,6 +447,14 @@ public static class PtyDaemonClient
             // 尺寸查询失败/会话已退出/daemon 是不认识 resize 的旧版本: 保持会话原尺寸, 不影响 attach 主体。
             // 这里不能往 stderr 写东西 —— 终端形态下它会落到会话画面上, 污染用户的界面。
         }
+    }
+
+    private static async Task<PtyDaemonResponse> SendAsync(string socketPath, string? portFile, PtyDaemonRequest request, CancellationToken cancellationToken)
+    {
+        using var socket = await ConnectAsync(socketPath, portFile, cancellationToken);
+        using var stream = new NetworkStream(socket, ownsSocket: true);
+        await WriteRequestAsync(stream, request, cancellationToken);
+        return await ReadResponseAsync(stream, cancellationToken);
     }
 
     private static async Task WriteRequestAsync(Stream stream, PtyDaemonRequest request, CancellationToken cancellationToken)

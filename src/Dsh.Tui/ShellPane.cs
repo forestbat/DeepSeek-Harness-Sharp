@@ -1,6 +1,5 @@
 using System.Threading.Channels;
 using Dsh.Core;
-using Dsh.Pty;
 
 namespace Dsh.Tui;
 
@@ -14,6 +13,8 @@ internal sealed class ShellPane : ITuiPane
     private readonly ScrollWheel _wheel = new();
     private readonly PtySession _session;
     private readonly VtScreen _screen;
+    /** _screen 的跨线程门: 输出泵(Feed)、UI 线程(Resize/DrawTranscript)、读取工具(SnapshotLines)三方共用。 */
+    private readonly object _screenGate = new();
     private readonly CancellationTokenSource _pump = new();
     private readonly Task _pumpTask;
     private readonly Channel<byte[]> _writes = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true });
@@ -39,8 +40,15 @@ internal sealed class ShellPane : ITuiPane
 
     public int Id { get; }
 
+    public TuiPaneKind Kind => TuiPaneKind.Shell;
+
     /** shell 窗格不绑定 agent 会话。 */
     public Session? Session => null;
+
+    /** 窗格目录/读取工具用: 底层 PTY 会话标识与命令行。 */
+    internal string PtyId => _session.Id.Value;
+
+    internal string PtyCommand => _session.Command;
 
     public bool StickToBottom { get; set; } = true;
 
@@ -58,11 +66,14 @@ internal sealed class ShellPane : ITuiPane
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
-        _screen.Render(grid, rect, _scrollOffset);
-        if (_scrollOffset <= 0 && _screen.CursorVisible && rect.Contains(_screen.CursorX, _screen.CursorY))
+        lock (_screenGate)
         {
-            var cursor = grid[_screen.CursorX, _screen.CursorY];
-            grid[_screen.CursorX, _screen.CursorY] = cursor with { Style = cursor.Style | CellStyle.Reverse };
+            _screen.Render(grid, rect, _scrollOffset);
+            if (_scrollOffset <= 0 && _screen.CursorVisible && rect.Contains(_screen.CursorX, _screen.CursorY))
+            {
+                var cursor = grid[_screen.CursorX, _screen.CursorY];
+                grid[_screen.CursorX, _screen.CursorY] = cursor with { Style = cursor.Style | CellStyle.Reverse };
+            }
         }
     }
 
@@ -70,7 +81,9 @@ internal sealed class ShellPane : ITuiPane
 
     public void HandleMouseWheel(float delta)
     {
-        var maximum = Math.Max(0, _screen.ScrollbackCount);
+        int maximum;
+        lock (_screenGate)
+            maximum = Math.Max(0, _screen.ScrollbackCount);
         _scrollOffset = Math.Clamp(_scrollOffset + _wheel.Scroll(delta), 0, maximum);
         if (_scrollOffset == 0)
             StickToBottom = true;
@@ -82,7 +95,9 @@ internal sealed class ShellPane : ITuiPane
         if (_disposed || Exited)
             return;
         Span<byte> buffer = stackalloc byte[16];
-        var length = TerminalKeyEncoder.Encode(key, buffer, _screen.ApplicationCursorKeys);
+        int length;
+        lock (_screenGate)
+            length = TerminalKeyEncoder.Encode(key, buffer, _screen.ApplicationCursorKeys);
         if (length == 0)
             return;
         _scrollOffset = 0;
@@ -104,9 +119,12 @@ internal sealed class ShellPane : ITuiPane
     /** 窗格尺寸变化时同步到 PTY, shell 才能按真实宽高折行。 */
     public void Resize(int width, int height)
     {
-        if (width == _screen.Width && height == _screen.Height)
-            return;
-        _screen.Resize(width, height);
+        lock (_screenGate)
+        {
+            if (width == _screen.Width && height == _screen.Height)
+                return;
+            _screen.Resize(width, height);
+        }
         if (_disposed || Exited)
             return;
         try
@@ -138,6 +156,36 @@ internal sealed class ShellPane : ITuiPane
         }
         _session.Dispose();
         _pump.Dispose();
+    }
+
+    /** 滚回+当前屏的纯文本快照(去行尾空白; 屏幕末尾的全空行也去掉, 避免快照被空屏淹没)。 */
+    public IReadOnlyList<string> SnapshotLines()
+    {
+        lock (_screenGate)
+        {
+            var lines = new List<string>(_screen.ScrollbackCount + _screen.Height);
+            for (var offset = _screen.ScrollbackCount - 1; offset >= 0; offset--)
+                lines.Add(RowText(_screen.ScrollbackRow(offset)));
+            for (var y = 0; y < _screen.Height; y++)
+                lines.Add(RowText(_screen.Row(y)));
+            while (lines.Count > 0 && lines[^1].Length == 0)
+                lines.RemoveAt(lines.Count - 1);
+            return lines;
+        }
+    }
+
+    public bool HasOverlay => false;
+
+    public void DrawOverlay(CellGrid grid, ConsoleRect rect)
+    {
+    }
+
+    private static string RowText(ReadOnlySpan<Cell> row)
+    {
+        var chars = new char[row.Length];
+        for (var index = 0; index < row.Length; index++)
+            chars[index] = row[index].Character;
+        return new string(chars).TrimEnd();
     }
 
     private void EnqueueWrite(byte[] bytes)
@@ -188,7 +236,8 @@ internal sealed class ShellPane : ITuiPane
             }
             _bytesRead += read;
             StatusText = $"shell 读取 {_bytesRead} 字节 · {_session.Command} (pid {_session.ProcessId})";
-            _screen.Feed(_readBuffer.AsSpan(0, read));
+            lock (_screenGate)
+                _screen.Feed(_readBuffer.AsSpan(0, read));
             Invalidate();
         }
         Exited = true;
@@ -198,7 +247,8 @@ internal sealed class ShellPane : ITuiPane
     /** 读取泵失败时把原因显示在窗格里(否则只剩一片空白, 用户与测试都无从判断)。 */
     private void ShowFailure(Exception error)
     {
-        _screen.Feed($"\r\n\u001b[31m[shell 会话中止] {error.GetType().Name}: {error.Message}\u001b[0m\r\n");
+        lock (_screenGate)
+            _screen.Feed($"\r\n\u001b[31m[shell 会话中止] {error.GetType().Name}: {error.Message}\u001b[0m\r\n");
     }
 
     private async Task DelayAsync()

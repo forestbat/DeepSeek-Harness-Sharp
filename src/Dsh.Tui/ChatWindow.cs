@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Boot;
@@ -46,6 +47,7 @@ public sealed class ChatWindow : IDisposable
     private int? _inputHeight;
     private readonly TuiSettings? _settings;
     private ConsoleRect _paneArea;
+    private ConsoleRect _overlayArea;
     private int _focusedPaneId;
     private int _inputPaneId;
     private int _nextPaneId;
@@ -395,6 +397,9 @@ public sealed class ChatWindow : IDisposable
     {
         RenderVersion++;
         layout = Effective(layout);
+        // 命令浮层打开时: 正文区滚轮滚动候选(与 ↑/↓ 等价), 便于浏览长命令列表。
+        if (layout.Main.Contains(cellX, cellY) && InputPane.ScrollOverlay(delta))
+            return;
         // 单窗格时指针落在右栏上: 滚右栏内容(窄终端里才看得到下面的段落), 不再滚正文。
         if (_panes.Count == 1 && layout.RightPanel.Contains(cellX, cellY) && InputPane.ScrollRightPanel(delta))
             return;
@@ -637,6 +642,8 @@ public sealed class ChatWindow : IDisposable
         grid.Clear();
         layout = Effective(layout);
         _paneArea = new ConsoleRect(0, 0, grid.Width, Math.Max(0, layout.Main.Height));
+        // 浮层(总览/子代理列表)的正文区域: 单窗格且有右侧栏时限于正文宽, 避免居中基准包含侧栏而压到侧栏上
+        _overlayArea = _panes.Count == 1 && layout.RightPanel.Width > 0 ? layout.Main : _paneArea;
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
         SyncShellPaneSizes();
 
@@ -665,6 +672,30 @@ public sealed class ChatWindow : IDisposable
             DrawOverview(grid);
         if (_agentsActive)
             DrawAgentList(grid);
+        DrawPaneOverlays(grid, layout);
+    }
+
+    /**
+     * 命令/mention 浮层永远最后画: 它属于整帧最上层, 否则会被右栏/输入/状态/分隔线/窗口级浮层覆盖。
+     * 单窗格用正文矩形(含右侧栏时即 layout.Main); 多窗格逐一用各窗格矩形。
+     */
+    private void DrawPaneOverlays(CellGrid grid, UiLayout layout)
+    {
+        if (_panes.Count == 1)
+        {
+            var only = _panes.Values.First();
+            if (only.HasOverlay)
+                only.DrawOverlay(grid, layout.Main);
+            return;
+        }
+        foreach (var placement in _paneLayout.Panes)
+        {
+            if (!_panes.TryGetValue(placement.PaneId, out var pane) || !pane.HasOverlay)
+                continue;
+            var rect = placement.Rect;
+            if (rect.Width > 0 && rect.Height > 1)
+                pane.DrawOverlay(grid, new ConsoleRect(rect.X, rect.Y + 1, rect.Width, rect.Height - 1));
+        }
     }
 
     public void RequestExit()
@@ -672,6 +703,7 @@ public sealed class ChatWindow : IDisposable
 
     public void Dispose()
     {
+        _paneTools?.Dispose();
         foreach (var pane in _panes.Values)
             pane.Dispose();
         _unsubscribe.Invoke();
@@ -692,6 +724,128 @@ public sealed class ChatWindow : IDisposable
     /** 外部(如 shell 输出泵)请求重绘: 只推版本号, 真正的合并由主循环完成。 */
     internal void Invalidate()
         => RenderVersion++;
+
+    /** 窗格目录条目: pane_read/pane_list 工具的只读元数据。 */
+    internal sealed record PaneCatalogEntry(
+        int Id,
+        TuiPaneKind Kind,
+        string Title,
+        string? SessionId,
+        string? PtyId,
+        string? PtyCommand,
+        bool Focused,
+        bool Exited);
+
+    /** 把读取编排到 UI 线程执行(窗格集合只在 UI 线程增删); 结果经 TCS 跨线程返回。 */
+    internal Task<T> DispatchAsync<T>(Func<T> read)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        QueueAction(() =>
+        {
+            try
+            {
+                completion.TrySetResult(read());
+            }
+            catch (Exception error)
+            {
+                completion.TrySetException(error);
+            }
+        });
+        return completion.Task;
+    }
+
+    internal Task<IReadOnlyList<PaneCatalogEntry>> SnapshotPanesAsync()
+        => DispatchAsync(() =>
+        {
+            var entries = new List<PaneCatalogEntry>(_panes.Count);
+            foreach (var pane in _panes.Values)
+                entries.Add(CatalogEntryOf(pane));
+            return (IReadOnlyList<PaneCatalogEntry>)entries;
+        });
+
+    /** 读取工具挂载: 交互形态由 TuiRunner 调用一次, 随 ChatWindow.Dispose 一并注销。 */
+    internal void RegisterPaneTools()
+        => _paneTools ??= PaneReadTools.Apply(_ctx, this);
+
+    private IDisposable? _paneTools;
+
+    internal Task<PaneCatalogEntry?> FindPaneAsync(int paneId)
+        => DispatchAsync(() => _panes.TryGetValue(paneId, out var pane) ? CatalogEntryOf(pane) : null);
+
+    internal Task<IReadOnlyList<string>?> SnapshotPaneLinesAsync(int paneId)
+        => DispatchAsync(() => _panes.TryGetValue(paneId, out var pane) ? pane.SnapshotLines() : null);
+
+    /** 常驻桥发布用: 一次派发内取本地窗格目录 + 每个窗格尾行, 作为发往 daemon 的快照。 */
+    internal Task<IReadOnlyList<PtyPaneSnapshotDto>> SnapshotPaneSnapshotsAsync(int maxLines)
+        => DispatchAsync<IReadOnlyList<PtyPaneSnapshotDto>>(() =>
+        [
+            .. Catalog().Select(entry => new PtyPaneSnapshotDto
+            {
+                Id = entry.Id,
+                Kind = entry.Kind.ToString().ToLowerInvariant(),
+                Title = entry.Title,
+                SessionId = entry.SessionId,
+                PtyId = entry.PtyId,
+                Command = entry.PtyCommand,
+                Focused = entry.Focused,
+                Exited = entry.Exited,
+                Lines = _panes.TryGetValue(entry.Id, out var pane) ? [.. pane.SnapshotLines().TakeLast(maxLines)] : null,
+            }),
+        ]);
+
+    /** 在 UI 线程把一条窗格输入(kind: focus/text/key)应用到目标窗格; 返回人类可读结果。 */
+    internal string ApplyPaneInput(string kind, int paneId, string payload)
+    {
+        if (!_panes.TryGetValue(paneId, out var pane))
+            throw new InvalidOperationException($"pane {paneId} does not exist");
+        switch (kind)
+        {
+            case "focus":
+                FocusPane(paneId);
+                return $"focused pane {paneId}";
+            case "text" when pane is ChatPane chat:
+                chat.SendUserText(payload);
+                return $"sent text to pane {paneId}";
+            case "text" when pane is ShellPane shell:
+                shell.HandleText(payload);
+                return $"wrote text to pane {paneId}";
+            case "key" when pane is ShellPane keys:
+                keys.HandleText(payload);
+                return $"wrote keys to pane {paneId}";
+            default:
+                throw new InvalidOperationException($"pane {paneId} does not accept kind \"{kind}\"");
+        }
+    }
+
+    /** 其他进程发布的远程窗格(pty id + 快照); 与本进程目录同形, 供 pane_list/pane_read 合并。 */
+    internal IReadOnlyList<(string PtyId, PtyPaneSnapshotDto Pane)> RemotePanes()
+        => [.. _daemonPtys.SelectMany(pty => (pty.Panes ?? []).Select(pane => (pty.Id, pane)))];
+
+    /** 本窗格所属 agent 会话 id(常驻桥上报归属用)。 */
+    internal string AgentSessionId => InputPane.Agent.Id.Value;
+
+    private PaneCatalogEntry CatalogEntryOf(ITuiPane pane)
+        => new(
+            pane.Id,
+            pane.Kind,
+            pane.PaneTitle,
+            pane.Session?.Id.Value,
+            (pane as ShellPane)?.PtyId,
+            (pane as ShellPane)?.PtyCommand,
+            pane.Id == _focusedPaneId,
+            (pane as ShellPane)?.Exited ?? false);
+
+    /** 读任意会话(含无窗格的后台子代理会话)的 transcript 文本; 未知 id 返回 null。渲染在独立渲染器上进行, 不触碰任何 pane 状态。 */
+    internal IReadOnlyList<string>? SnapshotSessionLines(SessionId id)
+    {
+        var session = _subagents.FindSession(id);
+        if (session is null)
+            return null;
+        var renderer = new TranscriptRenderer();
+        foreach (var sessionEvent in session.SnapshotEvents())
+            renderer.AppendSessionEvent(sessionEvent, replay: true);
+        return renderer.SnapshotLines();
+    }
 
     internal IReadOnlyList<SessionInfo> CurrentSessions()
     {
@@ -736,6 +890,105 @@ public sealed class ChatWindow : IDisposable
     internal void InvalidateSessionInfos()
         => _sessionInfos = null;
 
+    private const int GitRefreshMinIntervalMs = 1500;
+    private const string EmptyGitTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+    private IReadOnlyList<string>? _gitLines;
+    private string? _gitCwd;
+    private long _gitRefreshedAt;
+    private int _gitRefreshing;
+
+    /** 右栏 Git 变更: 只读缓存(未就绪显示"计算中…"), 后台刷新, 不阻塞绘制/GPU 帧路径。 */
+    internal IReadOnlyList<string> GitLines()
+    {
+        var cwd = InputPane.Agent.Session.Header.Cwd;
+        if (string.IsNullOrWhiteSpace(cwd))
+            return ["(无工作目录)"];
+        var stale = Environment.TickCount64 - _gitRefreshedAt >= GitRefreshMinIntervalMs;
+        if ((_gitLines is null || !string.Equals(_gitCwd, cwd, StringComparison.Ordinal) || stale)
+            && Interlocked.CompareExchange(ref _gitRefreshing, 1, 0) == 0)
+            _ = RefreshGitLinesAsync(cwd);
+        return _gitLines ?? ["计算中…"];
+    }
+
+    private async Task RefreshGitLinesAsync(string cwd)
+    {
+        try
+        {
+            var lines = await Task.Run(() => LoadGitLines(cwd));
+            QueueAction(() =>
+            {
+                _gitLines = lines;
+                _gitCwd = cwd;
+                _gitRefreshedAt = Environment.TickCount64;
+                Invalidate();
+            });
+        }
+        catch (Exception error)
+        {
+            _ctx.LoggerFor("tui").Warn($"git panel failed: {error.Message}");
+            QueueAction(() =>
+            {
+                _gitLines = ["git 变更读取失败"];
+                _gitRefreshedAt = Environment.TickCount64;
+                Invalidate();
+            });
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _gitRefreshing, 0);
+        }
+    }
+
+    private static IReadOnlyList<string> LoadGitLines(string cwd)
+    {
+        var status = RunGit(cwd, "status", "--porcelain");
+        if (status is null)
+            return ["(非 git 仓库或 git 不可用)"];
+        if (status.Trim().Length > 0)
+            return GitPanel.Format(RunGit(cwd, "diff", "--numstat", "HEAD") ?? "", "未提交改动");
+        var last = RunGit(cwd, "diff", "--numstat", "HEAD~1", "HEAD")
+            ?? RunGit(cwd, "diff", "--numstat", EmptyGitTree, "HEAD")
+            ?? "";
+        return last.Trim().Length == 0 ? ["(无变更)"] : GitPanel.Format(last, "上次提交");
+    }
+
+    private static string? RunGit(string cwd, params string[] arguments)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = cwd,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            info.ArgumentList.Add("-C");
+            info.ArgumentList.Add(cwd);
+            info.ArgumentList.Add("-c");
+            info.ArgumentList.Add("core.quotepath=false");
+            foreach (var argument in arguments)
+                info.ArgumentList.Add(argument);
+            using var process = Process.Start(info);
+            if (process is null)
+                return null;
+            var output = process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(3000))
+            {
+                process.Kill(entireProcessTree: true);
+                return null;
+            }
+            return process.ExitCode == 0 ? output : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     internal IReadOnlyList<string> McpLines()
     {
         if (_mcpPanelLines is not null)
@@ -766,76 +1019,99 @@ public sealed class ChatWindow : IDisposable
 
     private async void RunSlashCommandAsync(ChatPane pane, string text)
     {
-        switch (text.Split(' ', 2)[0])
+        var name = text.Split(' ', 2)[0];
+        var verb = name.Length > 1 && name[0] == '/' ? name[1..] : name;
+        if (string.Equals(verb, "quit", StringComparison.OrdinalIgnoreCase))
         {
-            case "/quit" or "/exit":
-                RequestExit();
-                break;
-            case "/new":
-                await NewSession(pane, text);
-                break;
-            case "/resume":
-                await ResumeSession(pane, text);
-                break;
-            case "/session":
-                await ListSessions(pane, text);
-                break;
-            case "/detach":
-                await DetachSession(pane, text);
-                break;
-            case "/gpu":
-                SelectGpu(pane, text);
-                break;
-            default:
-                var commands = _ctx.Get<CommandsService>(CommandsService.ServiceName);
-                if (commands is null)
-                {
-                    // 无法判断是不是命令: 按普通消息发出(与"写错了"同一处理)。
-                    pane.SendUserText(text);
-                    break;
-                }
+            // /quit 可抛弃, 但仍认它: 不再单独给菜单项。
+            RequestExit();
+            return;
+        }
+        foreach (var local in LocalCommands)
+        {
+            if (!string.Equals(verb, local.Name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            await local.Run(pane, text);
+            return;
+        }
+        await RunRegisteredCommandAsync(pane, text);
+    }
 
-                try
-                {
-                    var execution = await commands.Execute(pane.Agent, text);
-                    if (execution is null)
-                    {
-                        // 首 token 不是已知命令: 用户为自己的输入负责, 整行当普通消息发给模型。
-                        pane.SendUserText(text);
-                        break;
-                    }
+    private async Task RunRegisteredCommandAsync(ChatPane pane, string text)
+    {
+        var commands = _ctx.Get<CommandsService>(CommandsService.ServiceName);
+        if (commands is null)
+        {
+            // 无法判断是不是命令: 按普通消息发出(与"写错了"同一处理)。
+            pane.SendUserText(text);
+            return;
+        }
 
-                    string? resultText = execution.Result switch
-                    {
-                        CommandResult.Success { Text: { } successText } when successText.Length > 0 => $"  {successText}\n",
-                        CommandResult.Error error => $"  {error.Text}\n",
-                        _ => null,
-                    };
-                    if (resultText is not null)
-                    {
-                        var captured = resultText;
-                        QueueAction(() => pane.AppendRaw(captured));
-                    }
+        try
+        {
+            var execution = await commands.Execute(pane.Agent, text);
+            if (execution is null)
+            {
+                // 首 token 不是已知命令: 用户为自己的输入负责, 整行当普通消息发给模型。
+                pane.SendUserText(text);
+                return;
+            }
 
-                    // 命令 + 提示词: 提示词由命令决定(成功或失败都可能带), 作为下一步用户消息发出。
-                    var followup = execution.Result switch
-                    {
-                        CommandResult.Success success => success.FollowupPrompt,
-                        CommandResult.Error error => error.FollowupPrompt,
-                        _ => null,
-                    };
-                    if (followup is { Length: > 0 } prompt)
-                        pane.SendUserText(prompt);
-                }
-                catch (Exception error)
-                {
-                    var message = error.Message;
-                    QueueAction(() => pane.AppendRaw($"  command failed: {message}\n"));
-                }
+            string? resultText = execution.Result switch
+            {
+                CommandResult.Success { Text: { } successText } when successText.Length > 0 => $"  {successText}\n",
+                CommandResult.Error error => $"  {error.Text}\n",
+                _ => null,
+            };
+            if (resultText is not null)
+            {
+                var captured = resultText;
+                QueueAction(() => pane.AppendRaw(captured));
+            }
 
-                break;
+            // 命令 + 提示词: 提示词由命令决定(成功或失败都可能带), 作为下一步用户消息发出。
+            var followup = execution.Result switch
+            {
+                CommandResult.Success success => success.FollowupPrompt,
+                CommandResult.Error error => error.FollowupPrompt,
+                _ => null,
+            };
+            if (followup is { Length: > 0 } prompt)
+                pane.SendUserText(prompt);
+        }
+        catch (Exception error)
+        {
+            var message = error.Message;
+            QueueAction(() => pane.AppendRaw($"  command failed: {message}\n"));
         }
     }
+
+    private IReadOnlyList<LocalCommand>? _localCommands;
+
+    /** TUI 本地命令(未注册到 CommandsService): 浮层菜单项与分发表同源, 避免新增命令只改一处。 */
+    private IReadOnlyList<LocalCommand> LocalCommands => _localCommands ??=
+    [
+        new("new", "开始新会话(可带目录)", NewSession),
+        new("resume", "恢复历史会话", ResumeSession),
+        new("session", "列出/恢复/删除会话", ListSessions),
+        new("detach", "脱离会话交给 daemon", DetachSession),
+        new("gpu", "选择 GPU / 渲染后端", (pane, text) => { SelectGpu(pane, text); return Task.CompletedTask; },
+            [new CommandArgumentSchema("adapter", "select", "GPU 适配器(选择并回车即写入, 重启生效)")]),
+        new("exit", "退出 TUI", (_, _) => { RequestExit(); return Task.CompletedTask; }),
+    ];
+
+    /** 供 ChatPane 追加进命令浮层(按名字去重)。 */
+    internal IReadOnlyList<CommandDescriptor> LocalCommandDescriptors
+        => [.. LocalCommands.Select(command => new CommandDescriptor(
+            command.Name,
+            command.Description,
+            ArgumentSchemas: command.ArgumentSchemas))];
+
+    private sealed record LocalCommand(
+        string Name,
+        string Description,
+        Func<ChatPane, string, Task> Run,
+        IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas = null);
 
     private async Task NewSession(ChatPane pane, string text)
     {
@@ -987,33 +1263,40 @@ public sealed class ChatWindow : IDisposable
     {
         var argument = text.Length > "/gpu".Length ? text["/gpu".Length..].Trim() : "";
         var adapters = GpuCatalog.ListAdapters();
+        var labels = GpuCatalog.SelectionLabels();
         if (argument.Length == 0)
         {
             var current = GpuCatalog.LoadSelectedAdapter(_home);
             pane.AppendRaw($"  gpu: current = {(current == GpuCatalog.AutoAdapter ? "auto (system default)" : current)}\n");
-            pane.AppendRaw("    0. auto (system default)\n");
-            for (var index = 0; index < adapters.Count; index++)
-            {
-                var kind = GpuCatalog.IsDiscrete(adapters[index]) ? "discrete" : "integrated";
-                // Detail 里已带 PCI slot(就是选卡值), 同名多卡因此能看出选的是哪张
-                pane.AppendRaw($"    {index + 1}. {adapters[index].Name} ({kind}, {adapters[index].Detail})\n");
-            }
-            pane.AppendRaw("  usage: /gpu <number> — takes effect after restart\n");
+            for (var index = 0; index < labels.Count; index++)
+                pane.AppendRaw($"    {index}. {labels[index]}\n");
+            pane.AppendRaw("  usage: /gpu <number|name> — takes effect after restart\n");
+            pane.AppendRaw("  note: 若当前以 CPU 模式运行, 该选择仅下次以 GPU 模式启动时才生效(Linux 经 PRIME 选择器)\n");
             return;
         }
 
         string selected;
-        if (argument.Equals("auto", StringComparison.OrdinalIgnoreCase) || argument == "0")
+        if (argument.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            || argument == "0"
+            || argument.Equals(labels.Count > 0 ? labels[0] : GpuCatalog.AutoAdapter, StringComparison.OrdinalIgnoreCase))
             selected = GpuCatalog.AutoAdapter;
         else if (int.TryParse(argument, out var index) && index >= 1 && index <= adapters.Count)
             selected = GpuCatalog.SelectionIdOf(adapters[index - 1]);
         else
         {
-            pane.AppendRaw($"  gpu: invalid selection '{argument}' (run /gpu to list)\n");
-            return;
+            var matched = GpuCatalog.MatchAdapterIndex(labels, argument);
+            if (matched <= 0)
+            {
+                pane.AppendRaw($"  gpu: invalid selection '{argument}' (run /gpu to list)\n");
+                return;
+            }
+            selected = GpuCatalog.SelectionIdOf(adapters[matched - 1]);
         }
         GpuCatalog.SaveSelectedAdapter(_home, selected);
         pane.AppendRaw($"  gpu: selected {(selected == GpuCatalog.AutoAdapter ? "auto (system default)" : selected)} — takes effect after restart\n");
+        var windowsNote = GpuCatalog.ApplyWindowsPreference(selected);
+        if (windowsNote.Length > 0)
+            pane.AppendRaw($"  {windowsNote}\n");
     }
 
     /** Ctrl+X D: 常驻会话(跑在 daemon 的 pty 上)只放 proxy 走, 自己继续跑; 非常驻(进程内 TUI)沿用 /detach 交接。 */
@@ -1351,10 +1634,13 @@ public sealed class ChatWindow : IDisposable
     {
         RefreshOverviewItems();
         var focusedIndex = _overviewItems.FindIndex(item => item.Kind == OverviewTargetKind.Pane && item.PaneId == _focusedPaneId);
-        _overviewIndex = Math.Clamp(focusedIndex < 0 ? 0 : focusedIndex, 0, Math.Max(0, _overviewItems.Count - 1));
+        _overviewIndex = focusedIndex >= 0 ? focusedIndex : FirstSelectableIndex();
         _overviewActive = true;
         _ = RefreshDaemonPtysAsync();
     }
+
+    private int FirstSelectableIndex()
+        => Math.Max(0, _overviewItems.FindIndex(item => item.Kind != OverviewTargetKind.None));
 
     private void HandleOverviewKey(ConsoleKeyInfo key)
     {
@@ -1364,14 +1650,31 @@ public sealed class ChatWindow : IDisposable
                 _overviewActive = false;
                 return;
             case ConsoleKey.UpArrow:
-                _overviewIndex = Math.Clamp(_overviewIndex - 1, 0, Math.Max(0, _overviewItems.Count - 1));
+                MoveOverview(-1);
                 return;
             case ConsoleKey.DownArrow:
-                _overviewIndex = Math.Clamp(_overviewIndex + 1, 0, Math.Max(0, _overviewItems.Count - 1));
+                MoveOverview(1);
                 return;
             case ConsoleKey.Enter:
                 ActivateOverview();
                 return;
+        }
+    }
+
+    /** 方向键只在可选行(Pane/Session)之间移动; PTY 行与分节标题(None)跳过。 */
+    private void MoveOverview(int direction)
+    {
+        if (_overviewItems.Count == 0)
+            return;
+        var index = _overviewIndex;
+        for (var step = 0; step < _overviewItems.Count; step++)
+        {
+            index = (index + direction + _overviewItems.Count) % _overviewItems.Count;
+            if (_overviewItems[index].Kind != OverviewTargetKind.None)
+            {
+                _overviewIndex = index;
+                return;
+            }
         }
     }
 
@@ -1400,16 +1703,29 @@ public sealed class ChatWindow : IDisposable
     private void RefreshOverviewItems()
     {
         _overviewItems.Clear();
+        var catalog = Catalog();
+        var placed = new HashSet<int>();
+
         _overviewItems.Add(new OverviewItem("PTY", OverviewTargetKind.None, null, null));
-        var hostPtys = PtyHost.Default.List();
-        if (hostPtys.Count == 0 && _daemonPtys.Count == 0)
-        {
+        // 只列存活 Pty(host 与跨进程同一规则); 已退出(Exited)不出现在总览里。
+        var hostPtys = PtyHost.Default.List().Where(pty => pty.Status != PtySessionStatus.Exited).ToList();
+        var daemonPtys = _daemonPtys
+            .Where(pty => !string.Equals(pty.Status, nameof(PtySessionStatus.Exited), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (hostPtys.Count == 0 && daemonPtys.Count == 0)
             _overviewItems.Add(new OverviewItem("  (无)", OverviewTargetKind.None, null, null));
-        }
         foreach (var pty in hostPtys)
+        {
             _overviewItems.Add(new OverviewItem($"  {pty.Id.Value} · {pty.Command} · {pty.Status.ToString().ToLowerInvariant()}", OverviewTargetKind.None, null, null));
-        foreach (var pty in _daemonPtys)
-            _overviewItems.Add(new OverviewItem($"  {pty.Id} (daemon) · {pty.Command} · {pty.Status}", OverviewTargetKind.None, null, null));
+            AddPaneRows(catalog, placed, 4, entry => string.Equals(entry.PtyId, pty.Id.Value, StringComparison.Ordinal));
+        }
+        foreach (var pty in daemonPtys)
+        {
+            var ownership = pty.AgentSessionId is { Length: > 0 } sessionId ? $" · {sessionId}" : "";
+            _overviewItems.Add(new OverviewItem($"  {pty.Id} (daemon) · {pty.Command} · {pty.Status}{ownership}", OverviewTargetKind.None, null, null));
+            foreach (var pane in pty.Panes ?? [])
+                _overviewItems.Add(new OverviewItem($"    pane {pane.Id} · {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.None, null, null));
+        }
 
         _overviewItems.Add(new OverviewItem("会话", OverviewTargetKind.None, null, null));
         var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.List() ?? [];
@@ -1418,29 +1734,77 @@ public sealed class ChatWindow : IDisposable
         foreach (var agent in agents)
         {
             var (provider, model) = CurrentModel(agent);
+            var ptyId = PtyForSession(agent.Id.Value);
             _overviewItems.Add(new OverviewItem(
                 $"  {agent.Id} · {provider}/{model}",
                 OverviewTargetKind.Session,
                 null,
                 agent.Id.ToString()));
+            // 会话 id 很长, pty 放行尾会被浮层宽度截掉; 单独一行保证可见。
+            _overviewItems.Add(new OverviewItem(
+                ptyId is { Length: > 0 } ? $"    pty {ptyId}" : "    pty (none)",
+                OverviewTargetKind.None,
+                null,
+                null));
+            AddPaneRows(catalog, placed, 4, entry => string.Equals(entry.SessionId, agent.Id.Value, StringComparison.Ordinal));
         }
 
-        _overviewItems.Add(new OverviewItem("窗格", OverviewTargetKind.None, null, null));
-        foreach (var id in PaneTree.PaneIds(_paneTree))
+        // 不属于任何已列 Pty/会话的窗格(如子代理窗格)统一放"未分组"。
+        var ungrouped = catalog.Where(entry => !placed.Contains(entry.Id)).ToList();
+        if (ungrouped.Count > 0)
         {
-            if (!_panes.TryGetValue(id, out var pane))
-                continue;
-            var marker = id == _focusedPaneId ? "* " : "  ";
-            var target = pane.Session is { } session ? session.Id.Value : pane.PaneTitle;
-            _overviewItems.Add(new OverviewItem(
-                $"  {marker}pane {id} · {target}",
-                OverviewTargetKind.Pane,
-                id,
-                null));
+            _overviewItems.Add(new OverviewItem("未分组", OverviewTargetKind.None, null, null));
+            foreach (var entry in ungrouped)
+                AddPaneRow(placed, entry, 2);
         }
     }
 
-    private async Task RefreshDaemonPtysAsync()
+    /** 会话所属 pty: daemon 上报的归属优先(跨进程), 否则常驻进程自身所在的 pty; 都没有返回 null。 */
+    private string? PtyForSession(string sessionId)
+    {
+        foreach (var pty in _daemonPtys)
+        {
+            if (string.Equals(pty.AgentSessionId, sessionId, StringComparison.Ordinal))
+                return pty.Id;
+        }
+        var resident = Environment.GetEnvironmentVariable(PtySessionProtocol.SessionVariable);
+        return resident is { Length: > 0 } ? resident : null;
+    }
+
+    /** 窗格目录(按 pane 树顺序): 总览与 pane_list/pane_read 共用同一份归属推导(CatalogEntryOf), 避免两套真相。 */
+    private IReadOnlyList<PaneCatalogEntry> Catalog()
+    {
+        var entries = new List<PaneCatalogEntry>(_panes.Count);
+        foreach (var id in PaneTree.PaneIds(_paneTree))
+        {
+            if (_panes.TryGetValue(id, out var pane))
+                entries.Add(CatalogEntryOf(pane));
+        }
+        return entries;
+    }
+
+    private void AddPaneRows(IReadOnlyList<PaneCatalogEntry> catalog, HashSet<int> placed, int indent, Func<PaneCatalogEntry, bool> match)
+    {
+        foreach (var entry in catalog)
+        {
+            if (!placed.Contains(entry.Id) && match(entry))
+                AddPaneRow(placed, entry, indent);
+        }
+    }
+
+    private void AddPaneRow(HashSet<int> placed, PaneCatalogEntry entry, int indent)
+    {
+        var marker = entry.Focused ? "* " : "  ";
+        var target = entry.SessionId ?? entry.Title;
+        _overviewItems.Add(new OverviewItem(
+            $"{new string(' ', indent)}{marker}pane {entry.Id} · {target}",
+            OverviewTargetKind.Pane,
+            entry.Id,
+            null));
+        placed.Add(entry.Id);
+    }
+
+    internal async Task RefreshDaemonPtysAsync()
     {
         try
         {
@@ -1473,8 +1837,8 @@ public sealed class ChatWindow : IDisposable
     }
 
     private ConsoleRect OverlayArea(CellGrid grid)
-        => _paneArea.Height > 0
-            ? _paneArea
+        => _overlayArea.Height > 0
+            ? _overlayArea
             : new ConsoleRect(0, 0, grid.Width, Math.Max(3, grid.Height - 3));
 
     private string AgentLine(SubagentNode node)
