@@ -29,6 +29,7 @@ public sealed class Plugin : IDshPlugin
         var tools = ctx.Get<ToolRuntime>()!;
         var prompt = ctx.Get<SystemPrompt>()!;
         var global = new EventOptions { Global = true };
+        _ = new ToonCodecService(ctx);
         var disposables = new List<IDisposable>();
         if (resolved.Output)
         {
@@ -175,6 +176,12 @@ public sealed class Plugin : IDshPlugin
     private sealed class FuncDispose(Func<bool> unsubscribe) : IDisposable
     {
         public void Dispose() => unsubscribe();
+    }
+
+    /** 把 ToonCodec 以 IToonCodec 契约服务暴露给消费方(如 TUI 的窗格读取工具), 消费方不引用本插件。 */
+    private sealed class ToonCodecService(Context ctx) : Service(ctx, IToonCodec.ServiceName), IToonCodec
+    {
+        public string Encode(JsonNode? value) => ToonCodec.Encode(value);
     }
 
     private sealed class DisposeBundle(List<IDisposable> disposables) : IDisposable
