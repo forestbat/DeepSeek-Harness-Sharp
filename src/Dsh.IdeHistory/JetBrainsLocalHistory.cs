@@ -34,13 +34,13 @@ public sealed class JetBrainsLocalHistoryProvider : IIdeHistoryProvider
 
     public IReadOnlyList<IdeHistoryStoreInfo> Discover()
     {
-        var root = _root
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "JetBrains");
-        if (!Directory.Exists(root))
-            return [];
         var stores = new List<IdeHistoryStoreInfo>();
-        foreach (var ideDir in Directory.EnumerateDirectories(root))
+        foreach (var root in CandidateRoots())
         {
+            if (!Directory.Exists(root))
+                continue;
+            foreach (var ideDir in Directory.EnumerateDirectories(root))
+            {
             foreach (var candidate in CandidateStores(ideDir))
             {
                 if (!File.Exists(candidate))
@@ -52,8 +52,25 @@ public sealed class JetBrainsLocalHistoryProvider : IIdeHistoryProvider
                     Retention = $"localHistory.daysToKeep (IDE 注册表, 默认 5 个工作日) [{Path.GetFileName(ideDir)}]",
                 });
             }
+            }
         }
         return stores;
+    }
+
+    private IEnumerable<string> CandidateRoots()
+    {
+        if (_root is not null)
+        {
+            yield return _root;
+            yield break;
+        }
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (OperatingSystem.IsWindows())
+            yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JetBrains");
+        else if (OperatingSystem.IsMacOS())
+            yield return Path.Combine(profile, "Library", "Caches", "JetBrains");
+        else
+            yield return Path.Combine(profile, ".cache", "JetBrains");
     }
 
     private static IEnumerable<string> CandidateStores(string ideDir)

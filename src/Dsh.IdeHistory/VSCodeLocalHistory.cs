@@ -5,14 +5,7 @@ namespace Dsh.IdeHistory;
 
 public sealed class VsCodeLocalHistoryProvider : IIdeHistoryProvider
 {
-    private static readonly string[] CandidateRoots =
-    [
-        Path.Combine(".config", "Code", "User"),
-        Path.Combine(".config", "Code - Insiders", "User"),
-        Path.Combine(".config", "Code - OSS", "User"),
-        Path.Combine(".config", "VSCodium", "User"),
-        Path.Combine(".vscode-server", "data", "User"),
-    ];
+    private static readonly string[] Products = ["Code", "Code - Insiders", "Code - OSS", "VSCodium"];
 
     private readonly string? _home;
 
@@ -32,9 +25,8 @@ public sealed class VsCodeLocalHistoryProvider : IIdeHistoryProvider
     public IReadOnlyList<IdeHistoryStoreInfo> Discover()
     {
         var stores = new List<IdeHistoryStoreInfo>();
-        foreach (var root in CandidateRoots)
+        foreach (var userDir in CandidateUserDirs())
         {
-            var userDir = Path.Combine(Home, root);
             var history = Path.Combine(userDir, "History");
             if (!Directory.Exists(history))
                 continue;
@@ -46,6 +38,38 @@ public sealed class VsCodeLocalHistoryProvider : IIdeHistoryProvider
             });
         }
         return stores;
+    }
+
+    /**
+     * 各平台 VS Code 系产品的 User 目录: Windows 在 %APPDATA%, macOS 在 ~/Library/Application Support, Linux 在 ~/.config。
+     * 注入 _home 时按 Linux 布局解析(测试缝, 与平台无关)。
+     */
+    private IEnumerable<string> CandidateUserDirs()
+    {
+        if (_home is not null)
+        {
+            foreach (var product in Products)
+                yield return Path.Combine(_home, ".config", product, "User");
+            yield break;
+        }
+        if (OperatingSystem.IsWindows())
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            foreach (var product in Products)
+                yield return Path.Combine(appData, product, "User");
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            var support = Path.Combine(Home, "Library", "Application Support");
+            foreach (var product in Products)
+                yield return Path.Combine(support, product, "User");
+        }
+        else
+        {
+            foreach (var product in Products)
+                yield return Path.Combine(Home, ".config", product, "User");
+            yield return Path.Combine(Home, ".vscode-server", "data", "User");
+        }
     }
 
     private static string DescribeRetention(string settingsPath)
@@ -120,6 +144,13 @@ public sealed class VsCodeLocalHistoryProvider : IIdeHistoryProvider
         };
     }
 
+    /** VS Code 把 Windows 盘符冒号百分号编码(file:///c%3A/...),Uri.LocalPath 还原成 /c:/...;补回盘符开头。 */
+    private static string LocalPathOf(string resource)
+    {
+        var path = new Uri(resource).LocalPath;
+        return path.Length > 2 && path[0] == '/' && path[2] == ':' ? path[1..] : path;
+    }
+
     private static (string? Resource, List<(string Id, long Timestamp)> Items) ReadEntriesFile(string path)
     {
         try
@@ -130,7 +161,7 @@ public sealed class VsCodeLocalHistoryProvider : IIdeHistoryProvider
             if (resource is not { Length: > 0 })
                 return (null, []);
             var local = resource.StartsWith("file://", StringComparison.Ordinal)
-                ? new Uri(resource).LocalPath
+                ? LocalPathOf(resource)
                 : resource;
             var items = new List<(string, long)>();
             if (root["entries"] is JsonArray array)
