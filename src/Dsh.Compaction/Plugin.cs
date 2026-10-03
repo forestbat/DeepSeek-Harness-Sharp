@@ -1,4 +1,5 @@
 using Dsh.Runtime;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Plugins;
@@ -33,7 +34,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         TokenMeter => Dsh.Compaction.TokenMeter.Register(ctx),
         CompactionToolResultPruner => ToolResultPruner.Register(ctx, PruneConfigFrom(config)),
-        CompactionBasic => BasicCompactionEngine.Register(ctx, BasicCompactionConfigFrom(config)),
+        CompactionBasic => RegisterBasicCompaction(ctx, config),
         CommandCompact => CompactCommand.Register(ctx),
         ToolCompact => CompactTool.Register(ctx),
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
@@ -41,6 +42,27 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)
         => config as IReadOnlyDictionary<string, object?>;
+
+    /** 基础压缩同时挂载首轮自动命名(共用 compaction_model), 二者随插件一同释放。 */
+    private static IDisposable RegisterBasicCompaction(Context ctx, object? config)
+    {
+        var engine = BasicCompactionEngine.Register(ctx, WithHarnessSummarization(ctx, BasicCompactionConfigFrom(config)));
+        return ctx.GetProp("harnessOptions") is HarnessOptions options
+            ? new Bundle(engine, new SessionAutoRename(ctx, options))
+            : engine;
+    }
+
+    /** 插件未配 summarization 时, 回落到 settings.yaml 顶层 compaction_model。 */
+    private static BasicCompactionConfig WithHarnessSummarization(Context ctx, BasicCompactionConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.SummarizationProvider) || !string.IsNullOrWhiteSpace(config.SummarizationModel))
+            return config;
+        if (ctx.GetProp("harnessOptions") is not HarnessOptions options)
+            return config;
+        return CompactionModelSetting.Parse(HarnessSettings.Load(options.Home).CompactionModel) is { } target
+            ? config with { SummarizationProvider = target.Provider, SummarizationModel = target.Model }
+            : config;
+    }
 
     private static ToolResultPruneConfig PruneConfigFrom(object? config)
     {
@@ -115,4 +137,13 @@ public sealed class Plugin(string packageName) : IDshPlugin
             int value => value,
             _ => null,
         };
+
+    private sealed class Bundle(params IDisposable[] parts) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var part in parts)
+                part.Dispose();
+        }
+    }
 }
