@@ -88,7 +88,6 @@ public class AnsiRendererTests
         var renderer = new AnsiRenderer();
         terminal.Feed(renderer.Render(leftBorder, 0, 0, forceFull: true));
         terminal.Feed(renderer.Render(rightBorder, 0, 0));
-
         AssertScreenMatches(terminal, rightBorder);
     }
 
@@ -103,6 +102,38 @@ public class AnsiRendererTests
         var second = renderer.Render(grid, 3, 2);
 
         Assert.Equal("\x1b[?2026h\x1b[?2026l", second);
+    }
+
+    /** 浮层边缘切开宽字符时(覆盖其续格), 同行后面的侧栏分隔线在终端上不得右移。 */
+    [Fact]
+    public void Popup_Edge_Splitting_Wide_Char_Keeps_Divider_Column()
+    {
+        const int width = 40;
+        const int height = 8;
+        const int dividerX = 30;
+        var baseGrid = new CellGrid(width, height);
+        FillRows(baseGrid);
+
+        var popupGrid = baseGrid.Clone();
+        // 左缘落在 (10,2) 起宽字符对的续格上
+        DrawBox(popupGrid, 11, 1, 20, 3);
+
+        var terminal = new VirtualTerminal(width, height);
+        var renderer = new AnsiRenderer();
+        terminal.Feed(renderer.Render(baseGrid, 0, 0, forceFull: true));
+        terminal.Feed(renderer.Render(popupGrid, 0, 0));
+
+        AssertScreenMatches(terminal, popupGrid);
+        return;
+
+        static void FillRows(CellGrid grid)
+        {
+            for (var y = 0; y < grid.Height; y++)
+            {
+                WriteText(grid, 0, y, "你好世界中文测试文本");
+                grid[dividerX, y] = new Cell('│');
+            }
+        }
     }
 
     [Fact]

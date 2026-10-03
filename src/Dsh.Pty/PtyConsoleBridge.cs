@@ -175,7 +175,8 @@ internal sealed class PtyRawMode : IDisposable
 
     private static PtyRawMode? TryEnableWindows()
     {
-        if (Console.IsInputRedirected)
+        // 同 TerminalRawMode: 输入/输出其中一路不是本进程的终端时, 这个控制台不是我们拥有的, 不能接管。
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
             return null;
 
         try
@@ -210,6 +211,8 @@ internal sealed class PtyRawMode : IDisposable
 
     private static PtyRawMode? TryEnableUnix()
     {
+        if (Console.IsOutputRedirected)
+            return null;
         var size = OperatingSystem.IsMacOS() ? MacTermiosSize : LinuxTermiosSize;
         var buffer = Marshal.AllocHGlobal(size);
         try

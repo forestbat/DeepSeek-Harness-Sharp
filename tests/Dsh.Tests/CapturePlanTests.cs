@@ -67,6 +67,10 @@ public sealed class CapturePlanTests
         Assert.Equal(ConsoleKey.X, CaptureKeys.ToKeyInfo('\u0018').Key);
         Assert.Equal(ConsoleKey.P, CaptureKeys.ToKeyInfo('\u0010').Key);
         Assert.True((CaptureKeys.ToKeyInfo('\u0018').Modifiers & ConsoleModifiers.Control) != 0);
-        Assert.Equal(ConsoleKey.NoName, CaptureKeys.ToKeyInfo('a').Key);
+        // 字母键带真实 ConsoleKey(否则 Ctrl+X 之后的和弦 w 认不出), 同时保留字符输入。
+        Assert.Equal(ConsoleKey.A, CaptureKeys.ToKeyInfo('a').Key);
+        Assert.Equal(ConsoleKey.W, CaptureKeys.ToKeyInfo('w').Key);
+        Assert.Equal('w', CaptureKeys.ToKeyInfo('w').KeyChar);
+        Assert.Equal(ConsoleKey.NoName, CaptureKeys.ToKeyInfo('1').Key);
     }
 }

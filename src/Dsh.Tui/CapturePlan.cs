@@ -7,6 +7,9 @@ public enum CapturePlanAction
     Wait,
     Keys,
     Capture,
+    Wheel,
+    Resize,
+    Dump,
 }
 
 /** 捕获计划的一步: 执行前等待 DelayMs, 再按键/拍帧(DelayMs 之前的时间即"等状态稳定")。 */
@@ -19,6 +22,9 @@ public sealed record CapturePlanStep(CapturePlanAction Action, string Value, int
  *   wait 500
  *   keys /model\r
  *   capture 01-model-menu
+ *   wheel 70 10 3
+ *   resize 240 25
+ *   dump frame-1   # 把该帧的 CellGrid 原文写到 <plan 同目录>/frame-1.grid.txt
  * 转义: \e=Esc \r=Enter \t=Tab \b=Backspace \n=LF \\=\ 与 \0xNN 形式(如 \x03=Ctrl+C)。
  */
 public static class CapturePlan
@@ -46,6 +52,15 @@ public static class CapturePlan
                 case "keys" when argument.Length > 0:
                     steps.Add(new CapturePlanStep(CapturePlanAction.Keys, Unescape(argument, index + 1), 0));
                     break;
+                case "wheel" when TryParseWheel(argument, out var wheel):
+                    steps.Add(new CapturePlanStep(CapturePlanAction.Wheel, wheel, 0));
+                    break;
+                case "resize" when TryParseSize(argument, out var size):
+                    steps.Add(new CapturePlanStep(CapturePlanAction.Resize, size, 0));
+                    break;
+                case "dump" when argument.Length > 0:
+                    steps.Add(new CapturePlanStep(CapturePlanAction.Dump, argument.Trim(), 0));
+                    break;
                 case "capture" when argument.Length > 0:
                     steps.Add(new CapturePlanStep(CapturePlanAction.Capture, argument, CaptureSettleMs));
                     break;
@@ -55,6 +70,33 @@ public static class CapturePlan
         }
 
         return steps;
+    }
+
+    private static bool TryParseWheel(string argument, out string value)
+    {
+        value = "";
+        var parts = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3
+            || !int.TryParse(parts[0], out var x)
+            || !int.TryParse(parts[1], out var y)
+            || !int.TryParse(parts[2], out var delta))
+            return false;
+        value = $"{x} {y} {delta}";
+        return true;
+    }
+
+    private static bool TryParseSize(string argument, out string value)
+    {
+        value = "";
+        var parts = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out var columns)
+            || !int.TryParse(parts[1], out var rows)
+            || columns <= 0
+            || rows <= 0)
+            return false;
+        value = $"{columns} {rows}";
+        return true;
     }
 
     private static string Unescape(string text, int lineNumber)
@@ -134,6 +176,12 @@ public static class CaptureKeys
         '\u0003' => new ConsoleKeyInfo('\u0003', ConsoleKey.C, false, false, true),
         '\u0018' => new ConsoleKeyInfo('\u0018', ConsoleKey.X, false, false, true),
         '\u0010' => new ConsoleKeyInfo('\u0010', ConsoleKey.P, false, false, true),
+        // 字母键带上真实 ConsoleKey: 否则 Ctrl+X 之后的和弦(如 w)认不出(Key=NoName)。
+        >= 'a' and <= 'z' => Letter(character, char.ToUpperInvariant(character)),
+        >= 'A' and <= 'Z' => Letter(character, character),
         _ => new ConsoleKeyInfo(character, ConsoleKey.NoName, false, false, false),
     };
+
+    private static ConsoleKeyInfo Letter(char character, char upper)
+        => new(character, (ConsoleKey)((int)ConsoleKey.A + (upper - 'A')), false, false, false);
 }

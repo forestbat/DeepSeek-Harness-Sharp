@@ -27,6 +27,7 @@ public sealed class ChatPane : ITuiPane
     private int _stashedCursor;
     private IReadOnlyList<string> _mentionCandidates = [];
     private int _mentionIndex;
+    private int _mentionEnd;
     private int _mentionStart;
     private bool _mentionActive;
     /** Ctrl+P 唤起命令选单时暂存的提示词: 选中命令后接到命令后面。 */
@@ -59,6 +60,8 @@ public sealed class ChatPane : ITuiPane
 
     public int Id { get; }
 
+    public TuiPaneKind Kind => TuiPaneKind.Chat;
+
     public AgentLoopAgent Agent { get; private set; }
 
     public Session Session => Agent.Session;
@@ -75,6 +78,14 @@ public sealed class ChatPane : ITuiPane
     public TranscriptRenderer Renderer { get; private set; } = new();
 
     public long RenderedSeq { get; private set; }
+
+    /** 内容快照走渲染器的加锁拷贝, 可在任意线程调用。 */
+    public IReadOnlyList<string> SnapshotLines() => Renderer.SnapshotLines();
+
+    /** 命令/mention 浮层画在整帧最后一层(见 ChatWindow.DrawPaneOverlays), 避免被右栏/输入/状态覆盖。 */
+    public bool HasOverlay => CommandMenu?.IsActive == true || _mentionActive;
+
+    public void DrawOverlay(CellGrid grid, ConsoleRect rect) => DrawMenuOverlay(grid, rect);
 
     public string Input { get; set; } = "";
 
@@ -547,9 +558,6 @@ public sealed class ChatPane : ITuiPane
             ApplyTintHighlight(grid, rect, row, lineIndex);
             ApplySelectionHighlight(grid, rect, row, lineIndex);
         }
-
-        if (CommandMenu?.IsActive == true || _mentionActive)
-            DrawMenuOverlay(grid, rect);
     }
 
     private void DrawMenuOverlay(CellGrid grid, ConsoleRect rect)
@@ -561,7 +569,7 @@ public sealed class ChatPane : ITuiPane
             if (headers.Count > 0)
                 PopupList.Draw(grid, rect, CommandMenuTitle(), headers, CommandMenu.Candidates, CommandMenu.SelectedIndex);
             else if (CommandMenu.Candidates.Count > 0)
-                PopupList.Draw(grid, rect, CommandMenuTitle(), CommandMenu.Candidates, CommandMenu.SelectedIndex);
+                PopupList.Draw(grid, rect, CommandMenuTitle(), [], CommandMenu.Candidates, CommandMenu.SelectedIndex, CommandMenu.CandidateDescriptions);
             return;
         }
 
@@ -697,7 +705,7 @@ public sealed class ChatPane : ITuiPane
         ]);
         AddPanelSection(lines, "MCP", _window.McpLines());
         AddPanelSection(lines, "计划", ["使用 /plan 管理"]);
-        AddPanelSection(lines, "输出", ["暂无"]);
+        AddPanelSection(lines, "Git 变更", _window.GitLines());
         AddPanelSection(lines, "快捷键",
         [
             "Enter 发送 · / 命令 · @ 引用",
@@ -952,11 +960,12 @@ public sealed class ChatPane : ITuiPane
             // 回到普通输入(浮层关闭)时丢弃 Ctrl+P 暂存的提示词, 避免误接到别的命令后面。
             _promptText = "";
             DeleteConfirmSessionId = null;
-            if (TryGetMentionToken(text, out var start, out var token))
+            if (TryGetMentionToken(text, Cursor, out var start, out var end))
             {
                 _mentionActive = true;
                 _mentionStart = start;
-                _mentionCandidates = _window.MentionResolver.ResolveCandidates(token, CurrentCwd(), _window.CurrentSessions());
+                _mentionEnd = end;
+                _mentionCandidates = _window.MentionResolver.ResolveCandidates(text[(start + 1)..end], CurrentCwd(), _window.CurrentSessions());
                 _mentionIndex = Math.Clamp(_mentionIndex, 0, Math.Max(0, _mentionCandidates.Count - 1));
             }
             else
@@ -971,8 +980,11 @@ public sealed class ChatPane : ITuiPane
     private CommandMenuState CreateCommandMenu()
     {
         var commands = _window.Ctx.Get<CommandsService>(CommandsService.ServiceName)?.List(Agent) ?? [];
-        if (commands.All(command => !string.Equals(command.Name, "exit", StringComparison.OrdinalIgnoreCase)))
-            commands = [.. commands, new CommandDescriptor("exit", "退出 TUI")];
+        foreach (var local in _window.LocalCommandDescriptors)
+        {
+            if (commands.All(command => !string.Equals(command.Name, local.Name, StringComparison.OrdinalIgnoreCase)))
+                commands = [.. commands, local];
+        }
         var descriptors = CommandMenuCatalog.Enrich(commands);
         return new CommandMenuState(descriptors, CommandCandidates);
     }
@@ -1009,6 +1021,7 @@ public sealed class ChatPane : ITuiPane
                 "session" => _window.CurrentSessions().Select(session => session.Id).ToList(),
                 "skill" => _window.SkillCandidates,
                 "reasoning" => ReasoningEffortCandidates(),
+                "gpu" => GpuCatalog.SelectionLabels(),
                 _ => [],
                 },
             };
@@ -1104,6 +1117,15 @@ public sealed class ChatPane : ITuiPane
         }
 
         RefreshMenuStatus();
+    }
+
+    /** 滚轮滚动命令/mention 浮层候选(与 ↑/↓ 等价); 浮层未打开返回 false。delta>0=向上(与正文滚动同约定)。 */
+    internal bool ScrollOverlay(float delta)
+    {
+        if (!HasOverlay || delta == 0)
+            return false;
+        MoveMenuSelection(delta > 0 ? -1 : 1);
+        return true;
     }
 
     private void ConfirmCommandMenu()
@@ -1208,10 +1230,9 @@ public sealed class ChatPane : ITuiPane
 
     private void InsertMentionCandidate()
     {
-        var text = Input;
-        var candidate = _mentionCandidates[_mentionIndex];
-        Input = $"{text[.._mentionStart]}@{candidate}";
-        Cursor = Input.Length;
+        var (inserted, cursor) = ReplaceMention(Input, _mentionStart, _mentionEnd, _mentionCandidates[_mentionIndex]);
+        Cursor = cursor;
+        Input = inserted;
         CloseMentionMenu();
         RefreshMenuStatus();
     }
@@ -1302,23 +1323,35 @@ public sealed class ChatPane : ITuiPane
         Agent.Followup(MessageFactory.CreateUserText(expandedText));
     }
 
-    private static bool TryGetMentionToken(string text, out int start, out string token)
+    /** 仅当光标落在「@token」区间内部或紧邻末尾时才算活跃 mention, 否则(如 token 后又输入了提示词)视为普通文本。 */
+    internal static bool TryGetMentionToken(string text, int cursor, out int start, out int end)
     {
         var at = text.LastIndexOf('@');
         if (at < 0)
         {
             start = 0;
-            token = "";
+            end = 0;
             return false;
         }
 
-        var end = at + 1;
-        while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != '@')
-            end++;
+        var tokenEnd = at + 1;
+        while (tokenEnd < text.Length && !char.IsWhiteSpace(text[tokenEnd]) && text[tokenEnd] != '@')
+            tokenEnd++;
+        if (cursor <= at || cursor > tokenEnd)
+        {
+            start = 0;
+            end = 0;
+            return false;
+        }
+
         start = at;
-        token = text[(at + 1)..end];
+        end = tokenEnd;
         return true;
     }
+
+    /** 只替换 mention token 区间并补尾随空格, 保留 token 之后已输入的文本; 返回新文本与光标位置。 */
+    internal static (string Text, int Cursor) ReplaceMention(string text, int start, int end, string candidate)
+        => ($"{text[..start]}@{candidate} {text[end..]}", start + candidate.Length + 2);
 
     private void RecallHistory(int direction)
     {
@@ -1720,14 +1753,37 @@ public sealed class ChatPane : ITuiPane
             return;
         }
 
+        // 逻辑行里可能内嵌换行(session-query 等多行命令输出): 必须先按 \n/\r 切行,
+        // 否则 '\n' 会被当普通字符写进网格, 终端渲染时真的换行, 导致后续内容错位/互相插入。
+        var start = 0;
+        var wrote = false;
+        for (var index = 0; index <= line.Length; index++)
+        {
+            if (index < line.Length && line[index] is not ('\n' or '\r'))
+                continue;
+            if (index > start)
+            {
+                WrapSegment(line[start..index], width, output);
+                wrote = true;
+            }
+
+            start = index + 1;
+        }
+
+        if (!wrote)
+            output.Add("");
+    }
+
+    private static void WrapSegment(string segment, int width, List<string> output)
+    {
         var start = 0;
         var column = 0;
-        for (var index = 0; index < line.Length; index++)
+        for (var index = 0; index < segment.Length; index++)
         {
-            var characterWidth = TerminalTextWidth.Of(line[index]);
+            var characterWidth = TerminalTextWidth.Of(segment[index]);
             if (column + characterWidth > width)
             {
-                output.Add(line[start..index]);
+                output.Add(segment[start..index]);
                 start = index;
                 column = 0;
             }
@@ -1735,7 +1791,7 @@ public sealed class ChatPane : ITuiPane
             column += characterWidth;
         }
 
-        output.Add(line[start..]);
+        output.Add(segment[start..]);
     }
 
     public void Dispose()

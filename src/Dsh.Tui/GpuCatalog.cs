@@ -48,6 +48,13 @@ public static class GpuCatalog
     /** 本机可用显卡: Windows 读注册表, Linux 读 sysfs; 拿不到就返回空列表, 绝不影响启动。 */
     public static IReadOnlyList<GpuAdapterInfo> ListAdapters()
     {
+        // 枚举要读注册表 + 扫 Enum\PCI + 探 UMA(单次可达数秒), 进程内适配器不会变, 缓存一次。
+        lock (AdapterCacheLock)
+            return _adapterCache ??= LoadAdapters();
+    }
+
+    private static IReadOnlyList<GpuAdapterInfo> LoadAdapters()
+    {
         try
         {
             if (OperatingSystem.IsWindows())
@@ -61,6 +68,9 @@ public static class GpuCatalog
         }
         return [];
     }
+
+    private static readonly object AdapterCacheLock = new();
+    private static IReadOnlyList<GpuAdapterInfo>? _adapterCache;
 
     /** 独显/核显分辨: 以显存架构为准——UMA(与 CPU 共享内存)为核显, 非 UMA(自带显存)为独显; 架构未知时 NVIDIA 桌面卡判独显, 其余保守判核显。 */
     public static bool IsDiscrete(GpuAdapterInfo adapter)
@@ -82,6 +92,54 @@ public static class GpuCatalog
                 return index;
         }
         return 0;
+    }
+
+    /** 选卡候选与 /gpu 展示共用同一组可读文本: 第 0 项是 auto, 其后每张卡 "名字 (kind, detail)"。 */
+    public static IReadOnlyList<string> SelectionLabels()
+    {
+        var labels = new List<string> { $"{AutoAdapter} (system default)" };
+        foreach (var adapter in ListAdapters())
+        {
+            var kind = IsDiscrete(adapter) ? "discrete" : "integrated";
+            labels.Add($"{adapter.Name} ({kind}, {adapter.Detail})");
+        }
+        return labels;
+    }
+
+    public const string WindowsAppHostName = "DeepSeek-Harness-Sharp";
+    public const string WindowsGpuPreferencesKey = @"Software\Microsoft\DirectX\UserGpuPreferences";
+
+    /** 进程级 GPU 偏好的数据值: 独显=2(高性能)/核显=1(节能)。 */
+    public static string WindowsPreferenceData(bool discrete) => $"GpuPreference={(discrete ? 2 : 1)};";
+
+    /**
+     * Windows 只支持进程级 GPU 偏好(WGL 按它落卡): 写 HKCU 下 UserGpuPreferences, 值名=进程映像全路径。
+     * auto 删除该项; 仅对产品 apphost 生效, 拒绝对 dotnet.exe 写入(那会波及所有 .NET 应用)。
+     */
+    public static string ApplyWindowsPreference(string selection)
+    {
+        if (!OperatingSystem.IsWindows())
+            return "";
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+            return "无法确定当前进程映像路径, 未写入 Windows 选卡偏好";
+        var name = Path.GetFileNameWithoutExtension(processPath);
+        if (name.Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            return "当前以 dotnet.exe 运行, 拒绝写入进程级 GPU 偏好(会影响所有 .NET 应用); 请用 apphost exe 启动后再选卡";
+        if (!name.Equals(WindowsAppHostName, StringComparison.OrdinalIgnoreCase))
+            return "";
+        using var key = Registry.CurrentUser.CreateSubKey(WindowsGpuPreferencesKey, writable: true);
+        if (key is null)
+            return "无法打开 Windows GPU 偏好注册表键";
+        if (selection == AutoAdapter)
+        {
+            key.DeleteValue(processPath, throwOnMissingValue: false);
+            return "已清除 Windows 进程级 GPU 偏好(auto)";
+        }
+        var adapter = ListAdapters().FirstOrDefault(candidate => SelectionIdOf(candidate) == selection);
+        var data = WindowsPreferenceData(adapter is not null && IsDiscrete(adapter));
+        key.SetValue(processPath, data, RegistryValueKind.String);
+        return $"已写 Windows 进程级 GPU 偏好 {data} — 重启生效";
     }
 
     /** /sys/class/drm/cardN/device/uevent 的解析: 只关心 DRIVER / PCI_ID / PCI_SLOT_NAME。 */

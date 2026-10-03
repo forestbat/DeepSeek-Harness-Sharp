@@ -136,6 +136,12 @@ internal sealed class VirtualTerminal
             }
             if (_wideRightHalf[CursorX, CursorY] && CursorX > 0)
                 Screen[CursorX - 1, CursorY] = ' ';
+            // 覆盖宽字符左半时右半一并失效(真实终端行为), 否则残留的右半标记会把下一次写入误判为覆盖右半
+            if (CursorX + 1 < Width && _wideRightHalf[CursorX + 1, CursorY])
+            {
+                Screen[CursorX + 1, CursorY] = ' ';
+                _wideRightHalf[CursorX + 1, CursorY] = false;
+            }
             Screen[CursorX, CursorY] = character;
             _wideRightHalf[CursorX, CursorY] = false;
             var advance = TerminalTextWidth.IsWide(character) ? 2 : 1;

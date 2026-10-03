@@ -68,6 +68,21 @@ public class GpuRenderCoreRenderTests : IDisposable
     }
 
     [Fact]
+    public void Renders_Reverse_On_Default_Colors_As_Visible_Block()
+    {
+        var grid = new CellGrid(4, 2);
+        grid[0, 0] = new Cell(' ', AnsiColor.Default, AnsiColor.Default, CellStyle.Reverse);
+
+        RenderFull(grid);
+
+        var block = ReadCellPixel(0, 0, 0.5f, 0.5f);
+        Assert.True(block.R > 150 && block.G > 150 && block.B > 150, $"反显默认色格应显示为默认前景色块,实际 R={block.R} G={block.G} B={block.B}");
+
+        var plain = ReadCellPixel(1, 0, 0.5f, 0.5f);
+        Assert.True(plain.R < 60 && plain.G < 60 && plain.B < 60, $"普通默认空格应保持默认背景,实际 R={plain.R} G={plain.G} B={plain.B}");
+    }
+
+    [Fact]
     public void Wide_Character_Map_Entry_Has_Wide_Bit()
     {
         var grid = new CellGrid(1, 1);

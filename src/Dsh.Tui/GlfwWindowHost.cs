@@ -51,6 +51,9 @@ public sealed class GlfwWindowHost : IGlSurfaceHostRunner
 
     public void RequestClose() => _window.Close();
 
+    public void Resize(int pixelWidth, int pixelHeight)
+        => _window.ClientSize = new Vector2i(Math.Max(1, pixelWidth), Math.Max(1, pixelHeight));
+
     public string? ReadClipboard() => _window.ClipboardString;
 
     public void Dispose()

@@ -23,16 +23,14 @@ public static class PopupList
         string title,
         IReadOnlyList<string> headerLines,
         IReadOnlyList<string> items,
-        int selectedIndex)
+        int selectedIndex,
+        IReadOnlyList<string>? descriptions = null)
     {
         if (area.Width <= 0 || area.Height <= 0)
             return;
 
-        var contentWidth = items.Count == 0 ? TerminalTextWidth.Of(title) : items.Max(TerminalTextWidth.Of);
-        contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(title));
-        foreach (var header in headerLines)
-            contentWidth = Math.Max(contentWidth, TerminalTextWidth.Of(header));
-        var width = Math.Min(area.Width, contentWidth + 4);
+        // 铺满 area 宽度: 不留两侧空白, 也不让底层正文从旁边露出。
+        var width = area.Width;
         var maxHeight = Math.Min(MaxPopupHeight, area.Height);
         var headerCount = Math.Min(headerLines.Count, Math.Max(0, maxHeight - 3));
         var itemRows = items.Count == 0
@@ -42,11 +40,12 @@ public static class PopupList
         if (width < 4 || height < 3)
             return;
 
-        var x = area.X + Math.Max(0, (area.Width - width) / 2);
+        var x = area.X;
         var y = area.Bottom - height;
         if (y < area.Y)
             y = area.Y;
 
+        // 先按整幅清底, 再画边框与内容: 浮层覆盖的行既不留空白, 也不让底层正文露出。
         Fill(grid, x, y, width, height);
         DrawBorder(grid, x, y, width, height);
         DrawText(grid, x + 1, y, Truncate(title, width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
@@ -73,18 +72,40 @@ public static class PopupList
         if (visibleCount <= 0)
             return;
         var first = Math.Clamp(selectedIndex - visibleCount + 1, 0, Math.Max(0, items.Count - visibleCount));
+        var nameColumn = DescriptionColumn(items, width);
         for (var row = 0; row < visibleCount; row++)
         {
             var itemIndex = first + row;
             if (itemIndex >= items.Count)
                 break;
             var selected = itemIndex == selectedIndex;
-            var text = $"{(selected ? "› " : "  ")}{Truncate(items[itemIndex], width - 4)}";
+            var marker = selected ? "› " : "  ";
+            var text = descriptions is { Count: > 0 }
+                ? $"{marker}{Pad(Truncate(items[itemIndex], Math.Max(1, nameColumn - 2)), nameColumn - 2)}{Truncate(DescriptionAt(descriptions, itemIndex), width - nameColumn - 2)}"
+                : $"{marker}{Truncate(items[itemIndex], width - 4)}";
             DrawText(grid, x + 1, candidateTop + row, text,
                 selected ? AnsiColor.Black : AnsiColor.Default,
                 selected ? AnsiColor.BrightCyan : AnsiColor.Default,
                 selected ? CellStyle.Bold : CellStyle.None);
         }
+    }
+
+    /** 名字列宽: 只占浮层左半, 给右侧解说词留出空间。 */
+    private static int DescriptionColumn(IReadOnlyList<string> items, int width)
+    {
+        var longest = 0;
+        foreach (var item in items)
+            longest = Math.Max(longest, TerminalTextWidth.Of(item));
+        return Math.Clamp(longest + 2, 10, Math.Max(10, width / 2));
+    }
+
+    private static string DescriptionAt(IReadOnlyList<string> descriptions, int index)
+        => index < descriptions.Count ? descriptions[index] : "";
+
+    private static string Pad(string text, int width)
+    {
+        var pad = width - TerminalTextWidth.Of(text);
+        return pad > 0 ? text + new string(' ', pad) : text;
     }
 
     private static void Fill(CellGrid grid, int x, int y, int width, int height)

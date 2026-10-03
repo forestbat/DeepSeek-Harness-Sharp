@@ -266,19 +266,16 @@ public sealed class GpuRenderCore : IDisposable
                 int fg = int((packedCell >> 16) & 0x1Fu);
                 int bg = int((packedCell >> 21) & 0x1Fu);
                 int style = int((packedCell >> 26) & 0x7u);
-                if ((style & 4) != 0)
-                {
-                    int swap = fg;
-                    fg = bg;
-                    bg = swap;
-                }
+                bool reversed = (style & 4) != 0;
                 float span = 1.0;
                 vec2 uv0 = vec2(0.0);
                 vec2 uv1 = vec2(0.0);
                 vec4 color;
                 if (uPass == 0)
                 {
-                    color = bg == 0 ? uDefaultBackground : uPalette[bg];
+                    color = reversed
+                        ? (fg == 0 ? uDefaultForeground : uPalette[fg])
+                        : (bg == 0 ? uDefaultBackground : uPalette[bg]);
                 }
                 else
                 {
@@ -293,7 +290,9 @@ public sealed class GpuRenderCore : IDisposable
                     int slot = (mapped & 0x7FFFFFFF) - 1;
                     span = mapped < 0 ? 2.0 : 1.0;
                     int slotSpan = mapped < 0 ? 2 : 1;
-                    color = fg == 0 ? uDefaultForeground : uPalette[fg];
+                    color = reversed
+                        ? (bg == 0 ? uDefaultBackground : uPalette[bg])
+                        : (fg == 0 ? uDefaultForeground : uPalette[fg]);
                     if ((style & 2) != 0)
                         color = vec4(color.rgb * 0.5, color.a);
                     int slotCol = slot - (slot / uAtlasCells.x) * uAtlasCells.x;

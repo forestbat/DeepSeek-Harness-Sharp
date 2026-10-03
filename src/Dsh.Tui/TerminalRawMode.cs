@@ -148,7 +148,9 @@ public sealed class TerminalRawMode : IDisposable
      */
     private static TerminalRawMode? TryEnableWindows(bool enableMouse)
     {
-        if (Console.IsInputRedirected)
+        // 只有本进程同时拥有输入与输出终端时才接管: 否则(stdout 被重定向到管道)我们并不"拥有"这个控制台,
+        // 对它做 SetConsoleMode/鼠标上报会落到别的进程(宿主)的控制台上。
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
             return null;
 
         try
@@ -193,6 +195,8 @@ public sealed class TerminalRawMode : IDisposable
 
     private static TerminalRawMode? TryEnableUnix(bool enableMouse)
     {
+        if (Console.IsOutputRedirected)
+            return null;
         var size = OperatingSystem.IsMacOS() ? MacTermiosSize : LinuxTermiosSize;
         var buffer = Marshal.AllocHGlobal(size);
         try

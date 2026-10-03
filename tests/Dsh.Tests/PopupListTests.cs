@@ -13,11 +13,11 @@ public class PopupListTests
 
         PopupList.Draw(grid, area, "Pick", items, 1);
 
-        Assert.Equal('┌', grid[5, 5].Character);
-        Assert.Equal('┐', grid[13, 5].Character);
-        Assert.Equal('│', grid[13, 7].Character);
-        Assert.Equal(CellStyle.Bold, grid[7, 7].Style & CellStyle.Bold);
-        Assert.Equal('›', grid[6, 7].Character);
+        Assert.Equal('┌', grid[0, 5].Character);
+        Assert.Equal('┐', grid[19, 5].Character);
+        Assert.Equal('│', grid[19, 7].Character);
+        Assert.Equal(CellStyle.Bold, grid[1, 7].Style & CellStyle.Bold);
+        Assert.Equal('›', grid[1, 7].Character);
     }
 
     [Fact]
@@ -29,26 +29,30 @@ public class PopupListTests
 
         PopupList.Draw(grid, area, "Pick", items, 0);
 
-        Assert.Equal('┌', grid[9, 0].Character);
-        Assert.Equal('└', grid[9, 3].Character);
+        Assert.Equal('┌', grid[0, 0].Character);
+        Assert.Equal('└', grid[0, 3].Character);
     }
 
+    /** 浮层铺满可用宽度并整幅清底: 底层文字(含宽字符)不能从浮层旁边或内部露出。 */
     [Fact]
-    public void Draw_Fills_Interior_Blanking_Underlying_Wide_Text()
+    public void Draw_Fills_Full_Width_Blanking_Underlying_Wide_Text()
     {
         var grid = new CellGrid(20, 10);
         var area = new ConsoleRect(0, 0, 20, 10);
-        for (var x = 0; x < 20; x++)
+        for (var x = 0; x < 20; x += 2)
         {
             grid[x, 8] = new Cell('深');
+            grid[x + 1, 8] = new Cell('\0');
             grid[x, 9] = new Cell('度');
+            grid[x + 1, 9] = new Cell('\0');
         }
 
         PopupList.Draw(grid, area, "Pick", ["ab"], 0);
 
-        Assert.Equal(' ', grid[11, 8].Character);
-        Assert.Equal(AnsiColor.Default, grid[11, 8].Background);
-        Assert.Equal('深', grid[0, 8].Character);
-        Assert.Equal('度', grid[19, 9].Character);
+        Assert.Equal('›', grid[1, 8].Character);
+        Assert.Equal(' ', grid[5, 8].Character);
+        Assert.Equal(' ', grid[10, 8].Character);
+        Assert.Equal('│', grid[0, 8].Character);
+        Assert.Equal('│', grid[19, 8].Character);
     }
 }

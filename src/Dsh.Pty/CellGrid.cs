@@ -83,7 +83,33 @@ public sealed class CellGrid
     public Cell this[int x, int y]
     {
         get => _cells[(y * Width) + x];
-        set => _cells[(y * Width) + x] = value;
+        set
+        {
+            var index = (y * Width) + x;
+            var previous = _cells[index];
+            _cells[index] = value;
+            RepairWideCharSplit(x, y, previous, value);
+        }
+    }
+
+    /** 覆盖写不能留下悬空半宽字符: 占位格被覆盖则清左侧宽字符本体, 宽字符本体被覆盖则清右侧占位格。 */
+    private void RepairWideCharSplit(int x, int y, Cell previous, Cell value)
+    {
+        if (previous.Character == '\0' && value.Character != '\0' && x > 0)
+        {
+            var leftIndex = (y * Width) + x - 1;
+            var left = _cells[leftIndex];
+            if (TerminalTextWidth.Of(left.Character) == 2)
+                _cells[leftIndex] = left with { Character = ' ' };
+        }
+        if (TerminalTextWidth.Of(previous.Character) == 2
+            && TerminalTextWidth.Of(value.Character) != 2
+            && x + 1 < Width
+            && _cells[(y * Width) + x + 1].Character == '\0')
+        {
+            var rightIndex = (y * Width) + x + 1;
+            _cells[rightIndex] = _cells[rightIndex] with { Character = ' ' };
+        }
     }
 
     public void Clear(Cell cell = default)

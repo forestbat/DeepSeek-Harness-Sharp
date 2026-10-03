@@ -315,6 +315,27 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
                 foreach (var character in step.Value)
                     _chat.HandleKey(CaptureKeys.ToKeyInfo(character));
                 break;
+            case CapturePlanAction.Wheel:
+                {
+                    var parts = step.Value.Split(' ');
+                    var wheelX = int.Parse(parts[0]);
+                    var wheelY = int.Parse(parts[1]);
+                    if (wheelX < 0)
+                        wheelX += _grid.Width;
+                    if (wheelY < 0)
+                        wheelY += _grid.Height;
+                    _chat.HandleMouseWheel(int.Parse(parts[2]), wheelX, wheelY, _layout);
+                    break;
+                }
+            case CapturePlanAction.Resize:
+                {
+                    var parts = step.Value.Split(' ');
+                    _host.Resize(int.Parse(parts[0]) * _atlas.GlyphWidth, int.Parse(parts[1]) * _atlas.GlyphHeight);
+                    break;
+                }
+            case CapturePlanAction.Dump:
+                DumpGrid(step.Value);
+                break;
             case CapturePlanAction.Capture:
                 SaveScreenshot(CaptureFramePath(step.Value));
                 break;
@@ -330,6 +351,26 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         var directory = Path.GetDirectoryName(Path.GetFullPath(_capturePlanPath!)) ?? ".";
         var file = name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? name : $"{name}.png";
         return Path.Combine(directory, file);
+    }
+
+    /** 把当帧 CellGrid 原文落盘(取证: 判定问题在网格层还是渲染/宿主层)。 */
+    private void DumpGrid(string name)
+    {
+        var lines = new List<string>(_grid.Height);
+        for (var y = 0; y < _grid.Height; y++)
+        {
+            var chars = new char[_grid.Width];
+            for (var x = 0; x < _grid.Width; x++)
+            {
+                var character = _grid[x, y].Character;
+                chars[x] = character == '\0' ? ' ' : character;
+            }
+
+            lines.Add($"{y:D3}|{new string(chars)}|");
+        }
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(_capturePlanPath!)) ?? ".";
+        File.WriteAllLines(Path.Combine(directory, $"{name}.grid.txt"), lines);
     }
 
     private void SaveScreenshot(string path)

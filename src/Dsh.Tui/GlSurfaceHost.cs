@@ -51,4 +51,9 @@ public interface IGlSurfaceHostRunner : IGlSurfaceHost
 
     /** 读取宿主剪贴板(窗口形态有); 裸 TTY 无剪贴板返回 null。 */
     string? ReadClipboard();
+
+    /** 调整像素尺寸(窗口形态用于复现 resize; 其他宿主默认忽略)。 */
+    void Resize(int pixelWidth, int pixelHeight)
+    {
+    }
 }

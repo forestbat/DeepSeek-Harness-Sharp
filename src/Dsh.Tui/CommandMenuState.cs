@@ -46,6 +46,14 @@ public sealed class CommandMenuState
         _ => [],
     };
 
+    /** 与 Candidates 对齐的候选说明(浮层右侧解说词): 根/子命令阶段取命令描述, 参数阶段为空。 */
+    public IReadOnlyList<string> CandidateDescriptions => Stage switch
+    {
+        MenuStage.Root => [.. _rootFiltered.Select(command => command.Description)],
+        MenuStage.Subcommand => [.. _subFiltered.Select(command => command.Description)],
+        _ => [],
+    };
+
     public int SelectedIndex { get; private set; }
 
     public string Prefix => _prefix;

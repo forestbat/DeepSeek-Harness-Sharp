@@ -11,6 +11,22 @@ namespace Dsh.Tests;
 public class GpuCatalogSelectionTests
 {
     [Fact]
+    public void SelectionLabels_Start_With_Auto_And_Cover_Every_Adapter()
+    {
+        var labels = GpuCatalog.SelectionLabels();
+
+        Assert.Contains("auto", labels[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(GpuCatalog.ListAdapters().Count + 1, labels.Count);
+    }
+
+    [Fact]
+    public void WindowsPreferenceData_Maps_Discrete_To_HighPerformance()
+    {
+        Assert.Equal("GpuPreference=2;", GpuCatalog.WindowsPreferenceData(discrete: true));
+        Assert.Equal("GpuPreference=1;", GpuCatalog.WindowsPreferenceData(discrete: false));
+    }
+
+    [Fact]
     public void Resolve_Returns_Null_For_Auto()
     {
         if (!OperatingSystem.IsLinux())
