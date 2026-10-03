@@ -9,8 +9,11 @@ public sealed partial class SessionNodeViewModel : ObservableObject
 {
     public required SessionId SessionId { get; init; }
 
-    /** 工作区名(由 cwd 归并), 用作树的分组标题。 */
+    /** 工作区显示名(由 cwd 归并的末段名), 用于侧栏分组标题。 */
     public required string Workspace { get; init; }
+
+    /** 分组键: 归一化后的完整工作区路径(空目录用占位名)。 */
+    public required string WorkspacePath { get; init; }
 
     public required string Cwd { get; init; }
 

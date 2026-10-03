@@ -58,6 +58,9 @@ public sealed record GuiSettingsSnapshot
 
     public string WorkspaceView { get; init; } = GuiSettings.ViewSolution;
 
+    /** 新会话的默认工作区(绝对路径); null 表示跟随启动目录。已有会话的 cwd 不变。 */
+    public string? DefaultWorkspace { get; init; }
+
     public string SortSessions { get; init; } = GuiSettings.SortUpdated;
 
     public bool ShowOnlyWithSessions { get; init; }
@@ -98,6 +101,7 @@ public sealed record GuiSettingsSnapshot
             Language = Text(parameters, "language") ?? "zh-CN",
             FontSize = Clamp(Number(parameters, "fontSize") ?? 13.5, GuiSettings.MinFontSize, GuiSettings.MaxFontSize),
             WorkspaceView = Text(parameters, "workspaceView") ?? GuiSettings.ViewSolution,
+            DefaultWorkspace = Text(parameters, "defaultWorkspace"),
             SortSessions = Text(parameters, "sortSessions") ?? GuiSettings.SortUpdated,
             ShowOnlyWithSessions = Flag(parameters, "showOnlyWithSessions") ?? false,
             TraceFilter = Text(parameters, "traceFilter") ?? GuiSettings.TraceAll,
@@ -122,6 +126,7 @@ public sealed record GuiSettingsSnapshot
         ["language"] = Language,
         ["fontSize"] = FontSize,
         ["workspaceView"] = WorkspaceView,
+        ["defaultWorkspace"] = DefaultWorkspace,
         ["sortSessions"] = SortSessions,
         ["showOnlyWithSessions"] = ShowOnlyWithSessions,
         ["traceFilter"] = TraceFilter,

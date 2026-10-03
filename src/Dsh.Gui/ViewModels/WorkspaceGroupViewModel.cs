@@ -9,6 +9,9 @@ public sealed partial class WorkspaceGroupViewModel : ObservableObject
 {
     public required string Name { get; init; }
 
+    /** 分组的完整工作区路径(与 cwd 一致), 与最近工作区下拉共用同一键。 */
+    public required string Path { get; init; }
+
     public ObservableCollection<SessionNodeViewModel> Sessions { get; } = [];
 
     [ObservableProperty]

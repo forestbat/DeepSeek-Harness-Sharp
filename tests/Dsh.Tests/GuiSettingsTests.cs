@@ -108,4 +108,17 @@ public sealed class GuiSettingsTests : IDisposable
 
         Assert.Equal(GuiSettings.MaxFontSize, settings.Load().FontSize);
     }
+
+    [Fact]
+    public void DefaultWorkspace_RoundTrips_And_Clears()
+    {
+        var settings = new GuiSettings(new HarnessHome(_home));
+        Assert.Null(settings.Load().DefaultWorkspace);
+
+        settings.Save(settings.Load() with { DefaultWorkspace = _home });
+        Assert.Equal(_home, settings.Load().DefaultWorkspace);
+
+        settings.Save(settings.Load() with { DefaultWorkspace = null });
+        Assert.Null(settings.Load().DefaultWorkspace);
+    }
 }

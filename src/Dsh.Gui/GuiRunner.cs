@@ -21,8 +21,10 @@ public static class GuiRunner
             return 0;
 
         var settings = new GuiSettings(app.Home).Load();
+        // 显式设置的工作区盖过进程启动目录: 双击桌面快捷方式启动时 cwd 会落在安装目录/System32
+        var workspace = settings.DefaultWorkspace ?? cwd;
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
-        var agent = await OpenAgentAsync(app, agents, cwd, resumeSessionId);
+        var agent = await OpenAgentAsync(app, agents, workspace, resumeSessionId);
 
         var (exitCode, lastSession) = await RunAvaloniaAsync(app, agent, settings, instance);
         var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;

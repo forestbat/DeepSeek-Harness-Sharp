@@ -134,6 +134,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /** 输入胶囊「引用会话」列表。 */
     public ObservableCollection<SessionNodeViewModel> RecentSessions { get; } = [];
 
+    public ObservableCollection<WorkspaceChoiceViewModel> RecentWorkspaces { get; } = [];
+
     /** 模型浮层列表: 按 ModelSearchText 子串过滤 Preferences.Models, IsCurrent 跟随当前模型标签。 */
     public ObservableCollection<ModelListItem> FilteredModels { get; } = [];
 
@@ -234,6 +236,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _marketStatus = "";
+
+    /** 当前会话的工作区完整路径(侧栏"工作区"行显示)。 */
+    [ObservableProperty]
+    private string _currentWorkspace = "";
 
     public bool IsSolutionView => WorkspaceView == GuiSettings.ViewSolution;
 
@@ -382,6 +388,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var node in Sort(nodes).Take(20))
             RecentSessions.Add(node);
         SelectedSession = FindSession(_agent.Id);
+        RebuildRecentWorkspaces();
+        UpdateCurrentWorkspace();
+    }
+
+    /** 最近工作区 = 已有会话的 distinct 完整路径, 按最近创建倒序; 选中只改默认目录。 */
+    private void RebuildRecentWorkspaces()
+    {
+        RecentWorkspaces.Clear();
+        var paths = _catalog.Load()
+            .Where(node => node.WorkspacePath != SessionCatalog.UnspecifiedWorkspace)
+            .GroupBy(node => node.WorkspacePath, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Max(node => node.CreatedAt))
+            .Select(group => group.Key);
+        foreach (var path in paths)
+        {
+            var captured = path;
+            RecentWorkspaces.Add(new WorkspaceChoiceViewModel(
+                SessionCatalog.WorkspaceDisplayName(path),
+                path,
+                new RelayCommand(() => SetDefaultWorkspace(captured))));
+        }
+    }
+
+    /** 只设新会话的默认目录, 不切换当前会话。 */
+    private void SetDefaultWorkspace(string path)
+    {
+        Gui.Save(Gui.Load() with { DefaultWorkspace = path });
+        StatusText = $"新会话默认工作区已设为 {path}";
+        RefreshSessions();
+    }
+
+    private void UpdateCurrentWorkspace()
+        => CurrentWorkspace = SessionCatalog.WorkspacePath(_agent.Session.Header.Cwd);
+
+    [RelayCommand]
+    private async Task PickWorkspaceAsync()
+    {
+        if (FilePicker is null)
+            return;
+        var picked = await FilePicker(false, true);
+        if (picked.Count > 0)
+            SetDefaultWorkspace(picked[0]);
     }
 
     [RelayCommand]
@@ -813,11 +861,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private IReadOnlyList<WorkspaceGroupViewModel> GroupByWorkspace(IReadOnlyList<SessionNodeViewModel> nodes)
         => [.. nodes
-            .GroupBy(node => node.Workspace, StringComparer.Ordinal)
+            .GroupBy(node => node.WorkspacePath, StringComparer.Ordinal)
             .OrderByDescending(group => group.Max(node => node.CreatedAt))
             .Select(group =>
             {
-                var workspace = new WorkspaceGroupViewModel { Name = group.Key };
+                var workspace = new WorkspaceGroupViewModel
+                {
+                    Name = SessionCatalog.WorkspaceDisplayName(group.Key),
+                    Path = group.Key,
+                };
                 foreach (var node in Sort(group))
                     workspace.Sessions.Add(node);
                 return workspace;
@@ -1018,9 +1070,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task NewSessionAsync()
     {
+        // 显式设置的工作区优先于当前会话目录: 设置项的意义就是让用户摆脱"会话永远落在启动目录"
+        var cwd = Gui.Load().DefaultWorkspace
+            ?? _agent.Session.Header.Cwd
+            ?? Environment.CurrentDirectory;
         var handle = await _agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid()}"),
-            _agent.Session.Header.Cwd ?? Environment.CurrentDirectory,
+            cwd,
             CurrentOptions()));
         var created = (AgentLoopAgent)handle.Agent;
         await created.WhenIdle();
@@ -1053,6 +1109,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ShowAgent(AgentLoopAgent agent)
     {
         _agent = agent;
+        UpdateCurrentWorkspace();
         _renderedSeq = 0;
         _openAssistant = null;
         _openReasoning = null;

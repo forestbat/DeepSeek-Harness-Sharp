@@ -31,13 +31,43 @@
         </StackPanel>
       </Button>
 
-      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="6,4"
-              Margin="0,4,0,0" Command="{Binding ShowChatCommand}" ToolTip.Tip="回到会话">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Folder}" />
-          <TextBlock Text="工作区" Classes="Secondary" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
+      <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+        <Button Grid.Column="0" Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="6,4"
+                Command="{Binding ShowChatCommand}" ToolTip.Tip="{Binding CurrentWorkspace}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Folder}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding CurrentWorkspace}" Classes="Secondary" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+        </Button>
+        <Button Grid.Column="1" Classes="Icon" Width="26" Height="26" ToolTip.Tip="切换新会话默认工作区" VerticalAlignment="Center">
+          <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
+          <Button.Flyout>
+            <Flyout Placement="BottomEdgeAlignedLeft">
+              <StackPanel Width="360" Spacing="4">
+                <TextBlock Text="最近工作区（点击设为新会话默认目录）" Classes="Secondary" Margin="4,0,0,2" />
+                <ItemsControl ItemsSource="{Binding RecentWorkspaces}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WorkspaceChoiceViewModel">
+                      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4"
+                              Command="{Binding SelectCommand}">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Name}" />
+                          <TextBlock Text="{Binding Path}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
+                                     TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Separator Margin="4,4" />
+                <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4"
+                        Content="打开新工作区…" Command="{Binding PickWorkspaceCommand}" />
+              </StackPanel>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+      </Grid>
 
       <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,2,0,0">
         <Button Classes="Chip" HorizontalAlignment="Left" ToolTip.Tip="工作区视图">
