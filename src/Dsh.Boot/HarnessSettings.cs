@@ -27,6 +27,9 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "mcp")]
     public Dictionary<string, McpServerSettings> McpServers { get; set; } = [];
 
+    [YamlMember(Alias = "a2a")]
+    public A2aSettings? A2a { get; set; }
+
     [YamlMember(Alias = "compaction")]
     public CompactionSettings? Compaction { get; set; }
 
@@ -217,6 +220,36 @@ public sealed class LoggingSettings
         FileMaxBytes = FileMaxMb * BytesPerMegabyte,
         KeepDays = KeepDays,
     };
+}
+
+public sealed class A2aSettings
+{
+    [YamlMember(Alias = "enabled")]
+    public bool Enabled { get; set; }
+
+    [YamlMember(Alias = "host")]
+    public string? Host { get; set; }
+
+    [YamlMember(Alias = "port")]
+    public int Port { get; set; }
+
+    [YamlMember(Alias = "publicUrl")]
+    public string? PublicUrl { get; set; }
+
+    [YamlMember(Alias = "authToken")]
+    public string? AuthToken { get; set; }
+
+    [YamlMember(Alias = "skill_id")]
+    public string? SkillId { get; set; }
+
+    [YamlMember(Alias = "skill_name")]
+    public string? SkillName { get; set; }
+
+    [YamlMember(Alias = "skill_description")]
+    public string? SkillDescription { get; set; }
+
+    [YamlMember(Alias = "skill_tags")]
+    public List<string> SkillTags { get; set; } = [];
 }
 
 public sealed class McpServerSettings

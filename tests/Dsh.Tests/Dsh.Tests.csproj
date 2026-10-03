@@ -61,6 +61,7 @@
     <ProjectReference Include="..\..\src\Dsh.Web\Dsh.Web.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Sdk\Dsh.Sdk.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Acp\Dsh.Acp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.A2A\Dsh.A2A.csproj" />
     <ProjectReference Include="..\..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Lsp\Dsh.Lsp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Telemetry\Dsh.Telemetry.csproj" />

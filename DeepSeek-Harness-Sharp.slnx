@@ -8,6 +8,7 @@
     <File Path="compose.yaml" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Dsh.A2A/Dsh.A2A.csproj" />
     <Project Path="src/Dsh.Account/Dsh.Account.csproj" />
     <Project Path="src/Dsh.Acp/Dsh.Acp.csproj" />
     <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
