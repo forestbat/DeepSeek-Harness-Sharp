@@ -94,6 +94,9 @@ public sealed class IdeHistoryTests
             {
                 new("content", "/home/dev/project/app.py", (int)contentId),
                 new("delete", "/home/dev/project/old.py", null),
+                new("delete-tree", "/home/dev/project/removed-dir", null),
+                new("label", "里程碑", null),
+                new("system-label", "自动保存", null),
             };
             var payload = SyntheticChangeSet.Build(7, 1_780_000_000_000, "外部更改", changes);
             var data = new byte[0x20 + payload.Length];
@@ -113,17 +116,19 @@ public sealed class IdeHistoryTests
             var provider = new JetBrainsLocalHistoryProvider(directory);
             var store = Assert.Single(provider.Discover());
             var entries = provider.List(store, null, 10);
-            Assert.Equal(2, entries.Count);
+            Assert.Equal(3, entries.Count);
             Assert.Equal(0, provider.SkippedRecords);
+            Assert.DoesNotContain(entries, entry => entry.Kind is "label" or "system-label");
             Assert.Contains(entries, entry => entry.Kind == "content" && entry.Path == "/home/dev/project/app.py" && entry.ContentId == contentId.ToString());
             Assert.Contains(entries, entry => entry.Kind == "delete" && entry.Path == "/home/dev/project/old.py");
+            Assert.Contains(entries, entry => entry.Kind == "delete" && entry.Path == "/home/dev/project/removed-dir");
             Assert.All(entries, entry => Assert.Equal(1_780_000_000_000, entry.Timestamp));
             Assert.True(provider.SupportsContent);
             var contentEntry = Assert.Single(entries, entry => entry.Kind == "content");
             var content = provider.Read(store, contentEntry);
             Assert.NotNull(content);
             Assert.Equal("old app.py body", content.Text);
-            var deleted = Assert.Single(entries, entry => entry.Kind == "delete");
+            var deleted = Assert.Single(entries, entry => entry.Kind == "delete" && entry.Path == "/home/dev/project/old.py");
             Assert.Null(provider.Read(store, deleted));
             Assert.NotNull(provider.LastReadError);
         }
@@ -304,9 +309,21 @@ public sealed class IdeHistoryTests
                     "ro-status" => 5,
                     "move" => 6,
                     "delete" => 7,
+                    "delete-tree" => 7,
+                    "label" => 8,
+                    "system-label" => 9,
                     _ => throw new InvalidOperationException(),
                 });
                 VarLong(buffer, 1000 + buffer.Count);
+                // 标签变更无路径: name + projectId(+ zigzag color)。
+                if (change.Kind is "label" or "system-label")
+                {
+                    Utf(buffer, change.Path);
+                    Utf(buffer, "project");
+                    if (change.Kind == "system-label")
+                        SignedVarInt(buffer, 3);
+                    continue;
+                }
                 Utf(buffer, change.Path);
                 switch (change.Kind)
                 {
@@ -315,9 +332,23 @@ public sealed class IdeHistoryTests
                         Time(buffer, timestamp - 1000);
                         break;
                     case "delete":
-                        Utf(buffer, "old.py");
+                        // 与 DataStreamUtil.writeEntry 一致: 类型(0=文件)在前, 条目名随后。
                         VarInt(buffer, 0);
+                        Utf(buffer, "old.py");
                         WriteLong(buffer, timestamp - 2000);
+                        buffer.Add(0);
+                        VarInt(buffer, 0);
+                        break;
+                    case "delete-tree":
+                        // 目录条目(1) + 新格式条目名(<FILE_ID_AND_HASH> + nameId/nameHash 两个大端 int32) + 一个文件子条目。
+                        VarInt(buffer, 1);
+                        Utf(buffer, "<FILE_ID_AND_HASH>");
+                        WriteInt32(buffer, 123456);
+                        WriteInt32(buffer, -7654321);
+                        VarInt(buffer, 1);
+                        VarInt(buffer, 0);
+                        Utf(buffer, "inner.py");
+                        WriteLong(buffer, timestamp - 3000);
                         buffer.Add(0);
                         VarInt(buffer, 0);
                         break;
@@ -342,6 +373,8 @@ public sealed class IdeHistoryTests
         }
 
         private static void VarLong(List<byte> buffer, long value) => VarInt(buffer, value);
+
+        private static void SignedVarInt(List<byte> buffer, long value) => VarInt(buffer, (value << 1) ^ (value >> 63));
 
         private static void Utf(List<byte> buffer, string text)
         {
@@ -377,6 +410,12 @@ public sealed class IdeHistoryTests
         private static void WriteLong(List<byte> buffer, long value)
         {
             for (var shift = 56; shift >= 0; shift -= 8)
+                buffer.Add((byte)(value >> shift));
+        }
+
+        private static void WriteInt32(List<byte> buffer, int value)
+        {
+            for (var shift = 24; shift >= 0; shift -= 8)
                 buffer.Add((byte)(value >> shift));
         }
     }

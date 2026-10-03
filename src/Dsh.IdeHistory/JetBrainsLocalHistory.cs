@@ -25,6 +25,11 @@ public sealed class JetBrainsLocalHistoryProvider : IIdeHistoryProvider
 
     public int SkippedRecords { get; private set; }
 
+    /** 解码失败的原因样本(至多 8 条,含记录 id):SkippedRecords 异常升高时用于定位不兼容的记录形态。 */
+    public IReadOnlyList<string> SkipErrors => _skipErrors;
+
+    private readonly List<string> _skipErrors = [];
+
     public string? LastReadError { get; private set; }
 
     public IReadOnlyList<IdeHistoryStoreInfo> Discover()
@@ -60,6 +65,7 @@ public sealed class JetBrainsLocalHistoryProvider : IIdeHistoryProvider
     public IReadOnlyList<IdeHistoryEntry> List(IdeHistoryStoreInfo store, string? pathFilter, int limit)
     {
         SkippedRecords = 0;
+        _skipErrors.Clear();
         var dataPath = store.Location;
         var indexPath = dataPath[..^DataSuffix.Length] + IndexSuffix;
         if (!File.Exists(dataPath) || !File.Exists(indexPath))
@@ -133,9 +139,11 @@ public sealed class JetBrainsLocalHistoryProvider : IIdeHistoryProvider
             {
                 decoded = ChangeSetDecoder.Decode(data.AsSpan((int)address, size));
             }
-            catch (Exception)
+            catch (Exception error)
             {
                 SkippedRecords++;
+                if (_skipErrors.Count < 8)
+                    _skipErrors.Add($"id={id} size={size}: {error.Message}");
             }
             if (decoded is not null)
                 yield return decoded;
@@ -167,15 +175,30 @@ internal static class ChangeSetDecoder
         var items = new List<DecodedChangeItem>((int)count);
         for (var index = 0; index < count; index++)
         {
-            items.Add(ReadChange(ref reader));
+            if (ReadChange(ref reader) is { } item)
+                items.Add(item);
         }
         return new DecodedChange(timestamp, items);
     }
 
-    private static DecodedChangeItem ReadChange(ref SpanReader reader)
+    private static DecodedChangeItem? ReadChange(ref SpanReader reader)
     {
         var type = reader.ReadVarInt();
         reader.ReadVarLong();
+        // 标签变更没有路径: 结构是 name + projectId(+ color), 不产生文件历史条目, 只推进游标。
+        if (type == 8)
+        {
+            reader.ReadString();
+            reader.ReadString();
+            return null;
+        }
+        if (type == 9)
+        {
+            reader.ReadString();
+            reader.ReadString();
+            reader.ReadSignedVarInt();
+            return null;
+        }
         var path = Normalize(reader.ReadString());
         switch (type)
         {
@@ -199,22 +222,19 @@ internal static class ChangeSetDecoder
             case 7:
                 ReadEntry(ref reader);
                 return new DecodedChangeItem("delete", path, null);
-            case 8:
-                reader.ReadString();
-                reader.ReadString();
-                return new DecodedChangeItem("label", path, null);
-            case 9:
-                reader.ReadVarInt();
-                return new DecodedChangeItem("system-label", path, null);
             default:
                 throw new InvalidOperationException($"unexpected change type: {type}");
         }
     }
 
+    /**
+     * 删除条目的序列化顺序是类型在前、条目体在后(DataStreamUtil.writeEntry)。
+     * 条目名兼容两种形态: 旧格式直接写名字字符串; 注册表项 lvcs.store.entry.file.id 开启后写 FILE_ID_MAGIC + 两个大端 int32(nameId/nameHash)。
+     */
     private static void ReadEntry(ref SpanReader reader)
     {
-        reader.ReadString();
         var type = reader.ReadVarInt();
+        ReadEntryName(ref reader);
         if (type == 0)
         {
             reader.ReadLong();
@@ -230,6 +250,16 @@ internal static class ChangeSetDecoder
             return;
         }
         throw new InvalidOperationException($"unexpected entry type: {type}");
+    }
+
+    private const string FileIdMagic = "<FILE_ID_AND_HASH>";
+
+    private static void ReadEntryName(ref SpanReader reader)
+    {
+        if (reader.ReadString() != FileIdMagic)
+            return;
+        reader.ReadInt32BigEndian();
+        reader.ReadInt32BigEndian();
     }
 
     private static string Normalize(string path)
@@ -267,6 +297,22 @@ internal static class ChangeSetDecoder
         }
 
         public long ReadVarLong() => ReadVarInt();
+
+        /** 有符号 varint(zigzag): PutSystemLabelChange 的 color 字段用这个编码。 */
+        public long ReadSignedVarInt()
+        {
+            var raw = ReadVarInt();
+            return (raw >>> 1) ^ -(raw & 1);
+        }
+
+        public int ReadInt32BigEndian()
+        {
+            if (_position + 4 > _bytes.Length)
+                throw new EndOfStreamException();
+            var value = BinaryPrimitives.ReadInt32BigEndian(_bytes[_position..]);
+            _position += 4;
+            return value;
+        }
 
         public long ReadLong()
         {
