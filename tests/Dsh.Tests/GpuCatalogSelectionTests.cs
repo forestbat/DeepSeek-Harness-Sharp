@@ -1,12 +1,11 @@
 using Dsh.Boot;
 using Dsh.Tui;
-using Xunit;
 
 namespace Dsh.Tests;
 
 /**
- * Linux 选卡: 设置里的适配器值保存/读回, 以及"适配器 → /dev/dri/cardN"的 by-path 映射。
- * 无 DRM(Windows/WSL/容器)或没有 PCI slot 形态的适配器时跳过。
+ * 选卡: 设置值的保存/读回、候选匹配、Linux 的"适配器 → /dev/dri/cardN"by-path 映射、Windows 的进程级偏好。
+ * 适配器枚举 Windows(注册表)/Linux(sysfs)各一套, 纯逻辑跨平台, 平台专属断言按 OS 分支, 不再整条测试跳过。
  */
 public class GpuCatalogSelectionTests
 {
@@ -26,58 +25,61 @@ public class GpuCatalogSelectionTests
         Assert.Equal("GpuPreference=1;", GpuCatalog.WindowsPreferenceData(discrete: false));
     }
 
+    /** auto 是默认值, 不强制任何卡; Linux 的 DRM 解析对 auto 直接返回 null。 */
     [Fact]
-    public void Resolve_Returns_Null_For_Auto()
+    public void Auto_Selection_Is_Default_And_Forces_No_Card()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            Assert.Skip("选卡解析仅 Linux");
-            return;
-        }
-        Assert.Null(GpuCatalog.ResolveDrmCardPath(GpuCatalog.AutoAdapter));
+        using var home = new TempHome();
+        Assert.Equal(GpuCatalog.AutoAdapter, GpuCatalog.LoadSelectedAdapter(home.Home));
+        Assert.Equal(0, GpuCatalog.MatchAdapterIndex(GpuCatalog.SelectionLabels(), GpuCatalog.AutoAdapter));
+        if (OperatingSystem.IsLinux())
+            Assert.Null(GpuCatalog.ResolveDrmCardPath(GpuCatalog.AutoAdapter));
     }
 
+    /** 未知选卡值退化为默认(auto), 不强制任何卡; Linux 的 DRM 解析找不到适配器时返回 null。 */
     [Fact]
-    public void Resolve_Returns_Null_For_Unknown_Slot()
+    public void Unknown_Selection_Forces_No_Card()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            Assert.Skip("选卡解析仅 Linux");
-            return;
-        }
-        Assert.Null(GpuCatalog.ResolveDrmCardPath("0000:ff:ff.0"));
+        Assert.Equal(0, GpuCatalog.MatchAdapterIndex(GpuCatalog.SelectionLabels(), "0000:ff:ff.0"));
+        if (OperatingSystem.IsLinux())
+            Assert.Null(GpuCatalog.ResolveDrmCardPath("0000:ff:ff.0"));
     }
 
+    /** 选卡值(PCI slot / 显示名)在 Windows 与 Linux 上都能保存并读回; Linux 有 slot 时再解析到具体卡节点。 */
     [Fact]
-    public void Saved_Slot_RoundTrips_And_Resolves_To_Card_Node()
+    public void Saved_Selection_RoundTrips_And_Resolves_To_Card_Node()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            Assert.Skip("选卡解析仅 Linux");
-            return;
-        }
-        var adapter = GpuCatalog.ListAdapters().FirstOrDefault(candidate => GpuCatalog.LooksLikePciSlot(candidate.Id));
+        var adapter = GpuCatalog.ListAdapters().FirstOrDefault();
         if (adapter is null)
         {
-            Assert.Skip("本机没有 PCI slot 形态的 DRM 适配器");
+            Assert.Skip("本机没有可用显卡");
             return;
         }
 
-        var home = new HarnessHome(Path.Combine(AppContext.BaseDirectory, "gpu-selection-home", Guid.NewGuid().ToString("N")));
-        try
-        {
-            GpuCatalog.SaveSelectedAdapter(home, adapter.Id);
-            Assert.Equal(adapter.Id, GpuCatalog.LoadSelectedAdapter(home));
+        using var home = new TempHome();
+        var selection = GpuCatalog.SelectionIdOf(adapter);
+        GpuCatalog.SaveSelectedAdapter(home.Home, selection);
+        Assert.Equal(selection, GpuCatalog.LoadSelectedAdapter(home.Home));
 
-            var cardPath = GpuCatalog.ResolveDrmCardPath(adapter.Id);
-            Assert.NotNull(cardPath);
-            Assert.StartsWith("/dev/dri/card", cardPath, StringComparison.Ordinal);
-            Assert.True(File.Exists(cardPath), $"解析出的卡节点不存在: {cardPath}");
-        }
-        finally
+        if (!OperatingSystem.IsLinux() || !GpuCatalog.LooksLikePciSlot(adapter.Id))
+            return;
+        var cardPath = GpuCatalog.ResolveDrmCardPath(selection);
+        Assert.NotNull(cardPath);
+        Assert.StartsWith("/dev/dri/card", cardPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(cardPath), $"解析出的卡节点不存在: {cardPath}");
+    }
+
+    private sealed class TempHome : IDisposable
+    {
+        public HarnessHome Home { get; } = new(Path.Combine(
+            AppContext.BaseDirectory,
+            "gpu-selection-home",
+            Guid.NewGuid().ToString("N")));
+
+        public void Dispose()
         {
-            if (Directory.Exists(home.Root))
-                Directory.Delete(home.Root, recursive: true);
+            if (Directory.Exists(Home.Root))
+                Directory.Delete(Home.Root, recursive: true);
         }
     }
 }
