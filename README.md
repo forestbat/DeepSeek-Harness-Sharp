@@ -1,6 +1,20 @@
 # DeepSeek-Harness-Sharp
 
-一个用 C# 重写的 DeepSeek Harness 实现,初衷是解决原 DeepSeek Harness 在高并发下性能减退和崩溃的问题(TUI 单进程内存占用约 20MB)。
+一个用 C# 重写的 DeepSeek Harness 实现,初衷是解决原 DeepSeek Harness 在高并发下性能减退和崩溃的问题(TUI 单进程内存占用约 10MB，GUI 单进程内存占用约50-100MB)。
+
+## 安装
+
+从 GitHub Release 下载对应平台的 Release 构建,装到用户目录并注册 `dshsh` 命令:
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/scripts/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/scripts/install.ps1 | iex
+```
+
+安装后新开终端,在任意目录运行 `dshsh` 即可启动 TUI。可用环境变量覆盖: `DSHSH_VERSION`(版本号或 latest)、`DSHSH_HOME`(安装目录)、`DSHSH_BASE_URL`(镜像基址)、`DSHSH_PROXY`(下载代理)。Release 资产命名为 `dshsh-<rid>.tar.gz`(Linux/macOS)与 `dshsh-win-<arch>.zip`(Windows)。
 
 ## 运行
 
