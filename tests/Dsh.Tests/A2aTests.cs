@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Text;
 using Dsh.A2A;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -226,5 +227,43 @@ public sealed class A2aTests
         var canceled = await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken);
         Assert.Equal(TaskState.Canceled, canceled.Status.State);
         await Assert.ThrowsAsync<global::A2A.A2AException>(() => client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken));
+    }
+
+    [Fact]
+    public async Task RemoteClient_CardSendGetList()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var server = new MockDeepSeekServer(SseTextOnly);
+        using var fixture = new A2aFixture(server.BaseUrl);
+        var client = new A2aRemoteClient(new Dictionary<string, A2aRemoteSettings>());
+
+        var card = await client.CardAsync(fixture.Endpoint, cancellationToken);
+        Assert.True(card.Ok);
+        Assert.Equal("deepseek-harness", card.Name);
+
+        var sent = await client.SendAsync(fixture.Endpoint, "hi", wait: true, timeoutSeconds: 20, cancellationToken);
+        Assert.NotNull(sent.Task);
+        Assert.Equal(nameof(TaskState.Completed), sent.Task!.State);
+        Assert.Equal("Hello world", sent.Task.Answer);
+
+        var got = await client.GetAsync(fixture.Endpoint, sent.Task.Id, cancellationToken);
+        Assert.Equal(nameof(TaskState.Completed), got.Task!.State);
+
+        var list = await client.ListAsync(fixture.Endpoint, null, 50, cancellationToken);
+        Assert.Contains(list.Tasks, task => task.Id == sent.Task.Id);
+    }
+
+    [Fact]
+    public async Task RemoteClient_Cancel()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var server = new MockDeepSeekServer(SseTextOnly, TimeSpan.FromSeconds(5));
+        using var fixture = new A2aFixture(server.BaseUrl);
+        var client = new A2aRemoteClient(new Dictionary<string, A2aRemoteSettings>());
+
+        var sent = await client.SendAsync(fixture.Endpoint, "hi", wait: false, timeoutSeconds: 1, cancellationToken);
+        Assert.NotNull(sent.Task);
+        var canceled = await client.CancelAsync(fixture.Endpoint, sent.Task!.Id, cancellationToken);
+        Assert.Equal(nameof(TaskState.Canceled), canceled.Task!.State);
     }
 }

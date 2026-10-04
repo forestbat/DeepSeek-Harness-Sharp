@@ -29,7 +29,6 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
     private readonly string? _model;
     private readonly Dictionary<string, SessionRecord> _sessions = [];
     private readonly Lock _gate = new();
-    private bool _disposed;
 
     public DshAgentHandler(Context ctx, string? provider = null, string? model = null)
     {
@@ -99,7 +98,6 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
 
     public void Dispose()
     {
-        _disposed = true;
         List<SessionRecord> records;
         lock (_gate)
         {

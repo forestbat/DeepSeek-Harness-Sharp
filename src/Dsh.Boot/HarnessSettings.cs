@@ -250,6 +250,22 @@ public sealed class A2aSettings
 
     [YamlMember(Alias = "skill_tags")]
     public List<string> SkillTags { get; set; } = [];
+
+    [YamlMember(Alias = "remotes")]
+    public Dictionary<string, A2aRemoteSettings> Remotes { get; set; } = [];
+}
+
+/** 远端 A2A agent: url 为基地址(用于解析 agent card); token 是简写的 Bearer(无需自写 authorization 头); headers 为其它附加头(如 qwen 的 x-qwen-*)。 */
+public sealed class A2aRemoteSettings
+{
+    [YamlMember(Alias = "url")]
+    public string? Url { get; set; }
+
+    [YamlMember(Alias = "token")]
+    public string? Token { get; set; }
+
+    [YamlMember(Alias = "headers")]
+    public Dictionary<string, string> Headers { get; set; } = [];
 }
 
 public sealed class McpServerSettings

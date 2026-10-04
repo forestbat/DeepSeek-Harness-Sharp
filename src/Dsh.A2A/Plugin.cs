@@ -11,33 +11,40 @@ public sealed class Plugin : IDshPlugin
 {
     private const string EndpointKey = "a2aEndpoint";
 
-    public string[] Inject => [AgentRegistry.ServiceName, SessionStore.ServiceName];
+    public string[] Inject => [AgentRegistry.ServiceName, SessionStore.ServiceName, ToolRuntime.ServiceName, SystemPrompt.ServiceName];
 
     public IDisposable Apply(Context ctx, object? config)
     {
         var home = (ctx.GetProp("harnessOptions") as HarnessOptions)?.Home ?? HarnessHome.Resolve();
         var settings = TryLoadSettings(ctx, home);
-        if (settings?.A2a is not { Enabled: true } a2a)
+        if (settings?.A2a is not { } a2a)
             return new CallbackDisposable();
-        var (provider, model) = ResolveDefaults(ctx, settings);
-        var handler = new DshAgentHandler(ctx, provider, model);
-        var options = new A2aHostOptions(a2a.Host ?? "127.0.0.1", a2a.Port, a2a.PublicUrl, a2a.AuthToken)
+        var disposables = new List<IDisposable>();
+        if (a2a.Enabled || a2a.Remotes.Count > 0)
+            disposables.Add(new A2aClientTools(a2a.Remotes).Register(ctx));
+        if (a2a.Enabled)
         {
-            Skill = new A2aSkillOptions(
-                a2a.SkillId ?? "coding",
-                a2a.SkillName ?? "Coding",
-                a2a.SkillDescription ?? "General software engineering assistance",
-                a2a.SkillTags.Count > 0 ? a2a.SkillTags : null),
-        };
-        var host = new A2aHost(handler, options);
-        host.Start();
-        ctx.Root.SetOwn(EndpointKey, host.Endpoint);
-        ctx.LoggerFor("a2a").Info($"a2a server listening on {host.Endpoint}");
-        return new CallbackDisposable(() =>
-        {
-            host.Dispose();
-            handler.Dispose();
-        });
+            var (provider, model) = ResolveDefaults(ctx, settings);
+            var handler = new DshAgentHandler(ctx, provider, model);
+            var options = new A2aHostOptions(a2a.Host ?? "127.0.0.1", a2a.Port, a2a.PublicUrl, a2a.AuthToken)
+            {
+                Skill = new A2aSkillOptions(
+                    a2a.SkillId ?? "coding",
+                    a2a.SkillName ?? "Coding",
+                    a2a.SkillDescription ?? "General software engineering assistance",
+                    a2a.SkillTags.Count > 0 ? a2a.SkillTags : null),
+            };
+            var host = new A2aHost(handler, options);
+            host.Start();
+            ctx.Root.SetOwn(EndpointKey, host.Endpoint);
+            ctx.LoggerFor("a2a").Info($"a2a server listening on {host.Endpoint}");
+            disposables.Add(new CallbackDisposable(() =>
+            {
+                host.Dispose();
+                handler.Dispose();
+            }));
+        }
+        return new DisposableBundle([.. disposables]);
     }
 
     private static HarnessSettings? TryLoadSettings(Context ctx, HarnessHome home)
@@ -64,5 +71,14 @@ public sealed class Plugin : IDshPlugin
     private sealed class CallbackDisposable(Action? dispose = null) : IDisposable
     {
         public void Dispose() => dispose?.Invoke();
+    }
+
+    private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var disposable in disposables)
+                disposable.Dispose();
+        }
     }
 }
