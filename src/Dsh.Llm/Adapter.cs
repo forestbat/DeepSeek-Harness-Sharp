@@ -44,6 +44,23 @@ public class GenerateOptions
     public SessionId? SessionId { get; init; }
     public GeneratePurpose? Purpose { get; init; }
     public CancellationToken Cancellation { get; init; }
+
+    /** 复制请求并替换取消令牌(看门狗需要用一个可自己取消的令牌驱动适配器)。 */
+    public GenerateOptions WithCancellation(CancellationToken cancellationToken) => new()
+    {
+        Provider = Provider,
+        Model = Model,
+        ReasoningEffort = ReasoningEffort,
+        Messages = Messages,
+        System = System,
+        Tools = Tools,
+        Temperature = Temperature,
+        MaxTokens = MaxTokens,
+        Stop = Stop,
+        SessionId = SessionId,
+        Purpose = Purpose,
+        Cancellation = cancellationToken,
+    };
 }
 
 public enum GeneratePurpose

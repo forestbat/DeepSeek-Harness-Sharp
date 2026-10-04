@@ -28,11 +28,22 @@ public abstract record ResolvedRetryPolicy
         LlmFailureCodes.Server,
         LlmFailureCodes.Timeout,
         LlmFailureCodes.Transport,
+        LlmFailureCodes.StreamClosed,
+        LlmFailureCodes.IncompleteStream,
     ];
 
     public required double InitialDelayMs { get; init; }
     public required double MaxDelayMs { get; init; }
     public required double JitterRatio { get; init; }
+
+    /** 第 attempt(从 0 起)次重试前等待的时长: 指数退避, 封顶 MaxDelayMs, 叠加 ±JitterRatio 抖动。 */
+    public TimeSpan Delay(int attempt)
+    {
+        var raw = Math.Min(MaxDelayMs, InitialDelayMs * Math.Pow(2, Math.Max(0, attempt)));
+        var jitter = raw * JitterRatio;
+        var value = raw - jitter + Random.Shared.NextDouble() * 2 * jitter;
+        return TimeSpan.FromMilliseconds(Math.Clamp(value, 1, MaxTimerDelayMs));
+    }
 
     public sealed record Normal(int MaxRetries, IReadOnlyList<string> RetryableCodes) : ResolvedRetryPolicy;
 

@@ -37,6 +37,7 @@ public static class LlmFailureCodes
     public const string Timeout = "TIMEOUT";
     public const string Transport = "TRANSPORT";
     public const string StreamClosed = "STREAM_CLOSED";
+    public const string IncompleteStream = "INCOMPLETE_STREAM";
 }
 
 public static partial class LlmFailureClassifiers

@@ -91,7 +91,7 @@ public class AgentLoopIntegrationTests
         public AgentRegistry Agents { get; }
         public AgentLoop Loop { get; }
 
-        public HarnessFixture(string baseUrl, bool inHistory = false)
+        public HarnessFixture(string baseUrl, bool inHistory = false, ResolvedRetryPolicy? retryPolicy = null)
         {
             Ctx = new Context();
             Sessions = new SessionStore(Ctx);
@@ -110,7 +110,7 @@ public class AgentLoopIntegrationTests
                     "test-model",
                     SystemPromptUpdate: inHistory ? SystemPromptUpdateModes.InHistory : null)],
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
-                ResolvedRetryPolicy.Resolve(null, "test"));
+                retryPolicy ?? ResolvedRetryPolicy.Resolve(null, "test"));
             var adapter = new Dsh.Llm.DeepSeek.DeepSeekAdapter("test-provider", new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
             {
                 Options = () => connection,
@@ -235,6 +235,42 @@ public class AgentLoopIntegrationTests
         Assert.Equal("abc", Assert.IsType<TextBlock>(toolResult.Message.Block.Content[0]).Text);
         var turnEnd = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<TurnEndPayload>().Single();
         Assert.IsType<TurnEndReason.Completed>(turnEnd.Reason);
+    }
+
+    [Fact]
+    public async Task TruncatedStream_RetriesThenErrorsInsteadOfCompleting()
+    {
+        var calls = 0;
+        using var server = new MockDeepSeekServer(_ =>
+        {
+            calls++;
+            // 有内容但流尾缺 [DONE]/finish_reason: 供应商中途断开。
+            return
+            [
+                """data: {"choices":[{"delta":{"content":"partial"}}]}""",
+                "",
+            ];
+        });
+        using var fixture = new HarnessFixture(server.BaseUrl, retryPolicy: ResolvedRetryPolicy.Resolve(
+            new RetryPolicyConfig.Normal(
+                MaxRetries: 1,
+                Backoff: new BackoffConfig(InitialDelayMs: 1, MaxDelayMs: 1, JitterRatio: 0)),
+            "test"));
+        var handle = await fixture.Agents.Create(new CreateAgentOptions(
+            SessionId.Create("session-truncated"),
+            null,
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
+        var agent = (AgentLoopAgent)handle.Agent;
+
+        agent.Followup(MessageFactory.CreateUserText("hi"));
+        await agent.WhenIdle();
+
+        Assert.Equal(2, calls);
+        var turnEnd = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<TurnEndPayload>().Single();
+        Assert.IsType<TurnEndReason.Error>(turnEnd.Reason);
+        var assistant = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<AssistantMessagePayload>().Single();
+        Assert.True(assistant.Interrupted);
+        Assert.Equal("partial", string.Concat(assistant.Message.Content.OfType<TextBlock>().Select(b => b.Text)));
     }
 
     [Fact]

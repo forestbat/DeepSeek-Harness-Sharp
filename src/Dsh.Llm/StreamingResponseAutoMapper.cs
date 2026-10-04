@@ -12,14 +12,20 @@ public static class StreamingResponseAutoMapper
     {
         using var reader = new StreamReader(stream);
         var state = new MapperState();
+        var terminated = false;
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             var data = line.Trim();
             if (!data.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 continue;
             var payload = data["data:".Length..].Trim();
-            if (payload.Length == 0 || payload == "[DONE]")
+            if (payload.Length == 0)
                 continue;
+            if (payload == "[DONE]")
+            {
+                terminated = true;
+                continue;
+            }
             IReadOnlyList<StreamChunk>? mapped = null;
             try
             {
@@ -36,7 +42,7 @@ public static class StreamingResponseAutoMapper
                     yield return chunk;
             }
         }
-        foreach (var chunk in state.Finish())
+        foreach (var chunk in state.Finish(terminated))
             yield return chunk;
     }
 
@@ -328,7 +334,7 @@ public static class StreamingResponseAutoMapper
             return block;
         }
 
-        public IReadOnlyList<StreamChunk> Finish()
+        public IReadOnlyList<StreamChunk> Finish(bool terminated = true)
         {
             var chunks = new List<StreamChunk>();
             if (_textOpen)
@@ -337,7 +343,9 @@ public static class StreamingResponseAutoMapper
                 chunks.Add(new StreamChunk.BlockEnd(ReasoningIndex, new ReasoningBlock(_reasoning.ToString())));
             foreach (var block in _toolBlocks.Values)
                 chunks.Add(new StreamChunk.BlockEnd(block.Index, new ToolCallBlock(block.CallId, block.Name ?? "", block.Arguments.ToString())));
-            chunks.Add(new StreamChunk.Finish(_finishReason ?? new FinishReason.Stop()));
+            var reason = _finishReason
+                ?? (terminated ? new FinishReason.Stop() : new FinishReason.Incomplete("stream ended without a terminator"));
+            chunks.Add(new StreamChunk.Finish(reason));
             return chunks;
         }
     }

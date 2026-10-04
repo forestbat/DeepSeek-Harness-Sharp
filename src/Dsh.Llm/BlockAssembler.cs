@@ -146,7 +146,8 @@ public sealed class BlockAssembler
 
     public TokenUsage? Usage => _usage;
 
-    public FinishReason Finish => _finish ?? new FinishReason.Stop();
+    /** 没有收到 finish 块时不再伪装成正常结束: 缺终止符一律标记为 Incomplete, 由上层按中断处理。 */
+    public FinishReason Finish => _finish ?? new FinishReason.Incomplete("stream ended without a finish chunk");
 
     public ReplayEnvelope? ReplayState => Assembled().Replay;
 

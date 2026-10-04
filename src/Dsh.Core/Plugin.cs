@@ -28,7 +28,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
         _ = new SessionProjectionRegistry(ctx);
         _ = new SystemPrompt(ctx, SystemPromptConfigFrom(config));
         _ = new ToolRuntime(ctx);
-        _ = new LlmRuntime(ctx);
+        _ = new LlmRuntime(ctx, LlmStreamLimitsFrom(config));
         _ = new LlmAdapterFactoryRegistry(ctx);
         _ = new AgentRegistry(ctx);
         // 持久化插件声明依赖 core 的服务, 因此它总是晚于 core 加载; 这里必须按需解析而不是取值快照。
@@ -62,6 +62,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     private static bool? BoolOf(IReadOnlyDictionary<string, object?>? dict, string key)
         => dict?.GetValueOrDefault(key) as bool?;
+
+    /** 流式看门狗阈值: 默认对齐 qwen-code (idle 4 分钟 / lifetime 15 分钟); 非正值关闭该守卫。 */
+    private static LlmStreamLimits LlmStreamLimitsFrom(object? config)
+    {
+        var dict = config as IReadOnlyDictionary<string, object?>;
+        return LlmStreamLimits.Resolve(
+            IntOf(dict, "streamIdleTimeoutMs"),
+            IntOf(dict, "streamMaxLifetimeMs"));
+    }
 
     private static int? IntOf(IReadOnlyDictionary<string, object?>? dict, string key)
         => dict?.GetValueOrDefault(key) switch

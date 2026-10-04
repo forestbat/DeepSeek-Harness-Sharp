@@ -128,7 +128,8 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             }
             catch (Exception error)
             {
-                failure = new LlmException(new LlmFailure(
+                // 保留适配器已经分类好的 LlmException(如缺终止符的 STREAM_CLOSED), 不要一律降级成 Transport。
+                failure = error as LlmException ?? new LlmException(new LlmFailure(
                     $"OpenAI-compatible API stream from {_openAi.Endpoint} failed: {error.Message}",
                     LlmFailureCodes.Transport), error);
                 moved = false;
@@ -242,7 +243,11 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             yield return new StreamChunk.BlockEnd(block.Index, CloseBlock(block));
         if (pendingUsage is not null)
             yield return new StreamChunk.Usage(pendingUsage);
-        yield return new StreamChunk.Finish(pendingFinish ?? new FinishReason.Stop());
+        // 只有供应商给出了明确的 finish_reason 才算正常结束; 流尾缺终止符视为中断, 交给上层重试。
+        if (pendingFinish is null)
+            throw new LlmException(new LlmFailure(
+                "OpenAI-compatible stream ended without a finish reason", LlmFailureCodes.StreamClosed));
+        yield return new StreamChunk.Finish(pendingFinish);
     }
 
     private IReadOnlyList<ChatMessage> ToChatMessages(GenerateOptions options)

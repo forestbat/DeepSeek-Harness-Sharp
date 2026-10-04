@@ -58,6 +58,19 @@ public sealed record AgentRequestErrorNotification(AgentRequestErrorPayload Payl
     public static string EventName => "agent/request-error";
 }
 
+/** 一次请求因流中断/瞬时失败即将重试(Attempt 从 1 起, MaxAttempts 含首次), 供 UI 与遥测观测。 */
+public sealed record AgentStreamInterruptedNotification(
+    IAgent Agent,
+    int Turn,
+    int Step,
+    string Provider,
+    LlmFailure Failure,
+    int Attempt,
+    int MaxAttempts) : INotification
+{
+    public static string EventName => "agent/stream-interrupted";
+}
+
 public sealed record AgentTurnStoppingNotification(AgentTurnStoppingPayload Payload) : INotification
 {
     public static string EventName => "agent/turn-stopping";

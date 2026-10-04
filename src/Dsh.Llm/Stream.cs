@@ -45,6 +45,12 @@ public abstract record FinishReason
     {
         public override string Kind => RawKind;
     }
+
+    /** 流在没有任何终止信号的情况下结束: 既没有供应商终止符, 也没有可识别的 finish reason。 */
+    public sealed record Incomplete(string Detail) : FinishReason
+    {
+        public override string Kind => "incomplete";
+    }
 }
 
 public sealed class FinishReasonJsonConverter : JsonConverter<FinishReason>
@@ -63,6 +69,7 @@ public sealed class FinishReasonJsonConverter : JsonConverter<FinishReason>
             "max-tokens" => new FinishReason.MaxTokens(),
             "aborted" => new FinishReason.Aborted(Failure()),
             "error" => new FinishReason.Error(Failure()),
+            "incomplete" => new FinishReason.Incomplete(root.TryGetProperty("detail", out var detail) ? detail.GetString() ?? "" : ""),
             _ => new FinishReason.Unknown(kind, root.Clone()),
         };
     }
@@ -85,6 +92,9 @@ public sealed class FinishReasonJsonConverter : JsonConverter<FinishReason>
             case FinishReason.Error error:
                 writer.WritePropertyName("failure");
                 DshJson.Serialize(writer, error.Failure);
+                break;
+            case FinishReason.Incomplete incomplete:
+                writer.WriteString("detail", incomplete.Detail);
                 break;
         }
         writer.WriteEndObject();

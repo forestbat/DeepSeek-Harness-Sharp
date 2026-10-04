@@ -34,9 +34,11 @@ public sealed class LlmRuntime : Service
     private sealed record Registration(LlmAdapter Adapter, LlmProviderInfo Provider, ResolvedRetryPolicy RetryPolicy);
 
     private readonly Dictionary<string, Registration> _adapters = [];
+    private readonly LlmStreamLimits _streamLimits;
 
-    public LlmRuntime(Context ctx) : base(ctx, ServiceName)
+    public LlmRuntime(Context ctx, LlmStreamLimits? streamLimits = null) : base(ctx, ServiceName)
     {
+        _streamLimits = streamLimits ?? LlmStreamLimits.Default;
     }
 
     public AdapterRegistrationHandle RegisterAdapter(IReadOnlyList<string> providers, LlmAdapter adapter)
@@ -160,11 +162,17 @@ public sealed class LlmRuntime : Service
         Registration? registration,
         PreparedAdapterCall? adapterCall)
     {
-        var result = await Ctx.Events.Waterfall(Ctx, new LlmStreamNotification(options),
-            () => new ValueTask<object?>(AdapterStream(options, registration, adapterCall)));
+        // 看门狗统一包在所有适配器外层: 用可自我取消的令牌驱动适配器, 超时/用户取消都能中止底层请求。
+        using var watchdog = _streamLimits.Enabled ? new StreamWatchdog(_streamLimits, options.Cancellation) : null;
+        var effective = watchdog is null ? options : options.WithCancellation(watchdog.Token);
+        if (watchdog is not null && AgentLoopRequestMarker.IsMarked(options))
+            AgentLoopRequestMarker.Mark(effective);
+        var result = await Ctx.Events.Waterfall(Ctx, new LlmStreamNotification(effective),
+            () => new ValueTask<object?>(AdapterStream(effective, registration, adapterCall)));
         if (result is not IAsyncEnumerable<StreamChunk> stream)
             throw new LlmException(new LlmFailure("llm/stream waterfall returned no stream", "INVALID_STREAM"));
-        await foreach (var chunk in stream)
+        var guarded = watchdog is null ? stream : watchdog.Guard(stream);
+        await foreach (var chunk in guarded)
             yield return chunk;
     }
 

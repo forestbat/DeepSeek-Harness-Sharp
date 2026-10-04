@@ -361,6 +361,7 @@ public sealed class AgentLoopAgent : IAgent
         var assembly = _pendingAssembly
             ?? throw new InvalidOperationException("agent loop stepped without a prompt assembly");
 
+        var attempts = 0;
         while (true)
         {
             var surfaceGeneration = Session.SurfaceManager.ReplaceGeneration;
@@ -401,21 +402,43 @@ public sealed class AgentLoopAgent : IAgent
             }
 
             var finish = assembler.Finish;
-            if (finish is FinishReason.Error or FinishReason.Aborted)
+            var failure = FailureOf(finish);
+            if (failure is null && finish is FinishReason.Stop && assembler.Blocks().Count == 0)
+                failure = new LlmFailure(
+                    "model returned a completed response with no content",
+                    LlmFailureCodes.EmptyResponse);
+            if (failure is not null)
             {
-                var failure = finish switch
-                {
-                    FinishReason.Error error => error.Failure,
-                    FinishReason.Aborted aborted => aborted.Failure,
-                    _ => throw new InvalidOperationException(),
-                };
                 var action = await Dispatch.Waterfall(
                     new AgentRequestErrorNotification(new AgentRequestErrorPayload(this, turn, step, request.Provider, failure, preparedCall.RetryPolicy, signal)),
                     () => new ValueTask<object?>()) as RequestErrorAction;
                 signal.ThrowIfCancellationRequested();
-                if (action is not RequestErrorAction.Retry)
-                    throw new LlmException(failure);
-                continue;
+                if (action is RequestErrorAction.Retry)
+                    continue;
+                // waterfall 没有接管时, 按适配器声明的重试策略重试中断/瞬时失败; 中断绝不静默当作完成。
+                if (preparedCall.RetryPolicy is ResolvedRetryPolicy.Normal policy
+                    && policy.RetryableCodes.Contains(failure.Code)
+                    && attempts < policy.MaxRetries)
+                {
+                    var delay = policy.Delay(attempts);
+                    attempts++;
+                    Dispatch.Emit(new AgentStreamInterruptedNotification(
+                        this,
+                        turn,
+                        step,
+                        request.Provider,
+                        failure,
+                        attempts,
+                        policy.MaxRetries + 1));
+                    await Task.Delay(delay, signal);
+                    continue;
+                }
+                PersistInterrupted(turn, step, request, assembler, chunkSeqs);
+                throw new LlmException(new LlmFailure(
+                    attempts == 0
+                        ? failure.Message
+                        : $"response interrupted after {attempts + 1} attempt(s): {failure.Message}",
+                    failure.Code));
             }
 
             var message = MessageFactory.CreateAssistantMessage(assembler.Blocks(), request.Provider, request.Model, assembler.ReplayState?.Response);
@@ -432,6 +455,34 @@ public sealed class AgentLoopAgent : IAgent
             var concluded = await ExecuteToolCalls(turn, step, toolCalls, signal);
             return concluded ? StepOutcome.Completed : null;
         }
+    }
+
+    /** 把 finish 归一成失败: Unknown/Incomplete 视为可重试的中断, Stop/ToolCalls/MaxTokens 不是失败。 */
+    private static LlmFailure? FailureOf(FinishReason finish) => finish switch
+    {
+        FinishReason.Error error => error.Failure,
+        FinishReason.Aborted aborted => aborted.Failure,
+        FinishReason.Unknown unknown => new LlmFailure(
+            $"unrecognized finish reason \"{unknown.RawKind}\"", LlmFailureCodes.IncompleteStream),
+        FinishReason.Incomplete incomplete => new LlmFailure(incomplete.Detail, LlmFailureCodes.IncompleteStream),
+        _ => null,
+    };
+
+    /** 重试耗尽时把已经流出的半截文本落库并标注中断, 让用户至少能看到"已经说了什么"。 */
+    private void PersistInterrupted(int turn, int step, GenerateOptions request, BlockAssembler assembler, IReadOnlyList<long> chunkSeqs)
+    {
+        var content = assembler.InterruptedBlocks();
+        if (content.Count == 0)
+            return;
+        Session.Append(
+            new AssistantMessagePayload(
+                turn,
+                step,
+                MessageFactory.CreateAssistantMessage(content, request.Provider, request.Model),
+                assembler.Usage,
+                true),
+            new SurfaceOp.Append(),
+            chunkSeqs);
     }
 
     private void CommitSystemPrompt(int turn, int step, bool startsRequestSeries)
