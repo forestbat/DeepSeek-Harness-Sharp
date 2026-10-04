@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Pty;
 using Dsh.Runtime;
 using Dsh.Toon;
 using Dsh.Tui;
@@ -16,6 +17,8 @@ public sealed class PaneReadToolsTests : IDisposable
     private readonly string _homeDir = Path.Combine(
         Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-homes")),
         Guid.NewGuid().ToString("N"));
+
+    private static readonly PtyPaneSnapshotDto RemotePane = new() { Id = 7, Kind = "chat", Title = "remote-chat", Lines = ["remote line"] };
 
     [Fact]
     public async Task PaneList_Lists_All_Panes_With_Kind_And_Session()
@@ -122,6 +125,68 @@ public sealed class PaneReadToolsTests : IDisposable
         chat.Dispose();
     }
 
+    [Fact]
+    public async Task PaneList_Merges_Remote_Panes()
+    {
+        var (chat, tools, _, _) = await CreateChatWithTools();
+        chat.DaemonPtyAccess = new FakeDaemonPtyAccess(RemotePane);
+
+        var result = await RunTool(chat, tools, PaneReadTools.PaneListToolName, "{}");
+
+        var rows = SuccessValue(result).EnumerateArray().ToList();
+        var remote = Assert.Single(rows, row => row.TryGetProperty("remote", out var flag) && flag.GetBoolean());
+        Assert.Equal(7, remote.GetProperty("id").GetInt32());
+        Assert.Equal("pty-remote", remote.GetProperty("ptyId").GetString());
+        chat.Dispose();
+    }
+
+    [Fact]
+    public async Task PaneRead_Falls_Back_To_Remote_Pane()
+    {
+        var (chat, tools, _, _) = await CreateChatWithTools();
+        chat.DaemonPtyAccess = new FakeDaemonPtyAccess(RemotePane);
+
+        var result = await RunTool(chat, tools, PaneReadTools.PaneReadToolName, """{"paneId": 7}""");
+
+        var value = SuccessValue(result);
+        Assert.True(value.GetProperty("remote").GetBoolean());
+        Assert.Contains("remote line", string.Join('\n', value.GetProperty("lines").EnumerateArray().Select(line => line.GetString())));
+        chat.Dispose();
+    }
+
+    [Fact]
+    public async Task PaneSend_Routes_Remote_To_Control_Send()
+    {
+        var (chat, tools, _, _) = await CreateChatWithTools();
+        var fake = new FakeDaemonPtyAccess(RemotePane);
+        chat.DaemonPtyAccess = fake;
+
+        var result = await RunTool(chat, tools, PaneReadTools.PaneSendToolName, """{"paneId": 7, "kind": "text", "text": "hi"}""");
+
+        var value = SuccessValue(result);
+        Assert.True(value.GetProperty("remote").GetBoolean());
+        var sent = Assert.Single(fake.ControlSends);
+        Assert.Equal(("pty-remote", "text", 7, "hi"), sent);
+        chat.Dispose();
+    }
+
+    /** pane_send 的 schema 必须暴露 text/key/focus, 且 key 有独立载荷字段(与 ApplyPaneInput 的 key 分支对齐)。 */
+    [Fact]
+    public async Task PaneSend_Exposes_Text_Key_And_Focus()
+    {
+        var (chat, tools, _, _) = await CreateChatWithTools();
+
+        var definition = tools.Get(PaneReadTools.PaneSendToolName);
+        Assert.NotNull(definition);
+        var properties = definition!.Parameters!["properties"]!.AsObject();
+        var kinds = properties["kind"]!["enum"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
+        Assert.Contains("text", kinds);
+        Assert.Contains("key", kinds);
+        Assert.Contains("focus", kinds);
+        Assert.NotNull(properties["keys"]);
+        chat.Dispose();
+    }
+
     private async Task<(ChatWindow Chat, ToolRuntime Tools, AgentLoopAgent First, AgentLoopAgent Second)> CreateChatWithTools(
         bool registerToonCodec = false)
     {
@@ -139,6 +204,7 @@ public sealed class PaneReadToolsTests : IDisposable
         var chat = new ChatWindow(ctx, first, HarnessHome.Resolve(_homeDir));
         chat.AddPane(second, SplitOrientation.Vertical);
         chat.RegisterPaneTools();
+        chat.DaemonPtyAccess = FakeDaemonPtyAccess.Empty;
         return (chat, tools, first, second);
     }
 
@@ -189,6 +255,34 @@ public sealed class PaneReadToolsTests : IDisposable
     private sealed class ToonCodecAdapter : IToonCodec
     {
         public string Encode(JsonNode? value) => ToonCodec.Encode(value);
+    }
+
+    /** 假的 daemon pty 访问: 按给定窗格快照发布一个远端 pty, 并记录控制消息路由。 */
+    private sealed class FakeDaemonPtyAccess(params PtyPaneSnapshotDto[] panes) : IDaemonPtyAccess
+    {
+        public static FakeDaemonPtyAccess Empty { get; } = new();
+
+        public List<(string PtyId, string Kind, int PaneId, string Payload)> ControlSends { get; } = [];
+
+        public Task<IReadOnlyList<PtyDaemonSessionDto>> ListAsync()
+            => Task.FromResult<IReadOnlyList<PtyDaemonSessionDto>>(panes.Length == 0
+                ? []
+                :
+                [
+                    new PtyDaemonSessionDto
+                    {
+                        Id = "pty-remote",
+                        Command = "dsh tui",
+                        Status = nameof(PtySessionStatus.Running),
+                        Panes = [.. panes],
+                    },
+                ]);
+
+        public Task ControlSendAsync(string ptyId, string kind, int paneId, string payload)
+        {
+            ControlSends.Add((ptyId, kind, paneId, payload));
+            return Task.CompletedTask;
+        }
     }
 
     public void Dispose()
