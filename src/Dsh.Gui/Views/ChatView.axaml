@@ -10,7 +10,8 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="20,14,20,0">
+    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
+          Classes="chatHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
         <TextBlock Text="{Binding SessionSubtitle}" Classes="Tertiary" />

@@ -62,6 +62,32 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
         });
 
+    /** 侧栏收起时顶栏标题要让开左上角的展开按钮, 否则汉堡键压住标题。 */
+    [Fact]
+    public async Task CollapsedSidebar_ShiftsChatHeaderRight() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
+            var window = new MainWindow(environment.App, environment.Agent);
+            var viewModel = window.ViewModel!;
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var chat = window.GetVisualDescendants().OfType<ChatView>().Single();
+            var header = chat.FindControl<Grid>("ChatHeader")!;
+
+            viewModel.IsSidebarVisible = false;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(56, header.Margin.Left);
+
+            viewModel.IsSidebarVisible = true;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(20, header.Margin.Left);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+
     [Fact]
     public async Task DecisionDialog_RendersAndResolvesApproval() => await HeadlessGui.RunAsync(async () =>
         {

@@ -8,7 +8,8 @@
 
   <Grid RowDefinitions="Auto,*,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="20,14,20,10">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto"
+          Classes="pageHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="插件市场" Classes="Title" />
         <TextBlock Text="{Binding MarketStatus}" Classes="Tertiary" TextWrapping="Wrap" />

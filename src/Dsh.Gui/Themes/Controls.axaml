@@ -12,6 +12,20 @@
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
+  <!-- 页面顶栏: 侧栏收起时左移 36px 让开左上角的展开按钮(汉堡)。类样式必须不含局部 Margin, 否则局部值优先。 -->
+  <Style Selector="Grid.pageHeader">
+    <Setter Property="Margin" Value="20,14,20,10" />
+  </Style>
+  <Style Selector="Grid.pageHeader.collapsed">
+    <Setter Property="Margin" Value="56,14,20,10" />
+  </Style>
+  <Style Selector="Grid.chatHeader">
+    <Setter Property="Margin" Value="20,14,20,0" />
+  </Style>
+  <Style Selector="Grid.chatHeader.collapsed">
+    <Setter Property="Margin" Value="56,14,20,0" />
+  </Style>
+
   <Style Selector="TextBlock.Title">
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Title}" />
     <Setter Property="FontWeight" Value="SemiBold" />

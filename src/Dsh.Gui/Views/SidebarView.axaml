@@ -154,8 +154,11 @@
                               <TextBlock Text="{Binding MatchSnippet}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
                                          TextTrimming="CharacterEllipsis" IsVisible="{Binding HasMatchSnippet}" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="{Binding RelativeTime}" Classes="Tertiary"
-                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0" VerticalAlignment="Center">
+                              <TextBlock Text="● 运行中" FontSize="{DynamicResource FontSize.Status}"
+                                         Foreground="{DynamicResource Brush.Status.Success}" IsVisible="{Binding IsRunning}" />
+                              <TextBlock Text="{Binding RelativeTime}" Classes="Tertiary" />
+                            </StackPanel>
                           </Grid>
                         </Button>
                         <TextBox Grid.ColumnSpan="2" Classes="Search" IsVisible="{Binding IsRenaming}"
@@ -209,8 +212,13 @@
                             Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSessionCommand}"
                             CommandParameter="{Binding}">
                       <StackPanel>
-                        <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
-                                   TextTrimming="CharacterEllipsis" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="●" FontSize="{DynamicResource FontSize.Status}"
+                                     Foreground="{DynamicResource Brush.Status.Success}" VerticalAlignment="Center"
+                                     IsVisible="{Binding IsRunning}" />
+                          <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
+                                     TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
                         <TextBlock Text="{Binding MatchSnippet}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
                                    TextTrimming="CharacterEllipsis" IsVisible="{Binding HasMatchSnippet}" />
                       </StackPanel>

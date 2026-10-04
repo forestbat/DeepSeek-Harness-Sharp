@@ -28,6 +28,10 @@ public sealed partial class SessionNodeViewModel : ObservableObject
     [ObservableProperty]
     private bool _isLive;
 
+    /** 该会话的 agent 正在跑回合; 由 TurnStart/TurnEnd 事件更新, 侧栏据此显示"运行中"。 */
+    [ObservableProperty]
+    private bool _isRunning;
+
     [ObservableProperty]
     private string _modelLabel = "";
 
@@ -52,6 +56,7 @@ public sealed partial class SessionNodeViewModel : ObservableObject
     {
         Agent = liveAgent;
         IsLive = liveAgent is not null;
+        IsRunning = liveAgent?.Status == AgentStatus.Running;
         Title = title.Length > 0 ? title : SessionId.Value;
         ModelLabel = modelLabel;
         RelativeTime = RelativeTimeText.Format(CreatedAt);

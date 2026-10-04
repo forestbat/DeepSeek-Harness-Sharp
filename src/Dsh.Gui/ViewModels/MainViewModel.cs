@@ -55,6 +55,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherBridge<SessionEvent> _events;
     private readonly List<Func<bool>> _unsubscribers = [];
     private readonly List<MessageViewModel> _lastUserMessages = [];
+    private Session? _renamedSession;
     private IReadOnlyList<string> _skillNames = [];
     private readonly Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
     private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
@@ -803,6 +804,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var unsubscribe in _unsubscribers)
             unsubscribe();
         _unsubscribers.Clear();
+        if (_renamedSession is not null)
+            _renamedSession.Renamed -= OnSessionRenamed;
     }
 
     /** 文件选择由视图提供(Avalonia 对话框需要 TopLevel), 未接视图时返回空。 */
@@ -959,6 +962,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (ReferenceEquals(notification.Session, _agent.Session))
             _events.Enqueue(notification.Event);
+        if (notification.Event.Data is TurnStartPayload or TurnEndPayload)
+            RefreshRunningState(notification.Session, notification.Event.Data is TurnStartPayload);
+    }
+
+    /** 后台会话的回合开始/结束也要反映到侧栏, 否则非当前会话看起来像被挂起。 */
+    private void RefreshRunningState(Session session, bool running)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed)
+                return;
+            foreach (var node in AllSessions())
+            {
+                if (node.SessionId == session.Id)
+                    node.IsRunning = running;
+            }
+        });
+    }
+
+    /** 会话被自动命名或压缩重命名后, 刷新顶部标题与侧栏节点(原本只在切换/新建时刷新)。 */
+    private void OnSessionRenamed(Session session, SessionHeader header)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_disposed || !ReferenceEquals(session, _agent.Session))
+                return;
+            SessionTitle = header.Title ?? _agent.Id.Value;
+            RefreshSessions();
+        });
     }
 
     private void OnComposerPropertyChanged(object? sender, PropertyChangedEventArgs args)
@@ -1119,6 +1151,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _lastUserMessages.Clear();
         Page = AppPage.Chat;
         SessionTitle = agent.Session.Header.Title ?? agent.Id.Value;
+        if (_renamedSession is not null)
+            _renamedSession.Renamed -= OnSessionRenamed;
+        _renamedSession = agent.Session;
+        agent.Session.Renamed += OnSessionRenamed;
         ApplyEvents(agent.Session.SnapshotEvents());
         IsBusy = agent.Status == AgentStatus.Running;
         RefreshMode();

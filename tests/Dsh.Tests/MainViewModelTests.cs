@@ -93,6 +93,29 @@ public sealed class MainViewModelTests
         Assert.True(node.IsLive);
     }
 
+    /** 侧栏"运行中"指示由后台会话的 TurnStart/TurnEnd 驱动, 不限于当前显示会话。 */
+    [Fact]
+    public async Task SessionNode_TracksRunningState_FromTurnEvents()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+        var session = environment.Agent.Session;
+        var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First(item => item.SessionId == session.Id);
+        Assert.False(node.IsRunning);
+
+        environment.App.Ctx.Emit(new SessionEventNotification(session, Event(1, new TurnStartPayload(1))));
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(node.IsRunning);
+
+        environment.App.Ctx.Emit(new SessionEventNotification(
+            session, Event(2, new TurnEndPayload(1, new TurnEndReason.Completed()))));
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(node.IsRunning);
+    }
+
+    private static SessionEvent Event(long seq, SessionEventPayload payload)
+        => new() { Type = payload.Type, Seq = seq, Time = 0, Data = payload };
+
     [Fact]
     public async Task SnapshotReplay_MapsEventsToMessagesAndTrace()
     {
