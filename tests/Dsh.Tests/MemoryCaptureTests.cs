@@ -158,7 +158,7 @@ public sealed class MemoryCaptureTests
             MemoryPath = Path.Combine(_cwd, ".dsh-memory.md");
             SidecarDir = Path.Combine(_cwd, ".dsh-memory");
             var memory = new ProjectMemory(new FileMemoryStore(MemoryPath), SidecarDir);
-            _capture = new MemoryCapture(ctx, memory, new HarnessOptions(home, Cwd: _cwd));
+            _capture = new MemoryCapture(ctx, _ => memory, new HarnessOptions(home, Cwd: _cwd));
         }
 
         public MockCaptureAdapter Adapter { get; }

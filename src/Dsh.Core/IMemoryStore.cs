@@ -16,4 +16,12 @@ public static class MemoryServices
     public const string Store = "memoryStore";
 
     public const string ProjectMemory = "projectMemory";
+
+    public const string Provider = "projectMemoryProvider";
+}
+
+/** 按会话工作区提供项目记忆:同一进程可同时服务多个项目,按项目根缓存。 */
+public interface IProjectMemoryProvider
+{
+    ProjectMemory For(string? cwd);
 }

@@ -2,6 +2,7 @@ using Dsh.Runtime;
 using Dsh.AgentInstructions;
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Llm;
 using System.Runtime.CompilerServices;
 
 namespace Dsh.Tests;
@@ -92,6 +93,66 @@ public sealed class AgentInstructionsTests
         {
             Directory.Delete(root, true);
         }
+    }
+
+    [Fact]
+    public async Task RendersFromAgentSessionCwd_NotComposeCwd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-agents-md", Guid.NewGuid().ToString("N"));
+        var composeDir = Path.Combine(root, "compose");
+        var agentDir = Path.Combine(root, "agent");
+        var home = new HarnessHome(Path.Combine(root, "home"));
+        Directory.CreateDirectory(composeDir);
+        Directory.CreateDirectory(agentDir);
+        Directory.CreateDirectory(home.Root);
+        try
+        {
+            File.WriteAllText(Path.Combine(composeDir, "AGENTS.md"), "compose instructions marker");
+            File.WriteAllText(Path.Combine(agentDir, "AGENTS.md"), "agent instructions marker");
+
+            var (ctx, prompt, registration) = Compose(home, composeDir); using var _reg = registration;
+            var assembly = await prompt.Assemble(new AssembleContext(Agent: new FakeAgent(ctx, agentDir)));
+            var section = assembly.Sections.Single(s => s.Name == "agent-instructions");
+
+            Assert.Contains("agent instructions marker", section.Text);
+            Assert.DoesNotContain("compose instructions marker", section.Text);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    private sealed class FakeAgent : IAgent
+    {
+        private readonly SessionId _id = SessionId.Create($"session-{Guid.NewGuid():N}");
+
+        public FakeAgent(Context ctx, string cwd)
+        {
+            Ctx = ctx;
+            Session = Session.Create(_id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion,
+                Id = _id,
+                CreatedAt = 0,
+                Cwd = cwd,
+                IsSeeded = false,
+            });
+        }
+
+        public SessionId Id => Session.Id;
+        public Session Session { get; }
+        public ScopeKey ScopeKey { get; } = new();
+        public Context Ctx { get; }
+        public AgentStatus Status => AgentStatus.Idle;
+        public AgentOptions Options { get; } = new();
+
+        public void Cancel(AgentCancelCause cause, bool keepInbox = false) { }
+        public Task WhenIdle() => Task.CompletedTask;
+        public void Send(UserMessage message, string target, bool wakeup) { }
+        public void Followup(UserMessage message) { }
+        public void Steer(UserMessage message) { }
+        public void Inject(UserMessage message) { }
     }
 }
 

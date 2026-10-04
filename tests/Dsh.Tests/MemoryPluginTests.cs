@@ -104,6 +104,33 @@ public sealed class MemoryPluginTests
         Assert.DoesNotContain("beta dotnet", text);
     }
 
+    [Fact]
+    public async Task Workspace_ResolvesPerProjectRootAndCaches()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-memory-ws-{Guid.NewGuid():N}");
+        var projectA = Path.Combine(root, "a");
+        var projectB = Path.Combine(root, "b");
+        Directory.CreateDirectory(projectA);
+        Directory.CreateDirectory(projectB);
+        try
+        {
+            using var workspace = new MemoryWorkspace(MemoryPluginConfig.Resolve(null));
+            var memoryA = workspace.For(projectA);
+            Assert.Same(memoryA, workspace.For(projectA));
+            var memoryB = workspace.For(projectB);
+            Assert.NotSame(memoryA, memoryB);
+
+            await memoryA.RememberAsync("key", "alpha", "Facts", "test", TestContext.Current.CancellationToken);
+
+            Assert.Contains("alpha", await File.ReadAllTextAsync(Path.Combine(projectA, MemoryStoreFactory.DefaultFileName), TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(Path.Combine(projectB, MemoryStoreFactory.DefaultFileName)));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private sealed class ToolFixture : IDisposable
     {
         private readonly string _root;
@@ -121,7 +148,7 @@ public sealed class MemoryPluginTests
             var memory = new ProjectMemory(
                 new FileMemoryStore(MemoryPath),
                 Path.Combine(_root, ".dsh-memory"));
-            _tool = MemorySaveTool.Register(ctx, memory);
+            _tool = MemorySaveTool.Register(ctx, _ => memory);
         }
 
         public string MemoryPath { get; }

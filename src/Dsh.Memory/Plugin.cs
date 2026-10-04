@@ -18,14 +18,11 @@ public sealed class Plugin : IDshPlugin
     {
         var options = ctx.GetProp("harnessOptions") as HarnessOptions
             ?? throw new InvalidOperationException("harnessOptions is required for the memory plugin");
-        var cwd = options.Cwd ?? Environment.CurrentDirectory;
-        var store = MemoryStoreFactory.Create(config as MemoryPluginConfig ?? MemoryPluginConfig.Resolve(config), cwd);
-        var memory = new ProjectMemory(store, ProjectMemory.SidecarDirFor(ProjectRoot.Resolve(cwd)));
-        ctx.Provide(MemoryServices.Store, store);
-        ctx.Provide(MemoryServices.ProjectMemory, memory);
-        var tool = MemorySaveTool.Register(ctx, memory);
-        var capture = new MemoryCapture(ctx, memory, options);
-        return new Bundle(store as IDisposable, tool, capture);
+        var workspace = new MemoryWorkspace(config as MemoryPluginConfig ?? MemoryPluginConfig.Resolve(config));
+        ctx.Provide(MemoryServices.Provider, workspace);
+        var tool = MemorySaveTool.Register(ctx, exec => workspace.For(exec.Agent?.Session.Header.Cwd));
+        var capture = new MemoryCapture(ctx, session => workspace.For(session.Header.Cwd), options);
+        return new Bundle(workspace, tool, capture);
     }
 
     private sealed class Bundle(IDisposable? store, IDisposable tool, IDisposable capture) : IDisposable

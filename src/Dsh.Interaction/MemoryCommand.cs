@@ -16,10 +16,10 @@ public static class MemoryCommand
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         systemPrompt.Section(new PromptSection(
             MemorySectionName,
-            _ => MemoryPolicyText(ctx)));
+            context => MemoryPolicyText(ResolveMemory(ctx, context.Agent?.Session.Header.Cwd))));
         systemPrompt.Context(new PromptContext(
             MemoryContextName,
-            _ => MemoryContextText(ctx)));
+            context => MemoryContextText(ResolveMemory(ctx, context.Agent?.Session.Header.Cwd))));
 
         return commands.Register(new CommandDefinition
         {
@@ -39,14 +39,14 @@ public static class MemoryCommand
             case "off":
                 return await Toggle(ctx, raw == "on");
             case "show":
-                if (ResolveMemory(ctx) is not { } memoryToShow)
+                if (ResolveMemory(ctx, invocation.Agent.Session.Header.Cwd) is not { } memoryToShow)
                     return new CommandResult.Error("project memory is unavailable; run /memory on first");
                 return new CommandResult.Success(await memoryToShow.ShowAsync(invocation.Signal));
         }
         var space = raw.IndexOf(' ');
         var verb = space < 0 ? raw : raw[..space];
         var argument = space < 0 ? "" : raw[(space + 1)..].Trim();
-        if (ResolveMemory(ctx) is not { } memory)
+        if (ResolveMemory(ctx, invocation.Agent.Session.Header.Cwd) is not { } memory)
             return new CommandResult.Error("project memory is unavailable; run /memory on first");
         return verb switch
         {
@@ -83,9 +83,9 @@ public static class MemoryCommand
         return new CommandResult.Success($"project memory {(enabled ? "on" : "off")} ({message})");
     }
 
-    private static string MemoryPolicyText(Context ctx)
+    private static string MemoryPolicyText(ProjectMemory? memory)
     {
-        if (ResolveMemory(ctx) is not { } memory)
+        if (memory is null)
             return "";
         return $"""
             Project memory is enabled (store: {memory.Description}).
@@ -94,9 +94,9 @@ public static class MemoryCommand
             """;
     }
 
-    private static string MemoryContextText(Context ctx)
+    private static string MemoryContextText(ProjectMemory? memory)
     {
-        if (ResolveMemory(ctx) is not { } memory)
+        if (memory is null)
             return "";
         try
         {
@@ -108,6 +108,7 @@ public static class MemoryCommand
         }
     }
 
-    private static ProjectMemory? ResolveMemory(Context ctx)
-        => ctx.Get<ProjectMemory>(MemoryServices.ProjectMemory, false);
+    private static ProjectMemory? ResolveMemory(Context ctx, string? cwd)
+        => ctx.Get<IProjectMemoryProvider>(MemoryServices.Provider, false)?.For(cwd)
+           ?? ctx.Get<ProjectMemory>(MemoryServices.ProjectMemory, false);
 }

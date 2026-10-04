@@ -160,6 +160,41 @@ public sealed class MemoryCommandTests
         }
     }
 
+    [Fact]
+    public async Task ProjectContext_FollowsAgentWorkspace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-memory-cmd", Guid.NewGuid().ToString("N"));
+        var projectA = Path.Combine(root, "a");
+        var projectB = Path.Combine(root, "b");
+        Directory.CreateDirectory(projectA);
+        Directory.CreateDirectory(projectB);
+        try
+        {
+            var ctx = new Context();
+            var systemPrompt = new SystemPrompt(ctx, new SystemPromptConfig());
+            _ = CommandsService.Register(ctx);
+            using var registration = MemoryCommand.Register(ctx);
+            using var workspace = new MemoryWorkspace(MemoryPluginConfig.Resolve(null));
+            ctx.Provide(MemoryServices.Provider, workspace);
+            await File.WriteAllTextAsync(Path.Combine(projectA, ".dsh-memory.md"), "## Facts\n- a.marker :: from-a (2026-01-01T00:00:00Z)\n", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(projectB, ".dsh-memory.md"), "## Facts\n- b.marker :: from-b (2026-01-01T00:00:00Z)\n", TestContext.Current.CancellationToken);
+
+            var assemblyA = await systemPrompt.Assemble(new AssembleContext(Agent: new FakeAgent(ctx, projectA)));
+            var assemblyB = await systemPrompt.Assemble(new AssembleContext(Agent: new FakeAgent(ctx, projectB)));
+            var contextA = assemblyA.Contexts.Single(item => item.Name == "memory:project");
+            var contextB = assemblyB.Contexts.Single(item => item.Name == "memory:project");
+
+            Assert.Contains("from-a", contextA.Text);
+            Assert.DoesNotContain("from-b", contextA.Text);
+            Assert.Contains("from-b", contextB.Text);
+            Assert.DoesNotContain("from-a", contextB.Text);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private sealed class FakePluginManager : IPluginManager
     {
         public List<string> Calls { get; } = [];
@@ -187,7 +222,7 @@ public sealed class MemoryCommandTests
 
     private sealed class FakeAgent : IAgent
     {
-        public FakeAgent(Context ctx)
+        public FakeAgent(Context ctx, string? cwd = null)
         {
             Ctx = ctx;
             var id = SessionId.Create($"session-{Guid.NewGuid():N}");
@@ -196,7 +231,7 @@ public sealed class MemoryCommandTests
                 Version = SessionHeader.SessionFormatVersion,
                 Id = id,
                 CreatedAt = 0,
-                Cwd = Path.GetTempPath(),
+                Cwd = cwd ?? Path.GetTempPath(),
                 IsSeeded = false,
             });
         }

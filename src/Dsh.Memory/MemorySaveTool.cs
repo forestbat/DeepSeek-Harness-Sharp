@@ -27,7 +27,7 @@ public static class MemorySaveTool
         + "or skip (decline out-of-scope content). "
         + "Records are timestamped automatically; the injected index is capped at 8192 bytes, so read the memory file directly when you need full content.";
 
-    public static IDisposable Register(Context ctx, ProjectMemory memory)
+    public static IDisposable Register(Context ctx, Func<ToolRunContext, ProjectMemory> resolve)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
@@ -75,7 +75,7 @@ public static class MemorySaveTool
                     }
                     """)!.AsObject(),
                 (_, value) => RenderResult(value)),
-            Execute = (args, exec) => Execute(args, exec, memory),
+            Execute = (args, exec) => Execute(args, exec, resolve(exec)),
         });
         return new Registration(registration, section);
     }

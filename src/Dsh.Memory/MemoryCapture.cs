@@ -20,7 +20,7 @@ public sealed class MemoryCapture : Service, IDisposable
 
     private sealed record CaptureOp(string Op, string? Section, string? Key, string? Text);
 
-    private readonly ProjectMemory _memory;
+    private readonly Func<Session, ProjectMemory> _resolveMemory;
     private readonly HarnessOptions _options;
     private readonly Dictionary<string, DateTimeOffset> _lastRun = new(StringComparer.Ordinal);
     private readonly Channel<Session> _queue = Channel.CreateBounded<Session>(
@@ -29,9 +29,9 @@ public sealed class MemoryCapture : Service, IDisposable
     private readonly Task _worker;
     private readonly Lock _sync = new();
 
-    public MemoryCapture(Context ctx, ProjectMemory memory, HarnessOptions options) : base(ctx, ServiceName)
+    public MemoryCapture(Context ctx, Func<Session, ProjectMemory> resolveMemory, HarnessOptions options) : base(ctx, ServiceName)
     {
-        _memory = memory;
+        _resolveMemory = resolveMemory;
         _options = options;
         _ = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)
             ?? throw new InvalidOperationException("memory capture requires the llm service");
@@ -103,12 +103,13 @@ public sealed class MemoryCapture : Service, IDisposable
             return;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(signal);
         timeout.CancelAfter(RunTimeout);
+        var memory = _resolveMemory(session);
         var digestText = await CallAsync(llm, target, CapturePrompts.Digest(transcript), session.Id, timeout.Token);
         if (ParseDigest(digestText) is { } digest)
-            await _memory.WriteDigestAsync(session.Id, digest.Topic, digest.Summary, signal);
-        var index = await _memory.BuildIndexAsync(ProjectMemory.DefaultIndexBudgetBytes, signal);
+            await memory.WriteDigestAsync(session.Id, digest.Topic, digest.Summary, signal);
+        var index = await memory.BuildIndexAsync(ProjectMemory.DefaultIndexBudgetBytes, signal);
         var consolidationText = await CallAsync(llm, target, CapturePrompts.Consolidation(index, transcript), session.Id, timeout.Token);
-        var applied = await ApplyOpsAsync(ParseOps(consolidationText), signal);
+        var applied = await ApplyOpsAsync(memory, ParseOps(consolidationText), signal);
         Ctx.Logger.Info("%s", $"memory capture: session {session.Id.Value}, {applied} operation(s) applied");
     }
 
@@ -144,11 +145,15 @@ public sealed class MemoryCapture : Service, IDisposable
                 throw new InvalidOperationException($"memory capture LLM call failed: {error.Failure.Message}");
             case FinishReason.Aborted aborted:
                 throw new InvalidOperationException($"memory capture LLM call aborted: {aborted.Failure.Message}");
+            case FinishReason.Unknown unknown:
+                throw new InvalidOperationException($"memory capture LLM call ended without a recognized finish reason: {unknown.RawKind}");
+            case FinishReason.Incomplete incomplete:
+                throw new InvalidOperationException($"memory capture LLM call was interrupted: {incomplete.Detail}");
         }
         return string.Concat(assembler.Blocks().OfType<TextBlock>().Select(block => block.Text));
     }
 
-    private async Task<int> ApplyOpsAsync(IReadOnlyList<CaptureOp> ops, CancellationToken signal)
+    private static async Task<int> ApplyOpsAsync(ProjectMemory memory, IReadOnlyList<CaptureOp> ops, CancellationToken signal)
     {
         var applied = 0;
         foreach (var op in ops.Take(MaxOperationsPerRun))
@@ -158,11 +163,11 @@ public sealed class MemoryCapture : Service, IDisposable
                 switch (op)
                 {
                     case { Op: "upsert", Key: { Length: > 0 } key, Text: { Length: > 0 } text }:
-                        await _memory.RememberAsync(key, text, op.Section, "capture", signal);
+                        await memory.RememberAsync(key, text, op.Section, "capture", signal);
                         applied++;
                         break;
                     case { Op: "remove", Key: { Length: > 0 } key }:
-                        await _memory.ForgetAsync(key, "capture", signal);
+                        await memory.ForgetAsync(key, "capture", signal);
                         applied++;
                         break;
                 }
