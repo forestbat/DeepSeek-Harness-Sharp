@@ -436,6 +436,7 @@ public sealed class PtySession : IDisposable
         {
             WorkingDirectory = info.WorkingDirectory ?? Environment.CurrentDirectory,
             UseShellExecute = false,
+            CreateNoWindow = true,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

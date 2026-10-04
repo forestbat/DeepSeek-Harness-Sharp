@@ -43,6 +43,7 @@ public sealed class ShadowGit
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
             WorkingDirectory = Directory.Exists(_workTree) ? _workTree : _gitDir,
         };
         foreach (var arg in Arguments([.. args]))

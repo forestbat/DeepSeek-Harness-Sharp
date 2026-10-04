@@ -293,6 +293,7 @@ public static class PtyDaemonClient
         var startInfo = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
+            CreateNoWindow = true,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

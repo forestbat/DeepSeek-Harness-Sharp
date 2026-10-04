@@ -126,6 +126,7 @@ public static class ClosePolicy
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
+                CreateNoWindow = true,
             };
             foreach (var argument in probe.Arguments)
                 startInfo.ArgumentList.Add(argument);
