@@ -20,8 +20,8 @@ public sealed class Plugin : IDshPlugin
         if (settings?.A2a is not { Enabled: true } a2a)
             return new CallbackDisposable();
         var (provider, model) = ResolveDefaults(ctx, settings);
-        var bridge = new A2aSessionBridge(ctx, provider, model);
-        var options = new A2aServerOptions(a2a.Host ?? "127.0.0.1", a2a.Port, a2a.PublicUrl, a2a.AuthToken)
+        var handler = new DshAgentHandler(ctx, provider, model);
+        var options = new A2aHostOptions(a2a.Host ?? "127.0.0.1", a2a.Port, a2a.PublicUrl, a2a.AuthToken)
         {
             Skill = new A2aSkillOptions(
                 a2a.SkillId ?? "coding",
@@ -29,14 +29,14 @@ public sealed class Plugin : IDshPlugin
                 a2a.SkillDescription ?? "General software engineering assistance",
                 a2a.SkillTags.Count > 0 ? a2a.SkillTags : null),
         };
-        var listener = new A2aHttpListener(new A2aJsonRpc(bridge), options, ctx);
-        listener.Start();
-        ctx.Root.SetOwn(EndpointKey, listener.Endpoint);
-        ctx.LoggerFor("a2a").Info($"a2a server listening on {listener.Endpoint}");
+        var host = new A2aHost(handler, options);
+        host.Start();
+        ctx.Root.SetOwn(EndpointKey, host.Endpoint);
+        ctx.LoggerFor("a2a").Info($"a2a server listening on {host.Endpoint}");
         return new CallbackDisposable(() =>
         {
-            listener.Dispose();
-            bridge.Dispose();
+            host.Dispose();
+            handler.Dispose();
         });
     }
 
