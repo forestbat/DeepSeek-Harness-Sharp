@@ -1,6 +1,6 @@
 using Dsh.Llm;
 
-namespace Dsh.Persistence;
+namespace Dsh.Interaction;
 
 /** 会话标题: 取首条用户消息的第一行, 缩短后写入 Session.Header.Title; 会话 id 保持不变。 */
 public static class SessionTitleFromUserMessage

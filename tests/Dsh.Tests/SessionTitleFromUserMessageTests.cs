@@ -1,6 +1,6 @@
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Persistence;
 
 namespace Dsh.Tests;
 

@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.Channels;
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
@@ -9,9 +10,11 @@ using Dsh.Runtime.Events;
 namespace Dsh.Compaction;
 
 /**
- * 首轮结束后自动命名: 用命名模型(compaction_model ?? 会话模型)生成短标题,
- * 经 Session.Rename 触发 Renamed 事件(TUI 即时更新)并写入持久化。
- * 空标题才命名; 每个会话只尝试一次; 失败只记日志, 不打断会话。
+ * 会话自动命名: 用命名模型(compaction_model ?? 会话模型)生成短标题,
+ * 经 Session.Rename 触发 Renamed 事件(TUI/GUI 即时更新)并写入持久化。
+ * 触发时机: 首条用户消息 / 首条 LLM 消息 / 回合结束, 谁先到算谁。
+ * 持久化层的"首行兜底"标题会被模型标题覆盖; 手工命名(/rename)不覆盖。
+ * 每个会话只尝试一次; 失败保留兜底标题, 不打断会话。
  */
 public sealed class SessionAutoRename : Service, IDisposable
 {
@@ -38,18 +41,44 @@ public sealed class SessionAutoRename : Service, IDisposable
             new EventOptions { Global = true });
     }
 
+    /**
+     * 触发时机: 用户的第一条消息、LLM 的第一条消息、或任意回合结束, 谁先到算谁。
+     * 只对空标题会话尝试一次; 若此刻会话还没有请求头(拿不到模型)则不标记, 等后续事件再试。
+     */
     private void Observe(Session session, SessionEvent sessionEvent)
     {
-        if (sessionEvent.Data is not TurnEndPayload { Reason: TurnEndReason.Completed, Turn: 1 })
+        if (sessionEvent.Data is not (
+            UserMessagePayload { Message.Source: UserMessageSource }
+            or AssistantMessagePayload
+            or TurnEndPayload))
             return;
-        if (!string.IsNullOrWhiteSpace(session.Header.Title))
+        if (HasFinalTitle(session))
             return;
         lock (_sync)
         {
-            if (!_attempted.Add(session.Id.Value))
+            if (_attempted.Contains(session.Id.Value))
                 return;
         }
         _queue.Writer.TryWrite(session);
+    }
+
+    /** 已有标题且不是持久化层"首行兜底"时视为已定名(手工 /rename 等), 不覆盖。 */
+    private static bool HasFinalTitle(Session session)
+    {
+        var title = session.Header.Title;
+        if (string.IsNullOrWhiteSpace(title))
+            return false;
+        return !string.Equals(title, ProvisionalTitle(session), StringComparison.Ordinal);
+    }
+
+    private static string? ProvisionalTitle(Session session)
+    {
+        foreach (var sessionEvent in session.SnapshotEvents())
+        {
+            if (sessionEvent.Data is UserMessagePayload user)
+                return SessionTitleFromUserMessage.Derive(user.Message);
+        }
+        return null;
     }
 
     private async Task ProcessAsync()
@@ -85,10 +114,18 @@ public sealed class SessionAutoRename : Service, IDisposable
 
     private async Task RenameAsync(Session session, CancellationToken signal)
     {
+        // 太早(会话还没有请求头, 拿不到模型)就先不占用"只尝试一次"的名额, 等后续事件再试。
         if (CompactionModelSetting.Resolve(HarnessSettings.Load(_options.Home).CompactionModel, session) is not { } target)
             return;
+        lock (_sync)
+        {
+            if (!_attempted.Add(session.Id.Value))
+                return;
+        }
         var title = await GenerateTitleAsync(session, target, signal);
         if (title.Length == 0)
+            return;
+        if (HasFinalTitle(session))
             return;
         session.Rename(title);
         Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false)?.Rename(session.Id, title);
