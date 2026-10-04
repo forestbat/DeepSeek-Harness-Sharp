@@ -90,6 +90,28 @@ public sealed class ToonPluginTests
     }
 
     [Fact]
+    public async Task Dispatcher_AcceptsJsonObjectArguments()
+    {
+        var (_, tools) = CreateHost();
+        using var registration = tools.Register(EchoTool("echo"));
+
+        // 模型偶尔把目标参数直接写成 JSON 对象而非 TOON 文本: 不应报 "given key was not present"。
+        var result = await tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-obj"),
+            Name = Dsh.Toon.Plugin.ToolName,
+            Arguments = JsonDocument.Parse("""{"name":"echo","arguments":{"command":"ls -la","description":"List files"}}""").RootElement,
+            Signal = TestContext.Current.CancellationToken,
+        });
+
+        Assert.False(result.IsError);
+        var text = Assert.IsType<TextBlock>(Assert.Single(result.Content)).Text;
+        Assert.Contains("ls -la", text);
+        Assert.Contains("List files", text);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task Dispatcher_RejectsSelfDispatch()
     {
         var (ctx, tools) = CreateHost();

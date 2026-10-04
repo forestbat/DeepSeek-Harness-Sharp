@@ -73,7 +73,7 @@ public sealed class Plugin : IDshPlugin
     private static async Task<object?> Dispatch(ToolRuntime tools, JsonElement arguments, ToolRunContext run)
     {
         var target = arguments.TryGetProperty("name", out var name) ? name.GetString() : null;
-        var toon = arguments.TryGetProperty("arguments", out var raw) ? raw.GetString() : null;
+        var raw = arguments.TryGetProperty("arguments", out var rawArguments) ? rawArguments : default;
         if (string.IsNullOrWhiteSpace(target))
             return """{"error":"missing target tool name"}""";
         if (string.Equals(target, ToolName, StringComparison.Ordinal))
@@ -81,7 +81,15 @@ public sealed class Plugin : IDshPlugin
         JsonNode? decoded;
         try
         {
-            decoded = string.IsNullOrWhiteSpace(toon) ? new JsonObject() : ToonCodec.Decode(toon!);
+            decoded = raw.ValueKind switch
+            {
+                // 模型偶尔把目标参数直接写成 JSON 对象/数组(而非 TOON 文本), 两种形态都接受。
+                JsonValueKind.Object or JsonValueKind.Array => JsonNode.Parse(raw.GetRawText()),
+                JsonValueKind.String => string.IsNullOrWhiteSpace(raw.GetString())
+                    ? new JsonObject()
+                    : ToonCodec.Decode(raw.GetString()!),
+                _ => new JsonObject(),
+            };
         }
         catch (FormatException error)
         {

@@ -50,7 +50,7 @@ public static class PwshTool
                     ["timeoutMs"] = ToolSchemas.NumberParam("Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."),
                     ["workdir"] = ToolSchemas.StringParam("Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."),
                 },
-                "command", "description"),
+                "command"),
             Output = new ToolOutputDefinition(BashTool.OutputSchemaShared, (_, value) => Render(value)),
             Execute = (args, exec) => Execute(args, exec, subprocess, resolved),
         });
@@ -60,7 +60,6 @@ public static class PwshTool
     private static async Task<object?> Execute(JsonElement args, ToolRunContext exec, SubprocessService subprocess, BashToolConfig config)
     {
         var command = args.GetProperty("command").GetString() ?? "";
-        var description = args.GetProperty("description").GetString() ?? "";
         double? timeoutMsArg = args.TryGetProperty("timeoutMs", out var timeoutElement) && timeoutElement.ValueKind == JsonValueKind.Number
             ? timeoutElement.GetDouble()
             : null;
@@ -69,8 +68,6 @@ public static class PwshTool
             : null;
         if (command.Trim().Length == 0)
             throw new ArgumentException("invalid command: expected a non-empty string");
-        if (description.Trim().Length == 0)
-            throw new ArgumentException("invalid description: expected a non-empty string");
         if (timeoutMsArg is not null && (!double.IsFinite(timeoutMsArg.Value) || timeoutMsArg.Value <= 0))
             throw new ArgumentException($"invalid timeoutMs: expected a positive number, got {JsonSerializer.Serialize(timeoutMsArg.Value)}");
         var timeoutMs = (long)Math.Clamp(timeoutMsArg ?? config.TimeoutMs, 1, config.MaxTimeoutMs);
