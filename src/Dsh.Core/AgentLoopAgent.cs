@@ -554,8 +554,10 @@ public sealed class AgentLoopAgent : IAgent
                 ? persistedConfig.ReasoningEffort
                 : null;
         var reasoningEffort = Options.ReasoningEffort ?? persistedReasoningEffort;
-        var seedConfig = _requestHeaderLogged
-            ? RequestProposal(persistedHeader!)
+        // 会话已有的请求头(/model、/reasoning 或上一轮的配置)优先于 agent 创建时的 Options;
+        // 否则用户在首轮前用 /model 选择的模型会被全局默认 Options 覆盖。
+        var seedConfig = persistedHeader is not null
+            ? RequestProposal(persistedHeader)
             : new LlmCallConfig(provider, model, reasoningEffort, null, Options.MaxTokens);
         var proposedConfig = await Dispatch.Waterfall(
             new AgentRequestNotification(new AgentRequestPayload(this, phase.Turn, phase.Step, signal)),
