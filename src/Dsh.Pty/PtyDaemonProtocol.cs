@@ -109,6 +109,9 @@ public sealed class PtyPaneSnapshotDto
     public bool Exited { get; set; }
 
     public List<string>? Lines { get; set; }
+
+    /** 发布时是否因总量上限被裁剪(只保留了尾行的一部分)。 */
+    public bool Truncated { get; set; }
 }
 
 public sealed class PtyControlMessageDto
@@ -149,6 +152,9 @@ public sealed class PtyDaemonSessionDto
 
     /** 该 pty 发布的窗格目录与尾行快照(publish-panes 写入); 无则 null。 */
     public List<PtyPaneSnapshotDto>? Panes { get; set; }
+
+    /** 最近一次 publish-panes 的时间(daemon 记录); 无则 null。 */
+    public DateTimeOffset? PublishedAt { get; set; }
 }
 
 public sealed class PtyDaemonResponse

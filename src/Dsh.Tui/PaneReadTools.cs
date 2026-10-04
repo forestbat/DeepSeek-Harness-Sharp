@@ -108,7 +108,7 @@ internal static class PaneReadTools
     private static ToolDefinition PaneSendDefinition(Context ctx, ChatWindow window) => new()
     {
         Name = PaneSendToolName,
-        Description = "Send input to a pane of this TUI: `text` submits text (chat pane) or writes bytes (shell pane), `focus` switches the target TUI's focused pane. Works on local panes and on published panes of other processes behind the same daemon. Read-write.",
+        Description = "Send input to a pane of this TUI: `text` submits text (chat pane) or writes bytes (shell pane); `key` writes raw keys to a shell pane; `focus` switches the target TUI's focused pane. Works on local panes and on published panes of other processes behind the same daemon. Read-write.",
         Parameters = new JsonObject
         {
             ["type"] = "object",
@@ -117,12 +117,13 @@ internal static class PaneReadTools
             ["properties"] = new JsonObject
             {
                 ["paneId"] = new JsonObject { ["type"] = "integer", ["description"] = "Pane id from pane_list." },
-                ["kind"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("text", "focus"), ["description"] = "text: send/submit input; focus: switch focus (local panes only)." },
+                ["kind"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("text", "key", "focus"), ["description"] = "text: send/submit input; key: write raw keys to a shell pane; focus: switch focus." },
                 ["text"] = new JsonObject { ["type"] = "string", ["description"] = "Payload for kind=text." },
+                ["keys"] = new JsonObject { ["type"] = "string", ["description"] = "Payload for kind=key (raw bytes written to a shell pane)." },
             },
         },
         Output = new ToolOutputDefinition(PaneSendSchema, (args, value) => Render(ctx, args, value)),
-        IsConcurrencySafe = _ => true,
+        IsConcurrencySafe = _ => false,
         Execute = (args, _) => PaneSendExecute(window, args),
     };
 
@@ -131,8 +132,7 @@ internal static class PaneReadTools
         var rows = new List<JsonNode?>();
         foreach (var entry in await window.SnapshotPanesAsync())
             rows.Add(ProjectPane(entry));
-        await window.RefreshDaemonPtysAsync();
-        foreach (var (ptyId, pane) in window.RemotePanes())
+        foreach (var (ptyId, pane) in await window.RemotePanesAsync())
             rows.Add(ProjectRemotePane(ptyId, pane));
         return new JsonArray(rows.ToArray());
     }
@@ -153,8 +153,7 @@ internal static class PaneReadTools
             });
         }
 
-        await window.RefreshDaemonPtysAsync();
-        var remote = window.RemotePanes().FirstOrDefault(item => item.Pane.Id == paneId);
+        var remote = (await window.RemotePanesAsync()).FirstOrDefault(item => item.Pane.Id == paneId);
         if (remote.Pane is null)
             throw new InvalidOperationException($"pane {paneId} does not exist (run pane_list for current panes)");
         return ReadResult(remote.Pane.Lines ?? [], RequestedLines(args), new JsonObject
@@ -195,6 +194,8 @@ internal static class PaneReadTools
         var paneId = args.GetProperty("paneId").GetInt32();
         var kind = args.TryGetProperty("kind", out var kindElement) && kindElement.ValueKind == JsonValueKind.String ? kindElement.GetString() ?? "text" : "text";
         var text = args.TryGetProperty("text", out var textElement) && textElement.ValueKind == JsonValueKind.String ? textElement.GetString() ?? "" : "";
+        if (text.Length == 0 && args.TryGetProperty("keys", out var keysElement) && keysElement.ValueKind == JsonValueKind.String)
+            text = keysElement.GetString() ?? "";
 
         if (await window.FindPaneAsync(paneId) is not null)
         {
@@ -202,11 +203,10 @@ internal static class PaneReadTools
             return new JsonObject { ["paneId"] = paneId, ["kind"] = kind, ["remote"] = false, ["result"] = local };
         }
 
-        await window.RefreshDaemonPtysAsync();
-        var remote = window.RemotePanes().FirstOrDefault(item => item.Pane.Id == paneId);
+        var remote = (await window.RemotePanesAsync()).FirstOrDefault(item => item.Pane.Id == paneId);
         if (remote.Pane is null)
             throw new InvalidOperationException($"pane {paneId} not found locally or in published remote panes (run pane_list)");
-        await PtyDaemonClient.ControlSendAsync(remote.PtyId, kind, paneId, text);
+        await window.DaemonPtyAccess.ControlSendAsync(remote.PtyId, kind, paneId, text);
         return new JsonObject { ["paneId"] = paneId, ["kind"] = kind, ["remote"] = true, ["ptyId"] = remote.PtyId, ["result"] = "queued" };
     }
 

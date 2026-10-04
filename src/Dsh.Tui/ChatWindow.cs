@@ -817,9 +817,15 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    /** 其他进程发布的远程窗格(pty id + 快照); 与本进程目录同形, 供 pane_list/pane_read 合并。 */
-    internal IReadOnlyList<(string PtyId, PtyPaneSnapshotDto Pane)> RemotePanes()
-        => [.. _daemonPtys.SelectMany(pty => (pty.Panes ?? []).Select(pane => (pty.Id, pane)))];
+    /** 刷新并返回其他进程发布的远程窗格(pty id + 快照); 直接用返回值, 不等 UI 线程应用 _daemonPtys。 */
+    internal async Task<IReadOnlyList<(string PtyId, PtyPaneSnapshotDto Pane)>> RemotePanesAsync()
+    {
+        var sessions = await RefreshDaemonPtysAsync();
+        return [.. sessions.SelectMany(pty => (pty.Panes ?? []).Select(pane => (pty.Id, pane)))];
+    }
+
+    /** daemon pty 访问入口; 默认走真实客户端, 测试可替换为假实现。 */
+    internal IDaemonPtyAccess DaemonPtyAccess { get; set; } = new RealDaemonPtyAccess();
 
     /** 本窗格所属 agent 会话 id(常驻桥上报归属用)。 */
     internal string AgentSessionId => InputPane.Agent.Id.Value;
@@ -1697,6 +1703,23 @@ public sealed class ChatWindow : IDisposable
                 else
                     RunSlashCommand(InputPane, $"/resume {sessionId}");
                 return;
+            case OverviewTargetKind.RemotePane when item.PtyId is { } ptyId && item.PaneId is { } paneId:
+                _overviewActive = false;
+                _ = FocusRemotePaneSafeAsync(ptyId, paneId);
+                return;
+        }
+    }
+
+    /** 激活远程窗格: 通知其所属 TUI 把焦点切到该窗格(方案 §4.4 的 focus 控制消息)。 */
+    private static async Task FocusRemotePaneSafeAsync(string ptyId, int paneId)
+    {
+        try
+        {
+            await PtyDaemonClient.ControlSendAsync(ptyId, "focus", paneId, "");
+        }
+        catch (Exception)
+        {
+            // daemon 未起/远端 pty 已消失: 忽略。
         }
     }
 
@@ -1724,7 +1747,7 @@ public sealed class ChatWindow : IDisposable
             var ownership = pty.AgentSessionId is { Length: > 0 } sessionId ? $" · {sessionId}" : "";
             _overviewItems.Add(new OverviewItem($"  {pty.Id} (daemon) · {pty.Command} · {pty.Status}{ownership}", OverviewTargetKind.None, null, null));
             foreach (var pane in pty.Panes ?? [])
-                _overviewItems.Add(new OverviewItem($"    pane {pane.Id} · {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.None, null, null));
+                _overviewItems.Add(new OverviewItem($"    pane {pane.Id} · {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.RemotePane, pane.Id, null, pty.Id));
         }
 
         _overviewItems.Add(new OverviewItem("会话", OverviewTargetKind.None, null, null));
@@ -1804,21 +1827,23 @@ public sealed class ChatWindow : IDisposable
         placed.Add(entry.Id);
     }
 
-    internal async Task RefreshDaemonPtysAsync()
+    internal async Task<IReadOnlyList<PtyDaemonSessionDto>> RefreshDaemonPtysAsync()
     {
         try
         {
-            var sessions = await PtyDaemonClient.ListAsync();
+            var sessions = await DaemonPtyAccess.ListAsync();
             QueueAction(() =>
             {
                 _daemonPtys = sessions;
                 if (_overviewActive)
                     RefreshOverviewItems();
             });
+            return sessions;
         }
         catch (Exception error)
         {
             _ctx.LoggerFor("tui").Debug($"pty daemon list failed: {error.Message}");
+            return [];
         }
     }
 
@@ -2075,8 +2100,9 @@ public sealed class ChatWindow : IDisposable
     {
         None,
         Pane,
+        RemotePane,
         Session,
     }
 
-    private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId);
+    private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId, string? PtyId = null);
 }

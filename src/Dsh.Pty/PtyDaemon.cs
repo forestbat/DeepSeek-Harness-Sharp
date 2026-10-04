@@ -31,6 +31,9 @@ public sealed class PtyDaemon : IAsyncDisposable
 
         public volatile List<PtyPaneSnapshotDto>? Panes;
 
+        /** 最近一次 publish-panes 的 UTC ticks; 0 表示未发布(用 Interlocked 读写)。 */
+        public long PublishedAtTicks;
+
         public readonly Channel<PtyControlMessageDto> Controls = Channel.CreateUnbounded<PtyControlMessageDto>();
 
         public long Seq;
@@ -357,6 +360,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     if (request.AgentSessionId is { Length: > 0 } sessionId)
                         remote.AgentSessionId = sessionId;
                     remote.Panes = request.Panes;
+                    Interlocked.Exchange(ref remote.PublishedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
                     await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
                     return false;
                 }
@@ -492,6 +496,8 @@ public sealed class PtyDaemon : IAsyncDisposable
         {
             dto.AgentSessionId = remote.AgentSessionId;
             dto.Panes = remote.Panes;
+            var publishedTicks = Volatile.Read(ref remote.PublishedAtTicks);
+            dto.PublishedAt = publishedTicks == 0 ? null : new DateTimeOffset(publishedTicks, TimeSpan.Zero);
         }
         return dto;
     }

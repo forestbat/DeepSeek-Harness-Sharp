@@ -1,3 +1,4 @@
+using System.Text;
 using Dsh.Pty;
 
 namespace Dsh.Tui;
@@ -10,6 +11,7 @@ namespace Dsh.Tui;
 internal sealed class PaneBridge : IDisposable
 {
     public const int MaxPublishedLines = 200;
+    public const int MaxPublishedBytes = 64 * 1024;
     public static readonly TimeSpan PublishInterval = TimeSpan.FromSeconds(1);
 
     private readonly string _ptyId;
@@ -56,7 +58,7 @@ internal sealed class PaneBridge : IDisposable
                 await Task.Delay(PublishInterval, _stop.Token);
                 try
                 {
-                    var panes = await _window.SnapshotPaneSnapshotsAsync(MaxPublishedLines);
+                    var panes = CapSnapshots(await _window.SnapshotPaneSnapshotsAsync(MaxPublishedLines));
                     var hash = Hash(panes);
                     if (hash == _lastHash)
                         continue;
@@ -125,6 +127,45 @@ internal sealed class PaneBridge : IDisposable
                 hash.Add(line);
         }
         return hash.ToHashCode();
+    }
+
+    /**
+     * 按总量上限裁剪快照: 各 pane 的尾行共享 64KB 预算, 预算耗尽后的行丢弃并把该 pane 标 Truncated。
+     * 输入已是每 pane 的尾行(≤MaxPublishedLines), 这里只保证跨 pane 总量有界。
+     */
+    internal static IReadOnlyList<PtyPaneSnapshotDto> CapSnapshots(IReadOnlyList<PtyPaneSnapshotDto> panes)
+    {
+        var budget = MaxPublishedBytes;
+        var result = new List<PtyPaneSnapshotDto>(panes.Count);
+        foreach (var pane in panes)
+        {
+            var lines = pane.Lines ?? [];
+            var kept = new List<string>(lines.Count);
+            foreach (var line in lines)
+            {
+                var cost = Encoding.UTF8.GetByteCount(line) + 1;
+                if (cost > budget)
+                    break;
+                budget -= cost;
+                kept.Add(line);
+            }
+
+            result.Add(new PtyPaneSnapshotDto
+            {
+                Id = pane.Id,
+                Kind = pane.Kind,
+                Title = pane.Title,
+                SessionId = pane.SessionId,
+                PtyId = pane.PtyId,
+                Command = pane.Command,
+                Focused = pane.Focused,
+                Exited = pane.Exited,
+                Truncated = pane.Truncated || kept.Count < lines.Count,
+                Lines = kept,
+            });
+        }
+
+        return result;
     }
 
     public void Dispose()
