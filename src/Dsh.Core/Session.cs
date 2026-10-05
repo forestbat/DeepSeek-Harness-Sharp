@@ -1,16 +1,17 @@
+using System.Collections;
 using Dsh.Llm;
 
 namespace Dsh.Core;
 
 public sealed class Session
 {
-    private readonly List<SessionEvent> _log = [];
+    private SessionEvent[] _buffer = [];
+    private int _count;
+    private SessionLog _snapshot = SessionLog.Empty;
+    private readonly Lock _writeGate = new();
     private readonly Surface.Manager _surfaceManager;
-    private SessionEvent[]? _eventsSnapshot;
     private EpochHeader? _headerFold;
-    private long _headerFoldSeq;
     private RequestContextPayload? _contextFold;
-    private long _contextFoldSeq;
     private List<Message> _derived = [];
     private int _derivedNodes;
     private int _derivedGeneration;
@@ -31,7 +32,7 @@ public sealed class Session
 
     private Session(SessionId id, IReadOnlyList<SessionEvent>? seed, SessionHeader? header, long? suppliedInheritedEventCount)
     {
-        _surfaceManager = new Surface.Manager(_log);
+        _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot));
         if (seed is not null)
         {
             for (var index = 0; index < seed.Count; index++)
@@ -50,10 +51,10 @@ public sealed class Session
                 {
                     throw new ArgumentException($"invalid seed event at index {index}: {error.Message}");
                 }
-                _log.Add(seedEvent);
+                Commit(seedEvent);
             }
         }
-        FirstLiveSeq = _log.Count;
+        FirstLiveSeq = _count;
         Header = header is null
             ? new SessionHeader
             {
@@ -73,10 +74,10 @@ public sealed class Session
         var inheritedEventCount = suppliedInheritedEventCount ?? 0;
         if (!Header.IsSeeded && inheritedEventCount != 0)
             throw new ArgumentException("unseeded session inherited event count must be 0");
-        if (inheritedEventCount > _log.Count)
+        if (inheritedEventCount > _count)
             throw new ArgumentException("session inherited event count exceeds its event log");
         InheritedEventCount = inheritedEventCount;
-        if (seed is not null && (_log.Count == 0 || _log[^1].Type != SessionEventTypes.SessionEndSeed))
+        if (seed is not null && (_count == 0 || _buffer[_count - 1].Type != SessionEventTypes.SessionEndSeed))
             Append(new SessionEndSeedPayload());
     }
 
@@ -86,37 +87,50 @@ public sealed class Session
     public static Session FromRestore(SessionId id, IReadOnlyList<SessionEvent> seed, SessionHeader header, long inheritedEventCount)
         => new(id, seed, header, inheritedEventCount);
 
-    public SessionEvent? EventAt(long seq) => seq >= 0 && seq < _log.Count ? _log[(int)seq] : null;
+    public SessionEvent? EventAt(long seq)
+    {
+        var snapshot = Volatile.Read(ref _snapshot);
+        return seq >= 0 && seq < snapshot.Count ? snapshot[(int)seq] : null;
+    }
 
     public IReadOnlyList<SessionEvent> SnapshotEvents(long fromSeq = 0, long? toSeqExclusive = null)
     {
-        var to = toSeqExclusive ?? Seq;
-        if (fromSeq == 0 && to == _log.Count)
-            return _eventsSnapshot ??= [.. _log];
-        return _log.GetRange((int)fromSeq, (int)(to - fromSeq));
+        var snapshot = Volatile.Read(ref _snapshot);
+        var to = toSeqExclusive ?? snapshot.Count;
+        if (fromSeq == 0 && to == snapshot.Count)
+            return snapshot;
+        if (fromSeq < 0 || to > snapshot.Count || fromSeq > to)
+            throw new ArgumentOutOfRangeException(
+                nameof(fromSeq),
+                $"invalid snapshot range [{fromSeq}, {to}) for {snapshot.Count} events");
+        return snapshot.Slice((int)fromSeq, (int)to);
     }
 
     public IReadOnlyList<SessionEvent> OwnEvents() => SnapshotEvents(InheritedEventCount);
 
     public bool IsOwnSeq(long seq) => seq >= InheritedEventCount && seq < Seq;
 
-    public long Seq => _log.Count;
+    public long Seq => Volatile.Read(ref _snapshot).Count;
 
     public SessionEvent Append(SessionEventPayload payload, SurfaceOp? surfaceOp = null, IReadOnlyList<long>? sourceEventSeqs = null)
     {
-        var sessionEvent = new SessionEvent
+        SessionEvent sessionEvent;
+        Action<Session, SessionEvent>? subscribers;
+        lock (_writeGate)
         {
-            Type = payload.Type,
-            Seq = _log.Count,
-            Time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Data = payload,
-            SurfaceOp = surfaceOp,
-            SourceEventSeqs = sourceEventSeqs,
-        };
-        _surfaceManager.ValidateNext(sessionEvent);
-        var subscribers = Appended;
-        _log.Add(sessionEvent);
-        _eventsSnapshot = null;
+            sessionEvent = new SessionEvent
+            {
+                Type = payload.Type,
+                Seq = _count,
+                Time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Data = payload,
+                SurfaceOp = surfaceOp,
+                SourceEventSeqs = sourceEventSeqs,
+            };
+            _surfaceManager.ValidateNext(sessionEvent);
+            Commit(sessionEvent);
+            subscribers = Appended;
+        }
         if (subscribers is not null)
         {
             foreach (var subscriber in subscribers.GetInvocationList())
@@ -157,29 +171,9 @@ public sealed class Session
         }
     }
 
-    public EpochHeader? RequestHeader()
-    {
-        if (_headerFoldSeq < _log.Count)
-        {
-            _headerFold = Core.RequestHeader.Fold(_log.GetRange((int)_headerFoldSeq, (int)(_log.Count - _headerFoldSeq)), _headerFold);
-            _headerFoldSeq = _log.Count;
-        }
-        return _headerFold;
-    }
+    public EpochHeader? RequestHeader() => Volatile.Read(ref _headerFold);
 
-    public RequestContextPayload? RequestContext()
-    {
-        if (_contextFoldSeq < _log.Count)
-        {
-            foreach (var sessionEvent in _log.GetRange((int)_contextFoldSeq, (int)(_log.Count - _contextFoldSeq)))
-            {
-                if (sessionEvent.Data is RequestContextPayload context)
-                    _contextFold = context;
-            }
-            _contextFoldSeq = _log.Count;
-        }
-        return _contextFold;
-    }
+    public RequestContextPayload? RequestContext() => Volatile.Read(ref _contextFold);
 
     public IReadOnlyList<Message> DeriveMessages()
     {
@@ -191,13 +185,64 @@ public sealed class Session
             _derivedNodes = 0;
             _derivedGeneration = generation;
         }
+        var snapshot = Volatile.Read(ref _snapshot);
         for (var index = _derivedNodes; index < nodes.Count; index++)
         {
-            var message = Surface.DeriveEventMessage(_log[(int)nodes[index]]);
+            var message = Surface.DeriveEventMessage(snapshot[(int)nodes[index]]);
             if (message is not null)
                 _derived.Add(message);
         }
         _derivedNodes = nodes.Count;
         return [.. _derived];
+    }
+
+    private void Commit(SessionEvent sessionEvent)
+    {
+        EnsureCapacity(_count + 1);
+        _buffer[_count] = sessionEvent;
+        _count++;
+        switch (sessionEvent.Data)
+        {
+            case RequestHeaderPayload header:
+                Volatile.Write(ref _headerFold, Core.RequestHeader.Canonicalize(header.Header));
+                break;
+            case RequestContextPayload context:
+                Volatile.Write(ref _contextFold, context);
+                break;
+        }
+        Volatile.Write(ref _snapshot, new SessionLog(_buffer, 0, _count));
+    }
+
+    private void EnsureCapacity(int required)
+    {
+        if (required <= _buffer.Length)
+            return;
+        var capacity = _buffer.Length == 0 ? 16 : _buffer.Length;
+        while (capacity < required)
+            capacity *= 2;
+        Array.Resize(ref _buffer, capacity);
+    }
+
+    // 单写者追加、发布不可变 (数组, 长度) 视图: 读者取一次引用后无锁遍历, 元素先写、长度后发布, 故不会读到未写入的槽。
+    private sealed class SessionLog(SessionEvent[] items, int offset, int count) : IReadOnlyList<SessionEvent>
+    {
+        public static readonly SessionLog Empty = new([], 0, 0);
+
+        public int Count => count;
+
+        public SessionEvent this[int index]
+            => index >= 0 && index < count
+                ? items[offset + index]
+                : throw new ArgumentOutOfRangeException(nameof(index));
+
+        public SessionLog Slice(int from, int to) => new(items, offset + from, to - from);
+
+        public IEnumerator<SessionEvent> GetEnumerator()
+        {
+            for (var i = 0; i < count; i++)
+                yield return items[offset + i];
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

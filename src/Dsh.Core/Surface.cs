@@ -188,33 +188,35 @@ public static class Surface
 
     public sealed class Manager
     {
-        private readonly IReadOnlyList<SessionEvent> _log;
+        private readonly Func<IReadOnlyList<SessionEvent>> _logProvider;
         private readonly long _baseSeq;
         private readonly FoldState _state = new();
         private long _lastProcessedSeq;
         private (SessionEvent Event, long ExpectedSeq, Plan? Plan)? _pendingPlan;
 
-        public Manager(IReadOnlyList<SessionEvent> log, long baseSeq = 0)
+        public Manager(Func<IReadOnlyList<SessionEvent>> logProvider, long baseSeq = 0)
         {
-            _log = log;
+            _logProvider = logProvider;
             _baseSeq = baseSeq;
             _lastProcessedSeq = baseSeq == 0 ? -1 : baseSeq - 1;
         }
 
         public void ValidateNext(SessionEvent sessionEvent)
         {
-            if (_lastProcessedSeq < _baseSeq + _log.Count - 1)
-                ProcessDelta();
-            var expectedSeq = _baseSeq + _log.Count;
-            _pendingPlan = (sessionEvent, expectedSeq, PlanSurfaceEvent(_state, sessionEvent, expectedSeq, _log, _baseSeq));
+            var log = _logProvider();
+            if (_lastProcessedSeq < _baseSeq + log.Count - 1)
+                ProcessDelta(log);
+            var expectedSeq = _baseSeq + log.Count;
+            _pendingPlan = (sessionEvent, expectedSeq, PlanSurfaceEvent(_state, sessionEvent, expectedSeq, log, _baseSeq));
         }
 
         public int ReplaceGeneration
         {
             get
             {
-                if (_lastProcessedSeq < _baseSeq + _log.Count - 1)
-                    ProcessDelta();
+                var log = _logProvider();
+                if (_lastProcessedSeq < _baseSeq + log.Count - 1)
+                    ProcessDelta(log);
                 return _state.ReplaceGeneration;
             }
         }
@@ -223,19 +225,20 @@ public static class Surface
         {
             get
             {
-                if (_lastProcessedSeq < _baseSeq + _log.Count - 1)
-                    ProcessDelta();
+                var log = _logProvider();
+                if (_lastProcessedSeq < _baseSeq + log.Count - 1)
+                    ProcessDelta(log);
                 return _state.Nodes;
             }
         }
 
-        private void ProcessDelta()
+        private void ProcessDelta(IReadOnlyList<SessionEvent> log)
         {
-            var tailSeq = _baseSeq + _log.Count - 1;
+            var tailSeq = _baseSeq + log.Count - 1;
             for (var seq = _lastProcessedSeq + 1; seq <= tailSeq; seq++)
             {
                 var index = (int)(seq - _baseSeq);
-                var sessionEvent = _log[index];
+                var sessionEvent = log[index];
                 var pending = _pendingPlan;
                 if (pending is { } plan && ReferenceEquals(plan.Event, sessionEvent) && plan.ExpectedSeq == seq)
                 {
@@ -243,7 +246,7 @@ public static class Surface
                 }
                 else
                 {
-                    ApplyPlan(_state, PlanSurfaceEvent(_state, sessionEvent, seq, _log, _baseSeq));
+                    ApplyPlan(_state, PlanSurfaceEvent(_state, sessionEvent, seq, log, _baseSeq));
                 }
                 if (pending is not null && pending.Value.ExpectedSeq <= seq)
                     _pendingPlan = null;

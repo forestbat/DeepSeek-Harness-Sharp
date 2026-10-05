@@ -210,4 +210,101 @@ public class SessionTests
             Assert.Equal(reason, restored);
         }
     }
+
+    [Fact]
+    public void Snapshot_IsImmutableAcrossAppend()
+    {
+        var session = Session.Create(NewSessionId());
+        session.Append(UserText("one"), new SurfaceOp.Append());
+        var before = session.SnapshotEvents();
+        session.Append(UserText("two"), new SurfaceOp.Append());
+
+        Assert.Single(before);
+        var after = session.SnapshotEvents();
+        Assert.Equal(2, after.Count);
+        Assert.Equal("two", Assert.IsType<TextBlock>(
+            Assert.IsType<UserMessagePayload>(after[1].Data).Message.Content[0]).Text);
+    }
+
+    [Fact]
+    public void RequestHeader_TracksLatestPayload()
+    {
+        var session = Session.Create(NewSessionId());
+        var header = RequestHeader.Canonicalize(new EpochHeader(new LlmCallConfig("deepseek-official", "deepseek-v4-flash")));
+
+        session.Append(new RequestHeaderPayload(header, RequestHeaderReasons.Initial));
+
+        Assert.Equal(header, session.RequestHeader());
+    }
+
+    [Fact]
+    public void ConcurrentAppendAndRead_ProducesNoTornRead()
+    {
+        var session = Session.Create(NewSessionId());
+        const int count = 20_000;
+        using var start = new ManualResetEventSlim(false);
+        Exception? failure = null;
+
+        var writer = new Thread(() =>
+        {
+            start.Wait();
+            try
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    if (i % 64 == 0)
+                        session.Append(new RequestHeaderPayload(
+                            new EpochHeader(new LlmCallConfig("p", $"m{i % 4}")),
+                            RequestHeaderReasons.Change));
+                    else
+                        session.Append(new TurnStartPayload(i));
+                }
+            }
+            catch (Exception error)
+            {
+                failure ??= error;
+            }
+        }) { IsBackground = true };
+        writer.Start();
+
+        void Read()
+        {
+            start.Wait();
+            try
+            {
+                while (writer.IsAlive)
+                {
+                    var snapshot = session.SnapshotEvents();
+                    for (var i = 0; i < snapshot.Count; i++)
+                    {
+                        if (snapshot[i] is null || snapshot[i].Seq != i)
+                            throw new InvalidOperationException($"torn snapshot element at index {i}");
+                    }
+                    _ = session.EventAt(session.Seq - 1);
+                    _ = session.RequestHeader();
+                    _ = session.RequestContext();
+                }
+            }
+            catch (Exception error)
+            {
+                failure ??= error;
+            }
+        }
+
+        var readers = new List<Thread>();
+        for (var i = 0; i < 3; i++)
+        {
+            var reader = new Thread(Read) { IsBackground = true };
+            reader.Start();
+            readers.Add(reader);
+        }
+
+        start.Set();
+        Assert.True(writer.Join(TimeSpan.FromSeconds(30)), "writer thread did not finish");
+        foreach (var reader in readers)
+            reader.Join(TimeSpan.FromSeconds(5));
+
+        Assert.Null(failure);
+        Assert.Equal(count, session.Seq);
+    }
 }
