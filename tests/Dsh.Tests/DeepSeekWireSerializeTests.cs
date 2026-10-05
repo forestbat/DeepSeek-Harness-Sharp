@@ -10,7 +10,13 @@ public sealed class DeepSeekWireSerializeTests
 {
     private static JsonObject SerializeAssistant(Message message)
     {
-        var wire = WireSerialize.SerializeMessages([message]);
+        var options = new GenerateOptions
+        {
+            Provider = "deepseek-official",
+            Model = "deepseek-v4-flash",
+            Messages = [message],
+        };
+        var wire = WireSerialize.SerializeMessages(options);
         var json = JsonSerializer.Serialize(wire[0], DeepSeekWireJsonContext.Default.WireMessage);
         return JsonNode.Parse(json)!.AsObject();
     }

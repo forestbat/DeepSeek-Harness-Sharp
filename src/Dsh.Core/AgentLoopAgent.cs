@@ -621,6 +621,9 @@ public sealed class AgentLoopAgent : IAgent
         }
         signal.ThrowIfCancellationRequested();
 
+        var attachments = AttachmentHydration.Collect(
+            boundaryMessages,
+            _loopCtx.Get<IAttachmentStore>(FileAttachmentStore.ServiceName, false));
         var request = AgentLoopRequestMarker.Mark(new GenerateOptions
         {
             Provider = config.Provider,
@@ -633,6 +636,7 @@ public sealed class AgentLoopAgent : IAgent
             Stop = config.Stop,
             SessionId = session.Id,
             Cancellation = signal,
+            Attachments = attachments,
         });
         return (request, preparedCall);
     }

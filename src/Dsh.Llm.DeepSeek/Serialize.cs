@@ -37,14 +37,24 @@ public static class WireSerialize
     private static string FlattenText(IReadOnlyList<ContentBlock> blocks)
         => string.Concat(blocks.OfType<TextBlock>().Select(block => block.Text));
 
-    private static void AssertTextOnly(IReadOnlyList<ContentBlock> blocks)
+    // 无图时 content 为字符串; 有图时按 OpenAI 兼容的多模态 parts 数组发送(image_url data URI)。
+    private static JsonNode UserContent(GenerateOptions options, IReadOnlyList<ContentBlock> blocks)
     {
-        if (blocks.Any(block => block is ImageBlock))
+        if (!blocks.Any(block => block is ImageBlock))
+            return JsonValue.Create(FlattenText(blocks)) ?? JsonValue.Create("");
+        var parts = new JsonArray();
+        var text = FlattenText(blocks);
+        if (text.Length > 0)
+            parts.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+        foreach (var image in blocks.OfType<ImageBlock>())
         {
-            throw new LlmException(new LlmFailure(
-                "The DeepSeek chat-completions adapter does not support image content.",
-                "UNSUPPORTED_CONTENT"));
+            parts.Add(new JsonObject
+            {
+                ["type"] = "image_url",
+                ["image_url"] = new JsonObject { ["url"] = AttachmentResolution.DataUrl(options, image.Attachment) },
+            });
         }
+        return parts;
     }
 
     private static WireMessage SerializeAssistant(Message message)
@@ -57,21 +67,20 @@ public static class WireSerialize
             .ToList();
         return new WireMessage(
             "assistant",
-            text,
+            JsonValue.Create(text),
             reasoning.Length > 0 ? reasoning : null,
             toolCalls.Count > 0 ? toolCalls : null);
     }
 
-    public static IReadOnlyList<WireMessage> SerializeMessages(IReadOnlyList<Message> messages)
+    public static IReadOnlyList<WireMessage> SerializeMessages(GenerateOptions options)
     {
         var wire = new List<WireMessage>();
-        foreach (var message in messages)
+        foreach (var message in options.Messages)
         {
-            AssertTextOnly(message.Content);
             switch (message.Role)
             {
                 case MessageRole.System:
-                    wire.Add(new WireMessage("system", FlattenText(message.Content)));
+                    wire.Add(new WireMessage("system", JsonValue.Create(FlattenText(message.Content))));
                     continue;
                 case MessageRole.Assistant:
                     wire.Add(SerializeAssistant(message));
@@ -80,12 +89,13 @@ public static class WireSerialize
                     {
                         var toolResults = message.Content.OfType<ToolResultBlock>().ToList();
                         var text = FlattenText(message.Content);
-                        if (text.Length > 0 || toolResults.Count == 0)
-                            wire.Add(new WireMessage("user", text));
+                        var hasImages = message.Content.Any(block => block is ImageBlock);
+                        if (text.Length > 0 || hasImages || toolResults.Count == 0)
+                            wire.Add(new WireMessage("user", UserContent(options, message.Content)));
                         foreach (var result in toolResults)
                         {
                             var content = FlattenText(result.Content);
-                            wire.Add(new WireMessage("tool", content.Length > 0 ? content : "(no output)", ToolCallId: result.ToolCallId.Value));
+                            wire.Add(new WireMessage("tool", JsonValue.Create(content.Length > 0 ? content : "(no output)"), ToolCallId: result.ToolCallId.Value));
                         }
                         break;
                     }
@@ -98,8 +108,8 @@ public static class WireSerialize
     {
         var messages = new List<WireMessage>();
         if (options.System is { } system)
-            messages.Add(new WireMessage("system", system));
-        messages.AddRange(SerializeMessages(options.Messages));
+            messages.Add(new WireMessage("system", JsonValue.Create(system)));
+        messages.AddRange(SerializeMessages(options));
         var (thinking, reasoningEffort) = ResolveThinking(options, defaults);
         return new WireRequest
         {

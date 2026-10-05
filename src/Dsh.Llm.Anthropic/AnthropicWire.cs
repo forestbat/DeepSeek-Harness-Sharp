@@ -19,7 +19,7 @@ internal static class AnthropicWire
         if (options.System is { } system)
             body["system"] = system;
 
-        body["messages"] = SerializeMessages(options.Messages);
+        body["messages"] = SerializeMessages(options);
 
         if (options.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(SerializeTool).ToArray());
@@ -30,15 +30,15 @@ internal static class AnthropicWire
         return body.ToJsonString();
     }
 
-    private static JsonArray SerializeMessages(IReadOnlyList<Message> messages)
+    private static JsonArray SerializeMessages(GenerateOptions options)
     {
         var array = new JsonArray();
-        foreach (var message in messages)
-            array.Add(SerializeMessage(message));
+        foreach (var message in options.Messages)
+            array.Add(SerializeMessage(options, message));
         return array;
     }
 
-    private static JsonObject SerializeMessage(Message message)
+    private static JsonObject SerializeMessage(GenerateOptions options, Message message)
     {
         var role = message.Role switch
         {
@@ -54,7 +54,7 @@ internal static class AnthropicWire
         {
             if (block is ReasoningBlock)
                 continue;
-            content.Add(SerializeBlock(block));
+            content.Add(SerializeBlock(options, block));
         }
 
         return new JsonObject
@@ -64,7 +64,7 @@ internal static class AnthropicWire
         };
     }
 
-    private static JsonObject SerializeBlock(ContentBlock block) => block switch
+    private static JsonObject SerializeBlock(GenerateOptions options, ContentBlock block) => block switch
     {
         TextBlock text => new JsonObject
         {
@@ -79,9 +79,16 @@ internal static class AnthropicWire
             ["input"] = ParseArguments(call.Arguments),
         },
         ToolResultBlock result => SerializeToolResult(result),
-        ImageBlock => throw new LlmException(new LlmFailure(
-            "Anthropic adapter does not support image content",
-            "UNSUPPORTED_CONTENT")),
+        ImageBlock image => new JsonObject
+        {
+            ["type"] = "image",
+            ["source"] = new JsonObject
+            {
+                ["type"] = "base64",
+                ["media_type"] = image.Attachment.MediaType,
+                ["data"] = Convert.ToBase64String(AttachmentResolution.Resolve(options, image.Attachment).Span),
+            },
+        },
         _ => throw new LlmException(new LlmFailure(
             $"Anthropic adapter does not support content block \"{block.Type}\"",
             "UNSUPPORTED_CONTENT")),

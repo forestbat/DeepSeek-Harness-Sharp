@@ -19,7 +19,7 @@ public sealed record WireRequest
 
 public sealed record WireMessage(
     [property: JsonPropertyName("role")] string Role,
-    [property: JsonPropertyName("content")] string? Content,
+    [property: JsonPropertyName("content")] JsonNode? Content,
     [property: JsonPropertyName("reasoning_content")] string? ReasoningContent = null,
     [property: JsonPropertyName("tool_calls")] IReadOnlyList<WireToolCall>? ToolCalls = null,
     [property: JsonPropertyName("tool_call_id")] string? ToolCallId = null);

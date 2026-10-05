@@ -252,13 +252,6 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
 
     private IReadOnlyList<ChatMessage> ToChatMessages(GenerateOptions options)
     {
-        if (options.Messages.Any(message => message.Content.Any(block => block is ImageBlock)))
-        {
-            throw new LlmException(new LlmFailure(
-                "OpenAI-compatible image conversion requires the durable attachment service.",
-                "UNSUPPORTED_CONTENT"));
-        }
-
         var messages = new List<ChatMessage>();
         foreach (var message in options.Messages)
         {
@@ -283,12 +276,34 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                             }
                             break;
                         }
-                        messages.Add(new ChatMessage(ChatRole.User, [new TextContent(FlattenText(message.Content))]));
+                        messages.Add(new ChatMessage(ChatRole.User, ToUserContents(options, message.Content)));
                         break;
                     }
             }
         }
         return messages;
+    }
+
+    private static IList<AIContent> ToUserContents(GenerateOptions options, IReadOnlyList<ContentBlock> blocks)
+    {
+        var contents = new List<AIContent>();
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case TextBlock text when text.Text.Length > 0:
+                    contents.Add(new TextContent(text.Text));
+                    break;
+                case ImageBlock image:
+                    contents.Add(new DataContent(
+                        AttachmentResolution.Resolve(options, image.Attachment),
+                        image.Attachment.MediaType));
+                    break;
+            }
+        }
+        if (contents.Count == 0)
+            contents.Add(new TextContent(FlattenText(blocks)));
+        return contents;
     }
 
     private static IList<AIContent> ToAssistantContents(IReadOnlyList<ContentBlock> blocks)

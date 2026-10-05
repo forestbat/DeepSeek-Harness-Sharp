@@ -45,6 +45,9 @@ public class GenerateOptions
     public GeneratePurpose? Purpose { get; init; }
     public CancellationToken Cancellation { get; init; }
 
+    /** 请求期注入的附件字节: ImageAttachmentRef.AttachmentId -> 字节。适配器据此把 ImageBlock 序列化为真实图片。 */
+    public IReadOnlyDictionary<string, byte[]>? Attachments { get; init; }
+
     /** 复制请求并替换取消令牌(看门狗需要用一个可自己取消的令牌驱动适配器)。 */
     public GenerateOptions WithCancellation(CancellationToken cancellationToken) => new()
     {
@@ -60,6 +63,7 @@ public class GenerateOptions
         SessionId = SessionId,
         Purpose = Purpose,
         Cancellation = cancellationToken,
+        Attachments = Attachments,
     };
 }
 

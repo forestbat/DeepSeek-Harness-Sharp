@@ -25,6 +25,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static IDisposable RegisterCore(Context ctx, object? config)
     {
         _ = new SessionStore(ctx);
+        _ = new FileAttachmentStore(ctx);
         _ = new SessionProjectionRegistry(ctx);
         _ = new SystemPrompt(ctx, SystemPromptConfigFrom(config));
         _ = new ToolRuntime(ctx);
