@@ -1,7 +1,7 @@
 # 托管插件模板与作者指南
 
 一个可被宿主发现的插件只需要三件事：一个实现 `IDshPlugin` 的类，csproj 里 import 生成器 props，编译产物（主 dll + deps.json + 私有依赖）放进宿主 `plugins/<目录名>/` 下。
-目录名约定为包名把 `/` 换成 `__`；加载后以清单内的包名为准，目录名只做发现入口。
+目录名不参与识别：加载后一律以清单内的包名为准，目录名只做发现入口。手工摆放时建议按包名把 `/` 换成 `__`（如 `@scope__one`）便于人读；而 `/plugins add` 装出来的目录名是 dll 文件名（如 `MyPlugin`）——两种命名都能被正常发现。
 
 本目录即模板工程：`DshPluginTemplate.csproj` + `Plugin.cs`，每个文件的注释就是规则原文（做什么 + 为什么），可直接作为创造模式搭插件骨架的上下文。
 
@@ -59,6 +59,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
 ## 安装与卸载
 
-- `/plugins add <路径>`：把目标 dll 及其 deps.json 闭包拷入 `plugins/<目录名>/`（宿主镜像已有的程序集自动跳过），随后热装载。
+- `/plugins add <路径>`：把目标 dll 及其 deps.json 闭包拷入 `plugins/<dll 文件名>/`（宿主镜像已有的程序集自动跳过），随后热装载。
 - `/plugins remove <包名>`：协作式卸载；仍有下游 Inject 其服务的共享库会被拒绝并列出依赖方。
+- 更新插件：先 `/plugins remove <包名>`（卸载并释放文件占用），再删掉该插件所在的 `plugins/<目录名>/`（`/plugins add` 装的目录名就是 dll 文件名；手工摆放的是你起的名字），然后 `/plugins add <新构建的 dll>`。同名文件内容不一致时 add 一律拒绝——这是为了不覆盖手放或他人写的同名插件，所以更新必须先删旧副本。
 - 工具重名不再是错误：后注册者自动以 `<包名末段>-<工具名>` 可见并 WARN；PTC 模式下非标识符工具名用 `tools.call("<name>", args)` 调用。
