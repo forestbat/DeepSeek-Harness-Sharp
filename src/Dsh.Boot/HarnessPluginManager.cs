@@ -11,6 +11,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly Composition _composition;
     private readonly HarnessHome _home;
     private readonly HarnessSettings _settings;
+    private readonly string _pluginsDirectory;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly HashSet<string> _leaked = new(StringComparer.Ordinal);
@@ -20,12 +21,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         Composition composition,
         HarnessHome home,
         HarnessSettings settings,
-        IReadOnlyList<ManagedPlugin> loadedOnStart)
+        IReadOnlyList<ManagedPlugin> loadedOnStart,
+        string pluginsDirectory)
     {
         _host = host;
         _composition = composition;
         _home = home;
         _settings = settings;
+        _pluginsDirectory = pluginsDirectory;
         foreach (var entry in loadedOnStart)
         {
             _loadedContexts[entry.Package] = entry.Context;
@@ -132,7 +135,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         string installPath;
         try
         {
-            installPath = PluginInstall.Install(path, Path.Combine(AppContext.BaseDirectory, "plugins"));
+            installPath = PluginInstall.Install(path, _pluginsDirectory);
         }
         catch (InvalidOperationException error)
         {

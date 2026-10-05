@@ -25,7 +25,7 @@ public static class ConfigBoot
 
         var pluginHost = new PluginHost();
         pluginHost.RegisterCompiledIn();
-        var pluginsDirectory = Path.Combine(AppContext.BaseDirectory, "plugins");
+        var pluginsDirectory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
         var discovery = pluginHost.Scan(pluginsDirectory, ResolveNativeBridge());
         foreach (var skip in discovery.Skipped)
@@ -57,7 +57,7 @@ public static class ConfigBoot
             var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
             ctx.LoggerFor("boot").Info("composition ready: %d plugin(s), home %s", composition.Activations.Count, options.Home.Root);
-            var manager = new HarnessPluginManager(pluginHost, composition, options.Home, settings, discovery.Managed);
+            var manager = new HarnessPluginManager(pluginHost, composition, options.Home, settings, discovery.Managed, pluginsDirectory);
             app.Track(manager);
             ctx.Provide("pluginManager", manager);
         }

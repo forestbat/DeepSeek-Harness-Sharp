@@ -13,7 +13,8 @@ public sealed record HarnessOptions(
     string? ApiKeyEnv = null,
     string? ApiKey = null,
     string? ReasoningEffort = null,
-    bool IsTui = false);
+    bool IsTui = false,
+    string? PluginsDirectory = null);
 
 public sealed class HarnessApp : IDisposable
 {
