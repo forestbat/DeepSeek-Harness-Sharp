@@ -1,0 +1,314 @@
+name: 发布 Release（JIT / AOT）
+
+# 只在明确的发布点触发，日常提交不会发 Release：
+#   1) push 形如 v0.1.0-jit / v0.1.0-aot 的 tag；
+#   2) 手动 workflow_dispatch（要求 tag 已先推送到仓库，档位可覆盖，也可只干跑不发布）。
+# 档位判定：tag 以 -aot 结尾 => AOT 档（pre-release，不占用 latest）；其余 => JIT 档（latest）。
+# 发布说明由 GitHub 自动生成（--generate-notes），不在仓库里维护手写前端。
+# 发布前先跑一遍测试（排除需要 GPU/桌面/外部模型的类别），测试不过就不构建、不发布。
+on:
+  push:
+    tags:
+      - 'v*-jit'
+      - 'v*-aot'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已存在的 tag（如 v0.1.0-jit）；请先把 tag 推到仓库'
+        required: true
+      flavor:
+        description: '发布档位：jit 或 aot；留空则按 tag 后缀推断'
+        required: false
+        default: ''
+      dry_run:
+        description: '只构建与打包，不创建/更新 Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: 判定档位
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.detect.outputs.tag }}
+      flavor: ${{ steps.detect.outputs.flavor }}
+      prerelease: ${{ steps.detect.outputs.prerelease }}
+    steps:
+      - id: detect
+        name: 解析 tag 与档位
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_FLAVOR: ${{ inputs.flavor }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            TAG="$IN_TAG"
+            FLAVOR="$IN_FLAVOR"
+          else
+            TAG="$REF_NAME"
+            FLAVOR=""
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::没有解析到 tag"
+            exit 1
+          fi
+          if [ -z "$FLAVOR" ]; then
+            case "$TAG" in
+              *-aot) FLAVOR=aot ;;
+              *)     FLAVOR=jit ;;
+            esac
+          fi
+          case "$FLAVOR" in
+            jit) PRERELEASE=false ;;
+            aot) PRERELEASE=true ;;
+            *) echo "::error::无法识别的档位: $FLAVOR"; exit 1 ;;
+          esac
+          {
+            echo "tag=$TAG"
+            echo "flavor=$FLAVOR"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG flavor=$FLAVOR prerelease=$PRERELEASE"
+
+  test:
+    name: 测试（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+          else
+            bash scripts/fetch-dryioc-feed.sh
+          fi
+
+      - name: 编译测试工程（Debug，含插件夹具）
+        run: dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
+
+      - name: 运行测试（排除 GpuStress / LlmSmoke / RenderBench）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GpuStress 需要真实 GPU；RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
+          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+          if [ ! -x "$EXE" ]; then
+            EXE="$EXE.exe"
+          fi
+          ARGS=("$EXE" -noColor
+            -trait- "Category=GpuStress"
+            -trait- "Category=LlmSmoke"
+            -trait- "Category=RenderBench")
+          if command -v timeout >/dev/null 2>&1; then
+            ARGS=(timeout 900 "${ARGS[@]}")
+          fi
+          echo "运行: ${ARGS[*]}"
+          "${ARGS[@]}"
+
+  build:
+    name: 构建 ${{ needs.prepare.outputs.flavor }} / ${{ matrix.rid }}
+    needs: [prepare, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            archive: dshsh-win-x64.zip
+          - os: ubuntu-latest
+            rid: linux-x64
+            archive: dshsh-linux-x64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+          else
+            bash scripts/fetch-dryioc-feed.sh
+          fi
+
+      - name: 安装 AOT 工具链（Linux）
+        if: matrix.rid == 'linux-x64' && needs.prepare.outputs.flavor == 'aot'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev
+
+      - name: 发布产物（Release，自包含 + 裁剪）
+        shell: bash
+        env:
+          FLAVOR: ${{ needs.prepare.outputs.flavor }}
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          AOT_ARGS=""
+          if [ "$FLAVOR" = "aot" ]; then
+            AOT_ARGS="-p:PublishAot=true"
+          fi
+          # 不指定 PublishDir，使用默认发布目录，避免 bash/Windows 路径转换问题。
+          # DebugType=none：发布档不需要调试符号（AOT 的 pdb 单独就有数百 MB）。
+          dotnet publish DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj \
+            -c Release -r "$RID" $AOT_ARGS \
+            -p:DebugSymbols=false -p:DebugType=none \
+            --nologo -v m
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
+          test -d "$PUB"
+          STAGE="artifacts/release-stage/$RID"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/plugins"
+          cp -R "$PUB/." "$STAGE/"
+          if [ "$FLAVOR" = "aot" ]; then
+            # 结构特征判别是否真的 AOT：JIT 发布同样会产出 apphost，光看文件存在拦不住。
+            bash scripts/assert-aot-output.sh "$STAGE"
+          fi
+          # 调试旁文件不进产物（AOT 的 .pdb/.dbg 动辄数百 MB）。
+          rm -f "$STAGE"/*.pdb "$STAGE"/*.dbg
+          echo "staging 文件数: $(find "$STAGE" -type f | wc -l)"
+          echo "staging 体积: $(du -sh "$STAGE" | cut -f1)"
+
+      - name: 打包并校验（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "artifacts/release-stage/$env:RID"
+          New-Item -ItemType Directory -Force "$stage/plugins" | Out-Null
+          $out = "artifacts/release-stage/$env:ARCHIVE"
+          Remove-Item -Force $out -ErrorAction SilentlyContinue
+          # Windows 自带的 tar 是 bsdtar：-a 按扩展名生成 zip，且会保留空目录条目（plugins/）。
+          tar.exe -a -c -f $out --exclude=*.pdb --exclude=*.dbg -C $stage .
+          if ($LASTEXITCODE -ne 0) { throw "打包失败" }
+          $entries = tar.exe -tf $out
+          $junk = @($entries | Where-Object { $_ -match '\.(pdb|dbg)$' })
+          if ($junk.Count -ne 0) { throw "归档里不该有调试符号：$($junk -join ', ')" }
+          if (-not ($entries -match '^\./plugins/$')) { throw "归档缺少 plugins/ 目录条目" }
+          $verify = Join-Path $env:RUNNER_TEMP "verify-$env:RID"
+          Remove-Item -Recurse -Force $verify -ErrorAction SilentlyContinue
+          Expand-Archive -LiteralPath $out -DestinationPath $verify -Force
+          if (-not (Test-Path "$verify/DeepSeek-Harness-Sharp.exe")) { throw "归档里找不到 DeepSeek-Harness-Sharp.exe" }
+          if (-not (Test-Path "$verify/plugins")) { throw "归档里找不到 plugins/" }
+          $env:DSH_HOME = Join-Path $env:RUNNER_TEMP "dsh-home-$env:RID"
+          $proc = Start-Process -FilePath "$verify/DeepSeek-Harness-Sharp.exe" -ArgumentList @('--help') -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/smoke.out" -RedirectStandardError "$env:RUNNER_TEMP/smoke.err"
+          if (-not $proc.WaitForExit(60000)) { $proc.Kill($true); throw "冒烟超时" }
+          if ($proc.ExitCode -ne 0) { throw "冒烟失败，exit=$($proc.ExitCode)" }
+          Write-Host "归档校验通过：$env:ARCHIVE"
+
+      - name: 打包并校验（POSIX）
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          STAGE="artifacts/release-stage/$RID"
+          mkdir -p "$STAGE/plugins"
+          OUT="artifacts/release-stage/$ARCHIVE"
+          rm -f "$OUT"
+          tar -czf "$OUT" --exclude='*.pdb' --exclude='*.dbg' -C "$STAGE" .
+          test "$(tar -tzf "$OUT" | grep -c -E '\.(pdb|dbg)$' || true)" = "0"
+          tar -tzf "$OUT" | grep -qx './plugins/' || { echo "::error::归档缺少 plugins/ 目录条目"; exit 1; }
+          VERIFY="$(mktemp -d)"
+          tar -xzf "$OUT" -C "$VERIFY"
+          test -f "$VERIFY/DeepSeek-Harness-Sharp" || { echo "::error::归档里找不到 DeepSeek-Harness-Sharp"; exit 1; }
+          test -d "$VERIFY/plugins" || { echo "::error::归档里找不到 plugins/"; exit 1; }
+          chmod +x "$VERIFY/DeepSeek-Harness-Sharp"
+          cd "$VERIFY"
+          DSH_HOME="$VERIFY/dsh-home" timeout 60 ./DeepSeek-Harness-Sharp --help > "$VERIFY/smoke.out" 2>&1 || {
+            echo "::error::冒烟失败"; tail -20 "$VERIFY/smoke.out"; exit 1; }
+          cd - >/dev/null
+          rm -rf "$VERIFY"
+          echo "归档校验通过：$ARCHIVE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: artifacts/release-stage/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: 创建/更新 Release
+    needs: [prepare, test, build]
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 创建或更新 Release（说明用 GitHub 自动生成）
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(dist/*/*)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::没有可上传的产物"
+            exit 1
+          fi
+          printf '待上传：\n'
+          printf '  %s\n' "${FILES[@]}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在：刷新资产（说明保持原样）"
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+            if [ "$PRERELEASE" = "true" ]; then
+              gh release edit "$TAG" --prerelease
+            else
+              gh release edit "$TAG" --latest
+            fi
+          else
+            echo "创建 Release $TAG（说明自动生成）"
+            if [ "$PRERELEASE" = "true" ]; then
+              gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" --prerelease "${FILES[@]}"
+            else
+              gh release create "$TAG" --verify-tag --generate-notes --title "$TAG" --latest "${FILES[@]}"
+            fi
+          fi
+          gh release view "$TAG" --json tagName,isPrerelease,assets \
+            --jq '{tag: .tagName, prerelease: .isPrerelease, assets: [.assets[] | "\\(.name) \\(.size)"]}'

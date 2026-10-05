@@ -1,0 +1,205 @@
+name: 构建校验
+
+# 不创建任何 Release；发布由 release.yml 在打 tag 时负责。
+# 触发与分工（本仓库 push 居多、PR 很少：约 170 个 commit 只有 1 个 merged PR）：
+#   - push 到 master / PR 的 open|sync|reopen：跑测试 + JIT 发布校验；
+#   - PR 被 merge（closed 且 merged=true）：在 merge 提交上再跑 AOT 构建（且以测试通过为前置）；
+#   - 手动 workflow_dispatch：可用 aot 开关决定是否连带跑 AOT。
+# 也就是说：直接 push 不会跑 AOT，AOT 只出现在"真的合入"与手动触发这两处。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      aot:
+        description: '同时构建 AOT 档（Windows + Linux，较慢）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 测试（${{ matrix.os }}）
+    # PR 被关闭但没合并时不必再跑。
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PR 的 merge 提交；其它事件回落到 github.sha。
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+          else
+            bash scripts/fetch-dryioc-feed.sh
+          fi
+
+      - name: 编译测试工程（Debug，含插件夹具）
+        run: dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
+
+      - name: 运行测试（排除 GpuStress / LlmSmoke / RenderBench）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GpuStress 需要真实 GPU；RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
+          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+          if [ ! -x "$EXE" ]; then
+            EXE="$EXE.exe"
+          fi
+          ARGS=("$EXE" -noColor
+            -trait- "Category=GpuStress"
+            -trait- "Category=LlmSmoke"
+            -trait- "Category=RenderBench")
+          if command -v timeout >/dev/null 2>&1; then
+            ARGS=(timeout 900 "${ARGS[@]}")
+          fi
+          echo "运行: ${ARGS[*]}"
+          "${ARGS[@]}"
+
+  build:
+    name: 发布校验（${{ matrix.os }}，JIT）
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+          else
+            bash scripts/fetch-dryioc-feed.sh
+          fi
+
+      - name: JIT 发布校验（Release + 裁剪 + 自包含）
+        run: >
+          dotnet publish DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj
+          -c Release -r ${{ matrix.rid }}
+          -p:DebugSymbols=false -p:DebugType=none
+          --nologo -v m
+
+  aot:
+    name: AOT 构建（${{ matrix.rid }}）
+    # 只在这两处跑：PR 被 merge（在 merge 提交上），或手动 dispatch 且 aot=true。
+    # 直接 push 到 master 不跑（本仓库 push 居多，AOT 只跟"真的合入"绑定）。
+    needs: [test]
+    if: ${{ (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true) || (github.event_name == 'workflow_dispatch' && inputs.aot) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+          else
+            bash scripts/fetch-dryioc-feed.sh
+          fi
+
+      - name: 安装 AOT 工具链（Linux）
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev
+
+      - name: AOT 发布 + 原生产物硬校验 + 冒烟
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          dotnet publish DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj \
+            -c Release -r "$RID" -p:PublishAot=true \
+            -p:DebugSymbols=false -p:DebugType=none \
+            --nologo -v m
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
+          # 结构特征判别是否真的 AOT（JIT 发布同样会产出 apphost，光看文件存在拦不住）。
+          bash scripts/assert-aot-output.sh "$PUB"
+          # 调试旁文件不进产物（AOT 的 .pdb/.dbg 动辄数百 MB）。
+          rm -f "$PUB"/*.pdb "$PUB"/*.dbg
+          mkdir -p "$PUB/plugins"
+          EXE="$PUB/DeepSeek-Harness-Sharp"
+          if [ ! -f "$EXE" ]; then
+            EXE="$EXE.exe"
+          fi
+          chmod +x "$EXE" 2>/dev/null || true
+          if command -v timeout >/dev/null 2>&1; then
+            timeout 120 "$EXE" --help > "$RUNNER_TEMP/aot-smoke.out" 2>&1
+          else
+            "$EXE" --help > "$RUNNER_TEMP/aot-smoke.out" 2>&1
+          fi || {
+            echo "::error::AOT 冒烟失败"
+            tail -20 "$RUNNER_TEMP/aot-smoke.out"
+            exit 1
+          }
+          echo "AOT 冒烟通过"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot-${{ matrix.rid }}
+          path: DeepSeek-Harness-Sharp/bin/Release/net10.0/${{ matrix.rid }}/publish
+          if-no-files-found: error
+          retention-days: 7
