@@ -14,7 +14,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("@deepseek-ai/dsh-tool-todo", manager.PackageNames);
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
@@ -62,7 +62,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("not found", await manager.AddAsync("@deepseek-ai/dsh-missing"));
             Assert.Contains("not active", await manager.RemoveAsync("@deepseek-ai/dsh-missing"));
@@ -88,11 +88,12 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
-            var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.Tests.dll");
+            var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");
             Assert.True(File.Exists(pluginPath), $"plugin assembly not found: {pluginPath}");
-            // 测试程序集本身在镜像内;禁用它之后,再作为托管程序集从文件装入可回收 ALC。
+            // 夹具的产物在测试输出根目录, 不在 plugins/ 下, 所以不会被组合期的扫描发现;
+            // 这里禁掉镜像内的同名包, 再把它作为托管程序集从文件装入可回收 ALC。
             Assert.Equal(ActivationState.Active, app.Composition!.Find("test/local")!.State);
             Assert.Contains("removed", await manager.RemoveAsync("test/local"));
             Assert.Null(app.Composition.Find("test/local"));
@@ -116,10 +117,8 @@ public sealed class HotPlugTests
         }
         finally
         {
+            // 安装根就在这个临时目录里, 随它一起删掉, 不碰测试输出目录。
             DeleteBestEffort(dir);
-            // /plugins add 现在会把程序集拷进 plugins/ 目录,清掉避免影响后续进程的 Compose 扫描。
-            // Windows 下同进程其他用例可能已把这份拷贝装进 ALC(内存映射删不掉),清不动就留给下次构建清理。
-            DeleteBestEffort(Path.Combine(AppContext.BaseDirectory, "plugins", "Dsh.Tests"));
         }
     }
 
@@ -154,7 +153,7 @@ public sealed class HotPlugTests
                 safety:
                   autoApprove: false
                 """, TestContext.Current.CancellationToken);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
             Assert.Null(tools.Get("todo_write"));

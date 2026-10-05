@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 热装载用例的磁盘载荷: 一个真实可被发现的托管插件, 与 Dsh.Tests 程序集解耦, 不借用模板工程。 -->
+  <Import Project="..\..\src\Dsh.Plugins.Generator\DshPluginPackage.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- 产出 deps.json: 加载器按它解析插件目录里的私有第三方依赖。 -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -28,6 +28,23 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      热装载用例的磁盘载荷: 只取它的产物文件, 不在测试代码里引用它的类型。
+      ReferenceOutputAssembly=false 是必须的: 本工程是宿主(DshPluginHost=true), 生成器会把"引用到的程序集"
+      声明的 [DshPlugin] 一并聚合进编译目录, 直接引用会让夹具的 test/local 与测试自带的 TestPlugin 撞包。
+      因此产物文件用下面的 None 显式复制。
+    -->
+    <ProjectReference Include="..\Dsh.ManagedPluginSample\Dsh.ManagedPluginSample.csproj" ReferenceOutputAssembly="false" />
+    <!-- 让 /plugins add 走与真实插件相同的 dll + deps 闭包路径。 -->
+    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.dll"
+          Link="Dsh.ManagedPluginSample.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.deps.json"
+          Link="Dsh.ManagedPluginSample.deps.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Dsh.Account\Dsh.Account.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Board\Dsh.Board.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm\Dsh.Llm.csproj" />
