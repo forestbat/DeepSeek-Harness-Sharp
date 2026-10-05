@@ -83,7 +83,7 @@ public class SessionAutoRenameTests
             agent.Followup(MessageFactory.CreateUserText("hi"));
             await agent.WhenIdle();
 
-            await WaitForTitleAsync(agent);
+            await WaitForTitleAsync(agent, Title);
             Assert.Equal(Title, agent.Session.Header.Title);
             Assert.Equal(1, adapter.TitleCalls);
         }
@@ -125,7 +125,7 @@ public class SessionAutoRenameTests
                 agent.Followup(MessageFactory.CreateUserText("hi"));
                 await agent.WhenIdle();
 
-                await WaitForTitleAsync(agent);
+                await WaitForTitleAsync(agent, Title);
                 Assert.Equal(Title, agent.Session.Header.Title);
                 Assert.Equal(1, adapter.TitleCalls);
             }
@@ -136,10 +136,12 @@ public class SessionAutoRenameTests
         }
     }
 
-    private static async Task WaitForTitleAsync(AgentLoopAgent agent)
+    /** 持久化层会先写首行兜底标题, 所以盯住模型标题有没有落定, 而不是"标题非空"。 */
+    private static async Task WaitForTitleAsync(AgentLoopAgent agent, string expected)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (string.IsNullOrWhiteSpace(agent.Session.Header.Title) && DateTime.UtcNow < deadline)
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline
+            && !string.Equals(agent.Session.Header.Title, expected, StringComparison.Ordinal))
             await Task.Delay(25, TestContext.Current.CancellationToken);
     }
 

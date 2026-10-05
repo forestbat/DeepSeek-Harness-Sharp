@@ -65,7 +65,7 @@ public sealed class MainViewModelTests
             .Select(payload => payload.Message)
             .LastOrDefault(message => message.Content.Any(block => block is ImageBlock));
         Assert.NotNull(userMessage);
-        Assert.Contains(userMessage!.Content, block => block is ImageBlock);
+        Assert.Contains(userMessage.Content, block => block is ImageBlock);
         Assert.Contains(userMessage.Content, block => block is TextBlock { Text: "look at this" });
     }
 
@@ -124,22 +124,35 @@ public sealed class MainViewModelTests
 
     /** 侧栏"运行中"指示由后台会话的 TurnStart/TurnEnd 驱动, 不限于当前显示会话。 */
     [Fact]
-    public async Task SessionNode_TracksRunningState_FromTurnEvents()
+    public async Task SessionNode_TracksRunningState_FromTurnEvents() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        var environment = await GuiTestEnvironment.CreateAsync();
+        using var environmentScope = environment;
         using var viewModel = new MainViewModel(environment.App, environment.Agent);
         var session = environment.Agent.Session;
         var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First(item => item.SessionId == session.Id);
         Assert.False(node.IsRunning);
 
-        environment.App.Ctx.Emit(new SessionEventNotification(session, Event(1, new TurnStartPayload(1))));
-        Dispatcher.UIThread.RunJobs();
-        Assert.True(node.IsRunning);
+        // 事件按真实路径从后台线程发出, 视图模型把更新派回 dispatcher; 在 UI 线程上轮询排空直到节点反映出来。
+        await Task.Run(() => environment.App.Ctx.Emit(
+            new SessionEventNotification(session, Event(1, new TurnStartPayload(1)))),
+            TestContext.Current.CancellationToken);
+        await PumpUntilAsync(() => node.IsRunning);
 
-        environment.App.Ctx.Emit(new SessionEventNotification(
-            session, Event(2, new TurnEndPayload(1, new TurnEndReason.Completed()))));
-        Dispatcher.UIThread.RunJobs();
-        Assert.False(node.IsRunning);
+        await Task.Run(() => environment.App.Ctx.Emit(
+            new SessionEventNotification(session, Event(2, new TurnEndPayload(1, new TurnEndReason.Completed())))),
+            TestContext.Current.CancellationToken);
+        await PumpUntilAsync(() => !node.IsRunning);
+    });
+
+    /** 后台线程发出的事件要等 dispatcher 追上才反映到视图模型, 因此在 headless UI 线程上轮询排空。 */
+    private static async Task PumpUntilAsync(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 200 && !condition(); attempt++)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+        }
     }
 
     private static SessionEvent Event(long seq, SessionEventPayload payload)
