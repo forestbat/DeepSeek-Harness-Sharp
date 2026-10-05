@@ -49,6 +49,7 @@ public static class PwshTool
                         + "\"git status\" → \"Show working tree status\"; \"Get-Process\" → \"List running processes\"."),
                     ["timeoutMs"] = ToolSchemas.NumberParam("Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."),
                     ["workdir"] = ToolSchemas.StringParam("Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."),
+                    ["envs"] = ToolSchemas.StringMapParam("Environment variables to set for this command (object of string values). `DSH_*` keys are ignored."),
                 },
                 "command"),
             Output = new ToolOutputDefinition(BashTool.OutputSchemaShared, (_, value) => Render(value)),
@@ -66,15 +67,13 @@ public static class PwshTool
         var workdirArg = args.TryGetProperty("workdir", out var workdirElement) && workdirElement.ValueKind == JsonValueKind.String
             ? workdirElement.GetString()
             : null;
+        var envs = BashTool.ReadEnvs(args);
         if (command.Trim().Length == 0)
             throw new ArgumentException("invalid command: expected a non-empty string");
         if (timeoutMsArg is not null && (!double.IsFinite(timeoutMsArg.Value) || timeoutMsArg.Value <= 0))
             throw new ArgumentException($"invalid timeoutMs: expected a positive number, got {JsonSerializer.Serialize(timeoutMsArg.Value)}");
         var timeoutMs = (long)Math.Clamp(timeoutMsArg ?? config.TimeoutMs, 1, config.MaxTimeoutMs);
-        var sessionCwd = exec.Agent?.Session.Header.Cwd;
-        var workdir = workdirArg is not null
-            ? Path.IsPathRooted(workdirArg) ? workdirArg : Path.GetFullPath(Path.Combine(sessionCwd ?? Environment.CurrentDirectory, workdirArg))
-            : sessionCwd ?? config.Cwd ?? Environment.CurrentDirectory;
+        var workdir = BashTool.ResolveWorkdir(workdirArg, exec, config);
         using var timeoutSignal = new CancellationTokenSource();
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeoutSignal.Token);
         timeoutSignal.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
@@ -82,7 +81,7 @@ public static class PwshTool
         {
             Argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", EncodingPreamble + command],
             Cwd = workdir,
-            Env = ShellEnvironment.NonInteractiveOverrides,
+            Env = BashTool.MergeEnv(envs),
             Stdout = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Stderr = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Signal = fused.Token,

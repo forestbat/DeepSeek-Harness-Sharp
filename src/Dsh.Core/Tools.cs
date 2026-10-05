@@ -544,7 +544,10 @@ public sealed class ToolRuntime : Service
             var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null)
                 ?? throw new ToolNotFoundException(exec.Name);
             exec.BodyInvoked = true;
-            var returned = await tool.Execute(exec.Arguments, exec);
+            var arguments = exec.Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                ? JsonDocument.Parse("{}").RootElement
+                : exec.Arguments;
+            var returned = await tool.Execute(arguments, exec);
             var result = CreateSuccessResult(exec, tool, returned);
             return signal.IsCancellationRequested ? AbortedResult(result) : result;
         }
@@ -778,7 +781,7 @@ public sealed class ToolRuntime : Service
             return candidate switch
             {
                 null => JsonDocument.Parse("null").RootElement,
-                JsonElement element => element.Clone(),
+        JsonElement element => element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? JsonDocument.Parse("{}").RootElement : element.Clone(),
                 _ => DshJson.ToElementRuntime(candidate),
             };
         }

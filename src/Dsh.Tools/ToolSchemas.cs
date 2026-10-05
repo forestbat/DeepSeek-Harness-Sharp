@@ -28,6 +28,17 @@ internal static class ToolSchemas
         return node;
     }
 
+    public static JsonObject StringMapParam(string? description = null)
+    {
+        var node = new JsonObject
+        {
+            ["type"] = "object",
+            ["additionalProperties"] = new JsonObject { ["type"] = "string" },
+        };
+        if (description is not null) node["description"] = description;
+        return node;
+    }
+
     public static JsonObject ObjectSchema(IReadOnlyDictionary<string, JsonObject> properties, params string[] required)
     {
         var propertiesNode = new JsonObject();

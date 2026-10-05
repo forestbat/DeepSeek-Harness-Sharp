@@ -151,6 +151,63 @@ public class ToolsTests : IDisposable
             Assert.EndsWith("100000\n", spilled);
             Assert.Contains("[output truncated; full output:", TextOf(result));
         }
+
+        [Fact]
+        public void MergeEnv_AppliesOverridesAndDropsDshKeys()
+        {
+            var merged = BashTool.MergeEnv(new Dictionary<string, string?> { ["MYVAR"] = "value", ["DSH_TEST"] = "nope" });
+
+            Assert.Equal("value", merged["MYVAR"]);
+            Assert.DoesNotContain("DSH_TEST", merged.Keys);
+        }
+
+        [Fact]
+        public async Task Workdir_IsHonored()
+        {
+            if (!BashProbe.IsAvailable)
+                Assert.Skip("bash 不可用(WSL/Git Bash 无响应), 跳过依赖外部 shell 的用例");
+            var dir = Path.Combine(Path.GetTempPath(), $"dsh-bash-workdir-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "marker.txt"), "");
+                var result = await _outer.Execute("bash", JsonSerializer.Serialize(new
+                {
+                    command = "ls",
+                    description = "workdir test",
+                    workdir = dir,
+                }, DshJson.Options));
+
+                Assert.False(result.IsError);
+                Assert.Contains("marker.txt", TextOf(result));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // WSL 可能短暂持有目录句柄; 清理失败不应让用例失败。
+                }
+            }
+        }
+
+        [Fact]
+        public async Task NonexistentWorkdir_IsRejected()
+        {
+            var missing = Path.Combine(Path.GetTempPath(), $"dsh-missing-{Guid.NewGuid():N}");
+            var result = await _outer.Execute("bash", JsonSerializer.Serialize(new
+            {
+                command = "echo hi",
+                description = "workdir validation",
+                workdir = missing,
+            }, DshJson.Options));
+
+            Assert.True(result.IsError);
+            Assert.Contains("workdir", TextOf(result));
+        }
     }
 
     public sealed class Pwsh : IDisposable
@@ -236,6 +293,21 @@ public class ToolsTests : IDisposable
             var success = Assert.IsType<ToolExecutionResult.Success>(result);
             Assert.True(success.Value.GetProperty("timedOut").GetBoolean());
             Assert.Contains("[timed out after 500ms]", TextOf(result));
+        }
+
+        [Fact]
+        public async Task Envs_AreApplied()
+        {
+            if (!PwshAvailable()) return;
+            var result = await _outer.Execute("pwsh", JsonSerializer.Serialize(new
+            {
+                command = "Write-Output $env:MYVAR",
+                description = "env test",
+                envs = new Dictionary<string, string> { ["MYVAR"] = "value" },
+            }, DshJson.Options));
+
+            Assert.False(result.IsError);
+            Assert.Contains("value", TextOf(result));
         }
     }
 

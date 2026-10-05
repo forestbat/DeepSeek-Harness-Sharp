@@ -822,9 +822,12 @@ public sealed class AgentLoopAgent : IAgent
     {
         try
         {
-            return string.IsNullOrEmpty(raw)
+            var parsed = string.IsNullOrEmpty(raw)
                 ? JsonDocument.Parse("{}").RootElement
                 : JsonDocument.Parse(raw).RootElement;
+            return parsed.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+                ? JsonDocument.Parse("{}").RootElement
+                : parsed;
         }
         catch (JsonException)
         {

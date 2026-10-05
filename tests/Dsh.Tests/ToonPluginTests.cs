@@ -128,4 +128,25 @@ public sealed class ToonPluginTests
         Assert.Contains("cannot call itself", text);
         await Task.CompletedTask;
     }
+
+    [Fact]
+    public async Task Dispatcher_TreatsNullArgumentsAsEmptyObject()
+    {
+        var (_, tools) = CreateHost();
+        using var registration = tools.Register(EchoTool("echo"));
+
+        // 无参工具把 arguments 写成 null(或省略): 目标参数应归一为 {}, 不能变成 JSON Null 元素。
+        var result = await tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-null"),
+            Name = Dsh.Toon.Plugin.ToolName,
+            Arguments = JsonDocument.Parse("""{"name":"echo","arguments":"null"}""").RootElement,
+            Signal = TestContext.Current.CancellationToken,
+        });
+
+        Assert.False(result.IsError);
+        var text = Assert.IsType<TextBlock>(Assert.Single(result.Content)).Text;
+        Assert.Contains("{}", text);
+        await Task.CompletedTask;
+    }
 }

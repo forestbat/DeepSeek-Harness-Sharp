@@ -95,7 +95,7 @@ public sealed class Plugin : IDshPlugin
         {
             return JsonSerializer.Serialize(new JsonObject { ["error"] = $"invalid TOON arguments: {error.Message}" });
         }
-        var targetArguments = JsonSerializer.SerializeToElement(decoded);
+        var targetArguments = JsonSerializer.SerializeToElement(decoded as JsonObject ?? new JsonObject());
         var result = await tools.Execute(new ToolExecutionInput
         {
             CallId = ToolCallId.Create($"toon-{Guid.NewGuid():N}"),

@@ -62,6 +62,7 @@ public static class BashTool
                         + "\"git status\" → \"Show working tree status\"; \"npm install\" → \"Install package dependencies\"."),
                     ["timeoutMs"] = ToolSchemas.NumberParam("Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."),
                     ["workdir"] = ToolSchemas.StringParam("Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."),
+                    ["envs"] = ToolSchemas.StringMapParam("Environment variables to set for this command (object of string values). `DSH_*` keys are ignored."),
                 },
                 "command"),
             Output = new ToolOutputDefinition(OutputSchema, (_, value) => Render(value)),
@@ -117,6 +118,7 @@ public static class BashTool
         var workdirArg = args.TryGetProperty("workdir", out var workdirElement) && workdirElement.ValueKind == JsonValueKind.String
             ? workdirElement.GetString()
             : null;
+        var envs = ReadEnvs(args);
         if (command.Trim().Length == 0)
             throw new ArgumentException("invalid command: expected a non-empty string");
         if (timeoutMsArg is not null && (!double.IsFinite(timeoutMsArg.Value) || timeoutMsArg.Value <= 0))
@@ -126,7 +128,7 @@ public static class BashTool
         using var timeoutSignal = new CancellationTokenSource();
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeoutSignal.Token);
         timeoutSignal.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
-        var env = ShellEnvironment.NonInteractiveOverrides;
+        var env = MergeEnv(envs);
         var handle = subprocess.Spawn(new SubprocessSpawnSpec
         {
             Argv = ["bash", "-c", command],
@@ -153,16 +155,55 @@ public static class BashTool
             new BashStreamOutput(stderrRead.Text, stderrRead.Lossy, stderrRead.SpillPath));
     }
 
-    private static string ResolveWorkdir(string? modelWorkdir, ToolRunContext exec, BashToolConfig config)
+    internal static string ResolveWorkdir(string? modelWorkdir, ToolRunContext exec, BashToolConfig config)
     {
         var sessionCwd = exec.Agent?.Session.Header.Cwd;
-        if (modelWorkdir is not null)
+        var workdir = modelWorkdir switch
         {
-            if (Path.IsPathRooted(modelWorkdir)) return modelWorkdir;
-            if (sessionCwd is not null) return Path.GetFullPath(Path.Combine(sessionCwd, modelWorkdir));
-            return Path.GetFullPath(modelWorkdir);
+            null => sessionCwd ?? config.Cwd ?? Environment.CurrentDirectory,
+            _ when Path.IsPathRooted(modelWorkdir) => modelWorkdir,
+            _ when sessionCwd is not null => Path.GetFullPath(Path.Combine(sessionCwd, modelWorkdir)),
+            _ => Path.GetFullPath(modelWorkdir),
+        };
+        if (!Directory.Exists(workdir))
+            throw new ArgumentException($"invalid workdir: directory does not exist: {workdir}");
+        return workdir;
+    }
+
+    internal static IReadOnlyDictionary<string, string?>? ReadEnvs(JsonElement args)
+    {
+        if (!args.TryGetProperty("envs", out var envElement)
+            || envElement.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return null;
+        if (envElement.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("invalid envs: expected an object of string values");
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var property in envElement.EnumerateObject())
+        {
+            if (property.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                result[property.Name] = null;
+                continue;
+            }
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new ArgumentException($"invalid envs: \"{property.Name}\" must be a string or null");
+            result[property.Name] = property.Value.GetString();
         }
-        return sessionCwd ?? config.Cwd ?? Environment.CurrentDirectory;
+        return result;
+    }
+
+    internal static IReadOnlyDictionary<string, string?> MergeEnv(IReadOnlyDictionary<string, string?>? envs)
+    {
+        if (envs is null || envs.Count == 0)
+            return ShellEnvironment.NonInteractiveOverrides;
+        var merged = new Dictionary<string, string?>(ShellEnvironment.NonInteractiveOverrides);
+        foreach (var (key, value) in envs)
+        {
+            if (key.StartsWith("DSH_", StringComparison.OrdinalIgnoreCase))
+                continue;
+            merged[key] = value;
+        }
+        return merged;
     }
 
     private static IReadOnlyList<ContentBlock> Render(JsonElement value)
