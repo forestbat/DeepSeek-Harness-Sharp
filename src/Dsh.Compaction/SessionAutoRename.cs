@@ -146,7 +146,7 @@ public sealed class SessionAutoRename : Service, IDisposable
             Provider = target.Provider,
             Model = target.Model,
             Messages = [MessageFactory.CreateUserText(TitlePrompt(transcript), new PluginMessageSource("dsh-compaction"))],
-            Purpose = GeneratePurpose.Memory,
+            Purpose = GeneratePurpose.SessionTitle,
             SessionId = session.Id,
             Cancellation = timeout.Token,
         };

@@ -30,7 +30,7 @@ public class SessionAutoRenameTests
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             string text;
-            if (options.Purpose == GeneratePurpose.Memory)
+            if (options.Purpose == GeneratePurpose.SessionTitle)
             {
                 TitleCalls++;
                 text = Title;
