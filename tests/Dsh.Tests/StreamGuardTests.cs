@@ -94,6 +94,23 @@ public class StreamGuardTests
         Assert.True(elapsed < TimeSpan.FromSeconds(5), $"watchdog took too long: {elapsed}");
     }
 
+    /** 上游无视取消令牌时, 看门狗仍然照常产出超时结束, 不阻塞消费端、也不把释放异常抛出来。 */
+    [Fact]
+    public async Task Watchdog_StillFinishes_WhenUpstreamIgnoresCancellation()
+    {
+        using var watchdog = new StreamWatchdog(new LlmStreamLimits(50, 0), CancellationToken.None);
+        var started = Stopwatch.GetTimestamp();
+        var chunks = new List<StreamChunk>();
+        await foreach (var chunk in watchdog.Guard(Stubborn()))
+            chunks.Add(chunk);
+        var elapsed = Stopwatch.GetElapsedTime(started);
+
+        var finish = Assert.IsType<StreamChunk.Finish>(Assert.Single(chunks));
+        var error = Assert.IsType<FinishReason.Error>(finish.Reason);
+        Assert.Equal(LlmFailureCodes.Timeout, error.Failure.Code);
+        Assert.True(elapsed < TimeSpan.FromSeconds(5), $"watchdog took too long: {elapsed}");
+    }
+
     private static async Task<List<StreamChunk>> CollectAutoMapperAsync(string payload)
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
@@ -128,5 +145,12 @@ public class StreamGuardTests
         yield return new StreamChunk.TextDelta(0, "hi");
         yield return new StreamChunk.BlockEnd(0, new TextBlock("hi"));
         yield return new StreamChunk.Finish(new FinishReason.Stop());
+    }
+
+    /** 顽固上游: 不接收取消令牌, 永不返回, 模拟"无视取消的适配器"。 */
+    private static async IAsyncEnumerable<StreamChunk> Stubborn()
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan);
+        yield break;
     }
 }

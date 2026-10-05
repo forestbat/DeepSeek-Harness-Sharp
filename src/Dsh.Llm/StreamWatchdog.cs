@@ -24,44 +24,85 @@ public sealed class StreamWatchdog : IDisposable
 
     public async IAsyncEnumerable<StreamChunk> Guard(IAsyncEnumerable<StreamChunk> source)
     {
-        await using var enumerator = source.GetAsyncEnumerator(Token);
-        using var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        if (_limits.MaxLifetimeMs > 0)
-            lifetimeCts.CancelAfter(_limits.MaxLifetimeMs);
-        var lifetime = Task.Delay(Timeout.InfiniteTimeSpan, lifetimeCts.Token);
-        while (true)
+        var enumerator = source.GetAsyncEnumerator(Token);
+        Task? outstanding = null;
+        try
         {
-            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            if (_limits.IdleTimeoutMs > 0)
-                idleCts.CancelAfter(_limits.IdleTimeoutMs);
-            var idle = Task.Delay(Timeout.InfiniteTimeSpan, idleCts.Token);
-            var move = enumerator.MoveNextAsync().AsTask();
-            var winner = await Task.WhenAny(move, idle, lifetime);
-            if (winner == move)
+            using var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            if (_limits.MaxLifetimeMs > 0)
+                lifetimeCts.CancelAfter(_limits.MaxLifetimeMs);
+            var lifetime = Task.Delay(Timeout.InfiniteTimeSpan, lifetimeCts.Token);
+            while (true)
             {
-                bool has;
-                try
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(Token);
+                if (_limits.IdleTimeoutMs > 0)
+                    idleCts.CancelAfter(_limits.IdleTimeoutMs);
+                var idle = Task.Delay(Timeout.InfiniteTimeSpan, idleCts.Token);
+                var move = enumerator.MoveNextAsync().AsTask();
+                var winner = await Task.WhenAny(move, idle, lifetime);
+                if (winner == move)
                 {
-                    has = await move;
+                    bool has;
+                    try
+                    {
+                        has = await move;
+                    }
+                    catch (OperationCanceledException) when (Token.IsCancellationRequested)
+                    {
+                        yield break;
+                    }
+                    if (!has)
+                        yield break;
+                    yield return enumerator.Current;
+                    continue;
                 }
-                catch (OperationCanceledException) when (Token.IsCancellationRequested)
-                {
+                outstanding = move;
+                Observe(move);
+                _linked.Cancel();
+                if (_user.IsCancellationRequested)
                     yield break;
-                }
-                if (!has)
-                    yield break;
-                yield return enumerator.Current;
-                continue;
-            }
-            Observe(move);
-            _linked.Cancel();
-            if (_user.IsCancellationRequested)
+                var detail = winner == lifetime
+                    ? $"stream exceeded the {_limits.MaxLifetimeMs}ms lifetime cap"
+                    : $"stream produced no data for {_limits.IdleTimeoutMs}ms";
+                yield return new StreamChunk.Finish(new FinishReason.Error(new LlmFailure(detail, LlmFailureCodes.Timeout)));
                 yield break;
-            var detail = winner == lifetime
-                ? $"stream exceeded the {_limits.MaxLifetimeMs}ms lifetime cap"
-                : $"stream produced no data for {_limits.IdleTimeoutMs}ms";
-            yield return new StreamChunk.Finish(new FinishReason.Error(new LlmFailure(detail, LlmFailureCodes.Timeout)));
-            yield break;
+            }
+        }
+        finally
+        {
+            await ReleaseAsync(enumerator, outstanding);
+        }
+    }
+
+    /** 编译器的异步迭代器在有未决 MoveNextAsync 时释放会抛 NotSupportedException, 并且不跑上游 finally。
+     *  超时路径上的 move 随令牌取消落定, 落定后再释放; 上游无视取消时交给后台任务, 不阻塞收尾。 */
+    /** 编译器的异步迭代器在有未决 MoveNextAsync 时释放会抛 NotSupportedException, 并且不跑上游 finally。
+     *  超时路径上的 move 随令牌取消落定, 落定后再释放; 上游无视取消时把释放交给后台任务后立即返回, 绝不阻塞收尾。 */
+    private static ValueTask ReleaseAsync(IAsyncEnumerator<StreamChunk> enumerator, Task? outstanding)
+    {
+        if (outstanding is null || outstanding.IsCompleted)
+            return enumerator.DisposeAsync();
+        _ = ReleaseWhenSettledAsync(enumerator, outstanding);
+        return ValueTask.CompletedTask;
+    }
+
+    private static async Task ReleaseWhenSettledAsync(IAsyncEnumerator<StreamChunk> enumerator, Task outstanding)
+    {
+        try
+        {
+            await outstanding;
+        }
+        catch (Exception)
+        {
+            // 上游的取消/错误已在超时路径上处理, 这里只等它可以被释放
+        }
+        try
+        {
+            await enumerator.DisposeAsync();
+        }
+        catch (Exception)
+        {
+            // 释放发生在收尾路径, 已没有可报告的对象
         }
     }
 
