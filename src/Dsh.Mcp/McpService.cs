@@ -1,7 +1,6 @@
 ﻿using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
-using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 
 namespace Dsh.Mcp;
@@ -35,32 +34,26 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
 {
     public const string ServiceName = "mcp";
 
-    private readonly List<McpConnection> _connections = [];
+    private readonly List<Connection> _connections = [];
     private readonly Lock _gate = new();
 
     public IReadOnlyList<McpServerStatus> Status()
     {
         lock (_gate)
-            return _connections.Select(connection => connection.Status).ToList();
+            return _connections.Select(connection => connection.Handle.Status).ToList();
     }
 
     public async Task ConnectAsync(IReadOnlyList<McpServerConfig> servers, CancellationToken signal = default)
     {
         foreach (var server in servers)
-        {
-            try
-            {
-                await ConnectOneAsync(server, CreateTransport(server), signal);
-            }
-            catch (Exception error)
-            {
-                Track(new McpConnection(server, null, [], error.Message));
-            }
-        }
+            await ConnectOneAsync(server, () => CreateTransport(server), signal);
     }
 
     internal async Task ConnectAsync(McpServerConfig server, IClientTransport transport, CancellationToken signal = default)
-        => await ConnectOneAsync(server, transport, signal);
+        => await ConnectOneAsync(server, () => transport, signal);
+
+    internal async Task ConnectAsync(McpServerConfig server, Func<IClientTransport> transportFactory, CancellationToken signal = default)
+        => await ConnectOneAsync(server, transportFactory, signal);
 
     public async Task ReloadAsync(IReadOnlyList<McpServerConfig> servers, CancellationToken signal = default)
     {
@@ -70,30 +63,30 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
 
     public async ValueTask DisposeAsync() => await DisconnectAllAsync();
 
-    private async Task ConnectOneAsync(McpServerConfig server, IClientTransport transport, CancellationToken signal)
+    private async Task ConnectOneAsync(McpServerConfig server, Func<IClientTransport> transportFactory, CancellationToken signal)
     {
+        var handle = new McpServerHandle(server, transportFactory);
         try
         {
-            var client = await McpClient.CreateAsync(transport, new McpClientOptions(), NullLoggerFactory.Instance, signal);
-            var tools = await client.ListToolsAsync(cancellationToken: signal);
-            var registrations = RegisterTools(server.Name, tools);
-            Track(new McpConnection(server, client, registrations));
+            var tools = await handle.ConnectAsync(signal);
+            Track(new Connection(handle, RegisterTools(handle, tools)));
         }
         catch (Exception error)
         {
-            Track(new McpConnection(server, null, [], error.Message));
+            handle.MarkError(error.Message);
+            Track(new Connection(handle, []));
         }
     }
 
-    private IReadOnlyList<IDisposable> RegisterTools(string serverName, IList<McpClientTool> tools)
+    private IReadOnlyList<IDisposable> RegisterTools(McpServerHandle handle, IList<McpClientTool> tools)
     {
         var runtime = Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         return tools
-            .Select(tool => runtime.Register(McpToolBridge.Wrap(serverName, tool)))
+            .Select(tool => runtime.Register(McpToolBridge.Wrap(handle, tool)))
             .ToList();
     }
 
-    private void Track(McpConnection connection)
+    private void Track(Connection connection)
     {
         lock (_gate)
             _connections.Add(connection);
@@ -101,7 +94,7 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
 
     private async Task DisconnectAllAsync()
     {
-        List<McpConnection> connections;
+        List<Connection> connections;
         lock (_gate)
         {
             connections = [.. _connections];
@@ -111,8 +104,7 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
         {
             foreach (var registration in connection.Registrations)
                 registration.Dispose();
-            if (connection.Client is not null)
-                await connection.Client.DisposeAsync();
+            await connection.Handle.DisposeAsync();
         }
     }
 
@@ -144,10 +136,5 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
         throw new ArgumentException($"mcp server \"{server.Name}\" has unsupported transport \"{server.Transport}\"");
     }
 
-    private sealed class McpConnection(McpServerConfig config, McpClient? client, IReadOnlyList<IDisposable> registrations, string? error = null)
-    {
-        public McpClient? Client { get; } = client;
-        public IReadOnlyList<IDisposable> Registrations { get; } = registrations;
-        public McpServerStatus Status { get; } = new(config.Name, config.Transport, client is not null, registrations.Count, error);
-    }
+    private sealed record Connection(McpServerHandle Handle, IReadOnlyList<IDisposable> Registrations);
 }

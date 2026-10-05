@@ -33,6 +33,48 @@ public static class McpToolBridge
             Execute = (args, exec) => ExecuteAsync(call, args, exec),
         };
 
+    // 绑定可换句柄: 调用时解析当前 McpClientTool, 陈旧会话失败则重连一次并重试一次。
+    internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool)
+        => Wrap(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
+            (arguments, signal) => CallWithReconnectAsync(handle, tool.Name, arguments, signal));
+
+    internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
+        McpServerHandle handle,
+        string toolName,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken signal)
+        => await CallWithReconnectAsync(
+            invoke: () => Resolve(handle, toolName).Tool.CallAsync(arguments, null, null, signal),
+            usedVersion: () => handle.Version,
+            reconnect: version => handle.ReconnectIfVersionAsync(version, signal),
+            signal: signal);
+
+    internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
+        Func<ValueTask<CallToolResult>> invoke,
+        Func<long> usedVersion,
+        Func<long, Task> reconnect,
+        CancellationToken signal)
+    {
+        var version = usedVersion();
+        try
+        {
+            return await invoke();
+        }
+        catch (Exception error) when (McpStaleSession.IsStale(error, signal))
+        {
+            await reconnect(version);
+            return await invoke();
+        }
+    }
+
+    private static (McpClientTool Tool, long Version) Resolve(McpServerHandle handle, string toolName)
+        => handle.TryGetTool(toolName, out var tool, out var version) && tool is not null
+            ? (tool, version)
+            : throw new HarnessException(
+                $"mcp tool \"{toolName}\" is unavailable on server \"{handle.Config.Name}\"",
+                ErrorCode);
+
+
     internal static string Sanitize(string name)
         => string.Concat(name.Select(character => char.IsLetterOrDigit(character) || character == '_' ? character : '_'));
 

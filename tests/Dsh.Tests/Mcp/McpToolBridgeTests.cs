@@ -1,9 +1,12 @@
 using System.IO.Pipes;
+using System.Net;
 using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Mcp;
 using Dsh.Runtime;
+using ModelContextProtocol;
+using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -148,5 +151,199 @@ public sealed class McpServiceTests
         }));
         var rendered = Assert.IsType<TextBlock>(Assert.Single(registered.Output.Render(args, value)));
         Assert.Contains("echo:hello", rendered.Text);
+    }
+}
+
+public sealed class McpStaleSessionTests
+{
+    [Fact]
+    public void IsStale_HttpRequestNotFound() =>
+        Assert.True(McpStaleSession.IsStale(
+            new HttpRequestException("Streamable HTTP session not found", null, HttpStatusCode.NotFound),
+            CancellationToken.None));
+
+    [Fact]
+    public void IsStale_OperationCanceledWithoutUserAbort() =>
+        Assert.True(McpStaleSession.IsStale(new OperationCanceledException(), CancellationToken.None));
+
+    [Fact]
+    public void IsStale_OperationCanceledWithUserAbort()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.False(McpStaleSession.IsStale(new OperationCanceledException(), cts.Token));
+    }
+
+    [Fact]
+    public void IsStale_SessionNotFoundMessage() =>
+        Assert.True(McpStaleSession.IsStale(new McpException("HTTP 404 session not found"), CancellationToken.None));
+
+    [Fact]
+    public void IsStale_ToolErrorIsNotStale() =>
+        Assert.False(McpStaleSession.IsStale(
+            new HarnessException("mcp tool failed", McpToolBridge.ErrorCode),
+            CancellationToken.None));
+}
+
+public sealed class McpReconnectRetryTests
+{
+    private static CallToolResult Ok() => new() { Content = [new TextContentBlock { Text = "ok" }] };
+
+    [Fact]
+    public async Task StaleFailure_ReconnectsOnceAndRetries()
+    {
+        var calls = 0;
+        var reconnects = new List<long>();
+
+        var result = await McpToolBridge.CallWithReconnectAsync(
+            invoke: () =>
+            {
+                calls++;
+                return calls == 1
+                    ? throw new HttpRequestException("session not found", null, HttpStatusCode.NotFound)
+                    : ValueTask.FromResult(Ok());
+            },
+            usedVersion: () => 7,
+            reconnect: version =>
+            {
+                reconnects.Add(version);
+                return Task.CompletedTask;
+            },
+            signal: CancellationToken.None);
+
+        Assert.Equal(2, calls);
+        Assert.Equal([7L], reconnects);
+        Assert.Equal("ok", Assert.Single(result.Content.OfType<TextContentBlock>()).Text);
+    }
+
+    [Fact]
+    public async Task StaleFailure_RetriesAtMostOnce()
+    {
+        var calls = 0;
+
+        await Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await McpToolBridge.CallWithReconnectAsync(
+                invoke: () =>
+                {
+                    calls++;
+                    throw new HttpRequestException("session not found", null, HttpStatusCode.NotFound);
+                },
+                usedVersion: () => 1,
+                reconnect: _ => Task.CompletedTask,
+                signal: CancellationToken.None));
+
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task UserAbort_IsNotRetried()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var calls = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await McpToolBridge.CallWithReconnectAsync(
+                invoke: () =>
+                {
+                    calls++;
+                    throw new OperationCanceledException(cts.Token);
+                },
+                usedVersion: () => 1,
+                reconnect: _ => Task.CompletedTask,
+                signal: cts.Token));
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task ToolError_IsNotRetried()
+    {
+        var calls = 0;
+
+        await Assert.ThrowsAsync<HarnessException>(async () =>
+            await McpToolBridge.CallWithReconnectAsync(
+                invoke: () =>
+                {
+                    calls++;
+                    throw new HarnessException("mcp tool failed", McpToolBridge.ErrorCode);
+                },
+                usedVersion: () => 1,
+                reconnect: _ => Task.CompletedTask,
+                signal: CancellationToken.None));
+
+        Assert.Equal(1, calls);
+    }
+}
+
+public sealed class McpServerHandleTests
+{
+    [Fact]
+    public async Task Reconnect_RehandshakesAndGatesOnVersion()
+    {
+        var lifetime = new Lifetime();
+        var handle = new McpServerHandle(new McpServerConfig("loopback", "stdio"), lifetime.Factory);
+        await using (handle)
+        {
+            await handle.ConnectAsync(TestContext.Current.CancellationToken);
+            var first = handle.Version;
+            Assert.True(handle.Connected, handle.Status.Error);
+            Assert.Equal(1, handle.ToolCount);
+
+            await handle.ReconnectIfVersionAsync(first, TestContext.Current.CancellationToken);
+            Assert.True(handle.Connected, handle.Status.Error);
+            Assert.True(handle.Version > first);
+            Assert.Equal(1, handle.ToolCount);
+
+            var current = handle.Version;
+            await handle.ReconnectIfVersionAsync(first, TestContext.Current.CancellationToken);
+            Assert.Equal(current, handle.Version);
+        }
+        await lifetime.DisposeAsync();
+    }
+
+    private sealed class Lifetime : IAsyncDisposable
+    {
+        private readonly List<IDisposable> _streams = [];
+        private readonly List<IAsyncDisposable> _servers = [];
+
+        public IClientTransport Factory()
+        {
+            var serverOut = new AnonymousPipeServerStream(PipeDirection.Out);
+            var serverIn = new AnonymousPipeServerStream(PipeDirection.In);
+            var clientOut = new AnonymousPipeClientStream(PipeDirection.Out, serverIn.ClientSafePipeHandle);
+            var clientIn = new AnonymousPipeClientStream(PipeDirection.In, serverOut.ClientSafePipeHandle);
+            var echo = McpServerTool.Create((string text) => $"echo:{text}",
+                new McpServerToolCreateOptions { Name = "echo", Description = "Echoes text." });
+            var server = McpServer.Create(
+                new StreamServerTransport(serverIn, serverOut, "loopback"),
+                new McpServerOptions
+                {
+                    ServerInfo = new Implementation { Name = "loopback", Version = "1.0" },
+                    ToolCollection = [echo],
+                });
+            _ = server.RunAsync(TestContext.Current.CancellationToken);
+            _servers.Add(server);
+            _streams.AddRange([serverOut, serverIn, clientOut, clientIn]);
+            return new StreamClientTransport(clientOut, clientIn);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            foreach (var server in _servers)
+            {
+                try
+                {
+                    await server.DisposeAsync();
+                }
+                catch
+                {
+                    // Teardown only: a server whose transport was already closed may throw.
+                }
+            }
+            foreach (var stream in _streams)
+                stream.Dispose();
+        }
     }
 }
