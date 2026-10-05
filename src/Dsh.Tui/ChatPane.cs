@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
@@ -30,6 +31,9 @@ public sealed class ChatPane : ITuiPane
     private int _mentionEnd;
     private int _mentionStart;
     private bool _mentionActive;
+    private PopupList.Window _mentionWindow;
+    private int? _mentionScrollGrab;
+    private readonly List<ImageAttachmentRef> _attachments = [];
     /** Ctrl+P 唤起命令选单时暂存的提示词: 选中命令后接到命令后面。 */
     private string _promptText = "";
     private readonly ScrollWheel _wheel = new();
@@ -387,6 +391,42 @@ public sealed class ChatPane : ITuiPane
         RefreshMenus();
     }
 
+    /** 括号粘贴: 本地图片路径转附件; 空粘贴尝试读 OS 剪贴板图片; 其余按文本插入。 */
+    internal void HandlePaste(string text)
+    {
+        if (text.Length == 0)
+        {
+            TryAttachClipboardImage();
+            return;
+        }
+        var remaining = AttachImagePaths(text);
+        if (remaining.Length == 0)
+        {
+            StatusText = $"已附加 {_attachments.Count} 张图片 — Enter 发送";
+            return;
+        }
+        InsertText(remaining);
+    }
+
+    private bool TryAttachClipboardImage()
+    {
+        try
+        {
+            if (!ClipboardImage.TryRead(out var bytes, out var mediaType))
+                return false;
+            var store = Agent.Ctx.Get<IAttachmentStore>(FileAttachmentStore.ServiceName, false);
+            if (store is null)
+                return false;
+            _attachments.Add(store.Put(bytes, mediaType, 0, 0, "clipboard"));
+            StatusText = $"已附加 {_attachments.Count} 张图片 — Enter 发送";
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /** 鼠标滚轮只作用于收到的 pane; 由调用方按命中测试路由。 */
     public void HandleMouseWheel(float delta)
     {
@@ -575,7 +615,8 @@ public sealed class ChatPane : ITuiPane
 
         if (_mentionActive)
         {
-            PopupList.Draw(grid, rect, $"@ {_mentionCandidates.Count} candidates", _mentionCandidates, _mentionIndex);
+            _mentionWindow = PopupList.WindowOf(rect, 0, _mentionCandidates.Count, _mentionIndex);
+            PopupList.Draw(grid, rect, $"@ {_mentionCandidates.Count} candidates", [], _mentionCandidates, _mentionIndex, null, scrollbar: true);
         }
     }
 
@@ -946,7 +987,7 @@ public sealed class ChatPane : ITuiPane
     internal void RefreshMenus()
     {
         var text = Input;
-        if (text.StartsWith('/'))
+        if (text.StartsWith('/') && !IsImagePath(text))
         {
             if (CommandMenu is not { IsActive: true })
                 CommandMenu = CreateCommandMenu();
@@ -965,7 +1006,7 @@ public sealed class ChatPane : ITuiPane
                 _mentionActive = true;
                 _mentionStart = start;
                 _mentionEnd = end;
-                _mentionCandidates = _window.MentionResolver.ResolveCandidates(text[(start + 1)..end], CurrentCwd(), _window.CurrentSessions());
+                _mentionCandidates = MentionResolver.ResolveCandidates(text[(start + 1)..end], CurrentCwd(), _window.CurrentSessions());
                 _mentionIndex = Math.Clamp(_mentionIndex, 0, Math.Max(0, _mentionCandidates.Count - 1));
             }
             else
@@ -1119,12 +1160,64 @@ public sealed class ChatPane : ITuiPane
         RefreshMenuStatus();
     }
 
-    /** 滚轮滚动命令/mention 浮层候选(与 ↑/↓ 等价); 浮层未打开返回 false。delta>0=向上(与正文滚动同约定)。 */
+    /** 滚轮滚动命令/mention 浮层候选(与 ↑/↓ 等价); 浮层无候选返回 false 以便正文继续滚动。delta>0=向上(与正文滚动同约定)。 */
     internal bool ScrollOverlay(float delta)
     {
-        if (!HasOverlay || delta == 0)
+        if (delta == 0)
             return false;
-        MoveMenuSelection(delta > 0 ? -1 : 1);
+        if (CommandMenu?.IsActive == true && CommandMenu.Candidates.Count > 0)
+        {
+            MoveMenuSelection(delta > 0 ? -1 : 1);
+            return true;
+        }
+        if (_mentionActive && _mentionCandidates.Count > 0)
+        {
+            _mentionIndex = Math.Clamp(_mentionIndex + (delta > 0 ? -1 : 1), 0, _mentionCandidates.Count - 1);
+            RefreshMenuStatus();
+            return true;
+        }
+        return false;
+    }
+
+    /** 命中 mention 浮层滚动条则开始拖动: 返回是否接管该次按下。 */
+    internal bool TryBeginMentionScrollDrag(int cellX, int cellY)
+    {
+        if (!_mentionActive)
+            return false;
+        var bar = PopupList.ScrollbarOf(_mentionWindow, _mentionCandidates.Count);
+        if (bar is null || cellX != bar.Column || cellY < bar.TrackTop || cellY >= bar.TrackTop + bar.TrackHeight)
+            return false;
+        var onThumb = cellY >= bar.TrackTop + bar.ThumbTop && cellY < bar.TrackTop + bar.ThumbTop + bar.ThumbHeight;
+        _mentionScrollGrab = onThumb ? cellY - (bar.TrackTop + bar.ThumbTop) : bar.ThumbHeight / 2;
+        DragMentionScrollDrag(cellY);
+        return true;
+    }
+
+    /** 拖动 mention 滚动条: 由滑块位置映射到候选下标(选中项跟随窗口)。 */
+    internal bool DragMentionScrollDrag(int cellY)
+    {
+        if (_mentionScrollGrab is not { } grab)
+            return false;
+        var bar = PopupList.ScrollbarOf(_mentionWindow, _mentionCandidates.Count);
+        if (bar is null)
+        {
+            _mentionScrollGrab = null;
+            return false;
+        }
+        var thumbRange = Math.Max(1, bar.TrackHeight - bar.ThumbHeight);
+        var thumbTop = Math.Clamp(cellY - grab - bar.TrackTop, 0, thumbRange);
+        var first = bar.MaxFirst == 0 ? 0 : (int)Math.Round((double)thumbTop * bar.MaxFirst / thumbRange);
+        _mentionIndex = Math.Clamp(first + bar.Visible - 1, 0, Math.Max(0, _mentionCandidates.Count - 1));
+        RefreshMenuStatus();
+        return true;
+    }
+
+    /** 结束 mention 滚动条拖动; 返回是否曾有拖动。 */
+    internal bool EndMentionScrollDrag()
+    {
+        if (_mentionScrollGrab is null)
+            return false;
+        _mentionScrollGrab = null;
         return true;
     }
 
@@ -1293,34 +1386,186 @@ public sealed class ChatPane : ITuiPane
     private void Submit()
     {
         var text = Input.Trim();
-        if (text.Length == 0)
-            return;
-        Input = "";
-        Cursor = 0;
-        _history.Add(text);
-        _historyIndex = -1;
-
-        var displayMessage = MessageFactory.CreateUserText(text);
-        Renderer.AppendUserMessage(displayMessage);
-        StickToBottom = true;
-
-        if (text.StartsWith('/'))
+        if (text.StartsWith("/attach ", StringComparison.OrdinalIgnoreCase))
         {
+            var path = text["/attach ".Length..].Trim();
+            AttachImagePaths(path);
+            Input = "";
+            Cursor = 0;
+            StatusText = _attachments.Count > 0 ? $"已附加 {_attachments.Count} 张图片 — Enter 发送" : $"无法附加图片: {path}";
+            return;
+        }
+
+        // 先识别"存在图片文件路径"(绝对路径以 / 开头, 别被当成斜杠命令)。
+        var consumedAsImage = false;
+        if (text.Length > 0)
+        {
+            var remaining = AttachImagePaths(text);
+            consumedAsImage = remaining.Length == 0;
+            text = remaining;
+        }
+
+        if (!consumedAsImage && text.StartsWith('/'))
+        {
+            Input = "";
+            Cursor = 0;
+            _history.Add(text);
+            _historyIndex = -1;
             _window.RunSlashCommand(this, text);
             return;
         }
 
+        if (text.Length == 0 && _attachments.Count == 0)
+            return;
+        Input = "";
+        Cursor = 0;
+        if (text.Length > 0)
+            _history.Add(text);
+        _historyIndex = -1;
+
+        var displayBlocks = new List<ContentBlock>();
+        if (text.Length > 0)
+            displayBlocks.Add(new TextBlock(text));
+        foreach (var attachment in _attachments)
+            displayBlocks.Add(new ImageBlock(attachment));
+        if (displayBlocks.Count == 0)
+            displayBlocks.Add(new TextBlock("[image]"));
+        Renderer.AppendUserMessage(MessageFactory.CreateUserMessage(displayBlocks));
+        StickToBottom = true;
+
         SendUserText(text);
+    }
+
+    /**
+     * 消息里可作为附件抽取的图片路径: 要么 `@<相对或绝对路径>`(按会话工作区解析), 要么独立的绝对路径(盘符或 / 开头)。
+     * `(?<!\S)` 边界保证不会把 `@foo/bar.png` 里的 `/bar.png` 片段误当成独立路径。
+     */
+    private static readonly Regex ImagePathPattern = new(
+        @"(?<!\S)(?:@(?<m>[^\s@""']*?\.(?:png|jpe?g|gif|webp|avif))|(?<p>(?:[A-Za-z]:[\\/]|/)[^\s@""']*?\.(?:png|jpe?g|gif|webp|avif)))",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /**
+     * 从消息里抽出可读的本地图片路径并挂为附件、从文本中移除, 返回剩余文本(通常是用户指令)。
+     * 这样"粘贴图片路径/@图片 + 指令"也能把图片作为 ImageBlock 发给模型, 而不是把路径当正文。
+     */
+    internal string AttachImagePaths(string text)
+    {
+        var remaining = text;
+        try
+        {
+            foreach (Match match in ImagePathPattern.Matches(text))
+            {
+                var relative = match.Groups["m"].Success;
+                var candidate = relative ? match.Groups["m"].Value : match.Groups["p"].Value;
+                if (!TryAttachFile(candidate, relative))
+                    continue;
+                remaining = remaining.Replace(match.Value, " ", StringComparison.Ordinal);
+            }
+        }
+        catch (Exception)
+        {
+            // 依赖缺失/读取失败: 退化为文本, 绝不崩。
+        }
+
+        return Regex.Replace(remaining.Trim(), " {2,}", " ");
+    }
+
+    private bool TryAttachFile(string candidate, bool relativeToCwd)
+    {
+        try
+        {
+            var path = NormalizePath(candidate);
+            if (path is null)
+                return false;
+            if (relativeToCwd && !Path.IsPathRooted(path))
+                path = Path.GetFullPath(Path.Combine(CurrentCwd(), path));
+            if (!File.Exists(path))
+                return false;
+            if (ImageAttachments.MediaTypeForExtension(Path.GetExtension(path)) is not { } mediaType)
+                return false;
+            var store = Agent.Ctx.Get<IAttachmentStore>(FileAttachmentStore.ServiceName, false);
+            if (store is null)
+                return false;
+            var bytes = File.ReadAllBytes(path);
+            _attachments.Add(store.Put(bytes, mediaType, 0, 0, Path.GetFileName(path)));
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /** 仅供测试: 返回文本里匹配到的图片路径(去掉 @ 前缀, 不访问文件系统)。 */
+    internal static IReadOnlyList<string> MatchImagePathTokens(string text)
+        => [.. ImagePathPattern.Matches(text).Select(match =>
+            match.Groups["m"].Success ? match.Groups["m"].Value : match.Groups["p"].Value)];
+
+    /** 文本里是否含"图片路径"片段(用于决定不把它当斜杠命令/不做命令补全)。 */
+    private static bool IsImagePath(string text)
+    {
+        try
+        {
+            return ImagePathPattern.IsMatch(text);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    internal static string? NormalizePath(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+            return null;
+        if (trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return new Uri(trimmed).LocalPath;
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
+
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '"' && trimmed[^1] == '"') || (trimmed[0] == '\'' && trimmed[^1] == '\'')))
+            trimmed = trimmed[1..^1];
+
+        if (OperatingSystem.IsWindows())
+        {
+            // 终端可能给 MSYS/Git-Bash 风格: /C:/Users/... 或 /c/Users/... —— 还原成 C:\Users\...
+            if (trimmed.Length >= 3 && trimmed[0] == '/' && char.IsLetter(trimmed[1]) && trimmed[2] == ':')
+                trimmed = trimmed[1..];
+            else if (trimmed.Length >= 3 && trimmed[0] == '/' && char.IsLetter(trimmed[1]) && trimmed[2] == '/')
+                trimmed = $"{trimmed[1]}:{trimmed[2..]}";
+            if (trimmed.Length >= 2 && char.IsLetter(trimmed[0]) && trimmed[1] == ':')
+                trimmed = char.ToUpperInvariant(trimmed[0]) + trimmed[1..];
+            trimmed = trimmed.Replace('/', '\\');
+        }
+
+        return trimmed;
     }
 
     /** 把文本作为用户消息发出: 普通输入与"命令 + 提示词"的提示词共用同一条路径。 */
     internal void SendUserText(string text)
     {
-        if (text.Length == 0)
+        if (text.Length == 0 && _attachments.Count == 0)
             return;
-        var expandedText = _window.MentionResolver.ExpandMentions(text, CurrentCwd(), _window.CurrentSessions());
+        var expandedText = text.Length == 0
+            ? ""
+            : MentionResolver.ExpandMentions(text, CurrentCwd(), _window.CurrentSessions());
+        var content = new List<ContentBlock>();
+        if (expandedText.Length > 0)
+            content.Add(new TextBlock(expandedText));
+        foreach (var attachment in _attachments)
+            content.Add(new ImageBlock(attachment));
+        _attachments.Clear();
         SetBusy(true);
-        Agent.Followup(MessageFactory.CreateUserText(expandedText));
+        Agent.Followup(MessageFactory.CreateUserMessage(content));
     }
 
     /** 仅当光标落在「@token」区间内部或紧邻末尾时才算活跃 mention, 否则(如 token 后又输入了提示词)视为普通文本。 */

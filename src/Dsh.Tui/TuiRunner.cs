@@ -219,6 +219,11 @@ public static class TuiRunner
 
     private static void DispatchInput(ChatWindow chat, TerminalInputEvent inputEvent, UiLayout layout)
     {
+        if (inputEvent.IsPaste)
+        {
+            chat.HandlePaste(inputEvent.Paste!);
+            return;
+        }
         if (inputEvent.IsMouse)
         {
             var mouse = inputEvent.Mouse!.Value;

@@ -18,13 +18,17 @@ public readonly record struct TerminalMouseEvent(int X, int Y, int Button, bool 
     };
 }
 
-public readonly record struct TerminalInputEvent(ConsoleKeyInfo Key, TerminalMouseEvent? Mouse)
+public readonly record struct TerminalInputEvent(ConsoleKeyInfo Key, TerminalMouseEvent? Mouse, string? Paste = null)
 {
     public bool IsMouse => Mouse is not null;
+
+    public bool IsPaste => Paste is not null;
 
     public static TerminalInputEvent FromKey(ConsoleKeyInfo key) => new(key, null);
 
     public static TerminalInputEvent FromMouse(TerminalMouseEvent mouse) => new(default, mouse);
+
+    public static TerminalInputEvent FromPaste(string text) => new(default, null, text);
 }
 
 /** 平台无关的输入源: Unix 走原始字节 + SGR, Windows 走控制台输入记录; 两者产出同一事件类型。 */
@@ -49,6 +53,9 @@ internal interface ITerminalInputSource : IDisposable
 public sealed class TerminalInputParser
 {
     private const byte Escape = 0x1b;
+    private static readonly byte[] PasteStart = "\u001b[200~"u8.ToArray();
+    private static readonly byte[] PasteEnd = "\u001b[201~"u8.ToArray();
+    private const int MaxPasteBytes = 8 * 1024 * 1024;
     private readonly List<byte> _pending = [];
     private readonly Queue<TerminalInputEvent> _ready = new();
 
@@ -85,6 +92,22 @@ public sealed class TerminalInputParser
             input = default;
             if (_pending.Count == 0)
                 return false;
+            if (StartsWithPasteStart())
+            {
+                var end = IndexOf(PasteEnd, PasteStart.Length);
+                if (end >= 0)
+                {
+                    var text = Encoding.UTF8.GetString(
+                        CollectionsMarshal.AsSpan(_pending).Slice(PasteStart.Length, end - PasteStart.Length));
+                    _pending.RemoveRange(0, end + PasteEnd.Length);
+                    input = TerminalInputEvent.FromPaste(text);
+                    return true;
+                }
+                if (_pending.Count <= MaxPasteBytes)
+                    return false;   // 等 201~ 结束标记
+                // 超长且无结束标记: 落到普通解析(丢标记, 其余当文本), 不永久挂起
+            }
+
             var first = _pending[0];
             if (first == Escape || first == (byte)'[')
             {
@@ -133,6 +156,21 @@ public sealed class TerminalInputParser
             input = TerminalInputEvent.FromKey(PrintableKey(chars[0]));
             return true;
         }
+    }
+
+    private bool StartsWithPasteStart()
+        => _pending.Count >= PasteStart.Length
+            && CollectionsMarshal.AsSpan(_pending)[..PasteStart.Length].SequenceEqual(PasteStart);
+
+    private int IndexOf(byte[] pattern, int from)
+    {
+        var span = CollectionsMarshal.AsSpan(_pending);
+        for (var index = from; index + pattern.Length <= span.Length; index++)
+        {
+            if (span.Slice(index, pattern.Length).SequenceEqual(pattern))
+                return index;
+        }
+        return -1;
     }
 
     private bool TryTakeUtf8(out string chars)

@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Dsh.Gui.ViewModels;
@@ -125,10 +126,17 @@ public sealed partial class ChatView : UserControl
         _reasoningFlyout?.Hide();
     }
 
-    private void OnInputKeyDown(object? sender, KeyEventArgs e)
+    private async void OnInputKeyDown(object? sender, KeyEventArgs e)
     {
         if (_viewModel is null)
             return;
+        if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) != 0)
+        {
+            // 自己接管粘贴: 剪贴板有图片就转附件, 没有则退回文本粘贴。
+            e.Handled = true;
+            await PasteAsync();
+            return;
+        }
         if (_viewModel.IsSuggestionOpen)
         {
             switch (e.Key)
@@ -158,6 +166,52 @@ public sealed partial class ChatView : UserControl
         if (_viewModel.SubmitCommand.CanExecute(null))
             _viewModel.SubmitCommand.Execute(null);
     }
+
+    /** 剪贴板有图片 -> 转附件; 否则退回把剪贴板文本插到光标处(替代 TextBox 默认粘贴, 以便优先识别图片)。 */
+    private async Task PasteAsync()
+    {
+        if (_viewModel is null)
+            return;
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+        try
+        {
+            var bitmap = await clipboard.TryGetBitmapAsync();
+            if (bitmap is not null)
+            {
+                using var stream = new MemoryStream();
+                bitmap.Save(stream, new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+                _viewModel.AttachImage("clipboard.png", stream.ToArray(), bitmap.PixelSize.Width, bitmap.PixelSize.Height);
+                return;
+            }
+        }
+        catch (Exception)
+        {
+        }
+        try
+        {
+            var text = await clipboard.TryGetTextAsync();
+            if (string.IsNullOrEmpty(text))
+                return;
+            var current = InputBox.Text ?? "";
+            var index = Math.Clamp(InputBox.CaretIndex, 0, current.Length);
+            InputBox.Text = current[..index] + text + current[index..];
+            InputBox.CaretIndex = index + text.Length;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void OnAttachmentDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is Control { DataContext: AttachmentViewModel attachment })
+            _viewModel?.OpenPreviewCommand.Execute(attachment);
+    }
+
+    private void OnPreviewOverlayPressed(object? sender, PointerPressedEventArgs e)
+        => _viewModel?.ClosePreviewCommand.Execute(null);
 
     protected override void OnLoaded(RoutedEventArgs e)
     {

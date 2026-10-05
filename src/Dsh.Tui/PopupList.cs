@@ -10,6 +10,15 @@ public static class PopupList
     /** 带说明行(参数面板)时的翻页步长: 候选可见行数 = 浮层高度 - 标题 - 边框 - 说明行。 */
     public static int PageRowsFor(int headerCount) => Math.Max(1, MaxPopupHeight - 2 - Math.Max(0, headerCount));
 
+    /** 浮层几何: 位置、可见窗口与首个可见候选下标。 */
+    public readonly record struct Window(int X, int Y, int Width, int Height, int First, int Visible, int HeaderCount);
+
+    /** 滚动条几何: 轨道/滑块位置(供绘制与命中测试共用同一套算法)。 */
+    public sealed record Scrollbar(int Column, int TrackTop, int TrackHeight, int ThumbTop, int ThumbHeight, int First, int Visible, int ItemCount)
+    {
+        public int MaxFirst => Math.Max(0, ItemCount - Visible);
+    }
+
     public static void Draw(CellGrid grid, ConsoleRect area, string title, IReadOnlyList<string> items, int selectedIndex)
         => Draw(grid, area, title, [], items, selectedIndex);
 
@@ -24,69 +33,103 @@ public static class PopupList
         IReadOnlyList<string> headerLines,
         IReadOnlyList<string> items,
         int selectedIndex,
-        IReadOnlyList<string>? descriptions = null)
+        IReadOnlyList<string>? descriptions = null,
+        bool scrollbar = false)
     {
         if (area.Width <= 0 || area.Height <= 0)
             return;
 
-        // 铺满 area 宽度: 不留两侧空白, 也不让底层正文从旁边露出。
-        var width = area.Width;
-        var maxHeight = Math.Min(MaxPopupHeight, area.Height);
-        var headerCount = Math.Min(headerLines.Count, Math.Max(0, maxHeight - 3));
-        var itemRows = items.Count == 0
-            ? headerCount > 0 ? 0 : 1
-            : Math.Min(items.Count, Math.Max(0, maxHeight - 2 - headerCount));
-        var height = Math.Min(maxHeight, 2 + headerCount + itemRows);
-        if (width < 4 || height < 3)
+        var window = WindowOf(area, headerLines.Count, items.Count, selectedIndex);
+        if (window.Width < 4 || window.Height < 3)
             return;
 
-        var x = area.X;
-        var y = area.Bottom - height;
-        if (y < area.Y)
-            y = area.Y;
-
         // 先按整幅清底, 再画边框与内容: 浮层覆盖的行既不留空白, 也不让底层正文露出。
-        Fill(grid, x, y, width, height);
-        DrawBorder(grid, x, y, width, height);
-        DrawText(grid, x + 1, y, Truncate(title, width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
+        Fill(grid, window.X, window.Y, window.Width, window.Height);
+        DrawBorder(grid, window.X, window.Y, window.Width, window.Height);
+        DrawText(grid, window.X + 1, window.Y, Truncate(title, window.Width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
 
-        for (var row = 0; row < headerCount; row++)
+        for (var row = 0; row < window.HeaderCount; row++)
         {
             var header = headerLines[row];
             var current = header.StartsWith('▸');
-            DrawText(grid, x + 1, y + 1 + row, Truncate(header, width - 2),
+            DrawText(grid, window.X + 1, window.Y + 1 + row, Truncate(header, window.Width - 2),
                 current ? AnsiColor.BrightCyan : AnsiColor.Default,
                 AnsiColor.Default,
                 current ? CellStyle.Bold : CellStyle.Dim);
         }
 
-        var candidateTop = y + 1 + headerCount;
+        var candidateTop = window.Y + 1 + window.HeaderCount;
         if (items.Count == 0)
         {
-            if (headerCount == 0)
-                DrawText(grid, x + 1, candidateTop, "  (空)", AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
+            if (window.HeaderCount == 0)
+                DrawText(grid, window.X + 1, candidateTop, "  (空)", AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
             return;
         }
 
-        var visibleCount = height - 2 - headerCount;
-        if (visibleCount <= 0)
-            return;
-        var first = Math.Clamp(selectedIndex - visibleCount + 1, 0, Math.Max(0, items.Count - visibleCount));
-        var nameColumn = DescriptionColumn(items, width);
-        for (var row = 0; row < visibleCount; row++)
+        var nameColumn = DescriptionColumn(items, window.Width);
+        for (var row = 0; row < window.Visible; row++)
         {
-            var itemIndex = first + row;
+            var itemIndex = window.First + row;
             if (itemIndex >= items.Count)
                 break;
             var selected = itemIndex == selectedIndex;
             var marker = selected ? "› " : "  ";
             var text = descriptions is { Count: > 0 }
-                ? $"{marker}{Pad(Truncate(items[itemIndex], Math.Max(1, nameColumn - 2)), nameColumn - 2)}{Truncate(DescriptionAt(descriptions, itemIndex), width - nameColumn - 2)}"
-                : $"{marker}{Truncate(items[itemIndex], width - 4)}";
-            DrawText(grid, x + 1, candidateTop + row, text,
+                ? $"{marker}{Pad(Truncate(items[itemIndex], Math.Max(1, nameColumn - 2)), nameColumn - 2)}{Truncate(DescriptionAt(descriptions, itemIndex), window.Width - nameColumn - 2)}"
+                : $"{marker}{Truncate(items[itemIndex], window.Width - 4)}";
+            DrawText(grid, window.X + 1, candidateTop + row, text,
                 selected ? AnsiColor.Black : AnsiColor.Default,
                 selected ? AnsiColor.BrightCyan : AnsiColor.Default,
                 selected ? CellStyle.Bold : CellStyle.None);
+        }
+
+        if (scrollbar)
+            DrawScrollbar(grid, ScrollbarOf(window, items.Count));
+    }
+
+    /** 计算浮层几何: 与 Draw 共用, 供鼠标命中测试使用。 */
+    public static Window WindowOf(ConsoleRect area, int headerCount, int itemCount, int selectedIndex)
+    {
+        var width = area.Width;
+        var maxHeight = Math.Min(MaxPopupHeight, area.Height);
+        headerCount = Math.Min(headerCount, Math.Max(0, maxHeight - 3));
+        var itemRows = itemCount == 0
+            ? headerCount > 0 ? 0 : 1
+            : Math.Min(itemCount, Math.Max(0, maxHeight - 2 - headerCount));
+        var height = Math.Min(maxHeight, 2 + headerCount + itemRows);
+        var y = Math.Max(area.Y, area.Bottom - height);
+        var visible = Math.Max(0, height - 2 - headerCount);
+        var first = visible <= 0 ? 0 : Math.Clamp(selectedIndex - visible + 1, 0, Math.Max(0, itemCount - visible));
+        return new Window(area.X, y, width, height, first, visible, headerCount);
+    }
+
+    /** 候选超出可见窗口时的滚动条几何; 否则为 null。 */
+    public static Scrollbar? ScrollbarOf(Window window, int itemCount)
+    {
+        if (itemCount <= window.Visible || window.Width < 6)
+            return null;
+        var maxFirst = Math.Max(0, itemCount - window.Visible);
+        var thumb = Math.Clamp((int)Math.Round((double)window.Visible * window.Visible / itemCount), 1, window.Visible);
+        var thumbTop = maxFirst == 0 ? 0 : (int)Math.Round((double)(window.Visible - thumb) * window.First / maxFirst);
+        return new Scrollbar(
+            window.X + window.Width - 2,
+            window.Y + 1 + window.HeaderCount,
+            window.Visible,
+            thumbTop,
+            thumb,
+            window.First,
+            window.Visible,
+            itemCount);
+    }
+
+    private static void DrawScrollbar(CellGrid grid, Scrollbar? bar)
+    {
+        if (bar is null)
+            return;
+        for (var row = 0; row < bar.TrackHeight; row++)
+        {
+            var inThumb = row >= bar.ThumbTop && row < bar.ThumbTop + bar.ThumbHeight;
+            Set(grid, bar.Column, bar.TrackTop + row, inThumb ? '█' : '│');
         }
     }
 

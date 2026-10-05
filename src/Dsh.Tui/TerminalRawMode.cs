@@ -34,6 +34,11 @@ public sealed class TerminalRawMode : IDisposable
 
     internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+    /** 括号粘贴: 开启后终端把粘贴内容包在 ESC[200~ … ESC[201~ 里, 使多字符粘贴原子到达(图片路径路线)。 */
+    internal const string BracketedPasteEnableSequence = "\x1b[?2004h";
+
+    internal const string BracketedPasteDisableSequence = "\x1b[?2004l";
+
     /** 备用屏幕接管: 进 ?1049h + 藏光标 ?25l; 退出反向恢复, 主屏现场(shell 提示符/滚动历史)原样奉还。 */
     internal const string ScreenEnterSequence = "\x1b[?1049h\x1b[?25l";
 
@@ -92,7 +97,7 @@ public sealed class TerminalRawMode : IDisposable
             return;
 
         // 先恢复终端可见状态(鼠标/备用屏幕/光标), 再恢复输入模式
-        WriteSequence(_mouseEnabled ? MouseDisableSequence + ScreenExitSequence : ScreenExitSequence);
+        WriteSequence((_mouseEnabled ? MouseDisableSequence : "") + BracketedPasteDisableSequence + ScreenExitSequence);
         if (_original is not null)
         {
             var buffer = Marshal.AllocHGlobal(_original.Length);
@@ -160,7 +165,7 @@ public sealed class TerminalRawMode : IDisposable
             var handle = GetStdHandle(StdInputHandle);
             if (handle == 0 || handle == -1 || !GetConsoleMode(handle, out var original))
             {
-                WriteSequence(ScreenEnterSequence);
+                WriteSequence(BracketedPasteEnableSequence + ScreenEnterSequence);
                 return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
             }
             var mode = (original
@@ -170,12 +175,12 @@ public sealed class TerminalRawMode : IDisposable
                 mode |= EnableMouseInput;
             if (!SetConsoleMode(handle, mode))
             {
-                WriteSequence(ScreenEnterSequence);
+                WriteSequence(BracketedPasteEnableSequence + ScreenEnterSequence);
                 return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
             }
             // 丢掉接管前排队的陈旧输入(可能是残留鼠标跟踪留下的 X10 字节)
             FlushConsoleInputBuffer(handle);
-            WriteSequence(enableMouse ? MouseEnableSequence + ScreenEnterSequence : ScreenEnterSequence);
+            WriteSequence((enableMouse ? MouseEnableSequence : "") + BracketedPasteEnableSequence + ScreenEnterSequence);
             return new TerminalRawMode(
                 true,
                 restoreTreatControlCAsInput: restoreTreatControlCAsInput,
@@ -211,7 +216,7 @@ public sealed class TerminalRawMode : IDisposable
             Marshal.Copy(raw, 0, buffer, size);
             if (tcsetattr(0, TcsaNow, buffer) != 0)
                 return null;
-            WriteSequence(enableMouse ? MouseEnableSequence + ScreenEnterSequence : ScreenEnterSequence);
+            WriteSequence((enableMouse ? MouseEnableSequence : "") + BracketedPasteEnableSequence + ScreenEnterSequence);
             return new TerminalRawMode(true, original, mouseEnabled: enableMouse);
         }
         finally

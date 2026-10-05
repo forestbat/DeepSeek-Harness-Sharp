@@ -8,6 +8,10 @@
              x:CompileBindings="True"
              FontFamily="{DynamicResource Font.Ui}">
 
+  <UserControl.Resources>
+    <views:PngToBitmapConverter x:Key="PngToBitmap" />
+  </UserControl.Resources>
+
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
     <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
@@ -259,7 +263,7 @@
             BorderBrush="{DynamicResource Brush.Border.Subtle}"
             BorderThickness="1"
             CornerRadius="{DynamicResource CornerRadius.Card}">
-      <Grid RowDefinitions="Auto,Auto,Auto">
+      <Grid RowDefinitions="Auto,Auto,Auto,Auto">
         <Border Grid.Row="0" Margin="0,0,0,6" MaxHeight="240" IsVisible="{Binding IsSuggestionOpen}"
                 Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="8">
           <ScrollViewer HorizontalScrollBarVisibility="Disabled">
@@ -281,12 +285,35 @@
           </ScrollViewer>
         </Border>
 
-        <TextBox Grid.Row="1" Name="InputBox" Classes="Bare" AcceptsReturn="True" TextWrapping="Wrap"
+        <ItemsControl Grid.Row="1" ItemsSource="{Binding Attachments}" IsVisible="{Binding HasAttachments}" Margin="0,0,0,6">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <StackPanel Orientation="Horizontal" Spacing="6" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:AttachmentViewModel">
+              <Border Background="{DynamicResource Brush.Bg.Inset}" CornerRadius="6" Padding="4" ToolTip.Tip="双击预览">
+                <Grid ColumnDefinitions="Auto,Auto">
+                  <Image Width="48" Height="48" Stretch="Uniform"
+                         Source="{Binding Png, Converter={StaticResource PngToBitmap}}"
+                         DoubleTapped="OnAttachmentDoubleTapped" />
+                  <Button Grid.Column="1" Classes="Ghost" Width="18" Height="18" Padding="0"
+                          VerticalAlignment="Top" Content="×"
+                          Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).RemoveAttachmentCommand}"
+                          CommandParameter="{Binding}" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBox Grid.Row="2" Name="InputBox" Classes="Bare" AcceptsReturn="True" TextWrapping="Wrap"
                  MinHeight="40" MaxHeight="180"
                  PlaceholderText="{Binding Composer.Placeholder}"
                  Text="{Binding Composer.Input}" />
 
-        <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
           <Button Classes="Chip" ToolTip.Tip="附件与引用">
             <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
             <Button.Flyout>
@@ -394,6 +421,12 @@
           </Button>
         </Grid>
       </Grid>
+    </Border>
+
+    <Border Grid.RowSpan="5" Background="#B0000000" IsVisible="{Binding IsPreviewOpen}" ZIndex="20"
+            PointerPressed="OnPreviewOverlayPressed">
+      <Image Source="{Binding PreviewAttachment.Png, Converter={StaticResource PngToBitmap}}"
+             Stretch="Uniform" Margin="60" />
     </Border>
 
     <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="22,0,22,10" Spacing="8">

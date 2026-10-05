@@ -203,9 +203,13 @@ public static class MessageText
             ReasoningBlock reasoning => $"[reasoning] {reasoning.Text}",
             ToolCallBlock call => $"[tool: {call.Name}] {call.Arguments}",
             ToolResultBlock result => Flatten(result.Content),
-            ImageBlock => "[image]",
+            ImageBlock image => $"[图片: {ImageName(image.Attachment)}]",
             _ => $"[{block.Type}]",
         }));
+
+    /** 只显示文件名, 绝不渲染包含账户目录的完整路径。 */
+    public static string ImageName(ImageAttachmentRef attachment)
+        => string.IsNullOrWhiteSpace(attachment.Name) ? "image" : attachment.Name;
 }
 
 public static class MessageFactory

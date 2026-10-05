@@ -1,6 +1,6 @@
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Tui;
 
 namespace Dsh.Tests;
 
@@ -12,11 +12,23 @@ public class MentionResolverTests
         using var temp = new TempDir();
         File.WriteAllText(Path.Combine(temp.Path, "alpha.txt"), "a");
         File.WriteAllText(Path.Combine(temp.Path, "beta.txt"), "b");
-        var resolver = new MentionResolver();
 
-        var candidates = resolver.ResolveCandidates("al", temp.Path, []);
+        var candidates = MentionResolver.ResolveCandidates("al", temp.Path, []);
 
         Assert.Equal(["alpha.txt"], candidates);
+    }
+
+    [Fact]
+    public void Empty_Token_Lists_Working_Directory_Entries_Directories_First()
+    {
+        using var temp = new TempDir();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "src"));
+        File.WriteAllText(Path.Combine(temp.Path, "README.md"), "r");
+        File.WriteAllText(Path.Combine(temp.Path, ".hidden"), "h");
+
+        var candidates = MentionResolver.ResolveCandidates("", temp.Path, []);
+
+        Assert.Equal(["src", ".hidden", "README.md"], candidates);
     }
 
     [Fact]
@@ -25,11 +37,35 @@ public class MentionResolverTests
         using var temp = new TempDir();
         Directory.CreateDirectory(Path.Combine(temp.Path, "src"));
         Directory.CreateDirectory(Path.Combine(temp.Path, "docs"));
-        var resolver = new MentionResolver();
 
-        var candidates = resolver.ResolveCandidates("sr", temp.Path, []);
+        var candidates = MentionResolver.ResolveCandidates("sr", temp.Path, []);
 
         Assert.Equal(["src"], candidates);
+    }
+
+    [Fact]
+    public void Trailing_Separator_Lists_Directory_Children()
+    {
+        using var temp = new TempDir();
+        var src = Directory.CreateDirectory(Path.Combine(temp.Path, "src"));
+        Directory.CreateDirectory(Path.Combine(src.FullName, "nested"));
+        File.WriteAllText(Path.Combine(src.FullName, "a.cs"), "a");
+
+        var candidates = MentionResolver.ResolveCandidates("src/", temp.Path, []);
+
+        Assert.Equal(["src/nested", "src/a.cs"], candidates);
+    }
+
+    [Fact]
+    public void Sessions_And_Files_Are_Merged_For_NonEmpty_Token()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(Path.Combine(temp.Path, "session-file.txt"), "x");
+        MentionSessionInfo[] sessions = [new("session-1", "Alpha", null)];
+
+        var candidates = MentionResolver.ResolveCandidates("session", temp.Path, sessions);
+
+        Assert.Equal(["session-1", "session-file.txt"], candidates);
     }
 
     [Fact]
@@ -37,9 +73,8 @@ public class MentionResolverTests
     {
         using var temp = new TempDir();
         File.WriteAllText(Path.Combine(temp.Path, "note.txt"), "hello world");
-        var resolver = new MentionResolver();
 
-        var expanded = resolver.ExpandMentions("see @note.txt", temp.Path);
+        var expanded = MentionResolver.ExpandMentions("see @note.txt", temp.Path, []);
 
         Assert.Contains("[file: note.txt]", expanded);
         Assert.Contains("hello world", expanded);
@@ -52,9 +87,8 @@ public class MentionResolverTests
         var docs = Directory.CreateDirectory(Path.Combine(temp.Path, "docs"));
         File.WriteAllText(Path.Combine(docs.FullName, "a.md"), "a");
         File.WriteAllText(Path.Combine(docs.FullName, "b.md"), "b");
-        var resolver = new MentionResolver();
 
-        var expanded = resolver.ExpandMentions("list @docs", temp.Path);
+        var expanded = MentionResolver.ExpandMentions("list @docs", temp.Path, []);
 
         Assert.Contains("[directory: docs]", expanded);
         Assert.Contains("docs/a.md", expanded);
@@ -64,28 +98,24 @@ public class MentionResolverTests
     [Fact]
     public void Session_Candidates_Filter_By_Id_Or_Title()
     {
-        var sessions = new[]
-        {
-            new SessionInfo("session-1", "Alpha", null),
-            new SessionInfo("session-2", "Beta", null),
-        };
-        var resolver = new MentionResolver();
+        using var temp = new TempDir();
+        MentionSessionInfo[] sessions =
+        [
+            new("session-1", "Alpha", null),
+            new("session-2", "Beta", null),
+        ];
 
-        Assert.Equal(["session-1", "session-2"], resolver.ResolveCandidates("session-", "/tmp", sessions));
-        Assert.Equal(["session-1"], resolver.ResolveCandidates("Alp", "/tmp", sessions));
-        Assert.Equal(["session-2"], resolver.ResolveCandidates("session-2", "/tmp", sessions));
+        Assert.Equal(["session-1", "session-2"], MentionResolver.ResolveCandidates("session-", temp.Path, sessions));
+        Assert.Equal(["session-1"], MentionResolver.ResolveCandidates("Alp", temp.Path, sessions));
+        Assert.Equal(["session-2"], MentionResolver.ResolveCandidates("session-2", temp.Path, sessions));
     }
 
     [Fact]
     public void ExpandMentions_Expands_Session()
     {
-        var sessions = new[]
-        {
-            new SessionInfo("session-1", "Alpha", "first session summary"),
-        };
-        var resolver = new MentionResolver();
+        MentionSessionInfo[] sessions = [new("session-1", "Alpha", "first session summary")];
 
-        var expanded = resolver.ExpandMentions("see @session-1", "/tmp", sessions);
+        var expanded = MentionResolver.ExpandMentions("see @session-1", "/tmp", sessions);
 
         Assert.Contains("session-1", expanded);
         Assert.Contains("first session summary", expanded);
@@ -109,7 +139,7 @@ public class MentionResolverTests
             Revision = "r1",
         };
 
-        var info = SessionInfo.FromSnapshot(snapshot);
+        var info = MentionSessionInfo.FromSnapshot(snapshot);
 
         Assert.Equal("session-1", info.Id);
         Assert.Equal("My session title", info.Title);

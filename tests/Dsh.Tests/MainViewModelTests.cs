@@ -41,6 +41,35 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task AttachImage_AddsAttachmentAndSubmitsImageBlock()
+    {
+        using var environment = await GuiTestEnvironment.CreateAsync();
+        using var viewModel = new MainViewModel(environment.App, environment.Agent);
+
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3 };
+        viewModel.AttachImage("shot.png", png, 4, 2);
+
+        var attachment = Assert.Single(viewModel.Attachments);
+        Assert.True(viewModel.HasAttachments);
+        Assert.Equal("shot.png", attachment.Name);
+
+        viewModel.Composer.Input = "look at this";
+        await viewModel.SubmitCommand.ExecuteAsync(null);
+
+        Assert.Empty(viewModel.Attachments);
+        Assert.False(viewModel.HasAttachments);
+
+        var userMessage = environment.Agent.Session.SnapshotEvents()
+            .Select(sessionEvent => sessionEvent.Data)
+            .OfType<UserMessagePayload>()
+            .Select(payload => payload.Message)
+            .LastOrDefault(message => message.Content.Any(block => block is ImageBlock));
+        Assert.NotNull(userMessage);
+        Assert.Contains(userMessage!.Content, block => block is ImageBlock);
+        Assert.Contains(userMessage.Content, block => block is TextBlock { Text: "look at this" });
+    }
+
+    [Fact]
     public async Task OpenSession_FromSettingsOrMarket_ReturnsToChatPage()
     {
         using var environment = await GuiTestEnvironment.CreateAsync();

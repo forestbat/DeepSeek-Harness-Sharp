@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -433,6 +434,51 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SetDefaultWorkspace(picked[0]);
     }
 
+    public ObservableCollection<AttachmentViewModel> Attachments { get; } = [];
+
+    [ObservableProperty]
+    private bool _hasAttachments;
+
+    [ObservableProperty]
+    private AttachmentViewModel? _previewAttachment;
+
+    [ObservableProperty]
+    private bool _isPreviewOpen;
+
+    partial void OnPreviewAttachmentChanged(AttachmentViewModel? value) => IsPreviewOpen = value is not null;
+
+    /** 把一张图片写入附件存储并挂到输入区(供 GUI 剪贴板贴图与路径路线共用)。 */
+    public void AttachImage(string name, byte[] png, int width, int height, string mediaType = "image/png")
+    {
+        var store = _ctx.Get<IAttachmentStore>(FileAttachmentStore.ServiceName, false);
+        if (store is null)
+            return;
+        try
+        {
+            var reference = store.Put(png, mediaType, width, height, name);
+            Attachments.Add(new AttachmentViewModel(reference, png));
+            HasAttachments = Attachments.Count > 0;
+        }
+        catch (ArgumentException)
+        {
+        }
+    }
+
+    [RelayCommand]
+    private void RemoveAttachment(AttachmentViewModel attachment)
+    {
+        Attachments.Remove(attachment);
+        HasAttachments = Attachments.Count > 0;
+        if (ReferenceEquals(PreviewAttachment, attachment))
+            PreviewAttachment = null;
+    }
+
+    [RelayCommand]
+    private void OpenPreview(AttachmentViewModel attachment) => PreviewAttachment = attachment;
+
+    [RelayCommand]
+    private void ClosePreview() => PreviewAttachment = null;
+
     [RelayCommand]
     private void NewSession() => _ = NewSessionAsync();
 
@@ -440,17 +486,78 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private async Task SubmitAsync()
     {
         var text = Composer.Input.Trim();
-        if (text.Length == 0)
-            return;
-        Composer.Input = "";
-        CloseSuggestions();
+        // 先抽出消息里的本地图片路径转成附件(粘贴图片后常紧跟指令, 不能只看整段是否是路径)。
+        if (text.Length > 0)
+        {
+            text = await ExtractImagePathsAsync(text);
+            Composer.Input = text;
+        }
         if (text.StartsWith('/'))
         {
+            Composer.Input = "";
+            CloseSuggestions();
             await RunCommandAsync(text);
             return;
         }
+        if (text.Length == 0 && Attachments.Count == 0)
+            return;
+        Composer.Input = "";
+        CloseSuggestions();
+        var content = new List<ContentBlock>();
+        if (text.Length > 0)
+            content.Add(new TextBlock(ExpandMentions(text)));
+        foreach (var attachment in Attachments)
+            content.Add(new ImageBlock(attachment.Reference));
+        Attachments.Clear();
+        HasAttachments = false;
         // 用户消息只由会话事件渲染: 本地回显会在恢复会话/重放事件时变成第二条。
-        _agent.Followup(MessageFactory.CreateUserText(ExpandMentions(text)));
+        _agent.Followup(MessageFactory.CreateUserMessage(content));
+    }
+
+    /**
+     * 消息里可作为附件抽取的图片路径: `@<相对或绝对路径>`(按会话工作区解析)或独立的绝对路径。
+     * `(?<!\S)` 边界避免把 `@foo/bar.png` 里的 `/bar.png` 片段误当成独立路径。
+     */
+    private static readonly Regex ImagePathPattern = new(
+        @"(?<!\S)(?:@(?<m>[^\s@""']*?\.(?:png|jpe?g|gif|webp|avif))|(?<p>(?:[A-Za-z]:[\\/]|/)[^\s@""']*?\.(?:png|jpe?g|gif|webp|avif)))",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /** 抽出文本里可读的本地图片路径挂为附件、从文本移除, 返回剩余文本(通常是用户指令)。 */
+    private async Task<string> ExtractImagePathsAsync(string text)
+    {
+        var remaining = text;
+        var cwd = _agent.Session.Header.Cwd ?? Environment.CurrentDirectory;
+        foreach (Match match in ImagePathPattern.Matches(text))
+        {
+            var relative = match.Groups["m"].Success;
+            var path = relative ? match.Groups["m"].Value : match.Groups["p"].Value;
+            if (path.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    path = new Uri(path).LocalPath;
+                }
+                catch (UriFormatException)
+                {
+                    continue;
+                }
+            }
+            path = path.Trim('"', '\'');
+            if (relative && !Path.IsPathRooted(path))
+                path = Path.GetFullPath(Path.Combine(cwd, path));
+            if (!File.Exists(path) || ImageAttachments.MediaTypeForExtension(Path.GetExtension(path)) is not { } mediaType)
+                continue;
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(path);
+                AttachImage(Path.GetFileName(path), bytes, 0, 0, mediaType);
+                remaining = remaining.Replace(match.Value, " ", StringComparison.Ordinal);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+            }
+        }
+        return Regex.Replace(remaining.Trim(), " {2,}", " ");
     }
 
     [RelayCommand]
@@ -1531,8 +1638,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _updatingSuggestions = false;
     }
 
+    /** 文本里是否含"图片路径"片段(用于: 有图路径时不弹命令/引用补全)。 */
+    private static bool IsImagePath(string text)
+    {
+        try
+        {
+            return ImagePathPattern.IsMatch(text);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private IReadOnlyList<SuggestionViewModel> BuildSuggestions(string input)
     {
+        if (IsImagePath(input))
+            return [];
         if (input.StartsWith('@') || input.Contains(" @", StringComparison.Ordinal))
             return MentionSuggestions(input);
         if (input.StartsWith('/'))
@@ -1606,7 +1728,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var token = input[(at + 1)..end];
         var cwd = _agent.Session.Header.Cwd ?? Environment.CurrentDirectory;
         return [.. MentionResolver.ResolveCandidates(token, cwd, CurrentMentionSessions())
-            .Take(20)
             .Select(candidate => new SuggestionViewModel("mention", $"@{candidate}", "", $"@{candidate}"))];
     }
 

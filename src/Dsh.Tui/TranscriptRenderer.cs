@@ -105,8 +105,14 @@ public sealed class TranscriptRenderer
     public void AppendUserMessage(UserMessage message)
     {
         var text = string.Concat(message.Content.OfType<TextBlock>().Select(block => block.Text));
-        Append($"\n❯ {text}\n");
+        var imageNames = message.Content.OfType<ImageBlock>().Select(block => ImageName(block.Attachment)).ToList();
+        var suffix = imageNames.Count == 0 ? "" : $" [图片: {string.Join(", ", imageNames)}]";
+        Append($"\n❯ {text}{suffix}\n");
     }
+
+    /** 只显示文件名, 绝不渲染包含账户目录的完整路径。 */
+    private static string ImageName(ImageAttachmentRef attachment)
+        => string.IsNullOrWhiteSpace(attachment.Name) ? "image" : attachment.Name;
 
     /** replay=true 用于会话切换后的历史回放: 用户消息平时由输入回显渲染, 只在回放时从事件补渲染。 */
     public void AppendSessionEvent(SessionEvent sessionEvent, bool replay = false, bool foldToolResult = true)

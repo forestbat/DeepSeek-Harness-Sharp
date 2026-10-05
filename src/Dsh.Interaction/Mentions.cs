@@ -21,14 +21,14 @@ public static partial class MentionResolver
 
     public static IReadOnlyList<string> ResolveCandidates(string token, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
     {
+        var files = ResolveFileSystemCandidates(token, cwd);
         if (string.IsNullOrEmpty(token))
-            return [];
+            return files;
         var sessionMatches = sessions
             .Where(session => session.Id.StartsWith(token, StringComparison.OrdinalIgnoreCase)
                 || (session.Title?.StartsWith(token, StringComparison.OrdinalIgnoreCase) ?? false))
-            .Select(session => session.Id)
-            .ToList();
-        return sessionMatches.Count > 0 ? sessionMatches : ResolveFileSystemCandidates(token, cwd);
+            .Select(session => session.Id);
+        return [.. sessionMatches, .. files];
     }
 
     public static string ExpandMentions(string text, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
@@ -46,21 +46,36 @@ public static partial class MentionResolver
     {
         try
         {
-            var fullPath = Path.GetFullPath(Path.Combine(cwd, token));
-            var directory = Path.GetDirectoryName(fullPath);
-            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            var (directory, prefix) = ResolveListing(token, cwd);
+            if (directory is null || !Directory.Exists(directory))
                 return [];
-            var prefix = Path.GetFileName(fullPath);
-            return [.. Directory.EnumerateFileSystemEntries(directory)
+            var directories = Directory.EnumerateDirectories(directory)
                 .Select(Path.GetFileName)
                 .Where(name => name is not null && name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(name => name, StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
+            var files = Directory.EnumerateFiles(directory)
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
+            return [.. directories.Concat(files)
                 .Select(name => Slash(Path.GetRelativePath(cwd, Path.Combine(directory, name!))))];
         }
         catch (Exception)
         {
             return [];
         }
+    }
+
+    /** 空 token 或结尾分隔符 → 列 cwd / 该目录的子项; 否则在 token 的父目录里按最后一段前缀过滤。 */
+    private static (string? Directory, string Prefix) ResolveListing(string token, string cwd)
+    {
+        if (string.IsNullOrEmpty(token))
+            return (cwd, "");
+        var normalized = token.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+        if (normalized.EndsWith(Path.DirectorySeparatorChar))
+            return (Path.GetFullPath(Path.Combine(cwd, normalized)), "");
+        var fullPath = Path.GetFullPath(Path.Combine(cwd, token));
+        return (Path.GetDirectoryName(fullPath), Path.GetFileName(fullPath));
     }
 
     private static string? ExpandToken(string token, string cwd, IReadOnlyList<MentionSessionInfo> sessions)

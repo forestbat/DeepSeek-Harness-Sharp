@@ -25,14 +25,13 @@ public sealed class ChatWindow : IDisposable
     private readonly object _gate = new();
     private readonly Queue<(ITuiPane Pane, SessionEvent Event)> _pendingEvents = [];
     private readonly Queue<Action> _pendingActions = [];
-    private readonly MentionResolver _mentionResolver = new();
     private readonly ISessionPersistence? _persistence;
     private readonly SubagentDirectory _subagents;
     private readonly HashSet<SessionId> _liveSubagents = [];
     private readonly Dictionary<int, ITuiPane> _panes = [];
     private readonly List<OverviewItem> _overviewItems = [];
     private readonly List<SubagentNode> _agentItems = [];
-    private IReadOnlyList<SessionInfo>? _sessionInfos;
+    private IReadOnlyList<MentionSessionInfo>? _sessionInfos;
     private IReadOnlyList<string> _skillCandidates = [];
     private IReadOnlyList<string> _providerCatalogCandidates = [];
     private ProviderCatalogSnapshot? _providerCatalog;
@@ -149,8 +148,6 @@ public sealed class ChatWindow : IDisposable
 
     internal HarnessHome Home => _home;
 
-    internal MentionResolver MentionResolver => _mentionResolver;
-
     internal IReadOnlyList<string> SkillCandidates => _skillCandidates;
 
     /** models.dev 目录里当前有适配器可服务的 provider 名(`/provider add` 的候选)。 */
@@ -203,6 +200,13 @@ public sealed class ChatWindow : IDisposable
 
         if (actions.Count > 0 || sessionEvents.Count > 0)
             RenderVersion++;
+    }
+
+    /** 括号粘贴: 交给输入 pane(本地图片路径转附件 / 空粘贴读剪贴板 / 其余插入文本)。 */
+    public void HandlePaste(string text)
+    {
+        RenderVersion++;
+        InputPane.HandlePaste(text);
     }
 
     public void HandleKey(ConsoleKeyInfo key)
@@ -417,6 +421,8 @@ public sealed class ChatWindow : IDisposable
         var input = InputPane;
         if (input.PendingApproval is not null)
             return;
+        if (input.TryBeginMentionScrollDrag(cellX, cellY))
+            return;
         if (_panes.Count > 1 && FindDividerAt(cellX, cellY) is { } divider)
         {
             _dividerDrag = divider;
@@ -481,6 +487,8 @@ public sealed class ChatWindow : IDisposable
     {
         RenderVersion++;
         layout = Effective(layout);
+        if (InputPane.DragMentionScrollDrag(cellY))
+            return;
         if (_inputDrag)
         {
             DragInputHeight(cellY, layout);
@@ -505,6 +513,8 @@ public sealed class ChatWindow : IDisposable
     {
         RenderVersion++;
         layout = Effective(layout);
+        if (InputPane.EndMentionScrollDrag())
+            return null;
         if (_inputDrag)
         {
             _inputDrag = false;
@@ -853,12 +863,12 @@ public sealed class ChatWindow : IDisposable
         return renderer.SnapshotLines();
     }
 
-    internal IReadOnlyList<SessionInfo> CurrentSessions()
+    internal IReadOnlyList<MentionSessionInfo> CurrentSessions()
     {
         if (_sessionInfos is not null)
             return _sessionInfos;
 
-        var result = new List<SessionInfo>();
+        var result = new List<MentionSessionInfo>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (_persistence is not null)
         {
@@ -869,7 +879,7 @@ public sealed class ChatWindow : IDisposable
                     // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致)。
                     if (snapshot.Header.IsSubagent)
                         continue;
-                    var info = SessionInfo.FromSnapshot(snapshot);
+                    var info = MentionSessionInfo.FromSnapshot(snapshot);
                     if (seen.Add(info.Id))
                         result.Add(info);
                 }
@@ -884,7 +894,7 @@ public sealed class ChatWindow : IDisposable
         {
             if (agent.Session.Header.IsSubagent)
                 continue;
-            var info = new SessionInfo(agent.Id.ToString(), agent.Session.Header.Title, null);
+            var info = new MentionSessionInfo(agent.Id.ToString(), agent.Session.Header.Title, null);
             if (seen.Add(info.Id))
                 result.Add(info);
         }
