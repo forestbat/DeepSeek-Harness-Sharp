@@ -5,6 +5,8 @@
 
 本目录即模板工程：`DshPluginTemplate.csproj` + `Plugin.cs`，每个文件的注释就是规则原文（做什么 + 为什么），可直接作为创造模式搭插件骨架的上下文。
 
+原生（AOT）插件不走这条路：它产出每 RID 一份的共享库、契约是 C ABI、能力面只有工具与日志，写法与坑见 `templates/native-plugin/README.md`。
+
 ## 编译期诊断
 
 | 诊断码 | 级别 | 含义与处理 |
