@@ -61,6 +61,18 @@ jobs:
       - name: 编译测试工程（Debug，含插件夹具）
         run: dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
 
+      - name: 安装 sqlite3（Windows；SQLitePCLRaw.provider.sqlite3 需要系统 sqlite3.dll）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install sqlite --no-progress -y
+          $dll = Get-ChildItem 'C:\ProgramData\chocolatey\lib\sqlite' -Recurse -Filter 'sqlite3.dll' |
+            Select-Object -First 1
+          if (-not $dll) { throw '未找到 sqlite3.dll' }
+          New-Item -ItemType Directory -Force tests/Dsh.Tests/bin/Debug/net10.0 | Out-Null
+          Copy-Item $dll.FullName 'tests/Dsh.Tests/bin/Debug/net10.0/' -Force
+          Write-Host "copied $($dll.FullName)"
+
       - name: 运行测试（排除 GpuStress / OnlyGpu / LlmSmoke / RenderBench）
         shell: bash
         run: |
