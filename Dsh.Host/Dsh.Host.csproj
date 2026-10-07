@@ -22,4 +22,13 @@
                       Exclude="..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
   </ItemGroup>
 
+  <!--
+    生成器由 DshPluginHost.props 以 MSBuild 任务调用(不是普通引用), 不在上面的通配引用里;
+    显式引用只为把它纳入 restore 图: 否则单独 publish 宿主时其 CoreCompile 因缺 project.assets.json 报 NETSDK1004。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj"
+                      ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>

@@ -153,6 +153,7 @@ public sealed class GpuPreferenceTests
     }
 
     [Fact]
+    [Trait("Category", "OnlyGpu")]
     public void WindowsAdapterList_ContainsTheTwoRealCards_AndSkipsVirtualOnes()
     {
         if (!OperatingSystem.IsWindows())

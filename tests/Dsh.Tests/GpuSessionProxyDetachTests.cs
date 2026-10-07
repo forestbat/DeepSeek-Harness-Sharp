@@ -9,6 +9,7 @@ namespace Dsh.Tests;
  * 用隐藏窗口跑真实的 GpuSessionProxy(与 `dsh tui --gpu` 同一条路径), 再 RequestClose 模拟关窗口。
  */
 [Collection(GuiSerialCollection.CollectionName)]
+[Trait("Category", "OnlyGpu")]
 public sealed class GpuSessionProxyDetachTests
 {
     [Fact]

@@ -110,17 +110,19 @@ jobs:
       - name: 编译测试工程（Debug，含插件夹具）
         run: dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
 
-      - name: 运行测试（排除 GpuStress / LlmSmoke / RenderBench）
+      - name: 运行测试（排除 GpuStress / OnlyGpu / LlmSmoke / RenderBench）
         shell: bash
         run: |
           set -euo pipefail
-          # GpuStress 需要真实 GPU；RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
+          # GpuStress 需要真实 GPU 压测；OnlyGpu 是功能性的 GPU/桌面渲染用例(无 GPU/EGL 的 runner 跑不了)；
+          # RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
           EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
           ARGS=("$EXE" -noColor
             -trait- "Category=GpuStress"
+            -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench")
           if command -v timeout >/dev/null 2>&1; then

@@ -2,6 +2,8 @@ using Dsh.Tui;
 
 namespace Dsh.Tests;
 
+/** 需要真实字体渲染环境(CI 无 CJK 字体时烘不出字形): 只在具备真实桌面/字体的机器上跑。 */
+[Trait("Category", "OnlyGpu")]
 public class GlyphAtlasTests
 {
     [Fact]

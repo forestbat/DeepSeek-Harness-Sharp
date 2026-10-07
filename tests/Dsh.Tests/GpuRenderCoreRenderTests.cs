@@ -4,6 +4,7 @@ using OpenTK.Graphics.OpenGL;
 namespace Dsh.Tests;
 
 [Collection("RenderBench")]
+[Trait("Category", "OnlyGpu")]
 public class GpuRenderCoreRenderTests : IDisposable
 {
     private const int CellW = 16;

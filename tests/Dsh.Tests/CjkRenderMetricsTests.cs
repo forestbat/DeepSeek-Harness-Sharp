@@ -5,6 +5,7 @@ namespace Dsh.Tests;
 
 /** 真实格尺寸(图集度量推导)下的 GPU 组件测试: CJK 占满两格、与 ASCII 共享基线。 */
 [Collection("RenderBench")]
+[Trait("Category", "OnlyGpu")]
 public class CjkRenderMetricsTests
 {
     [Fact]

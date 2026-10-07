@@ -426,8 +426,9 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.True((expanded[0, title].Style & CellStyle.Bold) != 0);
     }
 
-    /** 鼠标拖动分隔线调整窗格比例: 分隔线跟手, 且两侧不小于最小格数。 */
+    /** 鼠标拖动分隔线调整窗格比例: 分隔线跟手, 且两侧不小于最小格数。需要真实桌面渲染环境(EGL)。 */
     [Fact]
+    [Trait("Category", "OnlyGpu")]
     public async Task MouseDrag_OnDivider_ResizesPanes()
     {
         var (ctx, agent, home) = await CreateAgent();
