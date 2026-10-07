@@ -240,7 +240,7 @@ public sealed class ChatWindow : IDisposable
             if (key.Key == ConsoleKey.X && (key.Modifiers & ConsoleModifiers.Control) != 0)
             {
                 _ctrlXPrefix = true;
-                SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · Q 退出");
+                SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · ,/. 切会话 · Q 退出");
                 return;
             }
             shell.HandleKey(key);
@@ -267,7 +267,7 @@ public sealed class ChatWindow : IDisposable
             {
                 case ConsoleKey.X:
                     _ctrlXPrefix = true;
-                    SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话 · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · 方向键/O 切窗格 · Q 退出");
+                    SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话 · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · 方向键/O 切窗格 · ,/. 切会话 · Q 退出");
                     return;
                 case ConsoleKey.C:
                     if (input.Busy)
@@ -348,6 +348,12 @@ public sealed class ChatWindow : IDisposable
                 return;
             case ConsoleKey.OemMinus or ConsoleKey.Subtract:
                 CloseFocusedPane();
+                return;
+            case ConsoleKey.OemComma:
+                SwitchSessionInPty(-1);
+                return;
+            case ConsoleKey.OemPeriod:
+                SwitchSessionInPty(1);
                 return;
             case ConsoleKey.LeftArrow:
                 MoveFocus(FocusDirection.Left);
@@ -1562,6 +1568,8 @@ public sealed class ChatWindow : IDisposable
         {
             '+' => ConsoleKey.OemPlus,
             '-' => ConsoleKey.OemMinus,
+            ',' => ConsoleKey.OemComma,
+            '.' => ConsoleKey.OemPeriod,
             _ => (ConsoleKey?)null,
         };
         if (target is null || key.Key == target)
@@ -1572,6 +1580,27 @@ public sealed class ChatWindow : IDisposable
             (key.Modifiers & ConsoleModifiers.Shift) != 0,
             (key.Modifiers & ConsoleModifiers.Alt) != 0,
             (key.Modifiers & ConsoleModifiers.Control) != 0);
+    }
+
+    /** Ctrl+X ,/. : 在"当前窗格所属 Pty"的会话窗格间循环切换(归属推导复用总览的 PtyForSession, 单一真相)。 */
+    private void SwitchSessionInPty(int direction)
+    {
+        var catalog = Catalog();
+        var current = catalog.FirstOrDefault(entry => entry.Id == _focusedPaneId);
+        var pty = current?.SessionId is { Length: > 0 } sessionId ? PtyForSession(sessionId) : current?.PtyId;
+        var siblings = catalog
+            .Where(entry => entry.Kind == TuiPaneKind.Chat
+                && entry.SessionId is { Length: > 0 }
+                && string.Equals(PtyForSession(entry.SessionId), pty, StringComparison.Ordinal))
+            .ToList();
+        if (siblings.Count < 2)
+            return;
+        var index = siblings.FindIndex(entry => entry.Id == _focusedPaneId);
+        var start = index < 0 ? 0 : index;
+        var nextIndex = ((start + direction) % siblings.Count + siblings.Count) % siblings.Count;
+        var next = siblings[nextIndex];
+        FocusPane(next.Id);
+        SetCtrlXHint($"已切换到会话 {next.SessionId}({nextIndex + 1}/{siblings.Count})");
     }
 
     private async void SplitFocusedPane()

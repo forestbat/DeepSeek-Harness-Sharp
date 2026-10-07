@@ -153,10 +153,10 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            archive: dshsh-win-x64.zip
+            archive: dsharp-win-x64.zip
           - os: ubuntu-latest
             rid: linux-x64
-            archive: dshsh-linux-x64.tar.gz
+            archive: dsharp-linux-x64.tar.gz
     steps:
       - uses: actions/checkout@v4
 

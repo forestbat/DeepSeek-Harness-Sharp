@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 #
 # DeepSeek Harness 命令行安装脚本(Linux/macOS)。
-# 从 GitHub Release 下载对应平台的构建, 装到用户目录, 并注册 `dshsh` 命令。
+# 从 GitHub Release 下载对应平台的构建, 装到用户目录, 并注册 `dsharp` 命令。
 #
 # 用法:
 #   curl -fsSL https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/scripts/install.sh | bash
 #   curl -fsSL <url> | bash -s -- --version 0.1.0
 #
 # 可用环境变量(命令行参数优先):
-#   DSHSH_VERSION        版本号或 latest(默认 latest)
-#   DSHSH_HOME           安装目录(默认 $HOME/.dshsh)
-#   DSHSH_BIN_DIR        命令目录(默认 $HOME/.local/bin)
-#   DSHSH_BASE_URL       Release 基址(默认 GitHub Release, 可指向镜像)
-#   DSHSH_LOCAL_ARCHIVE  本地归档路径, 跳过下载(离线安装/测试用)
-#   DSHSH_PROXY          下载代理, 例如 http://127.0.0.1:10808
+#   DSHARP_VERSION        版本号或 latest(默认 latest)
+#   DSHARP_HOME           安装目录(默认 $HOME/.dsharp)
+#   DSHARP_BIN_DIR        命令目录(默认 $HOME/.local/bin)
+#   DSHARP_BASE_URL       Release 基址(默认 GitHub Release, 可指向镜像)
+#   DSHARP_LOCAL_ARCHIVE  本地归档路径, 跳过下载(离线安装/测试用)
+#   DSHARP_PROXY          下载代理, 例如 http://127.0.0.1:10808
 #
-# Release 资产命名约定: dshsh-<rid>.tar.gz, rid 形如 linux-x64 / linux-arm64 / osx-x64 / osx-arm64。
+# Release 资产命名约定: dsharp-<rid>.tar.gz, rid 形如 linux-x64 / linux-arm64 / osx-x64 / osx-arm64。
 # 归档根目录即发布输出(含可执行文件 DeepSeek-Harness-Sharp 与 plugins/)。
 set -euo pipefail
 
 REPO="forestbat/DeepSeek-Harness-Sharp"
-VERSION="${DSHSH_VERSION:-latest}"
-INSTALL_DIR="${DSHSH_HOME:-$HOME/.dshsh}"
-BIN_DIR="${DSHSH_BIN_DIR:-$HOME/.local/bin}"
-BASE_URL="${DSHSH_BASE_URL:-https://github.com/$REPO/releases}"
-LOCAL_ARCHIVE="${DSHSH_LOCAL_ARCHIVE:-}"
-PROXY="${DSHSH_PROXY:-}"
-COMMAND_NAME="dshsh"
+VERSION="${DSHARP_VERSION:-latest}"
+INSTALL_DIR="${DSHARP_HOME:-$HOME/.dsharp}"
+BIN_DIR="${DSHARP_BIN_DIR:-$HOME/.local/bin}"
+BASE_URL="${DSHARP_BASE_URL:-https://github.com/$REPO/releases}"
+LOCAL_ARCHIVE="${DSHARP_LOCAL_ARCHIVE:-}"
+PROXY="${DSHARP_PROXY:-}"
+COMMAND_NAME="dsharp"
 HOST_BINARY="DeepSeek-Harness-Sharp"
 
 log() { printf '%s\n' "$*"; }
@@ -78,7 +78,7 @@ detect_arch() {
 }
 
 RID="$(detect_os)-$(detect_arch)"
-ASSET="dshsh-$RID.tar.gz"
+ASSET="dsharp-$RID.tar.gz"
 
 asset_url() {
     case "$VERSION" in
@@ -118,7 +118,7 @@ if [ -n "$LOCAL_ARCHIVE" ]; then
 else
     URL="$(asset_url)"
     log "下载 $URL"
-    download "$URL" "$ARCHIVE" || fail "下载失败, 请检查版本号、网络或 DSHSH_PROXY"
+    download "$URL" "$ARCHIVE" || fail "下载失败, 请检查版本号、网络或 DSHARP_PROXY"
 fi
 
 EXTRACT_DIR="$TMP_DIR/extract"
@@ -160,6 +160,10 @@ if ! printf '%s' ":$PATH:" | grep -q ":$BIN_DIR:"; then
         printf '\n# DeepSeek Harness\n%s\n' "$LINE" >> "$HOME/.profile"
     fi
     log "已把 $BIN_DIR 写入 shell 启动文件; 新开终端或执行: export PATH=\"$BIN_DIR:\$PATH\""
+fi
+
+if command -v dshsh >/dev/null 2>&1; then
+    log "提示: 检测到旧命令 'dshsh'($(command -v dshsh)), 新版命令是 'dsharp'; 可删除旧的。"
 fi
 
 log ""

@@ -25,6 +25,18 @@ public static class PluginInstall
         return Path.Combine(staging, Path.GetFileName(sourcePath));
     }
 
+    /** 删除 add 落盘的插件目录;只允许 plugins 根下的每插件子目录,拒绝删根或根外路径。 */
+    public static void Uninstall(string directory, string pluginsRoot)
+    {
+        var target = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = Path.GetFullPath(pluginsRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (target.Length == 0
+            || string.Equals(target, root, StringComparison.OrdinalIgnoreCase)
+            || !target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"拒绝删除 plugins 根或根外目录: {target}");
+        Directory.Delete(target, recursive: true);
+    }
+
     /** 宿主镜像(可执行文件旁)的程序集不随插件落盘:它们由宿主解析,拷贝只会制造第二份类型身份。 */
     private static HashSet<string> HostImageNames()
         => new(

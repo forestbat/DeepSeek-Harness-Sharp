@@ -103,10 +103,14 @@ public sealed class HotPlugTests
             Assert.Contains("activated", added);
             Assert.Equal(ActivationState.Active, app.Composition.Find("test/local")!.State);
             Assert.StartsWith("active [managed-assembly", manager.Describe("test/local"));
+            var installDir = Path.Combine(dir, "plugins", "Dsh.ManagedPluginSample");
+            Assert.True(Directory.Exists(installDir), $"add 应把插件落盘到: {installDir}");
 
             var removed = await manager.RemoveAsync("test/local");
 
             Assert.Contains("removed", removed);
+            Assert.Contains("已删除安装目录", removed);
+            Assert.False(Directory.Exists(installDir), $"remove 应删除安装目录: {installDir}");
             Assert.DoesNotContain("could not be collected", removed);
             Assert.Null(app.Composition.Find("test/local"));
             for (var attempt = 0; attempt < 30; attempt++)

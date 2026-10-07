@@ -14,6 +14,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly string _pluginsDirectory;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
     private readonly HashSet<string> _leaked = new(StringComparer.Ordinal);
 
     public HarnessPluginManager(
@@ -34,6 +35,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             _loadedContexts[entry.Package] = entry.Context;
             if (entry.SharedDependencies.Count > 0)
                 _sharedDependencies[entry.Package] = entry.SharedDependencies;
+            if (entry.InstallDirectory is { } directory)
+                _installedDirectories[entry.Package] = directory;
         }
     }
 
@@ -78,16 +81,52 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
             return "usage: /plugins remove <package>";
-        if (_composition.Root.Scheduler.Find(trimmed) is null)
+        var active = _composition.Root.Scheduler.Find(trimmed) is not null;
+        if (!active && !_installedDirectories.ContainsKey(trimmed))
             return $"plugin {trimmed} is not active";
-        var (weak, leaked) = await UnloadAsync(trimmed, force, reclaim: IsManaged(trimmed));
-        Persist(trimmed, new PluginSetting { Enabled = false });
+        var message = active ? await DetachAsync(trimmed, force) : Removed(trimmed, leaked: false);
+        var uninstall = await UninstallInstalledAsync(trimmed);
+        return uninstall is null ? message : $"{message}; {uninstall}";
+    }
+
+    /** 摘除并登记为禁用;制品目录的删除交给 remove 的 UninstallInstalled。 */
+    private async Task<string> DetachAsync(string package, bool force)
+    {
+        var (weak, leaked) = await UnloadAsync(package, force, reclaim: IsManaged(package));
+        Persist(package, new PluginSetting { Enabled = false });
         if (leaked)
-            _leaked.Add(trimmed);
+            _leaked.Add(package);
         if (weak is null)
-            return Removed(trimmed, leaked);
-        _ = VerifyCollectionAsync(trimmed, weak);
-        return Removed(trimmed, leaked) + "(加载上下文回收校验异步进行中;若泄漏会记录日志并在 /plugins list 标记 leaked)";
+            return Removed(package, leaked);
+        _ = VerifyCollectionAsync(package, weak);
+        return Removed(package, leaked) + "(加载上下文回收校验异步进行中;若泄漏会记录日志并在 /plugins list 标记 leaked)";
+    }
+
+    /** 删除 add 落盘的每插件目录;未跟踪到目录(compiled-in / 平铺布局)则返回 null。 */
+    private async Task<string?> UninstallInstalledAsync(string package)
+    {
+        if (!_installedDirectories.Remove(package, out var directory))
+            return null;
+        // Windows 上被装箱的程序集文件在 ALC 回收前仍被锁定:催促 GC 后有界重试。
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                PluginInstall.Uninstall(directory, _pluginsDirectory);
+                return $"已删除安装目录 {directory}";
+            }
+            catch (Exception error) when (attempt < 60 && error is IOException or UnauthorizedAccessException)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                GC.WaitForPendingFinalizers();
+                await Task.Delay(50);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                _installedDirectories[package] = directory;
+                return $"删除安装目录失败: {directory}: {error.Message}";
+            }
+        }
     }
 
     public async Task<string> DisableAsync(string package)
@@ -159,6 +198,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         foreach (var package in result.Packages)
         {
             _loadedContexts[package] = result.Context!;
+            _installedDirectories[package] = Path.GetDirectoryName(installPath)!;
             if (result.SharedDependencies.Count > 0)
                 _sharedDependencies[package] = result.SharedDependencies;
             messages.Add(await ActivateAsync(package));

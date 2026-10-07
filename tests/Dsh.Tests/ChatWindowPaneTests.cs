@@ -228,6 +228,29 @@ public sealed class ChatWindowPaneTests : IDisposable
     }
 
     [Fact]
+    public async Task CtrlX_Comma_Period_Cycles_Sessions_In_Same_Pty()
+    {
+        var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
+        var layout = LayoutEngine.Calculate(120, 40);
+        _ = DrawFrameReturningGrid(chat, layout);
+        Assert.Equal(1, chat.FocusedPaneId);
+
+        PressCtrl(chat, ConsoleKey.X);
+        Press(chat, ConsoleKey.OemComma);
+        Assert.Equal(0, chat.FocusedPaneId);
+
+        PressCtrl(chat, ConsoleKey.X);
+        Press(chat, ConsoleKey.OemPeriod);
+        Assert.Equal(1, chat.FocusedPaneId);
+
+        // Unix/pty 宿主只送字符不带键名: 归一化后仍应切换。
+        PressCtrl(chat, ConsoleKey.X);
+        chat.HandleKey(new ConsoleKeyInfo(',', ConsoleKey.NoName, false, false, false));
+        Assert.Equal(0, chat.FocusedPaneId);
+        chat.Dispose();
+    }
+
+    [Fact]
     public async Task Background_Pane_Event_Updates_Its_Renderer_Without_Stealing_Focus()
     {
         var (chat, _, _, _, second) = await CreateChatWithTwoAgents();

@@ -16,8 +16,12 @@ public sealed record PluginLoadResult(
     IReadOnlyList<string> SharedDependencies,
     PluginLoadContext? Context);
 
-/** 托管插件的一次装载:包名、共享依赖声明与持有它的可回收加载上下文。 */
-public sealed record ManagedPlugin(string Package, PluginLoadContext Context, IReadOnlyList<string> SharedDependencies);
+/** 托管插件的一次装载:包名、共享依赖声明、持有它的可回收加载上下文,以及装载来源目录 (仅在 per-plugin 布局下非空,供 remove 卸载)。 */
+public sealed record ManagedPlugin(
+    string Package,
+    PluginLoadContext Context,
+    IReadOnlyList<string> SharedDependencies,
+    string? InstallDirectory = null);
 
 /** 被跳过的插件制品与原因,供宿主逐文件 WARN。 */
 public sealed record PluginSkip(string File, string Reason);
@@ -169,7 +173,7 @@ public sealed class PluginHost
                     "NativeAOT 构建不能在运行期装载托管程序集;请把它编译进镜像,或改用原生插件"));
                 return;
             }
-            TryLoadManaged(file, packages, managed, skipped, flatLayout, out var handled);
+            TryLoadManaged(file, packages, managed, skipped, flatLayout ? null : containerDirectory, out var handled);
             if (handled)
                 return;
         }
@@ -182,7 +186,7 @@ public sealed class PluginHost
         List<string> packages,
         List<ManagedPlugin> managed,
         List<PluginSkip> skipped,
-        bool flatLayout,
+        string? installDirectory,
         out bool handled)
     {
         PluginLoadResult result;
@@ -203,14 +207,14 @@ public sealed class PluginHost
         }
         skipped.AddRange(result.Skipped);
         handled = result.Packages.Count > 0 || result.Skipped.Count > 0;
-        if (flatLayout && result.Packages.Count > 0)
+        if (installDirectory is null && result.Packages.Count > 0)
         {
             skipped.Add(new PluginSkip(file,
                 "平铺布局已废弃,将在下个版本停止扫描:请把插件及其依赖移入 plugins/<目录>/"));
         }
         foreach (var package in result.Packages)
         {
-            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies));
+            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, installDirectory));
             packages.Add(package);
         }
     }

@@ -4,7 +4,7 @@
 
 ## 安装
 
-从 GitHub Release 下载对应平台的 Release 构建,装到用户目录并注册 `dshsh` 命令:
+从 GitHub Release 下载对应平台的 Release 构建,装到用户目录并注册 `dsharp` 命令:
 
 ```bash
 # Linux / macOS
@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/ma
 irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/scripts/install.ps1 | iex
 ```
 
-安装后新开终端,在任意目录运行 `dshsh` 即可启动 TUI。可用环境变量覆盖: `DSHSH_VERSION`(版本号或 latest)、`DSHSH_HOME`(安装目录)、`DSHSH_BASE_URL`(镜像基址)、`DSHSH_PROXY`(下载代理)。Release 资产命名为 `dshsh-<rid>.tar.gz`(Linux/macOS)与 `dshsh-win-<arch>.zip`(Windows)。
+安装后新开终端,在任意目录运行 `dsharp` 即可启动 TUI。可用环境变量覆盖: `DSHARP_VERSION`(版本号或 latest)、`DSHARP_HOME`(安装目录)、`DSHARP_BASE_URL`(镜像基址)、`DSHARP_PROXY`(下载代理)。Release 资产命名为 `dsharp-<rid>.tar.gz`(Linux/macOS)与 `dsharp-win-<arch>.zip`(Windows)。
 
 ## 运行
 
