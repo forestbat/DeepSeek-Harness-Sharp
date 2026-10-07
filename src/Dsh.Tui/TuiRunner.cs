@@ -28,6 +28,7 @@ public static class TuiRunner
     {
         // 渲染前先声明控制台按 UTF-8 解释: daemon 脱离终端后创建的伪控制台默认取系统 OEM 代码页, 会把画面中文读成乱码。
         ConsoleCodePage.EnsureUtf8();
+        HookCrashLog(app);
         if (gpu && gpuScreenshot is null && gpuCapturePlan is null && ShouldRunAsProxy())
             return await TuiProxy.RunAsync(app, shell, gpu: true);
         if (gpu)
@@ -38,9 +39,10 @@ public static class TuiRunner
             return await TuiProxy.RunAsync(app, shell);
 
         // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞。
-        // 鼠标上报照常开: 终端形态下这是拖拽/滚轮/点击的唯一来源(序列会被 proxy 转给宿主终端)。只会发 X10 的
-        // 终端(如 Rider 内置终端)由客户端丢报文并让终端停发(SGR 能穿过 ConPTY, 原样放行)。
-        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
+        // 走到这里已不是 proxy: 本进程的终端要么是 daemon 的 ConPTY、要么被重定向, 都不是"用户终端"。
+        // 因此只做原始模式与备用屏幕接管, 不发出鼠标上报序列(否则会经 daemon 泄到用户终端, 与 proxy 重复)——
+        // 鼠标由持有用户终端的 proxy 负责开启并转发。Windows 仍保留控制台鼠标输入位, 供 InjectMouse 注入记录。
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true, emitMouseReports: false);
         var signalGuards = RegisterSignalRestore(rawMode);
         try
         {
@@ -63,6 +65,34 @@ public static class TuiRunner
                 foreach (var guard in signalGuards)
                     guard.Dispose();
         }
+    }
+
+    private static bool _crashLogHooked;
+
+    /** 未处理异常把栈落盘(开发期落 artifacts020/, 安装态回落 home/logs), 事后可定位。 */
+    private static void HookCrashLog(HarnessApp app)
+    {
+        if (_crashLogHooked)
+            return;
+        _crashLogHooked = true;
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            try
+            {
+                var directory = Path.Combine(Environment.CurrentDirectory, "artifacts020");
+                if (!Directory.Exists(directory))
+                    directory = app.Home.LogsPath;
+                Directory.CreateDirectory(directory);
+                var path = Path.Combine(directory, $"tui-crash-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+                File.WriteAllText(path, Convert.ToString(args.ExceptionObject) ?? "unhandled exception (no detail)");
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        };
     }
 
     /** Unix 信号兜底: SIGTERM/SIGHUP/SIGINT 时先恢复终端再退出, 不给宿主留 raw+备用屏幕残骸。 */
@@ -346,7 +376,7 @@ public static class TuiRunner
         Console.Error.WriteLine($"GPU unavailable: {reason}");
         if (Console.IsInputRedirected)
             return 1;
-        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true);
+        using var rawMode = TerminalRawMode.TryEnable(enableMouse: true, emitMouseReports: false);
         return RunInteractiveAsync(app, agent).GetAwaiter().GetResult();
     }
 

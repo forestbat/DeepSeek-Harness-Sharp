@@ -13,6 +13,10 @@ public sealed class VtScreenWideCharTests
         screen.Feed(Encoding.UTF8.GetBytes("上下文"));
         Assert.Equal('上', screen.Row(0)[0].Character);
         Assert.Equal('下', screen.Row(0)[2].Character);
+        // 宽字符续格必须是 '\0' 占位(不能是空格, 否则消费方会多输出一列致字距拉大/越界)。
+        Assert.Equal('\0', screen.Row(0)[1].Character);
+        Assert.Equal('\0', screen.Row(0)[3].Character);
+        Assert.Equal('\0', screen.Row(0)[5].Character);
     }
 
     [Fact]

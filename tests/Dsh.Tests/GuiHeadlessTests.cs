@@ -23,7 +23,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
 {
     private const int BulkMessages = 1000;
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", "gui-screenshots"));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "gui-screenshots"));
 
     [Fact]
     public async Task MainWindow_RendersEveryPage() => await HeadlessGui.RunAsync(async () =>
@@ -384,7 +384,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         }
     });
 
-    /** diff 卡片真实渲染截图(阶段 4): 折叠态与展开态各一张, 供与参考图 artifacts/bugs/7925849368c492dfb053dda75d5b683f.png 对照。 */
+    /** diff 卡片真实渲染截图(阶段 4): 折叠态与展开态各一张, 供与参考图 artifacts020/bugs/7925849368c492dfb053dda75d5b683f.png 对照。 */
     [Fact]
     public async Task DiffCard_RendersCollapsedAndExpanded() => await HeadlessGui.RunAsync(async () =>
         {

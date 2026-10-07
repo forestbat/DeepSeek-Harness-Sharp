@@ -13,7 +13,7 @@ if (-not $Target) {
     $candidates = @(
         (Join-Path $repoRoot "DshGuiHost\bin\Release\net10.0\dsh-gui.exe"),
         (Join-Path $repoRoot "DshGuiHost\bin\Debug\net10.0\dsh-gui.exe"),
-        (Join-Path $repoRoot "artifacts\gui\dsh-gui.exe")
+        (Join-Path $repoRoot "artifacts020\gui\dsh-gui.exe")
     )
     $Target = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }

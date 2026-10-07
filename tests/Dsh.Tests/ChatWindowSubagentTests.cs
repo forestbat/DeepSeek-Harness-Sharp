@@ -12,7 +12,7 @@ namespace Dsh.Tests;
 public sealed class ChatWindowSubagentTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-homes")),
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
         Guid.NewGuid().ToString("N"));
 
     [Fact]

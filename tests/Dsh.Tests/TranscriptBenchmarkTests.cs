@@ -102,7 +102,7 @@ public class TranscriptBenchmarkTests : IDisposable
         report.AppendLine();
         report.AppendLine($"全程 GC 分配: {allocBytes / 1e6:F1} MB。");
 
-        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/bench");
+        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/bench");
         Directory.CreateDirectory(directory);
         var path = Path.GetFullPath(Path.Combine(directory, "render-transcript-benchmark.md"));
         File.WriteAllText(path, report.ToString());

@@ -5,8 +5,8 @@ namespace Dsh.Pty;
 
 public static class PtyConsoleBridge
 {
-    /** 被桥接进程可能开过鼠标上报(?1000/?1002/?1006)且仍在 daemon 中运行, detach 时替它复位宿主终端。 */
-    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+    /** 被桥接进程可能开过鼠标上报(?1000/?1002/?1003/?1006/?1015)且仍在 daemon 中运行, detach 时替它复位宿主终端。 */
+    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1015l";
 
     /** 请求宿主终端上报鼠标(按钮事件 + SGR 编码); 代理在 attach 时主动发出。 */
     internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";

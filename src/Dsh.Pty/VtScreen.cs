@@ -715,7 +715,7 @@ public sealed class VtScreen
                 return;
             }
             line[CursorX] = new Cell(character, _penForeground, _penBackground, _penStyle);
-            line[CursorX + 1] = new Cell(' ', _penForeground, _penBackground, _penStyle);
+            line[CursorX + 1] = new Cell('\0', _penForeground, _penBackground, _penStyle);
         }
         else
         {

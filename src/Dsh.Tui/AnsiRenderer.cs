@@ -91,13 +91,17 @@ public sealed class AnsiRenderer
         builder.Append("\x1b[2J\x1b[3J\x1b[H");
         for (var y = 0; y < grid.Height; y++)
         {
-            for (var x = 0; x < grid.Width; x++)
+            var row = grid.Row(y);
+            for (var x = 0; x < row.Length; x++)
             {
-                var cell = grid[x, y];
+                var cell = row[x];
+                // 宽字符续格占位(紧跟在宽字符后的 '\0')不单独输出: 宽字符已让光标推进两格;
+                // 其余 '\0'(未初始化格)按空格输出以保持列位。与 AppendDiff 的判定一致。
+                if (cell.Character == '\0' && x > 0 && TerminalTextWidth.IsWide(row[x - 1].Character))
+                    continue;
+
                 _sgr.Apply(builder, cell);
                 builder.Append(Sanitize(cell.Character));
-                if (TerminalTextWidth.IsWide(cell.Character))
-                    x++;
             }
 
             if (y < grid.Height - 1)

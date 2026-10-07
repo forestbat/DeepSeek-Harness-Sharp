@@ -10,7 +10,7 @@ internal static class TuiScreenshot
 {
     public static string ArtifactPath(string fileName)
         => Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", "debug-screenshots", fileName));
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "debug-screenshots", fileName));
 
     /** 字符屏 → 工程自身字形图集/GL 管线 → PNG(与 GpuRenderer.SaveScreenshot 同样的读回+翻转)。 */
     public static void SavePng(char[,] screen, string fileName)

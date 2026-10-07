@@ -1,6 +1,6 @@
 #requires -Version 7
 # 生成 GUI 图标与品牌资源: icon.png / icon.ico / logo-mark.png / logo-wordmark.svg。
-# 源图是 artifacts/gpu-screenshots 下的深蓝底白鲸截图, 输出全部落在仓库内, 可重复运行。
+# 源图是 artifacts020/gpu-screenshots 下的深蓝底白鲸截图, 输出全部落在仓库内, 可重复运行。
 # icon 系列由矢量化轮廓直接渲染(圆角深蓝底 + 白鲸), logo-mark 由源图 alpha 提取, 另外导出预览图供检查。
 # 依赖 Windows 上 pwsh 自带的 System.Drawing.Common (GDI+)。
 
@@ -10,10 +10,10 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
 $root = Split-Path -Parent $PSScriptRoot
-$sourcePath = Join-Path $root "artifacts\gpu-screenshots\94c5de49903710d051d8e566ad6d8089.png"
+$sourcePath = Join-Path $root "artifacts020\gpu-screenshots\94c5de49903710d051d8e566ad6d8089.png"
 $assetsDir = Join-Path $root "src\Dsh.Gui\Assets"
-$previewPath = Join-Path $root "artifacts\gpu-screenshots\logo-mark-preview.png"
-$iconPreviewPath = Join-Path $root "artifacts\gpu-screenshots\icon-256-preview.png"
+$previewPath = Join-Path $root "artifacts020\gpu-screenshots\logo-mark-preview.png"
+$iconPreviewPath = Join-Path $root "artifacts020\gpu-screenshots\icon-256-preview.png"
 $markSize = 128
 $simplifyTolerance = 0.6
 $backgroundCut = 0.04

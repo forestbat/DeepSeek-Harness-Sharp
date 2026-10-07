@@ -18,7 +18,7 @@ if [ -z "$target" ]; then
   for candidate in \
     "$repo_root/DshGuiHost/bin/Release/net10.0/dsh-gui" \
     "$repo_root/DshGuiHost/bin/Debug/net10.0/dsh-gui" \
-    "$repo_root/artifacts/gui/dsh-gui"; do
+    "$repo_root/artifacts020/gui/dsh-gui"; do
     if [ -x "$candidate" ]; then
       target="$candidate"
       break

@@ -11,7 +11,7 @@ namespace Dsh.Tests;
 public class ChatWindowMenuTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-homes")),
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
         Guid.NewGuid().ToString("N"));
 
     private AgentLoopAgent? _lastAgent;

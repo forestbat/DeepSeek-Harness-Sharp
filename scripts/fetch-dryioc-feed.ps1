@@ -36,7 +36,7 @@ if ($Proxy) {
 
 $RootDir = Split-Path -Parent $PSScriptRoot
 $FeedDir = Join-Path $RootDir 'packages'
-$WorkDir = Join-Path $RootDir 'artifacts/.dryioc-src'
+$WorkDir = Join-Path $RootDir 'artifacts020/.dryioc-src'
 $Csproj = Join-Path $RootDir 'src/Dsh.Runtime/Dsh.Runtime.csproj'
 
 $PackageId = 'DryIoc.dll'
@@ -150,10 +150,14 @@ function Build-FromSource([string]$Commit, [string]$StampFile) {
     }
     New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
 
+    # 先建好 feed 目录: 本仓库 NuGet.config 的 local-dsh 源指向相对路径 packages/,
+    # DryIoc 的 restore 会继承该配置, 目录不存在则报 NU1301。
+    New-Item -ItemType Directory -Path $FeedDir -Force | Out-Null
+
     Write-Host "从源码构建 $PackageId (commit $($Commit.Substring(0, 12)))..."
-    git clone --filter=blob:none --no-checkout $RepoUrl $WorkDir
+    git -c core.longpaths=true clone --filter=blob:none --no-checkout $RepoUrl $WorkDir
     git -C $WorkDir fetch --depth 1 origin $Commit
-    git -C $WorkDir checkout --quiet $Commit
+    git -C $WorkDir -c core.longpaths=true checkout --quiet $Commit
 
     # 部分克隆(blob:none)下 SourceLink 读取 git 会失败, 需关闭版本查询。
     dotnet build (Join-Path $WorkDir 'src/DryIoc/DryIoc.csproj') -c Release `

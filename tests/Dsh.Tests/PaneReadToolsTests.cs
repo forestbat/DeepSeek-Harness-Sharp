@@ -15,7 +15,7 @@ namespace Dsh.Tests;
 public sealed class PaneReadToolsTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-homes")),
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
         Guid.NewGuid().ToString("N"));
 
     private static readonly PtyPaneSnapshotDto RemotePane = new() { Id = 7, Kind = "chat", Title = "remote-chat", Lines = ["remote line"] };

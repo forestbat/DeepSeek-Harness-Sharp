@@ -16,7 +16,7 @@ internal sealed class PtyTuiHarness : IDisposable
     public const int Rows = 30;
 
     private static readonly string TranscriptPath = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", "debug-screenshots", "tui-pty-stream.txt"));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "debug-screenshots", "tui-pty-stream.txt"));
 
     private readonly PtyHost _host;
     private readonly StringBuilder _text = new();
@@ -228,13 +228,13 @@ internal sealed class PtyTuiHarness : IDisposable
     }
 
     /**
-     * 隔离 home(项目内 artifacts 下, 不污染用户目录): 复制真实 home 的配置与凭据, 保证插件能解析。
-     * Linux 上域套接字路径上限 108 字符, home 必须短: 用 artifacts 下的 8 位目录名而非 GUID 全称。
+     * 隔离 home(项目内 artifacts020 下, 不污染用户目录): 复制真实 home 的配置与凭据, 保证插件能解析。
+     * Linux 上域套接字路径上限 108 字符, home 必须短: 用 artifacts020 下的 8 位目录名而非 GUID 全称。
      */
     private static string PrepareIsolatedHome(string realHome)
     {
         var home = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", $"h{Guid.NewGuid():N}"[..9]));
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", $"h{Guid.NewGuid():N}"[..9]));
         Directory.CreateDirectory(home);
         foreach (var name in new[] { "settings.yaml", "profiles" })
         {

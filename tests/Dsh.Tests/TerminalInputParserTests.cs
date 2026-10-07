@@ -164,6 +164,9 @@ public class TerminalInputParserTests
         Assert.Contains("1006", TerminalRawMode.MouseDisableSequenceForTests);
         Assert.Contains("h", TerminalRawMode.MouseEnableSequenceForTests);
         Assert.Contains("l", TerminalRawMode.MouseDisableSequenceForTests);
+        // 退出时必须把 1003(全量移动)/1015(urxvt) 也复位, 否则终端仍持续刷鼠标上报。
+        Assert.Contains("1003", TerminalRawMode.MouseDisableSequenceForTests);
+        Assert.Contains("1015", TerminalRawMode.MouseDisableSequenceForTests);
     }
 
     [Fact]

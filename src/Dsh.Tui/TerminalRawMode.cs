@@ -32,7 +32,8 @@ public sealed class TerminalRawMode : IDisposable
     /** ?1002 = 拖动(button-event)跟踪, 文本选择需要; ?1006 = SGR 扩展坐标。 */
     internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
-    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+    /** 关闭时把被桥接/常驻进程可能开过的 ?1003(全量移动)/?1015(urxvt) 一并复位, 否则退出后终端仍刷鼠标上报。 */
+    internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1015l";
 
     /** 括号粘贴: 开启后终端把粘贴内容包在 ESC[200~ … ESC[201~ 里, 使多字符粘贴原子到达(图片路径路线)。 */
     internal const string BracketedPasteEnableSequence = "\x1b[?2004h";
@@ -61,6 +62,10 @@ public sealed class TerminalRawMode : IDisposable
     private readonly uint? _consoleInputMode;
     private bool _disposed;
 
+    private static readonly object ActiveGate = new();
+    private static readonly List<WeakReference<TerminalRawMode>> Active = [];
+    private static bool _restoreHooksRegistered;
+
     private TerminalRawMode(
         bool active,
         byte[]? original = null,
@@ -81,12 +86,53 @@ public sealed class TerminalRawMode : IDisposable
 
     internal static string MouseDisableSequenceForTests => MouseDisableSequence;
 
-    public static TerminalRawMode? TryEnable(bool enableMouse = false)
+    private static TerminalRawMode Track(TerminalRawMode mode)
+    {
+        RegisterForRestore(mode);
+        return mode;
+    }
+
+    /** 崩溃兜底: 未处理异常/进程退出时也要把终端恢复(Dispose 幂等), 不给宿主留 raw+备用屏幕残骸。 */
+    private static void RegisterForRestore(TerminalRawMode mode)
+    {
+        lock (ActiveGate)
+        {
+            Active.Add(new WeakReference<TerminalRawMode>(mode));
+            if (_restoreHooksRegistered)
+                return;
+            _restoreHooksRegistered = true;
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => RestoreActive();
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => RestoreActive();
+        }
+    }
+
+    private static void RestoreActive()
+    {
+        List<TerminalRawMode> live;
+        lock (ActiveGate)
+        {
+            live = [];
+            foreach (var reference in Active)
+                if (reference.TryGetTarget(out var mode))
+                    live.Add(mode);
+        }
+        foreach (var mode in live)
+            mode.Dispose();
+    }
+
+    public static TerminalRawMode? TryEnable(bool enableMouse = false, bool emitMouseReports = true)
     {
         if (OperatingSystem.IsWindows())
-            return TryEnableWindows(enableMouse);
-        return TryEnableUnix(enableMouse);
+            return TryEnableWindows(enableMouse, emitMouseReports);
+        return TryEnableUnix(enableMouse, emitMouseReports);
     }
+
+    /**
+     * 鼠标上报开关序列: 只有拥有用户终端的进程才应发出。常驻会话的终端是 daemon 的 ConPTY,
+     * 发出会经 daemon 泄到用户终端、与 proxy 重复, 因此由 emitMouseReports 单独控制。
+     */
+    internal static string MouseReportEnableSequenceFor(bool enableMouse, bool emitMouseReports)
+        => enableMouse && emitMouseReports ? MouseEnableSequence : "";
 
     public void Dispose()
     {
@@ -151,7 +197,7 @@ public sealed class TerminalRawMode : IDisposable
      * 截去做选择而不进输入缓冲; 清除虚拟终端输入位以保证键盘按虚拟键码送达(与 psmux 的本地路径一致)。
      * 句柄或模式不可写时退回仅 TreatControlCAsInput, 此时输入源会退回 Console.ReadKey。
      */
-    private static TerminalRawMode? TryEnableWindows(bool enableMouse)
+    private static TerminalRawMode? TryEnableWindows(bool enableMouse, bool emitMouseReports)
     {
         // 只有本进程同时拥有输入与输出终端时才接管: 否则(stdout 被重定向到管道)我们并不"拥有"这个控制台,
         // 对它做 SetConsoleMode/鼠标上报会落到别的进程(宿主)的控制台上。
@@ -166,7 +212,7 @@ public sealed class TerminalRawMode : IDisposable
             if (handle == 0 || handle == -1 || !GetConsoleMode(handle, out var original))
             {
                 WriteSequence(BracketedPasteEnableSequence + ScreenEnterSequence);
-                return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+                return Track(new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput));
             }
             var mode = (original
                 & ~(EnableProcessedInput | EnableLineInput | EnableEchoInput | EnableQuickEditMode | EnableVirtualTerminalInput))
@@ -176,17 +222,17 @@ public sealed class TerminalRawMode : IDisposable
             if (!SetConsoleMode(handle, mode))
             {
                 WriteSequence(BracketedPasteEnableSequence + ScreenEnterSequence);
-                return new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput);
+                return Track(new TerminalRawMode(true, restoreTreatControlCAsInput: restoreTreatControlCAsInput));
             }
             // 丢掉接管前排队的陈旧输入(可能是残留鼠标跟踪留下的 X10 字节)
             FlushConsoleInputBuffer(handle);
-            WriteSequence((enableMouse ? MouseEnableSequence : "") + BracketedPasteEnableSequence + ScreenEnterSequence);
-            return new TerminalRawMode(
+            WriteSequence(MouseReportEnableSequenceFor(enableMouse, emitMouseReports) + BracketedPasteEnableSequence + ScreenEnterSequence);
+            return Track(new TerminalRawMode(
                 true,
                 restoreTreatControlCAsInput: restoreTreatControlCAsInput,
-                mouseEnabled: enableMouse,
+                mouseEnabled: enableMouse && emitMouseReports,
                 consoleInputHandle: handle,
-                consoleInputMode: original);
+                consoleInputMode: original));
         }
         catch (IOException)
         {
@@ -198,7 +244,7 @@ public sealed class TerminalRawMode : IDisposable
         }
     }
 
-    private static TerminalRawMode? TryEnableUnix(bool enableMouse)
+    private static TerminalRawMode? TryEnableUnix(bool enableMouse, bool emitMouseReports)
     {
         if (Console.IsOutputRedirected)
             return null;
@@ -216,8 +262,8 @@ public sealed class TerminalRawMode : IDisposable
             Marshal.Copy(raw, 0, buffer, size);
             if (tcsetattr(0, TcsaNow, buffer) != 0)
                 return null;
-            WriteSequence((enableMouse ? MouseEnableSequence : "") + BracketedPasteEnableSequence + ScreenEnterSequence);
-            return new TerminalRawMode(true, original, mouseEnabled: enableMouse);
+            WriteSequence(MouseReportEnableSequenceFor(enableMouse, emitMouseReports) + BracketedPasteEnableSequence + ScreenEnterSequence);
+            return Track(new TerminalRawMode(true, original, mouseEnabled: enableMouse && emitMouseReports));
         }
         finally
         {

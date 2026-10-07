@@ -5,7 +5,7 @@ namespace Dsh.Tests;
 /**
  * CPU(终端 ANSI)路径的真实 TUI 验证: 打开 / 命令浮层、并在输入区输入中文时,
  * 浮层 / 正文 / 右侧栏三者不得互相混排——只属于右栏的内容不得出现在正文列, 右栏也不得被挤掉。
- * 与 GPU 路径的取证帧(artifacts/debug-screenshots/r*.png、g*.grid.txt)互补。
+ * 与 GPU 路径的取证帧(artifacts020/debug-screenshots/r*.png、g*.grid.txt)互补。
  */
 [Collection(SerialProcessCollection.Name)]
 public class TuiOverlayCpuTests

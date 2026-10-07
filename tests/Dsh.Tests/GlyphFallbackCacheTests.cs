@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 public sealed class GlyphFallbackCacheTests
 {
     private static readonly string Root = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-homes"));
+        Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes"));
 
     [Fact]
     public void RoundTrip_And_Key_Invalidation()

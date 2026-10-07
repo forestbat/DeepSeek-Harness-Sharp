@@ -141,7 +141,7 @@ public class GlyphAtlasTests
 
     private static string IsolatedCachePath()
     {
-        var directory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts/test-tmp"));
+        var directory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-tmp"));
         Directory.CreateDirectory(directory);
         return Path.Combine(directory, $"glyph-cache-{Guid.NewGuid():N}.bin");
     }

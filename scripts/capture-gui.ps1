@@ -1,7 +1,7 @@
 param(
     [string]$DshHome = "",
     [string]$Session = "",
-    [string]$Out = "artifacts/gpu-screenshots/gui.png",
+    [string]$Out = "artifacts020/gpu-screenshots/gui.png",
     [int]$WaitSeconds = 8,
     [switch]$KeepOpen,
     # 捕获目标可换: 默认 GUI 启动器; 传 -ExePath/-ExeArguments 可截 GPU 窗口(dsh tui --gpu)等其它进程。
@@ -43,7 +43,7 @@ else
     if ($DshHome.Length -gt 0) { $arguments += @("--home", $DshHome) }
     if ($Session.Length -gt 0) { $arguments += @("--session", $Session) }
 }
-$errorLog = Join-Path $root "artifacts\capture-gui.err"
+$errorLog = Join-Path $root "artifacts020\capture-gui.err"
 Remove-Item $errorLog -ErrorAction SilentlyContinue
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $root -RedirectStandardError $errorLog -PassThru
 

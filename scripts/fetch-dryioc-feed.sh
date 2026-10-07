@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 FEED_DIR="$ROOT_DIR/packages"
-WORK_DIR="$ROOT_DIR/artifacts/.dryioc-src"
+WORK_DIR="$ROOT_DIR/artifacts020/.dryioc-src"
 CSPROJ="$ROOT_DIR/src/Dsh.Runtime/Dsh.Runtime.csproj"
 
 PACKAGE_ID="DryIoc.dll"
@@ -164,10 +164,14 @@ build_from_source() {
     rm -rf "$WORK_DIR"
     mkdir -p "$WORK_DIR"
 
+    # 先建好 feed 目录: 本仓库 NuGet.config 的 local-dsh 源指向相对路径 packages/,
+    # DryIoc 的 restore 会继承该配置, 目录不存在则报 NU1301。
+    mkdir -p "$FEED_DIR"
+
     echo "从源码构建 $PACKAGE_ID (commit ${commit:0:12})..."
-    git clone --filter=blob:none --no-checkout "$REPO_URL" "$WORK_DIR"
+    git -c core.longpaths=true clone --filter=blob:none --no-checkout "$REPO_URL" "$WORK_DIR"
     git -C "$WORK_DIR" fetch --depth 1 origin "$commit"
-    git -C "$WORK_DIR" checkout --quiet "$commit"
+    git -C "$WORK_DIR" -c core.longpaths=true checkout --quiet "$commit"
 
     # 部分克隆(blob:none)下 SourceLink 读取 git 会失败, 需关闭版本查询。
     dotnet build "$WORK_DIR/src/DryIoc/DryIoc.csproj" -c Release \
