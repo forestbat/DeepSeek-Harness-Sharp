@@ -59,6 +59,17 @@ public sealed record BoardMessage(
     string Body,
     string? ReplyTo = null);
 
+/** 行级(区域级)软占用：某会话对 path 的 [StartLine, EndLine] 声明了意图，TTL 到期自动失效。advisory，不硬阻断编辑。 */
+public sealed record BoardClaim(
+    string Id,
+    SessionId Owner,
+    string Path,
+    int StartLine,
+    int EndLine,
+    string Intent,
+    long Timestamp,
+    long ExpiresAt);
+
 public sealed record BoardPage(IReadOnlyList<BoardMessage> Messages, long Cursor, bool HasMore);
 
 /**
@@ -75,6 +86,8 @@ public sealed class SwarmBoard(Context ctx) : Service(ctx, ServiceName)
     public const int MaxReadBytes = 32 * 1024;
     public const int DefaultReadLimit = 20;
     public const int MaxReadLimit = 50;
+    public const int DefaultClaimTtlSeconds = 600;
+    public const int MaxClaimTtlSeconds = 3600;
 
     private sealed class BoardState
     {
@@ -82,6 +95,8 @@ public sealed class SwarmBoard(Context ctx) : Service(ctx, ServiceName)
         public List<BoardMessage> Messages = [];
         public int Bytes;
         public readonly Dictionary<(SessionId Sender, string Key), BoardMessage> Dedup = [];
+        public long NextClaimSeq = 1;
+        public List<BoardClaim> Claims = [];
     }
 
     private readonly Dictionary<SessionId, BoardState> _boards = [];
@@ -205,6 +220,79 @@ public sealed class SwarmBoard(Context ctx) : Service(ctx, ServiceName)
                 roster.Add(session.Id);
         }
         return roster;
+    }
+
+    /** 声明一段文件区域(软锁): 返回本次 claim 与与之重叠的既有 claim(不含自己)。同一所有者对同区域重复声明视为续期。 */
+    public (BoardClaim Claim, IReadOnlyList<BoardClaim> Conflicts) Claim(
+        IAgent owner, string path, int startLine, int endLine, string intent, int? ttlSeconds)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new BoardException("claim path is required", BoardErrorCodes.InvalidMessage);
+        if (startLine < 1 || endLine < startLine)
+            throw new BoardException("claim line range is invalid", BoardErrorCodes.InvalidMessage);
+        var ttl = ttlSeconds ?? DefaultClaimTtlSeconds;
+        if (ttl < 1 || ttl > MaxClaimTtlSeconds)
+            throw new BoardException($"claim ttl must be between 1 and {MaxClaimTtlSeconds} seconds", BoardErrorCodes.InvalidMessage);
+        lock (_sync)
+        {
+            var board = BoardFor(RootOf(owner));
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
+            var conflicts = board.Claims
+                .Where(claim => claim.Owner != owner.Id
+                    && string.Equals(claim.Path, path, StringComparison.Ordinal)
+                    && claim.StartLine <= endLine && startLine <= claim.EndLine)
+                .ToList();
+            var existing = board.Claims.FindIndex(claim =>
+                claim.Owner == owner.Id
+                && string.Equals(claim.Path, path, StringComparison.Ordinal)
+                && claim.StartLine == startLine && claim.EndLine == endLine);
+            if (existing >= 0)
+            {
+                var renewed = board.Claims[existing] with { Intent = intent, ExpiresAt = now + ttl * 1000L };
+                board.Claims[existing] = renewed;
+                return (renewed, conflicts);
+            }
+            var created = new BoardClaim(
+                $"claim-{board.NextClaimSeq++}",
+                owner.Id,
+                path,
+                startLine,
+                endLine,
+                intent,
+                now,
+                now + ttl * 1000L);
+            board.Claims.Add(created);
+            return (created, conflicts);
+        }
+    }
+
+    /** 释放 claim: 只释放本人所有; claimId 优先, 否则按 path。返回释放条数。 */
+    public int Release(IAgent owner, string? claimId, string? path)
+    {
+        lock (_sync)
+        {
+            var board = BoardFor(RootOf(owner));
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
+            return board.Claims.RemoveAll(claim =>
+                claim.Owner == owner.Id
+                && (claimId is not null
+                    ? claim.Id == claimId
+                    : path is not null && string.Equals(claim.Path, path, StringComparison.Ordinal)));
+        }
+    }
+
+    /** 当前有效 claim(先清过期), 供 board_read 与冲突提示。 */
+    public IReadOnlyList<BoardClaim> Claims(IAgent viewer)
+    {
+        lock (_sync)
+        {
+            var board = BoardFor(RootOf(viewer));
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            board.Claims.RemoveAll(claim => claim.ExpiresAt <= now);
+            return [.. board.Claims];
+        }
     }
 
     private BoardState BoardFor(SessionId root)

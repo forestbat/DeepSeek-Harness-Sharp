@@ -200,4 +200,61 @@ public class BoardTests
         Assert.Equal(2, fixture.Board.Activity(childB, 0));
         Assert.Equal(0, fixture.Board.Activity(childA, 0));
     }
+
+    [Fact]
+    public async Task Claim_ReportsOverlap_And_ReleaseFrees()
+    {
+        using var fixture = new Fixture();
+        var main = await fixture.CreateMain("session-board-claim-main");
+        var child = fixture.CreateChild(main, "session-board-claim-child");
+
+        var first = await Claim(fixture, main, "call-claim-1", "src/a.cs", 10, 20, "edit a");
+        Assert.Equal(0, first.GetProperty("conflicts").GetArrayLength());
+        var claimId = first.GetProperty("claim_id").GetString();
+        Assert.False(string.IsNullOrEmpty(claimId));
+
+        var second = await Claim(fixture, child, "call-claim-2", "src/a.cs", 15, 25, "edit a too");
+        Assert.Equal(1, second.GetProperty("conflicts").GetArrayLength());
+        Assert.Equal("main", second.GetProperty("conflicts")[0].GetProperty("owner").GetString());
+
+        var read = await Execute(fixture, child, "call-read-claim", BoardTools.ReadToolName, new JsonObject());
+        Assert.Equal(2, read.GetProperty("claims").GetArrayLength());
+
+        var released = await Execute(fixture, main, "call-release-1", BoardTools.ReleaseToolName,
+            new JsonObject { ["claim_id"] = claimId });
+        Assert.Equal(1, released.GetProperty("released").GetInt32());
+        var third = await Claim(fixture, child, "call-claim-3", "src/a.cs", 10, 20, "retry");
+        Assert.Equal(0, third.GetProperty("conflicts").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Claim_ExpiresAfterTtl()
+    {
+        using var fixture = new Fixture();
+        var main = await fixture.CreateMain("session-board-ttl-main");
+        await Execute(fixture, main, "call-claim-ttl", BoardTools.ClaimToolName, new JsonObject
+        {
+            ["path"] = "src/b.cs",
+            ["start_line"] = 1,
+            ["end_line"] = 2,
+            ["intent"] = "x",
+            ["ttl"] = 1,
+        });
+        var before = await Execute(fixture, main, "call-read-before", BoardTools.ReadToolName, new JsonObject());
+        Assert.Equal(1, before.GetProperty("claims").GetArrayLength());
+
+        await Task.Delay(1100, TestContext.Current.CancellationToken);
+
+        var after = await Execute(fixture, main, "call-read-after", BoardTools.ReadToolName, new JsonObject());
+        Assert.Equal(0, after.GetProperty("claims").GetArrayLength());
+    }
+
+    private static Task<JsonElement> Claim(Fixture fixture, IAgent agent, string callId, string path, int start, int end, string intent)
+        => Execute(fixture, agent, callId, BoardTools.ClaimToolName, new JsonObject
+        {
+            ["path"] = path,
+            ["start_line"] = start,
+            ["end_line"] = end,
+            ["intent"] = intent,
+        });
 }
