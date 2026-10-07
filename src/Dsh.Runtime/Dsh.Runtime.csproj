@@ -6,12 +6,13 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
     <!--
-      DryIoc 6.0.0-preview-09 只在 CI 产物中以 DryIoc.dll 包 ID 发布；见 scripts/fetch-dryioc-feed.ps1 与 NuGet.config 的 local-dsh 源。
+      DryIoc.dll 不发布到 nuget.org(该 ID 线上最高只到 6.0.0-preview-09, 且与上游 2026 构建不同), 需从 dadhi/DryIoC 的构建产物取得;
+      故引用固定版本并由 scripts/fetch-dryioc-feed.ps1 与 NuGet.config 的 local-dsh 源提供。上游当前产出 6.0.0。
       该包携带 build/DryIoc.dll.targets: 无条件的 CopyCompileTimeDIToProject 会向源码目录释放 CompileTimeDI 脚手架与 .config/dotnet-tools.json,
       CompileTimeGenerate 在 Debug 且已有构建产物时执行 `dotnet t4`, 失败即让构建报 MSB3073; 且包内无条件的 <Compile Update> 会把包自带示例类型编译进本程序集。
       本仓库使用运行时解释模式(WithUseInterpretation), 不使用编译期 DI, 故排除 build 资产。
     -->
-    <PackageReference Include="DryIoc.dll" Version="6.0.0-preview-09" ExcludeAssets="build" />
+    <PackageReference Include="DryIoc.dll" Version="6.0.0" ExcludeAssets="build" />
     <PackageReference Include="Chickensoft.LogicBlocks" Version="6.2.1" />
   </ItemGroup>
 
