@@ -53,9 +53,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
           else
-            bash scripts/fetch-dryioc-feed.sh
+            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
       - name: 编译测试工程（Debug，含插件夹具）
@@ -108,9 +108,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
           else
-            bash scripts/fetch-dryioc-feed.sh
+            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
       - name: JIT 发布校验（Release + 裁剪 + 自包含）
@@ -152,9 +152,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
           else
-            bash scripts/fetch-dryioc-feed.sh
+            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
       - name: 安装 AOT 工具链（Linux）
