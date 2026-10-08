@@ -154,12 +154,23 @@ public static class ProviderCatalog
         return reader.ReadToEnd();
     }
 
+    private static readonly SemaphoreSlim CacheWriteGate = new(1, 1);
+
     /** 原子写: 先写同目录临时文件再改名覆盖, 避免并发读到半截内容, 也避免删除目录时与写句柄冲突。 */
     private static async Task WriteCacheAtomicAsync(string path, string content, CancellationToken signal)
     {
-        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
-        await File.WriteAllTextAsync(temp, content, signal);
-        File.Move(temp, path, overwrite: true);
+        // 同一 home 可能被多个窗口/面板并发刷新: 串行化写入, 避免两个 Move 相互抢同一个目标文件。
+        await CacheWriteGate.WaitAsync(signal);
+        try
+        {
+            var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+            await File.WriteAllTextAsync(temp, content, signal);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            CacheWriteGate.Release();
+        }
     }
 
     public static ProviderCatalogSnapshot Parse(string json)
