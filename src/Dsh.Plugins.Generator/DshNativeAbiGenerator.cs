@@ -67,7 +67,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         if (spec is null)
             return;
         ReportUnknownRoles(context, hostApiType, pluginApiType, constants, [
-            "log", "register_tool", "package", "activate", "deactivate", "invoke_tool",
+            "log", "register_tool", "unregister_tool", "package", "activate", "deactivate", "invoke_tool",
         ]);
 
         var pluginInterface = compilation.GetTypeByMetadataName(NativePluginInterfaceMetadataName);
@@ -108,6 +108,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
             Version = Constant(constants, "Version", 0),
             EntryExport = Constant(constants, "EntryPoint", ""),
             PackageExport = Constant(constants, "PackageExport", ""),
+            VersionExport = Constant(constants, "VersionExport", ""),
             Ok = Constant(constants, "Ok", 0),
             Error = Constant(constants, "Error", -1),
             LogInfo = Constant(constants, "LogInfo", 1),
@@ -118,6 +119,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
             PluginInvokeToolField = Field(pluginApiType, roleAttribute, "invoke_tool"),
             HostLogField = Field(hostApiType, roleAttribute, "log"),
             HostRegisterToolField = Field(hostApiType, roleAttribute, "register_tool"),
+            HostUnregisterToolField = Field(hostApiType, roleAttribute, "unregister_tool"),
         };
         foreach (var (type, role, field) in new[]
         {
@@ -127,6 +129,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
             (pluginApiType.Name, "invoke_tool", spec.PluginInvokeToolField),
             (hostApiType.Name, "log", spec.HostLogField),
             (hostApiType.Name, "register_tool", spec.HostRegisterToolField),
+            (hostApiType.Name, "unregister_tool", spec.HostUnregisterToolField),
         })
         {
             if (field.Length == 0)
@@ -212,6 +215,8 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
 
         public string PackageExport { get; set; } = "";
 
+        public string VersionExport { get; set; } = "";
+
         public int Ok { get; set; }
 
         public int Error { get; set; }
@@ -231,5 +236,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         public string HostLogField { get; set; } = "";
 
         public string HostRegisterToolField { get; set; } = "";
+
+        public string HostUnregisterToolField { get; set; } = "";
     }
 }

@@ -52,4 +52,45 @@
     </ItemGroup>
   </Target>
 
+  <!-- 仅测试需要: 会访问违例的真实原生探针, 验证 guard 的遏制。由 DshBuildFaultProbe=true 开启。 -->
+  <Target Name="BuildDshFaultProbe" BeforeTargets="BeforeBuild" Condition="'$(DshBuildFaultProbe)' == 'true'">
+    <PropertyGroup>
+      <DshProbeSource>$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c</DshProbeSource>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('Windows'))">dsh_fault_probe.dll</DshProbeFile>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('Linux'))">libdsh_fault_probe.so</DshProbeFile>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('OSX'))">libdsh_fault_probe.dylib</DshProbeFile>
+      <DshProbeOutputDir>$(IntermediateOutputPath)dsh-guard\</DshProbeOutputDir>
+      <DshProbeOutput>$(DshProbeOutputDir)$(DshProbeFile)</DshProbeOutput>
+      <DshVsDevCmd>@(DshVsDevCmdCandidate->'%(FullPath)')</DshVsDevCmd>
+    </PropertyGroup>
+    <MakeDir Directories="$(DshProbeOutputDir)" />
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmd)' != ''"
+          Command="call &quot;$(DshVsDevCmd)&quot; -arch=x64 -no_logo &amp;&amp; cl /nologo /utf-8 /TC /LD &quot;$(DshProbeSource)&quot; /Fo:&quot;$(DshProbeOutputDir)fault_probe.obj&quot; /Fe:&quot;$(DshProbeOutput)&quot;"
+          StandardOutputImportance="low" />
+    <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))"
+          Command="cc -O2 -fPIC -shared -o &quot;$(DshProbeOutput)&quot; &quot;$(DshProbeSource)&quot;"
+          StandardOutputImportance="low" />
+  </Target>
+
+  <Target Name="IncludeDshFaultProbe" BeforeTargets="GetCopyToOutputDirectoryItems"
+          DependsOnTargets="BuildDshFaultProbe" Condition="'$(DshBuildFaultProbe)' == 'true'">
+    <PropertyGroup>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('Windows'))">dsh_fault_probe.dll</DshProbeFile>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('Linux'))">libdsh_fault_probe.so</DshProbeFile>
+      <DshProbeFile Condition="$([MSBuild]::IsOSPlatform('OSX'))">libdsh_fault_probe.dylib</DshProbeFile>
+      <DshProbeOutputDir>$(IntermediateOutputPath)dsh-guard\</DshProbeOutputDir>
+      <DshProbeOutput>$(DshProbeOutputDir)$(DshProbeFile)</DshProbeOutput>
+    </PropertyGroup>
+    <ItemGroup Condition="Exists('$(DshProbeOutput)')">
+      <ContentWithTargetPath Include="$(DshProbeOutput)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <TargetPath>$(DshProbeFile)</TargetPath>
+      </ContentWithTargetPath>
+      <NoneWithTargetPath Include="$(DshProbeOutput)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <TargetPath>$(DshProbeFile)</TargetPath>
+      </NoneWithTargetPath>
+    </ItemGroup>
+  </Target>
+
 </Project>

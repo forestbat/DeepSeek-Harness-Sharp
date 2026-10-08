@@ -12,9 +12,12 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly HarnessHome _home;
     private readonly HarnessSettings _settings;
     private readonly string _pluginsDirectory;
+    private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
+    private readonly IReadOnlyList<PluginSkip> _loadFailures;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, INativePlugin> _nativePlugins = new(StringComparer.Ordinal);
     private readonly HashSet<string> _leaked = new(StringComparer.Ordinal);
 
     public HarnessPluginManager(
@@ -23,6 +26,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         HarnessHome home,
         HarnessSettings settings,
         IReadOnlyList<ManagedPlugin> loadedOnStart,
+        IReadOnlyList<INativePlugin> nativeOnStart,
+        IReadOnlyList<PluginSkip> loadFailures,
+        Func<INativePlugin, IDshPlugin>? nativeBridge,
         string pluginsDirectory)
     {
         _host = host;
@@ -30,6 +36,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _home = home;
         _settings = settings;
         _pluginsDirectory = pluginsDirectory;
+        _nativeBridge = nativeBridge;
+        _loadFailures = loadFailures;
         foreach (var entry in loadedOnStart)
         {
             _loadedContexts[entry.Package] = entry.Context;
@@ -38,7 +46,11 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             if (entry.InstallDirectory is { } directory)
                 _installedDirectories[entry.Package] = directory;
         }
+        foreach (var plugin in nativeOnStart)
+            _nativePlugins[plugin.Package] = plugin;
     }
+
+    public IReadOnlyList<PluginSkip> LoadFailures => _loadFailures;
 
     public IReadOnlyList<string> PackageNames => _host.Catalog.PackageNames
         .Distinct()
@@ -47,6 +59,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
 
     public string Describe(string package)
     {
+        if (_nativePlugins.TryGetValue(package, out var native) && native.State == NativePluginState.Faulted)
+            return "faulted [native-library] (unloaded on fault; quarantined after repeat)";
         var activation = _composition.Find(package);
         var state = activation?.State switch
         {
@@ -69,7 +83,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         var spec = packageOrPath.Trim();
         if (spec.Length == 0)
             return "usage: /plugins add <package|path>";
-        if (spec.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || File.Exists(spec))
+        if (IsLibraryPath(spec) || File.Exists(spec))
             return await AddFromPathAsync(spec);
         if (_host.Catalog.PackageNames.Contains(spec, StringComparer.Ordinal))
             return await ActivateAsync(spec);
@@ -92,7 +106,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     /** 摘除并登记为禁用;制品目录的删除交给 remove 的 UninstallInstalled。 */
     private async Task<string> DetachAsync(string package, bool force)
     {
-        var (weak, leaked) = await UnloadAsync(package, force, reclaim: IsManaged(package));
+        var (weak, leaked) = await UnloadAsync(package, force, reclaim: IsManaged(package), removeRegistration: true);
         Persist(package, new PluginSetting { Enabled = false });
         if (leaked)
             _leaked.Add(package);
@@ -139,7 +153,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         if (_composition.Root.Scheduler.Find(trimmed) is not null)
         {
             // 禁用只卸载效果,不回收制品:登记仍在,enable 可复原;回收交给 remove。
-            var outcome = await UnloadAsync(trimmed, force: false, reclaim: false);
+            var outcome = await UnloadAsync(trimmed, force: false, reclaim: false, removeRegistration: false);
             if (outcome.Leaked)
             {
                 _leaked.Add(trimmed);
@@ -163,13 +177,16 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return await ActivateAsync(trimmed);
     }
 
+    private static bool IsLibraryPath(string spec)
+        => spec.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            || spec.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+            || spec.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
+
     private async Task<string> AddFromPathAsync(string spec)
     {
         var path = Path.GetFullPath(spec);
         if (!File.Exists(path))
             return $"plugin file not found: {path}";
-        if (!RuntimeFeature.IsDynamicCodeSupported)
-            return "NativeAOT build cannot load managed plugins at runtime; compile the plugin into the image or ship it as a native library";
         // 先落盘再装载:plugins/<程序集名>/ 目录是重启后的发现入口,只装进程不拷贝会导致重启即丢。
         string installPath;
         try
@@ -180,12 +197,20 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         {
             return $"plugin install failed: {error.Message}";
         }
+        // 原生路由:扩展名即原生(.so/.dylib),或 NativeAOT 底座下托管 dll 无法热载。
+        if (Path.GetExtension(path) is ".so" or ".dylib" || !RuntimeFeature.IsDynamicCodeSupported)
+            return await ActivateNativeAsync(installPath);
         PluginLoadResult result;
         try
         {
             result = _host.TryLoad(installPath);
         }
-        catch (Exception error) when (error is BadImageFormatException or FileLoadException)
+        catch (BadImageFormatException)
+        {
+            // Windows 下原生共享库同样是 .dll:托管装不下就按原生装载。
+            return await ActivateNativeAsync(installPath);
+        }
+        catch (Exception error) when (error is FileLoadException)
         {
             return $"assembly load failed: {installPath}: {error.Message}";
         }
@@ -208,6 +233,44 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return string.Join('\n', messages);
     }
 
+    /** 原生装载:按句柄识别导出符号后登记到目录并激活;失败给出结构化原因。 */
+    private async Task<string> ActivateNativeAsync(string installPath)
+    {
+        if (_nativeBridge is null)
+            return "native plugin bridge is not available in this build";
+        var installDirectory = Path.GetDirectoryName(installPath)!;
+        var load = _host.LoadNativePlugin(installPath, _nativeBridge);
+        if (!load.Succeeded)
+        {
+            TryUninstall(installDirectory);
+            return $"native plugin load failed: {load.Reason}";
+        }
+        var plugin = load.Plugin!;
+        _nativePlugins[plugin.Package] = plugin;
+        _installedDirectories[plugin.Package] = installDirectory;
+        var message = await ActivateAsync(plugin.Package);
+        if (_composition.Find(plugin.Package)?.State != ActivationState.Active)
+        {
+            _nativePlugins.Remove(plugin.Package);
+            _installedDirectories.Remove(plugin.Package);
+            _host.Catalog.Remove(plugin.Package);
+            plugin.Dispose();
+            TryUninstall(installDirectory);
+        }
+        return message;
+    }
+
+    private void TryUninstall(string directory)
+    {
+        try
+        {
+            PluginInstall.Uninstall(directory, _pluginsDirectory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+        }
+    }
+
     private async Task<string> ActivateAsync(string package)
     {
         if (_composition.Find(package) is { } existing)
@@ -226,20 +289,29 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     /** 摘除插件并返回弱引用供回收验证;reclaim 仅对托管程序集形态成立(可回收 ALC)。
      *  独立成帧并只返回弱引用,使插件类型/定义等强引用在本方法返回后即可回收。 */
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private async Task<(WeakReference? Weak, bool Leaked)> UnloadAsync(string package, bool force, bool reclaim)
+    private async Task<(WeakReference? Weak, bool Leaked)> UnloadAsync(string package, bool force, bool reclaim, bool removeRegistration)
     {
         var activation = await _composition.Root.Scheduler.UnloadAsync(package, force: force);
         var leaked = activation is null || activation.State != ActivationState.Disposed;
         Release(ref activation);
         await _composition.Root.Scheduler.SettleAsync();   // 排空调度泵,避免快照任务滞留插件引用
-        if (!reclaim || !_loadedContexts.Remove(package, out var context))
-            return (null, leaked);
-        _host.Catalog.Remove(package);
-        if (_sharedDependencies.Remove(package, out var shared))
-            _host.SharedPool?.Release(shared);
-        var weak = PluginUnloader.Unload(context);
-        Release(ref context);
-        return (weak, leaked);
+        if (reclaim && _loadedContexts.Remove(package, out var context))
+        {
+            _host.Catalog.Remove(package);
+            if (_sharedDependencies.Remove(package, out var shared))
+                _host.SharedPool?.Release(shared);
+            var weak = PluginUnloader.Unload(context);
+            Release(ref context);
+            return (weak, leaked);
+        }
+        if (removeRegistration && _nativePlugins.Remove(package, out var native))
+        {
+            // 原生插件没有可回收 ALC:remove 时摘除登记 + Deactivate/Free;制品目录由 UninstallInstalled 处理。
+            // disable 只卸载效果(登记保留),enable 时重新 Activate 同一个已加载句柄。
+            _host.Catalog.Remove(package);
+            native.Dispose();
+        }
+        return (null, leaked);
     }
 
     /** 置空引用以断开 插件类型→程序集→ALC 的强引用,供后续回收校验。 */
@@ -300,6 +372,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
                 context.Unload();
         }
         _loadedContexts.Clear();
+        foreach (var native in _nativePlugins.Values)
+            native.Dispose();
+        _nativePlugins.Clear();
     }
 
     private static string Removed(string package, bool leaked)

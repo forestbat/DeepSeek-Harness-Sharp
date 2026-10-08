@@ -66,7 +66,11 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 **能力面（ABI v1 只有日志与工具）**
 - 没有 `Inject`/服务提供、没有 `ConfigType` 配置绑定、没有提示词段、没有会话事件、没有 `[DshEntrypoint]`。
-- 工具集合在 `Activate` 时定死（生成器只在那时遍历一次 `Tools`），运行期不能增删。
+- 工具集合不再定死：除 `Activate` 时遍历一次 `Tools` 外，可在运行期增删——
+  `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 返回句柄，
+  `DshNativePluginRuntime.UnregisterTool(handle)` 撤销；宿主侧 `ToolRuntime` 即时生效。
+  反注册走 ABI v1 的**可选回调** `unregister_tool`：旧宿主该指针为 null，`UnregisterTool` 返回 false（工具无法撤销），
+  插件应据此降级；`dsh_plugin_abi_version` 是独立的可选导出，供宿主在握手前精确区分「版本不符」与「其它拒绝」。
 
 **工具契约**
 - 名字/描述/JSON Schema 都是字符串：Schema **必须能被解析**，否则激活失败（不是工具失败）。
@@ -78,19 +82,21 @@ public sealed class SamplePlugin : IDshNativePlugin
 - `Deactivate` 之后共享库会被 `NativeLibrary.Free`：在这里停掉后台线程/定时器，此后再调用宿主回调即属未定义行为。
 - 日志统一走 `DshNativePluginRuntime.Log(level, message)`（激活前是静默的），不要写控制台。
 
-**最容易踩的坑：握手失败是静默的**
-- 缺少导出符号、ABI 版本不匹配（插件与宿主必须同为 v1）、库不是 `NativeLib=Shared` 产物时，`TryLoad` 返回失败，宿主**既不报错也不把它列进 `/plugins list`**，只是没加载。
-- 因此"库放进 `plugins/` 却什么都没发生"时，先按这个顺序查：导出符号是否存在（`dsh_plugin_package`/`dsh_plugin_entry`）→ ABI 版本是否一致 → 是否真的编成了原生共享库。
-- 对照：托管插件缺清单同样静默（见托管指南），但原生这条还多一层"导出与版本"的静默。
+**握手失败不再静默**
+- 缺少导出符号（`dsh_plugin_package`/`dsh_plugin_entry`）、ABI 版本不匹配、库不是 `NativeLib=Shared` 产物时，装载失败会给出**结构化原因**：启动对 `plugins/` 下的候选逐文件记 WARN，`/plugins list` 增「加载失败」分组，`/plugins doctor` 打印完整原因。
+- 因此"库放进 `plugins/` 却什么都没发生"时，直接 `/plugins doctor`；原因会按顺序标注是缺导出、版本不符、非共享库还是 quarantine。
+- 对照：托管插件缺清单同样不再静默（见托管指南）。
 
 **装载与更新**
 - 主要分发方式是**放进 `<安装目录>/plugins/<目录>/` 启动加载**（原生库与托管插件同目录规则：目录名不参与识别）。
-- `/plugins add` 是**托管 dll 的热装载通道**：NativeAOT 底座下直接拒绝任何路径；JIT 底座下装原生库虽然可行，但不是推荐路径。
+- `/plugins add <路径>` 现在**支持原生插件**：按扩展名（`.so`/`.dylib`，Windows 下的原生 `.dll`）与导出符号识别原生库，路由到原生装载；AOT 宿主不能热载托管 dll，但加载原生库可行。
 - 更新与托管插件同规矩：**同名文件内容不一致不覆盖**。先 `/plugins remove <包名>`（或直接停宿主）→ 删掉旧目录 → 放入新库 → 重启。
 - 卸载原生插件是 `Deactivate` + `NativeLibrary.Free`，没有可回收 ALC，因此没有托管那种"回收校验/leaked"标记。
 
-**稳定性**
-- 原生库与宿主同进程：段错误/访问违例会带走整个宿主进程，**没有托管插件那样的 ALC 隔离**。插件里要自己兜住异常与边界条件。
+**稳定性与崩溃隔离（进程内、按插件）**
+- 每个原生插件对应一个 `NativePluginLoadContext`（`NativeLibrary` 句柄 + 导出绑定 + 在飞调用线程清单 + `Deactivate`/`Free` 路径），与托管侧 `PluginLoadContext` 结构对称。
+- 宿主包装每次工具调用：捕获**可捕获的异常/ABI 错误**（如返回 null、JSON 解析失败）后，标记该插件 `Faulted` → 立即移除其全部工具并尽力卸载 → 静默写日志；同类故障**第二次**出现即加入 quarantine，此后 `TryLoad` 直接拒绝并可读原因。
+- **诚实边界**：进程内遏制**不能**捕获原生段错误/访问违例（那需要 Windows VEH 或 POSIX `sigaction` + `sigsetjmp/siglongjmp`，本期**未落地**）；若真发生越界崩溃仍会带走整个宿主进程。当前策略是「调用包装 + Faulted 标记 + 卸载 + 二次即禁」，不是内存安全保证；插件仍须自己兜住异常与边界条件。
 
 ## 编译期诊断
 
@@ -107,8 +113,8 @@ public sealed class SamplePlugin : IDshNativePlugin
 | 产物 | 托管 dll + deps.json 闭包 | 每 RID 一份原生共享库 |
 | 契约 | `IDshPlugin`（.NET 类型） | C ABI v1（日志 + 工具） |
 | 能力面 | 服务/工具/提示词段/事件/入口点/配置 | 仅工具 + 日志 |
-| 装载 | 启动扫描 + `/plugins add` 热装载 | 启动扫描（`/plugins add` 在 AOT 底座下不可用） |
+| 装载 | 启动扫描 + `/plugins add` 热装载托管 dll | 启动扫描 + `/plugins add` 热装载原生库 |
 | 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate` + `NativeLibrary.Free` |
-| 版本闸门 | 清单 `DescriptorVersion` | ABI 版本（不匹配即静默不加载） |
-| 故障隔离 | ALC 隔离托管崩溃；原生依赖按 ALC 规则 | 无隔离，原生崩溃即进程退出 |
+| 版本闸门 | 清单 `DescriptorVersion` | ABI 版本（不符即结构化失败，`/plugins doctor` 可查） |
+| 故障隔离 | ALC 隔离托管崩溃；原生依赖按 ALC 规则 | 进程内调用包装 + Faulted 卸载 + 二次 quarantine；原生段错误仍会带走进程（VEH/sigaction 未落地） |
 | AOT 宿主 | 不能在运行期装载 | 正常加载 |

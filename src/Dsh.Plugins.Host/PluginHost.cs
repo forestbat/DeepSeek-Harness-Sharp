@@ -23,9 +23,6 @@ public sealed record ManagedPlugin(
     IReadOnlyList<string> SharedDependencies,
     string? InstallDirectory = null);
 
-/** 被跳过的插件制品与原因,供宿主逐文件 WARN。 */
-public sealed record PluginSkip(string File, string Reason);
-
 public sealed class PluginHost
 {
     private const string ManifestTypeName = "Dsh.Plugins.Generated.DshPluginManifest";
@@ -163,22 +160,29 @@ public sealed class PluginHost
         {
             seenAssemblies[simpleName] = containerDirectory;
         }
-        if (extension == ".dll")
+        if (extension == ".dll" && RuntimeFeature.IsDynamicCodeSupported)
         {
-            if (!RuntimeFeature.IsDynamicCodeSupported)
-            {
-                if (nativeBridge is not null && TryLoadNative(file, nativeBridge, packages, nativePlugins, skipped, flatLayout))
-                    return;
-                skipped.Add(new PluginSkip(file,
-                    "NativeAOT 构建不能在运行期装载托管程序集;请把它编译进镜像,或改用原生插件"));
-                return;
-            }
             TryLoadManaged(file, packages, managed, skipped, flatLayout ? null : containerDirectory, out var handled);
             if (handled)
                 return;
+            // 托管装载拒绝(BadImageFormat)→ 可能是原生共享库(Windows 下同样是 .dll),继续走原生探测。
         }
         if (nativeBridge is not null)
-            _ = TryLoadNative(file, nativeBridge, packages, nativePlugins, skipped, flatLayout);
+        {
+            if (TryLoadNative(file, nativeBridge, packages, nativePlugins, skipped, flatLayout, out var native))
+                return;
+            // 非静默:原生候选失败时给出结构化原因,不再默默跳过。
+            var reason = native.Reason ?? "未知原因";
+            skipped.Add(new PluginSkip(file, extension is ".so" or ".dylib"
+                ? $"原生插件装载失败: {reason}"
+                : $"既不是可热载的托管程序集,也不是原生插件: {reason}"));
+        }
+        else if (extension == ".dll")
+        {
+            skipped.Add(new PluginSkip(file,
+                "既不是可热载的托管程序集(NativeAOT 底座),也不是原生插件(宿主未挂接原生桥): "
+                + "请把它编译进镜像,或改用原生共享库"));
+        }
     }
 
     private void TryLoadManaged(
@@ -225,18 +229,20 @@ public sealed class PluginHost
         List<string> packages,
         List<INativePlugin> nativePlugins,
         List<PluginSkip> skipped,
-        bool flatLayout)
+        bool flatLayout,
+        out NativePluginLoad load)
     {
-        var plugin = NativePluginLibrary.TryLoad(file);
-        if (plugin is null)
+        load = NativePluginLibrary.TryLoad(file);
+        if (!load.Succeeded)
             return false;
+        var captured = load;
         try
         {
-            Catalog.Register(PluginDescriptor.For(plugin.Package, PluginForm.NativeLibrary), () => bridge(plugin));
+            Catalog.Register(PluginDescriptor.For(load.Plugin!.Package, PluginForm.NativeLibrary), () => bridge(captured.Plugin!));
         }
         catch (InvalidOperationException error)
         {
-            plugin.Dispose();
+            load.Plugin!.Dispose();
             skipped.Add(new PluginSkip(file, error.Message));
             return true;
         }
@@ -245,9 +251,28 @@ public sealed class PluginHost
             skipped.Add(new PluginSkip(file,
                 "平铺布局已废弃,将在下个版本停止扫描:请把插件及其依赖移入 plugins/<目录>/"));
         }
-        nativePlugins.Add(plugin);
-        packages.Add(plugin.Package);
+        nativePlugins.Add(load.Plugin!);
+        packages.Add(load.Plugin!.Package);
         return true;
+    }
+
+    /** /plugins add 的原生装载:登记到目录并返回插件句柄;失败给出结构化原因。 */
+    public NativePluginLoad LoadNativePlugin(string file, Func<INativePlugin, IDshPlugin> bridge)
+    {
+        var load = NativePluginLibrary.TryLoad(file);
+        if (!load.Succeeded)
+            return load;
+        var captured = load;
+        try
+        {
+            Catalog.Register(PluginDescriptor.For(load.Plugin!.Package, PluginForm.NativeLibrary), () => bridge(captured.Plugin!));
+        }
+        catch (InvalidOperationException error)
+        {
+            load.Plugin!.Dispose();
+            return NativePluginLoad.Fail(NativePluginFailureKind.DuplicatePackage, error.Message);
+        }
+        return load;
     }
 
     private static PluginDescriptor Descriptor(DshPluginRegistration registration, PluginForm form)

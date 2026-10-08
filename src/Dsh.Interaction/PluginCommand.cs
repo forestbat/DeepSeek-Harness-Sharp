@@ -24,11 +24,24 @@ public static class PluginCommand
                         .Distinct()
                         .OrderBy(name => name, StringComparer.Ordinal);
                     var lines = names.Select(name => manager is null ? name : $"{name}: {manager.Describe(name)}");
-                    var ops = RuntimeFeature.IsDynamicCodeSupported
-                        ? "ops: list | add <pkg|path> | remove <pkg> [--force] | disable <pkg> | enable <pkg>"
-                        : "ops: list | remove <pkg> [--force] | disable <pkg> | enable <pkg> (runtime load unavailable in NativeAOT)";
+                    var failures = manager?.LoadFailures ?? [];
+                    var failed = failures.Count == 0
+                        ? ""
+                        : $"\n加载失败 ({failures.Count}):\n" + string.Join('\n',
+                            failures.Select(skip => $"  {Path.GetFileName(skip.File)}: {skip.Reason}"));
                     return Task.FromResult<CommandResult>(
-                        new CommandResult.Success($"{string.Join('\n', lines)}\n{ops}"));
+                        new CommandResult.Success($"{string.Join('\n', lines)}{failed}\n{Ops}"));
+                }
+                if (tokens[0] == "doctor")
+                {
+                    var failures = manager?.LoadFailures ?? [];
+                    var report = failures.Count == 0
+                        ? "plugins doctor: 未发现跳过或装载失败的制品"
+                        : "plugins doctor: 发现 " + failures.Count + " 个跳过/失败制品\n"
+                            + string.Join('\n', failures.Select(skip => $"  {skip.File}: {skip.Reason}"));
+                    return Task.FromResult<CommandResult>(new CommandResult.Success(
+                        report + "\n排查顺序: 导出符号(dsh_plugin_package/dsh_plugin_entry) → ABI 版本 → 是否 NativeLib=Shared 产物;"
+                        + "运行期装载仅支持原生共享库(.so/.dylib,或 Windows 下的原生 .dll)"));
                 }
                 if (manager is null)
                 {
@@ -51,11 +64,15 @@ public static class PluginCommand
                         return RunAsync(manager.EnableAsync(tokens[1]));
                     default:
                         return Task.FromResult<CommandResult>(
-                            new CommandResult.Error("usage: /plugins list | add <pkg|path> | remove <pkg> [--force] | disable <pkg> | enable <pkg>"));
+                            new CommandResult.Error("usage: /plugins list | doctor | add <pkg|path> | remove <pkg> [--force] | disable <pkg> | enable <pkg>"));
                 }
             },
         });
     }
+
+    private static string Ops => RuntimeFeature.IsDynamicCodeSupported
+        ? "ops: list | doctor | add <pkg|path> | remove <pkg> [--force] | disable <pkg> | enable <pkg>"
+        : "ops: list | doctor | add <native library path> | remove <pkg> [--force] | disable <pkg> | enable <pkg>";
 
     private static async Task<CommandResult> RunAsync(Task<string> operation)
     {

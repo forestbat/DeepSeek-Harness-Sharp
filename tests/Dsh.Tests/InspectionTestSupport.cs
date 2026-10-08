@@ -63,6 +63,8 @@ internal sealed class RecordingPluginManager : IPluginManager
 
     public IReadOnlyList<string> PackageNames => ["sample-plugin"];
 
+    public IReadOnlyList<PluginSkip> LoadFailures => [];
+
     public string Describe(string package)
     {
         Calls.Add($"describe:{package}");

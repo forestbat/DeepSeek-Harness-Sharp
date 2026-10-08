@@ -6,6 +6,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DshBuildFaultProbe>true</DshBuildFaultProbe>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

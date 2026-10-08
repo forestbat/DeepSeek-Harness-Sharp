@@ -17,9 +17,15 @@ public interface IDshPlugin
     IDisposable Apply(Context ctx, object? config);
 }
 
+/** 一个被杀掉/跳过/装载失败的插件制品与原因,供宿主逐文件 WARN、/plugins list 失败分组与 doctor。 */
+public sealed record PluginSkip(string File, string Reason);
+
 public interface IPluginManager
 {
     IReadOnlyList<string> PackageNames { get; }
+
+    /** 启动扫描期间逐文件的跳过/失败清单(含原生装载失败的结构化原因)。 */
+    IReadOnlyList<PluginSkip> LoadFailures { get; }
 
     string Describe(string package);
 

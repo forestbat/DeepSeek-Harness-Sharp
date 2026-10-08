@@ -1,5 +1,4 @@
 using Dsh.Runtime;
-using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -200,6 +199,8 @@ public sealed class MemoryCommandTests
         public List<string> Calls { get; } = [];
 
         public IReadOnlyList<string> PackageNames => [];
+
+        public IReadOnlyList<PluginSkip> LoadFailures => [];
 
         public string Describe(string package) => "unknown";
 

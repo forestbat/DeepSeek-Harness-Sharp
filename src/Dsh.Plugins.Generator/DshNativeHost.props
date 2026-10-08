@@ -17,4 +17,6 @@
              RemoveProperties="RuntimeIdentifier;PublishAot;SelfContained" />
   </Target>
 
+  <Import Project="$(MSBuildThisFileDirectory)..\..\native\plugin_guard\PluginGuard.props" />
+
 </Project>
