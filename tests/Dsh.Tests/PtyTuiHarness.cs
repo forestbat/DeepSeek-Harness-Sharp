@@ -1,7 +1,6 @@
 using System.Net.Sockets;
 using System.Text;
 using Dsh.Boot;
-using Dsh.Pty;
 using Dsh.Tui.Services;
 
 namespace Dsh.Tests;
@@ -52,7 +51,7 @@ internal sealed class PtyTuiHarness : IDisposable
         var host = new PtyHost();
         try
         {
-            var arguments = new List<string> { "tui", "--home", home };
+            var arguments = new List<string> { "tui" };
             arguments.AddRange(extraArguments);
             var session = await host.StartAsync(new PtyStartInfo
             {
@@ -60,6 +59,8 @@ internal sealed class PtyTuiHarness : IDisposable
                 Arguments = arguments,
                 Rows = Rows,
                 Columns = Columns,
+                Home = home,
+                Environment = new Dictionary<string, string?> { [HarnessHome.ChildHomeEnv] = home },
             }, cancellationToken: TestContext.Current.CancellationToken);
             return new PtyTuiHarness(host, session, home);
         }
@@ -137,13 +138,13 @@ internal sealed class PtyTuiHarness : IDisposable
         }
     }
 
-    /** 结束本夹具 home 下的常驻会话(daemon 里 Command 含本 home 的那些)。 */
+    /** 结束本夹具 home 下的常驻会话(daemon 里 Home 归属为本 home 的那些)。 */
     private void StopResidentSessions()
     {
         try
         {
             foreach (var session in PtyDaemonClient.ListAsync().GetAwaiter().GetResult()
-                         .Where(candidate => candidate.Command.Contains(Home, StringComparison.OrdinalIgnoreCase)))
+                         .Where(candidate => string.Equals(candidate.Home, Home, StringComparison.OrdinalIgnoreCase)))
             {
                 for (var press = 0; press < 2; press++)
                 {

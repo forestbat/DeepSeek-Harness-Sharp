@@ -23,6 +23,9 @@ public sealed record PtyStartInfo
 
     public IReadOnlyDictionary<string, string?>? Environment { get; init; }
 
+    /** harness 持久化根(会话归属): daemon 用它给子进程注入 ChildHomeVariable, 并原样回传, 不参与 daemon 路由。 */
+    public string? Home { get; init; }
+
     public int Rows { get; init; } = 24;
 
         public int Columns { get; init; } = 80;
@@ -43,4 +46,5 @@ public sealed record PtySessionInfo(
     bool IsAttached,
     int Columns = 0,
     int Rows = 0,
-    bool WantsMouse = false);
+    bool WantsMouse = false,
+    string? Home = null);

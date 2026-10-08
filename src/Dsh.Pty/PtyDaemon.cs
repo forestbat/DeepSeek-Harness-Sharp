@@ -240,12 +240,15 @@ public sealed class PtyDaemon : IAsyncDisposable
                         {
                             [PtySessionProtocol.SessionVariable] = id,
                         };
+                        if (parameters.Home is { Length: > 0 } childHome)
+                            environment[PtySessionProtocol.ChildHomeVariable] = childHome;
                         var startInfo = new PtyStartInfo
                         {
                             FileName = parameters.FileName,
                             Arguments = parameters.Arguments,
                             WorkingDirectory = parameters.WorkingDirectory,
                             Environment = environment,
+                            Home = parameters.Home,
                             Rows = parameters.Rows,
                             Columns = parameters.Columns,
                             WantsMouse = parameters.WantsMouse,
@@ -491,6 +494,7 @@ public sealed class PtyDaemon : IAsyncDisposable
             Columns = info.Columns,
             Rows = info.Rows,
             WantsMouse = info.WantsMouse,
+            Home = info.Home,
         };
         if (_remote.TryGetValue(info.Id.Value, out var remote))
         {

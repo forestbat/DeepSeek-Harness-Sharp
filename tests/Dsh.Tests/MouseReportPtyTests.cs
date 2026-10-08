@@ -23,9 +23,12 @@ public class MouseReportPtyTests
         await harness.WaitForAsync("快捷键", TimeSpan.FromSeconds(150));
 
         // ① 夹具起的只是 proxy; 常驻 daemon 会话以本夹具 home 为家(见 PtyTuiHarness.StopResidentSessions)。
-        //    只有它声明要鼠标; 普通命令会话必须为 false, 否则 Unix 上代理原样透传, 上报会被当成命令敲进那个程序。
+        //    归属由结构化 Home 字段标识(不靠命令行文本); 普通命令会话必须为 false(mouse 只给常驻 TUI),
+        //    否则 Unix 上代理原样透传, 上报会被当成命令敲进那个程序。
         var sessions = await PtyDaemonClient.ListAsync(cancellationToken);
-        var tui = Assert.Single(sessions, session => session.Command.Contains(harness.Home, StringComparison.OrdinalIgnoreCase));
+        var tui = Assert.Single(sessions, session => string.Equals(session.Home, harness.Home, StringComparison.OrdinalIgnoreCase));
+        // 归属靠结构化 Home, 命令行里不该再出现 home(删掉 --home 仍然认得出常驻会话)。
+        Assert.DoesNotContain(harness.Home, tui.Command, StringComparison.OrdinalIgnoreCase);
         Assert.True(tui.WantsMouse);
         var shell = await PtyDaemonClient.StartAsync(
             new PtyDaemonStartParams
@@ -138,7 +141,7 @@ public class MouseReportPtyTests
         {
             var sessions = await PtyDaemonClient.ListAsync(TestContext.Current.CancellationToken);
             var session = sessions.FirstOrDefault(candidate =>
-                candidate.Command.Contains(harness.Home, StringComparison.OrdinalIgnoreCase));
+                string.Equals(candidate.Home, harness.Home, StringComparison.OrdinalIgnoreCase));
             if (session is not null && session.Columns == columns && session.Rows == rows)
                 return true;
             await Task.Delay(100, TestContext.Current.CancellationToken);

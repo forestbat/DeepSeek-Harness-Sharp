@@ -18,7 +18,7 @@ internal static class TuiProxy
         var arguments = new List<string>();
         if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
             arguments.Add(Environment.GetCommandLineArgs()[0]);
-        arguments.AddRange(ChildArguments(app, startShell));
+        arguments.AddRange(ChildArguments(startShell));
 
         var session = await PtyDaemonClient.StartAsync(new PtyDaemonStartParams
         {
@@ -27,6 +27,7 @@ internal static class TuiProxy
             WorkingDirectory = Environment.CurrentDirectory,
             Rows = rows,
             Columns = columns,
+            Home = app.Home.Root,
             Environment = new Dictionary<string, string?> { [PtySessionProtocol.ChildVariable] = "1" },
             // 常驻 TUI 要鼠标(拖动分隔线/滚轮): 终端形态的代理据此打开宿主终端上报。
             WantsMouse = true,
@@ -62,34 +63,19 @@ internal static class TuiProxy
         return 0;
     }
 
-    /** 只转发会影响"会话本体"的参数: --session 决定续哪个会话, --home 决定配置根; 形态参数一律不带过去。 */
-    private static List<string> ChildArguments(HarnessApp app, bool startShell)
+    /** 只转发会影响"会话本体"的参数: --session 决定续哪个会话; home 作为结构化字段交给 daemon, 不塞进命令行。 */
+    private static List<string> ChildArguments(bool startShell)
     {
         var arguments = new List<string> { "tui" };
         var raw = Environment.GetCommandLineArgs();
         var start = Array.FindIndex(raw, argument => string.Equals(argument, "tui", StringComparison.Ordinal));
-        var hasHome = false;
         for (var position = start + 1; start >= 0 && position < raw.Length; position++)
         {
             if (string.Equals(raw[position], "--session", StringComparison.Ordinal) && position + 1 < raw.Length)
             {
                 arguments.Add("--session");
                 arguments.Add(raw[++position]);
-                continue;
             }
-
-            if (string.Equals(raw[position], "--home", StringComparison.Ordinal) && position + 1 < raw.Length)
-            {
-                arguments.Add("--home");
-                arguments.Add(raw[++position]);
-                hasHome = true;
-            }
-        }
-
-        if (!hasHome)
-        {
-            arguments.Add("--home");
-            arguments.Add(app.Home.Root);
         }
 
         if (startShell)

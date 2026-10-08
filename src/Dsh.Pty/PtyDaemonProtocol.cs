@@ -83,6 +83,9 @@ public sealed class PtyDaemonStartParams
 
     public Dictionary<string, string?>? Environment { get; set; }
 
+    /** harness 持久化根(会话归属): 结构化传递, 不塞进命令行; daemon 据此向子进程注入 ChildHomeVariable。 */
+    public string? Home { get; set; }
+
     public int Rows { get; set; } = 24;
 
     public int Columns { get; set; } = 80;
@@ -146,6 +149,9 @@ public sealed class PtyDaemonSessionDto
     public int Rows { get; set; }
 
     public bool WantsMouse { get; set; }
+
+    /** 本会话的 harness 持久化根(启动时由 PtyDaemonStartParams.Home 指定); 用于按 home 归属筛选会话。 */
+    public string? Home { get; set; }
 
     /** 该 pty 里常驻 TUI 上报的 agent 会话 id(identify/publish-panes 写入); 无则 null。 */
     public string? AgentSessionId { get; set; }

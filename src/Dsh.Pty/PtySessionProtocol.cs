@@ -15,4 +15,10 @@ public static class PtySessionProtocol
 
     /** daemon 托管会话时给子进程注入的会话 id: 常驻 TUI 靠它找到自己的尺寸文件。 */
     public const string SessionVariable = "DSH_PTY_SESSION_ID";
+
+    /**
+     * daemon 托管会话时给子进程注入的 harness 持久化根。与 DSH_HOME 区分开: DSH_HOME 决定 daemon 的 run 根,
+     * 这个只决定会话进程自己的 home, 因此单 daemon 也能托管属于不同 home 的会话。需与 Dsh.Boot.HarnessHome.ChildHomeEnv 一致。
+     */
+    public const string ChildHomeVariable = "DSH_HARNESS_HOME";
 }
