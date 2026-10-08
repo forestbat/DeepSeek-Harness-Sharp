@@ -5,6 +5,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- netstandard2.0 分析器/源生成器不能 AOT: 禁止被发布, 以免宿主 AOT 发布时对空源生成器报 NETSDK1207。 -->
+    <IsPublishable>false</IsPublishable>
     <NoWarn>$(NoWarn);RS2008</NoWarn>
     <ImplicitUsings>disable</ImplicitUsings>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
@@ -14,5 +16,18 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" PrivateAssets="all" />
   </ItemGroup>
+
+  <!--
+    构建期源生成器(Roslyn 要求 netstandard2.0): 只在编译期运行, 不是发布产物; 它生成的 ABI 胶水会照常编译进宿主并被 AOT。
+    但宿主为满足还原图引用了本项目, 宿主 -p:PublishAot=true 时该全局属性随项目图传入, 框架引用处理会误把本项目当 AOT 目标报 NETSDK1207;
+    全局属性求值期无法覆盖、目标内可改写, 故在检查前清掉, 让生成器按普通 netstandard2.0 项目还原/构建。
+  -->
+  <Target Name="ClearAotForAnalyzer" BeforeTargets="ProcessFrameworkReferences">
+    <PropertyGroup>
+      <PublishAot>false</PublishAot>
+      <PublishTrimmed>false</PublishTrimmed>
+      <SelfContained>false</SelfContained>
+    </PropertyGroup>
+  </Target>
 
 </Project>
