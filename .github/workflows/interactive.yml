@@ -1,0 +1,48 @@
+﻿name: 交互式 SSH（tmate）
+
+# 仅手动触发：需要人工在 runner 上敲命令时用（例如 macOS 上人工看 GUI 效果）。
+# 独立 workflow，不与 ci.yml 混写，避免污染常规 push/PR 流程。
+on:
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: '会话超时时长（分钟）'
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  ssh:
+    name: 交互会话（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
+          else
+            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
+          fi
+
+      - name: 启动 tmate 会话
+        uses: mxschmitt/action-tmate@v3
+        with:
+          # 仅允许触发者用其 GitHub 注册的 SSH key 连接，避免暴露公开会话。
+          limit-access-to-actor: true
+        timeout-minutes: ${{ inputs.timeout_minutes }}

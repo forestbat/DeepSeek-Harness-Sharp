@@ -87,7 +87,7 @@ require_dotnet_sdk() {
 
 get_required_package_version() {
     local version
-    version="$(sed -nE 's/.*Include="DryIoc\.dll"[[:space:]]+Version="([^"]+)".*/\1/p' "$CSPROJ" | head -n1)"
+    version="$(sed -n -E 's/.*Include="DryIoc\.dll"[[:space:]]+Version="([^"]+)".*/\1/p' "$CSPROJ" | head -n1)"
     if [ -z "$version" ]; then
         echo "无法从 $CSPROJ 读取 DryIoc.dll 的版本。" >&2
         exit 1
@@ -197,7 +197,8 @@ assert_produced_version() {
     [ -f "$target_nupkg" ] && return 0
 
     local produced
-    produced="$(find "$FEED_DIR" -maxdepth 1 -name "$PACKAGE_ID.*.nupkg" -printf '%f\n' 2>/dev/null | head -n1 || true)"
+    # BSD find(macOS) 不支持 -printf, 用 -exec basename 兼容。
+    produced="$(find "$FEED_DIR" -maxdepth 1 -name "$PACKAGE_ID.*.nupkg" -exec basename {} \; 2>/dev/null | head -n1 || true)"
     if [ -n "$produced" ]; then
         echo "上游最新产出的版本是 $produced, 与 csproj 要求的 $version 不一致; 请同步更新 $CSPROJ 的 PackageReference。" >&2
         exit 1

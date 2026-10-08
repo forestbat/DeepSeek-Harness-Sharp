@@ -25,6 +25,7 @@ if [ ! -f "$DIR/$APP" ] && [ ! -f "$DIR/$APP.exe" ]; then
 fi
 
 # JIT 发布的标志物。这些文件在 AOT 镜像里都不该出现。
+# 覆盖 win/linux/macOS：CoreCLR 与 hostfxr 在 Windows 是 .dll、Linux 是 .so、macOS 是 .dylib。
 JIT_MARKERS=(
     "$APP.dll"
     "$APP.runtimeconfig.json"
@@ -32,8 +33,10 @@ JIT_MARKERS=(
     "System.Private.CoreLib.dll"
     "coreclr.dll"
     "libcoreclr.so"
+    "libcoreclr.dylib"
     "hostfxr.dll"
     "libhostfxr.so"
+    "libhostfxr.dylib"
 )
 
 FOUND=()
