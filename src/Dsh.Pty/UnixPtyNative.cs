@@ -8,7 +8,8 @@ namespace Dsh.Pty;
 
 internal static class UnixPtyNative
 {
-    private const ulong Tiocswinsz = 0x5414;
+    /** TIOCSWINSZ 随平台不同: Linux 0x5414, Darwin 0x80087467(_IOW('t', 103, struct winsize))。 */
+    private static readonly ulong Tiocswinsz = OperatingSystem.IsMacOS() ? 0x80087467UL : 0x5414UL;
     private const int Sigterm = 15;
     private const int Sigkill = 9;
 
@@ -34,8 +35,8 @@ internal static class UnixPtyNative
     }
     private const int Wnohang = 1;
     private const int ORdwr = 2;
-    /** glibc/musl 一致: 让子进程成为新会话首进程, 从而能在 open 从端时取得控制终端(job control 前提)。 */
-    private const short PosixSpawnSetsid = 0x80;
+    /** 让子进程成为新会话首进程, 从而能在 open 从端时取得控制终端(job control 前提)。值随平台不同: glibc 0x80, Darwin 0x0400(其 0x80 是 START_SUSPENDED, 用错会挂起子进程)。 */
+    private static readonly short PosixSpawnSetsid = OperatingSystem.IsMacOS() ? (short)0x0400 : (short)0x80;
     /** 不透明类型的保守容量: glibc 2.39 的 posix_spawnattr_t 含两个 sigset_t(共 256 字节)加调度参数, 已超 256。 */
     private const int SpawnAttrBytes = 1024;
 
@@ -263,42 +264,42 @@ internal static class UnixPtyNative
     [DllImport("libutil", SetLastError = true)]
     private static extern int openpty(out int master, out int slave, IntPtr name, IntPtr termp, IntPtr winp);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawnp(out int pid, IntPtr file, ref PosixSpawnFileActions fileActions, IntPtr attrp, IntPtr argv, IntPtr envp);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawn_file_actions_addopen(ref PosixSpawnFileActions fileActions, int fd, IntPtr path, int oflag, int mode);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawnattr_init(IntPtr attributes);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawnattr_destroy(IntPtr attributes);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawnattr_setflags(IntPtr attributes, short flags);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawn_file_actions_init(out PosixSpawnFileActions fileActions);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawn_file_actions_destroy(ref PosixSpawnFileActions fileActions);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawn_file_actions_adddup2(ref PosixSpawnFileActions fileActions, int fd, int newfd);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int posix_spawn_file_actions_addchdir_np(ref PosixSpawnFileActions fileActions, IntPtr path);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int ioctl(int fd, ulong request, ref Winsize argp);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int close(int fd);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int kill(int pid, int signal);
 
-    [DllImport("libc.so.6", SetLastError = true)]
+    [DllImport("libc", SetLastError = true)]
     private static extern int waitpid(int pid, out int status, int options);
 }
