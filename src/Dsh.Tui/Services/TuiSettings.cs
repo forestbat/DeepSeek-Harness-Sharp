@@ -1,4 +1,6 @@
+using System.Globalization;
 using Dsh.Boot;
+using Dsh.Pty;
 
 namespace Dsh.Tui.Services;
 
@@ -28,6 +30,23 @@ public sealed class TuiSettings(HarnessHome home)
     {
         get => Read("inputHeight", MaximumInputHeight);
         set => Write("inputHeight", value, MaximumInputHeight);
+    }
+
+    /** 高亮色(聚焦窗格标题/补全选中): "#rrggbb" 真彩或 16 色板名(如 BrightCyan); 缺省 BrightCyan。 */
+    public CellColor Highlight => ReadColor("highlightColor", CellColor.FromPalette(AnsiColor.BrightCyan));
+
+    private CellColor ReadColor(string key, CellColor fallback)
+    {
+        if (Parameters().GetValueOrDefault(key) is not string text || text.Length == 0)
+            return fallback;
+        if (text.Length == 7 && text[0] == '#'
+            && byte.TryParse(text.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r)
+            && byte.TryParse(text.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g)
+            && byte.TryParse(text.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
+            return CellColor.FromRgb(r, g, b);
+        return Enum.TryParse<AnsiColor>(text, ignoreCase: true, out var palette)
+            ? CellColor.FromPalette(palette)
+            : fallback;
     }
 
     private int? Read(string key, int maximum)

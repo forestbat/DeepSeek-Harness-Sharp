@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Pty;
 using Dsh.Tui.Services;
 
 namespace Dsh.Tests;
@@ -56,5 +57,26 @@ public sealed class TuiSettingsTests : IDisposable
         var reloaded = HarnessSettings.Load(home);
         Assert.Equal("light", reloaded.Plugins["@deepseek-ai/dsh-gui"].Parameters["theme"]);
         Assert.False(reloaded.Plugins["@deepseek-ai/dsh-gui"].Enabled);
+    }
+
+    [Fact]
+    public void Highlight_Parses_Rgb_And_Palette()
+    {
+        var home = new HarnessHome(_homeDir);
+        Directory.CreateDirectory(_homeDir);
+        var raw = HarnessSettings.Load(home);
+        raw.Plugins[TuiSettings.Package] = new PluginSetting
+        {
+            Enabled = true,
+            Parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["highlightColor"] = "#112233" },
+        };
+        raw.SavePlugins(home);
+
+        Assert.Equal(CellColor.FromRgb(0x11, 0x22, 0x33), new TuiSettings(home).Highlight);
+
+        var palette = HarnessSettings.Load(home);
+        palette.Plugins[TuiSettings.Package].Parameters["highlightColor"] = "BrightRed";
+        palette.SavePlugins(home);
+        Assert.Equal(CellColor.FromPalette(AnsiColor.BrightRed), new TuiSettings(home).Highlight);
     }
 }

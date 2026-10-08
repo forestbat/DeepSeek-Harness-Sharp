@@ -15,6 +15,7 @@ public sealed class GpuRenderCore : IDisposable
     private int _atlasTexture;
     private int _cellCapacity;
     private int _seenMapVersion = -1;
+    private int _seenPaletteVersion = -1;
     private int _atlasTextureLocation;
     private int _cellsLocation;
     private int _glyphMapLocation;
@@ -76,11 +77,6 @@ public sealed class GpuRenderCore : IDisposable
         GL.BindTexture(TextureTarget.Texture2D, 0);
 
         GL.UseProgram(_shader);
-        for (var index = 0; index < 17; index++)
-        {
-            var rgba = TerminalColorPalette.ToRgba((AnsiColor)index);
-            GL.Uniform4f(GL.GetUniformLocation(_shader, $"uPalette[{index}]"), rgba.R, rgba.G, rgba.B, rgba.A);
-        }
         GL.Uniform4f(GL.GetUniformLocation(_shader, "uDefaultBackground"), 0f, 0f, 0f, 1f);
         GL.Uniform4f(GL.GetUniformLocation(_shader, "uDefaultForeground"), TerminalColorPalette.DefaultForeground.R, TerminalColorPalette.DefaultForeground.G, TerminalColorPalette.DefaultForeground.B, 1f);
         GL.Uniform2i(GL.GetUniformLocation(_shader, "uAtlasCells"), GlyphAtlas.Columns, GlyphAtlas.Rows);
@@ -131,6 +127,7 @@ public sealed class GpuRenderCore : IDisposable
     private void PrepareFrame(GlyphAtlas atlas, int gridWidth, int gridHeight)
     {
         GL.UseProgram(_shader);
+        UploadPalette();
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.BindTexture(TextureTarget.Texture2D, _atlasTexture);
         GL.ActiveTexture(TextureUnit.Texture1);
@@ -182,6 +179,23 @@ public sealed class GpuRenderCore : IDisposable
             GL.DeleteBuffer(_unitVbo);
         if (_ebo != 0)
             GL.DeleteBuffer(_ebo);
+    }
+
+    /** 调色板变化(新 RGB 槽位)时才重传 uPalette[64]; 索引稳定, 脏行增量上传不受影响。 */
+    private void UploadPalette()
+    {
+        var table = CellColorTable.Shared;
+        var version = table.Version;
+        if (version == _seenPaletteVersion)
+            return;
+        var count = table.Count;
+        for (var slot = 0; slot < count; slot++)
+        {
+            var rgba = TerminalColorPalette.ToRgba(table[slot]);
+            GL.Uniform4f(GL.GetUniformLocation(_shader, $"uPalette[{slot}]"), rgba.R, rgba.G, rgba.B, rgba.A);
+        }
+
+        _seenPaletteVersion = version;
     }
 
     private void FlushAtlasDirty(GlyphAtlas atlas)
@@ -251,7 +265,7 @@ public sealed class GpuRenderCore : IDisposable
             uniform int uInstanceBase;
             uniform usamplerBuffer uCells;
             uniform isampler2D uGlyphMap;
-            uniform vec4 uPalette[17];
+            uniform vec4 uPalette[64];
             uniform vec4 uDefaultBackground;
             uniform vec4 uDefaultForeground;
             out vec4 vColor;
@@ -263,9 +277,9 @@ public sealed class GpuRenderCore : IDisposable
                 int cx = cellIndex - cy * uGridSize.x;
                 uint packedCell = texelFetch(uCells, cellIndex).r;
                 int chr = int(packedCell & 0xFFFFu);
-                int fg = int((packedCell >> 16) & 0x1Fu);
-                int bg = int((packedCell >> 21) & 0x1Fu);
-                int style = int((packedCell >> 26) & 0x7u);
+                int fg = int((packedCell >> 16) & 0x3Fu);
+                int bg = int((packedCell >> 22) & 0x3Fu);
+                int style = int((packedCell >> 28) & 0x7u);
                 bool reversed = (style & 4) != 0;
                 float span = 1.0;
                 vec2 uv0 = vec2(0.0);

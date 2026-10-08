@@ -190,12 +190,18 @@ public sealed class PtySession : IDisposable
             output.Append(";2");
         if ((cell.Style & CellStyle.Reverse) != 0)
             output.Append(";7");
-        if (cell.Foreground != AnsiColor.Default)
-            output.Append(';').Append(ForegroundCode(cell.Foreground));
-        if (cell.Background != AnsiColor.Default)
-            output.Append(';').Append(ForegroundCode(cell.Background) + 10);
+        if (!cell.Foreground.IsDefault)
+            output.Append(';').Append(ForegroundSegment(cell.Foreground));
+        if (!cell.Background.IsDefault)
+            output.Append(';').Append(BackgroundSegment(cell.Background));
         output.Append('m');
     }
+
+    private static string ForegroundSegment(CellColor color)
+        => color.IsRgb ? $"38;2;{color.R};{color.G};{color.B}" : ForegroundCode(color.IsPalette ? color.PaletteColor : AnsiColor.Default).ToString();
+
+    private static string BackgroundSegment(CellColor color)
+        => color.IsRgb ? $"48;2;{color.R};{color.G};{color.B}" : (ForegroundCode(color.IsPalette ? color.PaletteColor : AnsiColor.Default) + 10).ToString();
 
     /** 调色板 1..8 → 30..37, 9..16 → 90..97(背景再 +10)。 */
     private static int ForegroundCode(AnsiColor color)
@@ -403,7 +409,7 @@ public sealed class PtySession : IDisposable
     internal PtySessionInfo ToInfo()
     {
         lock (_gate)
-            return new PtySessionInfo(Id, Command, StartedAt, ProcessId, _status, _exitCode, _attached, _screen.Width, _screen.Height, _startInfo.WantsMouse);
+            return new PtySessionInfo(Id, Command, StartedAt, ProcessId, _status, _exitCode, _attached, _screen.Width, _screen.Height, _startInfo.WantsMouse, _startInfo.Home);
     }
 
     private void OnUnixExited(int? exitCode)

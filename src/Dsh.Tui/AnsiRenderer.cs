@@ -155,6 +155,12 @@ public sealed class AnsiRenderer
         _lastCursorY = cursorY;
     }
 
+    private static string ForegroundSegment(CellColor color)
+        => color.IsRgb ? $"38;2;{color.R};{color.G};{color.B}" : ForegroundCode(color.IsPalette ? color.PaletteColor : AnsiColor.Default).ToString();
+
+    private static string BackgroundSegment(CellColor color)
+        => color.IsRgb ? $"48;2;{color.R};{color.G};{color.B}" : BackgroundCode(color.IsPalette ? color.PaletteColor : AnsiColor.Default).ToString();
+
     private static int ForegroundCode(AnsiColor color)
     {
         if (color == AnsiColor.Default)
@@ -179,8 +185,8 @@ public sealed class AnsiRenderer
     /** 终端当前 SGR 状态的本机记录; Apply 只发与当前态的差异属性。 */
     private struct SgrState
     {
-        private AnsiColor _foreground;
-        private AnsiColor _background;
+        private CellColor _foreground;
+        private CellColor _background;
         private CellStyle _style;
         private bool _valid;
 
@@ -216,44 +222,54 @@ public sealed class AnsiRenderer
             builder.Append("\x1b[");
             var separator = false;
             AppendStyleOn(builder, cell.Style, ref separator);
-            if (separator)
-                builder.Append(';');
-            builder.Append(ForegroundCode(cell.Foreground));
+            AppendSeparator(builder, ref separator);
+            builder.Append(ForegroundSegment(cell.Foreground));
             builder.Append(';');
-            builder.Append(BackgroundCode(cell.Background));
+            builder.Append(BackgroundSegment(cell.Background));
             builder.Append('m');
         }
 
         private void AppendDelta(StringBuilder builder, Cell cell)
         {
-            Span<int> codes = stackalloc int[5];
-            var count = 0;
-            var toggled = _style ^ cell.Style;
-            if ((toggled & CellStyle.Bold) != 0)
-                codes[count++] = (cell.Style & CellStyle.Bold) != 0 ? 1 : 22;
-            if ((toggled & CellStyle.Dim) != 0)
-                codes[count++] = (cell.Style & CellStyle.Dim) != 0 ? 2 : 22;
-            if ((toggled & CellStyle.Reverse) != 0)
-                codes[count++] = (cell.Style & CellStyle.Reverse) != 0 ? 7 : 27;
-            if (_foreground != cell.Foreground)
-                codes[count++] = ForegroundCode(cell.Foreground);
-            if (_background != cell.Background)
-                codes[count++] = BackgroundCode(cell.Background);
             builder.Append("\x1b[");
             var separator = false;
             var emitted22 = false;
-            foreach (var code in codes[..count])
+            var toggled = _style ^ cell.Style;
+            AppendInt(builder, (toggled & CellStyle.Bold) != 0 ? (cell.Style & CellStyle.Bold) != 0 ? 1 : 22 : null, ref separator, ref emitted22);
+            AppendInt(builder, (toggled & CellStyle.Dim) != 0 ? (cell.Style & CellStyle.Dim) != 0 ? 2 : 22 : null, ref separator, ref emitted22);
+            AppendInt(builder, (toggled & CellStyle.Reverse) != 0 ? (cell.Style & CellStyle.Reverse) != 0 ? 7 : 27 : null, ref separator, ref emitted22);
+            if (_foreground != cell.Foreground)
             {
-                if (code == 22 && emitted22)
-                    continue;
-                if (code == 22)
-                    emitted22 = true;
-                if (separator)
-                    builder.Append(';');
-                builder.Append(code);
-                separator = true;
+                AppendSeparator(builder, ref separator);
+                builder.Append(ForegroundSegment(cell.Foreground));
+            }
+            if (_background != cell.Background)
+            {
+                AppendSeparator(builder, ref separator);
+                builder.Append(BackgroundSegment(cell.Background));
             }
             builder.Append('m');
+        }
+
+        private static void AppendInt(StringBuilder builder, int? code, ref bool separator, ref bool emitted22)
+        {
+            if (code is not { } value)
+                return;
+            if (value == 22)
+            {
+                if (emitted22)
+                    return;
+                emitted22 = true;
+            }
+            AppendSeparator(builder, ref separator);
+            builder.Append(value);
+        }
+
+        private static void AppendSeparator(StringBuilder builder, ref bool separator)
+        {
+            if (separator)
+                builder.Append(';');
+            separator = true;
         }
 
         private static void AppendStyleOn(StringBuilder builder, CellStyle style, ref bool separator)

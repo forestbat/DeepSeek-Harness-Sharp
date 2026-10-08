@@ -7,6 +7,11 @@ public static class TerminalColorPalette
     public static readonly Rgba DefaultBackground = new(0f, 0f, 0f);
     public static readonly Rgba DefaultForeground = new(0.9f, 0.9f, 0.9f);
 
+    public static Rgba ToRgba(CellColor color)
+        => color.IsRgb
+            ? new Rgba(color.R / 255f, color.G / 255f, color.B / 255f)
+            : ToRgba(color.IsPalette ? color.PaletteColor : AnsiColor.Default);
+
     public static Rgba ToRgba(AnsiColor color) => color switch
     {
         AnsiColor.Default => DefaultForeground,

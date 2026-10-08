@@ -8,8 +8,8 @@ internal static class CellText
         int x,
         int y,
         string text,
-        AnsiColor foreground = AnsiColor.Default,
-        AnsiColor background = AnsiColor.Default,
+        CellColor foreground = default,
+        CellColor background = default,
         CellStyle style = CellStyle.None)
         => Draw(grid, x, y, text.AsSpan(), foreground, background, style);
 
@@ -18,8 +18,8 @@ internal static class CellText
         int x,
         int y,
         ReadOnlySpan<char> text,
-        AnsiColor foreground = AnsiColor.Default,
-        AnsiColor background = AnsiColor.Default,
+        CellColor foreground = default,
+        CellColor background = default,
         CellStyle style = CellStyle.None)
     {
         if (y < 0 || y >= grid.Height || x >= grid.Width)

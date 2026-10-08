@@ -9,7 +9,20 @@ public class CellPackerTests
     {
         var packed = CellPacker.Pack(new Cell('A', AnsiColor.Green, AnsiColor.Black, CellStyle.Bold));
 
-        Assert.Equal((uint)('A' | ((int)AnsiColor.Green << 16) | ((int)AnsiColor.Black << 21) | (1 << 26)), packed);
+        Assert.Equal((uint)('A' | ((int)AnsiColor.Green << 16) | ((int)AnsiColor.Black << 22) | (1 << 28)), packed);
+    }
+
+    [Fact]
+    public void Pack_Encodes_Rgb_Through_Color_Table()
+    {
+        var table = new CellColorTable();
+        var color = CellColor.FromRgb(0x12, 0x34, 0x56);
+
+        var packed = CellPacker.Pack(new Cell('Z', color, CellColor.Default), table);
+
+        var slot = table.Index(color);
+        Assert.InRange(slot, CellColorTable.BaseColors, CellColorTable.Capacity - 1);
+        Assert.Equal((uint)('Z' | (slot << 16)), packed);
     }
 
     [Fact]

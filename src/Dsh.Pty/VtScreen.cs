@@ -27,8 +27,8 @@ public sealed class VtScreen
     private int _savedY;
     private int _savedScrollTop;
     private int _savedScrollBottom;
-    private AnsiColor _penForeground = AnsiColor.Default;
-    private AnsiColor _penBackground = AnsiColor.Default;
+    private CellColor _penForeground = CellColor.Default;
+    private CellColor _penBackground = CellColor.Default;
     private CellStyle _penStyle = CellStyle.None;
     private bool _wrapPending;
     private ParseState _state = ParseState.Ground;
@@ -520,28 +520,51 @@ public sealed class VtScreen
         }
     }
 
-    /** 256 色/真彩色: 只映射到 16 色板, 其余回退默认色(CellGrid 只支持 16 色)。 */
+    /** 256 色/真彩色: 0-15 映射 16 色板, 16-255 用 xterm 调色板转 RGB(真彩原样), 供真彩渲染路径使用。 */
     private int ConsumeExtendedColor(string[] parts, int index, bool foreground)
     {
         if (index + 1 >= parts.Length)
             return index;
         if (parts[index + 1] == "5" && index + 2 < parts.Length)
         {
-            if (int.TryParse(parts[index + 2], out var color) && color is >= 0 and < 16)
-                Assign(foreground, (AnsiColor)(color + 1));
-            else
-                Assign(foreground, AnsiColor.Default);
+            Assign(foreground, int.TryParse(parts[index + 2], out var color) ? FromIndexedColor(color) : CellColor.Default);
             return index + 2;
         }
         if (parts[index + 1] == "2" && index + 4 < parts.Length)
         {
-            Assign(foreground, AnsiColor.Default);
+            Assign(foreground,
+                int.TryParse(parts[index + 2], out var r) && int.TryParse(parts[index + 3], out var g) && int.TryParse(parts[index + 4], out var b)
+                    ? CellColor.FromRgb(Clamp(r), Clamp(g), Clamp(b))
+                    : CellColor.Default);
             return index + 4;
         }
         return index;
     }
 
-    private void Assign(bool foreground, AnsiColor color)
+    private static CellColor FromIndexedColor(int color)
+    {
+        if (color is < 0)
+            return CellColor.Default;
+        if (color < 16)
+            return CellColor.FromPalette((AnsiColor)(color + 1));
+        if (color < 232)
+        {
+            var cube = color - 16;
+            return CellColor.FromRgb(Level(cube / 36), Level(cube / 6 % 6), Level(cube % 6));
+        }
+        if (color < 256)
+        {
+            var gray = (byte)(8 + (color - 232) * 10);
+            return CellColor.FromRgb(gray, gray, gray);
+        }
+        return CellColor.Default;
+    }
+
+    private static byte Level(int component) => (byte)(component == 0 ? 0 : 55 + (component * 40));
+
+    private static byte Clamp(int value) => (byte)Math.Clamp(value, 0, 255);
+
+    private void Assign(bool foreground, CellColor color)
     {
         if (foreground)
             _penForeground = color;

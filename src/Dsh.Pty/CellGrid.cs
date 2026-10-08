@@ -30,10 +30,41 @@ public enum AnsiColor : byte
     BrightWhite = 16,
 }
 
+public enum CellColorKind : byte
+{
+    Default = 0,
+    Palette = 1,
+    Rgb = 2,
+}
+
+/**
+ * 单元格颜色: 默认色 / 16 色板 / 24-bit RGB 三态。16 色板沿用 AnsiColor 枚举, 由 AnsiColor 隐式转换而来,
+ * 因此既有 `new Cell(ch, AnsiColor.Red, ...)` 之类调用点无需改动。
+ */
+public readonly record struct CellColor(CellColorKind Kind, byte Palette, byte R, byte G, byte B)
+{
+    public static readonly CellColor Default = new(CellColorKind.Default, 0, 0, 0, 0);
+
+    public bool IsDefault => Kind == CellColorKind.Default;
+
+    public bool IsPalette => Kind == CellColorKind.Palette;
+
+    public bool IsRgb => Kind == CellColorKind.Rgb;
+
+    public AnsiColor PaletteColor => (AnsiColor)Palette;
+
+    public static CellColor FromPalette(AnsiColor color)
+        => color == AnsiColor.Default ? Default : new CellColor(CellColorKind.Palette, (byte)color, 0, 0, 0);
+
+    public static CellColor FromRgb(byte r, byte g, byte b) => new(CellColorKind.Rgb, 0, r, g, b);
+
+    public static implicit operator CellColor(AnsiColor color) => FromPalette(color);
+}
+
 public readonly record struct Cell(
     char Character = ' ',
-    AnsiColor Foreground = AnsiColor.Default,
-    AnsiColor Background = AnsiColor.Default,
+    CellColor Foreground = default,
+    CellColor Background = default,
     CellStyle Style = CellStyle.None);
 
 public readonly record struct CellChange(int X, int Y, Cell Cell);

@@ -2,12 +2,15 @@ namespace Dsh.Tui;
 
 public static class CellPacker
 {
-    // 布局: 0-15 字符, 16-20 前景, 21-25 背景, 26-28 样式(Bold=1, Dim=2, Reverse=4)
-    public static uint Pack(Cell cell)
+    // 布局: 0-15 字符, 16-21 前景槽位, 22-27 背景槽位, 28-30 样式(Bold=1, Dim=2, Reverse=4)。
+    // 槽位是 CellColorTable 的 6-bit 索引(默认/16 色板/RGB), 24-bit 真彩经调色板间接进 GPU。
+    public static uint Pack(Cell cell) => Pack(cell, CellColorTable.Shared);
+
+    public static uint Pack(Cell cell, CellColorTable table)
         => (uint)(cell.Character
-            | ((int)cell.Foreground << 16)
-            | ((int)cell.Background << 21)
-            | ((int)cell.Style << 26));
+            | (table.Index(cell.Foreground) << 16)
+            | (table.Index(cell.Background) << 22)
+            | ((int)cell.Style << 28));
 
     public static void PackRows(CellGrid grid, int firstRow, int rowCount, uint[] destination, GlyphAtlas atlas)
     {

@@ -1,0 +1,55 @@
+<Project>
+
+  <!--
+    原生故障遏制库 dsh_plugin_guard: 由宿主/测试程序在构建时用本机 C 工具链编译, 并随输出部署。
+    Windows 用 cl(经 VS 的 VsDevCmd 定位), Unix 用 cc; 找不到工具链时告警跳过, 不中断 .NET 构建。
+    源见 native/plugin_guard/guard.c。
+  -->
+
+  <PropertyGroup>
+    <DshGuardSource Condition="'$(DshGuardSource)' == ''">$(MSBuildThisFileDirectory)guard.c</DshGuardSource>
+    <DshGuardFile Condition="$([MSBuild]::IsOSPlatform('Windows'))">dsh_plugin_guard.dll</DshGuardFile>
+    <DshGuardFile Condition="$([MSBuild]::IsOSPlatform('Linux'))">libdsh_plugin_guard.so</DshGuardFile>
+    <DshGuardFile Condition="$([MSBuild]::IsOSPlatform('OSX'))">libdsh_plugin_guard.dylib</DshGuardFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <DshVsDevCmdCandidate Include="$(MSBuildProgramFiles32)\Microsoft Visual Studio\**\VsDevCmd.bat" />
+  </ItemGroup>
+
+  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
+      <DshGuardOutput>$(DshGuardOutputDir)$(DshGuardFile)</DshGuardOutput>
+      <DshVsDevCmd>@(DshVsDevCmdCandidate->'%(FullPath)')</DshVsDevCmd>
+    </PropertyGroup>
+    <MakeDir Directories="$(DshGuardOutputDir)" />
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmd)' != ''"
+          Command="call &quot;$(DshVsDevCmd)&quot; -arch=x64 -no_logo &amp;&amp; cl /nologo /utf-8 /TC /LD &quot;$(DshGuardSource)&quot; /Fo:&quot;$(DshGuardOutputDir)guard.obj&quot; /Fe:&quot;$(DshGuardOutput)&quot;"
+          StandardOutputImportance="low" />
+    <Warning Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmd)' == ''"
+             Text="dsh_plugin_guard: 未找到 VsDevCmd.bat(需 VS 的 C++ 工具集), 跳过原生故障遏制库构建" />
+    <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))"
+          Command="cc -O2 -fPIC -shared -o &quot;$(DshGuardOutput)&quot; &quot;$(DshGuardSource)&quot;"
+          StandardOutputImportance="low" />
+  </Target>
+
+  <Target Name="IncludeDshPluginGuard" BeforeTargets="GetCopyToOutputDirectoryItems"
+          DependsOnTargets="BuildDshPluginGuard">
+    <PropertyGroup>
+      <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
+      <DshGuardOutput>$(DshGuardOutputDir)$(DshGuardFile)</DshGuardOutput>
+    </PropertyGroup>
+    <ItemGroup Condition="Exists('$(DshGuardOutput)')">
+      <ContentWithTargetPath Include="$(DshGuardOutput)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <TargetPath>$(DshGuardFile)</TargetPath>
+      </ContentWithTargetPath>
+      <NoneWithTargetPath Include="$(DshGuardOutput)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <TargetPath>$(DshGuardFile)</TargetPath>
+      </NoneWithTargetPath>
+    </ItemGroup>
+  </Target>
+
+</Project>
