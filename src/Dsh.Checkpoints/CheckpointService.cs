@@ -174,7 +174,7 @@ public sealed class CheckpointService : Service, ICheckpointRestore, IDisposable
         {
             if (_repos.TryGetValue(cwd, out var existing))
                 return existing;
-            var root = Path.Combine(new HarnessHome(_homeRoot).CheckpointsPath, ProjectStorageKey.Of(cwd));
+            var root = Path.Combine(new HarnessHome(_homeRoot).CheckpointsPath, ProjectStorageKey.BoundedOf(cwd));
             var created = new ProjectRepo(
                 new ShadowGit(Path.Combine(root, "repo.git"), cwd),
                 new CheckpointLog(Path.Combine(root, "points.jsonl")));

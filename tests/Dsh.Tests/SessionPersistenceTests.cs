@@ -221,6 +221,18 @@ public class SessionPersistenceTests : IDisposable
         => Assert.Equal(expected, ProjectStorageKey.Of(cwd));
 
     [Fact]
+    public void ProjectStorageKey_BoundedOf_StaysShortDeterministicAndDistinct()
+    {
+        var deep = "/" + string.Join('/', Enumerable.Repeat("segment", 40));
+        var key = ProjectStorageKey.BoundedOf(deep);
+        Assert.True(
+            key.Length <= ProjectStorageKey.BoundedSlugLength + 2 + 1 + 16 + 2,
+            $"键过长: {key.Length} => {key}");
+        Assert.Equal(key, ProjectStorageKey.BoundedOf(deep));
+        Assert.NotEqual(key, ProjectStorageKey.BoundedOf(deep + "/x"));
+    }
+
+    [Fact]
     public void ProjectStorageKey_TruncatesLongSlugs()
     {
         var key = ProjectStorageKey.Of("/" + new string('a', 300));

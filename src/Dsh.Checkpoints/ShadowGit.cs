@@ -15,6 +15,8 @@ public sealed class ShadowGit
         "-c", "user.email=checkpoints@dsh.local",
         "-c", "commit.gpgsign=false",
         "-c", "core.autocrlf=false",
+        // 存储键含完整工作区路径, 深路径下 git 对象文件会超过 Windows MAX_PATH; 开启长路径支持。
+        "-c", "core.longpaths=true",
     ];
 
     private readonly string _gitDir;
