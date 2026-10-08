@@ -1140,9 +1140,5 @@ public class ChatWindowMenuTests : IDisposable
         return new string(chars).Replace("\0", "");
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 }

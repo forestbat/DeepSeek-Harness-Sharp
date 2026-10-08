@@ -11,11 +11,7 @@ public sealed class TuiSettingsTests : IDisposable
         Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
         Guid.NewGuid().ToString("N"));
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 
     [Fact]
     public void Read_Without_Section_Keeps_Default_And_Clamps_Absurd_Values()

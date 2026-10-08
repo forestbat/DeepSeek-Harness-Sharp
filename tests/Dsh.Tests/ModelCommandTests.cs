@@ -70,9 +70,5 @@ public class ModelCommandTests : IDisposable
             => new("multi", model, model);
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 }

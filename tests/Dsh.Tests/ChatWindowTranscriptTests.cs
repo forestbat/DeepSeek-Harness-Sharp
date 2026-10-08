@@ -680,9 +680,5 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         return count;
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 }

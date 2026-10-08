@@ -285,9 +285,5 @@ public sealed class PaneReadToolsTests : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 }

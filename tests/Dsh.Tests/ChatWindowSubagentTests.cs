@@ -344,11 +344,7 @@ public sealed class ChatWindowSubagentTests : IDisposable
         return string.Join('\n', lines);
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 
     private sealed record Fixture(Context Ctx, SessionStore Store, AgentLoopAgent Parent, ChatWindow Chat);
 }

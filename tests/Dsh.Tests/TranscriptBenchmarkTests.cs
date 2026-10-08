@@ -152,9 +152,5 @@ public class TranscriptBenchmarkTests : IDisposable
         return sorted[(int)Math.Ceiling(sorted.Length * p) - 1];
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, true);
-    }
+    public void Dispose() => TempTree.Delete(_homeDir);
 }
