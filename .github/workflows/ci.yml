@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # 按 ref + 事件分组: 手动 dispatch(跑 AOT)不应取消正在跑的 push 校验, 反之亦然; 同一来源的重复触发仍互相取消。
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
