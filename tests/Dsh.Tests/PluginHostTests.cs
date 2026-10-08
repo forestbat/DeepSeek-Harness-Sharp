@@ -65,14 +65,8 @@ public sealed class PluginHostTests
         }
         finally
         {
-            // ALC 回收后仍可能有其他加载器残留句柄, 删除失败不应让用例失败(临时目录由系统清理)
-            try
-            {
-                Directory.Delete(root, true);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-            }
+            // ALC 回收后仍可能有加载器残留句柄(Windows 上被映射的 DLL 无法立即删除); 清理失败不应让用例失败。
+            TempTree.Delete(root);
         }
     }
 
@@ -102,7 +96,7 @@ public sealed class PluginHostTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TempTree.Delete(root);
         }
     }
 
@@ -140,7 +134,7 @@ public sealed class PluginHostTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TempTree.Delete(root);
         }
     }
 }
