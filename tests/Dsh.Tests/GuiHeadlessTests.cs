@@ -196,18 +196,12 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
                 .ToList();
             if (OperatingSystem.IsWindows())
             {
+                // 有真实显卡时只校验"非空且可区分"(有 PCI slot 用 slot, 无 slot 的虚拟卡回退显示名);
+                // 具体映射(SelectionIdOf/LooksLikePciSlot)由 GpuPreferenceTests 覆盖。
+                Assert.All(realAdapters, option => Assert.False(string.IsNullOrWhiteSpace(option.Value)));
+                Assert.Equal(realAdapters.Count, realAdapters.Select(option => option.Value).Distinct(StringComparer.Ordinal).Count());
                 if (realAdapters.Count == 0)
-                {
-                    // 无真实显卡时不把"有显卡"当硬前置: 只验证"自动"项与保存链路。
-                    Console.WriteLine("未枚举到真实显卡, 跳过显卡落盘值断言。");
-                }
-                else
-                {
-                    // 有真实显卡时: 落盘值必须是 PCI slot(同名多卡唯一可区分), 卡名在 Label 里。
-                    foreach (var option in realAdapters)
-                        Assert.True(GpuPreference.LooksLikePciSlot(option.Value), $"显卡落盘值不是 PCI slot: {option.Label} => {option.Value}");
-                    Assert.Equal(realAdapters.Count, realAdapters.Select(option => option.Value).Distinct(StringComparer.Ordinal).Count());
-                }
+                    Console.WriteLine("未枚举到真实显卡, 仅校验\"自动\"项与保存链路。");
             }
 
             var target = adapters[^1];
