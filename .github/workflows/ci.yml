@@ -90,6 +90,10 @@ jobs:
             -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench")
+          # macOS 暂时逐用例打印 STARTING/FINISHED, 用于定位挂死的用例(STARTING 后无 FINISHED)。
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ARGS+=(-verbose)
+          fi
           if command -v timeout >/dev/null 2>&1; then
             ARGS=(timeout 900 "${ARGS[@]}")
           fi
