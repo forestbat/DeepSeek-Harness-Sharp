@@ -9,7 +9,7 @@ public sealed record ToolResultSpillOptions(
     int TailChars = 1024);
 
 /**
- * 大工具结果落盘: 正文超过阈值时写入 <home>/tool-results, 上下文里只保留头尾与文件路径,
+ * 大工具结果落盘: 正文超过阈值时写入持久化根下的 tool-results 目录, 上下文里只保留头尾与文件路径,
  * 避免单个工具输出(整份文件/长日志)撑爆上下文窗口。落盘失败时原样返回, 不影响主流程。
  */
 public sealed class ToolResultSpill : Service

@@ -813,6 +813,7 @@ public sealed class AgentLoopAgent : IAgent
             : result.Content;
         if (_pendingReminder is not null)
             _pendingReminder = null;
+        content = SpillLargeText(content, call.CallId);
         var message = MessageFactory.CreateToolResultMessage(call.CallId, content, result.IsError);
         Session.Append(new ToolResultPayload(
             turn,
@@ -820,6 +821,28 @@ public sealed class AgentLoopAgent : IAgent
             message,
             result is ToolExecutionResult.Failure { Error.Info: { } info } ? new ToolResultErrorInfo(info.Name, info.Code) : null,
             result.Meta), new SurfaceOp.Append(), [callSeq]);
+    }
+
+    private IReadOnlyList<ContentBlock> SpillLargeText(IReadOnlyList<ContentBlock> content, ToolCallId callId)
+    {
+        var spill = _loopCtx.Get<ToolResultSpill>(ToolResultSpill.ServiceName, false);
+        if (spill is null)
+            return content;
+        var changed = false;
+        var mapped = new List<ContentBlock>(content.Count);
+        foreach (var block in content)
+        {
+            if (block is TextBlock { Text: { } text } && spill.ShouldSpill(text))
+            {
+                mapped.Add(new TextBlock(spill.Spill(text, callId.ToString())));
+                changed = true;
+            }
+            else
+            {
+                mapped.Add(block);
+            }
+        }
+        return changed ? mapped : content;
     }
 
     private static JsonElement ParseArguments(string raw)
