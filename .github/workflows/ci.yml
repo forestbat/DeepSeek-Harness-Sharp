@@ -90,14 +90,14 @@ jobs:
             -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench")
-          # macOS 临时诊断: 串行执行 + 逐用例日志, 并用看门狗在 6 分钟后杀掉挂死进程,
-          # 让挂死用例以"最后一个 [STARTING] 无 [FINISHED]"的形式留在可下载的日志里。
+          # macOS 串行执行: PTY 主端读在 macOS 上会阻塞调用线程, 并行调度下会拖死线程池而挂死;
+          # 串行执行全部用例通过(约 90s)。看门狗兜底, 避免未来回归时卡满 job 超时(25 分钟)。
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=(-verbose -parallel none)
-            echo "运行(macOS 诊断): ${ARGS[*]}"
+            ARGS+=(-parallel none)
+            echo "运行: ${ARGS[*]}"
             "${ARGS[@]}" &
             TESTPID=$!
-            ( sleep 360; kill -9 "$TESTPID" 2>/dev/null ) &
+            ( sleep 600; kill -9 "$TESTPID" 2>/dev/null ) &
             WATCH=$!
             set +e
             wait "$TESTPID"
