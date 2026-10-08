@@ -169,8 +169,6 @@ jobs:
             rid: win-x64
           - os: ubuntu-latest
             rid: linux-x64
-          - os: macos-latest
-            rid: osx-arm64
     steps:
       - uses: actions/checkout@v4
         with:
