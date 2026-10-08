@@ -3,8 +3,8 @@ name: 构建校验
 # 不创建任何 Release；发布由 release.yml 在打 tag 时负责。
 # 触发与分工（本仓库 push 居多、PR 很少：约 170 个 commit 只有 1 个 merged PR）：
 #   - push 到 master / PR 的 open|sync|reopen：跑测试 + JIT 发布校验；
-#   - PR 被 merge（closed 且 merged=true）：在 merge 提交上再跑 AOT 构建（且以测试通过为前置）；
-#   - 手动 workflow_dispatch：可用 aot 开关决定是否连带跑 AOT。
+#   - PR 被 merge（closed 且 merged=true）：在 merge 提交上再跑 AOT 构建；
+#   - 手动 workflow_dispatch：aot 开关决定是否跑 AOT。
 # 也就是说：直接 push 不会跑 AOT，AOT 只出现在"真的合入"与手动触发这两处。
 on:
   push:
@@ -79,6 +79,7 @@ jobs:
           set -euo pipefail
           # GpuStress 需要真实 GPU 压测；OnlyGpu 是功能性的 GPU/桌面渲染用例(无 GPU/EGL 的 runner 跑不了)；
           # RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
+          # GitHub 托管 runner 无 GPU, 需要 GPU 的度量请在带 GPU 的无头机上直接跑(不加 trait 过滤)。
           EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
@@ -136,9 +137,9 @@ jobs:
 
   aot:
     name: AOT 构建（${{ matrix.rid }}）
-    # 只在这两处跑：PR 被 merge（在 merge 提交上），或手动 dispatch 且 aot=true。
+    # 独立流水线：只在这两处跑——PR 被 merge（在 merge 提交上），或手动 dispatch 且 aot=true。
     # 直接 push 到 master 不跑（本仓库 push 居多，AOT 只跟"真的合入"绑定）。
-    needs: [test]
+    # 不依赖 test：AOT 是独立校验，test 未过也不应阻止 AOT 构建或手动触发。
     if: ${{ (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true) || (github.event_name == 'workflow_dispatch' && inputs.aot) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
