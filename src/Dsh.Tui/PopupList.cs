@@ -46,14 +46,14 @@ public static class PopupList
         // 先按整幅清底, 再画边框与内容: 浮层覆盖的行既不留空白, 也不让底层正文露出。
         Fill(grid, window.X, window.Y, window.Width, window.Height);
         DrawBorder(grid, window.X, window.Y, window.Width, window.Height);
-        DrawText(grid, window.X + 1, window.Y, Truncate(title, window.Width - 2), AnsiColor.BrightCyan, AnsiColor.Default, CellStyle.Bold);
+        DrawText(grid, window.X + 1, window.Y, Truncate(title, window.Width - 2), TuiTheme.Highlight, AnsiColor.Default, CellStyle.Bold);
 
         for (var row = 0; row < window.HeaderCount; row++)
         {
             var header = headerLines[row];
             var current = header.StartsWith('▸');
             DrawText(grid, window.X + 1, window.Y + 1 + row, Truncate(header, window.Width - 2),
-                current ? AnsiColor.BrightCyan : AnsiColor.Default,
+                current ? TuiTheme.Highlight : AnsiColor.Default,
                 AnsiColor.Default,
                 current ? CellStyle.Bold : CellStyle.Dim);
         }
@@ -79,7 +79,7 @@ public static class PopupList
                 : $"{marker}{Truncate(items[itemIndex], window.Width - 4)}";
             DrawText(grid, window.X + 1, candidateTop + row, text,
                 selected ? AnsiColor.Black : AnsiColor.Default,
-                selected ? AnsiColor.BrightCyan : AnsiColor.Default,
+                selected ? TuiTheme.Highlight : AnsiColor.Default,
                 selected ? CellStyle.Bold : CellStyle.None);
         }
 
@@ -196,10 +196,10 @@ public static class PopupList
     {
         if (x < 0 || x >= grid.Width || y < 0 || y >= grid.Height)
             return;
-        grid[x, y] = new Cell(character, AnsiColor.BrightCyan);
+        grid[x, y] = new Cell(character, TuiTheme.Highlight);
     }
 
-    private static void DrawText(CellGrid grid, int x, int y, string text, AnsiColor foreground, AnsiColor background, CellStyle style)
+    private static void DrawText(CellGrid grid, int x, int y, string text, CellColor foreground, CellColor background, CellStyle style)
     {
         if (y < 0 || y >= grid.Height)
             return;

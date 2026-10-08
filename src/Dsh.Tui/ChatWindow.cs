@@ -1,11 +1,11 @@
 using System.Diagnostics;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using System.Globalization;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Pty;
 using Dsh.Subagent;
 using Dsh.Tui.Services;
 
@@ -70,6 +70,8 @@ public sealed class ChatWindow : IDisposable
         _home = home;
         _persistence = persistence;
         _settings = settings;
+        if (settings is not null)
+            TuiTheme.Load(settings);
         _rightPanelWidth = settings?.SidebarWidth;
         _inputHeight = settings?.InputHeight;
         _subagents = new SubagentDirectory(ctx);
@@ -169,7 +171,7 @@ public sealed class ChatWindow : IDisposable
 
     internal ChatPane PaneById(int id) => (ChatPane)_panes[id];
 
-    private ChatPane InputPane => (ChatPane)_panes[_inputPaneId];
+    internal ChatPane InputPane => (ChatPane)_panes[_inputPaneId];
 
     private ITuiPane FocusedPane => _panes[_focusedPaneId];
 
@@ -322,6 +324,8 @@ public sealed class ChatWindow : IDisposable
                 input.Input = "/session ";
                 input.Cursor = input.Input.Length;
                 input.RefreshMenus();
+                // 终端窗格内 Ctrl+X S: 把焦点带回 DSH 命令行, 保证 /session 可输入(不打断 shell 进程)。
+                FocusPane(input.Id);
                 return;
             case ConsoleKey.D:
                 RequestDetach(input);
@@ -1120,6 +1124,9 @@ public sealed class ChatWindow : IDisposable
         new("gpu", "选择 GPU / 渲染后端", (pane, text) => { SelectGpu(pane, text); return Task.CompletedTask; },
             [new CommandArgumentSchema("adapter", "select", "GPU 适配器(选择并回车即写入, 重启生效)")]),
         new("exit", "退出 TUI", (_, _) => { RequestExit(); return Task.CompletedTask; }),
+        new("timestamp", "定位/回退/派生到某条用户消息", TimestampCommand,
+            [new CommandArgumentSchema("action", "select", "jump(查看) / revert(截断到该消息之前) / fork(派生新会话)"),
+             new CommandArgumentSchema("seq", "select", "用户消息 seq(见 /timestamp 无参数列出)")]),
     ];
 
     /** 供 ChatPane 追加进命令浮层(按名字去重)。 */
@@ -1134,6 +1141,155 @@ public sealed class ChatWindow : IDisposable
         string Description,
         Func<ChatPane, string, Task> Run,
         IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas = null);
+
+    /** `/timestamp <seq>` 的 seq 候选: 本会话里用户自己发的消息。 */
+    internal IReadOnlyList<string> TimestampCandidates()
+        => [.. UserMessages(InputPane.Agent.Session).Select(entry => entry.Seq.ToString(CultureInfo.InvariantCulture))];
+
+    private static List<(long Seq, string Text)> UserMessages(Session session)
+    {
+        var messages = new List<(long Seq, string Text)>();
+        foreach (var sessionEvent in session.SnapshotEvents())
+        {
+            if (sessionEvent.Data is not UserMessagePayload user || user.Message.Source is not UserMessageSource)
+                continue;
+            var text = string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)).Trim();
+            if (text.Length > 0)
+                messages.Add((sessionEvent.Seq, text));
+        }
+        return messages;
+    }
+
+    /** `/timestamp [jump|revert|fork <seq>]`: 无参数列出用户消息; revert 就地截断, fork 派生新会话(D3)。 */
+    private Task TimestampCommand(ChatPane pane, string text)
+    {
+        var messages = UserMessages(pane.Agent.Session);
+        var space = text.IndexOf(' ');
+        var arguments = space < 0 ? "" : text[(space + 1)..].Trim();
+        var parts = arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
+        {
+            if (messages.Count == 0)
+                pane.AppendRaw("  (没有用户消息)\n");
+            else
+                foreach (var (messageSeq, messageText) in messages)
+                    pane.AppendRaw($"  #{messageSeq} {Preview(messageText)}\n");
+            return Task.CompletedTask;
+        }
+
+        if (parts.Length < 2 || !long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetSeq))
+        {
+            pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <seq>\n");
+            return Task.CompletedTask;
+        }
+
+        var target = messages.FirstOrDefault(entry => entry.Seq == targetSeq);
+        switch (parts[0].ToLowerInvariant())
+        {
+            case "jump":
+                return JumpToMessage(pane, target, targetSeq);
+            case "revert":
+                return RevertToAsync(pane, targetSeq, target.Text);
+            case "fork":
+                return ForkAtAsync(pane, targetSeq);
+            default:
+                pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <seq>\n");
+                return Task.CompletedTask;
+        }
+    }
+
+    /** jump: 只滚到该消息(不改会话/文件); 用消息首行文本在视口缓存里定位。 */
+    private static Task JumpToMessage(ChatPane pane, (long Seq, string Text) target, long seq)
+    {
+        var firstLine = FirstLine(target.Text);
+        if (firstLine.Length == 0)
+        {
+            pane.AppendRaw($"  jump: 消息 #{seq} 无文本\n");
+            return Task.CompletedTask;
+        }
+
+        pane.AppendRaw(pane.TryScrollToMessage(firstLine)
+            ? $"  jumped to #{seq}\n"
+            : $"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
+        return Task.CompletedTask;
+    }
+
+    /** 会话截断到该消息之前并把消息回填输入区; 文件侧先按检查点恢复到 <= seq。 */
+    private async Task RevertToAsync(ChatPane pane, long seq, string targetText)
+    {
+        var restore = _ctx.Get<ICheckpointRestore>(ICheckpointRestore.ServiceName, false);
+        if (restore is not null && pane.CurrentCwd() is { Length: > 0 } cwd)
+        {
+            try
+            {
+                if (await restore.RestoreToSeqAsync(cwd, seq, CancellationToken.None) is { Length: > 0 } commit)
+                    pane.AppendRaw($"  文件已恢复到检查点 {commit[..Math.Min(8, commit.Length)]}\n");
+            }
+            catch (Exception error)
+            {
+                pane.AppendRaw($"  文件恢复失败(会话未截断): {error.Message}\n");
+                return;
+            }
+        }
+
+        if (!pane.Agent.Session.TryTruncateTo(seq))
+        {
+            pane.AppendRaw($"  revert 失败: seq {seq} 超出可截断范围\n");
+            return;
+        }
+
+        pane.Input = targetText;
+        pane.Cursor = pane.Input.Length;
+        pane.StickToBottom = true;
+        pane.AppendRaw($"  reverted: 会话已截断到 #{seq} 之前, 消息已回填输入区\n");
+    }
+
+    private static string FirstLine(string text)
+    {
+        foreach (var line in text.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 0)
+                return trimmed.Length <= 16 ? trimmed : trimmed[..16];
+        }
+        return "";
+    }
+
+    /** 派生新会话(不动当前会话), 保留 [0, seq) 事件。 */
+    private Task ForkAtAsync(ChatPane pane, long seq)
+    {
+        var session = pane.Agent.Session;
+        var events = session.SnapshotEvents(0, seq);
+        if (events.Count == 0)
+        {
+            pane.AppendRaw($"  fork 失败: seq {seq} 超出范围\n");
+            return Task.CompletedTask;
+        }
+        var persistence = _ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
+        if (persistence is null)
+        {
+            pane.AppendRaw("  fork 不可用: 会话持久化未启用\n");
+            return Task.CompletedTask;
+        }
+        var header = session.Header with
+        {
+            Id = SessionId.Create($"session-fork-{Guid.NewGuid():N}"),
+            Title = $"fork of {session.Id} @{seq}",
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ParentSession = session.Id,
+        };
+        using var handle = persistence.Create(header);
+        handle.Append(events);
+        handle.Close();
+        pane.AppendRaw($"  forked -> {header.Id} (用 /resume {header.Id} 打开)\n");
+        return Task.CompletedTask;
+    }
+
+    private static string Preview(string text)
+    {
+        var single = text.Replace('\n', ' ');
+        return single.Length <= 60 ? single : $"{single[..60]}…";
+    }
 
     private async Task NewSession(ChatPane pane, string text)
     {
@@ -1374,8 +1530,8 @@ public sealed class ChatWindow : IDisposable
         var arguments = parts.Length > 0
             ? parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries)
             : isDotnetHost
-                ? [Environment.GetCommandLineArgs()[0], "tui", "--session", pane.Agent.Id.ToString(), "--home", _home.Root]
-                : ["tui", "--session", pane.Agent.Id.ToString(), "--home", _home.Root];
+                ? [Environment.GetCommandLineArgs()[0], "tui", "--session", pane.Agent.Id.ToString()]
+                : ["tui", "--session", pane.Agent.Id.ToString()];
         // 不带命令 = 起的还是 TUI 本体, 它要鼠标(拖动分隔线/滚轮); 带命令 = 任意命令/普通 shell, 不能打开
         // 宿主终端上报(Unix 上代理原样透传, 报文会被当成命令敲进那个程序)。
         var wantsMouse = parts.Length == 0;
@@ -1390,6 +1546,7 @@ public sealed class ChatWindow : IDisposable
                 WorkingDirectory = pane.CurrentCwd(),
                 Rows = Math.Max(4, _paneArea.Height),
                 Columns = Math.Max(20, _paneArea.Width),
+                Home = _home.Root,
                 Environment = new Dictionary<string, string?>
                 {
                     ["DSH_DETACHED_SESSION_ID"] = pane.Agent.Id.ToString(),
@@ -1706,7 +1863,7 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    /** 方向键只在可选行(Pane/Session)之间移动; PTY 行与分节标题(None)跳过。 */
+    /** 方向键只在可选行(Pty/Pane/Session/RemotePane)之间移动; 纯标题行(None)跳过。 */
     private void MoveOverview(int direction)
     {
         if (_overviewItems.Count == 0)
@@ -1730,6 +1887,10 @@ public sealed class ChatWindow : IDisposable
             return;
         switch (item.Kind)
         {
+            case OverviewTargetKind.Pty when item.PtyId is { } ptyId:
+                _overviewActive = false;
+                EnterPty(ptyId);
+                return;
             case OverviewTargetKind.Pane when item.PaneId is { } paneId:
                 _overviewActive = false;
                 FocusPane(paneId);
@@ -1762,63 +1923,90 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
+    /** 总览: 单一树 Pty → session → pane(不再分“PTY/会话”两段)。 */
     private void RefreshOverviewItems()
     {
         _overviewItems.Clear();
         var catalog = Catalog();
-        var placed = new HashSet<int>();
-
-        _overviewItems.Add(new OverviewItem("PTY", OverviewTargetKind.None, null, null));
+        var placedPanes = new HashSet<int>();
+        var placedSessions = new HashSet<string>(StringComparer.Ordinal);
         // 只列存活 Pty(host 与跨进程同一规则); 已退出(Exited)不出现在总览里。
         var hostPtys = PtyHost.Default.List().Where(pty => pty.Status != PtySessionStatus.Exited).ToList();
         var daemonPtys = _daemonPtys
             .Where(pty => !string.Equals(pty.Status, nameof(PtySessionStatus.Exited), StringComparison.OrdinalIgnoreCase))
             .ToList();
-        if (hostPtys.Count == 0 && daemonPtys.Count == 0)
-            _overviewItems.Add(new OverviewItem("  (无)", OverviewTargetKind.None, null, null));
+        var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.List() ?? [];
+
+        void AddSessionRow(string sessionId)
+        {
+            if (!placedSessions.Add(sessionId))
+                return;
+            var agent = agents.FirstOrDefault(candidate => string.Equals(candidate.Id.Value, sessionId, StringComparison.Ordinal));
+            var (provider, model) = agent is null ? (string.Empty, string.Empty) : CurrentModel(agent);
+            _overviewItems.Add(new OverviewItem($"  {sessionId} · {provider}/{model}", OverviewTargetKind.Session, null, sessionId));
+            AddPaneRows(catalog, placedPanes, 4, entry => string.Equals(entry.SessionId, sessionId, StringComparison.Ordinal));
+        }
+
         foreach (var pty in hostPtys)
         {
-            _overviewItems.Add(new OverviewItem($"  {pty.Id.Value} · {pty.Command} · {pty.Status.ToString().ToLowerInvariant()}", OverviewTargetKind.None, null, null));
-            AddPaneRows(catalog, placed, 4, entry => string.Equals(entry.PtyId, pty.Id.Value, StringComparison.Ordinal));
+            _overviewItems.Add(new OverviewItem(
+                $"▸ {pty.Id.Value} · {pty.Command} · {pty.Status.ToString().ToLowerInvariant()}",
+                OverviewTargetKind.Pty, null, null, pty.Id.Value));
+            foreach (var agent in agents.Where(candidate => string.Equals(PtyForSession(candidate.Id.Value), pty.Id.Value, StringComparison.Ordinal)))
+                AddSessionRow(agent.Id.Value);
+            AddPaneRows(catalog, placedPanes, 4, entry => string.Equals(entry.PtyId, pty.Id.Value, StringComparison.Ordinal));
         }
+
         foreach (var pty in daemonPtys)
         {
             var ownership = pty.AgentSessionId is { Length: > 0 } sessionId ? $" · {sessionId}" : "";
-            _overviewItems.Add(new OverviewItem($"  {pty.Id} (daemon) · {pty.Command} · {pty.Status}{ownership}", OverviewTargetKind.None, null, null));
+            _overviewItems.Add(new OverviewItem(
+                $"▸ {pty.Id} (daemon) · {pty.Command} · {pty.Status}{ownership}",
+                OverviewTargetKind.Pty, null, null, pty.Id));
             foreach (var pane in pty.Panes ?? [])
                 _overviewItems.Add(new OverviewItem($"    pane {pane.Id} · {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.RemotePane, pane.Id, null, pty.Id));
+            foreach (var agent in agents.Where(candidate => string.Equals(PtyForSession(candidate.Id.Value), pty.Id, StringComparison.Ordinal)))
+                AddSessionRow(agent.Id.Value);
         }
 
-        _overviewItems.Add(new OverviewItem("会话", OverviewTargetKind.None, null, null));
-        var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.List() ?? [];
-        if (agents.Count == 0)
-            _overviewItems.Add(new OverviewItem("  (无)", OverviewTargetKind.None, null, null));
+        // 不归属任何已列 Pty 的会话与窗格: 会话按 id, 窗格统一落入“未分组”。
         foreach (var agent in agents)
-        {
-            var (provider, model) = CurrentModel(agent);
-            var ptyId = PtyForSession(agent.Id.Value);
-            _overviewItems.Add(new OverviewItem(
-                $"  {agent.Id} · {provider}/{model}",
-                OverviewTargetKind.Session,
-                null,
-                agent.Id.ToString()));
-            // 会话 id 很长, pty 放行尾会被浮层宽度截掉; 单独一行保证可见。
-            _overviewItems.Add(new OverviewItem(
-                ptyId is { Length: > 0 } ? $"    pty {ptyId}" : "    pty (none)",
-                OverviewTargetKind.None,
-                null,
-                null));
-            AddPaneRows(catalog, placed, 4, entry => string.Equals(entry.SessionId, agent.Id.Value, StringComparison.Ordinal));
-        }
-
-        // 不属于任何已列 Pty/会话的窗格(如子代理窗格)统一放"未分组"。
-        var ungrouped = catalog.Where(entry => !placed.Contains(entry.Id)).ToList();
+            AddSessionRow(agent.Id.Value);
+        var ungrouped = catalog.Where(entry => !placedPanes.Contains(entry.Id)).ToList();
         if (ungrouped.Count > 0)
         {
             _overviewItems.Add(new OverviewItem("未分组", OverviewTargetKind.None, null, null));
             foreach (var entry in ungrouped)
-                AddPaneRow(placed, entry, 2);
+                AddPaneRow(placedPanes, entry, 2);
         }
+
+        if (_overviewItems.Count == 0)
+            _overviewItems.Add(new OverviewItem("  (无)", OverviewTargetKind.None, null, null));
+    }
+
+    /**
+     * 进入 Pty: 已有窗格直接聚焦; 本进程的 shell pty 无窗格时绑一个终端窗格(与普通终端无异)。
+     * daemon/远程 pty 的窗格级 attach 不在阶段 1。
+     */
+    private void EnterPty(string ptyId)
+    {
+        foreach (var entry in Catalog())
+        {
+            if (string.Equals(entry.PtyId, ptyId, StringComparison.Ordinal) && _panes.ContainsKey(entry.Id))
+            {
+                FocusPane(entry.Id);
+                return;
+            }
+        }
+
+        if (PtyHost.Default.Get(ptyId) is { } session && session.Status != PtySessionStatus.Exited)
+        {
+            var id = _nextPaneId++;
+            AddPane(new ShellPane(this, id, session, Math.Max(1, _paneArea.Width), Math.Max(1, _paneArea.Height)), null);
+            return;
+        }
+
+        InputPane.AppendRaw($"  pty {ptyId} 暂无可进入的窗格(daemon/远程 pty 需窗格级 attach)\n");
     }
 
     /** 会话所属 pty: daemon 上报的归属优先(跨进程), 否则常驻进程自身所在的 pty; 都没有返回 null。 */
@@ -1890,7 +2078,7 @@ public sealed class ChatWindow : IDisposable
     {
         var area = OverlayArea(grid);
         var lines = _overviewItems.Select(item => item.Line).ToList();
-        PopupList.Draw(grid, area, "总览 PTY / 会话 / 窗格", lines, _overviewIndex);
+        PopupList.Draw(grid, area, "总览 Pty → 会话 → 窗格", lines, _overviewIndex);
     }
 
     private void DrawAgentList(CellGrid grid)
@@ -1987,7 +2175,7 @@ public sealed class ChatWindow : IDisposable
             rect.X,
             rect.Y,
             prefix + pane.PaneTitle,
-            focused ? AnsiColor.BrightCyan : AnsiColor.Default,
+            focused ? TuiTheme.Highlight : CellColor.Default,
             AnsiColor.Default,
             focused ? CellStyle.Bold : CellStyle.Dim);
     }
@@ -2138,6 +2326,7 @@ public sealed class ChatWindow : IDisposable
     private enum OverviewTargetKind
     {
         None,
+        Pty,
         Pane,
         RemotePane,
         Session,

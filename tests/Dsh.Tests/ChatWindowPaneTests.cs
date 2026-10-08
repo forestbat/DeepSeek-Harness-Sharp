@@ -134,21 +134,19 @@ public sealed class ChatWindowPaneTests : IDisposable
         Press(chat, ConsoleKey.W);
 
         var frame = DrawFrame(chat);
-        Assert.Contains("总览 PTY", frame);
-        Assert.Contains("PTY", frame);
-        Assert.Contains("会话", frame);
+        Assert.Contains("总览 Pty", frame);
         Assert.Contains("pane 0", frame);
         Assert.Contains(first.Id.ToString(), frame);
         Assert.Contains(second.Id.ToString(), frame);
 
         Press(chat, ConsoleKey.Escape);
-        Assert.DoesNotContain("总览 PTY", DrawFrame(chat));
+        Assert.DoesNotContain("总览 Pty", DrawFrame(chat));
         chat.Dispose();
     }
 
-    /** 总览的会话行必须标出所属 pty(没有则显式 none), 否则无法判断会话跑在哪个 pty。 */
+    /** 单一树: 会话直接列在树里(没有 pty 归属时不再有旧的“pty …”归属行, 也没有“PTY/会话”两段标题)。 */
     [Fact]
-    public async Task CtrlX_W_Overview_Shows_Session_Pty_Attribution()
+    public async Task CtrlX_W_Overview_Is_Single_Tree()
     {
         var (chat, _, _, first, second) = await CreateChatWithTwoAgents();
         var layout = LayoutEngine.Calculate(120, 40);
@@ -158,8 +156,6 @@ public sealed class ChatWindowPaneTests : IDisposable
         Press(chat, ConsoleKey.W);
 
         var lines = DrawFrame(chat).Split('\n');
-        // 浮层内容行带边框, 用 Contains 判定; 每个会话一条 "pty ..." 归属行。
-        Assert.True(lines.Count(line => line.Contains("pty ")) >= 2, "会话行下应各有一行 pty 归属");
         Assert.Contains(lines, line => line.Contains(first.Id.ToString()));
         Assert.Contains(lines, line => line.Contains(second.Id.ToString()));
         chat.Dispose();
@@ -180,7 +176,7 @@ public sealed class ChatWindowPaneTests : IDisposable
 
         // 方向键只在可选行间移动: Enter 必然激活某个窗格/会话并关闭总览(None 行会被跳过)。
         Assert.Contains(chat.FocusedPaneId, new[] { 0, 1 });
-        Assert.DoesNotContain("总览 PTY", DrawFrame(chat));
+        Assert.DoesNotContain("总览 Pty", DrawFrame(chat));
         chat.Dispose();
     }
 
@@ -324,6 +320,28 @@ public sealed class ChatWindowPaneTests : IDisposable
         }
 
         return string.Join('\n', lines);
+    }
+
+    /** §6 D3: /timestamp revert 就地截断会话并把被选消息回填输入区。 */
+    [Fact]
+    public async Task Timestamp_Revert_Truncates_Session_And_Refills_Input()
+    {
+        var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
+        var agent = chat.InputPane.Agent;
+        agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第一条")), new SurfaceOp.Append());
+        agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第二条")), new SurfaceOp.Append());
+        var targetSeq = agent.Session.SnapshotEvents().Last(entry => entry.Data is UserMessagePayload).Seq;
+
+        chat.RunSlashCommand(chat.InputPane, $"/timestamp revert {targetSeq}");
+        for (var attempt = 0; attempt < 200 && agent.Session.Seq != targetSeq; attempt++)
+        {
+            chat.DrainUi();
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal("第二条", chat.InputPane.Input);
+        Assert.Equal(targetSeq, agent.Session.Seq);
+        chat.Dispose();
     }
 
     public void Dispose()

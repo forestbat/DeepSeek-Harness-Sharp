@@ -97,6 +97,23 @@ public sealed class ChatPane : ITuiPane
 
     public int ScrollOffset { get; set; }
 
+    /** 滚到包含指定文本的首行(供 /timestamp jump): 需先绘制过一次以建立视口缓存。 */
+    internal bool TryScrollToMessage(string needle)
+    {
+        if (string.IsNullOrEmpty(needle) || _wrapCacheLines is not { Count: > 0 } lines)
+            return false;
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (lines[index].Contains(needle, StringComparison.Ordinal))
+            {
+                StickToBottom = false;
+                ScrollOffset = index;
+                return true;
+            }
+        }
+        return false;
+    }
+
     public bool StickToBottom { get; set; } = true;
 
     public string? SelectedFoldKey { get; set; }
@@ -1050,6 +1067,8 @@ public sealed class ChatPane : ITuiPane
             {
                 // provider 的 --type 候选按已注册适配器动态取(插件启用/停用后依然正确)。
                 "type" => KnownProviderTypes(),
+                "action" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => ["jump", "revert", "fork"],
+                "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(),
                 _ => descriptor.Name switch
             {
                 "model" => settings.Providers
