@@ -76,36 +76,6 @@ public sealed class GuiTestEnvironment : IDisposable
         App.Dispose();
         if (!_ownsDirectory)
             return;
-        try
-        {
-            DeleteTree(_directory);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
-
-    /** checkpoints 插件在工作区(即临时目录)下建 git 仓库, git 对象文件只读且收尾写盘滞后, 需清只读并重试。 */
-    private static void DeleteTree(string directory)
-    {
-        if (!Directory.Exists(directory))
-            return;
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                    File.SetAttributes(file, FileAttributes.Normal);
-                Directory.Delete(directory, true);
-                return;
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
+        TempTree.Delete(_directory);
     }
 }

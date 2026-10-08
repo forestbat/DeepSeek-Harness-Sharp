@@ -187,17 +187,27 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Capture(window, "headless-settings-graphics");
 
             var adapters = viewModel.Preferences.GpuAdapters;
+            // 首项始终是"自动"; 无 GPU 的 CI runner / 无驱动环境不会枚举出真实显卡。
             Assert.NotEmpty(adapters);
             Assert.Equal(GpuCatalog.AutoAdapter, adapters[0].Value);
+            var realAdapters = adapters
+                .Where(option => !string.Equals(option.Value, GpuCatalog.AutoAdapter, StringComparison.Ordinal))
+                .Where(option => !option.Label.Contains("当前不可用", StringComparison.Ordinal))
+                .ToList();
             if (OperatingSystem.IsWindows())
             {
-                // 本机是 AMD 780M + NVIDIA 4060 Laptop: 列表必须给出真实显卡而不是"渲染后端"。
-                // 落盘值是 PCI slot(同名多卡唯一可区分), 卡名在 Label 里。
-                var amd = adapters.First(option => option.Label.Contains("780M", StringComparison.OrdinalIgnoreCase));
-                var nvidia = adapters.First(option => option.Label.Contains("RTX 4060", StringComparison.OrdinalIgnoreCase));
-                Assert.True(GpuPreference.LooksLikePciSlot(amd.Value), $"AMD 卡的落盘值不是 PCI slot: {amd.Value}");
-                Assert.True(GpuPreference.LooksLikePciSlot(nvidia.Value), $"NVIDIA 卡的落盘值不是 PCI slot: {nvidia.Value}");
-                Assert.NotEqual(amd.Value, nvidia.Value);
+                if (realAdapters.Count == 0)
+                {
+                    // 无真实显卡时不把"有显卡"当硬前置: 只验证"自动"项与保存链路。
+                    Console.WriteLine("未枚举到真实显卡, 跳过显卡落盘值断言。");
+                }
+                else
+                {
+                    // 有真实显卡时: 落盘值必须是 PCI slot(同名多卡唯一可区分), 卡名在 Label 里。
+                    foreach (var option in realAdapters)
+                        Assert.True(GpuPreference.LooksLikePciSlot(option.Value), $"显卡落盘值不是 PCI slot: {option.Label} => {option.Value}");
+                    Assert.Equal(realAdapters.Count, realAdapters.Select(option => option.Value).Distinct(StringComparer.Ordinal).Count());
+                }
             }
 
             var target = adapters[^1];

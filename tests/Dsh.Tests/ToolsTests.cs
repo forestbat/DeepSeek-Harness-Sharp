@@ -233,7 +233,7 @@ public class ToolsTests : IDisposable
         {
             try
             {
-                var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "pwsh",
                     Arguments = "--version",
@@ -241,7 +241,13 @@ public class ToolsTests : IDisposable
                     RedirectStandardError = true,
                     UseShellExecute = false,
                 });
-                process!.WaitForExit(5000);
+                if (process is null)
+                    return false;
+                if (!process.WaitForExit(5000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    return false;
+                }
                 return process.ExitCode == 0;
             }
             catch

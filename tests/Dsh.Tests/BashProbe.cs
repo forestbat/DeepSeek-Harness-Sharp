@@ -13,9 +13,10 @@ internal static class BashProbe
 
     private static bool Probe()
     {
+        Process? process = null;
         try
         {
-            using var process = Process.Start(new ProcessStartInfo("bash", "-c \"exit 0\"")
+            process = Process.Start(new ProcessStartInfo("bash", "-c \"exit 0\"")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -27,6 +28,20 @@ internal static class BashProbe
         catch (Exception)
         {
             return false;
+        }
+        finally
+        {
+            // 探测超时(如本机 WSL 挂死)时子进程仍在运行, 必须连子进程树杀掉, 否则会一直占着句柄、拖住整个测试进程。
+            try
+            {
+                if (process is { HasExited: false })
+                    process.Kill(entireProcessTree: true);
+            }
+            catch (Exception)
+            {
+                // 进程可能已退出或无权终止: 探测结果已定, 这里不再抛出。
+            }
+            process?.Dispose();
         }
     }
 }

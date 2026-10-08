@@ -1,4 +1,3 @@
-using Dsh.Boot;
 using Dsh.Checkpoints;
 using Dsh.Core;
 using Dsh.Llm;
@@ -11,8 +10,8 @@ public sealed class CheckpointTests
     [Fact]
     public async Task Service_RecordsPointOnToolResultAndSkipsUnchangedContent()
     {
-        var project = CreateTempDirectory("project");
-        var home = CreateTempDirectory("home");
+        var project = TempTree.CreateDirectory("project");
+        var home = TempTree.CreateDirectory("home");
         try
         {
             File.WriteAllText(Path.Combine(project, "a.txt"), "one");
@@ -41,16 +40,16 @@ public sealed class CheckpointTests
         }
         finally
         {
-            DeleteQuietly(project);
-            DeleteQuietly(home);
+            TempTree.Delete(project);
+            TempTree.Delete(home);
         }
     }
 
     [Fact]
     public async Task Service_RestoresFilesFromCheckpoint()
     {
-        var project = CreateTempDirectory("project");
-        var home = CreateTempDirectory("home");
+        var project = TempTree.CreateDirectory("project");
+        var home = TempTree.CreateDirectory("home");
         try
         {
             File.WriteAllText(Path.Combine(project, "keep.txt"), "keep-original");
@@ -78,16 +77,16 @@ public sealed class CheckpointTests
         }
         finally
         {
-            DeleteQuietly(project);
-            DeleteQuietly(home);
+            TempTree.Delete(project);
+            TempTree.Delete(home);
         }
     }
 
     [Fact]
     public async Task Service_RespectsGitignoreAndPrunesOldPoints()
     {
-        var project = CreateTempDirectory("project");
-        var home = CreateTempDirectory("home");
+        var project = TempTree.CreateDirectory("project");
+        var home = TempTree.CreateDirectory("home");
         try
         {
             File.WriteAllText(Path.Combine(project, ".gitignore"), "ignored.txt\n");
@@ -121,15 +120,15 @@ public sealed class CheckpointTests
         }
         finally
         {
-            DeleteQuietly(project);
-            DeleteQuietly(home);
+            TempTree.Delete(project);
+            TempTree.Delete(home);
         }
     }
 
     [Fact]
     public void Log_PrunesByAgeAndLimit()
     {
-        var directory = CreateTempDirectory("log");
+        var directory = TempTree.CreateDirectory("log");
         try
         {
             var path = Path.Combine(directory, "points.jsonl");
@@ -155,7 +154,7 @@ public sealed class CheckpointTests
         }
         finally
         {
-            DeleteQuietly(directory);
+            TempTree.Delete(directory);
         }
     }
 
@@ -187,8 +186,8 @@ public sealed class CheckpointTests
     [Fact]
     public async Task RestoreToSeq_PicksLastPointAtOrBeforeSeq()
     {
-        var project = CreateTempDirectory("project");
-        var home = CreateTempDirectory("home");
+        var project = TempTree.CreateDirectory("project");
+        var home = TempTree.CreateDirectory("home");
         try
         {
             File.WriteAllText(Path.Combine(project, "keep.txt"), "op1");
@@ -212,8 +211,8 @@ public sealed class CheckpointTests
         }
         finally
         {
-            DeleteQuietly(project);
-            DeleteQuietly(home);
+            TempTree.Delete(project);
+            TempTree.Delete(home);
         }
     }
 
@@ -227,7 +226,8 @@ public sealed class CheckpointTests
 
     private static async Task WaitUntilAsync(Func<bool> condition, string what)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        // CI runner 上 git 进程创建 + 磁盘/杀软扫描很慢, 首个检查点可能远超 15s; 放宽上限(满足即返回)。
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         while (DateTime.UtcNow < deadline)
         {
             if (condition())
@@ -235,26 +235,5 @@ public sealed class CheckpointTests
             await Task.Delay(50);
         }
         Assert.Fail($"timed out waiting for {what}");
-    }
-
-    private static string CreateTempDirectory(string prefix)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"dsh-ckpt-{prefix}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        return directory;
-    }
-
-    private static void DeleteQuietly(string directory)
-    {
-        try
-        {
-            Directory.Delete(directory, true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 }

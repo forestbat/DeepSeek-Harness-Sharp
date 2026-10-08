@@ -149,6 +149,19 @@ public sealed class GpuSessionProxyDetachTests
         using var process = System.Diagnostics.Process.Start(startInfo);
         if (process is null)
             return;
-        await process.WaitForExitAsync(cancellationToken);
+        // 必须持续读取重定向的流, 否则管道缓冲区写满会死锁; 退出不确定时连子进程树一起杀掉, 避免残留进程占住句柄。
+        var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        finally
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            _ = await output;
+            _ = await error;
+        }
     }
 }
