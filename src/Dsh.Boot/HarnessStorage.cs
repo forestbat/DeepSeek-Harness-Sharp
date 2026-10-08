@@ -84,11 +84,13 @@ public static class HarnessStorage
                 if (!Directory.Exists(source))
                     continue;
                 var destination = Path.Combine(to.Root, directory);
-                if (Directory.Exists(destination))
+                if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
                     continue;
                 try
                 {
                     Directory.CreateDirectory(to.Root);
+                    if (Directory.Exists(destination))
+                        Directory.Delete(destination, recursive: false);
                     Directory.Move(source, destination);
                 }
                 catch (IOException)

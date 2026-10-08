@@ -99,4 +99,42 @@ public class ConfigBootTests
             }
         }
     }
+
+    [Fact]
+    public async Task Compose_StorageRootRedirectsHome()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"dsh-configboot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        HarnessApp? app = null;
+        try
+        {
+            var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
+            Directory.CreateDirectory(home.Root);
+            var target = Path.Combine(dir, "data");
+            await File.WriteAllTextAsync(Path.Combine(home.Root, "settings.yaml"), $"""
+                global_default_model: deepseek-official/deepseek-v4-flash
+                storage:
+                  root: {target.Replace('\\', '/')}
+                plugins:
+                  "@deepseek-ai/dsh-core": true
+                """, TestContext.Current.CancellationToken);
+
+            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+
+            Assert.Equal(Path.GetFullPath(target), app.Home.Root);
+            Assert.Equal(Path.GetFullPath(target), (string)app.Ctx.GetProp("dshHomePath")!);
+            Assert.True(File.Exists(Path.Combine(target, "settings.yaml")));
+        }
+        finally
+        {
+            app?.Dispose();
+            try
+            {
+                Directory.Delete(dir, true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
 }

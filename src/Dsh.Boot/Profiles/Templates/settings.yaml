@@ -81,6 +81,15 @@ logging:
   # 文件保留天数
   keep_days: 15
 
+# 持久化根:留空用 $DSH_HOME 或 ~/.dsh;改动后下次启动后台把旧根的数据目录搬到新根
+storage:
+  # root: D:/dsh-data
+  tool_results:
+    # 单个工具结果超过该字节数就落盘到 <root>/tool-results,会话里只留头尾与路径
+    max_bytes: 65536
+    # 落盘结果保留天数
+    retain_days: 30
+
 # 安全设置
 safety:
   autoApprove: false

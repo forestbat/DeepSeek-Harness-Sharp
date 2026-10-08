@@ -67,7 +67,9 @@ public static class HarnessEntrypoint
             }
         }
 
-        var harnessHome = HarnessHome.Resolve(home);
+        var harnessHome = home is { Length: > 0 } explicitHome
+            ? HarnessHome.Resolve(explicitHome)
+            : HarnessStorage.ResolveDefaultHome();
         if (dumpConfig)
         {
             var settings = HarnessSettings.Load(harnessHome);
@@ -144,7 +146,7 @@ public static class HarnessEntrypoint
                    dsh register-terminal    (Linux: 注册为桌面环境的默认终端)
 
             Options:
-              --home <path>      harness home (default: $DSH_HOME or ~/.dsh)
+              --home <path>      harness home (default: $DSH_HOME or ~/.dsh; settings 的 storage.root 仍会覆盖)
               --session <id>     open an existing session (gui) or resume one (tui)
               --gpu              open the standalone terminal window with the GPU renderer
               --shell            start with a real shell pane (Dsh.Pty) in the focused slot
@@ -174,7 +176,7 @@ public static class HarnessEntrypoint
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui");
         using var app = await ConfigBoot.Compose(options);
         return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(
-            home,
+            app.Home,
             Directory.GetCurrentDirectory(),
             resumeSessionId,
             gpu,

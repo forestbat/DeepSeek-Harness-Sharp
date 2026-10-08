@@ -16,18 +16,23 @@ public static class ConfigBoot
         await Task.Yield();
         options.Home.Ensure();
         var settings = HarnessSettings.Load(options.Home);
-        var logging = LoggingSetup.Create(settings.Logging?.ToOptions(), options.Home.LogsPath, allowConsole: !options.IsTui);
-        var credentials = new EnvCredentials(options.Home, options.Cwd);
+        var home = HarnessStorage.ApplyStorageRoot(options.Home, settings);
+        var logging = LoggingSetup.Create(settings.Logging?.ToOptions(), home.LogsPath, allowConsole: !options.IsTui);
+        var credentials = new EnvCredentials(home, options.Cwd);
         var ctx = new Context(logging);
-        ctx.SetOwn("dshHomePath", options.Home.Root);
+        ctx.SetOwn("dshHomePath", home.Root);
         ctx.SetOwn("credentials", credentials);
-        ctx.SetOwn("harnessOptions", options);
+        ctx.SetOwn("harnessOptions", options with { Home = home });
+        _ = new ToolResultSpill(ctx, settings.Storage?.ToolResults is { } toolResults
+            ? new ToolResultSpillOptions(toolResults.MaxBytes)
+            : null);
 
         var pluginHost = new PluginHost();
         pluginHost.RegisterCompiledIn();
         var pluginsDirectory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
-        var discovery = pluginHost.Scan(pluginsDirectory, ResolveNativeBridge());
+        var nativeBridge = ResolveNativeBridge();
+        var discovery = pluginHost.Scan(pluginsDirectory, nativeBridge);
         foreach (var skip in discovery.Skipped)
             ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
         foreach (var notice in pluginHost.SharedPool.DrainNotices())
@@ -42,22 +47,22 @@ public static class ConfigBoot
         var app = new HarnessApp
         {
             Ctx = ctx,
-            Home = options.Home,
+            Home = home,
             Credentials = credentials,
             Provider = provider,
             Model = model,
             ReasoningEffort = options.ReasoningEffort,
         };
         app.Track(logging);
-        if (discovery.Native.Count > 0)
-            app.Track(new PluginDisposables(discovery.Native));
 
         try
         {
             var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
-            ctx.LoggerFor("boot").Info("composition ready: %d plugin(s), home %s", composition.Activations.Count, options.Home.Root);
-            var manager = new HarnessPluginManager(pluginHost, composition, options.Home, settings, discovery.Managed, pluginsDirectory);
+            ctx.LoggerFor("boot").Info("composition ready: %d plugin(s), home %s", composition.Activations.Count, home.Root);
+            // 原生插件的所有权交给 manager:它在 /plugins remove、故障卸载与最终 Dispose 时统一 Deactivate + Free。
+            var manager = new HarnessPluginManager(
+                pluginHost, composition, home, settings, discovery.Managed, discovery.Native, discovery.Skipped, nativeBridge, pluginsDirectory);
             app.Track(manager);
             ctx.Provide("pluginManager", manager);
         }
@@ -123,12 +128,4 @@ public static class ConfigBoot
         }
     }
 
-    private sealed class PluginDisposables(IReadOnlyList<INativePlugin> plugins) : IDisposable
-    {
-        public void Dispose()
-        {
-            foreach (var plugin in plugins)
-                plugin.Dispose();
-        }
-    }
 }

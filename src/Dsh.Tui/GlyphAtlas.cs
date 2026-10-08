@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using SixLabors.Fonts;
 using SixLabors.Fonts.Unicode;
 using SixLabors.ImageSharp;
@@ -510,7 +511,7 @@ public sealed class GlyphAtlas
         var name = Math.Abs(fontSizePt - DefaultFontSizePt) < 1e-9
             ? "glyph-atlas.bin"
             : $"glyph-atlas-{fontSizePt}pt.bin";
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh", "cache", name);
+        return Path.Combine(HarnessStorage.ResolveDefaultHome().CachePath, name);
     }
 
     /** 布局基线位置: 以 'H' 大写字母脚底(即基线)实测, 避免假设 SixLabors 的行盒口径。 */

@@ -40,7 +40,7 @@ if ($ExeArguments.Length -gt 0)
 }
 else
 {
-    if ($DshHome.Length -gt 0) { $arguments += @("--home", $DshHome) }
+    if ($DshHome.Length -gt 0) { $env:DSH_HOME = $DshHome }
     if ($Session.Length -gt 0) { $arguments += @("--session", $Session) }
 }
 $errorLog = Join-Path $root "artifacts020\capture-gui.err"

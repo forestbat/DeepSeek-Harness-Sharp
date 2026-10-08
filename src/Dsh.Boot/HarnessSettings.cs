@@ -39,6 +39,9 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "logging")]
     public LoggingSettings? Logging { get; set; }
 
+    [YamlMember(Alias = "storage")]
+    public StorageSettings? Storage { get; set; }
+
     [YamlIgnore]
     public Dictionary<string, PluginSetting> Plugins { get; set; } = [];
 
@@ -187,6 +190,30 @@ public sealed class SafetySettings
 
     [YamlMember(Alias = "blacklist")]
     public List<string> Blacklist { get; set; } = [];
+}
+
+public sealed class StorageSettings
+{
+    /** 统一持久化根; 留空则用 $DSH_HOME 或 ~/.dsh。改动后下次启动后台迁移旧数据。 */
+    [YamlMember(Alias = "root")]
+    public string? Root { get; set; }
+
+    [YamlMember(Alias = "tool_results")]
+    public ToolResultsSettings? ToolResults { get; set; }
+}
+
+public sealed class ToolResultsSettings
+{
+    public const long DefaultMaxBytes = 64 * 1024;
+    public const int DefaultRetainDays = 30;
+
+    /** 超过该字节数的工具结果落盘, 会话里只留头部/尾部与路径。 */
+    [YamlMember(Alias = "max_bytes")]
+    public long MaxBytes { get; set; } = DefaultMaxBytes;
+
+    /** 落盘结果的保留天数。 */
+    [YamlMember(Alias = "retain_days")]
+    public int RetainDays { get; set; } = DefaultRetainDays;
 }
 
 public sealed class LoggingSettings

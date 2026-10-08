@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Dsh.Boot;
 
 namespace Dsh.Tui;
 
@@ -14,7 +15,7 @@ internal static class GlyphFallbackCache
     private const string Version = "1";
 
     public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh", "cache", "glyph-fallback.txt");
+        HarnessStorage.ResolveDefaultHome().CachePath, "glyph-fallback.txt");
 
     public static string Key(double fontSize, IReadOnlyList<string> inventory)
     {

@@ -54,7 +54,7 @@ dotnet DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp.dll tui
 DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe tui
 ```
 
-用 `--home <目录>` 或 `DSH_HOME` 可以指定独立的配置/会话目录,便于用不同配置试跑构建产物。
+用 `DSH_HOME`(或 settings.yaml 的 `storage.root`)可以指定独立的配置/会话目录,便于用不同配置试跑构建产物。
 
 ## 图形界面
 
@@ -116,7 +116,7 @@ DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe gui --sessio
 
 ## settings.yaml 结构
 
-配置文件为 `~/.dsh/settings.yaml`;首次运行按 `src/Dsh.Boot/Profiles/Templates/settings.yaml` 生成带注释的模板(可用 `--home <path>` 或 `$DSH_HOME` 指定其它 harness home 做隔离测试)。
+配置文件为 `~/.dsh/settings.yaml`;首次运行按 `src/Dsh.Boot/Profiles/Templates/settings.yaml` 生成带注释的模板(可用 `$DSH_HOME` 或 `storage.root` 指定其它 harness home 做隔离测试)。
 `/plugins` 命令写回 `plugins:` 段时采用文本级修改(保留注释)。
 
 ```yaml
