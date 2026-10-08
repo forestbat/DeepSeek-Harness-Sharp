@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using Dsh.Boot;
 using Dsh.Llm;
@@ -103,7 +102,7 @@ public static class ProviderCatalog
             return LoadEmbedded();
         try
         {
-            var snapshot = Parse(File.ReadAllText(file));
+            var snapshot = Parse(ReadCacheTextShared(file));
             return snapshot with { FromCache = true, FetchedAt = File.GetLastWriteTimeUtc(file) };
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
@@ -131,8 +130,11 @@ public static class ProviderCatalog
         {
             var json = await Http.GetStringAsync(SourceUrl, signal);
             var snapshot = Parse(json);
+            // 存储根可能已被删除(测试结束清理 / 用户切换 home): 不重建目录, 否则会留下"只剩 cache"的空家目录。
+            if (!Directory.Exists(home.Root))
+                return snapshot with { FetchedAt = DateTimeOffset.UtcNow };
             Directory.CreateDirectory(home.CachePath);
-            await File.WriteAllTextAsync(CacheFile(home), json, signal);
+            await WriteCacheAtomicAsync(CacheFile(home), json, signal);
             return snapshot with { FetchedAt = DateTimeOffset.UtcNow };
         }
         catch (Exception error) when (error is HttpRequestException or TaskCanceledException or JsonException or IOException or UnauthorizedAccessException)
@@ -142,6 +144,22 @@ public static class ProviderCatalog
             var source = cached.FromCache ? "缓存" : "内置快照";
             return cached with { Error = $"刷新失败, 仍用{source}: {error.Message}" };
         }
+    }
+
+    /** 缓存可能被其它线程/实例同时读写: 共享 ReadWrite|Delete 打开, 避开"文件正在使用"。 */
+    private static string ReadCacheTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    /** 原子写: 先写同目录临时文件再改名覆盖, 避免并发读到半截内容, 也避免删除目录时与写句柄冲突。 */
+    private static async Task WriteCacheAtomicAsync(string path, string content, CancellationToken signal)
+    {
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        await File.WriteAllTextAsync(temp, content, signal);
+        File.Move(temp, path, overwrite: true);
     }
 
     public static ProviderCatalogSnapshot Parse(string json)
