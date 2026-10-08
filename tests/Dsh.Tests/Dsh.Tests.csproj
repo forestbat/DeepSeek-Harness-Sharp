@@ -89,6 +89,7 @@
     <ProjectReference Include="..\..\src\Dsh.Inspection\Dsh.Inspection.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Memory\Dsh.Memory.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Pty\Dsh.Pty.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Transport\Dsh.Transport.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
   </ItemGroup>

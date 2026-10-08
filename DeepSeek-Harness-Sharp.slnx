@@ -51,6 +51,7 @@
     <Project Path="src/Dsh.Telemetry/Dsh.Telemetry.csproj" />
     <Project Path="src/Dsh.Tools/Dsh.Tools.csproj" />
     <Project Path="src/Dsh.Toon/Dsh.Toon.csproj" />
+    <Project Path="src/Dsh.Transport/Dsh.Transport.csproj" />
     <Project Path="src/Dsh.Tui/Dsh.Tui.csproj" />
     <Project Path="src/Dsh.Web/Dsh.Web.csproj" />
     <Project Path="src/Dsh.Workflow/Dsh.Workflow.csproj" />
