@@ -90,9 +90,20 @@ jobs:
             -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench")
-          # macOS 暂时逐用例打印 STARTING/FINISHED, 用于定位挂死的用例(STARTING 后无 FINISHED)。
+          # macOS 临时诊断: 串行执行 + 逐用例日志, 并用看门狗在 6 分钟后杀掉挂死进程,
+          # 让挂死用例以"最后一个 [STARTING] 无 [FINISHED]"的形式留在可下载的日志里。
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=(-verbose)
+            ARGS+=(-verbose -parallel none)
+            echo "运行(macOS 诊断): ${ARGS[*]}"
+            "${ARGS[@]}" &
+            TESTPID=$!
+            ( sleep 360; kill -9 "$TESTPID" 2>/dev/null ) &
+            WATCH=$!
+            set +e
+            wait "$TESTPID"
+            CODE=$?
+            kill "$WATCH" 2>/dev/null || true
+            exit $CODE
           fi
           if command -v timeout >/dev/null 2>&1; then
             ARGS=(timeout 900 "${ARGS[@]}")
