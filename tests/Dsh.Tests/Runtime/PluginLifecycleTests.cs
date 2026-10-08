@@ -1,5 +1,4 @@
 using Dsh.Runtime;
-using Dsh.Runtime.Plugins;
 
 namespace Dsh.Tests.Runtime;
 
@@ -40,7 +39,7 @@ public class PluginLifecycleTests
         Assert.Equal(ActivationState.Failed, activation.State);
         Assert.Equal(1, attempts);
 
-        activation.SendInput(new PluginLifecycleState.Input.Retry());
+        activation.SendInput(new PluginActivationInput(PluginActivationInputKind.Retry));
         await ctx.Scheduler.SettleAsync();
         Assert.Equal(ActivationState.Failed, activation.State);
         Assert.Equal(2, attempts);
@@ -62,9 +61,9 @@ public class PluginLifecycleTests
         var inputs = Enumerable.Range(0, 32).Select(index => Task.Run(() =>
         {
             if (index % 2 == 0)
-                activation.SendInput(new PluginLifecycleState.Input.DependencyChanged());
+                activation.SendInput(new PluginActivationInput(PluginActivationInputKind.DependencyChanged));
             else
-                activation.SendInput(new PluginLifecycleState.Input.ConfigChanged());
+                activation.SendInput(new PluginActivationInput(PluginActivationInputKind.ConfigChanged));
         })).ToArray();
         await Task.WhenAll(inputs);
         await ctx.Scheduler.SettleAsync();

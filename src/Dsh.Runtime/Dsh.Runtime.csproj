@@ -13,7 +13,6 @@
       本仓库使用运行时解释模式(WithUseInterpretation), 不使用编译期 DI, 故排除 build 资产。
     -->
     <PackageReference Include="DryIoc.dll" Version="6.0.0" ExcludeAssets="build" />
-    <PackageReference Include="Chickensoft.LogicBlocks" Version="6.2.1" />
   </ItemGroup>
 
   <PropertyGroup>

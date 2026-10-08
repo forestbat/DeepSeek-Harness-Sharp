@@ -1,8 +1,6 @@
-using Dsh.Runtime.Plugins;
-
 namespace Dsh.Runtime;
 
-/** 单个插件的激活单元:公开可观测面(State/WaitAsync/Error 字符串),状态迁移由 PluginLifecycle 承载。 */
+/** 单个插件的激活单元:公开可观测面(State/WaitAsync/Error 字符串),状态迁移由本类内的转移表承载。 */
 public sealed class PluginActivation
 {
     private readonly PluginDefinition _definition;
@@ -28,17 +26,14 @@ public sealed class PluginActivation
     public bool IsActive => State == ActivationState.Active;
     public bool IsTransitioning => State is ActivationState.Activating or ActivationState.Deactivating;
 
-    internal PluginLifecycle? Lifecycle { get; }
     internal EffectScope Effects { get; } = new();
     internal bool PendingUnload { get; set; }
 
     /** 外部输入入口:并发提交在此串行化。 */
-    public void SendInput<TInput>(in TInput input) where TInput : struct
+    public void SendInput(in PluginActivationInput input)
     {
-        if (Lifecycle is null)
-            return;
         lock (_inputSync)
-            Lifecycle.Input(in input);
+            Transition(input);
     }
 
     internal PluginActivation(PluginDefinition definition, object? config)
@@ -48,7 +43,6 @@ public sealed class PluginActivation
         Inject = definition.Inject;
         InjectTypes = definition.InjectTypes;
         Config = config;
-        Lifecycle = new PluginLifecycle(this);
     }
 
     private PluginActivation(string name)
@@ -76,7 +70,7 @@ public sealed class PluginActivation
             await Ctx.Root.Scheduler.UnloadAsync(Name);
             return;
         }
-        SendInput(new PluginLifecycleState.Input.Deactivate(Unload: true));
+        SendInput(new PluginActivationInput(PluginActivationInputKind.Deactivate, Unload: true));
         await WaitAsync();
     }
 
@@ -136,17 +130,17 @@ public sealed class PluginActivation
 
     internal void StartActivation()
     {
-        SendInput(new PluginLifecycleState.Input.Activate());
-        SendInput(new PluginLifecycleState.Input.ActivateCompleted(Apply().Error));
+        SendInput(new PluginActivationInput(PluginActivationInputKind.Activate));
+        SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted, Error: Apply().Error));
     }
 
     internal void RequestRebuild()
     {
         PendingUnload = false;
-        SendInput(new PluginLifecycleState.Input.DependencyChanged());
+        SendInput(new PluginActivationInput(PluginActivationInputKind.DependencyChanged));
     }
 
-    internal void RequestUnload() => SendInput(new PluginLifecycleState.Input.Deactivate(Unload: true));
+    internal void RequestUnload() => SendInput(new PluginActivationInput(PluginActivationInputKind.Deactivate, Unload: true));
 
     internal void ClearError() => Error = null;
 
@@ -201,6 +195,84 @@ public sealed class PluginActivation
         _dependencyOwners = snapshot;
     }
 
+    /** 状态转移表(替代 LogicBlocks, D7): 只决定"下一个状态", 副作用统一走 LifecycleEntered/StartDisposal。 */
+    private void Transition(in PluginActivationInput input)
+    {
+        switch (input.Kind)
+        {
+            case PluginActivationInputKind.Activate when State == ActivationState.Pending:
+                LifecycleEntered(ActivationState.Activating);
+                break;
+            case PluginActivationInputKind.ActivateCompleted when State == ActivationState.Activating:
+                LifecycleEntered(input.Error is null ? ActivationState.Active : ActivationState.Failed);
+                break;
+            case PluginActivationInputKind.DependencyChanged or PluginActivationInputKind.ConfigChanged:
+                HandleStale();
+                break;
+            case PluginActivationInputKind.Retry when State == ActivationState.Failed:
+                RetryPending();
+                break;
+            case PluginActivationInputKind.Deactivate:
+                HandleDeactivate(input.Unload);
+                break;
+            case PluginActivationInputKind.Deactivated when State == ActivationState.Deactivating:
+                LifecycleEntered(input.Unload ? ActivationState.Disposed : ActivationState.Pending);
+                break;
+        }
+    }
+
+    /** Active 插件依赖/配置变更 → 重建(先卸旧效应); Failed 插件 → 清错重试。 */
+    private void HandleStale()
+    {
+        switch (State)
+        {
+            case ActivationState.Active:
+                PendingUnload = false;
+                StartDisposal();
+                LifecycleEntered(ActivationState.Deactivating);
+                break;
+            case ActivationState.Failed:
+                RetryPending();
+                break;
+        }
+    }
+
+    private void HandleDeactivate(bool unload)
+    {
+        switch (State)
+        {
+            case ActivationState.Pending:
+                if (unload)
+                    LifecycleEntered(ActivationState.Disposed);
+                break;
+            case ActivationState.Active:
+                PendingUnload = unload;
+                StartDisposal();
+                LifecycleEntered(ActivationState.Deactivating);
+                break;
+            case ActivationState.Failed:
+                LifecycleEntered(ActivationState.Disposed);
+                break;
+        }
+    }
+
+    private void RetryPending()
+    {
+        ClearError();
+        LifecycleEntered(ActivationState.Pending);
+    }
+
+    private void StartDisposal()
+    {
+        // 不用捕获同步上下文的续体:其续体会持住本对象(进而持住插件程序集),导致协作式卸载无法回收 ALC。
+        var disposal = DisposeEffectsAsync();
+        _ = disposal.ContinueWith(
+            _ => SendInput(new PluginActivationInput(PluginActivationInputKind.Deactivated, Unload: PendingUnload)),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
+    }
+
     internal void LifecycleEntered(ActivationState state)
     {
         State = state;
@@ -208,7 +280,11 @@ public sealed class PluginActivation
         {
             case ActivationState.Activating:
             case ActivationState.Deactivating:
-                _settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                // 曾出现整套测试偶发挂死在 xunit 的 Main: 它一直等某个用例收尾, 而该用例的环境组合永不返回。
+                // 根因: 进入迁移态时若直接替换 _settled, AwaitTransitionsAsync 可能刚判到 IsTransitioning 就拿到这个即将被丢弃的旧句柄, 旧句柄从此再无完成者, Task.WhenAll 永不返回, SettleAsync/Compose 永久等待; 每个 GUI 用例都要 Compose, 于是整套挂住 Main。
+                // 修复: 换新句柄前先 TrySetResult 释放旧句柄; AwaitTransitionsAsync 会重新评估迁移状态, 因此不会提前返回。
+                (_settled, var previous) = (new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously), _settled);
+                previous.TrySetResult();
                 break;
             case ActivationState.Active:
                 Ctx.LoggerFor().Info("activated");
@@ -263,3 +339,17 @@ public sealed class PluginActivation
 
     private readonly record struct ApplyOutcome(string? Error);
 }
+
+/** 插件状态机输入(替代 LogicBlocks 输入结构, D7)。 */
+public enum PluginActivationInputKind
+{
+    Activate,
+    ActivateCompleted,
+    DependencyChanged,
+    ConfigChanged,
+    Retry,
+    Deactivate,
+    Deactivated,
+}
+
+public readonly record struct PluginActivationInput(PluginActivationInputKind Kind, string? Error = null, bool Unload = false);
