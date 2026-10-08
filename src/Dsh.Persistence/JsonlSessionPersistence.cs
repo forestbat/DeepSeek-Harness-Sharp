@@ -332,6 +332,27 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         stream.Flush(true);
     }
 
+    /** 就地重写日志到前 eventCount 个事件(D3 revert): 头行 + 保留事件整体原子替换, 失败不改原文件。 */
+    internal void TruncateLog(SessionHeader header, long eventCount)
+    {
+        var path = FindLog(header.Id);
+        if (path is null)
+            return;
+        var stored = ReadStoredLog(path, header.Id);
+        var keep = (int)Math.Clamp(eventCount, 0, stored.Events.Count);
+        if (keep == stored.Events.Count)
+            return;
+        var kept = stored.Events.GetRange(0, keep);
+        var content = EncodeMaterialization(stored.Meta, stored.InheritedEventCount, kept);
+        var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
+        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(content);
+            stream.Flush(true);
+        }
+        File.Move(temp, path, overwrite: true);
+    }
+
     internal void ReleaseHandle(JsonlSessionHandle handle, bool materialized)
     {
         lock (_trackerGate)

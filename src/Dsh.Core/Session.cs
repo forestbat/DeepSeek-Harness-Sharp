@@ -9,7 +9,7 @@ public sealed class Session
     private int _count;
     private SessionLog _snapshot = SessionLog.Empty;
     private readonly Lock _writeGate = new();
-    private readonly Surface.Manager _surfaceManager;
+    private Surface.Manager _surfaceManager;
     private EpochHeader? _headerFold;
     private RequestContextPayload? _contextFold;
     private List<Message> _derived = [];
@@ -17,6 +17,8 @@ public sealed class Session
     private int _derivedGeneration;
 
     public event Action<Session, SessionEvent>? Appended;
+
+    public event Action<Session, long>? Truncated;
 
     public event Action<Session, SessionHeader>? Renamed;
 
@@ -111,6 +113,65 @@ public sealed class Session
     public bool IsOwnSeq(long seq) => seq >= InheritedEventCount && seq < Seq;
 
     public long Seq => Volatile.Read(ref _snapshot).Count;
+
+    /** 就地截断到 eventCount: 只剩 [0, eventCount), 重建 surface 与 header/context 折叠。仅限本会话自有区间。 */
+    public bool TryTruncateTo(long eventCount)
+    {
+        long truncatedTo;
+        lock (_writeGate)
+        {
+            if (eventCount < InheritedEventCount || eventCount > _count)
+                return false;
+            if (eventCount == _count)
+                return true;
+            _count = (int)eventCount;
+            Volatile.Write(ref _snapshot, new SessionLog(_buffer, 0, _count));
+            // surface 与折叠状态由事件日志派生: 日志缩短后整体重建, 不能就地回退(见 D3 revert)。
+            _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot));
+            _headerFold = null;
+            _contextFold = null;
+            for (var index = 0; index < _count; index++)
+            {
+                switch (_buffer[index].Data)
+                {
+                    case RequestHeaderPayload header:
+                        _headerFold = Core.RequestHeader.Canonicalize(header.Header);
+                        break;
+                    case RequestContextPayload context:
+                        _contextFold = context;
+                        break;
+                }
+            }
+
+            _derived = [];
+            _derivedNodes = 0;
+            _derivedGeneration = -1;
+            truncatedTo = _count;
+        }
+
+        NotifyTruncated(truncatedTo);
+        return true;
+    }
+
+    private void NotifyTruncated(long eventCount)
+    {
+        var subscribers = Truncated;
+        if (subscribers is null)
+            return;
+        foreach (var subscriber in subscribers.GetInvocationList())
+        {
+            if (subscriber is not Action<Session, long> action)
+                continue;
+            try
+            {
+                action(this, eventCount);
+            }
+            catch
+            {
+                // Observer failures are contained and never unmake a committed truncation.
+            }
+        }
+    }
 
     public SessionEvent Append(SessionEventPayload payload, SurfaceOp? surfaceOp = null, IReadOnlyList<long>? sourceEventSeqs = null)
     {

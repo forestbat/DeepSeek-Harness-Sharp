@@ -100,6 +100,26 @@ internal sealed class JsonlSessionHandle(
         }
     }
 
+    public void Truncate(long eventCount)
+    {
+        lock (_gate)
+        {
+            AssertOpen("truncate");
+            if (Access != SessionAccess.Write) throw new SessionReadOnlyException(Id, "truncate");
+            if (eventCount < 0) throw new ArgumentOutOfRangeException(nameof(eventCount), "truncate target must be non-negative");
+            if (state.Materialized && eventCount >= state.Cursor)
+                return;
+            if (state.Materialized)
+                storage.TruncateLog(Header, eventCount);
+            state.Cursor = eventCount;
+            state.Materialized = state.Materialized || eventCount == 0;
+            state.Primed = null;
+            state.TornTruncateTo = null;
+            state.RecoveredTail = null;
+            _observedLength = eventCount;
+        }
+    }
+
     public void Flush()
     {
         lock (_gate)

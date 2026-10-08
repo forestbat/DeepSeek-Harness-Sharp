@@ -34,9 +34,13 @@ public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
         _sessions[session.Id] = entry;
         Action<Session, SessionEvent> forward = (source, sessionEvent) => PublishEvent(source, sessionEvent);
         session.Appended += forward;
+        Action<Session, long> truncated = (source, eventCount) =>
+            Ctx.Events.Emit(Ctx, new SessionTruncateNotification(source, eventCount));
+        session.Truncated += truncated;
         return new SessionDetach(() =>
         {
             session.Appended -= forward;
+            session.Truncated -= truncated;
             Detach(session);
         });
     }

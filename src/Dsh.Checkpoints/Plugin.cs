@@ -22,6 +22,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         var homeRoot = ctx.GetProp("dshHomePath") as string ?? HarnessHome.Resolve().Root;
         var service = new CheckpointService(ctx, CheckpointPolicy.Resolve(config), homeRoot);
+        ctx.Provide(ICheckpointRestore.ServiceName, service);
         return new DisposableBundle(service, CheckpointCommand.Register(ctx, service));
     }
 

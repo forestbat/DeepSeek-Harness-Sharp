@@ -25,6 +25,8 @@ public interface ISessionHandle : IDisposable
     SessionAccess Access { get; }
     IReadOnlyList<SessionEvent> Read(long offset = 0, long? length = null);
     void Append(IReadOnlyList<SessionEvent> events);
+    /** 就地截断日志到 eventCount(D3 revert), 并把游标重置到该位置。 */
+    void Truncate(long eventCount);
     void Flush();
     void Close();
 }

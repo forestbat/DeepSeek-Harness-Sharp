@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -32,7 +33,7 @@ public sealed record CheckpointPolicy
     }
 }
 
-public sealed class CheckpointService : Service, IDisposable
+public sealed class CheckpointService : Service, ICheckpointRestore, IDisposable
 {
     public const string ServiceName = "checkpoints";
 
@@ -78,6 +79,20 @@ public sealed class CheckpointService : Service, IDisposable
         var point = points[index];
         await repo.Git.RestoreAsync(point.Commit, signal);
         return point.Commit;
+    }
+
+    /** D3 revert 的文件侧: 恢复到 Seq <= seq 的最近检查点; 没有则返回 null。 */
+    public async Task<string?> RestoreToSeqAsync(string cwd, long seq, CancellationToken signal)
+    {
+        var points = PointsFor(cwd);
+        var index = -1;
+        for (var position = 0; position < points.Count; position++)
+        {
+            if (points[position].Seq > seq)
+                break;
+            index = position;
+        }
+        return index < 0 ? null : await RestoreFilesAsync(cwd, index, signal);
     }
 
     private void Observe(Session session, SessionEvent sessionEvent)
@@ -159,7 +174,7 @@ public sealed class CheckpointService : Service, IDisposable
         {
             if (_repos.TryGetValue(cwd, out var existing))
                 return existing;
-            var root = Path.Combine(_homeRoot, "checkpoints", ProjectStorageKey.Of(cwd));
+            var root = Path.Combine(new HarnessHome(_homeRoot).CheckpointsPath, ProjectStorageKey.Of(cwd));
             var created = new ProjectRepo(
                 new ShadowGit(Path.Combine(root, "repo.git"), cwd),
                 new CheckpointLog(Path.Combine(root, "points.jsonl")));

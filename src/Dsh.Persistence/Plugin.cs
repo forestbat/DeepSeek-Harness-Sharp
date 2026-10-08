@@ -60,6 +60,11 @@ public sealed class Plugin(string packageName) : IDshPlugin
             if (handles.TryGetValue(notification.Session.Id, out var handle))
                 handle.Flush();
         });
+        var truncated = ctx.On<SessionTruncateNotification>(notification =>
+        {
+            if (handles.TryGetValue(notification.Session.Id, out var handle))
+                handle.Truncate(notification.EventCount);
+        });
         var disposed = ctx.On<SessionDisposedNotification>(notification =>
         {
             if (handles.Remove(notification.Session.Id, out var handle))
@@ -72,6 +77,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
             new CallbackDisposable(() => created()),
             new CallbackDisposable(() => eventHandler()),
             new CallbackDisposable(() => flush()),
+            new CallbackDisposable(() => truncated()),
             new CallbackDisposable(() => disposed()));
     }
 

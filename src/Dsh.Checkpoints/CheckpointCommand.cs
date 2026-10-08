@@ -41,8 +41,7 @@ public static class CheckpointCommand
         {
             var points = service.PointsFor(cwd);
             var path = Path.Combine(
-                ctx.GetProp("dshHomePath") as string ?? HarnessHome.Resolve().Root,
-                "checkpoints",
+                new HarnessHome(ctx.GetProp("dshHomePath") as string ?? HarnessHome.Resolve().Root).CheckpointsPath,
                 ProjectStorageKey.Of(cwd));
             return new CommandResult.Success(
                 $"enabled: true\npoints: {points.Count}/{service.MaxPoints}\nkeep days: {service.KeepDays}\nstore: {path}");

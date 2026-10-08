@@ -183,6 +183,40 @@ public sealed class CheckpointTests
         IsSeeded = false,
     };
 
+    /** D3 revert 文件侧: RestoreToSeqAsync 取 Seq<=目标 的最近检查点; 无则 null(不动文件)。 */
+    [Fact]
+    public async Task RestoreToSeq_PicksLastPointAtOrBeforeSeq()
+    {
+        var project = CreateTempDirectory("project");
+        var home = CreateTempDirectory("home");
+        try
+        {
+            File.WriteAllText(Path.Combine(project, "keep.txt"), "op1");
+            var ctx = new Context();
+            var sessions = new SessionStore(ctx);
+            using var service = new CheckpointService(ctx, new CheckpointPolicy { MaxPoints = 256, KeepDays = 15 }, home);
+            var header = Header(project);
+            var session = sessions.Create(id: header.Id, header: header);
+
+            AppendToolResult(session);
+            await WaitUntilAsync(() => service.PointsFor(project).Count == 1, "first checkpoint");
+            var firstSeq = service.PointsFor(project)[0].Seq;
+
+            File.WriteAllText(Path.Combine(project, "keep.txt"), "op2");
+            AppendToolResult(session);
+            await WaitUntilAsync(() => service.PointsFor(project).Count == 2, "second checkpoint");
+
+            Assert.Null(await service.RestoreToSeqAsync(project, firstSeq - 1, CancellationToken.None));
+            Assert.NotNull(await service.RestoreToSeqAsync(project, firstSeq, CancellationToken.None));
+            Assert.Equal("op1", File.ReadAllText(Path.Combine(project, "keep.txt")));
+        }
+        finally
+        {
+            DeleteQuietly(project);
+            DeleteQuietly(home);
+        }
+    }
+
     private static void AppendToolResult(Session session)
         => session.Append(
             new ToolResultPayload(
