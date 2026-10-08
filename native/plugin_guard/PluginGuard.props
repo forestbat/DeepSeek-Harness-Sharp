@@ -17,7 +17,7 @@
     <DshVsDevCmdCandidate Include="$(MSBuildProgramFiles32)\Microsoft Visual Studio\**\VsDevCmd.bat" />
   </ItemGroup>
 
-  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild">
+  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild" Condition="'$(DshGuardOwner)' == 'true'">
     <PropertyGroup>
       <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
       <DshGuardOutput>$(DshGuardOutputDir)$(DshGuardFile)</DshGuardOutput>
@@ -35,7 +35,7 @@
   </Target>
 
   <Target Name="IncludeDshPluginGuard" BeforeTargets="GetCopyToOutputDirectoryItems"
-          DependsOnTargets="BuildDshPluginGuard">
+          DependsOnTargets="BuildDshPluginGuard" Condition="'$(DshGuardOwner)' == 'true'">
     <PropertyGroup>
       <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
       <DshGuardOutput>$(DshGuardOutputDir)$(DshGuardFile)</DshGuardOutput>

@@ -3,6 +3,8 @@
   <!-- 原生 ABI 宿主侧接入点:引入生成器,产出主机函数表、回调蹦床与插件函数表绑定。 -->
   <PropertyGroup>
     <DshNativeHost>true</DshNativeHost>
+    <!-- 原生故障遏制库的唯一所有者:内容只从这里贡献, 再经项目引用传递, 避免多项目重复发布同一 .so/.dll。 -->
+    <DshGuardOwner>true</DshGuardOwner>
   </PropertyGroup>
 
   <ItemGroup>
