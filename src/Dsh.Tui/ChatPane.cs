@@ -108,6 +108,7 @@ public sealed class ChatPane : ITuiPane
             {
                 StickToBottom = false;
                 ScrollOffset = index;
+                _suppressStickOnce = true;
                 return true;
             }
         }
@@ -115,6 +116,20 @@ public sealed class ChatPane : ITuiPane
     }
 
     public bool StickToBottom { get; set; } = true;
+
+    /** jump 后抑制一次“新内容贴底”, 让目标消息保持在顶上; 一次性, 之后恢复正常贴底。 */
+    private bool _suppressStickOnce;
+
+    private void RequestStickToBottom()
+    {
+        if (_suppressStickOnce)
+        {
+            _suppressStickOnce = false;
+            return;
+        }
+
+        StickToBottom = true;
+    }
 
     public string? SelectedFoldKey { get; set; }
 
@@ -582,7 +597,7 @@ public sealed class ChatPane : ITuiPane
     private void AppendText(string text)
     {
         Renderer.AppendSystemMessage(text);
-        StickToBottom = true;
+        RequestStickToBottom();
     }
 
     public void DrawTranscript(CellGrid grid, ConsoleRect rect)
@@ -1450,7 +1465,7 @@ public sealed class ChatPane : ITuiPane
         if (displayBlocks.Count == 0)
             displayBlocks.Add(new TextBlock("[image]"));
         Renderer.AppendUserMessage(MessageFactory.CreateUserMessage(displayBlocks));
-        StickToBottom = true;
+        RequestStickToBottom();
 
         SendUserText(text);
     }

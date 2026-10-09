@@ -1064,6 +1064,22 @@ public class ChatWindowMenuTests : IDisposable
                 ]));
     }
 
+    /** /timestamp 的 seq 候选显示可读预览(#seq + 消息文本), 而不是只有编号。 */
+    [Fact]
+    public async Task TimestampCandidates_Show_Readable_Preview()
+    {
+        using var chat = await CreateChat();
+
+        Type(chat, "hello jump target");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
+
+        var entry = Assert.Single(chat.TimestampCandidates());
+
+        Assert.StartsWith("#", entry);
+        Assert.Contains("hello jump target", entry, StringComparison.Ordinal);
+    }
+
     private async Task<ChatWindow> CreateChat(Action<Context, CommandsService>? configure = null, string model = "deepseek-v4-flash", bool stubModelCommand = true)
     {
         var ctx = new Context();

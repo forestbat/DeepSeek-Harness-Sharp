@@ -661,6 +661,7 @@ public sealed class ChatWindow : IDisposable
     {
         grid.Clear();
         layout = Effective(layout);
+        // 窗格区始终按整幅宽度布局(多窗格不画右栏); 分隔线由 _paneLayout 派生, 与窗格同源, 不会因基数不一致而错位。
         _paneArea = new ConsoleRect(0, 0, grid.Width, Math.Max(0, layout.Main.Height));
         // 浮层(总览/子代理列表)的正文区域: 单窗格且有右侧栏时限于正文宽, 避免居中基准包含侧栏而压到侧栏上
         _overlayArea = _panes.Count == 1 && layout.RightPanel.Width > 0 ? layout.Main : _paneArea;
@@ -1142,9 +1143,10 @@ public sealed class ChatWindow : IDisposable
         Func<ChatPane, string, Task> Run,
         IReadOnlyList<CommandArgumentSchema>? ArgumentSchemas = null);
 
-    /** `/timestamp <seq>` 的 seq 候选: 本会话里用户自己发的消息。 */
+    /** `/timestamp seq` 的 seq 候选: 本会话里用户自己发的消息; 显示为可读预览(#seq 前缀供解析回 seq)。 */
     internal IReadOnlyList<string> TimestampCandidates()
-        => [.. UserMessages(InputPane.Agent.Session).Select(entry => entry.Seq.ToString(CultureInfo.InvariantCulture))];
+        => [.. UserMessages(InputPane.Agent.Session)
+            .Select(entry => $"#{entry.Seq.ToString(CultureInfo.InvariantCulture)} {Preview(entry.Text)}")];
 
     private static List<(long Seq, string Text)> UserMessages(Session session)
     {
@@ -1177,7 +1179,8 @@ public sealed class ChatWindow : IDisposable
             return Task.CompletedTask;
         }
 
-        if (parts.Length < 2 || !long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetSeq))
+        var seqToken = parts.Length >= 2 ? parts[1].TrimStart('#') : "";
+        if (parts.Length < 2 || !long.TryParse(seqToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetSeq))
         {
             pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <seq>\n");
             return Task.CompletedTask;
@@ -1208,9 +1211,9 @@ public sealed class ChatWindow : IDisposable
             return Task.CompletedTask;
         }
 
-        pane.AppendRaw(pane.TryScrollToMessage(firstLine)
-            ? $"  jumped to #{seq}\n"
-            : $"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
+        // 只定位: 目标消息滚到顶上; 不打印 "jumped to"(那会把视图重新贴回底部, 跳转看不到效果)。
+        if (!pane.TryScrollToMessage(firstLine))
+            pane.AppendRaw($"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
         return Task.CompletedTask;
     }
 
@@ -1483,7 +1486,8 @@ public sealed class ChatWindow : IDisposable
         if (IsResidentChild())
         {
             DetachRequested = true;
-            pane.AppendRaw("  detached: 会话继续在 daemon 里运行(`dsh tui attach` 可接回)\n");
+            // detach 完全静默: 不写 transcript(否则 attach 回来还留着"detached:"字样), 仅记录调试日志。
+            _ctx.LoggerFor("tui").Info("detached: 会话继续在 daemon 里运行(`dsh tui attach` 可接回)");
             return;
         }
 
@@ -1555,7 +1559,8 @@ public sealed class ChatWindow : IDisposable
                 },
                 WantsMouse = wantsMouse,
             });
-            pane.AppendRaw($"  detached: {session.Id} — {session.Command} (daemon PTY)\n");
+            // detach 完全静默: 不写 transcript, 仅记录调试日志。
+            _ctx.LoggerFor("tui").Info($"detached: {session.Id} — {session.Command} (daemon PTY)");
             RequestExit();
         }
         catch (Exception error)
