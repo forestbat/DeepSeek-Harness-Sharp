@@ -138,6 +138,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<WorkspaceChoiceViewModel> RecentWorkspaces { get; } = [];
 
+    /** 已保存的 SSH 远程工作区(工作区下拉“远程工作区”子菜单)。 */
+    public ObservableCollection<RemoteWorkspaceChoiceViewModel> RemoteWorkspaces { get; } = [];
+
+    /** 当前选定的远程工作区(打开动作经远端宿主接入后生效)。 */
+    public SshWorkspace? SelectedRemoteWorkspace { get; private set; }
+
+    /** 已连接的远端宿主(stdio-over-SSH); 未连接为 null。 */
+    public Dsh.RemoteHost.IRemoteHost? RemoteHost => _remoteConnection?.Client;
+
+    private SshRemoteWorkspaceLauncher.Connection? _remoteConnection;
+
+    private const int RemoteWorkspacePageSize = 8;
+
+    private IReadOnlyList<SshWorkspace> _allRemoteWorkspaces = [];
+
+    /** 远程工作区当前页(0 起)。 */
+    public int RemoteWorkspacePage { get; private set; }
+
+    [ObservableProperty]
+    private bool _canPageRemoteBack;
+
+    [ObservableProperty]
+    private bool _canPageRemoteForward;
+
+    [ObservableProperty]
+    private bool _hasRemotePages;
+
     /** 模型浮层列表: 按 ModelSearchText 子串过滤 Preferences.Models, IsCurrent 跟随当前模型标签。 */
     public ObservableCollection<ModelListItem> FilteredModels { get; } = [];
 
@@ -391,6 +418,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             RecentSessions.Add(node);
         SelectedSession = FindSession(_agent.Id);
         RebuildRecentWorkspaces();
+        RebuildRemoteWorkspaces();
         UpdateCurrentWorkspace();
     }
 
@@ -410,6 +438,76 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 SessionCatalog.WorkspaceDisplayName(path),
                 path,
                 new RelayCommand(() => SetDefaultWorkspace(captured))));
+        }
+    }
+
+    /** 已保存的 SSH 远程工作区(工作区下拉“远程工作区”子菜单)。 */
+    private void RebuildRemoteWorkspaces()
+    {
+        _allRemoteWorkspaces = Gui.Load().RemoteWorkspaces;
+        RemoteWorkspacePage = 0;
+        RenderRemoteWorkspacePage();
+    }
+
+    /** 分页渲染: 一次一页, 配合滚动条/滚轮; 过多时用页脚按钮翻页。 */
+    private void RenderRemoteWorkspacePage()
+    {
+        RemoteWorkspaces.Clear();
+        foreach (var workspace in _allRemoteWorkspaces.Skip(RemoteWorkspacePage * RemoteWorkspacePageSize).Take(RemoteWorkspacePageSize))
+        {
+            var captured = workspace;
+            RemoteWorkspaces.Add(new RemoteWorkspaceChoiceViewModel(
+                captured.Name,
+                $"{captured.User}@{captured.Host}:{captured.Port}",
+                new RelayCommand(() => OpenRemoteWorkspace(captured))));
+        }
+
+        CanPageRemoteBack = RemoteWorkspacePage > 0;
+        CanPageRemoteForward = (RemoteWorkspacePage + 1) * RemoteWorkspacePageSize < _allRemoteWorkspaces.Count;
+        HasRemotePages = _allRemoteWorkspaces.Count > RemoteWorkspacePageSize;
+    }
+
+    [RelayCommand]
+    private void RemotePageBack()
+    {
+        if (RemoteWorkspacePage == 0)
+            return;
+        RemoteWorkspacePage--;
+        RenderRemoteWorkspacePage();
+    }
+
+    [RelayCommand]
+    private void RemotePageForward()
+    {
+        if ((RemoteWorkspacePage + 1) * RemoteWorkspacePageSize >= _allRemoteWorkspaces.Count)
+            return;
+        RemoteWorkspacePage++;
+        RenderRemoteWorkspacePage();
+    }
+
+    /** 打开远程工作区: 经 ssh 起远端宿主并接入(stdio-over-SSH)。 */
+    private void OpenRemoteWorkspace(SshWorkspace workspace) => _ = OpenRemoteWorkspaceAsync(workspace);
+
+    private async Task OpenRemoteWorkspaceAsync(SshWorkspace workspace)
+    {
+        SelectedRemoteWorkspace = workspace;
+        if (_remoteConnection is not null)
+        {
+            await _remoteConnection.DisposeAsync();
+            _remoteConnection = null;
+        }
+
+        StatusText = $"正在连接远程工作区: {workspace.Name}…";
+        try
+        {
+            _remoteConnection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, CancellationToken.None);
+            var info = await _remoteConnection.Client.InfoAsync();
+            var sessions = await _remoteConnection.Client.ListSessionsAsync();
+            StatusText = $"已连接远程工作区 {workspace.Name}（{info.Platform}，{sessions.Count} 个会话）";
+        }
+        catch (Exception error)
+        {
+            StatusText = $"远程工作区 {workspace.Name} 连接失败: {error.Message}";
         }
     }
 

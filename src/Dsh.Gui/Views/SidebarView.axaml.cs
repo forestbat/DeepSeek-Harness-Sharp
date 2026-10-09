@@ -109,4 +109,13 @@ public sealed partial class SidebarView : UserControl
         if (node.IsRenaming)
             viewModel.CommitRenameCommand.Execute(node);
     }
+
+    /** 悬停即打开“远程工作区”右拉菜单(有内容时); 空列表不弹窗。 */
+    private void OnRemoteWorkspaceHover(object? sender, PointerEventArgs e)
+    {
+        if (sender is not Button { Flyout: { } flyout } button)
+            return;
+        if (DataContext is MainViewModel { RemoteWorkspaces.Count: > 0 } && !flyout.IsOpen)
+            flyout.ShowAt(button);
+    }
 }

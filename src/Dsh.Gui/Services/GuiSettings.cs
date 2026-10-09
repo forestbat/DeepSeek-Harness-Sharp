@@ -55,7 +55,7 @@ public static class SshAuth
     public const string Agent = "agent";
 }
 
-/** 用户保存的 SSH 远程工作区(三次批注 2): 名称 + 连接参数 + 认证方式 + 可选代理/远端目录。 */
+/** 用户保存的 SSH 远程工作区: 名称 + 连接参数 + 认证方式 + 可选代理/远端目录。 */
 public sealed record SshWorkspace(
     string Name,
     string Host,
@@ -64,7 +64,8 @@ public sealed record SshWorkspace(
     string Auth,
     string? KeyPath = null,
     string? Proxy = null,
-    string? RemotePath = null);
+    string? RemotePath = null,
+    string? Password = null);
 
 /** 参数快照: 默认值即「零配置可用」的形态。 */
 public sealed record GuiSettingsSnapshot
@@ -161,6 +162,7 @@ public sealed record GuiSettingsSnapshot
                 ["keyPath"] = workspace.KeyPath,
                 ["proxy"] = workspace.Proxy,
                 ["remotePath"] = workspace.RemotePath,
+                ["password"] = workspace.Password,
             })
             .ToList(),
         ["sortSessions"] = SortSessions,
@@ -228,7 +230,8 @@ public sealed record GuiSettingsSnapshot
                 Text(map, "auth") ?? SshAuth.Agent,
                 Text(map, "keyPath"),
                 Text(map, "proxy"),
-                Text(map, "remotePath")));
+                Text(map, "remotePath"),
+                Text(map, "password")));
         }
 
         return result;

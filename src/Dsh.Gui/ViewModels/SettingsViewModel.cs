@@ -23,6 +23,7 @@ public enum SettingsSection
     Storage,
     Plugins,
     Shortcuts,
+    Remote,
     About,
 }
 
@@ -58,6 +59,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             section.SelectCommand = new RelayCommand<SettingsNavItemViewModel>(SelectSection);
         Sections[0].IsSelected = true;
         Reload();
+        LoadRemoteWorkspaces();
     }
 
     /** 主题/字号等外观项变化后由视图重新应用 App 资源。 */
@@ -82,6 +84,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         new(SettingsSection.Storage, "会话与存储"),
         new(SettingsSection.Plugins, "插件与 MCP"),
         new(SettingsSection.Shortcuts, "快捷键"),
+        new(SettingsSection.Remote, "远程"),
         new(SettingsSection.About, "关于"),
     ];
 
@@ -151,6 +154,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isShortcutsSection;
+
+    [ObservableProperty]
+    private bool _isRemoteSection;
 
     [ObservableProperty]
     private bool _isAboutSection;
@@ -572,6 +578,50 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task OpenConfigFolderAsync() => Status = await DesktopIntegration.OpenPathAsync(Path.GetDirectoryName(ConfigPath) ?? _home.Root);
 
+    public ObservableCollection<SshWorkspaceRowViewModel> RemoteWorkspaces { get; } = [];
+
+    [ObservableProperty]
+    private SshWorkspaceRowViewModel? _selectedRemoteWorkspace;
+
+    [ObservableProperty]
+    private bool _hasSelectedRemoteWorkspace;
+
+    partial void OnSelectedRemoteWorkspaceChanged(SshWorkspaceRowViewModel? value)
+        => HasSelectedRemoteWorkspace = value is not null;
+
+    [RelayCommand]
+    private void AddRemoteWorkspace()
+    {
+        var row = new SshWorkspaceRowViewModel { Name = "新远程工作区" };
+        RemoteWorkspaces.Add(row);
+        SelectedRemoteWorkspace = row;
+    }
+
+    [RelayCommand]
+    private void RemoveRemoteWorkspace(SshWorkspaceRowViewModel? row)
+    {
+        if (row is null)
+            return;
+        RemoteWorkspaces.Remove(row);
+        if (ReferenceEquals(SelectedRemoteWorkspace, row))
+            SelectedRemoteWorkspace = RemoteWorkspaces.FirstOrDefault();
+    }
+
+    [RelayCommand]
+    private void SaveRemoteWorkspaces()
+    {
+        _gui.Save(_gui.Load() with { RemoteWorkspaces = [.. RemoteWorkspaces.Select(row => row.ToModel())] });
+        Status = $"远程工作区已保存（{RemoteWorkspaces.Count} 个）";
+    }
+
+    private void LoadRemoteWorkspaces()
+    {
+        RemoteWorkspaces.Clear();
+        foreach (var workspace in _gui.Load().RemoteWorkspaces)
+            RemoteWorkspaces.Add(SshWorkspaceRowViewModel.From(workspace));
+        SelectedRemoteWorkspace = RemoteWorkspaces.FirstOrDefault();
+    }
+
     private void SelectSection(SettingsNavItemViewModel? section)
     {
         if (section is null)
@@ -587,6 +637,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsStorageSection = Section == SettingsSection.Storage;
         IsPluginsSection = Section == SettingsSection.Plugins;
         IsShortcutsSection = Section == SettingsSection.Shortcuts;
+        IsRemoteSection = Section == SettingsSection.Remote;
         IsAboutSection = Section == SettingsSection.About;
         if (Section == SettingsSection.Model)
             LoadHarnessSettings();
@@ -736,4 +787,79 @@ public sealed class PluginRowViewModel(string package, string description, bool 
     public string ActionLabel => Enabled ? "禁用" : "启用";
 
     public string WireAction => $"{(Enabled ? "disable" : "enable")}:{Package}";
+}
+
+/** “远程”分页的一行: 可编辑字段, 保存时转回 SshWorkspace。 */
+public sealed partial class SshWorkspaceRowViewModel : ObservableObject
+{
+    public static IReadOnlyList<string> AuthModes { get; } = [SshAuth.Password, SshAuth.Key, SshAuth.Agent];
+
+    [ObservableProperty]
+    private string _name = "";
+
+    [ObservableProperty]
+    private string _host = "";
+
+    [ObservableProperty]
+    private string _port = "22";
+
+    [ObservableProperty]
+    private string _user = "";
+
+    [ObservableProperty]
+    private string _auth = SshAuth.Agent;
+
+    [ObservableProperty]
+    private string? _password;
+
+    [ObservableProperty]
+    private string? _keyPath;
+
+    [ObservableProperty]
+    private string? _proxy;
+
+    [ObservableProperty]
+    private string? _remotePath;
+
+    public bool IsPassword => Auth == SshAuth.Password;
+
+    public bool IsKey => Auth == SshAuth.Key;
+
+    public string Summary => $"{User}@{Host}:{Port}";
+
+    partial void OnAuthChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsPassword));
+        OnPropertyChanged(nameof(IsKey));
+    }
+
+    partial void OnUserChanged(string value) => OnPropertyChanged(nameof(Summary));
+
+    partial void OnHostChanged(string value) => OnPropertyChanged(nameof(Summary));
+
+    partial void OnPortChanged(string value) => OnPropertyChanged(nameof(Summary));
+
+    public SshWorkspace ToModel() => new(
+        Name,
+        Host,
+        int.TryParse(Port, out var port) ? port : 22,
+        User,
+        Auth,
+        KeyPath,
+        Proxy,
+        RemotePath,
+        Password);
+
+    public static SshWorkspaceRowViewModel From(SshWorkspace workspace) => new()
+    {
+        Name = workspace.Name,
+        Host = workspace.Host,
+        Port = workspace.Port.ToString(),
+        User = workspace.User,
+        Auth = workspace.Auth,
+        Password = workspace.Password,
+        KeyPath = workspace.KeyPath,
+        Proxy = workspace.Proxy,
+        RemotePath = workspace.RemotePath,
+    };
 }

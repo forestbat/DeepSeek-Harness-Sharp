@@ -61,6 +61,38 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <Separator Margin="4,4" />
+                <Button x:Name="RemoteWorkspaceButton" Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4"
+                        PointerEntered="OnRemoteWorkspaceHover" Content="远程工作区">
+                  <Button.Flyout>
+                    <Flyout Placement="RightEdgeAlignedTop">
+                      <StackPanel Width="300">
+                      <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding RemoteWorkspaces}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:RemoteWorkspaceChoiceViewModel">
+                              <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4"
+                                      Command="{Binding OpenCommand}">
+                                <StackPanel>
+                                  <TextBlock Text="{Binding Name}" />
+                                  <TextBlock Text="{Binding Summary}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
+                                             TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                              </Button>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </ScrollViewer>
+                      <Grid ColumnDefinitions="*,*" ColumnSpacing="6" Margin="0,4,0,0"
+                            IsVisible="{Binding HasRemotePages}">
+                        <Button Grid.Column="0" Classes="Ghost" HorizontalAlignment="Stretch" Content="上一页"
+                                Command="{Binding RemotePageBackCommand}" />
+                        <Button Grid.Column="1" Classes="Ghost" HorizontalAlignment="Stretch" Content="下一页"
+                                Command="{Binding RemotePageForwardCommand}" />
+                      </Grid>
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
                 <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4"
                         Content="打开新工作区…" Command="{Binding PickWorkspaceCommand}" />
               </StackPanel>

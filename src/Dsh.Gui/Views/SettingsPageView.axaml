@@ -324,6 +324,64 @@
             </Border>
           </StackPanel>
 
+          <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsRemoteSection}">
+            <TextBlock Text="远程" Classes="Title" />
+
+            <Grid ColumnDefinitions="260,*" ColumnSpacing="12">
+              <Border Grid.Column="0" Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="10">
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                    <Button Classes="Ghost" Content="新增" Command="{Binding Preferences.AddRemoteWorkspaceCommand}" />
+                    <Button Classes="Ghost" Content="删除"
+                            Command="{Binding Preferences.RemoveRemoteWorkspaceCommand}"
+                            CommandParameter="{Binding Preferences.SelectedRemoteWorkspace}" />
+                  </StackPanel>
+                  <ListBox ItemsSource="{Binding Preferences.RemoteWorkspaces}"
+                           SelectedItem="{Binding Preferences.SelectedRemoteWorkspace, Mode=TwoWay}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SshWorkspaceRowViewModel">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Name}" />
+                          <TextBlock Text="{Binding Summary}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </DockPanel>
+              </Border>
+
+              <Border Grid.Column="1" Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14"
+                      IsVisible="{Binding Preferences.HasSelectedRemoteWorkspace}">
+                <StackPanel Spacing="8" DataContext="{Binding Preferences.SelectedRemoteWorkspace}">
+                  <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
+                    <TextBlock Text="名称" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Column="1" Text="{Binding Name}" />
+                    <TextBlock Grid.Row="1" Text="主机" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Host}" />
+                    <TextBlock Grid.Row="2" Text="端口" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Port}" />
+                    <TextBlock Grid.Row="3" Text="用户" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding User}" />
+                    <TextBlock Grid.Row="4" Text="认证方式" Classes="Tertiary" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{x:Static vm:SshWorkspaceRowViewModel.AuthModes}"
+                              SelectedItem="{Binding Auth, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                    <TextBlock Grid.Row="5" Text="密码" Classes="Tertiary" VerticalAlignment="Center" IsVisible="{Binding IsPassword}" />
+                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Password}" PasswordChar="●" IsVisible="{Binding IsPassword}" />
+                    <TextBlock Grid.Row="6" Text="密钥路径" Classes="Tertiary" VerticalAlignment="Center" IsVisible="{Binding IsKey}" />
+                    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding KeyPath}" IsVisible="{Binding IsKey}" />
+                    <TextBlock Grid.Row="7" Text="代理" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Proxy}" Watermark="如 socks5://127.0.0.1:1080 或 nc 命令" />
+                    <TextBlock Grid.Row="8" Text="远端目录" Classes="Tertiary" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding RemotePath}" />
+                  </Grid>
+                  <TextBlock Text="密码/密钥路径保存在本机 GUI 设置里，请自行评估风险；认证方式支持密码、密钥对、SSH 代理。" Classes="Tertiary" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Grid>
+
+            <Button Classes="Primary" HorizontalAlignment="Left" Content="保存远程工作区" Command="{Binding Preferences.SaveRemoteWorkspacesCommand}" />
+          </StackPanel>
+
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsAboutSection}">
             <TextBlock Text="关于" Classes="Title" />
 

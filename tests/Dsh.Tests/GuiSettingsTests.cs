@@ -130,19 +130,20 @@ public sealed class GuiSettingsTests : IDisposable
         {
             RemoteWorkspaces =
             [
-                new SshWorkspace("build", "100.69.183.49", 22, "pub", SshAuth.Password, Proxy: "socks5://127.0.0.1:1080", RemotePath: "/home/pub/work"),
-                new SshWorkspace("gpu", "100.100.10.10", 2222, "forestbat", SshAuth.Key, KeyPath: "C:/keys/id_ed25519"),
+                new SshWorkspace("build", "build-box.internal", 22, "builder", SshAuth.Password, Proxy: "socks5://127.0.0.1:1080", RemotePath: "~/work", Password: "s3cret"),
+                new SshWorkspace("gpu", "gpu-box.internal", 2222, "dev", SshAuth.Key, KeyPath: "C:/keys/id_ed25519"),
                 new SshWorkspace("agent", "example.internal", 22, "root", SshAuth.Agent),
             ],
         });
 
         var reloaded = settings.Load().RemoteWorkspaces;
         Assert.Equal(3, reloaded.Count);
-        Assert.Equal("100.69.183.49", reloaded[0].Host);
+        Assert.Equal("build-box.internal", reloaded[0].Host);
         Assert.Equal(22, reloaded[0].Port);
         Assert.Equal(SshAuth.Password, reloaded[0].Auth);
         Assert.Equal("socks5://127.0.0.1:1080", reloaded[0].Proxy);
-        Assert.Equal("/home/pub/work", reloaded[0].RemotePath);
+        Assert.Equal("~/work", reloaded[0].RemotePath);
+        Assert.Equal("s3cret", reloaded[0].Password);
         Assert.Equal(SshAuth.Key, reloaded[1].Auth);
         Assert.Equal(2222, reloaded[1].Port);
         Assert.Equal("C:/keys/id_ed25519", reloaded[1].KeyPath);
