@@ -5,5 +5,5 @@ public static class Program
 {
     [STAThread]
     public static int Main(string[] args)
-        => Dsh.Host.HarnessEntrypoint.RunAsync(["gui", .. args]).GetAwaiter().GetResult();
+        => Dsh.Host.HarnessEntrypoint.Run(["gui", .. args]);
 }
