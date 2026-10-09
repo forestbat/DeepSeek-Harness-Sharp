@@ -1,18 +1,27 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using System.Threading.Channels;
 using Dsh.Transport;
 
 namespace Dsh.RemoteHost;
 
-/** 本地 GUI/CLI 侧连接远端 host: 先握手(版本/token), 成功后提供协议级方法。 */
-public sealed class RemoteHostClient : IAsyncDisposable
+/**
+ * 本地侧连接远端 host: 先握手(版本/token), 然后实现 IRemoteHost。
+ * 会话事件/审批/PTY 输出经服务端推送(通知)转成本端的异步流。
+ */
+public sealed class RemoteHostClient : IRemoteHost, IAsyncDisposable
 {
     private readonly JsonRpcPeer _peer;
+    private readonly ConcurrentDictionary<string, Channel<RemoteEventInfo>> _eventStreams = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Channel<RemotePtyOutput>> _ptyStreams = new(StringComparer.Ordinal);
+    private Channel<RemoteApprovalRequest>? _approvals;
 
     private RemoteHostClient(JsonRpcPeer peer, HostHelloResponse hello)
     {
         _peer = peer;
         Hello = hello;
+        peer.NotificationReceived += OnNotification;
     }
 
     public HostHelloResponse Hello { get; }
@@ -48,20 +57,124 @@ public sealed class RemoteHostClient : IAsyncDisposable
     public Task<long> PingAsync(CancellationToken cancellationToken = default)
         => SendAsync(HostProtocol.MethodPing, null, HostProtocolJsonContext.Default.Int64, cancellationToken);
 
-    public Task<HostInfo> GetInfoAsync(CancellationToken cancellationToken = default)
+    public Task<HostInfo> InfoAsync(CancellationToken cancellationToken = default)
         => SendAsync(HostProtocol.MethodInfo, null, HostProtocolJsonContext.Default.HostInfo, cancellationToken);
 
-    private async Task<T> SendAsync<T>(
-        string method,
-        JsonElement? parameters,
-        JsonTypeInfo<T> typeInfo,
-        CancellationToken cancellationToken)
+    public Task<IReadOnlyList<RemoteSessionInfo>> ListSessionsAsync(CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodSessionList, null, HostProtocolJsonContext.Default.IReadOnlyListRemoteSessionInfo, cancellationToken);
+
+    public Task<RemoteSessionInfo> CreateSessionAsync(string cwd, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodSessionCreate, Serialize(new RemoteSessionCreateRequest(cwd), HostProtocolJsonContext.Default.RemoteSessionCreateRequest), HostProtocolJsonContext.Default.RemoteSessionInfo, cancellationToken);
+
+    public Task<RemoteSessionInfo> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodSessionResume, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.RemoteSessionInfo, cancellationToken);
+
+    public async IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var channel = _eventStreams.GetOrAdd(sessionId, _ => Channel.CreateUnbounded<RemoteEventInfo>());
+        await SendAsync(HostProtocol.MethodSessionSubscribe, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+        await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            yield return item;
+    }
+
+    public Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodSessionMessage, Serialize(new RemoteMessageRequest(sessionId, text), HostProtocolJsonContext.Default.RemoteMessageRequest), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+
+    public Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodSessionInterrupt, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+
+    public Task<IReadOnlyList<string>> ListToolsAsync(string sessionId, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodToolsList, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.IReadOnlyListString, cancellationToken);
+
+    public async IAsyncEnumerable<RemoteApprovalRequest> ApprovalsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var channel = _approvals ??= Channel.CreateUnbounded<RemoteApprovalRequest>();
+        await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            yield return item;
+    }
+
+    public Task RespondApprovalAsync(string requestId, bool allow, string? reason = null, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodApprovalRespond, Serialize(new RemoteApprovalResponse(requestId, allow, reason), HostProtocolJsonContext.Default.RemoteApprovalResponse), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+
+    public async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var content = await SendAsync(HostProtocol.MethodFileRead, Serialize(new RemoteFilePath(path), HostProtocolJsonContext.Default.RemoteFilePath), HostProtocolJsonContext.Default.RemoteFileContent, cancellationToken).ConfigureAwait(false);
+        return Convert.FromBase64String(content.Base64);
+    }
+
+    public Task WriteFileAsync(string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
+        => SendAsync(HostProtocol.MethodFileWrite, Serialize(new RemoteFileContent(path, Convert.ToBase64String(content.Span)), HostProtocolJsonContext.Default.RemoteFileContent), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+
+    public async Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+    {
+        var reference = await SendAsync(HostProtocol.MethodPtyStart, Serialize(new RemotePtyStartRequest(fileName, arguments), HostProtocolJsonContext.Default.RemotePtyStartRequest), HostProtocolJsonContext.Default.RemotePtyRef, cancellationToken).ConfigureAwait(false);
+        return reference.PtyId;
+    }
+
+    public async Task AttachPtyAsync(string ptyId, Stream input, Stream output, CancellationToken cancellationToken = default)
+    {
+        var channel = _ptyStreams.GetOrAdd(ptyId, _ => Channel.CreateUnbounded<RemotePtyOutput>());
+        await SendAsync(HostProtocol.MethodPtyAttach, Serialize(new RemotePtyRef(ptyId), HostProtocolJsonContext.Default.RemotePtyRef), HostProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+        var pumpInput = Task.Run(async () =>
+        {
+            var buffer = new byte[4096];
+            try
+            {
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                    await SendAsync(HostProtocol.MethodPtyWrite, Serialize(new RemotePtyInput(ptyId, Convert.ToBase64String(buffer.AsSpan(0, read))), HostProtocolJsonContext.Default.RemotePtyInput), HostProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is OperationCanceledException or IOException)
+            {
+            }
+        }, cancellationToken);
+        try
+        {
+            await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var bytes = Convert.FromBase64String(item.Base64);
+                if (bytes.Length > 0)
+                    await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                if (item.Eof)
+                    break;
+            }
+        }
+        finally
+        {
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await pumpInput.ConfigureAwait(false);
+        }
+    }
+
+    private void OnNotification(JsonRpcMessage message)
+    {
+        switch (message.Method)
+        {
+            case HostProtocol.NotificationEvent when Parse(message, HostProtocolJsonContext.Default.RemoteEventInfo) is { } item
+                && _eventStreams.TryGetValue(item.SessionId, out var events):
+                events.Writer.TryWrite(item);
+                break;
+            case HostProtocol.NotificationApproval when Parse(message, HostProtocolJsonContext.Default.RemoteApprovalRequest) is { } request:
+                (_approvals ??= Channel.CreateUnbounded<RemoteApprovalRequest>()).Writer.TryWrite(request);
+                break;
+            case HostProtocol.NotificationPtyOutput when Parse(message, HostProtocolJsonContext.Default.RemotePtyOutput) is { } output
+                && _ptyStreams.TryGetValue(output.PtyId, out var pty):
+                pty.Writer.TryWrite(output);
+                break;
+        }
+    }
+
+    private static T? Parse<T>(JsonRpcMessage message, JsonTypeInfo<T> info)
+        => message.Params is { } element ? JsonSerializer.Deserialize(element, info) : default;
+
+    private static JsonElement Serialize<T>(T value, JsonTypeInfo<T> info) => JsonSerializer.SerializeToElement(value, info);
+
+    private async Task<T> SendAsync<T>(string method, JsonElement? parameters, JsonTypeInfo<T> info, CancellationToken cancellationToken)
     {
         var result = await _peer.RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false);
         if (result is not { } value)
             throw new IOException($"host returned no result for {method}");
-        return JsonSerializer.Deserialize(value, typeInfo)
-            ?? throw new IOException($"host returned an invalid result for {method}");
+        return JsonSerializer.Deserialize(value, info) ?? throw new IOException($"host returned an invalid result for {method}");
     }
 
     public ValueTask DisposeAsync() => _peer.DisposeAsync();

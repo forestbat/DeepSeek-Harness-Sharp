@@ -15,7 +15,7 @@ public sealed class RemoteHostTests
     {
         await using var fixture = await HostFixture.CreateAsync(token: null, Ct);
         Assert.NotNull(fixture.Client);
-        var info = await fixture.Client!.GetInfoAsync(Ct);
+        var info = await fixture.Client!.InfoAsync(Ct);
         Assert.Equal(HostProtocol.Version, info.ProtocolVersion);
         Assert.False(string.IsNullOrEmpty(info.HostVersion));
         Assert.True(await fixture.Client.PingAsync(Ct) > 0);

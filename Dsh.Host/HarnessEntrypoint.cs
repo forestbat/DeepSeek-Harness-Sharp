@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Dsh.Boot;
 using Dsh.Plugins;
 using Dsh.Ptc;
@@ -20,6 +21,9 @@ public static class HarnessEntrypoint
         string? gpuScreenshot = null;
         string? gpuCapturePlan = null;
         string? gpuCard = null;
+        var hostStdio = false;
+        var hostServe = false;
+        string? hostToken = null;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
         {
@@ -39,6 +43,15 @@ public static class HarnessEntrypoint
                     break;
                 case "--shell":
                     shell = true;
+                    break;
+                case "--stdio":
+                    hostStdio = true;
+                    break;
+                case "--serve":
+                    hostServe = true;
+                    break;
+                case "--token" when index + 1 < args.Length:
+                    hostToken = args[++index];
                     break;
                 case "--gpu-screenshot" when index + 1 < args.Length:
                     gpuScreenshot = args[++index];
@@ -127,8 +140,8 @@ public static class HarnessEntrypoint
             case "host":
                 {
                     var subcommand = positional.Skip(1).FirstOrDefault();
-                    if (subcommand == "serve")
-                        return await RunHostServeAsync(positional.Skip(2).ToList());
+                    if (subcommand is "serve" || hostServe)
+                        return await RunHostServeAsync(harnessHome, hostStdio, hostToken);
                     await Console.Error.WriteLineAsync("dsh: host requires a subcommand (serve)");
                     return 1;
                 }
@@ -143,58 +156,70 @@ public static class HarnessEntrypoint
         }
     }
 
-    private static async Task<int> RunHostServeAsync(IReadOnlyList<string> options)
+    private static async Task<int> RunHostServeAsync(HarnessHome home, bool useStdio, string? token)
     {
-        var useStdio = options.Contains("--stdio");
-        var token = ReadOption(options, "--token");
-        if (!useStdio && token is null)
-            token = Guid.NewGuid().ToString("N");
-        var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token));
 
         if (useStdio)
         {
+            // stdio-over-SSH: 桥接到常驻 daemon; 没有就 detached 起一个。断开只断这条桥, 会话留在远端(脱钩/重连)。
+            if (!await Dsh.RemoteHost.RemoteHostListener.IsReachableAsync(home.Root, CancellationToken.None))
+                StartHostDaemon(home, token);
             using var duplex = Dsh.Transport.TransportConnection.FromStandardIo();
-            await server.ServeAsync(duplex);
+            await Dsh.RemoteHost.RemoteHostListener.BridgeAsync(duplex, home.Root, CancellationToken.None);
             return 0;
         }
 
-        Directory.CreateDirectory(Dsh.RemoteHost.RemoteHostEndpoint.RunDirectory());
-        await File.WriteAllTextAsync(Dsh.RemoteHost.RemoteHostEndpoint.TokenFile(), token!);
-        await Console.Out.WriteLineAsync(
-            $"dsh host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath()} (token file {Dsh.RemoteHost.RemoteHostEndpoint.TokenFile()})");
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
+        using var backend = new HarnessRemoteHostBackend(app);
+        var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
+        Directory.CreateDirectory(Dsh.RemoteHost.RemoteHostEndpoint.RunDirectory(home.Root));
+        await Console.Out.WriteLineAsync($"dsh host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath(home.Root)}");
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
             cancellation.Cancel();
         };
-        try
-        {
-            await Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(server, null, cancellation.Token);
-        }
-        finally
-        {
-            try
-            {
-                File.Delete(Dsh.RemoteHost.RemoteHostEndpoint.TokenFile());
-            }
-            catch (IOException)
-            {
-            }
-        }
-
+        await Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(server, home.Root, cancellation.Token);
         return 0;
     }
 
-    private static string? ReadOption(IReadOnlyList<string> options, string name)
+    /** 以脱离会话的方式起 `dsh host serve`(ssh 断开不把 daemon 带走)。 */
+    private static void StartHostDaemon(HarnessHome home, string? token)
     {
-        for (var index = 0; index + 1 < options.Count; index++)
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("failed to resolve the current executable to start the host daemon");
+        var hostArguments = new List<string>();
+        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
+            hostArguments.Add(Environment.GetCommandLineArgs()[0]);
+        hostArguments.Add("--home");
+        hostArguments.Add(home.Root);
+        if (token is { Length: > 0 })
         {
-            if (options[index] == name)
-                return options[index + 1];
+            hostArguments.Add("--token");
+            hostArguments.Add(token);
         }
 
-        return null;
+        hostArguments.Add("host");
+        hostArguments.Add("serve");
+
+        if (OperatingSystem.IsWindows())
+        {
+            Process.Start(new ProcessStartInfo(executable, hostArguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+            });
+            return;
+        }
+
+        var quoted = string.Join(' ', hostArguments.Select(argument => $"'{argument.Replace("'", "'\\''", StringComparison.Ordinal)}'"));
+        Process.Start(new ProcessStartInfo("/bin/sh", ["-c", $"nohup '{executable}' {quoted} >/dev/null 2>&1 &"])
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Directory.GetCurrentDirectory(),
+        });
     }
 
     private static void PrintUsage()
