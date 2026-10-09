@@ -135,6 +135,63 @@ public static class HarnessEntrypoint
         }
     }
 
+    /** 同步主入口: 需要时把 GUI 放到进程主线程(见 RunGuiOnMainThread), 其余入口沿用原异步路径。 */
+    public static int Run(string[] args)
+    {
+        // macOS 的 Avalonia.Native 要求 UI 必须在进程主线程初始化(Dispatcher.ReplaceImplementation 会校验
+        // impl.CurrentThreadIsLoopThread), 而 GUI 的正常启动横跨多个 await、主线程又被宿主阻塞, 无法满足;
+        // 因此 gui 在 macOS 上改走顶层同步路径, 由主线程直接驱动 Avalonia。
+        if (OperatingSystem.IsMacOS() && IsGuiInvocation(args))
+            return RunGuiOnMainThread(args);
+        return RunAsync(args).GetAwaiter().GetResult();
+    }
+
+    /** 取第一个位置参数作为命令; 跳过带值选项, 避免把 `--home gui` 之类误判成 gui 命令。 */
+    private static bool IsGuiInvocation(string[] args)
+    {
+        string[] valueOptions = ["--home", "--session", "--gpu-screenshot", "--gpu-capture-plan", "--gpu-card"];
+        for (var index = 0; index < args.Length; index++)
+        {
+            var arg = args[index];
+            if (valueOptions.Contains(arg))
+            {
+                index++;
+                continue;
+            }
+            if (arg.StartsWith("--", StringComparison.Ordinal))
+                continue;
+            return arg == "gui";
+        }
+        return false;
+    }
+
+    /** macOS 专用: 在主线程同步组合 harness 并运行 GUI, 满足 Avalonia.Native 的主线程约束。 */
+    private static int RunGuiOnMainThread(string[] args)
+    {
+        string? home = null;
+        string? resumeSessionId = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--home" when index + 1 < args.Length:
+                    home = args[++index];
+                    break;
+                case "--session" when index + 1 < args.Length:
+                    resumeSessionId = args[++index];
+                    break;
+            }
+        }
+        var harnessHome = home is { Length: > 0 } explicitHome
+            ? HarnessHome.Resolve(explicitHome)
+            : HarnessStorage.ResolveDefaultHome();
+        var cwd = Directory.GetCurrentDirectory();
+        ConsoleWindow.DetachIfOwned();
+        using var app = ConfigBoot.Compose(new HarnessOptions(harnessHome, cwd, IsTui: false))
+            .GetAwaiter().GetResult();
+        return Dsh.Gui.GuiRunner.RunOnMainThread(app, cwd, resumeSessionId);
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine("""
