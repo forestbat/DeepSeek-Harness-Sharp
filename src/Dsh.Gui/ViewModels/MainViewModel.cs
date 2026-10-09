@@ -655,6 +655,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
             }
         }
+        // 被引用的文本文件里出现的图片路径, 其图片字节也一并附带(而不只是把路径文本发过去)。
+        foreach (var referenced in TextFileImageReferences.Scan(text, cwd))
+        {
+            var mediaType = ImageAttachments.MediaTypeForExtension(Path.GetExtension(referenced));
+            if (mediaType is null)
+                continue;
+            try
+            {
+                AttachImage(Path.GetFileName(referenced), await File.ReadAllBytesAsync(referenced), 0, 0, mediaType);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+            }
+        }
         return Regex.Replace(remaining.Trim(), " {2,}", " ");
     }
 
