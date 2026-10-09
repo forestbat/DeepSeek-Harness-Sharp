@@ -179,6 +179,7 @@ public static class TuiRunner
 
         var seenVersion = -1;
         var nextFrameAt = 0L;
+        var seenSizeGeneration = -1L;
         try
         {
             while (!chat.ExitRequested)
@@ -188,6 +189,14 @@ public static class TuiRunner
                 if (grid.Width != size.Width || grid.Height != size.Height)
                 {
                     grid = new CellGrid(size.Width, size.Height);
+                    forceFull = true;
+                }
+
+                // attach(以及尺寸变化)时 daemon 会重写尺寸文件并递增代次: 一律整帧重画, 覆盖旧帧残留(右栏错位残影)。
+                var generation = DaemonSizeGenerationFromDisk();
+                if (generation != seenSizeGeneration)
+                {
+                    seenSizeGeneration = generation;
                     forceFull = true;
                 }
 
@@ -429,6 +438,12 @@ public static class TuiRunner
     }
 
     private static (int Width, int Height)? SessionSizeFromDaemon()
+        => DaemonSizeFromDisk() is { } size ? (size.Columns, size.Rows) : null;
+
+    /** 尺寸文件里的代次: attach/尺寸变化时 daemon 递增, 常驻 TUI 据此整帧重画。 */
+    private static long DaemonSizeGenerationFromDisk() => DaemonSizeFromDisk()?.Generation ?? -1;
+
+    private static (int Columns, int Rows, long Generation)? DaemonSizeFromDisk()
     {
         var id = Environment.GetEnvironmentVariable(PtySessionProtocol.SessionVariable);
         if (string.IsNullOrEmpty(id))
@@ -437,13 +452,14 @@ public static class TuiRunner
         {
             var parts = File.ReadAllText(PtyDaemonPaths.SessionSizeFile(id))
                 .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            return parts.Length == 2
-                && int.TryParse(parts[0], out var columns)
-                && int.TryParse(parts[1], out var rows)
-                && columns > 0
-                && rows > 0
-                ? (columns, rows)
-                : null;
+            if (parts.Length < 2
+                || !int.TryParse(parts[0], out var columns)
+                || !int.TryParse(parts[1], out var rows)
+                || columns <= 0
+                || rows <= 0)
+                return null;
+            var generation = parts.Length >= 3 && long.TryParse(parts[2], out var parsed) ? parsed : 0;
+            return (columns, rows, generation);
         }
         catch (IOException)
         {

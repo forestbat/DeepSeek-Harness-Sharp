@@ -549,16 +549,20 @@ public sealed class PtyDaemon : IAsyncDisposable
         }
     }
 
+    /** 尺寸落盘的代次: 每次写(含 attach 时的同尺寸 resize)自增, 常驻 TUI 据此在 attach/尺寸变化时整帧重画。 */
+    private static readonly ConcurrentDictionary<string, long> SizeGenerations = new();
+
     /** 会话尺寸落盘: ConPTY 子进程读不到 resize 后的窗口尺寸, 由尺寸的权威方(daemon)写文件给常驻 TUI 自己读。 */
     private static void WriteSessionSize(PtySession session)
     {
         try
         {
             var info = session.ToInfo();
+            var generation = SizeGenerations.AddOrUpdate(session.Id.ToString(), 1, static (_, current) => current + 1);
             Directory.CreateDirectory(PtyDaemonPaths.RunDirectory());
             File.WriteAllText(
                 PtyDaemonPaths.SessionSizeFile(session.Id.ToString()),
-                $"{info.Columns} {info.Rows}");
+                $"{info.Columns} {info.Rows} {generation}");
         }
         catch (IOException)
         {
