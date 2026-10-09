@@ -47,6 +47,25 @@ public sealed class GuiSettings(HarnessHome home)
         => HarnessSettings.Load(home).Plugins.GetValueOrDefault(Package)?.Parameters ?? [];
 }
 
+/** SSH 认证方式。 */
+public static class SshAuth
+{
+    public const string Password = "password";
+    public const string Key = "key";
+    public const string Agent = "agent";
+}
+
+/** 用户保存的 SSH 远程工作区(三次批注 2): 名称 + 连接参数 + 认证方式 + 可选代理/远端目录。 */
+public sealed record SshWorkspace(
+    string Name,
+    string Host,
+    int Port,
+    string User,
+    string Auth,
+    string? KeyPath = null,
+    string? Proxy = null,
+    string? RemotePath = null);
+
 /** 参数快照: 默认值即「零配置可用」的形态。 */
 public sealed record GuiSettingsSnapshot
 {
@@ -60,6 +79,9 @@ public sealed record GuiSettingsSnapshot
 
     /** 新会话的默认工作区(绝对路径); null 表示跟随启动目录。已有会话的 cwd 不变。 */
     public string? DefaultWorkspace { get; init; }
+
+    /** 用户保存的 SSH 远程工作区(工作区菜单“远程工作区”与设置页“远程”共用)。 */
+    public IReadOnlyList<SshWorkspace> RemoteWorkspaces { get; init; } = [];
 
     public string SortSessions { get; init; } = GuiSettings.SortUpdated;
 
@@ -102,6 +124,7 @@ public sealed record GuiSettingsSnapshot
             FontSize = Clamp(Number(parameters, "fontSize") ?? 13.5, GuiSettings.MinFontSize, GuiSettings.MaxFontSize),
             WorkspaceView = Text(parameters, "workspaceView") ?? GuiSettings.ViewSolution,
             DefaultWorkspace = Text(parameters, "defaultWorkspace"),
+            RemoteWorkspaces = Workspaces(parameters, "remoteWorkspaces"),
             SortSessions = Text(parameters, "sortSessions") ?? GuiSettings.SortUpdated,
             ShowOnlyWithSessions = Flag(parameters, "showOnlyWithSessions") ?? false,
             TraceFilter = Text(parameters, "traceFilter") ?? GuiSettings.TraceAll,
@@ -127,6 +150,19 @@ public sealed record GuiSettingsSnapshot
         ["fontSize"] = FontSize,
         ["workspaceView"] = WorkspaceView,
         ["defaultWorkspace"] = DefaultWorkspace,
+        ["remoteWorkspaces"] = RemoteWorkspaces
+            .Select(workspace => (object?)new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["name"] = workspace.Name,
+                ["host"] = workspace.Host,
+                ["port"] = workspace.Port,
+                ["user"] = workspace.User,
+                ["auth"] = workspace.Auth,
+                ["keyPath"] = workspace.KeyPath,
+                ["proxy"] = workspace.Proxy,
+                ["remotePath"] = workspace.RemotePath,
+            })
+            .ToList(),
         ["sortSessions"] = SortSessions,
         ["showOnlyWithSessions"] = ShowOnlyWithSessions,
         ["traceFilter"] = TraceFilter,
@@ -170,4 +206,31 @@ public sealed record GuiSettingsSnapshot
 
     private static double Clamp(double value, double minimum, double maximum)
         => Math.Clamp(value, minimum, maximum);
+
+    private static IReadOnlyList<SshWorkspace> Workspaces(IReadOnlyDictionary<string, object?> source, string key)
+    {
+        if (source.GetValueOrDefault(key) is not IEnumerable<object?> items)
+            return [];
+        var result = new List<SshWorkspace>();
+        foreach (var item in items)
+        {
+            if (item is not IReadOnlyDictionary<string, object?> map)
+                continue;
+            var name = Text(map, "name");
+            var host = Text(map, "host");
+            if (name is null || host is null)
+                continue;
+            result.Add(new SshWorkspace(
+                name,
+                host,
+                (int)(Number(map, "port") ?? 22),
+                Text(map, "user") ?? "",
+                Text(map, "auth") ?? SshAuth.Agent,
+                Text(map, "keyPath"),
+                Text(map, "proxy"),
+                Text(map, "remotePath")));
+        }
+
+        return result;
+    }
 }

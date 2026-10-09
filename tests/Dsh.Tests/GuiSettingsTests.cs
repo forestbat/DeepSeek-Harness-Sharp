@@ -121,4 +121,34 @@ public sealed class GuiSettingsTests : IDisposable
         settings.Save(settings.Load() with { DefaultWorkspace = null });
         Assert.Null(settings.Load().DefaultWorkspace);
     }
+
+    [Fact]
+    public void RemoteWorkspaces_RoundTrip_With_All_Auth_Modes()
+    {
+        var settings = new GuiSettings(new HarnessHome(_home));
+        settings.Save(settings.Load() with
+        {
+            RemoteWorkspaces =
+            [
+                new SshWorkspace("build", "100.69.183.49", 22, "pub", SshAuth.Password, Proxy: "socks5://127.0.0.1:1080", RemotePath: "/home/pub/work"),
+                new SshWorkspace("gpu", "100.100.10.10", 2222, "forestbat", SshAuth.Key, KeyPath: "C:/keys/id_ed25519"),
+                new SshWorkspace("agent", "example.internal", 22, "root", SshAuth.Agent),
+            ],
+        });
+
+        var reloaded = settings.Load().RemoteWorkspaces;
+        Assert.Equal(3, reloaded.Count);
+        Assert.Equal("100.69.183.49", reloaded[0].Host);
+        Assert.Equal(22, reloaded[0].Port);
+        Assert.Equal(SshAuth.Password, reloaded[0].Auth);
+        Assert.Equal("socks5://127.0.0.1:1080", reloaded[0].Proxy);
+        Assert.Equal("/home/pub/work", reloaded[0].RemotePath);
+        Assert.Equal(SshAuth.Key, reloaded[1].Auth);
+        Assert.Equal(2222, reloaded[1].Port);
+        Assert.Equal("C:/keys/id_ed25519", reloaded[1].KeyPath);
+        Assert.Equal(SshAuth.Agent, reloaded[2].Auth);
+
+        settings.Save(settings.Load() with { RemoteWorkspaces = [] });
+        Assert.Empty(settings.Load().RemoteWorkspaces);
+    }
 }
