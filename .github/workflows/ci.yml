@@ -153,6 +153,13 @@ jobs:
           -p:DebugSymbols=false -p:DebugType=none
           --nologo -v m
 
+      - name: GUI 启动器 JIT 发布校验（dsh-gui）
+        run: >
+          dotnet publish DshGuiHost/DshGuiHost.csproj
+          -c Release -r ${{ matrix.rid }}
+          -p:DebugSymbols=false -p:DebugType=none
+          --nologo -v m
+
   aot:
     name: AOT 构建（${{ matrix.rid }}）
     # 独立流水线：只在这两处跑——PR 被 merge（在 merge 提交上），或手动 dispatch 且 aot=true。
@@ -208,7 +215,16 @@ jobs:
             -c Release -r "$RID" -p:PublishAot=true \
             -p:DebugSymbols=false -p:DebugType=none \
             --nologo -v m
+          # GUI 启动器一并 AOT 发布并叠加进主产物。
+          dotnet publish DshGuiHost/DshGuiHost.csproj \
+            -c Release -r "$RID" -p:PublishAot=true \
+            -p:DebugSymbols=false -p:DebugType=none \
+            --nologo -v m
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
+          GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
+          test -d "$GUI_PUB"
+          cp -R "$GUI_PUB"/. "$PUB"/
+          rm -f "$PUB"/dsh-gui*.pdb "$PUB"/dsh-gui*.dbg
           # 结构特征判别是否真的 AOT（JIT 发布同样会产出 apphost，光看文件存在拦不住）。
           bash scripts/assert-aot-output.sh "$PUB"
           # 调试旁文件不进产物（AOT 的 .pdb/.dbg 动辄数百 MB）。

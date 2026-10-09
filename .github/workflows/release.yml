@@ -201,8 +201,15 @@ jobs:
             -c Release -r "$RID" $AOT_ARGS \
             -p:DebugSymbols=false -p:DebugType=none \
             --nologo -v m
+          # GUI 启动器一并发布并叠加进主产物。
+          dotnet publish DshGuiHost/DshGuiHost.csproj -c Release -r "$RID" $AOT_ARGS \
+            -p:DebugSymbols=false -p:DebugType=none --nologo -v m
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
+          GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
           test -d "$PUB"
+          test -d "$GUI_PUB"
+          cp -R "$GUI_PUB"/. "$PUB"/
+          rm -f "$PUB"/dsh-gui*.pdb "$PUB"/dsh-gui*.dbg
           STAGE="artifacts/release-stage/$RID"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/plugins"
@@ -239,6 +246,7 @@ jobs:
           Remove-Item -Recurse -Force $verify -ErrorAction SilentlyContinue
           Expand-Archive -LiteralPath $out -DestinationPath $verify -Force
           if (-not (Test-Path "$verify/DeepSeek-Harness-Sharp.exe")) { throw "归档里找不到 DeepSeek-Harness-Sharp.exe" }
+          if (-not (Test-Path "$verify/dsh-gui.exe")) { throw "归档里找不到 dsh-gui.exe" }
           if (-not (Test-Path "$verify/plugins")) { throw "归档里找不到 plugins/" }
           $env:DSH_HOME = Join-Path $env:RUNNER_TEMP "dsh-home-$env:RID"
           $proc = Start-Process -FilePath "$verify/DeepSeek-Harness-Sharp.exe" -ArgumentList @('--help') -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/smoke.out" -RedirectStandardError "$env:RUNNER_TEMP/smoke.err"
@@ -264,6 +272,7 @@ jobs:
           VERIFY="$(mktemp -d)"
           tar -xzf "$OUT" -C "$VERIFY"
           test -f "$VERIFY/DeepSeek-Harness-Sharp" || { echo "::error::归档里找不到 DeepSeek-Harness-Sharp"; exit 1; }
+          test -f "$VERIFY/dsh-gui" || { echo "::error::归档里找不到 dsh-gui"; exit 1; }
           test -d "$VERIFY/plugins" || { echo "::error::归档里找不到 plugins/"; exit 1; }
           chmod +x "$VERIFY/DeepSeek-Harness-Sharp"
           cd "$VERIFY"
