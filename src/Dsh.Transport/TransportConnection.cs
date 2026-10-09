@@ -17,6 +17,10 @@ public static class TransportConnection
         return duplex;
     }
 
+    /** stdio-over-SSH: 用当前进程的 stdin/stdout 作为帧通道(不监听任何端口)。 */
+    public static Stream FromStandardIo(bool ownsStreams = false)
+        => new StandardIoDuplexStream(Console.OpenStandardInput(), Console.OpenStandardOutput(), ownsStreams);
+
     public static async Task<Stream> ConnectUnixAsync(string socketPath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(socketPath);

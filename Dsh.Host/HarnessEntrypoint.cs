@@ -124,6 +124,14 @@ public static class HarnessEntrypoint
                 // 组合插件之前先摘掉自己的控制台
                 ConsoleWindow.DetachIfOwned();
                 return await RunEntrypointAsync(harnessHome, "gui", resumeSessionId);
+            case "host":
+                {
+                    var subcommand = positional.Skip(1).FirstOrDefault();
+                    if (subcommand == "serve")
+                        return await RunHostServeAsync(positional.Skip(2).ToList());
+                    await Console.Error.WriteLineAsync("dsh: host requires a subcommand (serve)");
+                    return 1;
+                }
             case "headless":
                 return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)));
             case "register-terminal":
@@ -135,6 +143,60 @@ public static class HarnessEntrypoint
         }
     }
 
+    private static async Task<int> RunHostServeAsync(IReadOnlyList<string> options)
+    {
+        var useStdio = options.Contains("--stdio");
+        var token = ReadOption(options, "--token");
+        if (!useStdio && token is null)
+            token = Guid.NewGuid().ToString("N");
+        var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token));
+
+        if (useStdio)
+        {
+            using var duplex = Dsh.Transport.TransportConnection.FromStandardIo();
+            await server.ServeAsync(duplex);
+            return 0;
+        }
+
+        Directory.CreateDirectory(Dsh.RemoteHost.RemoteHostEndpoint.RunDirectory());
+        await File.WriteAllTextAsync(Dsh.RemoteHost.RemoteHostEndpoint.TokenFile(), token!);
+        await Console.Out.WriteLineAsync(
+            $"dsh host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath()} (token file {Dsh.RemoteHost.RemoteHostEndpoint.TokenFile()})");
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        try
+        {
+            await Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(server, null, cancellation.Token);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(Dsh.RemoteHost.RemoteHostEndpoint.TokenFile());
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        return 0;
+    }
+
+    private static string? ReadOption(IReadOnlyList<string> options, string name)
+    {
+        for (var index = 0; index + 1 < options.Count; index++)
+        {
+            if (options[index] == name)
+                return options[index + 1];
+        }
+
+        return null;
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine("""
@@ -143,6 +205,7 @@ public static class HarnessEntrypoint
                    dsh tui --session <id> [--gpu]   (恢复 harness 会话; --gpu 开独立窗口)
                    dsh gui [--session <id>]
                    dsh headless "task"
+                   dsh host --serve [--stdio] [--token <t>]   (远端工作区宿主: 默认 loopback socket, --stdio 走 ssh)
                    dsh register-terminal    (Linux: 注册为桌面环境的默认终端)
 
             Options:

@@ -43,6 +43,7 @@
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
     <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
+    <Project Path="src/Dsh.RemoteHost/Dsh.RemoteHost.csproj" />
     <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
     <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />
     <Project Path="src/Dsh.SessionQuery/Dsh.SessionQuery.csproj" />
