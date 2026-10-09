@@ -9,7 +9,7 @@ namespace Dsh.Tests;
  */
 public sealed class PtySnapshotTests
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Snapshot_Starts_With_Full_Redraw_Preamble()
     {
         using var host = new PtyHost();
@@ -34,7 +34,7 @@ public sealed class PtySnapshotTests
         }
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Snapshot_Renders_The_Emulated_Screen_Not_The_History()
     {
         if (OperatingSystem.IsWindows())

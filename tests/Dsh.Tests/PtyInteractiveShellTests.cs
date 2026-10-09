@@ -11,7 +11,7 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class PtyInteractiveShellTests
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Interactive_Shell_Reports_Job_Control_And_Executes_Command()
     {
         if (OperatingSystem.IsWindows())

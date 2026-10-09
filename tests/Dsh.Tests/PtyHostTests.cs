@@ -5,7 +5,7 @@ namespace Dsh.Tests;
 
 public class PtyHostTests
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Host_Starts_Lists_Reads_And_Stops()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -31,7 +31,7 @@ public class PtyHostTests
         Assert.DoesNotContain(host.List(), entry => entry.Id == session.Id);
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Resize_UpdatesPtyWindowSize()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -50,7 +50,7 @@ public class PtyHostTests
         await host.StopAsync(session.Id.ToString());
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Write_And_Read_RoundTrips()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -71,7 +71,7 @@ public class PtyHostTests
         await host.StopAsync(session.Id.ToString());
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Windows_ConPty_Starts_And_Reads()
     {
         if (!OperatingSystem.IsWindows())
@@ -107,7 +107,7 @@ public class PtyHostTests
         Assert.True(await host.StopAsync(session.Id.ToString()));
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Windows_ConPty_Write_And_Read_RoundTrips()
     {
         if (!OperatingSystem.IsWindows())

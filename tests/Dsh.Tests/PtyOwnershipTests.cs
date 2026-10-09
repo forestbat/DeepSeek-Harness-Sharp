@@ -5,7 +5,7 @@ namespace Dsh.Tests;
 /** 跨进程归属与输入通道的协议往返: identify / publish-panes / control-send / control-read。 */
 public sealed class PtyOwnershipTests
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Identify_Publish_And_Control_RoundTrip()
     {
         if (OperatingSystem.IsWindows())

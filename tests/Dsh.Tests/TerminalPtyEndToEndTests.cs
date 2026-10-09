@@ -26,7 +26,7 @@ public class TerminalPtyEndToEndTests
         MaxReadBytes = 256 * 1024,
     };
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task ShellToolLoop_ExecutesCommandSurvivesInterruptAndCloses()
     {
         var resolved = PtyTerminalConfigResolver.Resolve(FastConfig);
