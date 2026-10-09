@@ -236,4 +236,33 @@ public sealed class HarnessSettingsTests
             Directory.Delete(home, true);
         }
     }
+
+    /** 机密配置(apiKey/authToken/SSH 密码)落盘一律仅属主可读写; Windows 由 profile ACL 保证, 跳过。 */
+    [Fact]
+    public void SettingsFile_IsOwnerOnlyReadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var home = Path.Combine(Path.GetTempPath(), "dsh-settings-mode", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(home);
+        var path = Path.Combine(home, "settings.yaml");
+        const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        try
+        {
+            // 缺失时创建模板, 一落盘即收紧。
+            HarnessSettings.Load(new HarnessHome(home));
+            Assert.Equal(OwnerOnly, File.GetUnixFileMode(path));
+
+            // 旧版本遗留的全局可读文件, 一经保存即收紧。
+            File.SetUnixFileMode(path, OwnerOnly | UnixFileMode.OtherRead);
+            var settings = HarnessSettings.Load(new HarnessHome(home));
+            settings.Plugins["@scope/x"] = new PluginSetting { Enabled = true };
+            settings.SavePlugins(new HarnessHome(home));
+            Assert.Equal(OwnerOnly, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            Directory.Delete(home, true);
+        }
+    }
 }

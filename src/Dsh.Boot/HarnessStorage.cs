@@ -68,6 +68,7 @@ public static class HarnessStorage
         try
         {
             File.Copy(from.SettingsFile, to.SettingsFile);
+            SettingsFilePermissions.Restrict(to.SettingsFile);
         }
         catch (IOException)
         {

@@ -65,7 +65,7 @@ public sealed class HarnessSettings
         var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
         if (!File.Exists(path))
-            File.WriteAllText(path, LoadTemplate());
+            SettingsFilePermissions.Write(path, LoadTemplate());
         var text = File.ReadAllText(path);
         var deserializer = new StaticDeserializerBuilder(new DshYamlStaticContext())
             .WithAttemptingUnquotedStringTypeDeserialization()
@@ -92,17 +92,18 @@ public sealed class HarnessSettings
         var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
         if (!File.Exists(path))
-            File.WriteAllText(path, LoadTemplate());
+            SettingsFilePermissions.Write(path, LoadTemplate());
         var text = File.ReadAllText(path);
         WriteAtomic(path, SettingsDocument.ReplacePluginsBlock(text, SettingsDocument.RenderPlugins(Plugins)));
     }
 
-    /** 先写同目录临时文件再改名,避免进程中断留下半截配置。 */
+    /** 先写同目录临时文件再改名,避免进程中断留下半截配置; settings.yaml 一律收紧为仅属主可读写。 */
     private static void WriteAtomic(string path, string content)
     {
         var temporary = $"{path}.tmp";
-        File.WriteAllText(temporary, content);
+        SettingsFilePermissions.Write(temporary, content);
         File.Move(temporary, path, overwrite: true);
+        SettingsFilePermissions.Restrict(path);
     }
 
     public (string Provider, string Model)? ResolveDefaultModel()
