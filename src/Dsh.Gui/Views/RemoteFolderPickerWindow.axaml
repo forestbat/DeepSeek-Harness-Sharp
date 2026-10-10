@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dsh.Gui.ViewModels"
+        xmlns:rh="using:Dsh.RemoteHost"
+        x:Class="Dsh.Gui.Views.RemoteFolderPickerWindow"
+        x:DataType="vm:RemoteFolderPickerViewModel"
+        x:CompileBindings="True"
+        Title="选择远端目录"
+        Width="640" Height="520"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        FontFamily="{DynamicResource Font.Ui}"
+        FontSize="{DynamicResource FontSize.Body}"
+        Background="{DynamicResource Brush.Bg.Card}">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Escape" Command="{Binding CancelCommand}" />
+  </Window.KeyBindings>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="10">
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+      <Button Classes="Ghost" Content="上级" Command="{Binding UpCommand}" />
+      <TextBox Grid.Column="1" Text="{Binding Path, Mode=TwoWay}" Watermark="远端目录路径（支持 ~）" />
+      <Button Grid.Column="2" Classes="Ghost" Content="转到" Command="{Binding GoCommand}" />
+      <Button Grid.Column="3" Classes="Ghost" Content="刷新" Command="{Binding RefreshCommand}" />
+    </Grid>
+
+    <ListBox Grid.Row="1" ItemsSource="{Binding Directories}" BorderThickness="0"
+             Background="{DynamicResource Brush.Bg.Inset}">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="rh:RemoteDirectoryEntry">
+          <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                  Command="{Binding $parent[ListBox].((vm:RemoteFolderPickerViewModel)DataContext).OpenCommand}"
+                  CommandParameter="{Binding}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Classes="Icon" Data="{StaticResource Icon.Folder}" />
+              <TextBlock Text="{Binding Name}" />
+            </StackPanel>
+          </Button>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <TextBlock Classes="Tertiary" Text="{Binding Status}" VerticalAlignment="Center"
+                 TextWrapping="Wrap" MaxWidth="360" />
+      <Button Classes="Ghost" Content="取消" Command="{Binding CancelCommand}" />
+      <Button Classes="Primary" Content="选择当前目录" Command="{Binding AcceptCommand}" />
+    </StackPanel>
+  </Grid>
+</Window>

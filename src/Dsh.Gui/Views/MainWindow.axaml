@@ -62,5 +62,29 @@
         </Button>
       </Grid>
     </Grid>
+
+    <ItemsControl Grid.Row="0" Grid.RowSpan="2" ItemsSource="{Binding Toasts}"
+                  HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                  Margin="0,0,18,18" IsHitTestVisible="False">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:ToastViewModel">
+          <Border Background="{DynamicResource Brush.Bg.Card}"
+                  BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
+                  CornerRadius="{DynamicResource CornerRadius.Card}"
+                  Padding="12,10" Margin="0,8,0,0" MaxWidth="440">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Ellipse Width="8" Height="8" Margin="0,5,0,0" VerticalAlignment="Top"
+                       Fill="{DynamicResource Brush.Status.Error}" IsVisible="{Binding IsError}" />
+              <Ellipse Width="8" Height="8" Margin="0,5,0,0" VerticalAlignment="Top"
+                       Fill="{DynamicResource Brush.Status.Success}" IsVisible="{Binding IsSuccess}" />
+              <StackPanel Spacing="2" MaxWidth="380">
+                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Message}" Classes="Secondary" TextWrapping="Wrap" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
   </Grid>
 </Window>

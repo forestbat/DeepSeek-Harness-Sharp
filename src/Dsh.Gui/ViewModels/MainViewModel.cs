@@ -47,6 +47,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const int MinContentQueryLength = 2;
 
     private const string PresetEventType = "preset/mode";
+    private const int MaxToasts = 4;
 
     private readonly Context _ctx;
     private readonly AgentRegistry _agents;
@@ -88,6 +89,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _onlyWithSessions = snapshot.ShowOnlyWithSessions;
         _isSidebarVisible = snapshot.SidebarVisible;
         Preferences = new SettingsViewModel(_ctx, app.Home, () => _agent, _bridge, Gui, _settings);
+        Preferences.Notify = ShowToast;
         Preferences.Models.CollectionChanged += (_, _) => RefreshFilteredModels();
         Preferences.ReasoningEfforts.CollectionChanged += (_, _) => HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
         HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
@@ -137,6 +139,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<SessionNodeViewModel> RecentSessions { get; } = [];
 
     public ObservableCollection<WorkspaceChoiceViewModel> RecentWorkspaces { get; } = [];
+
+    /** 右下角气泡(成功/失败提示); 由 ShowToast 写入, 到点自动消失。 */
+    public ObservableCollection<ToastViewModel> Toasts { get; } = [];
 
     /** 已保存的 SSH 远程工作区(工作区下拉“远程工作区”子菜单)。 */
     public ObservableCollection<RemoteWorkspaceChoiceViewModel> RemoteWorkspaces { get; } = [];
@@ -500,15 +505,39 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         StatusText = $"正在连接远程工作区: {workspace.Name}…";
         try
         {
-            _remoteConnection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, CancellationToken.None);
+            string? hostCommand = null;
+            if (Preferences.RemoteAutoDeploy)
+                hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, Preferences.BuildDeployOptions(), message => ShowToast("远端部署", message, false), CancellationToken.None)).CommandPath;
+            _remoteConnection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, hostCommand, CancellationToken.None);
             var info = await _remoteConnection.Client.InfoAsync();
             var sessions = await _remoteConnection.Client.ListSessionsAsync();
             StatusText = $"已连接远程工作区 {workspace.Name}（{info.Platform}，{sessions.Count} 个会话）";
+            ShowToast("远程工作区", StatusText, false);
         }
         catch (Exception error)
         {
             StatusText = $"远程工作区 {workspace.Name} 连接失败: {error.Message}";
+            ShowToast($"远程工作区 {workspace.Name} 连接失败", error.Message, true);
         }
+    }
+
+    /** 右下角气泡: 成功/失败都走这里(设置页“测试连接”“打开远程工作区”共用); 到点自动消失。 */
+    public void ShowToast(string title, string message, bool isError)
+    {
+        var toast = new ToastViewModel(title, message, isError);
+        Dispatcher.UIThread.Post(() =>
+        {
+            Toasts.Add(toast);
+            while (Toasts.Count > MaxToasts)
+                Toasts.RemoveAt(0);
+            _ = DismissToastAsync(toast);
+        });
+    }
+
+    private async Task DismissToastAsync(ToastViewModel toast)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(8));
+        Dispatcher.UIThread.Post(() => Toasts.Remove(toast));
     }
 
     /** 只设新会话的默认目录, 不切换当前会话。 */

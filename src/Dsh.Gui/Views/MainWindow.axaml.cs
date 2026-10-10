@@ -12,6 +12,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
+using Dsh.RemoteHost;
 
 namespace Dsh.Gui.Views;
 
@@ -39,6 +40,7 @@ public sealed partial class MainWindow : Window
         ViewModel.DecisionRequested += ShowDecisionAsync;
         ViewModel.CopyRequested += CopyToClipboard;
         ViewModel.FilePicker = PickAsync;
+        ViewModel.Preferences.RemoteFolderPicker = PickRemoteFolderAsync;
         ViewModel.Preferences.Applied += ApplyAppearance;
         ViewModel.Preferences.Preview += ApplyPreview;
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
@@ -262,7 +264,7 @@ public sealed partial class MainWindow : Window
     {
         if (!IsTrayFailure(e.Exception))
             return;
-        _ = Console.Error.WriteLineAsync($"dsh: tray icon unavailable: {e.Exception.Message}");
+        _ = Console.Error.WriteLineAsync($"dsharp: tray icon unavailable: {e.Exception.Message}");
         e.Handled = true;
     }
 
@@ -333,5 +335,17 @@ public sealed partial class MainWindow : Window
         }
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions { AllowMultiple = allowMultiple, Title = "选择文件" });
         return [.. files.Select(file => file.TryGetLocalPath()).Where(path => path is not null).Select(path => path!)];
+    }
+
+    /** “选择远端目录”: 需要时先自动部署 dsharp, 连上后再用对话框浏览远端目录树。 */
+    private async Task<string?> PickRemoteFolderAsync(SshWorkspace workspace, string? initial)
+    {
+        var cancellationToken = CancellationToken.None;
+        string? hostCommand = null;
+        if (ViewModel.Preferences.RemoteAutoDeploy)
+            hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, ViewModel.Preferences.BuildDeployOptions(), null, cancellationToken)).CommandPath;
+        await using var connection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, hostCommand, cancellationToken);
+        var dialog = new RemoteFolderPickerWindow(connection.Client, initial);
+        return await dialog.ShowDialog<string?>(this);
     }
 }
