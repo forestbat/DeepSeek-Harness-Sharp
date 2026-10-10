@@ -19,6 +19,12 @@ public sealed record RemoteApprovalResponse(string RequestId, bool Allow, string
 
 public sealed record RemoteFilePath(string Path);
 
+/** 远端文件系统中的一项: 名称 + 绝对路径 + 是否目录。 */
+public sealed record RemoteDirectoryEntry(string Name, string Path, bool IsDirectory);
+
+/** 一次远端目录列举: 被列举目录的绝对路径 + 父目录(根为 null) + 子项。 */
+public sealed record RemoteDirectoryListing(string Path, string? Parent, IReadOnlyList<RemoteDirectoryEntry> Entries);
+
 public sealed record RemoteFileContent(string Path, string Base64);
 
 public sealed record RemotePtyStartRequest(string FileName, IReadOnlyList<string> Arguments);

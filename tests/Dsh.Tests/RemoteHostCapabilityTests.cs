@@ -27,6 +27,11 @@ public sealed class RemoteHostCapabilityTests
         await client.WriteFileAsync("/work/a.txt", "hello"u8.ToArray(), Ct);
         Assert.Equal("hello"u8.ToArray(), await client.ReadFileAsync("/work/a.txt", Ct));
 
+        var listing = await client.ListDirectoryAsync("/work", Ct);
+        Assert.Equal("/work", listing.Path);
+        Assert.Equal("/", listing.Parent);
+        Assert.Contains(listing.Entries, entry => entry is { Name: "sub", IsDirectory: true });
+
         var events = new List<RemoteEventInfo>();
         using var subscription = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var pump = Task.Run(async () =>
@@ -111,6 +116,13 @@ public sealed class RemoteHostCapabilityTests
         private readonly Dictionary<string, RemoteSessionInfo> _sessions = [];
         private readonly Dictionary<string, Channel<RemoteEventInfo>> _events = [];
         private readonly Dictionary<string, byte[]> _files = [];
+        private readonly Dictionary<string, RemoteDirectoryListing> _directories = new(StringComparer.Ordinal)
+        {
+            ["/work"] = new RemoteDirectoryListing(
+                "/work",
+                "/",
+                [new RemoteDirectoryEntry("sub", "/work/sub", true), new RemoteDirectoryEntry("a.txt", "/work/a.txt", false)]),
+        };
         private readonly Dictionary<string, Channel<RemotePtyOutput>> _pty = [];
         private readonly Channel<RemoteApprovalRequest> _approvals = Channel.CreateUnbounded<RemoteApprovalRequest>();
         private readonly Dictionary<string, bool> _approvalAnswers = [];
@@ -157,6 +169,11 @@ public sealed class RemoteHostCapabilityTests
             _files[path] = content;
             return Task.CompletedTask;
         }
+
+        public Task<RemoteDirectoryListing> ListDirectoryAsync(string path, CancellationToken cancellationToken)
+            => Task.FromResult(_directories.TryGetValue(path, out var listing)
+                ? listing
+                : throw new DirectoryNotFoundException(path));
 
         public Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {

@@ -1,9 +1,9 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace Dsh.RemoteHost;
 
 /**
- * 远端工作区协议: 本地 GUI/CLI 与远端 `dsh host --serve` 之间的握手、能力与推送方法名。
+ * 远端工作区协议: 本地 GUI/CLI 与远端 `dsharp host --serve` 之间的握手、能力与推送方法名。
  * 帧格式由 Dsh.Transport(JsonRpcPeer) 提供; 这里只定义方法名与 DTO。
  */
 public static class HostProtocol
@@ -27,6 +27,7 @@ public static class HostProtocol
 
     public const string MethodFileRead = "host.file.read";
     public const string MethodFileWrite = "host.file.write";
+    public const string MethodFileList = "host.file.list";
 
     public const string MethodPtyStart = "host.pty.start";
     public const string MethodPtyWrite = "host.pty.write";
@@ -64,10 +65,13 @@ public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Pl
 [JsonSerializable(typeof(RemoteMessageRequest))]
 [JsonSerializable(typeof(RemoteFilePath))]
 [JsonSerializable(typeof(RemoteFileContent))]
+[JsonSerializable(typeof(RemoteDirectoryEntry))]
+[JsonSerializable(typeof(RemoteDirectoryListing))]
 [JsonSerializable(typeof(RemotePtyStartRequest))]
 [JsonSerializable(typeof(RemotePtyRef))]
 [JsonSerializable(typeof(RemotePtyInput))]
 [JsonSerializable(typeof(RemotePtyOutput))]
 [JsonSerializable(typeof(IReadOnlyList<RemoteSessionInfo>))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteDirectoryEntry>))]
 [JsonSerializable(typeof(IReadOnlyList<string>))]
 public partial class HostProtocolJsonContext : JsonSerializerContext;

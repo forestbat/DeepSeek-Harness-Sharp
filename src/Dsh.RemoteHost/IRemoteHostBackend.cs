@@ -24,6 +24,9 @@ public interface IRemoteHostBackend
 
     Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken);
 
+    /** 列出远端某目录的子项; Path 支持 `~` 前缀。 */
+    Task<RemoteDirectoryListing> ListDirectoryAsync(string path, CancellationToken cancellationToken);
+
     Task WriteFileAsync(string path, byte[] content, CancellationToken cancellationToken);
 
     Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken);

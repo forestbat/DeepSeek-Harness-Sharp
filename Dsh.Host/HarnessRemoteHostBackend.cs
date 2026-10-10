@@ -102,6 +102,32 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IDisposable
     public Task WriteFileAsync(string path, byte[] content, CancellationToken cancellationToken)
         => File.WriteAllBytesAsync(path, content, cancellationToken);
 
+    public Task<RemoteDirectoryListing> ListDirectoryAsync(string path, CancellationToken cancellationToken)
+    {
+        var directory = ExpandHome(path);
+        var info = new DirectoryInfo(directory);
+        if (!info.Exists)
+            throw new DirectoryNotFoundException($"远端目录不存在: {info.FullName}");
+        var entries = new List<RemoteDirectoryEntry>();
+        foreach (var child in info.EnumerateDirectories().OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase))
+            entries.Add(new RemoteDirectoryEntry(child.Name, child.FullName, true));
+        foreach (var child in info.EnumerateFiles().OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase))
+            entries.Add(new RemoteDirectoryEntry(child.Name, child.FullName, false));
+        return Task.FromResult(new RemoteDirectoryListing(info.FullName, info.Parent?.FullName, entries));
+    }
+
+    /** 远端用户的 `~`/空 路径折算为家目录: 用户填 `~/dsh-deploy` 时也能浏览。 */
+    private static string ExpandHome(string path)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(path) || path.Trim() == "~")
+            return home;
+        var trimmed = path.Trim();
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal) || trimmed.StartsWith("~\\", StringComparison.Ordinal))
+            return Path.Combine(home, trimmed[2..]);
+        return Path.GetFullPath(trimmed);
+    }
+
     public async Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         var session = await PtyHost.Default

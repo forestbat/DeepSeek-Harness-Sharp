@@ -119,7 +119,8 @@ public sealed class RemoteHostPersistenceTests
         public Task RespondApprovalAsync(string requestId, bool allow, string? reason, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
-
+        public Task<RemoteDirectoryListing> ListDirectoryAsync(string path, CancellationToken cancellationToken)
+            => Task.FromResult(new RemoteDirectoryListing(path, null, []));
         public Task WriteFileAsync(string path, byte[] content, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken) => Task.FromResult("");

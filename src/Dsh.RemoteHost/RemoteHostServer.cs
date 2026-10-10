@@ -151,6 +151,12 @@ public sealed class RemoteHostServer(
                     await backend.WriteFileAsync(request.Path, Convert.FromBase64String(request.Base64), cancellationToken).ConfigureAwait(false);
                     return Serialize(true, HostProtocolJsonContext.Default.Boolean);
                 }
+                case HostProtocol.MethodFileList when backend is not null:
+                {
+                    var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteFilePath)
+                        ?? throw new JsonRpcException(-32602, "list requires path");
+                    return Serialize(await backend.ListDirectoryAsync(request.Path, cancellationToken).ConfigureAwait(false), HostProtocolJsonContext.Default.RemoteDirectoryListing);
+                }
 
                 case HostProtocol.MethodPtyStart when backend is not null:
                 {
