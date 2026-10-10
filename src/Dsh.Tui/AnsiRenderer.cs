@@ -180,7 +180,7 @@ public sealed class AnsiRenderer
     }
 
     private static char Sanitize(char value)
-        => value == '\0' ? ' ' : value;
+        => value == '\0' ? ' ' : TerminalSafeGlyphs.AsciiSafe(value);
 
     /** 终端当前 SGR 状态的本机记录; Apply 只发与当前态的差异属性。 */
     private struct SgrState

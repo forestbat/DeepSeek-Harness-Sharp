@@ -250,12 +250,12 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         using var chat = new ChatWindow(ctx, agent, home);
         chat.DrainUi();
 
-        Assert.Contains("standard · deepseek-official · deepseek-v4-flash", DrawFrame(chat));
+        Assert.Contains("standard - deepseek-official - deepseek-v4-flash", DrawFrame(chat));
 
         agent.Session.Append(new PresetModePayload(InteractionPreset.Minimal));
         chat.DrainUi();
 
-        Assert.Contains("minimal · deepseek-official · deepseek-v4-flash", DrawFrame(chat));
+        Assert.Contains("minimal - deepseek-official - deepseek-v4-flash", DrawFrame(chat));
     }
 
     private async Task<(Context Ctx, AgentLoopAgent Agent, HarnessHome Home)> CreateAgent()

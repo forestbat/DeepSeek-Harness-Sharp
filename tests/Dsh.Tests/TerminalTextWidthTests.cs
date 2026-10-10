@@ -8,11 +8,17 @@ public class TerminalTextWidthTests
     [InlineData('a', 1)]
     [InlineData(' ', 1)]
     [InlineData('─', 1)]
+    [InlineData('│', 1)]
+    [InlineData('▶', 1)]
     [InlineData('中', 2)]
     [InlineData('文', 2)]
     [InlineData('　', 2)]
     [InlineData('０', 2)]
     [InlineData('한', 2)]
+    [InlineData('✅', 2)]
+    [InlineData('❌', 2)]
+    [InlineData('⚡', 2)]
+    [InlineData('⭐', 2)]
     public void Width_Matches_Terminal_Cell_Rules(char character, int expected)
         => Assert.Equal(expected, TerminalTextWidth.Of(character));
 

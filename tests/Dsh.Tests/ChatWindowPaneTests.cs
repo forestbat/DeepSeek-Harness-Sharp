@@ -23,7 +23,7 @@ public sealed class ChatWindowPaneTests : IDisposable
         var frame = DrawFrame(chat);
         Assert.Contains(first.Id.ToString(), frame);
         Assert.Contains(second.Id.ToString(), frame);
-        Assert.Contains("▶ ", frame);
+        Assert.Contains("> ", frame);
         chat.Dispose();
     }
 
@@ -144,7 +144,7 @@ public sealed class ChatWindowPaneTests : IDisposable
         chat.Dispose();
     }
 
-    /** 单一树: 会话直接列在树里(没有 pty 归属时不再有旧的“pty …”归属行, 也没有“PTY/会话”两段标题)。 */
+    /** 单一树: 会话直接列在树里(没有 pty 归属时不再有旧的“pty ~”归属行, 也没有“PTY/会话”两段标题)。 */
     [Fact]
     public async Task CtrlX_W_Overview_Is_Single_Tree()
     {
@@ -341,6 +341,31 @@ public sealed class ChatWindowPaneTests : IDisposable
 
         Assert.Equal("第二条", chat.InputPane.Input);
         Assert.Equal(targetSeq, agent.Session.Seq);
+        chat.Dispose();
+    }
+
+    /**
+     * 终端把东亚宽度 Ambiguous 的字符(分隔线/浮层边框/几何符号)按两格渲染时(简中控制台常见),
+     * 渲染输出必须仍与网格一一对齐 —— 布局按一格、终端按两格会让整行右移并在分屏里撕裂。
+     * 见 TerminalSafeGlyphs: 落屏前把这些字符换成等宽 ASCII。
+     */
+    [Fact]
+    public async Task Split_Menu_Renders_Aligned_On_Ambiguous_Wide_Terminal()
+    {
+        var (chat, _, _, first, _) = await CreateChatWithTwoAgents();
+        first.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("检查中文宽度渲染")), new SurfaceOp.Append());
+
+        chat.HandleKey(new ConsoleKeyInfo('/', ConsoleKey.NoName, false, false, false));
+        var layout = LayoutEngine.Calculate(120, 40);
+        var grid = new CellGrid(120, 40);
+        chat.Draw(grid, layout);
+        var output = new AnsiRenderer()
+            .RenderToBuffer(grid, chat.CursorScreenX, chat.CursorScreenY, forceFull: true)
+            .ToString();
+
+        var screen = new TerminalScreenSim(120, 40, ambiguousWide: true);
+        screen.Feed(output);
+        Assert.True(screen.Matches(grid), screen.Explain(grid));
         chat.Dispose();
     }
 

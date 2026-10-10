@@ -31,7 +31,7 @@ public sealed class ChatWindowSubagentTests : IDisposable
         Assert.Contains("alpha", frame);
         Assert.Contains("beta", frame);
         Assert.Contains("[one-shot]", frame);
-        Assert.Contains("○ ended", frame);
+        Assert.Contains("o ended", frame);
     }
 
     [Fact]
@@ -43,17 +43,17 @@ public sealed class ChatWindowSubagentTests : IDisposable
 
         PressCtrl(chat, ConsoleKey.X);
         Press(chat, ConsoleKey.A);
-        Assert.Contains("○ ended", DrawFrame(chat));
+        Assert.Contains("o ended", DrawFrame(chat));
 
         fixture.Ctx.Events.Emit(fixture.Ctx, new SubagentStartNotification(
             new SubagentRunInfo("run-1", "spawn", child.Id, true)));
         chat.DrainUi();
-        Assert.Contains("● live", DrawFrame(chat));
+        Assert.Contains("* live", DrawFrame(chat));
 
         fixture.Ctx.Events.Emit(fixture.Ctx, new SubagentEndNotification(
             new SubagentRunEndInfo("run-1", "spawn", child.Id, true, SubagentStopReason.Completed)));
         chat.DrainUi();
-        Assert.Contains("○ ended", DrawFrame(chat));
+        Assert.Contains("o ended", DrawFrame(chat));
     }
 
     [Fact]
@@ -160,8 +160,8 @@ public sealed class ChatWindowSubagentTests : IDisposable
         PressCtrl(chat, ConsoleKey.X);
         Press(chat, ConsoleKey.A);
         var frame = DrawFrame(chat);
-        Assert.Contains("○ ended · alpha", frame);
-        Assert.Contains("● live · beta", frame);
+        Assert.Contains("o ended - alpha", frame);
+        Assert.Contains("* live - beta", frame);
 
         Press(chat, ConsoleKey.Escape);
         Assert.DoesNotContain("子代理 (Ctrl+X A)", DrawFrame(chat));
@@ -178,8 +178,8 @@ public sealed class ChatWindowSubagentTests : IDisposable
         PressCtrl(chat, ConsoleKey.X);
         Press(chat, ConsoleKey.A);
         var frame = DrawFrame(chat);
-        Assert.Contains("› ○ ended · alpha [one-shot] +", frame);
-        Assert.Contains("    ○ ended · gamma [one-shot]", frame);
+        Assert.Contains("> o ended - alpha [one-shot] +", frame);
+        Assert.Contains("    o ended - gamma [one-shot]", frame);
         Assert.DoesNotContain("gamma [one-shot] +", frame);
     }
 
@@ -239,7 +239,7 @@ public sealed class ChatWindowSubagentTests : IDisposable
         Press(chat, ConsoleKey.A);
         Press(chat, ConsoleKey.Enter);
         chat.DrainUi();
-        Assert.Contains("● live", DrawFrame(chat));
+        Assert.Contains("* live", DrawFrame(chat));
 
         alpha.Append(new ToolCallPayload(1, 1, ToolCallId.Create("call-live"), "bash", """{"command":"echo live"}"""));
         chat.DrainUi();

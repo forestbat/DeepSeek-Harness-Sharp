@@ -16,7 +16,7 @@ namespace Dsh.Tui;
 public sealed class ChatPane : ITuiPane
 {
     private const string InputPrompt = "> ";
-    private const string ReadyStatus = "ready — Enter to send, ↑ history, Esc cancels a running turn, Ctrl+C×2 quits";
+    private const string ReadyStatus = "ready - Enter to send, ^ history, Esc cancels a running turn, Ctrl+C×2 quits";
 
     private readonly ChatWindow _window;
     private readonly Dictionary<ToolCallId, (int Start, string Arguments)> _pendingSubagentCalls = [];
@@ -434,7 +434,7 @@ public sealed class ChatPane : ITuiPane
         var remaining = AttachImagePaths(text);
         if (remaining.Length == 0)
         {
-            StatusText = $"已附加 {_attachments.Count} 张图片 — Enter 发送";
+            StatusText = $"已附加 {_attachments.Count} 张图片 - Enter 发送";
             return;
         }
         InsertText(remaining);
@@ -450,7 +450,7 @@ public sealed class ChatPane : ITuiPane
             if (store is null)
                 return false;
             _attachments.Add(store.Put(bytes, mediaType, 0, 0, "clipboard"));
-            StatusText = $"已附加 {_attachments.Count} 张图片 — Enter 发送";
+            StatusText = $"已附加 {_attachments.Count} 张图片 - Enter 发送";
             return true;
         }
         catch (Exception)
@@ -652,7 +652,7 @@ public sealed class ChatPane : ITuiPane
         }
     }
 
-    /** 参数面板说明行: ▸ 当前参数(含已输入值) · ✓ 已填 · · 待填; 每行给出 flag/名称、含义与必填。 */
+    /** 参数面板说明行: > 当前参数(含已输入值) - + 已填 - - 待填; 每行给出 flag/名称、含义与必填。 */
     private IReadOnlyList<string> CommandMenuPanelLines()
     {
         if (CommandMenu?.IsActive != true || CommandMenu.Stage != CommandMenuState.MenuStage.Argument)
@@ -672,10 +672,10 @@ public sealed class ChatPane : ITuiPane
             var value = typed is { Length: > 0 } ? typed
                 : index < values.Count && values[index].Length > 0 ? values[index]
                 : prefill ?? "";
-            // 标记: ▸ 当前参数 · ✓ 已有值(手输/已采纳/预置) · · 还没值。
+            // 标记: > 当前参数 - + 已有值(手输/已采纳/预置) - - 还没值。
             var marker = index == CommandMenu.ArgumentIndex
-                ? "▸"
-                : value.Length > 0 ? "✓" : "·";
+                ? ">"
+                : value.Length > 0 ? "+" : "-";
             var filled = value.Length > 0 ? $" = {value}" : "";
             var autoFilled = prefill is { Length: > 0 }
                 && typed is not { Length: > 0 }
@@ -705,14 +705,14 @@ public sealed class ChatPane : ITuiPane
             if (argumentStage)
                 return label;
             return CommandMenu.Query.Length > 0
-                ? $"{label} — 无匹配 \"{CommandMenu.Query}\""
-                : $"{label} — 无候选项";
+                ? $"{label} - 无匹配 \"{CommandMenu.Query}\""
+                : $"{label} - 无候选项";
         }
 
         var position = $"{CommandMenu.SelectedIndex + 1}/{count}";
         return CommandMenu.Query.Length > 0
-            ? $"{label} — {position} 匹配 \"{CommandMenu.Query}\""
-            : $"{label} — {position}";
+            ? $"{label} - {position} 匹配 \"{CommandMenu.Query}\""
+            : $"{label} - {position}";
     }
 
     /** 浮层翻页步长: 参数面板要扣掉说明行。 */
@@ -781,13 +781,13 @@ public sealed class ChatPane : ITuiPane
         AddPanelSection(lines, "Git 变更", _window.GitLines());
         AddPanelSection(lines, "快捷键",
         [
-            "Enter 发送 · / 命令 · @ 引用",
-            "Tab 下一个参数/折叠 · Esc 取消",
-            "↑/↓ 历史 · PgUp/PgDn 滚动",
+            "Enter 发送 - / 命令 - @ 引用",
+            "Tab 下一个参数/折叠 - Esc 取消",
+            "^/v 历史 - PgUp/PgDn 滚动",
             "Ctrl+C×2 退出",
-            "Ctrl+X N 新会话 · S 会话",
-            "Ctrl+X D detach · K 删会话",
-            "Ctrl+X W 总览 · + 分屏 · - 关闭",
+            "Ctrl+X N 新会话 - S 会话",
+            "Ctrl+X D detach - K 删会话",
+            "Ctrl+X W 总览 - + 分屏 - - 关闭",
             "Ctrl+X 方向键/O 切窗格",
         ]);
         return lines;
@@ -844,13 +844,13 @@ public sealed class ChatPane : ITuiPane
         var infoY = inputRow + 1;
         if (infoY >= grid.Height)
             return;
-        var hint = "Enter 发送 · / 命令 · @ 引用 · Tab 下一个参数 · Ctrl+X 会话";
+        var hint = "Enter 发送 - / 命令 - @ 引用 - Tab 下一个参数 - Ctrl+X 会话";
         CellText.Draw(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
         var (currentProvider, currentModel) = CurrentModel(Agent);
         var preset = CurrentPreset(Agent);
         var profile = CurrentReasoningEffort(Agent) is { } effort
-            ? $"{preset} · {currentProvider} · {currentModel} · {effort.Value}"
-            : $"{preset} · {currentProvider} · {currentModel}";
+            ? $"{preset} - {currentProvider} - {currentModel} - {effort.Value}"
+            : $"{preset} - {currentProvider} - {currentModel}";
         var profileWidth = TerminalTextWidth.Of(profile);
         if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
             CellText.Draw(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
@@ -863,11 +863,11 @@ public sealed class ChatPane : ITuiPane
         var impact = ApprovalHints.Impact(request.ToolName, request.Arguments);
         var line = $"  ⚠ approve tool \"{request.ToolName}\"?"
             + (request.Reason is null ? "" : $" {request.Reason}")
-            + (argument.Length == 0 ? "" : $" · {argument}")
+            + (argument.Length == 0 ? "" : $" - {argument}")
             + (impact.Length == 0 ? "" : $" {impact}")
             + " [y]es/[n]o/[c]ancel turn\n";
         AppendRaw(line);
-        StatusText = $"approval pending for \"{request.ToolName}\" — y/n/c";
+        StatusText = $"approval pending for \"{request.ToolName}\" - y/n/c";
     }
 
     private void AnswerApproval(ApprovalOutcome outcome)
@@ -909,7 +909,7 @@ public sealed class ChatPane : ITuiPane
             for (var index = 0; index < options.Count && index < 9; index++)
             {
                 var option = options[index];
-                AppendRaw($"    [{index + 1}] {option.Label}{(option.Description is null ? "" : $" — {option.Description}")}\n");
+                AppendRaw($"    [{index + 1}] {option.Label}{(option.Description is null ? "" : $" - {option.Description}")}\n");
             }
         }
         RefreshQuestionStatus();
@@ -919,12 +919,12 @@ public sealed class ChatPane : ITuiPane
     {
         var question = _questionRequest!.Questions[_questionIndex];
         var total = _questionRequest.Questions.Count;
-        var prefix = total > 1 ? $"问题 {_questionIndex + 1}/{total} · " : "";
+        var prefix = total > 1 ? $"问题 {_questionIndex + 1}/{total} - " : "";
         StatusText = question.Options is { Count: > 0 }
             ? question.MultiSelect
-                ? $"{prefix}1-9 切换选项(已选 {_questionSelection.Count}) · 输入框可补充 · Enter 确认 · Esc 取消"
-                : $"{prefix}1-9 选择 · 输入框可补充 · Enter 确认 · Esc 取消"
-            : $"{prefix}输入回答 · Enter 确认 · Esc 取消";
+                ? $"{prefix}1-9 切换选项(已选 {_questionSelection.Count}) - 输入框可补充 - Enter 确认 - Esc 取消"
+                : $"{prefix}1-9 选择 - 输入框可补充 - Enter 确认 - Esc 取消"
+            : $"{prefix}输入回答 - Enter 确认 - Esc 取消";
     }
 
     private void HandleQuestionKey(ConsoleKeyInfo key)
@@ -932,7 +932,7 @@ public sealed class ChatPane : ITuiPane
         var question = _questionRequest!.Questions[_questionIndex];
         if (key.Key == ConsoleKey.Escape)
         {
-            AppendRaw("  ✗ 已取消\n");
+            AppendRaw("  x 已取消\n");
             CompleteQuestions(null);
             return;
         }
@@ -996,7 +996,7 @@ public sealed class ChatPane : ITuiPane
             ShowCurrentQuestion();
             return;
         }
-        AppendRaw("  ✓ 已回答\n");
+        AppendRaw("  + 已回答\n");
         CompleteQuestions(new AskUserQuestionAnswer([.. _questionAnswers]));
     }
 
@@ -1194,7 +1194,7 @@ public sealed class ChatPane : ITuiPane
         RefreshMenuStatus();
     }
 
-    /** 滚轮滚动命令/mention 浮层候选(与 ↑/↓ 等价); 浮层无候选返回 false 以便正文继续滚动。delta>0=向上(与正文滚动同约定)。 */
+    /** 滚轮滚动命令/mention 浮层候选(与 ^/v 等价); 浮层无候选返回 false 以便正文继续滚动。delta>0=向上(与正文滚动同约定)。 */
     internal bool ScrollOverlay(float delta)
     {
         if (delta == 0)
@@ -1286,8 +1286,8 @@ public sealed class ChatPane : ITuiPane
     }
 
     /**
-     * `/provider add` 第一步选单的语义: 选中目录 provider → 带出 baseUrl/type/models(输入行为空时按 Enter 采纳);
-     * 选中协议族条目(openai-compatible / anthropic / custom(...)) → 视为自定义端点, 只带出 type, provider 名仍由用户填。
+     * `/provider add` 第一步选单的语义: 选中目录 provider > 带出 baseUrl/type/models(输入行为空时按 Enter 采纳);
+     * 选中协议族条目(openai-compatible / anthropic / custom(...)) > 视为自定义端点, 只带出 type, provider 名仍由用户填。
      * 返回 true 表示这次回车被当作预置消费掉(不要再走 Confirm)。
      */
     private bool ApplyProviderAddPreset()
@@ -1380,23 +1380,23 @@ public sealed class ChatPane : ITuiPane
             if (CommandMenu.Candidates.Count > 0)
             {
                 StatusText = CommandMenu.Stage == CommandMenuState.MenuStage.Argument
-                    ? $"{CommandMenu.Prompt} — ↑/↓ 移动 · PgUp/PgDn 翻页 · 输入筛选 · Enter 选中 · Tab 下一个参数 · Esc 返回"
-                    : $"{CommandMenu.Prompt} — ↑/↓ 移动 · PgUp/PgDn 翻页 · 输入筛选 · Enter/Tab 选中 · Esc 返回";
+                    ? $"{CommandMenu.Prompt} - ^/v 移动 - PgUp/PgDn 翻页 - 输入筛选 - Enter 选中 - Tab 下一个参数 - Esc 返回"
+                    : $"{CommandMenu.Prompt} - ^/v 移动 - PgUp/PgDn 翻页 - 输入筛选 - Enter/Tab 选中 - Esc 返回";
                 return;
             }
 
             var hasPrefill = CommandMenu.PrefilledValue(CommandMenu.ArgumentIndex) is { Length: > 0 };
             StatusText = hasPrefill
-                ? $"{CommandMenu.Prompt} — Enter 采纳预置并继续 · Tab 下一个参数 · 输入可改写 · Esc 返回"
+                ? $"{CommandMenu.Prompt} - Enter 采纳预置并继续 - Tab 下一个参数 - 输入可改写 - Esc 返回"
                 : CommandMenu.CurrentArgumentSchema?.Required == false
-                    ? $"{CommandMenu.Prompt} — Enter 跳过 · Tab 下一个参数 · 输入可填写 · Esc 返回"
-                    : $"{CommandMenu.Prompt} — 必填 · 输入后 Enter · Tab 下一个参数 · Esc 返回";
+                    ? $"{CommandMenu.Prompt} - Enter 跳过 - Tab 下一个参数 - 输入可填写 - Esc 返回"
+                    : $"{CommandMenu.Prompt} - 必填 - 输入后 Enter - Tab 下一个参数 - Esc 返回";
             return;
         }
 
         if (_mentionActive)
         {
-            StatusText = $"@ {_mentionCandidates.Count} candidates — ↑/↓ Enter Esc";
+            StatusText = $"@ {_mentionCandidates.Count} candidates - ^/v Enter Esc";
             return;
         }
 
@@ -1405,7 +1405,7 @@ public sealed class ChatPane : ITuiPane
 
     public void SetStatusReady()
         => StatusText = Busy
-            ? "working… (Esc to cancel)"
+            ? "working~ (Esc to cancel)"
             : ReadyStatus;
 
     private void SetBusy(bool busy)
@@ -1426,7 +1426,7 @@ public sealed class ChatPane : ITuiPane
             AttachImagePaths(path);
             Input = "";
             Cursor = 0;
-            StatusText = _attachments.Count > 0 ? $"已附加 {_attachments.Count} 张图片 — Enter 发送" : $"无法附加图片: {path}";
+            StatusText = _attachments.Count > 0 ? $"已附加 {_attachments.Count} 张图片 - Enter 发送" : $"无法附加图片: {path}";
             return;
         }
 
@@ -1571,7 +1571,7 @@ public sealed class ChatPane : ITuiPane
 
         if (OperatingSystem.IsWindows())
         {
-            // 终端可能给 MSYS/Git-Bash 风格: /C:/Users/... 或 /c/Users/... —— 还原成 C:\Users\...
+            // 终端可能给 MSYS/Git-Bash 风格: /C:/Users/... 或 /c/Users/... -- 还原成 C:\Users\...
             if (trimmed.Length >= 3 && trimmed[0] == '/' && char.IsLetter(trimmed[1]) && trimmed[2] == ':')
                 trimmed = trimmed[1..];
             else if (trimmed.Length >= 3 && trimmed[0] == '/' && char.IsLetter(trimmed[1]) && trimmed[2] == '/')
@@ -1832,7 +1832,7 @@ public sealed class ChatPane : ITuiPane
         Renderer.BumpVersion();
     }
 
-    /** 视觉行 → 源偏移: rows 的 FlatStart 升序, 二分找最后一个不超过 wrappedIndex 的行。 */
+    /** 视觉行 > 源偏移: rows 的 FlatStart 升序, 二分找最后一个不超过 wrappedIndex 的行。 */
     private int? SourceOffsetAt(int wrappedIndex)
     {
         var rows = _visualRows;
@@ -1963,7 +1963,7 @@ public sealed class ChatPane : ITuiPane
         _wrapProcessedLine = lines.Count;
     }
 
-    /** offset → 行号: 行 i 覆盖 [starts[i], 下一行起点), tail 行覆盖 [tailStart, 末尾)。 */
+    /** offset > 行号: 行 i 覆盖 [starts[i], 下一行起点), tail 行覆盖 [tailStart, 末尾)。 */
     private static int LineIndexOf(IReadOnlyList<int> starts, int completeCount, int tailStart, int offset)
     {
         if (offset >= tailStart)

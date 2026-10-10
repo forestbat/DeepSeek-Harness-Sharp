@@ -73,7 +73,7 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Contains("脱离会话交给 daemon", frame);
     }
 
-    /** 正文区滚轮在命令浮层打开时滚动候选(与 ↑/↓ 等价)。 */
+    /** 正文区滚轮在命令浮层打开时滚动候选(与 ^/v 等价)。 */
     [Fact]
     public async Task Wheel_Scrolls_Command_Menu()
     {
@@ -84,7 +84,7 @@ public class ChatWindowMenuTests : IDisposable
         var before = SelectedRow(grid, layout);
         Assert.True(before >= 0, "浮层应有选中项");
 
-        // 滚轮向下 = delta<0 → 高亮下移。
+        // 滚轮向下 = delta<0 > 高亮下移。
         chat.HandleMouseWheel(-3, 5, 5, layout);
         chat.HandleMouseWheel(-3, 5, 5, layout);
 
@@ -98,7 +98,7 @@ public class ChatWindowMenuTests : IDisposable
         {
             for (var x = layout.Main.X; x < layout.Main.Right; x++)
             {
-                if (grid[x, y].Character == '›')
+                if (grid[x, y].Character == '>')
                     return y;
             }
         }
@@ -299,6 +299,15 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Equal(["a", "b"], output);
     }
 
+    /** 表情(✅ 等东亚宽度 W 的符号)按两格计: 少算会把整行撑出窗格, 让分屏分隔线错位、字符溢到相邻区域。 */
+    [Fact]
+    public void WrapSingleLine_Counts_Wide_Emoji_As_Two_Cells()
+    {
+        var output = new List<string>();
+        ChatPane.WrapSingleLine("✅✅✅✅✅", 9, output);
+        Assert.Equal(["✅✅✅✅", "✅"], output);
+    }
+
     [Fact]
     public async Task Slash_m_Filters_Popup_To_Matching_Commands()
     {
@@ -307,9 +316,9 @@ public class ChatWindowMenuTests : IDisposable
         Type(chat, "/m");
 
         var frame = DrawFrame(chat);
-        Assert.Contains("› mcp", frame);
+        Assert.Contains("> mcp", frame);
         Assert.Contains("model", frame);
-        Assert.DoesNotContain("› session", frame);
+        Assert.DoesNotContain("> session", frame);
     }
 
     [Fact]
@@ -325,8 +334,8 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "pro");
         frame = DrawFrame(chat);
-        Assert.Contains("› deepseek-official/deepseek-v4-pro", frame);
-        Assert.DoesNotContain("› deepseek-official/deepseek-v4-flash", frame);
+        Assert.Contains("> deepseek-official/deepseek-v4-pro", frame);
+        Assert.DoesNotContain("> deepseek-official/deepseek-v4-flash", frame);
     }
 
     [Fact]
@@ -374,7 +383,7 @@ public class ChatWindowMenuTests : IDisposable
         // 不是直接执行: 停在参数选单, 没有打印 usage/note。
         Assert.DoesNotContain("usage: /gpu <number|name>", frame);
 
-        // 选中高亮项(auto) → 只回填命令, 不执行。
+        // 选中高亮项(auto) > 只回填命令, 不执行。
         Press(chat, ConsoleKey.Enter);
         frame = DrawFrame(chat);
         Assert.Contains($"> /gpu {labels[0]}", frame);
@@ -492,7 +501,7 @@ public class ChatWindowMenuTests : IDisposable
 
         frame = DrawFrame(chat);
         Assert.Contains("model: deepseek-official/m-b", frame);
-        Assert.Contains("deepseek-official · m-b", frame);
+        Assert.Contains("deepseek-official - m-b", frame);
         Assert.DoesNotContain("m-a", frame);
     }
 
@@ -614,7 +623,7 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Contains("Provider name", frame);
         Assert.Contains("Base URL", frame);
         Assert.Contains("(必填)", frame);
-        Assert.Contains("▸ name", frame);
+        Assert.Contains("> name", frame);
         Assert.DoesNotContain("(空)", frame);
 
         Type(chat, "kilo");
@@ -625,13 +634,13 @@ public class ChatWindowMenuTests : IDisposable
 
         // 回车采纳 name 后落到下一条必填参数, 面板继续留在参数阶段。
         frame = DrawFrame(chat);
-        Assert.Contains("▸ --base-url", frame);
+        Assert.Contains("> --base-url", frame);
         Assert.Contains("(必填)", frame);
 
         Type(chat, "https://example.com");
         Press(chat, ConsoleKey.Enter);
 
-        // 必填参数全部填完 → 回填完整命令但先不发送(浮层已关)。
+        // 必填参数全部填完 > 回填完整命令但先不发送(浮层已关)。
         frame = DrawFrame(chat);
         Assert.Contains("> /provdemo kilo --base-url https://example.com", frame);
         Assert.DoesNotContain("(必填)", frame);
@@ -662,25 +671,25 @@ public class ChatWindowMenuTests : IDisposable
         Press(chat, ConsoleKey.Tab);
 
         var frame = DrawFrame(chat);
-        Assert.Contains("▸ --base-url", frame);
+        Assert.Contains("> --base-url", frame);
         Assert.Contains("Tab 下一个参数", frame);
 
         Press(chat, ConsoleKey.Tab);
         frame = DrawFrame(chat);
-        Assert.Contains("▸ --api-key", frame);
+        Assert.Contains("> --api-key", frame);
 
         // api-key 留空也能继续走(采纳失败不阻塞), 且可选参数同样在循环里。
         Press(chat, ConsoleKey.Tab);
         frame = DrawFrame(chat);
-        Assert.Contains("▸ --type", frame);
+        Assert.Contains("> --type", frame);
 
         Press(chat, ConsoleKey.Tab);
         frame = DrawFrame(chat);
-        Assert.Contains("▸ --model-ids", frame);
+        Assert.Contains("> --model-ids", frame);
 
         Press(chat, ConsoleKey.Tab);
         frame = DrawFrame(chat);
-        Assert.Contains("▸ name", frame);
+        Assert.Contains("> name", frame);
         Assert.Contains("= acme", frame);
     }
 
@@ -966,9 +975,9 @@ public class ChatWindowMenuTests : IDisposable
         Press(chat, ConsoleKey.Enter);
 
         var frame = DrawFrame(chat);
-        // name/base-url/type/model-ids 都已由目录预置满足 → 直接落在唯一还需输入的必填 api-key。
-        Assert.Contains("▸ --api-key", frame);
-        Assert.Contains("✓ --base-url", frame);
+        // name/base-url/type/model-ids 都已由目录预置满足 > 直接落在唯一还需输入的必填 api-key。
+        Assert.Contains("> --api-key", frame);
+        Assert.Contains("+ --base-url", frame);
         Assert.Contains("https://open.bigmodel.cn/api/coding/paas/v4", frame);
         Assert.Contains("(自动填好)", frame);
         Assert.Contains("(必填)", frame);
@@ -1001,8 +1010,8 @@ public class ChatWindowMenuTests : IDisposable
         Press(chat, ConsoleKey.Enter);
 
         var frame = DrawFrame(chat);
-        Assert.Contains("▸ name", frame);
-        Assert.Contains("✓ --type", frame);
+        Assert.Contains("> name", frame);
+        Assert.Contains("+ --type", frame);
         Assert.Contains("= anthropic", frame);
         Assert.Contains("> /provider add", frame);
     }

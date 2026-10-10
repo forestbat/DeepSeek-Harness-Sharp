@@ -228,7 +228,8 @@ public class AnsiRendererTests
         {
             for (var x = 0; x < grid.Width; x++)
             {
-                var expected = grid[x, y].Character is '\0' ? ' ' : grid[x, y].Character;
+                var raw = grid[x, y].Character;
+                var expected = raw == '\0' ? ' ' : TerminalSafeGlyphs.AsciiSafe(raw);
                 var actual = terminal.Screen[x, y];
                 if (expected != actual)
                     mismatches.Add($"({x},{y}): expected '{expected}' but was '{actual}'");

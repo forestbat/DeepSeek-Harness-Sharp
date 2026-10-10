@@ -15,10 +15,10 @@ public class TerminalSanitizerTests
         Assert.Equal(" text\n", second.Text);
         var third = sanitizer.Push("\u001b]133;");
         Assert.Equal("", third.Text);
-        var fourth = sanitizer.Push("D;0\u0007dsh> ");
-        Assert.Equal("dsh> ", fourth.Text);
+        var fourth = sanitizer.Push("D;0\u0007dsharp> ");
+        Assert.Equal("dsharp> ", fourth.Text);
         Assert.True(fourth.Prompt);
-        Assert.Equal("dsh> ", fourth.PromptTail);
+        Assert.Equal("dsharp> ", fourth.PromptTail);
     }
 
     [Fact]
@@ -57,9 +57,9 @@ public class TerminalSanitizerTests
         var marker = sanitizer.Push("\u001b]133;D;0\u0007");
         Assert.True(marker.Prompt);
         Assert.Equal("", marker.PromptTail);
-        var tail = sanitizer.Push("dsh> ");
-        Assert.Equal("dsh> ", tail.Text);
-        Assert.Equal("dsh> ", tail.PromptTail);
+        var tail = sanitizer.Push("dsharp> ");
+        Assert.Equal("dsharp> ", tail.Text);
+        Assert.Equal("dsharp> ", tail.PromptTail);
     }
 
     [Fact]

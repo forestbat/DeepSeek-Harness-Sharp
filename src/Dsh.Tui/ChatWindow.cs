@@ -242,7 +242,7 @@ public sealed class ChatWindow : IDisposable
             if (key.Key == ConsoleKey.X && (key.Modifiers & ConsoleModifiers.Control) != 0)
             {
                 _ctrlXPrefix = true;
-                SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · ,/. 切会话 · Q 退出");
+                SetCtrlXHint("Ctrl+X: N 新会话 - S 会话 - D detach - A 子代理 - W 总览 - T 开 shell - + 分屏 - - 关窗格 - ,/. 切会话 - Q 退出");
                 return;
             }
             shell.HandleKey(key);
@@ -269,7 +269,7 @@ public sealed class ChatWindow : IDisposable
             {
                 case ConsoleKey.X:
                     _ctrlXPrefix = true;
-                    SetCtrlXHint("Ctrl+X: N 新会话 · S 会话 · D detach · K 删会话 · A 子代理 · W 总览 · T 开 shell · + 分屏 · - 关窗格 · 方向键/O 切窗格 · ,/. 切会话 · Q 退出");
+                    SetCtrlXHint("Ctrl+X: N 新会话 - S 会话 - D detach - K 删会话 - A 子代理 - W 总览 - T 开 shell - + 分屏 - - 关窗格 - 方向键/O 切窗格 - ,/. 切会话 - Q 退出");
                     return;
                 case ConsoleKey.C:
                     if (input.Busy)
@@ -411,7 +411,7 @@ public sealed class ChatWindow : IDisposable
     {
         RenderVersion++;
         layout = Effective(layout);
-        // 命令浮层打开时: 正文区滚轮滚动候选(与 ↑/↓ 等价), 便于浏览长命令列表。
+        // 命令浮层打开时: 正文区滚轮滚动候选(与 ^/v 等价), 便于浏览长命令列表。
         if (layout.Main.Contains(cellX, cellY) && InputPane.ScrollOverlay(delta))
             return;
         // 单窗格时指针落在右栏上: 滚右栏内容(窄终端里才看得到下面的段落), 不再滚正文。
@@ -925,7 +925,7 @@ public sealed class ChatWindow : IDisposable
     private long _gitRefreshedAt;
     private int _gitRefreshing;
 
-    /** 右栏 Git 变更: 只读缓存(未就绪显示"计算中…"), 后台刷新, 不阻塞绘制/GPU 帧路径。 */
+    /** 右栏 Git 变更: 只读缓存(未就绪显示"计算中~"), 后台刷新, 不阻塞绘制/GPU 帧路径。 */
     internal IReadOnlyList<string> GitLines()
     {
         var cwd = InputPane.Agent.Session.Header.Cwd;
@@ -935,7 +935,7 @@ public sealed class ChatWindow : IDisposable
         if ((_gitLines is null || !string.Equals(_gitCwd, cwd, StringComparison.Ordinal) || stale)
             && Interlocked.CompareExchange(ref _gitRefreshing, 1, 0) == 0)
             _ = RefreshGitLinesAsync(cwd);
-        return _gitLines ?? ["计算中…"];
+        return _gitLines ?? ["计算中~"];
     }
 
     private async Task RefreshGitLinesAsync(string cwd)
@@ -1291,7 +1291,7 @@ public sealed class ChatWindow : IDisposable
     private static string Preview(string text)
     {
         var single = text.Replace('\n', ' ');
-        return single.Length <= 60 ? single : $"{single[..60]}…";
+        return single.Length <= 60 ? single : $"{single[..60]}~";
     }
 
     private async Task NewSession(ChatPane pane, string text)
@@ -1350,7 +1350,7 @@ public sealed class ChatWindow : IDisposable
             }
             catch (Exception error)
             {
-                pane.AppendRaw($"  session cannot be loaded: {raw} — {error.Message}\n");
+                pane.AppendRaw($"  session cannot be loaded: {raw} - {error.Message}\n");
                 return;
             }
 
@@ -1451,7 +1451,7 @@ public sealed class ChatWindow : IDisposable
             pane.AppendRaw($"  gpu: current = {(current == GpuCatalog.AutoAdapter ? "auto (system default)" : current)}\n");
             for (var index = 0; index < labels.Count; index++)
                 pane.AppendRaw($"    {index}. {labels[index]}\n");
-            pane.AppendRaw("  usage: /gpu <number|name> — takes effect after restart\n");
+            pane.AppendRaw("  usage: /gpu <number|name> - takes effect after restart\n");
             pane.AppendRaw("  note: 若当前以 CPU 模式运行, 该选择仅下次以 GPU 模式启动时才生效(Linux 经 PRIME 选择器)\n");
             return;
         }
@@ -1474,7 +1474,7 @@ public sealed class ChatWindow : IDisposable
             selected = GpuCatalog.SelectionIdOf(adapters[matched - 1]);
         }
         GpuCatalog.SaveSelectedAdapter(_home, selected);
-        pane.AppendRaw($"  gpu: selected {(selected == GpuCatalog.AutoAdapter ? "auto (system default)" : selected)} — takes effect after restart\n");
+        pane.AppendRaw($"  gpu: selected {(selected == GpuCatalog.AutoAdapter ? "auto (system default)" : selected)} - takes effect after restart\n");
         var windowsNote = GpuCatalog.ApplyWindowsPreference(selected);
         if (windowsNote.Length > 0)
             pane.AppendRaw($"  {windowsNote}\n");
@@ -1487,7 +1487,7 @@ public sealed class ChatWindow : IDisposable
         {
             DetachRequested = true;
             // detach 完全静默: 不写 transcript(否则 attach 回来还留着"detached:"字样), 仅记录调试日志。
-            _ctx.LoggerFor("tui").Info("detached: 会话继续在 daemon 里运行(`dsh tui attach` 可接回)");
+            _ctx.LoggerFor("tui").Info("detached: 会话继续在 daemon 里运行(`dsharp tui attach` 可接回)");
             return;
         }
 
@@ -1516,7 +1516,7 @@ public sealed class ChatWindow : IDisposable
     private async Task DetachSession(ChatPane pane, string text)
     {
         var commandLine = text["/detach".Length..].Trim();
-        // 常驻会话: 不带参数的 /detach 与 Ctrl+X D 同义 —— 只放 proxy 走, 自己继续跑。
+        // 常驻会话: 不带参数的 /detach 与 Ctrl+X D 同义 -- 只放 proxy 走, 自己继续跑。
         if (commandLine.Length == 0 && IsResidentChild())
         {
             RequestDetach(pane);
@@ -1560,7 +1560,7 @@ public sealed class ChatWindow : IDisposable
                 WantsMouse = wantsMouse,
             });
             // detach 完全静默: 不写 transcript, 仅记录调试日志。
-            _ctx.LoggerFor("tui").Info($"detached: {session.Id} — {session.Command} (daemon PTY)");
+            _ctx.LoggerFor("tui").Info($"detached: {session.Id} - {session.Command} (daemon PTY)");
             RequestExit();
         }
         catch (Exception error)
@@ -1705,7 +1705,7 @@ public sealed class ChatWindow : IDisposable
         if (_panes[paneId] is ChatPane)
             _inputPaneId = paneId;
         if (_panes[paneId] is ShellPane shell)
-            shell.StatusText = "shell 窗格: 按键直达 shell · Ctrl+X - 关闭 · Ctrl+X 方向键/O 切窗格";
+            shell.StatusText = "shell 窗格: 按键直达 shell - Ctrl+X - 关闭 - Ctrl+X 方向键/O 切窗格";
         RenderVersion++;
     }
 
@@ -1928,7 +1928,7 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    /** 总览: 单一树 Pty → session → pane(不再分“PTY/会话”两段)。 */
+    /** 总览: 单一树 Pty > session > pane(不再分“PTY/会话”两段)。 */
     private void RefreshOverviewItems()
     {
         _overviewItems.Clear();
@@ -1948,14 +1948,14 @@ public sealed class ChatWindow : IDisposable
                 return;
             var agent = agents.FirstOrDefault(candidate => string.Equals(candidate.Id.Value, sessionId, StringComparison.Ordinal));
             var (provider, model) = agent is null ? (string.Empty, string.Empty) : CurrentModel(agent);
-            _overviewItems.Add(new OverviewItem($"  {sessionId} · {provider}/{model}", OverviewTargetKind.Session, null, sessionId));
+            _overviewItems.Add(new OverviewItem($"  {sessionId} - {provider}/{model}", OverviewTargetKind.Session, null, sessionId));
             AddPaneRows(catalog, placedPanes, 4, entry => string.Equals(entry.SessionId, sessionId, StringComparison.Ordinal));
         }
 
         foreach (var pty in hostPtys)
         {
             _overviewItems.Add(new OverviewItem(
-                $"▸ {pty.Id.Value} · {pty.Command} · {pty.Status.ToString().ToLowerInvariant()}",
+                $"> {pty.Id.Value} - {pty.Command} - {pty.Status.ToString().ToLowerInvariant()}",
                 OverviewTargetKind.Pty, null, null, pty.Id.Value));
             foreach (var agent in agents.Where(candidate => string.Equals(PtyForSession(candidate.Id.Value), pty.Id.Value, StringComparison.Ordinal)))
                 AddSessionRow(agent.Id.Value);
@@ -1964,12 +1964,12 @@ public sealed class ChatWindow : IDisposable
 
         foreach (var pty in daemonPtys)
         {
-            var ownership = pty.AgentSessionId is { Length: > 0 } sessionId ? $" · {sessionId}" : "";
+            var ownership = pty.AgentSessionId is { Length: > 0 } sessionId ? $" - {sessionId}" : "";
             _overviewItems.Add(new OverviewItem(
-                $"▸ {pty.Id} (daemon) · {pty.Command} · {pty.Status}{ownership}",
+                $"> {pty.Id} (daemon) - {pty.Command} - {pty.Status}{ownership}",
                 OverviewTargetKind.Pty, null, null, pty.Id));
             foreach (var pane in pty.Panes ?? [])
-                _overviewItems.Add(new OverviewItem($"    pane {pane.Id} · {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.RemotePane, pane.Id, null, pty.Id));
+                _overviewItems.Add(new OverviewItem($"    pane {pane.Id} - {pane.SessionId ?? pane.Title} (remote)", OverviewTargetKind.RemotePane, pane.Id, null, pty.Id));
             foreach (var agent in agents.Where(candidate => string.Equals(PtyForSession(candidate.Id.Value), pty.Id, StringComparison.Ordinal)))
                 AddSessionRow(agent.Id.Value);
         }
@@ -2052,7 +2052,7 @@ public sealed class ChatWindow : IDisposable
         var marker = entry.Focused ? "* " : "  ";
         var target = entry.SessionId ?? entry.Title;
         _overviewItems.Add(new OverviewItem(
-            $"{new string(' ', indent)}{marker}pane {entry.Id} · {target}",
+            $"{new string(' ', indent)}{marker}pane {entry.Id} - {target}",
             OverviewTargetKind.Pane,
             entry.Id,
             null));
@@ -2083,7 +2083,7 @@ public sealed class ChatWindow : IDisposable
     {
         var area = OverlayArea(grid);
         var lines = _overviewItems.Select(item => item.Line).ToList();
-        PopupList.Draw(grid, area, "总览 Pty → 会话 → 窗格", lines, _overviewIndex);
+        PopupList.Draw(grid, area, "总览 Pty > 会话 > 窗格", lines, _overviewIndex);
     }
 
     private void DrawAgentList(CellGrid grid)
@@ -2101,9 +2101,9 @@ public sealed class ChatWindow : IDisposable
     private string AgentLine(SubagentNode node)
     {
         var indent = new string(' ', Math.Max(0, node.Depth - 1) * 2);
-        var state = IsLive(node.Id) ? "● live" : "○ ended";
+        var state = IsLive(node.Id) ? "* live" : "o ended";
         var suffix = node.HasChildren ? " +" : "";
-        return $"{indent}{state} · {node.Label ?? node.Id.Value} [{node.Mode}]{suffix}";
+        return $"{indent}{state} - {node.Label ?? node.Id.Value} [{node.Mode}]{suffix}";
     }
 
     private void OpenAgentList()
@@ -2174,7 +2174,7 @@ public sealed class ChatWindow : IDisposable
 
     private static void DrawPaneHeader(CellGrid grid, ITuiPane pane, ConsoleRect rect, bool focused)
     {
-        var prefix = focused ? "▶ " : "  ";
+        var prefix = focused ? "> " : "  ";
         CellText.Draw(
             grid,
             rect.X,
