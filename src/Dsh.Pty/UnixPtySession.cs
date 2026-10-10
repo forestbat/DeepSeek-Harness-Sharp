@@ -9,6 +9,7 @@ internal sealed class UnixPtySession : IDisposable
     private readonly FileStream _stream;
     private readonly CancellationTokenSource _cts = new();
     private readonly object _gate = new();
+    private static readonly TimeSpan TerminateGrace = TimeSpan.FromSeconds(2);
     private Task? _monitorTask;
     private bool _stopping;
     private bool _disposed;
@@ -57,14 +58,11 @@ internal sealed class UnixPtySession : IDisposable
 
         UnixPtyNative.Terminate(_pid);
         var monitor = _monitorTask;
-        if (monitor is not null)
+        if (monitor is not null && await Task.WhenAny(monitor, Task.Delay(TerminateGrace)) != monitor)
         {
-            var completed = await Task.WhenAny(monitor, Task.Delay(TimeSpan.FromSeconds(2)));
-            if (completed != monitor)
-            {
-                UnixPtyNative.Kill(_pid);
-                await monitor;
-            }
+            UnixPtyNative.Kill(_pid);
+            // 有界等待: 某些平台/状态下 reap 迟迟不到, 不能无限等(否则调用方挂死); Dispose 会取消 _cts 收尾。
+            await Task.WhenAny(monitor, Task.Delay(TerminateGrace));
         }
 
         Dispose();

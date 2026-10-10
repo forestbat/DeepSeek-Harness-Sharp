@@ -91,7 +91,8 @@ public class PtyHostTests
         var session = await host.StartAsync(new PtyStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = ["/c", "echo conpty-ready"],
+            // 断言状态必须是 Running: 用常驻命令(echo 后 ping 等待), 否则 /c echo 会立刻退出。
+            Arguments = ["/c", "echo conpty-ready & ping -n 30 127.0.0.1 > nul"],
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PtySessionStatus.Running, session.Status);
