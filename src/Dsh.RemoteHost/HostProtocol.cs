@@ -19,11 +19,13 @@ public static class HostProtocol
     public const string MethodSessionCreate = "host.session.create";
     public const string MethodSessionResume = "host.session.resume";
     public const string MethodSessionSubscribe = "host.session.subscribe";
+    public const string MethodSessionUnsubscribe = "host.session.unsubscribe";
     public const string MethodSessionMessage = "host.session.message";
     public const string MethodSessionInterrupt = "host.session.interrupt";
 
     public const string MethodToolsList = "host.tools.list";
     public const string MethodApprovalRespond = "host.approval.respond";
+    public const string MethodQuestionRespond = "host.question.respond";
 
     public const string MethodFileRead = "host.file.read";
     public const string MethodFileWrite = "host.file.write";
@@ -37,6 +39,7 @@ public static class HostProtocol
     /** 服务端 -> 客户端 推送。 */
     public const string NotificationEvent = "host.event";
     public const string NotificationApproval = "host.approval";
+    public const string NotificationQuestion = "host.question";
     public const string NotificationPtyOutput = "host.pty.output";
 }
 
@@ -60,9 +63,20 @@ public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Pl
 [JsonSerializable(typeof(RemoteEventInfo))]
 [JsonSerializable(typeof(RemoteApprovalRequest))]
 [JsonSerializable(typeof(RemoteApprovalResponse))]
+[JsonSerializable(typeof(RemoteQuestionRequest))]
+[JsonSerializable(typeof(RemoteQuestionItem))]
+[JsonSerializable(typeof(RemoteQuestionOption))]
+[JsonSerializable(typeof(RemoteQuestionResponse))]
+[JsonSerializable(typeof(RemoteQuestionAnswerItem))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteQuestionItem>))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteQuestionAnswerItem>))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteQuestionOption>))]
 [JsonSerializable(typeof(RemoteSessionCreateRequest))]
 [JsonSerializable(typeof(RemoteSessionRef))]
+[JsonSerializable(typeof(RemoteSubscribeRequest))]
 [JsonSerializable(typeof(RemoteMessageRequest))]
+[JsonSerializable(typeof(RemoteImageBlock))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteImageBlock>))]
 [JsonSerializable(typeof(RemoteFilePath))]
 [JsonSerializable(typeof(RemoteFileContent))]
 [JsonSerializable(typeof(RemoteDirectoryEntry))]

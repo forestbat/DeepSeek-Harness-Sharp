@@ -66,10 +66,50 @@ public sealed class RemoteHostServer(
     /** 每个连接的处理与推送状态。 */
     private sealed class Connection(RemoteHostServer server, JsonRpcPeer peer)
     {
+        private readonly Dictionary<string, CancellationTokenSource> _eventPumps = new(StringComparer.Ordinal);
 
         public void StartPumps(CancellationToken cancellationToken)
         {
             _ = PumpApprovalsAsync(cancellationToken);
+            _ = PumpQuestionsAsync(cancellationToken);
+            cancellationToken.Register(StopAllEventPumps);
+        }
+
+        /** 每个会话至多一个事件泵: 重复订阅先停旧的, 避免同一事件被推送多次。 */
+        private void StartEventPump(string sessionId, long fromSeq, CancellationToken cancellationToken)
+        {
+            CancellationTokenSource pump;
+            lock (_eventPumps)
+            {
+                if (_eventPumps.Remove(sessionId, out var existing))
+                    existing.Cancel();
+                pump = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                _eventPumps[sessionId] = pump;
+            }
+            _ = PumpEventsAsync(sessionId, fromSeq, pump);
+        }
+
+        private void StopEventPump(string sessionId)
+        {
+            CancellationTokenSource? pump = null;
+            lock (_eventPumps)
+            {
+                if (_eventPumps.Remove(sessionId, out var existing))
+                    pump = existing;
+            }
+            pump?.Cancel();
+        }
+
+        private void StopAllEventPumps()
+        {
+            CancellationTokenSource[] pumps;
+            lock (_eventPumps)
+            {
+                pumps = [.. _eventPumps.Values];
+                _eventPumps.Clear();
+            }
+            foreach (var pump in pumps)
+                pump.Cancel();
         }
 
         public async ValueTask<JsonElement?> HandleAsync(JsonRpcMessage message, CancellationToken cancellationToken)
@@ -103,16 +143,23 @@ public sealed class RemoteHostServer(
                 }
                 case HostProtocol.MethodSessionSubscribe when backend is not null:
                 {
-                    var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteSessionRef)
+                    var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteSubscribeRequest)
                         ?? throw new JsonRpcException(-32602, "subscribe requires sessionId");
-                    _ = PumpEventsAsync(request.SessionId, cancellationToken);
+                    StartEventPump(request.SessionId, request.FromSeq, cancellationToken);
+                    return Serialize(true, HostProtocolJsonContext.Default.Boolean);
+                }
+                case HostProtocol.MethodSessionUnsubscribe when backend is not null:
+                {
+                    var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteSessionRef)
+                        ?? throw new JsonRpcException(-32602, "unsubscribe requires sessionId");
+                    StopEventPump(request.SessionId);
                     return Serialize(true, HostProtocolJsonContext.Default.Boolean);
                 }
                 case HostProtocol.MethodSessionMessage when backend is not null:
                 {
                     var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteMessageRequest)
                         ?? throw new JsonRpcException(-32602, "message requires sessionId and text");
-                    await backend.SendMessageAsync(request.SessionId, request.Text, cancellationToken).ConfigureAwait(false);
+                    await backend.SendMessageAsync(request.SessionId, request.Text, request.Images ?? [], cancellationToken).ConfigureAwait(false);
                     return Serialize(true, HostProtocolJsonContext.Default.Boolean);
                 }
                 case HostProtocol.MethodSessionInterrupt when backend is not null:
@@ -134,6 +181,13 @@ public sealed class RemoteHostServer(
                     var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteApprovalResponse)
                         ?? throw new JsonRpcException(-32602, "approval requires requestId");
                     await backend.RespondApprovalAsync(request.RequestId, request.Allow, request.Reason, cancellationToken).ConfigureAwait(false);
+                    return Serialize(true, HostProtocolJsonContext.Default.Boolean);
+                }
+                case HostProtocol.MethodQuestionRespond when backend is not null:
+                {
+                    var request = Parse(message.Params, HostProtocolJsonContext.Default.RemoteQuestionResponse)
+                        ?? throw new JsonRpcException(-32602, "question respond requires requestId");
+                    await backend.RespondQuestionAsync(request.RequestId, request.Answers, cancellationToken).ConfigureAwait(false);
                     return Serialize(true, HostProtocolJsonContext.Default.Boolean);
                 }
 
@@ -192,15 +246,15 @@ public sealed class RemoteHostServer(
             }
         }
 
-        private async Task PumpEventsAsync(string sessionId, CancellationToken cancellationToken)
+        private async Task PumpEventsAsync(string sessionId, long fromSeq, CancellationTokenSource pump)
         {
             var backend = server._backend;
             if (backend is null)
                 return;
             try
             {
-                await foreach (var item in backend.SubscribeAsync(sessionId, cancellationToken).ConfigureAwait(false))
-                    await peer.NotifyAsync(HostProtocol.NotificationEvent, Serialize(item, HostProtocolJsonContext.Default.RemoteEventInfo), cancellationToken).ConfigureAwait(false);
+                await foreach (var item in backend.SubscribeAsync(sessionId, fromSeq, pump.Token).ConfigureAwait(false))
+                    await peer.NotifyAsync(HostProtocol.NotificationEvent, Serialize(item, HostProtocolJsonContext.Default.RemoteEventInfo), pump.Token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is OperationCanceledException or IOException)
             {
@@ -216,6 +270,21 @@ public sealed class RemoteHostServer(
             {
                 await foreach (var request in backend.ApprovalsAsync(cancellationToken).ConfigureAwait(false))
                     await peer.NotifyAsync(HostProtocol.NotificationApproval, Serialize(request, HostProtocolJsonContext.Default.RemoteApprovalRequest), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is OperationCanceledException or IOException)
+            {
+            }
+        }
+
+        private async Task PumpQuestionsAsync(CancellationToken cancellationToken)
+        {
+            var backend = server._backend;
+            if (backend is null)
+                return;
+            try
+            {
+                await foreach (var request in backend.QuestionsAsync(cancellationToken).ConfigureAwait(false))
+                    await peer.NotifyAsync(HostProtocol.NotificationQuestion, Serialize(request, HostProtocolJsonContext.Default.RemoteQuestionRequest), cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (error is OperationCanceledException or IOException)
             {

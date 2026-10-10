@@ -36,13 +36,13 @@ public sealed class RemoteHostCapabilityTests
         using var subscription = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var pump = Task.Run(async () =>
         {
-            await foreach (var item in client.SubscribeAsync(created.Id, subscription.Token))
+            await foreach (var item in client.SubscribeAsync(created.Id, 0, subscription.Token))
                 events.Add(item);
         }, Ct);
         await Task.Delay(200, Ct);
-        await client.SendMessageAsync(created.Id, "hi", Ct);
+        await client.SendMessageAsync(created.Id, "hi", [], Ct);
         await WaitForAsync(() => events.Count > 0, Ct);
-        Assert.Equal("hi", events[0].Text);
+        Assert.Equal("user:hi", events[0].EventJson);
         await subscription.CancelAsync();
         try
         {
@@ -66,7 +66,7 @@ public sealed class RemoteHostCapabilityTests
                 received.TrySetResult(request);
         }, Ct);
 
-        backend.RaiseApproval(new RemoteApprovalRequest("req-1", "session-1", "allow?", "bash"));
+        backend.RaiseApproval(new RemoteApprovalRequest("req-1", "session-1", "bash", null, "allow?"));
         var approval = await received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         await fixture.Client.RespondApprovalAsync(approval.RequestId, true, "ok", Ct);
         await WaitForAsync(() => backend.ApprovalAnswer("req-1") is not null, Ct);
@@ -103,6 +103,35 @@ public sealed class RemoteHostCapabilityTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await attach);
     }
 
+    [Fact]
+    public async Task QuestionRequestRoundTripsBack()
+    {
+        var backend = new FakeBackend();
+        await using var fixture = await HostFixture.CreateAsync(backend, Ct);
+        var received = new TaskCompletionSource<RemoteQuestionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var pump = Task.Run(async () =>
+        {
+            await foreach (var request in fixture.Client.QuestionsAsync(subscription.Token))
+                received.TrySetResult(request);
+        }, Ct);
+
+        backend.RaiseQuestion(new RemoteQuestionRequest("q-1", "session-1",
+            [new RemoteQuestionItem("q1", "pick?", null, null, [new RemoteQuestionOption("A", null)], false, null)]));
+        var question = await received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        await fixture.Client.RespondQuestionAsync(question.RequestId, [new RemoteQuestionAnswerItem("q1", ["A"], null)], Ct);
+        await WaitForAsync(() => backend.QuestionAnswer("q-1") is not null, Ct);
+        Assert.Equal("A", backend.QuestionAnswer("q-1"));
+        await subscription.CancelAsync();
+        try
+        {
+            await pump;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private static async Task WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 500 && !condition(); attempt++)
@@ -125,7 +154,9 @@ public sealed class RemoteHostCapabilityTests
         };
         private readonly Dictionary<string, Channel<RemotePtyOutput>> _pty = [];
         private readonly Channel<RemoteApprovalRequest> _approvals = Channel.CreateUnbounded<RemoteApprovalRequest>();
+        private readonly Channel<RemoteQuestionRequest> _questions = Channel.CreateUnbounded<RemoteQuestionRequest>();
         private readonly Dictionary<string, bool> _approvalAnswers = [];
+        private readonly Dictionary<string, string> _questionAnswers = [];
 
         public Task<HostInfo> InfoAsync(CancellationToken cancellationToken)
             => Task.FromResult(new HostInfo(HostProtocol.Version, "fake", "test", "/home"));
@@ -135,7 +166,7 @@ public sealed class RemoteHostCapabilityTests
 
         public Task<RemoteSessionInfo> CreateSessionAsync(string cwd, CancellationToken cancellationToken)
         {
-            var session = new RemoteSessionInfo($"session-{_sessions.Count + 1}", cwd, "Idle", 0);
+            var session = new RemoteSessionInfo($"session-{_sessions.Count + 1}", cwd, "Idle", 0, null, null, 0);
             _sessions[session.Id] = session;
             return Task.FromResult(session);
         }
@@ -143,10 +174,10 @@ public sealed class RemoteHostCapabilityTests
         public Task<RemoteSessionInfo> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken)
             => Task.FromResult(_sessions.TryGetValue(sessionId, out var session) ? session : throw new KeyNotFoundException(sessionId));
 
-        public Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken)
+        public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
         {
             if (_events.TryGetValue(sessionId, out var channel))
-                channel.Writer.TryWrite(new RemoteEventInfo(sessionId, "message", text, 0));
+                channel.Writer.TryWrite(new RemoteEventInfo(sessionId, $"user:{text}"));
             return Task.CompletedTask;
         }
 
@@ -159,6 +190,18 @@ public sealed class RemoteHostCapabilityTests
         {
             _approvalAnswers[requestId] = allow;
             return Task.CompletedTask;
+        }
+
+        public Task RespondQuestionAsync(string requestId, IReadOnlyList<RemoteQuestionAnswerItem> answers, CancellationToken cancellationToken)
+        {
+            _questionAnswers[requestId] = answers.Count > 0 && answers[0].Selected.Count > 0 ? answers[0].Selected[0] : "";
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<RemoteQuestionRequest> QuestionsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await foreach (var request in _questions.Reader.ReadAllAsync(cancellationToken))
+                yield return request;
         }
 
         public Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken)
@@ -196,7 +239,7 @@ public sealed class RemoteHostCapabilityTests
             return Task.CompletedTask;
         }
 
-        public async IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, [EnumeratorCancellation] CancellationToken cancellationToken)
+        public async IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, long fromSeq, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             var channel = _events.TryGetValue(sessionId, out var existing)
                 ? existing
@@ -222,6 +265,10 @@ public sealed class RemoteHostCapabilityTests
         public void RaiseApproval(RemoteApprovalRequest request) => _approvals.Writer.TryWrite(request);
 
         public bool? ApprovalAnswer(string requestId) => _approvalAnswers.TryGetValue(requestId, out var answer) ? answer : null;
+
+        public void RaiseQuestion(RemoteQuestionRequest request) => _questions.Writer.TryWrite(request);
+
+        public string? QuestionAnswer(string requestId) => _questionAnswers.GetValueOrDefault(requestId);
     }
 
     private sealed class HostFixture : IAsyncDisposable

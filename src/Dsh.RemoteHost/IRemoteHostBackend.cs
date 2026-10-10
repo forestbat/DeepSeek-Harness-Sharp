@@ -14,13 +14,16 @@ public interface IRemoteHostBackend
 
     Task<RemoteSessionInfo> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken);
 
-    Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken);
+    Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken);
 
     Task InterruptAsync(string sessionId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<string>> ListToolsAsync(string sessionId, CancellationToken cancellationToken);
 
     Task RespondApprovalAsync(string requestId, bool allow, string? reason, CancellationToken cancellationToken);
+
+    /** 问答回填: 本地选择经 Response 项回传, 远端据此构造 AskUserQuestionAnswer。 */
+    Task RespondQuestionAsync(string requestId, IReadOnlyList<RemoteQuestionAnswerItem> answers, CancellationToken cancellationToken);
 
     Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken);
 
@@ -35,11 +38,14 @@ public interface IRemoteHostBackend
 
     Task StopPtyAsync(string ptyId, CancellationToken cancellationToken);
 
-    /** 会话事件流(服务端订阅后经通道推给客户端)。 */
-    IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, CancellationToken cancellationToken);
+    /** 会话事件流(服务端订阅后经通道推给客户端): 先补发 [fromSeq, ...) 历史, 再实时推送。 */
+    IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken);
 
     /** 审批请求流(远端发起, 阻塞到本地经 RespondApprovalAsync 回填)。 */
     IAsyncEnumerable<RemoteApprovalRequest> ApprovalsAsync(CancellationToken cancellationToken);
+
+    /** 问答请求流(远端发起, 阻塞到本地经 RespondQuestionAsync 回填)。 */
+    IAsyncEnumerable<RemoteQuestionRequest> QuestionsAsync(CancellationToken cancellationToken);
 
     /** PTY 输出流。 */
     IAsyncEnumerable<RemotePtyOutput> PtyOutputAsync(string ptyId, CancellationToken cancellationToken);

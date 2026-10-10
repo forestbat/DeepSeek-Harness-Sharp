@@ -30,8 +30,20 @@ public static class RemoteHostListener
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                using var client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
-                await server.ServeAsync(new NetworkStream(client.Client, ownsSocket: false), cancellationToken).ConfigureAwait(false);
+                TcpClient client;
+                try
+                {
+                    client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception error) when (cancellationToken.IsCancellationRequested
+                    && error is OperationCanceledException or SocketException or ObjectDisposedException)
+                {
+                    // 取消时底层可能以 SocketException(而非 OperationCanceledException)结束挂起的 accept。
+                    break;
+                }
+
+                // 每条连接独立服务: 一个半开/卡住的连接不能阻塞后续连接。
+                _ = ServeConnectionAsync(server, new NetworkStream(client.Client, ownsSocket: true), client, cancellationToken);
             }
         }
         finally
@@ -52,13 +64,41 @@ public static class RemoteHostListener
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var socket = await listener.AcceptAsync(cancellationToken).ConfigureAwait(false);
-                await server.ServeAsync(new NetworkStream(socket, ownsSocket: true), cancellationToken).ConfigureAwait(false);
+                Socket socket;
+                try
+                {
+                    socket = await listener.AcceptAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception error) when (cancellationToken.IsCancellationRequested
+                    && error is OperationCanceledException or SocketException or ObjectDisposedException)
+                {
+                    // 取消时底层可能以 SocketException(而非 OperationCanceledException)结束挂起的 accept。
+                    break;
+                }
+
+                // 每条连接独立服务: 一个半开/卡住的连接不能阻塞后续连接。
+                _ = ServeConnectionAsync(server, new NetworkStream(socket, ownsSocket: true), socket, cancellationToken);
             }
         }
         finally
         {
             TryDelete(socketPath);
+        }
+    }
+
+    /** 服务一条连接; 任何连接级异常只终结该连接, 不影响监听循环。 */
+    private static async Task ServeConnectionAsync(RemoteHostServer server, Stream stream, IDisposable owner, CancellationToken cancellationToken)
+    {
+        using (owner)
+        await using (stream)
+        {
+            try
+            {
+                await server.ServeAsync(stream, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is IOException or OperationCanceledException or SocketException)
+            {
+            }
         }
     }
 
@@ -73,12 +113,12 @@ public static class RemoteHostListener
         }
     }
 
-    /** 常驻 daemon 是否可达(单次尝试, 不等待)。 */
+    /** 常驻 daemon 是否可达: 短暂重试覆盖“正在重启/刚绑定”的窗口, 避免误判不可达而重复 spawn daemon。 */
     public static async Task<bool> IsReachableAsync(string? root, CancellationToken cancellationToken)
     {
         try
         {
-            using var stream = await ConnectAsync(root, cancellationToken, attempts: 1).ConfigureAwait(false);
+            using var stream = await ConnectAsync(root, cancellationToken, attempts: 10).ConfigureAwait(false);
             return true;
         }
         catch (Exception error) when (error is SocketException or IOException or TimeoutException)

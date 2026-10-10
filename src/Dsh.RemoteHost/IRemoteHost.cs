@@ -15,9 +15,12 @@ public interface IRemoteHost
 
     Task<RemoteSessionInfo> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken = default);
 
-    IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken = default);
 
-    Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken = default);
+    /** 停止某会话的事件推送(重新订阅前调用, 避免旧泵与新泵同时推送导致重复)。 */
+    Task UnsubscribeAsync(string sessionId, CancellationToken cancellationToken = default);
+
+    Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken = default);
 
     Task InterruptAsync(string sessionId, CancellationToken cancellationToken = default);
 
@@ -27,6 +30,11 @@ public interface IRemoteHost
     IAsyncEnumerable<RemoteApprovalRequest> ApprovalsAsync(CancellationToken cancellationToken = default);
 
     Task RespondApprovalAsync(string requestId, bool allow, string? reason = null, CancellationToken cancellationToken = default);
+
+    /** 问答请求流(远端发起); 本地决定后经 RespondQuestionAsync 回填。 */
+    IAsyncEnumerable<RemoteQuestionRequest> QuestionsAsync(CancellationToken cancellationToken = default);
+
+    Task RespondQuestionAsync(string requestId, IReadOnlyList<RemoteQuestionAnswerItem> answers, CancellationToken cancellationToken = default);
 
     Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken = default);
 
@@ -38,4 +46,7 @@ public interface IRemoteHost
     Task<string> StartPtyAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default);
 
     Task AttachPtyAsync(string ptyId, Stream input, Stream output, CancellationToken cancellationToken = default);
+
+    /** 终止远端某个 PTY。 */
+    Task StopPtyAsync(string ptyId, CancellationToken cancellationToken = default);
 }
