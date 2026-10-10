@@ -580,6 +580,36 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public ObservableCollection<SshWorkspaceRowViewModel> RemoteWorkspaces { get; } = [];
 
+    /** 右下角气泡回调(由 MainViewModel 注入): (标题, 正文, 是否错误)。 */
+    public Action<string, string, bool>? Notify { get; set; }
+
+    /** 远端目录选择器(由视图注入): 给定工作区与初始目录, 返回选中目录; 取消返回 null。 */
+    public Func<SshWorkspace, string?, Task<string?>>? RemoteFolderPicker { get; set; }
+
+    /** 远端缺少 dsharp 时自动下载并部署(仿 VS Code Server; 不注册 PATH 命令)。 */
+    [ObservableProperty]
+    private bool _remoteAutoDeploy = true;
+
+    [ObservableProperty]
+    private string _remoteReleaseBaseUrl = GuiSettings.DefaultReleaseBaseUrl;
+
+    [ObservableProperty]
+    private string _remoteReleaseVersion = GuiSettings.DefaultReleaseVersion;
+
+    [ObservableProperty]
+    private string _remoteDownloadProxy = "";
+
+    internal RemoteDsharpInstaller.Options BuildDeployOptions()
+        => new(RemoteReleaseBaseUrl, RemoteReleaseVersion, string.IsNullOrWhiteSpace(RemoteDownloadProxy) ? null : RemoteDownloadProxy);
+
+    /** 远程连接类操作进行中(测试连接/浏览目录), 期间禁用按钮避免重入。 */
+    [ObservableProperty]
+    private bool _remoteBusy;
+
+    partial void OnRemoteBusyChanged(bool value) => OnPropertyChanged(nameof(RemoteIdle));
+
+    public bool RemoteIdle => !RemoteBusy;
+
     [ObservableProperty]
     private SshWorkspaceRowViewModel? _selectedRemoteWorkspace;
 
@@ -592,7 +622,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void AddRemoteWorkspace()
     {
-        var row = new SshWorkspaceRowViewModel { Name = "新远程工作区" };
+        var row = new SshWorkspaceRowViewModel { Name = "新远程工作区", Owner = this };
         RemoteWorkspaces.Add(row);
         SelectedRemoteWorkspace = row;
     }
@@ -610,16 +640,80 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void SaveRemoteWorkspaces()
     {
-        _gui.Save(_gui.Load() with { RemoteWorkspaces = [.. RemoteWorkspaces.Select(row => row.ToModel())] });
+        _gui.Save(_gui.Load() with
+        {
+            RemoteWorkspaces = [.. RemoteWorkspaces.Select(row => row.ToModel())],
+            RemoteAutoDeploy = RemoteAutoDeploy,
+            RemoteReleaseBaseUrl = RemoteReleaseBaseUrl,
+            RemoteReleaseVersion = RemoteReleaseVersion,
+            RemoteDownloadProxy = RemoteDownloadProxy,
+        });
         Status = $"远程工作区已保存（{RemoteWorkspaces.Count} 个）";
     }
 
     private void LoadRemoteWorkspaces()
     {
+        var snapshot = _gui.Load();
+        RemoteAutoDeploy = snapshot.RemoteAutoDeploy;
+        RemoteReleaseBaseUrl = snapshot.RemoteReleaseBaseUrl;
+        RemoteReleaseVersion = snapshot.RemoteReleaseVersion;
+        RemoteDownloadProxy = snapshot.RemoteDownloadProxy;
         RemoteWorkspaces.Clear();
-        foreach (var workspace in _gui.Load().RemoteWorkspaces)
-            RemoteWorkspaces.Add(SshWorkspaceRowViewModel.From(workspace));
+        foreach (var workspace in snapshot.RemoteWorkspaces)
+        {
+            var row = SshWorkspaceRowViewModel.From(workspace);
+            row.Owner = this;
+            RemoteWorkspaces.Add(row);
+        }
+
         SelectedRemoteWorkspace = RemoteWorkspaces.FirstOrDefault();
+    }
+
+    /** “测试连接”: 走真实 ssh 连接(必要时先自动部署 dsharp), 成功/失败都经右下角气泡反馈。 */
+    internal async Task TestRemoteWorkspaceAsync(SshWorkspaceRowViewModel row)
+    {
+        if (RemoteBusy)
+            return;
+        RemoteBusy = true;
+        try
+        {
+            Notify?.Invoke("测试连接", $"正在连接 {row.Summary}…", false);
+            var workspace = row.ToModel();
+            string? hostCommand = null;
+            if (RemoteAutoDeploy)
+                hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, BuildDeployOptions(), message => Notify?.Invoke("远端部署", message, false), CancellationToken.None)).CommandPath;
+            Notify?.Invoke("连接成功", await SshRemoteWorkspaceLauncher.TestAsync(workspace, hostCommand, CancellationToken.None), false);
+        }
+        catch (Exception error)
+        {
+            Notify?.Invoke("连接失败", error.Message, true);
+        }
+        finally
+        {
+            RemoteBusy = false;
+        }
+    }
+
+    /** “选择远端目录”: 先连上远端, 再由选择的对话框浏览远端目录树。 */
+    internal async Task BrowseRemotePathAsync(SshWorkspaceRowViewModel row)
+    {
+        if (RemoteBusy || RemoteFolderPicker is null)
+            return;
+        RemoteBusy = true;
+        try
+        {
+            var picked = await RemoteFolderPicker(row.ToModel(), row.RemotePath);
+            if (!string.IsNullOrEmpty(picked))
+                row.RemotePath = picked;
+        }
+        catch (Exception error)
+        {
+            Notify?.Invoke("选择远端目录失败", error.Message, true);
+        }
+        finally
+        {
+            RemoteBusy = false;
+        }
     }
 
     private void SelectSection(SettingsNavItemViewModel? section)
@@ -826,6 +920,15 @@ public sealed partial class SshWorkspaceRowViewModel : ObservableObject
     public bool IsKey => Auth == SshAuth.Key;
 
     public string Summary => $"{User}@{Host}:{Port}";
+
+    /** 所属设置页: 供“测试连接/选择远端目录”回连父级(连接、通知与选择器都在父级)。 */
+    public SettingsViewModel? Owner { get; set; }
+
+    [RelayCommand]
+    private Task TestConnectionAsync() => Owner?.TestRemoteWorkspaceAsync(this) ?? Task.CompletedTask;
+
+    [RelayCommand]
+    private Task BrowseRemotePathAsync() => Owner?.BrowseRemotePathAsync(this) ?? Task.CompletedTask;
 
     partial void OnAuthChanged(string value)
     {

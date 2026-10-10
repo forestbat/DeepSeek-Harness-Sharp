@@ -372,12 +372,39 @@
                     <TextBlock Grid.Row="7" Text="代理" Classes="Tertiary" VerticalAlignment="Center" />
                     <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Proxy}" Watermark="如 socks5://127.0.0.1:1080 或 nc 命令" />
                     <TextBlock Grid.Row="8" Text="远端目录" Classes="Tertiary" VerticalAlignment="Center" />
-                    <TextBox Grid.Row="8" Grid.Column="1" Text="{Binding RemotePath}" />
+                    <Grid Grid.Row="8" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                      <TextBox Text="{Binding RemotePath}" Watermark="留空 = 远端家目录 ( $HOME )" />
+                      <Button Grid.Column="1" Classes="Icon" Width="30" Height="30"
+                              Command="{Binding BrowseRemotePathCommand}"
+                              IsEnabled="{Binding Owner.RemoteIdle}"
+                              ToolTip.Tip="选择远端机器上的目录">
+                        <Path Classes="Icon" Data="{StaticResource Icon.Folder}" />
+                      </Button>
+                    </Grid>
                   </Grid>
-                  <TextBlock Text="密码/密钥路径保存在本机 GUI 设置里，请自行评估风险；认证方式支持密码、密钥对、SSH 代理。" Classes="Tertiary" TextWrapping="Wrap" />
+                  <Button Classes="Ghost" HorizontalAlignment="Left" Content="测试连接"
+                          Command="{Binding TestConnectionCommand}"
+                          IsEnabled="{Binding Owner.RemoteIdle}" />
+                  <TextBlock Text="密码/密钥路径保存在本机 GUI 设置里，请自行评估风险；认证方式支持密码、密钥对、SSH 代理。远端目录留空时在远端用户家目录($HOME)运行，且需 dsharp 在 PATH 中。" Classes="Tertiary" TextWrapping="Wrap" />
                 </StackPanel>
               </Border>
             </Grid>
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Text="远端 dsharp 自动部署" FontWeight="SemiBold" />
+                <CheckBox Content="远端缺少 dsharp 时自动下载并部署（按绝对路径运行，不注册系统命令）"
+                          IsChecked="{Binding Preferences.RemoteAutoDeploy}" />
+                <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
+                  <TextBlock Text="发布基址" Classes="Tertiary" VerticalAlignment="Center" />
+                  <TextBox Grid.Column="1" Text="{Binding Preferences.RemoteReleaseBaseUrl}" />
+                  <TextBlock Grid.Row="1" Text="版本" Classes="Tertiary" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Preferences.RemoteReleaseVersion}" Watermark="latest 或 vX.Y.Z" />
+                  <TextBlock Grid.Row="2" Text="下载代理" Classes="Tertiary" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Preferences.RemoteDownloadProxy}" Watermark="留空 = 直连" />
+                </Grid>
+              </StackPanel>
+            </Border>
 
             <Button Classes="Primary" HorizontalAlignment="Left" Content="保存远程工作区" Command="{Binding Preferences.SaveRemoteWorkspacesCommand}" />
           </StackPanel>

@@ -25,6 +25,10 @@ public sealed class GuiSettings(HarnessHome home)
     public const double MinFontSize = 11;
     public const double MaxFontSize = 18;
 
+    /** 远端 dsharp 自动部署的默认下载源(与 scripts/install.sh 一致)。 */
+    public const string DefaultReleaseBaseUrl = "https://github.com/forestbat/DeepSeek-Harness-Sharp/releases";
+    public const string DefaultReleaseVersion = "latest";
+
     public event Action? Changed;
 
     public GuiSettingsSnapshot Load()
@@ -84,6 +88,17 @@ public sealed record GuiSettingsSnapshot
     /** 用户保存的 SSH 远程工作区(工作区菜单“远程工作区”与设置页“远程”共用)。 */
     public IReadOnlyList<SshWorkspace> RemoteWorkspaces { get; init; } = [];
 
+    /** 远端缺少 dsharp 时是否自动下载并部署(仿 VS Code Server; 不注册 PATH 命令)。 */
+    public bool RemoteAutoDeploy { get; init; } = true;
+
+    /** 自动部署的 Release 基址与版本(latest 或 vX.Y.Z)。 */
+    public string RemoteReleaseBaseUrl { get; init; } = GuiSettings.DefaultReleaseBaseUrl;
+
+    public string RemoteReleaseVersion { get; init; } = GuiSettings.DefaultReleaseVersion;
+
+    /** 本机下载 Release 时的代理(为空则直连)。 */
+    public string RemoteDownloadProxy { get; init; } = "";
+
     public string SortSessions { get; init; } = GuiSettings.SortUpdated;
 
     public bool ShowOnlyWithSessions { get; init; }
@@ -126,6 +141,10 @@ public sealed record GuiSettingsSnapshot
             WorkspaceView = Text(parameters, "workspaceView") ?? GuiSettings.ViewSolution,
             DefaultWorkspace = Text(parameters, "defaultWorkspace"),
             RemoteWorkspaces = Workspaces(parameters, "remoteWorkspaces"),
+            RemoteAutoDeploy = Flag(parameters, "remoteAutoDeploy") ?? true,
+            RemoteReleaseBaseUrl = Text(parameters, "remoteReleaseBaseUrl") ?? GuiSettings.DefaultReleaseBaseUrl,
+            RemoteReleaseVersion = Text(parameters, "remoteReleaseVersion") ?? GuiSettings.DefaultReleaseVersion,
+            RemoteDownloadProxy = Text(parameters, "remoteDownloadProxy") ?? "",
             SortSessions = Text(parameters, "sortSessions") ?? GuiSettings.SortUpdated,
             ShowOnlyWithSessions = Flag(parameters, "showOnlyWithSessions") ?? false,
             TraceFilter = Text(parameters, "traceFilter") ?? GuiSettings.TraceAll,
@@ -165,6 +184,10 @@ public sealed record GuiSettingsSnapshot
                 ["password"] = workspace.Password,
             })
             .ToList(),
+        ["remoteAutoDeploy"] = RemoteAutoDeploy,
+        ["remoteReleaseBaseUrl"] = RemoteReleaseBaseUrl,
+        ["remoteReleaseVersion"] = RemoteReleaseVersion,
+        ["remoteDownloadProxy"] = RemoteDownloadProxy,
         ["sortSessions"] = SortSessions,
         ["showOnlyWithSessions"] = ShowOnlyWithSessions,
         ["traceFilter"] = TraceFilter,

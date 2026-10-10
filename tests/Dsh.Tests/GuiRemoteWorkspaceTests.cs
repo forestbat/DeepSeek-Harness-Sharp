@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Formats.Tar;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -93,6 +94,22 @@ public sealed class GuiRemoteWorkspaceTests
         Assert.NotNull(viewModel.Preferences.SelectedRemoteWorkspace);
         Capture(window, "headless-settings-remote");
 
+        // “远端目录”右侧的文件夹按钮 + “测试连接”按钮。
+        Assert.NotNull(window.GetVisualDescendants().OfType<Button>()
+            .First(button => Equals(ToolTip.GetTip(button), "选择远端机器上的目录")));
+        Assert.NotNull(window.GetVisualDescendants().OfType<Button>()
+            .First(button => button.Content is "测试连接"));
+
+        // 右下角气泡: 成功与失败各一条。
+        viewModel.ShowToast("连接成功", "已连接 dev@gpu-box.internal（linux）· 远端目录 ~/dsh-deploy", false);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Single(viewModel.Toasts);
+        Capture(window, "headless-toast-success");
+        viewModel.ShowToast("连接失败", "ssh dev@gpu-box.internal 失败: Permission denied (publickey).", true);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(2, viewModel.Toasts.Count);
+        Capture(window, "headless-toast-both");
+
         viewModel.Preferences.SelectedRemoteWorkspace!.Name = "改名后的工作区";
         viewModel.Preferences.SaveRemoteWorkspacesCommand.Execute(null);
         Assert.Contains(new GuiSettings(environment.App.Home).Load().RemoteWorkspaces,
@@ -160,9 +177,101 @@ public sealed class GuiRemoteWorkspaceTests
             Assert.NotNull(viewModel.RemoteHost);
             Capture(window, "headless-remote-workspace-connected");
 
+            // 远端目录列举(供“选择远端目录”): 真实走 ssh 通道, 家目录应至少含目录项。
+            var home = await viewModel.RemoteHost!.ListDirectoryAsync("~", TestContext.Current.CancellationToken);
+            Assert.True(home.Entries.Count > 0, $"远端 {spec.Host} 家目录列举为空");
+            Assert.Contains(home.Entries, entry => entry.IsDirectory);
+
             window.Close();
             Dispatcher.UIThread.RunJobs();
         });
+    }
+
+    /** 设置页“测试连接”走完整 GUI 路径(行VM→ToModel→启动器): 密码认证应成功并弹成功气泡。 */
+    [Fact]
+    public async Task SettingsTestConnection_PasswordAuth_Succeeds()
+    {
+        var spec = LoadSpec();
+        if (spec is null)
+        {
+            Assert.Skip("未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证");
+            return;
+        }
+
+        await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            using var environmentScope = environment;
+            var window = new MainWindow(environment.App, environment.Agent);
+            var viewModel = window.ViewModel!;
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var row = new SshWorkspaceRowViewModel
+            {
+                Name = spec.Name,
+                Host = spec.Host,
+                Port = spec.Port.ToString(),
+                User = spec.User,
+                Auth = spec.Auth,
+                Password = spec.Password,
+                RemotePath = spec.RemotePath,
+                Owner = viewModel.Preferences,
+            };
+            viewModel.Preferences.RemoteWorkspaces.Add(row);
+            viewModel.Preferences.SelectedRemoteWorkspace = row;
+
+            await row.TestConnectionCommand.ExecuteAsync(null);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Contains(viewModel.Toasts, toast => toast.IsSuccess && toast.Title == "连接成功");
+            Assert.DoesNotContain(viewModel.Toasts, toast => toast.IsError);
+            Capture(window, "headless-settings-test-connection");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /** 自动部署: 远端没有 dsharp 时把本机发布打包上传到 ~/.dsharp/ 并按绝对路径起宿主(VS Code 式, 不注册命令)。 */
+    [Fact]
+    public async Task AutoDeploy_Uploads_And_Hosts_On_Real_Server()
+    {
+        var spec = LoadSpec();
+        if (spec is null)
+        {
+            Assert.Skip("未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证");
+            return;
+        }
+
+        var publish = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/deploy/dsh"));
+        if (!Directory.Exists(publish))
+        {
+            Assert.Skip($"缺少本地发布目录: {publish}");
+            return;
+        }
+
+        var tarPath = Path.Combine(Path.GetTempPath(), $"dsharp-deploy-{Guid.NewGuid():N}.tar");
+        TarFile.CreateFromDirectory(publish, tarPath, includeBaseDirectory: false);
+        try
+        {
+            var workspace = new SshWorkspace(spec.Name, spec.Host, spec.Port, spec.User, spec.Auth, RemotePath: spec.RemotePath, Password: spec.Password);
+            var result = await RemoteDsharpInstaller.EnsureAsync(
+                workspace,
+                new RemoteDsharpInstaller.Options("https://example.invalid", "latest", null),
+                null,
+                TestContext.Current.CancellationToken,
+                (_, _, _) => Task.FromResult(tarPath));
+            Assert.EndsWith("/dsharp", result.CommandPath);
+            Assert.Contains("/.dsharp/", result.CommandPath.Replace('\\', '/'));
+
+            var summary = await SshRemoteWorkspaceLauncher.TestAsync(workspace, result.CommandPath, TestContext.Current.CancellationToken);
+            Assert.Contains("已连接", summary);
+        }
+        finally
+        {
+            File.Delete(tarPath);
+        }
     }
 
     private static Spec? LoadSpec()
