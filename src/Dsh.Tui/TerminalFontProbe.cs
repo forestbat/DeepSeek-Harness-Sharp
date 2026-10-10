@@ -5,7 +5,7 @@ namespace Dsh.Tui;
 
 /**
  * 启动时向终端查询字符格子的像素尺寸(CSI 16 t, 应答 ESC [ 6 ; 高 ; 宽 t), 供 GPU 渲染路线对齐终端字号。
- * 终端不支持/超时/重定向时返回 null, 调用方落默认值。GPU 窗口想换字号 = 用户去调终端字号, 重启 dsh。
+ * 终端不支持/超时/重定向时返回 null, 调用方落默认值。GPU 窗口想换字号 = 用户去调终端字号, 重启 dsharp。
  */
 public static class TerminalFontProbe
 {

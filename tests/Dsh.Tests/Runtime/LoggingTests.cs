@@ -82,7 +82,7 @@ public class LoggingTests
         }
     }
 
-    /** 同一个 home 里同时跑两个 dsh(GUI + CLI/TUI, 或两个实例)时必须都能落盘: 旧实现用 FileShare.Read 会直接抛 IOException 把进程带崩。 */
+    /** 同一个 home 里同时跑两个 dsharp(GUI + CLI/TUI, 或两个实例)时必须都能落盘: 旧实现用 FileShare.Read 会直接抛 IOException 把进程带崩。 */
     [Fact]
     public void FileLogProvider_TwoProvidersShareOneDirectory()
     {

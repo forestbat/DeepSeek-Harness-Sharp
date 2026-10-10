@@ -5,7 +5,7 @@ namespace Dsh.PtyTerminal;
 public static class TerminalPrompt
 {
     public const string MarkerPrefix = "133;D;";
-    public const string ControlledPrompt = "dsh> ";
+    public const string ControlledPrompt = "dsharp> ";
 }
 
 public sealed record SanitizedChunk(string Text, bool Prompt, string? PromptTail = null);

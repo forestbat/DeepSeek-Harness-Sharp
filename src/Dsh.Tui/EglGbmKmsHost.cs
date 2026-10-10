@@ -7,9 +7,9 @@ namespace Dsh.Tui;
 
 /**
  * 裸 TTY GBM/KMS 宿主: 无显示服务器时接管 DRM CRTC 直接上屏, 键盘/鼠标走 evdev。
- * 管线: drmSetMaster → KDSETMODE(KD_GRAPHICS) → drmModeGetResources 选 connector/encoder/CRTC/preferred mode
- * → gbm_create_device → eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA) → gbm_surface_create(XRGB8888, SCANOUT|RENDERING)
- * → eglCreateWindowSurface → 每帧 eglSwapBuffers + gbm_surface_lock_front_buffer + drmModeAddFB2 + PageFlip。
+ * 管线: drmSetMaster > KDSETMODE(KD_GRAPHICS) > drmModeGetResources 选 connector/encoder/CRTC/preferred mode
+ * > gbm_create_device > eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA) > gbm_surface_create(XRGB8888, SCANOUT|RENDERING)
+ * > eglCreateWindowSurface > 每帧 eglSwapBuffers + gbm_surface_lock_front_buffer + drmModeAddFB2 + PageFlip。
  */
 internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
 {
@@ -98,7 +98,7 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         }
     }
 
-    /** `--gpu-card` 的值: 纯卡号(1 → /dev/dri/card1)或卡节点路径原样使用。 */
+    /** `--gpu-card` 的值: 纯卡号(1 > /dev/dri/card1)或卡节点路径原样使用。 */
     internal static string NormalizeCardPath(string value)
         => value.StartsWith('/') ? value : $"{DrmCardPrefix}{value}";
 
@@ -218,7 +218,7 @@ internal sealed class EglGbmKmsHost : IGlSurfaceHostRunner
         }
     }
 
-    /** VT_PROCESS 握手: 释放请求→交出 master 放行; 切回→重新接管并用最近一帧恢复画面。 */
+    /** VT_PROCESS 握手: 释放请求>交出 master 放行; 切回>重新接管并用最近一帧恢复画面。 */
     private void HandleVtSignals()
     {
         if (_vt is null)

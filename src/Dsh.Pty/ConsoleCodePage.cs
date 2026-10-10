@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace Dsh.Pty;
 
 /**
- * Windows 控制台代码页声明: dsh 与终端之间走的是**原始 UTF-8 字节**, 而代码页决定控制台怎么解释这些字节。
+ * Windows 控制台代码页声明: dsharp 与终端之间走的是**原始 UTF-8 字节**, 而代码页决定控制台怎么解释这些字节。
  * 输出侧: daemon 用 FreeConsole 脱离终端后创建的 ConPTY 伪控制台会退回系统 OEM 代码页(简中 936), 于是托管 TUI 写出的
  * 中文与边框字符被误读成"é¹â¬"这类乱码、ESC 序列还会错位(同一段 ASCII 却完好)。
  * 输入侧: 代理从控制台读入的是按**输入代码页**编码的字节, 936 下汉字变成 GBK 两字节(如"测试"=B2E2CAD4), 送到会话里

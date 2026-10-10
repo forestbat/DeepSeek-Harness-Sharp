@@ -147,7 +147,7 @@ public sealed class TranscriptRenderer
                         AppendDiffCard(card, foldToolResult);
                         break;
                     }
-                    var label = result.Error is not null ? $"✗ {result.Error.Code} " : "↳ ";
+                    var label = result.Error is not null ? $"x {result.Error.Code} " : "↳ ";
                     var start = _buffer.Length;
                     Append($"  {label}{text}\n");
                     if (foldToolResult)
@@ -165,7 +165,7 @@ public sealed class TranscriptRenderer
                 }
             case TurnEndPayload { Reason: TurnEndReason.Error error }:
                 _assistantStreamed = false;
-                Append($"  ✗ turn failed: {error.Failure.Code}: {error.Failure.Message}\n");
+                Append($"  x turn failed: {error.Failure.Code}: {error.Failure.Message}\n");
                 break;
             case TurnEndPayload:
                 _assistantStreamed = false;
@@ -374,7 +374,7 @@ public sealed class TranscriptRenderer
     private static string Preview(string text, int limit)
     {
         var flat = text.Replace("\r\n", " ").Replace('\n', ' ').Trim();
-        return flat.Length <= limit ? flat : $"{flat[..limit]}…";
+        return flat.Length <= limit ? flat : $"{flat[..limit]}~";
     }
 
     private void Append(string text)

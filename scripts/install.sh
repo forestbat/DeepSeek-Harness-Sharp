@@ -16,7 +16,7 @@
 #   DSHARP_PROXY          下载代理, 例如 http://127.0.0.1:10808
 #
 # Release 资产命名约定: dsharp-<rid>.tar.gz, rid 形如 linux-x64 / linux-arm64 / osx-x64 / osx-arm64。
-# 归档根目录即发布输出(含可执行文件 DeepSeek-Harness-Sharp 与 plugins/)。
+# 归档根目录即发布输出(含可执行文件 dsharp 与 plugins/)。
 set -euo pipefail
 
 REPO="forestbat/DeepSeek-Harness-Sharp"
@@ -27,7 +27,7 @@ BASE_URL="${DSHARP_BASE_URL:-https://github.com/$REPO/releases}"
 LOCAL_ARCHIVE="${DSHARP_LOCAL_ARCHIVE:-}"
 PROXY="${DSHARP_PROXY:-}"
 COMMAND_NAME="dsharp"
-HOST_BINARY="DeepSeek-Harness-Sharp"
+HOST_BINARY="dsharp"
 
 log() { printf '%s\n' "$*"; }
 fail() { printf '安装失败: %s\n' "$*" >&2; exit 1; }

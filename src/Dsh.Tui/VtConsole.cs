@@ -6,8 +6,8 @@ namespace Dsh.Tui;
 
 /**
  * VT 控制台接管: KD_GRAPHICS 停掉内核控制台绘制, K_OFF 防按键漏进 VT 行律,
- * VT_PROCESS 接管 Ctrl+Alt+Fn 切换(内核改为发信号: 释放→drmDropMaster→VT_RELDISP(1)放行;
- * 切回→drmSetMaster+恢复 CRTC→VT_RELDISP(2)), 退出恢复 AUTO/XLATE/TEXT。
+ * VT_PROCESS 接管 Ctrl+Alt+Fn 切换(内核改为发信号: 释放>drmDropMaster>VT_RELDISP(1)放行;
+ * 切回>drmSetMaster+恢复 CRTC>VT_RELDISP(2)), 退出恢复 AUTO/XLATE/TEXT。
  * 信令用实时信号(SIGRTMIN+4/+5): .NET 的 PosixSignal 枚举不含 SIGUSR1/2, 且 CoreCLR 占用 SIGUSR1;
  * 信号处理器只做一次静态字段写入(信号上下文里不做任何运行时再入), 由宿主循环轮询消费。
  */

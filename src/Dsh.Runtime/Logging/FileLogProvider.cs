@@ -86,7 +86,7 @@ public sealed class FileLogProvider : ILoggerProvider
         _writer = OpenWriter(PathFor(date, index)) ?? OpenWriter(PidPathFor(date)) ?? throw new IOException("log file is not writable");
     }
 
-    /** 同一天里多个 dsh 进程共用一个 home 是常态: 允许其它进程同时追加, 写不动再退到带 pid 的独立文件。 */
+    /** 同一天里多个 dsharp 进程共用一个 home 是常态: 允许其它进程同时追加, 写不动再退到带 pid 的独立文件。 */
     private static StreamWriter? OpenWriter(string path)
     {
         try

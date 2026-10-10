@@ -44,7 +44,7 @@ internal sealed class SubagentPane : ITuiPane
 
     public string PaneTitle => $"子代理 {Label}";
 
-    public string StatusText => "子代理查看: ←/→ 兄弟 · ↑ 父会话 · Esc 关闭";
+    public string StatusText => "子代理查看: </> 兄弟 - ^ 父会话 - Esc 关闭";
 
     private string Label => SubagentDescriptorPayload.IdentityOf(_session)?.Label ?? _session.Id.Value;
 
@@ -150,12 +150,12 @@ internal sealed class SubagentPane : ITuiPane
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
-        var state = _window.IsLive(_session.Id) ? "● live" : "○ ended";
+        var state = _window.IsLive(_session.Id) ? "* live" : "o ended";
         CellText.Draw(
             grid,
             rect.X,
             rect.Y,
-            $"子代理 {Label} [{state}]{SiblingPosition()} · ◀/▶ 兄弟 · ↑ 父会话 · Esc 关闭",
+            $"子代理 {Label} [{state}]{SiblingPosition()} - ◀/> 兄弟 - ^ 父会话 - Esc 关闭",
             AnsiColor.Default,
             AnsiColor.Default,
             CellStyle.Dim);
@@ -172,7 +172,7 @@ internal sealed class SubagentPane : ITuiPane
         for (var index = 0; index < siblings.Count; index++)
         {
             if (siblings[index].Id == _session.Id)
-                return $" · 兄弟 {index + 1}/{siblings.Count}";
+                return $" - 兄弟 {index + 1}/{siblings.Count}";
         }
         return "";
     }

@@ -11,7 +11,7 @@ namespace Dsh.Tui;
 public readonly record struct GlyphUv(float MinX, float MinY, float MaxX, float MaxY);
 
 /**
- * 字形图集: 度量照抄 Alacritty/crossfont —— 格宽 = floor(advance('0')),
+ * 字形图集: 度量照抄 Alacritty/crossfont -- 格宽 = floor(advance('0')),
  * 格高 = floor(max(字体声明行高, ascent − descent)), 基线距格顶 = 格高 + descent(负值);
  * 宽字形占同一行的两个连续槽(位图按自然尺寸烘焙, 绝不缩放), 窄字形占一槽。
  */
@@ -26,7 +26,7 @@ public sealed class GlyphAtlas
 
     private const string CacheMagic = "DSHGLYF3";
 
-    /** 字号(磅)→ 六线字号(px, Dpi=72 下 1pt=1px)。 */
+    /** 字号(磅)> 六线字号(px, Dpi=72 下 1pt=1px)。 */
     private const float DefaultFontSize = 17.333f;
 
     private static readonly Lazy<GlyphAtlas> SharedInstance = new(() => new GlyphAtlas());
@@ -647,7 +647,7 @@ public sealed class GlyphAtlas
         }
     }
 
-    /** 渲染探针判定可用性: 只校验可加载不够——某些族(TryGetMetrics 成功)进 FallbackFontFamilies 后会让整条回退链产出空字形。 */
+    /** 渲染探针判定可用性: 只校验可加载不够--某些族(TryGetMetrics 成功)进 FallbackFontFamilies 后会让整条回退链产出空字形。 */
     private static bool IsUsableFamily(FontFamily family)
     {
         try

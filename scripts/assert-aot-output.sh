@@ -16,7 +16,7 @@ if [ ! -d "$DIR" ]; then
     exit 1
 fi
 
-APP="DeepSeek-Harness-Sharp"
+APP="dsharp"
 
 if [ ! -f "$DIR/$APP" ] && [ ! -f "$DIR/$APP.exe" ]; then
     echo "::error::AOT 输出里没有可执行文件 $APP（或 $APP.exe）: $DIR" >&2

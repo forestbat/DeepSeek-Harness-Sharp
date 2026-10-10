@@ -55,6 +55,6 @@ public sealed class GitPanelTests
         var lines = GitPanel.Format(numstat, "上次提交");
 
         Assert.Equal(1 + GitPanel.MaxRows + 1, lines.Count);
-        Assert.Equal("… (+3)", lines[^1]);
+        Assert.Equal("~ (+3)", lines[^1]);
     }
 }

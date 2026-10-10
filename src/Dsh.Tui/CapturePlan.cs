@@ -164,7 +164,7 @@ public sealed class CapturePlanRunner(IReadOnlyList<CapturePlanStep> steps)
     }
 }
 
-/** 脚本字符 → 控制台按键(与真实终端按键等价, 供窗口宿主直接喂给 ChatWindow)。 */
+/** 脚本字符 > 控制台按键(与真实终端按键等价, 供窗口宿主直接喂给 ChatWindow)。 */
 public static class CaptureKeys
 {
     public static ConsoleKeyInfo ToKeyInfo(char character) => character switch

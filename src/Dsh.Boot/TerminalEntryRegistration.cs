@@ -1,7 +1,7 @@
 namespace Dsh.Boot;
 
 /**
- * Linux 终端入口注册: 让桌面环境/启动器唤起"终端"时进的是 dsh 的独立 GPU 窗口形态。
+ * Linux 终端入口注册: 让桌面环境/启动器唤起"终端"时进的是 dsharp 的独立 GPU 窗口形态。
  * 覆盖 freedesktop 的入口惯例(xdg-terminal-exec / $TERMINAL / x-terminal-emulator), 不碰任何系统级 hook。
  */
 public static class TerminalEntryRegistration
@@ -13,7 +13,7 @@ public static class TerminalEntryRegistration
     {
         if (!OperatingSystem.IsLinux())
         {
-            await output.WriteLineAsync("dsh: 终端入口注册只适用于 Linux(Windows 侧走自带的终端设置, 不做系统级注册)");
+            await output.WriteLineAsync("dsharp: 终端入口注册只适用于 Linux(Windows 侧走自带的终端设置, 不做系统级注册)");
             return 1;
         }
 
@@ -36,20 +36,20 @@ public static class TerminalEntryRegistration
         await UpsertListAsync(listFile, $"{LauncherName}.desktop");
         await File.WriteAllTextAsync(environmentFile, $"TERMINAL={LauncherName}\n", new System.Text.UTF8Encoding(false));
 
-        await output.WriteLineAsync($"dsh: 已写入 {launcher}");
-        await output.WriteLineAsync($"dsh: 已写入 {desktopFile}");
-        await output.WriteLineAsync($"dsh: 已把 {LauncherName}.desktop 登记进 {listFile}(xdg-terminal-exec)");
-        await output.WriteLineAsync($"dsh: 已写入 {environmentFile}($TERMINAL)");
-        await output.WriteLineAsync("dsh: Debian 系若要接管 x-terminal-emulator, 以 root 执行:");
-        await output.WriteLineAsync($"dsh:   update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator {binDirectory}/x-terminal-emulator-dsh 40");
-        await output.WriteLineAsync("dsh: 其余桌面环境请在各自的默认终端设置里选择 dsh(或本机路径 " + launcher + ")");
+        await output.WriteLineAsync($"dsharp: 已写入 {launcher}");
+        await output.WriteLineAsync($"dsharp: 已写入 {desktopFile}");
+        await output.WriteLineAsync($"dsharp: 已把 {LauncherName}.desktop 登记进 {listFile}(xdg-terminal-exec)");
+        await output.WriteLineAsync($"dsharp: 已写入 {environmentFile}($TERMINAL)");
+        await output.WriteLineAsync("dsharp: Debian 系若要接管 x-terminal-emulator, 以 root 执行:");
+        await output.WriteLineAsync($"dsharp:   update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator {binDirectory}/x-terminal-emulator-dsh 40");
+        await output.WriteLineAsync("dsharp: 其余桌面环境请在各自的默认终端设置里选择 dsharp(或本机路径 " + launcher + ")");
         return 0;
     }
 
     private const string LauncherScript = """
         #!/bin/sh
-        # dsh 终端入口: 交给独立 GPU 窗口形态, 启动即带真 shell 窗格(Dsh.Pty 宿主)。
-        exec dsh --gpu --shell "$@"
+        # dsharp 终端入口: 交给独立 GPU 窗口形态, 启动即带真 shell 窗格(Dsh.Pty 宿主)。
+        exec dsharp --gpu --shell "$@"
         """;
 
     /** xdg-terminal-exec 读取 .desktop 里的 Exec; Terminal=true 表示它本身就是终端。 */
@@ -57,8 +57,8 @@ public static class TerminalEntryRegistration
         [Desktop Entry]
         Type=Application
         Name=DSH Terminal
-        Comment=dsh 终端(独立 GPU 窗口形态)
-        Exec=dsh --gpu --shell
+        Comment=dsharp 终端(独立 GPU 窗口形态)
+        Exec=dsharp --gpu --shell
         Terminal=true
         Categories=System;TerminalEmulator;
         """;

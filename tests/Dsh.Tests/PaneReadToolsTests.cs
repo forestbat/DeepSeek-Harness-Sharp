@@ -272,7 +272,7 @@ public sealed class PaneReadToolsTests : IDisposable
                     new PtyDaemonSessionDto
                     {
                         Id = "pty-remote",
-                        Command = "dsh tui",
+                        Command = "dsharp tui",
                         Status = nameof(PtySessionStatus.Running),
                         Panes = [.. panes],
                     },

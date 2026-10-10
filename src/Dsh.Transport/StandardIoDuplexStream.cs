@@ -1,7 +1,7 @@
-﻿namespace Dsh.Transport;
+namespace Dsh.Transport;
 
 /**
- * 把进程 stdin/stdout 当成一条双向流(stdio-over-SSH: `ssh host dsh host --serve`)。
+ * 把进程 stdin/stdout 当成一条双向流(stdio-over-SSH: `ssh host dsharp host --serve`)。
  * 读来自 input, 写去 output; 不监听任何网络端口, 攻击面最小。
  */
 public sealed class StandardIoDuplexStream(Stream input, Stream output, bool ownsStreams = false) : Stream

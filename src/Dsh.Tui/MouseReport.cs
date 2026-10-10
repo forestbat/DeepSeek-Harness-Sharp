@@ -17,9 +17,9 @@ internal readonly record struct MouseReportMatch(MouseReportStatus Status, Termi
 
 /**
  * 鼠标报文语法(SGR `ESC [ < b;x;y M/m` 与 X10 `ESC [ M` + Cb Cx Cy)。
- * **前导 ESC 允许缺失**: ConPTY 的输入侧会吃掉报文前导 ESC, 客户端/会话实际读到的是 `[<…M` 或 `[M`+3 字节;
+ * **前导 ESC 允许缺失**: ConPTY 的输入侧会吃掉报文前导 ESC, 客户端/会话实际读到的是 `[<~M` 或 `[M`+3 字节;
  * 只剩这些字节时仍必须整条识别并丢弃, 否则它们会变成"键入文本"污染输入行(该缺陷已在 Windows/WSL 反复复现)。
- * 完好的报文交给上层还原成鼠标事件, 不能只在客户端丢弃 —— 会话侧同样需要鼠标事件(拖动分隔线/滚动)。
+ * 完好的报文交给上层还原成鼠标事件, 不能只在客户端丢弃 -- 会话侧同样需要鼠标事件(拖动分隔线/滚动)。
  */
 internal static class MouseReport
 {

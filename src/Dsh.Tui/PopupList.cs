@@ -24,7 +24,7 @@ public static class PopupList
 
     /**
      * 说明行 + 候选列表共用一个浮层: 说明行常驻在标题下方(参数面板), 候选在其下滚动。
-     * 说明行以 "▸" 开头表示当前正在填的参数(加粗高亮), 其余按暗色绘制。
+     * 说明行以 ">" 开头表示当前正在填的参数(加粗高亮), 其余按暗色绘制。
      */
     public static void Draw(
         CellGrid grid,
@@ -51,7 +51,7 @@ public static class PopupList
         for (var row = 0; row < window.HeaderCount; row++)
         {
             var header = headerLines[row];
-            var current = header.StartsWith('▸');
+            var current = header.StartsWith('>');
             DrawText(grid, window.X + 1, window.Y + 1 + row, Truncate(header, window.Width - 2),
                 current ? TuiTheme.Highlight : AnsiColor.Default,
                 AnsiColor.Default,
@@ -73,7 +73,7 @@ public static class PopupList
             if (itemIndex >= items.Count)
                 break;
             var selected = itemIndex == selectedIndex;
-            var marker = selected ? "› " : "  ";
+            var marker = selected ? "> " : "  ";
             var text = descriptions is { Count: > 0 }
                 ? $"{marker}{Pad(Truncate(items[itemIndex], Math.Max(1, nameColumn - 2)), nameColumn - 2)}{Truncate(DescriptionAt(descriptions, itemIndex), window.Width - nameColumn - 2)}"
                 : $"{marker}{Truncate(items[itemIndex], window.Width - 4)}";
@@ -233,6 +233,6 @@ public static class PopupList
             index++;
         }
 
-        return $"{text[..index]}…";
+        return $"{text[..index]}~";
     }
 }

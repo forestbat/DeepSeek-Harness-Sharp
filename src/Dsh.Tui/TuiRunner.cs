@@ -40,7 +40,7 @@ public static class TuiRunner
 
         // 接管(raw/备用屏幕/鼠标+清陈旧输入)必须先于耗时初始化: 堵住启动窗口期吃进残留鼠标跟踪字节的洞。
         // 走到这里已不是 proxy: 本进程的终端要么是 daemon 的 ConPTY、要么被重定向, 都不是"用户终端"。
-        // 因此只做原始模式与备用屏幕接管, 不发出鼠标上报序列(否则会经 daemon 泄到用户终端, 与 proxy 重复)——
+        // 因此只做原始模式与备用屏幕接管, 不发出鼠标上报序列(否则会经 daemon 泄到用户终端, 与 proxy 重复)--
         // 鼠标由持有用户终端的 proxy 负责开启并转发。Windows 仍保留控制台鼠标输入位, 供 InjectMouse 注入记录。
         using var rawMode = TerminalRawMode.TryEnable(enableMouse: true, emitMouseReports: false);
         var signalGuards = RegisterSignalRestore(rawMode);
@@ -391,7 +391,7 @@ public static class TuiRunner
 
     /**
      * GPU 渲染的字号对齐宿主终端格尺寸: 以本机默认图集的格尺寸为基准, 宽/高两个方向各算一个比例, 取较紧者。
-     * 终端不支持该查询或输出被重定向时用共享默认图集。用户想改字号就调终端字号, 重启 dsh 生效。
+     * 终端不支持该查询或输出被重定向时用共享默认图集。用户想改字号就调终端字号, 重启 dsharp 生效。
      */
     internal static GlyphAtlas CreateAtlasForTerminal()
     {

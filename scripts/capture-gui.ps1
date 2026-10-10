@@ -4,13 +4,13 @@ param(
     [string]$Out = "artifacts020/gpu-screenshots/gui.png",
     [int]$WaitSeconds = 8,
     [switch]$KeepOpen,
-    # 捕获目标可换: 默认 GUI 启动器; 传 -ExePath/-ExeArguments 可截 GPU 窗口(dsh tui --gpu)等其它进程。
+    # 捕获目标可换: 默认 GUI 启动器; 传 -ExePath/-ExeArguments 可截 GPU 窗口(dsharp tui --gpu)等其它进程。
     [string]$ExePath = "",
     [string]$ExeArguments = ""
 )
 
 # 后台截图 GUI: 不激活窗口, 不注入输入, 不占用用户的鼠标键盘。
-# 需要看某个会话的界面时用 -Session <id> (等价于 dsh gui --session <id>), 启动后直接就是那个会话。
+# 需要看某个会话的界面时用 -Session <id> (等价于 dsharp gui --session <id>), 启动后直接就是那个会话。
 # 用 dsh-gui.exe(Windows 子系统)而不是控制台宿主, 这样连"命令行黑框一闪而过"都不会出现。
 # 依赖: PrintWindow(PW_RENDERFULLCONTENT) 可以抓被遮挡的窗口。
 

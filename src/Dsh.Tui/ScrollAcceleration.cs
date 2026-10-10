@@ -20,7 +20,7 @@ internal sealed class LinearScrollAcceleration : IScrollAcceleration
 }
 
 /**
- * macOS 式滚轮加速: 测量相邻事件间隔, 用最近几个间隔的均值决定倍率——快速连滚加速, 慢滚保持精确。
+ * macOS 式滚轮加速: 测量相邻事件间隔, 用最近几个间隔的均值决定倍率--快速连滚加速, 慢滚保持精确。
  * 阈值/曲线照抄 OpenTUI 的 scroll-acceleration.ts(A=0.8, tau=3, 上限 6 倍, 参考间隔 100ms)。
  */
 internal sealed class MacOsScrollAcceleration : IScrollAcceleration
@@ -71,7 +71,7 @@ internal sealed class MacOsScrollAcceleration : IScrollAcceleration
 }
 
 /**
- * 每窗格一个: 事件增量(notches) × 每格基础行数 × 加速倍数 → 分数累积 → 取整滚动。
+ * 每窗格一个: 事件增量(notches) × 每格基础行数 × 加速倍数 > 分数累积 > 取整滚动。
  * 分数累积保证高分辨率滚轮/触控板的半个 notch 不会被丢掉。
  */
 internal sealed class ScrollWheel

@@ -48,7 +48,7 @@ internal interface ITerminalInputSource : IDisposable
 
 /**
  * 原始字节增量解码: 键盘转义序列与鼠标报文, 跨读取块保持状态。
- * 鼠标报文由 MouseReport 整条识别并丢弃/还原 —— 绝不允许报文里的字节落成"键入文本"。
+ * 鼠标报文由 MouseReport 整条识别并丢弃/还原 -- 绝不允许报文里的字节落成"键入文本"。
  */
 public sealed class TerminalInputParser
 {

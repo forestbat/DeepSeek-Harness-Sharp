@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace Dsh.Tests;
 
 /**
- * Linux 下以 `dotnet exec` 运行测试时 DOTNET_ROOT 常未设置, 子进程走 apphost 启动(pty daemon / dsh tui)会报
+ * Linux 下以 `dotnet exec` 运行测试时 DOTNET_ROOT 常未设置, 子进程走 apphost 启动(pty daemon / dsharp tui)会报
  * "You must install .NET to run this application"; 统一在进程启动时补上, 子进程按环境继承。
  */
 internal static class DotnetRootInitializer

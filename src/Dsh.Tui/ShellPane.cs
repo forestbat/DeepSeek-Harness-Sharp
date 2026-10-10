@@ -52,7 +52,7 @@ internal sealed class ShellPane : ITuiPane
 
     public bool StickToBottom { get; set; } = true;
 
-    public string PaneTitle => $"shell · {_session.Command}";
+    public string PaneTitle => $"shell - {_session.Command}";
 
     public string StatusText { get; set; } = "";
 
@@ -103,7 +103,7 @@ internal sealed class ShellPane : ITuiPane
         _scrollOffset = 0;
         StickToBottom = true;
         _keysSent++;
-        StatusText = $"shell 键入 {_keysSent} 次 · 读取 {_bytesRead} 字节 · {_session.Command} (pid {_session.ProcessId})";
+        StatusText = $"shell 键入 {_keysSent} 次 - 读取 {_bytesRead} 字节 - {_session.Command} (pid {_session.ProcessId})";
         EnqueueWrite(buffer[..length].ToArray());
     }
 
@@ -235,7 +235,7 @@ internal sealed class ShellPane : ITuiPane
                 break;
             }
             _bytesRead += read;
-            StatusText = $"shell 读取 {_bytesRead} 字节 · {_session.Command} (pid {_session.ProcessId})";
+            StatusText = $"shell 读取 {_bytesRead} 字节 - {_session.Command} (pid {_session.ProcessId})";
             lock (_screenGate)
                 _screen.Feed(_readBuffer.AsSpan(0, read));
             Invalidate();

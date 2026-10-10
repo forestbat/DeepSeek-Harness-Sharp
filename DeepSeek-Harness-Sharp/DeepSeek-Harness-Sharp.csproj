@@ -3,11 +3,13 @@
     <Import Project="..\Dsh.Host\Dsh.Host.Publish.targets" />
 
     <!--
-      控制台宿主(dsh): 薄入口, 组合根与插件引用在 Dsh.Host 库中。
+      控制台宿主(dsharp): 薄入口, 组合根与插件引用在 Dsh.Host 库中。
+      命令名 dsharp 不与 apt 的 dsh(dancer's shell / distributed shell)重名。
       发布形态:默认 Release 为 JIT + partial 裁剪 + 自包含;AOT 属可选档,用 -p:PublishAot=true 命令行开启(见 README)。
     -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <AssemblyName>dsharp</AssemblyName>
         <TargetFramework>net10.0</TargetFramework>
         <RootNamespace>DeepSeek_Harness_Sharp</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>

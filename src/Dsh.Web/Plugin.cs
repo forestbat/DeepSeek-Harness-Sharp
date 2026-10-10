@@ -41,7 +41,7 @@ public sealed class Plugin(string packageName) : IDshPlugin, IDshEntrypoint
     public async Task<int> RunAsync(HarnessApp app, PluginEntrypointOptions options, CancellationToken cancellationToken)
     {
         await using var server = new WebProfileServer();
-        await Console.Out.WriteLineAsync($"dsh web: http://127.0.0.1:{server.Port}");
+        await Console.Out.WriteLineAsync($"dsharp web: http://127.0.0.1:{server.Port}");
         await Task.Delay(Timeout.Infinite, cancellationToken);
         return 0;
     }

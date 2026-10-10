@@ -35,7 +35,7 @@ public sealed class TerminalRawMode : IDisposable
     /** 关闭时把被桥接/常驻进程可能开过的 ?1003(全量移动)/?1015(urxvt) 一并复位, 否则退出后终端仍刷鼠标上报。 */
     internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1015l";
 
-    /** 括号粘贴: 开启后终端把粘贴内容包在 ESC[200~ … ESC[201~ 里, 使多字符粘贴原子到达(图片路径路线)。 */
+    /** 括号粘贴: 开启后终端把粘贴内容包在 ESC[200~ ~ ESC[201~ 里, 使多字符粘贴原子到达(图片路径路线)。 */
     internal const string BracketedPasteEnableSequence = "\x1b[?2004h";
 
     internal const string BracketedPasteDisableSequence = "\x1b[?2004l";

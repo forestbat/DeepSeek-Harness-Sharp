@@ -72,7 +72,7 @@ public static class GpuCatalog
     private static readonly object AdapterCacheLock = new();
     private static IReadOnlyList<GpuAdapterInfo>? _adapterCache;
 
-    /** 独显/核显分辨: 以显存架构为准——UMA(与 CPU 共享内存)为核显, 非 UMA(自带显存)为独显; 架构未知时 NVIDIA 桌面卡判独显, 其余保守判核显。 */
+    /** 独显/核显分辨: 以显存架构为准--UMA(与 CPU 共享内存)为核显, 非 UMA(自带显存)为独显; 架构未知时 NVIDIA 桌面卡判独显, 其余保守判核显。 */
     public static bool IsDiscrete(GpuAdapterInfo adapter)
         => adapter.IsUma is { } uma ? !uma : adapter.Vendor.Equals("NVIDIA", StringComparison.OrdinalIgnoreCase);
 
@@ -106,7 +106,7 @@ public static class GpuCatalog
         return labels;
     }
 
-    public const string WindowsAppHostName = "DeepSeek-Harness-Sharp";
+    public const string WindowsAppHostName = "dsharp";
     public const string WindowsGpuPreferencesKey = @"Software\Microsoft\DirectX\UserGpuPreferences";
 
     /** 进程级 GPU 偏好的数据值: 独显=2(高性能)/核显=1(节能)。 */
@@ -139,7 +139,7 @@ public static class GpuCatalog
         var adapter = ListAdapters().FirstOrDefault(candidate => SelectionIdOf(candidate) == selection);
         var data = WindowsPreferenceData(adapter is not null && IsDiscrete(adapter));
         key.SetValue(processPath, data, RegistryValueKind.String);
-        return $"已写 Windows 进程级 GPU 偏好 {data} — 重启生效";
+        return $"已写 Windows 进程级 GPU 偏好 {data} - 重启生效";
     }
 
     /** /sys/class/drm/cardN/device/uevent 的解析: 只关心 DRIVER / PCI_ID / PCI_SLOT_NAME。 */
@@ -166,7 +166,7 @@ public static class GpuCatalog
         var vendorCode = pciId.Split(':')[0];
         var vendor = VendorNames.GetValueOrDefault(vendorCode, $"0x{vendorCode}");
         var name = $"{vendor} 显卡（{driver}）";
-        var detail = $"{slot ?? "?"} · {pciId}";
+        var detail = $"{slot ?? "?"} - {pciId}";
         return (new GpuAdapterInfo(slot ?? pciId, name, vendor, detail, null), driver, slot);
     }
 
@@ -268,7 +268,7 @@ public static class GpuCatalog
     }
 
     /**
-     * 设置里的选卡值 → 适配器: 先按 PCI slot 精确匹配(同名多卡只能这样区分),
+     * 设置里的选卡值 > 适配器: 先按 PCI slot 精确匹配(同名多卡只能这样区分),
      * 再按名字精确匹配, 最后按厂商名包含匹配。
      */
     [SupportedOSPlatform("linux")]
@@ -301,7 +301,7 @@ public static class GpuCatalog
             var identity = WindowsDeviceIdentity(name);
             var vendor = VendorOf(deviceId);
             var id = identity.PciSlot ?? identity.DeviceInstancePath ?? name;
-            adapters.Add(new GpuAdapterInfo(id, driverDesc, vendor, $"{vendor} · {identity.PciSlot ?? ShortDeviceId(deviceId)}", ProbeWindowsUma(deviceId)));
+            adapters.Add(new GpuAdapterInfo(id, driverDesc, vendor, $"{vendor} - {identity.PciSlot ?? ShortDeviceId(deviceId)}", ProbeWindowsUma(deviceId)));
         }
         return
         [
@@ -312,7 +312,7 @@ public static class GpuCatalog
         ];
     }
 
-    /** Windows LocationInformation → PCI slot: 只认尾部括号里的 (总线,设备,功能) 三元组, 格式串随系统语言变, 元组不变。 */
+    /** Windows LocationInformation > PCI slot: 只认尾部括号里的 (总线,设备,功能) 三元组, 格式串随系统语言变, 元组不变。 */
     public static string? ParsePciLocation(string? locationInformation)
     {
         if (locationInformation is null)
@@ -332,7 +332,7 @@ public static class GpuCatalog
     }
 
     /**
-     * 显示类驱动子键("0000") → (PCI slot, 设备实例路径)。
+     * 显示类驱动子键("0000") > (PCI slot, 设备实例路径)。
      * Enum\PCI 下每个设备实例的 Driver 值回指它的显示类子键, 这是子键与物理设备之间唯一可靠的链接;
      * 非 PCI 设备(虚拟显示适配器)查不到, 返回 (null, null)。
      */

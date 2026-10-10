@@ -222,7 +222,7 @@ internal static class TerminalGraphics
             builder.Append(character, repeat);
     }
 
-    /** 精确调色板优先; 超过 255 色退化为 RGB332 量化。返回每像素调色板索引与索引→RGB 表。 */
+    /** 精确调色板优先; 超过 255 色退化为 RGB332 量化。返回每像素调色板索引与索引>RGB 表。 */
     private static (byte[] Indices, List<(int Color, int Index)> Palette) Quantize(byte[] rgba, int width, int height)
     {
         var indices = new byte[width * height];
@@ -272,7 +272,7 @@ internal static class TerminalGraphics
         {
             if (builder.Length >= 80)
             {
-                builder.Append('…');
+                builder.Append('~');
                 break;
             }
             switch (character)
@@ -300,7 +300,7 @@ internal static class TerminalGraphics
         return builder.Length == 0 ? "(空)" : builder.ToString();
     }
 
-    /** 取自上而下的第 topY 行起、高 bandHeight 的像素带并压缩(GL 缓冲自下而上, 需换算并按上→下写入)。 */
+    /** 取自上而下的第 topY 行起、高 bandHeight 的像素带并压缩(GL 缓冲自下而上, 需换算并按上>下写入)。 */
     private static byte[] CompressBand(byte[] rgba, int width, int height, int topY, int bandHeight)
     {
         using var output = new MemoryStream();

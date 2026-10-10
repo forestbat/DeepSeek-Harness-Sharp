@@ -230,7 +230,7 @@ jobs:
           # 调试旁文件不进产物（AOT 的 .pdb/.dbg 动辄数百 MB）。
           rm -f "$PUB"/*.pdb "$PUB"/*.dbg
           mkdir -p "$PUB/plugins"
-          EXE="$PUB/DeepSeek-Harness-Sharp"
+          EXE="$PUB/dsharp"
           if [ ! -f "$EXE" ]; then
             EXE="$EXE.exe"
           fi

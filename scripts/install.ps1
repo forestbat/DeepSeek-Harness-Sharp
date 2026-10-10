@@ -12,7 +12,7 @@
 #   DSHARP_PROXY          下载代理, 例如 http://127.0.0.1:10808
 #
 # Release 资产命名约定: dsharp-win-<arch>.zip, arch 为 x64 或 arm64。
-# 归档根目录即发布输出(含 DeepSeek-Harness-Sharp.exe 与 plugins/)。
+# 归档根目录即发布输出(含 dsharp.exe 与 plugins/)。
 # 注意: 本脚本要能安全地通过 irm | iex 运行, 因此不调用 exit。
 $ErrorActionPreference = 'Stop'
 
@@ -23,7 +23,7 @@ $DsharpBaseUrl = if ($env:DSHARP_BASE_URL) { $env:DSHARP_BASE_URL } else { "http
 $DsharpLocalArchive = $env:DSHARP_LOCAL_ARCHIVE
 $DsharpProxy = $env:DSHARP_PROXY
 $DsharpCommand = 'dsharp'
-$DsharpHostExe = 'DeepSeek-Harness-Sharp.exe'
+$DsharpHostExe = 'dsharp.exe'
 
 function Get-DsharpArch {
     switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {

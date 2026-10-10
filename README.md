@@ -42,16 +42,16 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 ```bash
 # Linux/macOS:直接运行构建产物
-DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp              # 交互式 TUI
-DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp --gpu       # GPU 渲染
-DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp headless "跑一遍测试"
-DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp tui list
+DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp              # 交互式 TUI
+DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp --gpu       # GPU 渲染
+DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp headless "跑一遍测试"
+DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp tui list
 
 # 或将 DLL 交给本机 dotnet 运行
-dotnet DeepSeek-Harness-Sharp/bin/Debug/net10.0/DeepSeek-Harness-Sharp.dll tui
+dotnet DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll tui
 
 # Windows
-DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe tui
+DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsharp.exe tui
 ```
 
 用 `DSH_HOME`(或 settings.yaml 的 `storage.root`)可以指定独立的配置/会话目录,便于用不同配置试跑构建产物。
@@ -66,9 +66,9 @@ DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsh-gui.exe
 # Linux/macOS: 构建 DshGuiHost 后运行
 DshGuiHost/bin/Debug/net10.0/dsh-gui
 # 从控制台宿主进入 GUI(会占用当前控制台)
-DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe gui
+DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsharp.exe gui
 # 直接打开某个历史会话
-DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe gui --session <会话 id>
+DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsharp.exe gui --session <会话 id>
 ```
 
 - 挂到桌面环境:Windows 用 `pwsh -File scripts/install-desktop.ps1`(在桌面创建快捷方式),Linux 用 `bash scripts/install-desktop.sh`(写入 `~/.local/share/applications/dsh-gui.desktop` 并复制图标,GNOME/KDE 等桌面可直接固定到 dock/面板)。
@@ -84,7 +84,7 @@ DeepSeek-Harness-Sharp\bin\Debug\net10.0\DeepSeek-Harness-Sharp.exe gui --sessio
       workspaceView: solution   # solution|filesystem
       sidebarVisible: true
       gpu: { enabled: true, adapter: auto, backend: auto }   # adapter 选显卡(设置页会列出本机识别到的卡), backend 是高级项: auto|opengl|vulkan|software,改动重启生效
-      # `dsh tui --gpu` 的独立窗口还会读同一段的 vsync(缺省 true): true 跟显示器刷新同步,
+      # `dsharp tui --gpu` 的独立窗口还会读同一段的 vsync(缺省 true): true 跟显示器刷新同步,
       # false 让帧循环按显卡最快速度跑(空转吃一个核, 一般只在测延迟/性能时关)
       window: { rememberBounds: true }
   ```

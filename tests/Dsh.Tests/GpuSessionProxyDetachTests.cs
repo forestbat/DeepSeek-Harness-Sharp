@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 
 /**
  * GPU 形态语义: 关窗口必须等于 detach —— proxy 退出, 但 daemon 里的会话继续 Running。
- * 用隐藏窗口跑真实的 GpuSessionProxy(与 `dsh tui --gpu` 同一条路径), 再 RequestClose 模拟关窗口。
+ * 用隐藏窗口跑真实的 GpuSessionProxy(与 `dsharp tui --gpu` 同一条路径), 再 RequestClose 模拟关窗口。
  */
 [Collection(GuiSerialCollection.CollectionName)]
 [Trait("Category", "OnlyGpu")]
@@ -129,7 +129,7 @@ public sealed class GpuSessionProxyDetachTests
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "AGENTS.md")))
             root = root.Parent;
-        var name = OperatingSystem.IsWindows() ? "DeepSeek-Harness-Sharp.exe" : "DeepSeek-Harness-Sharp";
+        var name = OperatingSystem.IsWindows() ? "dsharp.exe" : "dsharp";
         var executable = Path.Combine(
             root?.FullName ?? AppContext.BaseDirectory,
             "DeepSeek-Harness-Sharp",

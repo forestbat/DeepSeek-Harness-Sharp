@@ -5,7 +5,7 @@ namespace Dsh.Tui;
 
 /**
  * 无显示服务器且无 DRM 时的 GPU 宿主: 用 EGL pbuffer 离屏渲染(可用文末 GPU, 不需要 /dev/dri),
- * 每帧把帧缓冲经终端图像协议贴回终端(kitty 按行分块只传变化行; sixel 整帧), 并按终端格尺寸映射键鼠事件 —— 保留交互。
+ * 每帧把帧缓冲经终端图像协议贴回终端(kitty 按行分块只传变化行; sixel 整帧), 并按终端格尺寸映射键鼠事件 -- 保留交互。
  * 终端两种协议都不支持时: 仅截图/捕获形态可用(不呈现), 否则 TryCreate 失败由调用方回退 CPU 渲染。
  */
 internal sealed class TerminalGraphicsHost : IGlSurfaceHostRunner

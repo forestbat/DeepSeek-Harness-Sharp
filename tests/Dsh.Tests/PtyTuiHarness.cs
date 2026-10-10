@@ -6,7 +6,7 @@ using Dsh.Tui.Services;
 namespace Dsh.Tests;
 
 /**
- * 真实 dsh TUI 跑在**工程自身 PTY**(PtyHost/PtySession)上的测试夹具:
+ * 真实 dsharp TUI 跑在**工程自身 PTY**(PtyHost/PtySession)上的测试夹具:
  * 启动、按键、按标记等待输出、留档、把输出解析成字符屏。不依赖任何终端模拟器或 tmux。
  */
 internal sealed class PtyTuiHarness : IDisposable
@@ -43,7 +43,7 @@ internal sealed class PtyTuiHarness : IDisposable
             return null;
         var realHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
         if (!File.Exists(Path.Combine(realHome, "settings.yaml")))
-            Assert.Skip($"环境缺少 {realHome}/settings.yaml, 无法启动 dsh");
+            Assert.Skip($"环境缺少 {realHome}/settings.yaml, 无法启动 dsharp");
         var home = PrepareIsolatedHome(realHome);
         if (!SupportsUnixSockets(home))
             Assert.Skip($"{home} 所在文件系统不支持 AF_UNIX(如 WSL 的 /mnt drvfs); 请把仓库放在原生文件系统上运行");
@@ -272,7 +272,7 @@ internal sealed class PtyTuiHarness : IDisposable
     private static string? FindTuiExecutable()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        var name = OperatingSystem.IsWindows() ? "DeepSeek-Harness-Sharp.exe" : "DeepSeek-Harness-Sharp";
+        var name = OperatingSystem.IsWindows() ? "dsharp.exe" : "dsharp";
         var path = Path.Combine(root, "DeepSeek-Harness-Sharp", "bin", "Debug", "net10.0", name);
         return File.Exists(path) ? path : null;
     }

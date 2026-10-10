@@ -13,7 +13,7 @@ public sealed class GlfwWindowHost : IGlSurfaceHostRunner
     private IGpuHostClient? _client;
     private bool _disposed;
 
-    public GlfwWindowHost(int clientWidth, int clientHeight, bool visible = true, string title = "dsh --gpu", bool vsync = true)
+    public GlfwWindowHost(int clientWidth, int clientHeight, bool visible = true, string title = "dsharp --gpu", bool vsync = true)
     {
         _vsync = vsync;
         // OpenTK 的 GLFW"主线程"认定要求入口方法在调用栈上且非线程池线程; async Main 的续体不满足, 直接关掉该检查(GLFW 在 Windows/X11/Wayland 对调用线程无要求)。

@@ -8,7 +8,7 @@ namespace Dsh.Tui;
 /**
  * GPU 形态的 proxy: 会话同样常驻 daemon(一个 pty 上的 TUI 进程), 本进程只开一个独立窗口渲染会话画面。
  * 窗口的键鼠编码成终端输入送进隧道, 隧道画面喂给 VtScreen 再由 GpuRenderCore 画到窗口。
- * 于是"关窗口"就是 detach: 本 proxy 结束, daemon 里的会话继续跑(`dsh tui attach` 或 `--gpu` 都能再接回)。
+ * 于是"关窗口"就是 detach: 本 proxy 结束, daemon 里的会话继续跑(`dsharp tui attach` 或 `--gpu` 都能再接回)。
  */
 internal sealed class GpuSessionProxy : IGpuHostClient
 {

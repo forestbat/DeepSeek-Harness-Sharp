@@ -8,7 +8,7 @@ public static class GitPanel
 {
     public const int MaxRows = 12;
 
-    /** numstat 行(`add\tdel\tpath`, 二进制为 `-\t-\tpath`)→ `{path} {add}+ {del}-`; 首行是来源。 */
+    /** numstat 行(`add\tdel\tpath`, 二进制为 `-\t-\tpath`)> `{path} {add}+ {del}-`; 首行是来源。 */
     public static IReadOnlyList<string> Format(string numstat, string source)
     {
         var rows = new List<(string Path, string Text)>();
@@ -29,7 +29,7 @@ public static class GitPanel
         var result = new List<string> { source };
         result.AddRange(ordered.Take(MaxRows).Select(row => row.Text));
         if (ordered.Count > MaxRows)
-            result.Add($"… (+{ordered.Count - MaxRows})");
+            result.Add($"~ (+{ordered.Count - MaxRows})");
         return result;
     }
 

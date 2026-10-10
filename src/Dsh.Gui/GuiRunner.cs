@@ -50,7 +50,7 @@ public static class GuiRunner
             }
             catch (Exception error)
             {
-                await Console.Error.WriteLineAsync($"dsh: session \"{resumeSessionId}\" cannot be resumed: {error.Message}");
+                await Console.Error.WriteLineAsync($"dsharp: session \"{resumeSessionId}\" cannot be resumed: {error.Message}");
             }
         }
         var created = (AgentLoopAgent)(await agents.Create(new CreateAgentOptions(

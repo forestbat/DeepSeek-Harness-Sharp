@@ -245,11 +245,11 @@ jobs:
           $verify = Join-Path $env:RUNNER_TEMP "verify-$env:RID"
           Remove-Item -Recurse -Force $verify -ErrorAction SilentlyContinue
           Expand-Archive -LiteralPath $out -DestinationPath $verify -Force
-          if (-not (Test-Path "$verify/DeepSeek-Harness-Sharp.exe")) { throw "归档里找不到 DeepSeek-Harness-Sharp.exe" }
+          if (-not (Test-Path "$verify/dsharp.exe")) { throw "归档里找不到 dsharp.exe" }
           if (-not (Test-Path "$verify/dsh-gui.exe")) { throw "归档里找不到 dsh-gui.exe" }
           if (-not (Test-Path "$verify/plugins")) { throw "归档里找不到 plugins/" }
           $env:DSH_HOME = Join-Path $env:RUNNER_TEMP "dsh-home-$env:RID"
-          $proc = Start-Process -FilePath "$verify/DeepSeek-Harness-Sharp.exe" -ArgumentList @('--help') -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/smoke.out" -RedirectStandardError "$env:RUNNER_TEMP/smoke.err"
+          $proc = Start-Process -FilePath "$verify/dsharp.exe" -ArgumentList @('--help') -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/smoke.out" -RedirectStandardError "$env:RUNNER_TEMP/smoke.err"
           if (-not $proc.WaitForExit(60000)) { $proc.Kill($true); throw "冒烟超时" }
           if ($proc.ExitCode -ne 0) { throw "冒烟失败，exit=$($proc.ExitCode)" }
           Write-Host "归档校验通过：$env:ARCHIVE"
@@ -271,12 +271,12 @@ jobs:
           tar -tzf "$OUT" | grep -qx './plugins/' || { echo "::error::归档缺少 plugins/ 目录条目"; exit 1; }
           VERIFY="$(mktemp -d)"
           tar -xzf "$OUT" -C "$VERIFY"
-          test -f "$VERIFY/DeepSeek-Harness-Sharp" || { echo "::error::归档里找不到 DeepSeek-Harness-Sharp"; exit 1; }
+          test -f "$VERIFY/dsharp" || { echo "::error::归档里找不到 dsharp"; exit 1; }
           test -f "$VERIFY/dsh-gui" || { echo "::error::归档里找不到 dsh-gui"; exit 1; }
           test -d "$VERIFY/plugins" || { echo "::error::归档里找不到 plugins/"; exit 1; }
-          chmod +x "$VERIFY/DeepSeek-Harness-Sharp"
+          chmod +x "$VERIFY/dsharp"
           cd "$VERIFY"
-          DSH_HOME="$VERIFY/dsh-home" timeout 60 ./DeepSeek-Harness-Sharp --help > "$VERIFY/smoke.out" 2>&1 || {
+          DSH_HOME="$VERIFY/dsh-home" timeout 60 ./dsharp --help > "$VERIFY/smoke.out" 2>&1 || {
             echo "::error::冒烟失败"; tail -20 "$VERIFY/smoke.out"; exit 1; }
           cd - >/dev/null
           rm -rf "$VERIFY"
