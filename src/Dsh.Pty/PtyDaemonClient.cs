@@ -21,6 +21,19 @@ public static class PtyDaemonClient
         return response.Sessions ?? [];
     }
 
+    /** 终止 daemon 里指定的 PTY 会话。 */
+    public static Task<IReadOnlyList<string>> KillAsync(string id, CancellationToken cancellationToken = default)
+        => KillAsync(id, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    public static async Task<IReadOnlyList<string>> KillAsync(string id, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+    {
+        using var socket = await ConnectAsync(socketPath, portFile, cancellationToken);
+        using var stream = new NetworkStream(socket, ownsSocket: true);
+        await WriteRequestAsync(stream, new PtyDaemonRequest { Method = "kill", Id = id }, cancellationToken);
+        var response = await ReadResponseAsync(stream, cancellationToken);
+        return response.Killed ?? [];
+    }
+
     public static Task<PtyDaemonSessionDto> StartAsync(PtyDaemonStartParams parameters, CancellationToken cancellationToken = default)
         => StartAsync(parameters, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
 
@@ -283,13 +296,13 @@ public static class PtyDaemonClient
 
         if (await IsRunningAsync(cancellationToken))
             return;
-        throw new InvalidOperationException("dsh tui daemon failed to start");
+        throw new InvalidOperationException("dsharp tui daemon failed to start");
     }
 
     private static void StartDaemonProcess()
     {
         var executable = Environment.ProcessPath
-            ?? throw new InvalidOperationException("failed to resolve the current executable to start dsh tui daemon");
+            ?? throw new InvalidOperationException("failed to resolve the current executable to start dsharp tui daemon");
         var startInfo = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
@@ -304,7 +317,7 @@ public static class PtyDaemonClient
         startInfo.ArgumentList.Add("daemon");
         var process = Process.Start(startInfo);
         if (process is null)
-            throw new InvalidOperationException("failed to start dsh tui daemon");
+            throw new InvalidOperationException("failed to start dsharp tui daemon");
         _ = process;
     }
 

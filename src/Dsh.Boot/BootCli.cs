@@ -13,7 +13,7 @@ public static class BootCli
     {
         if (string.IsNullOrWhiteSpace(task))
         {
-            await Console.Error.WriteLineAsync("error: a task is required, for example: dsh headless \"run the tests\"");
+            await Console.Error.WriteLineAsync("error: a task is required, for example: dsharp headless \"run the tests\"");
             return 1;
         }
         using var app = await HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()));
@@ -39,7 +39,7 @@ public static class BootCli
         Console.Out.WriteLine(text);
         if (reasonKind == "error")
         {
-            Console.Error.WriteLine($"dsh: {errorMessage}");
+            Console.Error.WriteLine($"dsharp: {errorMessage}");
             return 1;
         }
         return reasonKind == "completed" ? 0 : 1;
@@ -72,7 +72,45 @@ public static class BootCli
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine($"dsh: list failed: {error.Message}");
+            Console.Error.WriteLine($"dsharp: list failed: {error.Message}");
+            return 1;
+        }
+    }
+
+    /** 终止 daemon 里指定的 PTY 会话(带 id 选择性击杀)。 */
+    public static async Task<int> RunTuiKillPtyAsync(string id)
+    {
+        try
+        {
+            var clientType = RequireType("Dsh.Pty.PtyDaemonClient", "Dsh.Pty");
+            // kill 不该像 list 那样凭空拉起 daemon: 没在跑就没有可杀的会话。
+            if (!await (Task<bool>)InvokeStatic(clientType, "IsRunningAsync", CancellationToken.None)!)
+            {
+                await Console.Out.WriteLineAsync("daemon not running");
+                return 0;
+            }
+
+            var task = (Task)InvokeStatic(clientType, "KillAsync", id, CancellationToken.None)!;
+            await task;
+            var killed = (IEnumerable)task.GetType().GetProperty("Result")!.GetValue(task)!;
+            var count = 0;
+            foreach (var sessionId in killed)
+            {
+                await Console.Out.WriteLineAsync(sessionId as string);
+                count++;
+            }
+
+            await Console.Out.WriteLineAsync(count == 0 ? "no PTY sessions killed" : $"killed {count} PTY session(s)");
+            return 0;
+        }
+        catch (Exception error) when (IsPtyDaemonNotRunning(error))
+        {
+            await Console.Error.WriteLineAsync("daemon not running");
+            return 0;
+        }
+        catch (Exception error)
+        {
+            await Console.Error.WriteLineAsync($"dsharp: kill-pty failed: {error.Message}");
             return 1;
         }
     }
@@ -109,10 +147,10 @@ public static class BootCli
             var clientType = RequireType("Dsh.Pty.PtyDaemonClient", "Dsh.Pty");
             await (Task)InvokeStatic(clientType, "EnsureRunningAsync", CancellationToken.None)!;
             // 进入原始字节流前先留一句回声: 会话若已结束或立刻 EOF, 否则用户只会看到"什么都没发生就回到提示符"。
-            await Console.Out.WriteLineAsync($"dsh: attaching to {id} (daemon PTY; 会话退出或 Ctrl+C 即离开)");
+            await Console.Out.WriteLineAsync($"dsharp: attaching to {id} (daemon PTY; 会话退出或 Ctrl+C 即离开)");
             // 走 AttachConsoleAsync 而不是 AttachAsync: Windows 上鼠标报文要由代理解析(ConPTY 不翻译 X10), 并按平台取原始字节
             await (Task)InvokeStatic(clientType, "AttachConsoleAsync", id, Console.OpenStandardOutput(), CancellationToken.None)!;
-            await Console.Out.WriteLineAsync($"dsh: detached from {id}");
+            await Console.Out.WriteLineAsync($"dsharp: detached from {id}");
             return 0;
         }
         catch (Exception error) when (IsPtyDaemonNotRunning(error))
@@ -122,9 +160,9 @@ public static class BootCli
         }
         catch (Exception error)
         {
-            await Console.Error.WriteLineAsync($"dsh: attach failed: {error.Message}");
+            await Console.Error.WriteLineAsync($"dsharp: attach failed: {error.Message}");
             await Console.Error.WriteLineAsync(
-                "dsh: attach 只用于 daemon 里的 PTY 会话(由 /detach 产生); 恢复 harness 会话请用 `dsh tui --session <id>`(或 `dsh gui --session <id>`)。");
+                "dsharp: attach 只用于 daemon 里的 PTY 会话(由 /detach 产生); 恢复 harness 会话请用 `dsharp tui --session <id>`(或 `dsharp gui --session <id>`)。");
             return 1;
         }
     }
@@ -224,7 +262,7 @@ public static class BootCli
             {
                 if (!open)
                 {
-                    Console.Error.Write("dsh: reasoning:\n");
+                    Console.Error.Write("dsharp: reasoning:\n");
                     open = true;
                 }
                 Console.Error.Write(text);

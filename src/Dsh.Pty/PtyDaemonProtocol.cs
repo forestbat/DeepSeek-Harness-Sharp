@@ -177,6 +177,9 @@ public sealed class PtyDaemonResponse
     public List<PtyControlMessageDto>? Controls { get; set; }
 
     public long Seq { get; set; }
+
+    /** method=kill: 实际被终止的会话 id。 */
+    public List<string>? Killed { get; set; }
 }
 
 internal static class PtyDaemonJson

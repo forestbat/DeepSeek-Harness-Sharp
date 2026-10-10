@@ -224,6 +224,25 @@ public sealed class PtyDaemon : IAsyncDisposable
                     return false;
                 }
 
+            case "kill":
+                {
+                    if (request.Id is not { Length: > 0 } target)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "kill requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    if (!await _host.StopAsync(target))
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {target}" }, cancellationToken);
+                        return false;
+                    }
+
+                    PruneRemote(_host.List());
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Killed = [target] }, cancellationToken);
+                    return false;
+                }
+
             case "start":
                 {
                     if (request.Params is not { FileName.Length: > 0 } parameters)

@@ -68,11 +68,11 @@ public static class HarnessEntrypoint
                     PrintUsage();
                     return 0;
                 default:
-                    // 未知的 --选项 必须报错: 否则会被当成任务提示词喂给 headless(例如把 `dsh tui list` 误写成
-                    // `dsh --tui list`), 表现为"什么都没打印然后卡住"。
+                    // 未知的 --选项 必须报错: 否则会被当成任务提示词喂给 headless(例如把 `dsharp tui list` 误写成
+                    // `dsharp --tui list`), 表现为"什么都没打印然后卡住"。
                     if (args[index].StartsWith("--", StringComparison.Ordinal))
                     {
-                        await Console.Error.WriteLineAsync($"dsh: unknown option \"{args[index]}\" (try --help)");
+                        await Console.Error.WriteLineAsync($"dsharp: unknown option \"{args[index]}\" (try --help)");
                         return 2;
                     }
                     positional.Add(args[index]);
@@ -116,7 +116,7 @@ public static class HarnessEntrypoint
                     {
                         if (positional.Count < 3)
                         {
-                            await Console.Error.WriteLineAsync("dsh: tui attach requires a session id");
+                            await Console.Error.WriteLineAsync("dsharp: tui attach requires a session id");
                             return 1;
                         }
 
@@ -124,10 +124,20 @@ public static class HarnessEntrypoint
                         var target = positional[2];
                         if (await BootCli.IsDaemonPtyAsync(target))
                             return await BootCli.RunTuiAttachAsync(target);
-                        await Console.Out.WriteLineAsync($"dsh: {target} 不是 daemon 里的 PTY 会话, 按 harness 会话恢复"
+                        await Console.Out.WriteLineAsync($"dsharp: {target} 不是 daemon 里的 PTY 会话, 按 harness 会话恢复"
                             + (gpu ? "到独立 GPU 窗口" : "进本终端 TUI")
                             + "(要独立窗口加 --gpu)");
                         return await RunEntrypointAsync(harnessHome, "tui", target, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
+                    }
+                    if (subcommand == "kill-pty")
+                    {
+                        if (positional.Count < 3)
+                        {
+                            await Console.Error.WriteLineAsync("dsharp: tui kill-pty requires a pty id (see `dsharp tui list`)");
+                            return 1;
+                        }
+
+                        return await BootCli.RunTuiKillPtyAsync(positional[2]);
                     }
                     if (subcommand == "daemon")
                         return await BootCli.RunTuiDaemonAsync();
@@ -142,7 +152,7 @@ public static class HarnessEntrypoint
                     var subcommand = positional.Skip(1).FirstOrDefault();
                     if (subcommand is "serve" || hostServe)
                         return await RunHostServeAsync(harnessHome, hostStdio, hostToken);
-                    await Console.Error.WriteLineAsync("dsh: host requires a subcommand (serve)");
+                    await Console.Error.WriteLineAsync("dsharp: host requires a subcommand (serve)");
                     return 1;
                 }
             case "headless":
@@ -173,7 +183,7 @@ public static class HarnessEntrypoint
         using var backend = new HarnessRemoteHostBackend(app);
         var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
         Directory.CreateDirectory(Dsh.RemoteHost.RemoteHostEndpoint.RunDirectory(home.Root));
-        await Console.Out.WriteLineAsync($"dsh host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath(home.Root)}");
+        await Console.Out.WriteLineAsync($"dsharp host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath(home.Root)}");
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -184,7 +194,7 @@ public static class HarnessEntrypoint
         return 0;
     }
 
-    /** 以脱离会话的方式起 `dsh host serve`(ssh 断开不把 daemon 带走)。 */
+    /** 以脱离会话的方式起 `dsharp host serve`(ssh 断开不把 daemon 带走)。 */
     private static void StartHostDaemon(HarnessHome home, string? token)
     {
         var executable = Environment.ProcessPath
@@ -225,13 +235,13 @@ public static class HarnessEntrypoint
     private static void PrintUsage()
     {
         Console.WriteLine("""
-            Usage: dsh [options] [task...]
-                   dsh tui [list | attach <pty-id>]
-                   dsh tui --session <id> [--gpu]   (恢复 harness 会话; --gpu 开独立窗口)
-                   dsh gui [--session <id>]
-                   dsh headless "task"
-                   dsh host --serve [--stdio] [--token <t>]   (远端工作区宿主: 默认 loopback socket, --stdio 走 ssh)
-                   dsh register-terminal    (Linux: 注册为桌面环境的默认终端)
+            Usage: dsharp [options] [task...]
+                   dsharp tui [list | attach <pty-id> | kill-pty <pty-id>]
+                   dsharp tui --session <id> [--gpu]   (恢复 harness 会话; --gpu 开独立窗口)
+                   dsharp gui [--session <id>]
+                   dsharp headless "task"
+                   dsharp host --serve [--stdio] [--token <t>]   (远端工作区宿主: 默认 loopback socket, --stdio 走 ssh)
+                   dsharp register-terminal    (Linux: 注册为桌面环境的默认终端)
 
             Options:
               --home <path>      harness home (default: $DSH_HOME or ~/.dsh; settings 的 storage.root 仍会覆盖)
@@ -244,8 +254,10 @@ public static class HarnessEntrypoint
               --dump-config      print the resolved harness configuration and exit
               -h, --help         show this help
 
+            tui kill-pty <pty-id>: 终止 daemon 里指定的那个 PTY 会话(见 dsharp tui list)。
+
             tui attach 的 <id> 两种都支持(tmux 习惯):
-              · daemon 里的 PTY 会话(由 /detach 产生, 见 dsh tui list) —— 直接接管它的字节流;
+              · daemon 里的 PTY 会话(由 /detach 产生, 见 dsharp tui list) —— 直接接管它的字节流;
               · harness 会话 —— 恢复进窗口(本终端 TUI; 加 --gpu 开独立窗口)。
             注: 另一个 TUI 进程内的 shell 窗格无法跨进程 attach。
             """);
