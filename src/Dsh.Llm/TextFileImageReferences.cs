@@ -24,6 +24,33 @@ public static class TextFileImageReferences
         """(?<!\S)(?:[A-Za-z]:[\\/])?[^\s@"'<>|]*?\.(?:png|jpe?g|gif|webp|avif)(?![\w])""",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /** 内容里出现的图片路径 token(未解析, 去重); 供远端等自行解析路径的实现复用同一套识别规则。 */
+    public static IReadOnlyList<string> ImageTokens(string content)
+    {
+        var results = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in ImageTokenPattern.Matches(content))
+        {
+            var token = match.Value.Trim('"', '\'');
+            if (token.Length > 0 && seen.Add(token))
+                results.Add(token);
+        }
+        return results;
+    }
+
+    /** 提示词里 `@path` 引用的路径 token(未解析); 调用方自行判断是否文本文件并解析。 */
+    public static IReadOnlyList<string> ReferenceTokens(string text)
+    {
+        var results = new List<string>();
+        foreach (Match match in ReferencePattern.Matches(text))
+        {
+            var token = match.Groups[1].Value.Trim('"', '\'');
+            if (token.Length > 0)
+                results.Add(token);
+        }
+        return results;
+    }
+
     /** 扫描 text 里引用的本地文本文件, 返回其中图片路径解析出的图片文件绝对路径(去重、限量)。 */
     public static IReadOnlyList<string> Scan(string text, string cwd)
     {
