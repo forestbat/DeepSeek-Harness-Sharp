@@ -20,7 +20,7 @@
   <Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="10">
     <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
       <Button Classes="Ghost" Content="上级" Command="{Binding UpCommand}" />
-      <TextBox Grid.Column="1" Text="{Binding Path, Mode=TwoWay}" Watermark="远端目录路径（支持 ~）" />
+      <TextBox Grid.Column="1" Text="{Binding Path, Mode=TwoWay}" PlaceholderText="远端目录路径（支持 ~）" />
       <Button Grid.Column="2" Classes="Ghost" Content="转到" Command="{Binding GoCommand}" />
       <Button Grid.Column="3" Classes="Ghost" Content="刷新" Command="{Binding RefreshCommand}" />
     </Grid>

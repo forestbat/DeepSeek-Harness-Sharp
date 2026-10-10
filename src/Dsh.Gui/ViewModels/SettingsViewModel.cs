@@ -599,8 +599,24 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _remoteDownloadProxy = "";
 
+    /** 下载位置: auto(先远端后本地)/client(仅本地下发)/server(仅远端直下)。 */
+    [ObservableProperty]
+    private string _remoteDownloadVia = "auto";
+
+    /** 远端直下时的代理(为空则用远端自带代理/直连)。 */
+    [ObservableProperty]
+    private string _remoteServerProxy = "";
+
     internal RemoteDsharpInstaller.Options BuildDeployOptions()
-        => new(RemoteReleaseBaseUrl, RemoteReleaseVersion, string.IsNullOrWhiteSpace(RemoteDownloadProxy) ? null : RemoteDownloadProxy);
+        => new(
+            RemoteReleaseBaseUrl,
+            RemoteReleaseVersion,
+            string.IsNullOrWhiteSpace(RemoteDownloadProxy) ? null : RemoteDownloadProxy,
+            string.IsNullOrWhiteSpace(RemoteDownloadVia) ? "auto" : RemoteDownloadVia,
+            string.IsNullOrWhiteSpace(RemoteServerProxy) ? null : RemoteServerProxy);
+
+    /** 下载位置可选项(auto=先远端后本地)。 */
+    public IReadOnlyList<string> DownloadViaOptions { get; } = ["auto", "client", "server"];
 
     /** 远程连接类操作进行中(测试连接/浏览目录), 期间禁用按钮避免重入。 */
     [ObservableProperty]
@@ -647,6 +663,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             RemoteReleaseBaseUrl = RemoteReleaseBaseUrl,
             RemoteReleaseVersion = RemoteReleaseVersion,
             RemoteDownloadProxy = RemoteDownloadProxy,
+            RemoteDownloadVia = RemoteDownloadVia,
+            RemoteServerProxy = RemoteServerProxy,
         });
         Status = $"远程工作区已保存（{RemoteWorkspaces.Count} 个）";
     }
@@ -658,6 +676,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         RemoteReleaseBaseUrl = snapshot.RemoteReleaseBaseUrl;
         RemoteReleaseVersion = snapshot.RemoteReleaseVersion;
         RemoteDownloadProxy = snapshot.RemoteDownloadProxy;
+        RemoteDownloadVia = snapshot.RemoteDownloadVia;
+        RemoteServerProxy = snapshot.RemoteServerProxy;
         RemoteWorkspaces.Clear();
         foreach (var workspace in snapshot.RemoteWorkspaces)
         {

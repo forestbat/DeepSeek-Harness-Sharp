@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dsh.Gui.ViewModels"
+        x:Class="Dsh.Gui.Views.TerminalWindow"
+        x:DataType="vm:TerminalViewModel"
+        x:CompileBindings="True"
+        Title="{Binding Title}"
+        Width="860" Height="580"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        FontFamily="{DynamicResource Font.Ui}"
+        FontSize="{DynamicResource FontSize.Body}"
+        Background="{DynamicResource Brush.Bg.Card}">
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="12" RowSpacing="8">
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10">
+      <TextBlock Text="{Binding Title}" Classes="Secondary" VerticalAlignment="Center" />
+      <TextBlock Text="{Binding Status}" Classes="Tertiary" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <Border Grid.Row="1" Background="{DynamicResource Brush.Bg.Inset}"
+            CornerRadius="{DynamicResource CornerRadius.Card}">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="6">
+        <SelectableTextBlock Text="{Binding Text}" TextWrapping="NoWrap"
+                             FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12" />
+      </ScrollViewer>
+    </Border>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <TextBox Grid.Column="0" Name="InputBox" Text="{Binding Input, Mode=TwoWay}"
+               PlaceholderText="输入命令，回车发送" KeyDown="OnInputKeyDown" />
+      <Button Grid.Column="1" Classes="Primary" Content="发送" Command="{Binding SendCommand}" />
+    </Grid>
+  </Grid>
+</Window>

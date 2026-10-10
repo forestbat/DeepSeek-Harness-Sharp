@@ -12,7 +12,6 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
-using Dsh.RemoteHost;
 
 namespace Dsh.Gui.Views;
 
@@ -39,6 +38,7 @@ public sealed partial class MainWindow : Window
         DataContext = ViewModel;
         ViewModel.DecisionRequested += ShowDecisionAsync;
         ViewModel.CopyRequested += CopyToClipboard;
+        ViewModel.TerminalRequested += ShowTerminal;
         ViewModel.FilePicker = PickAsync;
         ViewModel.Preferences.RemoteFolderPicker = PickRemoteFolderAsync;
         ViewModel.Preferences.Applied += ApplyAppearance;
@@ -97,6 +97,7 @@ public sealed partial class MainWindow : Window
         {
             viewModel.DecisionRequested -= ShowDecisionAsync;
             viewModel.CopyRequested -= CopyToClipboard;
+            viewModel.TerminalRequested -= ShowTerminal;
             viewModel.Preferences.Applied -= ApplyAppearance;
             viewModel.Preferences.Preview -= ApplyPreview;
             viewModel.Dispose();
@@ -310,6 +311,13 @@ public sealed partial class MainWindow : Window
 
     private void CopyToClipboard(string text) => _ = CopyAsync(text);
 
+    private void ShowTerminal(TerminalViewModel terminal)
+    {
+        var window = new TerminalWindow(terminal);
+        window.Closed += async (_, _) => await terminal.DisposeAsync();
+        window.Show(this);
+    }
+
     private async Task CopyAsync(string text)
     {
         try
@@ -341,9 +349,11 @@ public sealed partial class MainWindow : Window
     private async Task<string?> PickRemoteFolderAsync(SshWorkspace workspace, string? initial)
     {
         var cancellationToken = CancellationToken.None;
+        if (ViewModel is not { } model)
+            return null;
         string? hostCommand = null;
-        if (ViewModel.Preferences.RemoteAutoDeploy)
-            hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, ViewModel.Preferences.BuildDeployOptions(), null, cancellationToken)).CommandPath;
+        if (model.Preferences.RemoteAutoDeploy)
+            hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, model.Preferences.BuildDeployOptions(), null, cancellationToken)).CommandPath;
         await using var connection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, hostCommand, cancellationToken);
         var dialog = new RemoteFolderPickerWindow(connection.Client, initial);
         return await dialog.ShowDialog<string?>(this);

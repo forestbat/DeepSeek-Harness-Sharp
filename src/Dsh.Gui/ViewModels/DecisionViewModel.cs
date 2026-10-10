@@ -90,6 +90,20 @@ public sealed partial class DecisionViewModel : ObservableObject
         };
     }
 
+    /** 远端审批没有本地 ApprovalRequest(无 IAgent): 用工具名/参数/理由构造同一个弹窗。 */
+    public static DecisionViewModel ForApproval(string toolName, string? arguments, string? reason)
+    {
+        var impact = ApprovalHints.Impact(toolName, arguments);
+        return new DecisionViewModel(DecisionKind.Approval)
+        {
+            ToolName = toolName,
+            Command = ApprovalHints.PrimaryArgument(toolName, arguments),
+            Reason = reason ?? "",
+            Impact = impact,
+            HasImpact = impact.Length > 0,
+        };
+    }
+
     public static DecisionViewModel ForQuestion(AskUserQuestionRequest request)
     {
         var viewModel = new DecisionViewModel(DecisionKind.Question)

@@ -38,7 +38,7 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 ## 运行构建产物
 
-`dotnet build` 的产物在 `DeepSeek-Harness-Sharp/bin/<Debug|Release>/net10.0/`,`dotnet publish` 的产物在其 `publish/` 子目录。
+`dotnet build` 的产物在 `DeepSeek-Harness-Sharp/bin/<Debug|Release>/net10.0/`,`dotnet publish` 的产物在其 `publish/` 子目录。GUI 启动器是独立工程 `DshGuiHost`(构建方式见「图形界面」),产物在 `DshGuiHost/bin/<Debug|Release>/net10.0/`。
 
 ```bash
 # Linux/macOS:直接运行构建产物
@@ -61,9 +61,13 @@ DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsharp.exe tui
 GUI 是内置插件 `@deepseek-ai/dsh-gui`,与 TUI 共用同一份配置、会话与命令实现(`/` 命令、`@` 引用、审批、`ask_user_question` 都走 harness 的同一条链路)。
 
 ```bash
-# Windows: 双击 bin 目录下的 dsh-gui.exe(Windows 子系统,不会出现控制台黑框),或从命令行启动
-DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsh-gui.exe
-# Linux/macOS: 构建 DshGuiHost 后运行
+# 构建 GUI 启动器(独立于 CLI/TUI 宿主;产物在 DshGuiHost/bin/<Debug|Release>/net10.0/)
+dotnet build DshGuiHost/DshGuiHost.csproj
+# 根目录的 dotnet build 会经 DeepSeek-Harness-Sharp.slnx 一并构建它
+
+# Windows: 双击 dsh-gui.exe(Windows 子系统,不会出现控制台黑框),或从命令行启动
+DshGuiHost\bin\Debug\net10.0\dsh-gui.exe
+# Linux/macOS: 运行同一工程的产物
 DshGuiHost/bin/Debug/net10.0/dsh-gui
 # 从控制台宿主进入 GUI(会占用当前控制台)
 DeepSeek-Harness-Sharp\bin\Debug\net10.0\dsharp.exe gui

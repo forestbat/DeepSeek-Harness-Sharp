@@ -370,10 +370,10 @@
                     <TextBlock Grid.Row="6" Text="密钥路径" Classes="Tertiary" VerticalAlignment="Center" IsVisible="{Binding IsKey}" />
                     <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding KeyPath}" IsVisible="{Binding IsKey}" />
                     <TextBlock Grid.Row="7" Text="代理" Classes="Tertiary" VerticalAlignment="Center" />
-                    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Proxy}" Watermark="如 socks5://127.0.0.1:1080 或 nc 命令" />
+                    <TextBox Grid.Row="7" Grid.Column="1" Text="{Binding Proxy}" PlaceholderText="如 socks5://127.0.0.1:1080 或 nc 命令" />
                     <TextBlock Grid.Row="8" Text="远端目录" Classes="Tertiary" VerticalAlignment="Center" />
                     <Grid Grid.Row="8" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                      <TextBox Text="{Binding RemotePath}" Watermark="留空 = 远端家目录 ( $HOME )" />
+                      <TextBox Text="{Binding RemotePath}" PlaceholderText="留空 = 远端家目录 ( $HOME )" />
                       <Button Grid.Column="1" Classes="Icon" Width="30" Height="30"
                               Command="{Binding BrowseRemotePathCommand}"
                               IsEnabled="{Binding Owner.RemoteIdle}"
@@ -395,13 +395,19 @@
                 <TextBlock Text="远端 dsharp 自动部署" FontWeight="SemiBold" />
                 <CheckBox Content="远端缺少 dsharp 时自动下载并部署（按绝对路径运行，不注册系统命令）"
                           IsChecked="{Binding Preferences.RemoteAutoDeploy}" />
-                <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
+                <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
                   <TextBlock Text="发布基址" Classes="Tertiary" VerticalAlignment="Center" />
                   <TextBox Grid.Column="1" Text="{Binding Preferences.RemoteReleaseBaseUrl}" />
                   <TextBlock Grid.Row="1" Text="版本" Classes="Tertiary" VerticalAlignment="Center" />
-                  <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Preferences.RemoteReleaseVersion}" Watermark="latest 或 vX.Y.Z" />
-                  <TextBlock Grid.Row="2" Text="下载代理" Classes="Tertiary" VerticalAlignment="Center" />
-                  <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Preferences.RemoteDownloadProxy}" Watermark="留空 = 直连" />
+                  <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Preferences.RemoteReleaseVersion}" PlaceholderText="latest 或 vX.Y.Z" />
+                  <TextBlock Grid.Row="2" Text="本地代理" Classes="Tertiary" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Preferences.RemoteDownloadProxy}" PlaceholderText="本机下载用；留空 = 直连" />
+                  <TextBlock Grid.Row="3" Text="下载位置" Classes="Tertiary" VerticalAlignment="Center" />
+                  <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding Preferences.DownloadViaOptions}"
+                            SelectedItem="{Binding Preferences.RemoteDownloadVia}" />
+                  <TextBlock Grid.Row="4" Text="远端代理" Classes="Tertiary" VerticalAlignment="Center" />
+                  <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Preferences.RemoteServerProxy}"
+                           PlaceholderText="远端直下用；留空 = 用远端自带代理/直连" />
                 </Grid>
               </StackPanel>
             </Border>

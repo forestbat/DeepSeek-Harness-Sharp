@@ -99,6 +99,12 @@ public sealed record GuiSettingsSnapshot
     /** 本机下载 Release 时的代理(为空则直连)。 */
     public string RemoteDownloadProxy { get; init; } = "";
 
+    /** 下载位置: auto(先远端后本地)/client(仅本地下发)/server(仅远端直下)。 */
+    public string RemoteDownloadVia { get; init; } = "auto";
+
+    /** 远端直下时的代理(为空则用远端自带代理/直连)。 */
+    public string RemoteServerProxy { get; init; } = "";
+
     public string SortSessions { get; init; } = GuiSettings.SortUpdated;
 
     public bool ShowOnlyWithSessions { get; init; }
@@ -145,6 +151,8 @@ public sealed record GuiSettingsSnapshot
             RemoteReleaseBaseUrl = Text(parameters, "remoteReleaseBaseUrl") ?? GuiSettings.DefaultReleaseBaseUrl,
             RemoteReleaseVersion = Text(parameters, "remoteReleaseVersion") ?? GuiSettings.DefaultReleaseVersion,
             RemoteDownloadProxy = Text(parameters, "remoteDownloadProxy") ?? "",
+            RemoteDownloadVia = Text(parameters, "remoteDownloadVia") ?? "auto",
+            RemoteServerProxy = Text(parameters, "remoteServerProxy") ?? "",
             SortSessions = Text(parameters, "sortSessions") ?? GuiSettings.SortUpdated,
             ShowOnlyWithSessions = Flag(parameters, "showOnlyWithSessions") ?? false,
             TraceFilter = Text(parameters, "traceFilter") ?? GuiSettings.TraceAll,
@@ -187,7 +195,9 @@ public sealed record GuiSettingsSnapshot
         ["remoteAutoDeploy"] = RemoteAutoDeploy,
         ["remoteReleaseBaseUrl"] = RemoteReleaseBaseUrl,
         ["remoteReleaseVersion"] = RemoteReleaseVersion,
-        ["remoteDownloadProxy"] = RemoteDownloadProxy,
+            ["remoteDownloadProxy"] = RemoteDownloadProxy,
+            ["remoteDownloadVia"] = RemoteDownloadVia,
+            ["remoteServerProxy"] = RemoteServerProxy,
         ["sortSessions"] = SortSessions,
         ["showOnlyWithSessions"] = ShowOnlyWithSessions,
         ["traceFilter"] = TraceFilter,

@@ -222,6 +222,12 @@
       </ListBox.ItemTemplate>
     </ListBox>
 
+    <Border Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,10,0,0"
+            Padding="10,4" CornerRadius="999" Background="{DynamicResource Brush.Accent.Soft}"
+            IsVisible="{Binding IsRemoteReadOnly}">
+      <TextBlock Text="远端会话 · 只读回放" Classes="Tertiary" />
+    </Border>
+
     <ListBox Grid.Row="2" Name="TraceList" Classes="MessageList" IsVisible="{Binding IsTraceTab}"
              ItemsSource="{Binding TraceView}">
       <ListBox.ItemsPanel>
@@ -258,7 +264,7 @@
       </ListBox.ItemTemplate>
     </ListBox>
 
-    <Border Grid.Row="3" Margin="20,10,20,6" Padding="12,10"
+    <Border Grid.Row="3" Margin="20,10,20,6" Padding="12,10" IsEnabled="{Binding !IsRemoteReadOnly}"
             Background="{DynamicResource Brush.Bg.Card}"
             BorderBrush="{DynamicResource Brush.Border.Subtle}"
             BorderThickness="1"

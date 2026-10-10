@@ -11,6 +11,7 @@ using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.SessionQuery;
@@ -150,9 +151,55 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public SshWorkspace? SelectedRemoteWorkspace { get; private set; }
 
     /** 已连接的远端宿主(stdio-over-SSH); 未连接为 null。 */
-    public Dsh.RemoteHost.IRemoteHost? RemoteHost => _remoteConnection?.Client;
+    public IRemoteHost? RemoteHost => _remoteConnection?.Client;
 
     private SshRemoteWorkspaceLauncher.Connection? _remoteConnection;
+
+    /** 远端宿主平台(windows/linux/macos), 供远端终端选择 shell。 */
+    private string _remotePlatform = "linux";
+
+    /** 远端路径风格(由远端平台决定, 与本地 OS 无关): 远端相对路径按它解析。 */
+    private RemotePathStyle _remotePathStyle = RemotePathStyle.Posix;
+
+    /** 远端宿主 home(~/.dsh)绝对路径: 未配置远端目录时, 用其父目录(远端家目录)作会话 cwd。 */
+    private string _remoteHomeRoot = "";
+
+    /** 已接入远端工作区: 新会话与工作区行都指向远端; 选回本地会话即退出该模式。 */
+    private bool _remoteWorkspaceActive;
+
+    /** 远端工作区显示名(user@host:路径)。 */
+    private string _remoteWorkspaceLabel = "";
+
+    /** 已连接的远端工作区及其会话(只读回放); 每次连接重建, 断开即清空。 */
+    public ObservableCollection<RemoteWorkspaceGroupViewModel> RemoteSessionGroups { get; } = [];
+
+    [ObservableProperty]
+    private bool _hasRemoteSessions;
+
+    /** 当前是否在看远端会话的只读回放: 输入框停用, 顶部显示只读标记。 */
+    [ObservableProperty]
+    private bool _isRemoteView;
+
+    /** 是否正在回放远端会话; 期间本地会话事件不写入消息列表, 切回本地时再由快照整体重绘。 */
+    private bool _remoteReplay;
+
+    /** 当前远端视图对应的会话 id(可发送时为活跃会话)。 */
+    private string? _remoteSessionId;
+
+    /** 当前远端会话的工作目录(远端绝对路径), 远端图片/文本文件引用按它解析。 */
+    private string _remoteCwd = "";
+
+    /** 远端视图是否只读(会话恢复失败/未连接时为只读)。 */
+    [ObservableProperty]
+    private bool _isRemoteReadOnly;
+
+    private CancellationTokenSource? _remoteReplayCts;
+
+    /** 远端审批/问答消费泵的取消源。 */
+    private CancellationTokenSource? _remoteDecisionCts;
+
+    /** 当前连接尝试的取消源: 新尝试取消旧的, 并带超时(避免卡死在"正在连接")。 */
+    private CancellationTokenSource? _remoteConnectCts;
 
     private const int RemoteWorkspacePageSize = 8;
 
@@ -195,6 +242,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /** 视图负责把文本写进剪贴板。 */
     public event Action<string>? CopyRequested;
+
+    /** 请求打开一个终端窗口(本地/远端 PTY); 由视图实现。 */
+    public event Action<TerminalViewModel>? TerminalRequested;
 
     [ObservableProperty]
     private SessionNodeViewModel? _selectedSession;
@@ -495,29 +545,463 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task OpenRemoteWorkspaceAsync(SshWorkspace workspace)
     {
+        // 新尝试取消旧的: 反复点击/切换工作区时不并发跑多条 ssh、不反复部署。
+        _remoteConnectCts?.Cancel();
+        var connectCts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _remoteConnectCts = connectCts;
+        var cancellationToken = connectCts.Token;
+
         SelectedRemoteWorkspace = workspace;
         if (_remoteConnection is not null)
         {
             await _remoteConnection.DisposeAsync();
             _remoteConnection = null;
         }
+        ClearRemoteSessions();
 
         StatusText = $"正在连接远程工作区: {workspace.Name}…";
         try
         {
             string? hostCommand = null;
             if (Preferences.RemoteAutoDeploy)
-                hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, Preferences.BuildDeployOptions(), message => ShowToast("远端部署", message, false), CancellationToken.None)).CommandPath;
-            _remoteConnection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, hostCommand, CancellationToken.None);
-            var info = await _remoteConnection.Client.InfoAsync();
-            var sessions = await _remoteConnection.Client.ListSessionsAsync();
+                hostCommand = (await RemoteDsharpInstaller.EnsureAsync(workspace, Preferences.BuildDeployOptions(), message => Dispatcher.UIThread.Post(() => StatusText = message), cancellationToken)).CommandPath;
+            var connection = await SshRemoteWorkspaceLauncher.ConnectAsync(workspace, hostCommand, cancellationToken);
+            if (!ReferenceEquals(_remoteConnectCts, connectCts))
+            {
+                // 已被更新的尝试取代: 丢弃这条连接, 不覆盖界面状态。
+                await connection.DisposeAsync();
+                return;
+            }
+            _remoteConnection = connection;
+            var info = await connection.Client.InfoAsync(cancellationToken);
+            _remotePlatform = info.Platform;
+            _remotePathStyle = RemotePaths.StyleFor(info.Platform);
+            _remoteHomeRoot = info.HomeRoot;
+            var sessions = await connection.Client.ListSessionsAsync(cancellationToken);
+            BuildRemoteSessionGroups(workspace, sessions);
+            StartRemoteDecisionPumps(connection);
+            // 接入成功即切到远端工作区: 工作区行显示 user@host:路径, "新会话"建在远端。
+            _remoteWorkspaceActive = true;
+            _remoteWorkspaceLabel = RemoteWorkspaceLabel(workspace);
+            UpdateCurrentWorkspace();
+            Page = AppPage.Chat;
             StatusText = $"已连接远程工作区 {workspace.Name}（{info.Platform}，{sessions.Count} 个会话）";
-            ShowToast("远程工作区", StatusText, false);
+            ShowToast("远程工作区", $"已切换到 {_remoteWorkspaceLabel}", false);
         }
         catch (Exception error)
         {
-            StatusText = $"远程工作区 {workspace.Name} 连接失败: {error.Message}";
-            ShowToast($"远程工作区 {workspace.Name} 连接失败", error.Message, true);
+            if (!ReferenceEquals(_remoteConnectCts, connectCts))
+                return; // 被更新的尝试取代, 不覆盖新尝试的状态。
+            ClearRemoteSessions();
+            var reason = error is OperationCanceledException or TimeoutException ? "（超时/已取消）" : "";
+            StatusText = $"远程工作区 {workspace.Name} 连接失败{reason}: {error.Message}";
+            ShowToast($"远程工作区 {workspace.Name} 连接失败{reason}", error.Message, true);
+        }
+        finally
+        {
+            if (ReferenceEquals(_remoteConnectCts, connectCts))
+                _remoteConnectCts = null;
+            connectCts.Dispose();
+        }
+    }
+
+    /** 把远端会话按工作区归组显示在侧栏(组标题 user@host:路径)。 */
+    private void BuildRemoteSessionGroups(SshWorkspace workspace, IReadOnlyList<RemoteSessionInfo> sessions)
+    {
+        var group = new RemoteWorkspaceGroupViewModel { Header = RemoteWorkspaceLabel(workspace) };
+        foreach (var session in sessions)
+        {
+            group.Sessions.Add(new RemoteSessionNodeViewModel
+            {
+                SessionId = session.Id,
+                Title = string.IsNullOrEmpty(session.Title) ? session.Id : session.Title,
+                Summary = session.Summary ?? "",
+                Cwd = session.Cwd,
+                RelativeTime = RelativeTimeText.Format(DateTimeOffset.FromUnixTimeMilliseconds(session.UpdatedAt)),
+                IsRunning = string.Equals(session.Status, nameof(AgentStatus.Running), StringComparison.Ordinal),
+            });
+        }
+        Dispatcher.UIThread.Post(() =>
+        {
+            RemoteSessionGroups.Clear();
+            RemoteSessionGroups.Add(group);
+            // 已连接就显示该组(即使 0 个会话), 让用户看到远端工作区已接入。
+            HasRemoteSessions = true;
+        });
+    }
+
+    private static string RemoteWorkspaceLabel(SshWorkspace workspace)
+    {
+        var path = string.IsNullOrWhiteSpace(workspace.RemotePath) ? "~" : workspace.RemotePath;
+        return $"{workspace.User}@{workspace.Host}:{path}";
+    }
+
+    /** 远端会话 cwd: 配置的远端目录优先; 否则用远端家目录(宿主 home 的父目录, 保证绝对路径, POSIX/Windows 通用)。 */
+    private string ResolveRemoteSessionCwd(SshWorkspace workspace)
+    {
+        if (!string.IsNullOrWhiteSpace(workspace.RemotePath))
+            return workspace.RemotePath;
+        var home = RemotePaths.DirectoryName(_remoteHomeRoot.TrimEnd('/', '\\'), _remotePathStyle);
+        return home.Length > 0 ? home : "~";
+    }
+
+    private void ClearRemoteSessions()
+    {
+        _remoteDecisionCts?.Cancel();
+        _remoteWorkspaceActive = false;
+        UpdateCurrentWorkspace();
+        Dispatcher.UIThread.Post(() =>
+        {
+            RemoteSessionGroups.Clear();
+            HasRemoteSessions = false;
+        });
+    }
+
+    /** 消费远端审批/问答: 用本地决定窗口决策后经 RPC 回填(§14 C)。 */
+    private void StartRemoteDecisionPumps(SshRemoteWorkspaceLauncher.Connection connection)
+    {
+        _remoteDecisionCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _remoteDecisionCts = cts;
+        _ = PumpRemoteApprovalsAsync(connection, cts.Token);
+        _ = PumpRemoteQuestionsAsync(connection, cts.Token);
+    }
+
+    private async Task PumpRemoteApprovalsAsync(SshRemoteWorkspaceLauncher.Connection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var request in connection.Client.ApprovalsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var handler = DecisionRequested;
+                if (handler is null)
+                    continue;
+                var decision = DecisionViewModel.ForApproval(request.Tool, request.Arguments, request.Reason);
+                var result = await DispatchDecisionAsync(handler, decision).ConfigureAwait(false);
+                var allow = result is ApprovalOutcome outcome && outcome is ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession;
+                await connection.Client.RespondApprovalAsync(request.RequestId, allow, null, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException)
+        {
+        }
+    }
+
+    private async Task PumpRemoteQuestionsAsync(SshRemoteWorkspaceLauncher.Connection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var request in connection.Client.QuestionsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var handler = DecisionRequested;
+                if (handler is null)
+                    continue;
+                var items = request.Questions
+                    .Select(item => new AskUserQuestionItem(
+                        item.Id,
+                        item.Question,
+                        item.Detail,
+                        item.Header,
+                        [.. item.Options.Select(option => new AskUserQuestionOption(option.Label, option.Description))],
+                        item.MultiSelect,
+                        item.ApproveLabel is { } approve ? new AskUserQuestionIntent(AskUserQuestionIntentKind.PlanReview, approve) : null))
+                    .ToList();
+                var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(items));
+                var result = await DispatchDecisionAsync(handler, decision).ConfigureAwait(false);
+                var answers = (result as AskUserQuestionAnswer)?.Answers
+                    ?? (IReadOnlyList<AskUserQuestionAnswerItem>)[];
+                await connection.Client.RespondQuestionAsync(
+                    request.RequestId,
+                    [.. answers.Select(answer => new RemoteQuestionAnswerItem(answer.Id, answer.Selected, answer.Custom))],
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException)
+        {
+        }
+    }
+
+    /** 把决定窗口投到 UI 线程并等待用户结论(与本地审批同一套 DecisionRequested)。 */
+    private static Task<object?> DispatchDecisionAsync(Func<DecisionViewModel, Task<object?>> handler, DecisionViewModel decision)
+    {
+        var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Ask()
+        {
+            try
+            {
+                handler(decision).ContinueWith(
+                    task => completion.TrySetResult(task.IsCompletedSuccessfully ? task.Result : null),
+                    TaskScheduler.Default);
+            }
+            catch (Exception)
+            {
+                completion.TrySetResult(null);
+            }
+        }
+        if (Dispatcher.UIThread.CheckAccess())
+            Ask();
+        else
+            Dispatcher.UIThread.Post(Ask);
+        return completion.Task;
+    }
+
+    /** 打开远端会话: 只读回放(§14 A)。发送/工具等交互在后续步骤接入。 */
+    [RelayCommand]
+    private void OpenRemoteSession(RemoteSessionNodeViewModel? node)
+    {
+        if (node is not null)
+            _ = OpenRemoteSessionAsync(node);
+    }
+
+    private async Task OpenRemoteSessionAsync(RemoteSessionNodeViewModel node)
+    {
+        var connection = _remoteConnection;
+        if (connection is null)
+            return;
+        _remoteReplayCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _remoteReplayCts = cts;
+        _remoteReplay = true;
+        Page = AppPage.Chat;
+        Tab = ChatTab.Conversation;
+        Messages.Clear();
+        _renderedSeq = 0;
+        _openAssistant = null;
+        _openReasoning = null;
+        IsBusy = false;
+        IsRemoteView = true;
+        IsRemoteReadOnly = true;
+        _remoteSessionId = node.SessionId;
+        _remoteCwd = node.Cwd;
+        SessionTitle = node.Title;
+        SessionSubtitle = "远端会话 · 只读回放";
+        try
+        {
+            // 恢复为活跃会话即可继续发送(§14 B); 已在跑的会话由后端幂等返回。
+            await connection.Client.ResumeSessionAsync(node.SessionId, cts.Token).ConfigureAwait(false);
+            Dispatcher.UIThread.Post(() =>
+            {
+                IsRemoteReadOnly = false;
+                SessionSubtitle = "远端会话 · 可发送";
+            });
+        }
+        catch (Exception error)
+        {
+            ShowToast("远端会话恢复失败（只读回放）", error.Message, true);
+        }
+        var transcript = new SubagentTranscript();
+        try
+        {
+            await foreach (var item in connection.Client.SubscribeAsync(node.SessionId, 0, cts.Token).ConfigureAwait(false))
+            {
+                var sessionEvent = DshJson.Deserialize<SessionEvent>(item.EventJson);
+                if (sessionEvent is null)
+                    continue;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    transcript.Apply(sessionEvent, Messages);
+                    transcript.Flush();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            ShowToast("远端会话回放失败", error.Message, true);
+        }
+    }
+
+    /** 远端视图发送消息: 经 RPC 交给远端会话, 事件由同一条订阅流回流渲染(§14 B/C)。 */
+    private async Task SubmitRemoteAsync()
+    {
+        var text = Composer.Input.Trim();
+        if (text.Length == 0 || _remoteSessionId is null || _remoteConnection is not { } connection)
+            return;
+        Composer.Input = "";
+        CloseSuggestions();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var images = new List<RemoteImageBlock>();
+        var remaining = text;
+        try
+        {
+            // 直接写在提示词里的图片路径: 远端相对路径按会话 cwd 解析。
+            foreach (Match match in ImagePathPattern.Matches(text))
+            {
+                var token = match.Groups["m"].Success ? match.Groups["m"].Value : match.Groups["p"].Value;
+                if (token.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (await TryAddRemoteImageAsync(connection.Client, [RemotePaths.Resolve(_remoteCwd, token, _remotePathStyle)], _remotePathStyle, seen, images, CancellationToken.None))
+                    remaining = remaining.Replace(match.Value, " ", StringComparison.Ordinal);
+            }
+            // 提示词引用的远端文本文件里出现的图片路径: 相对路径先按该文件目录、再按 cwd 解析。
+            foreach (var reference in TextFileImageReferences.ReferenceTokens(text))
+            {
+                var file = RemotePaths.Resolve(_remoteCwd, reference, _remotePathStyle);
+                if (ImageAttachments.MediaTypeForExtension(RemotePaths.Extension(file, _remotePathStyle)) is not null)
+                    continue;
+                if (await ReadRemoteTextAsync(connection.Client, file, CancellationToken.None) is not { } content)
+                    continue;
+                var directory = RemotePaths.DirectoryName(file, _remotePathStyle);
+                foreach (var token in TextFileImageReferences.ImageTokens(content))
+                {
+                    if (images.Count >= TextFileImageReferences.MaxImages)
+                        break;
+                    await TryAddRemoteImageAsync(connection.Client,
+                        [RemotePaths.Resolve(directory, token, _remotePathStyle), RemotePaths.Resolve(_remoteCwd, token, _remotePathStyle)], _remotePathStyle, seen, images, CancellationToken.None);
+                }
+            }
+            await connection.Client.SendMessageAsync(_remoteSessionId, remaining.Trim(), images, CancellationToken.None);
+        }
+        catch (Exception error)
+        {
+            ShowToast("远端发送失败", error.Message, true);
+        }
+    }
+
+    /** 远端文本文件内容(UTF-8); 过大/含 NUL/读失败返回 null(与本地一致: 只扫一层文本文件)。 */
+    private static async Task<string?> ReadRemoteTextAsync(IRemoteHost host, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var bytes = await host.ReadFileAsync(path, cancellationToken);
+            if (bytes.Length == 0 || bytes.Length > TextFileImageReferences.MaxTextBytes)
+                return null;
+            var content = System.Text.Encoding.UTF8.GetString(bytes);
+            return content.Contains('\0') ? null : content;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /** 依次尝试候选远端路径读取图片: 命中即加入并返回 true(媒体类型按扩展名判定)。 */
+    private static async Task<bool> TryAddRemoteImageAsync(
+        IRemoteHost host,
+        IReadOnlyList<string> candidates,
+        RemotePathStyle style,
+        HashSet<string> seen,
+        List<RemoteImageBlock> images,
+        CancellationToken cancellationToken)
+    {
+        if (images.Count >= TextFileImageReferences.MaxImages)
+            return false;
+        foreach (var candidate in candidates)
+        {
+            if (ImageAttachments.MediaTypeForExtension(RemotePaths.Extension(candidate, style)) is not { } mediaType || !seen.Add(candidate))
+                continue;
+            try
+            {
+                var bytes = await host.ReadFileAsync(candidate, cancellationToken);
+                images.Add(new RemoteImageBlock(mediaType, 0, 0, RemotePaths.FileName(candidate, style), Convert.ToBase64String(bytes)));
+                return true;
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException)
+            {
+                seen.Remove(candidate);
+            }
+        }
+        return false;
+    }
+
+    /** 重新拉取远端会话列表: 远端别处新建的会话也能出现在侧栏。 */
+    [RelayCommand]
+    private void RefreshRemoteSessions() => _ = RefreshRemoteSessionsAsync();
+
+    private async Task RefreshRemoteSessionsAsync()
+    {
+        if (_remoteConnection is null || SelectedRemoteWorkspace is not { } workspace)
+            return;
+        try
+        {
+            var sessions = await _remoteConnection.Client.ListSessionsAsync();
+            BuildRemoteSessionGroups(workspace, sessions);
+            StatusText = $"远端会话已刷新（{sessions.Count} 个）";
+        }
+        catch (Exception error)
+        {
+            ShowToast("刷新远端会话失败", error.Message, true);
+        }
+    }
+
+    /** 在已连接的远端工作区新建会话并打开(§14 B)。 */
+    [RelayCommand]
+    private void NewRemoteSession() => _ = NewRemoteSessionAsync();
+    private async Task NewRemoteSessionAsync()
+    {
+        var connection = _remoteConnection;
+        if (connection is null || SelectedRemoteWorkspace is not { } workspace)
+            return;
+        try
+        {
+            var created = await connection.Client.CreateSessionAsync(ResolveRemoteSessionCwd(workspace), CancellationToken.None);
+            var node = new RemoteSessionNodeViewModel
+            {
+                SessionId = created.Id,
+                Title = string.IsNullOrEmpty(created.Title) ? created.Id : created.Title,
+                Summary = "",
+                Cwd = created.Cwd,
+                RelativeTime = RelativeTimeText.Format(DateTimeOffset.FromUnixTimeMilliseconds(created.UpdatedAt)),
+            };
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (RemoteSessionGroups.Count > 0)
+                {
+                    RemoteSessionGroups[0].Sessions.Insert(0, node);
+                }
+                else
+                {
+                    var group = new RemoteWorkspaceGroupViewModel { Header = $"{workspace.User}@{workspace.Host}:{workspace.RemotePath ?? "~"}" };
+                    group.Sessions.Add(node);
+                    RemoteSessionGroups.Add(group);
+                }
+                HasRemoteSessions = true;
+            });
+            await OpenRemoteSessionAsync(node);
+        }
+        catch (Exception error)
+        {
+            ShowToast("远端新建会话失败", error.Message, true);
+        }
+    }
+
+    /** 打开本地终端(进程内 PTY): 与远端终端共用同一套 TerminalViewModel。 */
+    [RelayCommand]
+    private void OpenLocalTerminal() => _ = OpenLocalTerminalAsync();
+
+    private async Task OpenLocalTerminalAsync()
+    {
+        var terminal = new TerminalViewModel("本地终端");
+        TerminalRequested?.Invoke(terminal);
+        try
+        {
+            await terminal.StartLocalAsync(Home.Root);
+        }
+        catch (Exception error)
+        {
+            ShowToast("本地终端启动失败", error.Message, true);
+        }
+    }
+
+    /** 打开远端终端(经 RPC 的远端 PTY)。 */
+    [RelayCommand]
+    private void OpenRemoteTerminal() => _ = OpenRemoteTerminalAsync();
+
+    private async Task OpenRemoteTerminalAsync()
+    {
+        if (_remoteConnection is not { } connection)
+            return;
+        var terminal = new TerminalViewModel("远端终端");
+        TerminalRequested?.Invoke(terminal);
+        try
+        {
+            await terminal.StartRemoteAsync(connection.Client, _remotePlatform);
+        }
+        catch (Exception error)
+        {
+            ShowToast("远端终端启动失败", error.Message, true);
         }
     }
 
@@ -549,7 +1033,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private void UpdateCurrentWorkspace()
-        => CurrentWorkspace = SessionCatalog.WorkspacePath(_agent.Session.Header.Cwd);
+        => CurrentWorkspace = _remoteWorkspaceActive ? _remoteWorkspaceLabel : SessionCatalog.WorkspacePath(_agent.Session.Header.Cwd);
 
     [RelayCommand]
     private async Task PickWorkspaceAsync()
@@ -612,6 +1096,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SubmitAsync()
     {
+        if (IsRemoteView)
+        {
+            await SubmitRemoteAsync();
+            return;
+        }
         var text = Composer.Input.Trim();
         // 先抽出消息里的本地图片路径转成附件(粘贴图片后常紧跟指令, 不能只看整段是否是路径)。
         if (text.Length > 0)
@@ -702,7 +1191,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void CancelTask() => _agent.Cancel(new AgentCancelCause.User());
+    private void CancelTask()
+    {
+        if (IsRemoteView && _remoteSessionId is not null && _remoteConnection is not null)
+        {
+            _ = _remoteConnection.Client.InterruptAsync(_remoteSessionId, CancellationToken.None);
+            return;
+        }
+        _agent.Cancel(new AgentCancelCause.User());
+    }
 
     [RelayCommand]
     private void ShowChat() => Page = AppPage.Chat;
@@ -1208,6 +1705,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnSessionEvent(SessionEventNotification notification)
     {
+        if (_remoteReplay)
+            return;
         if (ReferenceEquals(notification.Session, _agent.Session))
             _events.Enqueue(notification.Event);
         if (notification.Event.Data is TurnStartPayload or TurnEndPayload)
@@ -1350,6 +1849,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task NewSessionAsync()
     {
+        // 已接入远端工作区时, "新会话"建在远端并切到远端视图(而不是本地)。
+        if (_remoteWorkspaceActive && _remoteConnection is not null)
+        {
+            await NewRemoteSessionAsync();
+            return;
+        }
         // 显式设置的工作区优先于当前会话目录: 设置项的意义就是让用户摆脱"会话永远落在启动目录"
         var cwd = Gui.Load().DefaultWorkspace
             ?? _agent.Session.Header.Cwd
@@ -1388,7 +1893,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void ShowAgent(AgentLoopAgent agent)
     {
+        _remoteReplay = false;
+        IsRemoteView = false;
+        IsRemoteReadOnly = false;
+        _remoteSessionId = null;
+        _remoteCwd = "";
+        _remoteReplayCts?.Cancel();
         _agent = agent;
+        // 显示本地会话即退出远端工作区模式(工作区行/新会话回到本地)。
+        _remoteWorkspaceActive = false;
         UpdateCurrentWorkspace();
         _renderedSeq = 0;
         _openAssistant = null;

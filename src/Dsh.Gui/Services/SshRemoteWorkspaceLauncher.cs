@@ -46,6 +46,9 @@ public static class SshRemoteWorkspaceLauncher
         try
         {
             var process = Process.Start(startInfo) ?? throw new InvalidOperationException("failed to start ssh");
+            // 必须持续排空 stderr: 远端宿主/ssh 往 stderr 写日志, 管道填满后 ssh 会阻塞, 表现为握手卡死。
+            var stderr = new StringBuilder();
+            _ = DrainAsync(process.StandardError, stderr);
             try
             {
                 var stream = new StandardIoDuplexStream(process.StandardOutput.BaseStream, process.StandardInput.BaseStream);
@@ -54,15 +57,43 @@ public static class SshRemoteWorkspaceLauncher
             }
             catch (Exception error)
             {
-                var detail = await ReadStandardErrorAsync(process).ConfigureAwait(false);
                 Kill(process);
-                throw new IOException($"ssh {workspace.User}@{workspace.Host} 失败（认证方式 {workspace.Auth}）: {detail}", error);
+                throw new IOException($"ssh {workspace.User}@{workspace.Host} 失败（认证方式 {workspace.Auth}）: {Describe(stderr)}", error);
             }
         }
         finally
         {
             if (askPass is not null)
                 TryDelete(askPass);
+        }
+    }
+
+    /** 后台把 stderr 读进有界缓冲(排空管道, 避免背压死锁), 供失败时汇报。 */
+    private static async Task DrainAsync(StreamReader reader, StringBuilder sink)
+    {
+        try
+        {
+            var buffer = new char[4096];
+            int read;
+            while ((read = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+            {
+                lock (sink)
+                {
+                    if (sink.Length < 8192)
+                        sink.Append(buffer, 0, read);
+                }
+            }
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+        }
+    }
+
+    private static string Describe(StringBuilder sink)
+    {
+        lock (sink)
+        {
+            return sink.Length == 0 ? "(无 stderr 输出)" : sink.ToString().Trim();
         }
     }
 
@@ -117,6 +148,8 @@ public static class SshRemoteWorkspaceLauncher
         var process = Process.Start(startInfo) ?? throw new InvalidOperationException("failed to start process");
         using (process)
         {
+            // 命令式调用(远端执行/scp)不需要 stdin: 必须显式关闭, 否则 Win32-OpenSSH 会一直等 stdin EOF, 表现为卡死。
+            process.StandardInput.Close();
             var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var error = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -128,17 +161,20 @@ public static class SshRemoteWorkspaceLauncher
         }
     }
 
-    /** 远端启动 harness: 指定了 hostCommandPath 就用它; 否则按“远端目录”用 ./dsharp, 或 PATH 里的 dsharp。 */
+    /** 远端启动 harness: 指定了 hostCommandPath 就用它(路径原样, 交由远端 shell); 否则按“远端目录”用 ./dsharp, 或 PATH 里的 dsharp。 */
     private static string HarnessCommand(SshWorkspace workspace, string? hostCommandPath)
     {
-        var launcher = string.IsNullOrEmpty(hostCommandPath)
-            ? string.IsNullOrEmpty(workspace.RemotePath) ? "dsharp" : "./dsharp"
-            : hostCommandPath;
-        var prefix = string.IsNullOrEmpty(workspace.RemotePath) || !string.IsNullOrEmpty(hostCommandPath)
-            ? ""
-            : $"cd {Quote(workspace.RemotePath)} && ";
-        return $"{prefix}{Quote(launcher)} host --serve --stdio";
+        // 指定了绝对路径时不做 POSIX 单引号转义, 只在含空白时加双引号(cmd 与 POSIX 都接受): 兼容 Windows 远端。
+        if (!string.IsNullOrEmpty(hostCommandPath))
+            return $"{NeutralQuote(hostCommandPath)} host --serve --stdio";
+        var launcher = string.IsNullOrEmpty(workspace.RemotePath) ? "dsharp" : "./dsharp";
+        var prefix = string.IsNullOrEmpty(workspace.RemotePath) ? "" : $"cd {Quote(workspace.RemotePath)} && ";
+        return $"{prefix}{launcher} host --serve --stdio";
     }
+
+    /** 只在含空白时用双引号包裹(cmd / POSIX 都接受); 否则原样。 */
+    private static string NeutralQuote(string value)
+        => value.Any(char.IsWhiteSpace) ? $"\"{value}\"" : value;
 
     private static ProcessStartInfo BuildSshStartInfo(SshWorkspace workspace, out string? askPass)
     {
@@ -185,6 +221,12 @@ public static class SshRemoteWorkspaceLauncher
         arguments.Add("BatchMode=" + (string.IsNullOrEmpty(workspace.Password) ? "yes" : "no"));
         arguments.Add("-o");
         arguments.Add("StrictHostKeyChecking=accept-new");
+        arguments.Add("-o");
+        arguments.Add("ConnectTimeout=15");
+        arguments.Add("-o");
+        arguments.Add("ServerAliveInterval=15");
+        arguments.Add("-o");
+        arguments.Add("ServerAliveCountMax=4");
         if (workspace.Auth == SshAuth.Key && workspace.KeyPath is { Length: > 0 } key)
         {
             arguments.Add("-i");
@@ -209,20 +251,6 @@ public static class SshRemoteWorkspaceLauncher
         startInfo.Environment["SSH_ASKPASS_REQUIRE"] = "force";
         startInfo.Environment["DISPLAY"] = "dsh:0";
         return askPass;
-    }
-
-    private static async Task<string> ReadStandardErrorAsync(Process process)
-    {
-        try
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            var text = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(text) ? "(无 stderr 输出)" : text.Trim();
-        }
-        catch (Exception)
-        {
-            return "(未能读取 stderr)";
-        }
     }
 
     private static void Kill(Process process)
