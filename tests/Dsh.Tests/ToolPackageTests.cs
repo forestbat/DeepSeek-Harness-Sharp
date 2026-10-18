@@ -61,7 +61,7 @@ public sealed class ToolPackageTests : IDisposable
             foreach (var expected in baseline["tools"]!.AsArray())
             {
                 var tool = tools.Get(expected!["name"]!.GetValue<string>())!;
-                Assert.Equal(expected["description"]!.GetValue<string>(), tool.Description);
+                Assert.Equal(expected["description"]!.GetValue<string>().Replace("\r\n", "\n"), tool.Description.Replace("\r\n", "\n"));
                 Assert.True(JsonNode.DeepEquals(expected["parameters"], tool.Parameters), tool.Name);
                 Assert.True(JsonNode.DeepEquals(expected["output"], tool.Output.Schema), tool.Name);
             }
