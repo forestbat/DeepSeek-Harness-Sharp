@@ -1,0 +1,15 @@
+▸ Secret scan (mode: staged)
+  Scanning 45 file(s)...
+
+
+▸ Scanning file content for secret patterns...
+
+  README.md
+    ✗ L566: [Database URL] mongodb://lo…017,
+
+  src/Dsh.Boot/Profiles/Templates/settings.yaml
+    ✗ L278: [Database URL] mongodb://lo…7017
+
+▸ 2 potential secret(s) in file content
+
+⚠ 2 finding(s) — review before committing

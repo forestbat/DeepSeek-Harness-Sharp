@@ -1,0 +1,79 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+    Dsh.Tests.NativePluginAbiTests.PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors [SKIP]
+      未发布原生样例(/tmp/m70.nlyNtD/tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so), 先运行 dotnet publish tests/Dsh.NativePluginSample -c Release
+    Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.GuiRemoteWorkspaceTests.RemoteWorkspace_ConnectsOverSsh [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+    Dsh.Tests.IrohReceiverTests.Incomplete_Systemd_Registration_Can_Be_Disabled_Without_Leaving_A_Blocked_Receiver [SKIP]
+      Requires a reachable systemd user manager.
+done
+    Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.MongoMemoryStoreTests.WritesAndReadsMemoryThroughMongo [SKIP]
+      MongoDB is not reachable at mongodb://localhost:27017
+    Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected [SKIP]
+      the tool is registered on Windows only
+dsharp web bridge listening on http://127.0.0.1:41607/ (loopback only)
+machines: local (/tmp/m70.nlyNtD/.daemon-tests/wple891e5)
+web access token: /tmp/m70.nlyNtD/.daemon-tests/wple891e5/run/web.token (new on every start; show it with `dsharp web --print-token`)
+first login: open http://127.0.0.1:41607/#token=<token>, or paste the token into the login page
+from another computer: ssh -N -L 41607:127.0.0.1:41607 zhixi@ansr-nectar-4, then open http://127.0.0.1:41607/ there
+through a jump host: ssh -N -J <user>@<jump-host> -L 41607:127.0.0.1:41607 zhixi@ansr-nectar-4
+from a phone or tablet: forward local port 41607 to 127.0.0.1:41607 on this computer in an SSH client app (e.g. Termius, JuiceSSH, Blink), then open http://127.0.0.1:41607/ in the phone's browser and paste the token
+    Dsh.Tests.GuiRemoteWorkspaceTests.AutoDeploy_Uploads_And_Hosts_On_Real_Server [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+    Dsh.Tests.MouseReportPtyTests.Reports_Never_Pollute_Input_And_Drag_Resizes_Divider [SKIP]
+      环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "wsl") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.ExistingPersistentShell_KeepsItsDirectoryAfterCdOutsideRoot(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.TuiOverlayCpuTests.Slash_Menu_Does_Not_Mix_Right_Panel_Into_Main [SKIP]
+      环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp
+    Dsh.Tests.JobsTests+PersistentPwsh.TerminatingError_ReportsExitOneAndKeepsTheSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorFollowedBySuccess_HasNoExitMarker [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.FailedNativeCommand_ReportsItsExitCode [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.LocationVariablesFunctionsAndEnvironment_PersistAcrossCalls [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.MultiLineCommandWithQuotesAndNonAscii_RunsAsOneCommand [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Exit_ResetsAndNextCallStartsFresh [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Timeout_ResetsSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorAsLastStatement_IsMergedAndReportedAsExitOne [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+  Finished:    Dsh.Tests (ID = 'a57dcfe77ca9ab8e12f88a1b1a53408679010ddd36b0d8113365acc76422857c')
+=== TEST EXECUTION SUMMARY ===
+   Dsh.Tests  Total: 2704, Errors: 0, Failed: 0, Skipped: 32, Not Run: 4, Time: 379.879s

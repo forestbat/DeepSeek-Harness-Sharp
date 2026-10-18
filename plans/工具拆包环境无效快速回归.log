@@ -1,0 +1,654 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+    Dsh.Tests.ClipboardTests.TrySetText_Writes_To_System_Clipboard [FAIL]
+      剪贴板写入应成功(Windows 走 clip.exe)
+      Stack Trace:
+        tests/Dsh.Tests/ClipboardTests.cs(16,0): at Dsh.Tests.ClipboardTests.TrySetText_Writes_To_System_Clipboard()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.AcpClientTests.SocketServer_RequiresLocalTokenBeforeSessions [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/a57f6ce/run/dsh-acp.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/a57f6ce/run/dsh-acp.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.Acp/AcpSocketServer.cs(56,0): at Dsh.Acp.AcpSocketServer.Start()
+        tests/Dsh.Tests/AcpClientTests.cs(155,0): at Dsh.Tests.AcpClientTests.SocketServer_RequiresLocalTokenBeforeSessions()
+        tests/Dsh.Tests/AcpClientTests.cs(179,0): at Dsh.Tests.AcpClientTests.SocketServer_RequiresLocalTokenBeforeSessions()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.AcpClientTests.SocketServer_OversizedLine_GetsErrorAndDisconnects_AndKeepsServing [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/ocd47d9/run/dsh-acp.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/ocd47d9/run/dsh-acp.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.Acp/AcpSocketServer.cs(56,0): at Dsh.Acp.AcpSocketServer.Start()
+        tests/Dsh.Tests/AcpClientTests.cs(191,0): at Dsh.Tests.AcpClientTests.SocketServer_OversizedLine_GetsErrorAndDisconnects_AndKeepsServing()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.MongoMemoryStoreTests.WritesAndReadsMemoryThroughMongo [SKIP]
+      MongoDB is not reachable at mongodb://localhost:27017
+    Dsh.Tests.AcpClientTests.SocketServer_RestrictsSocketAndRunDirectoryToOwner [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/m8cdec6/run/dsh-acp.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/m8cdec6/run/dsh-acp.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.Acp/AcpSocketServer.cs(56,0): at Dsh.Acp.AcpSocketServer.Start()
+        tests/Dsh.Tests/AcpClientTests.cs(229,0): at Dsh.Tests.AcpClientTests.SocketServer_RestrictsSocketAndRunDirectoryToOwner()
+           at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+           at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+    Dsh.Tests.GuiRemoteWorkspaceTests.AutoDeploy_Uploads_And_Hosts_On_Real_Server [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+    Dsh.Tests.GuiRemoteWorkspaceTests.RemoteWorkspace_ConnectsOverSsh [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+    Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected [SKIP]
+      the tool is registered on Windows only
+done
+    Dsh.Tests.HostChatProtocolTests.SessionEditing_UsesHostCommandsAndPersistence_AndBroadcastsDeletion [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hcecebbfe/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hcecebbfe/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/HostChatProtocolTests.cs(38,0): at Dsh.Tests.HostChatProtocolTests.SessionEditing_UsesHostCommandsAndPersistence_AndBroadcastsDeletion()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.SessionRegistry_PushesChanges_AndDerivesWaitingForUser [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhsdbd103/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhsdbd103/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(160,0): at Dsh.Tests.RemoteHostMultiClientTests.SessionRegistry_PushesChanges_AndDerivesWaitingForUser()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostNotifyTests.RpcList_DuringReadCommit_ReturnsAtomicFilteredPages_AndCanCancelWaiting [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mnlf17ca0/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mnlf17ca0/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostNotifyTests.cs(137,0): at Dsh.Tests.RemoteHostNotifyTests.RpcList_DuringReadCommit_ReturnsAtomicFilteredPages_AndCanCancelWaiting()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostGitTests.ProjectsOutsideTheAllowedRoots_AreRejected [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgr6c8243/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgr6c8243/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostGitTests.cs(97,0): at Dsh.Tests.RemoteHostGitTests.ProjectsOutsideTheAllowedRoots_AreRejected()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.FolderOperations_CreateRenameAndDeleteOnlyAfterConfirmingDirectories [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvdd31cd3/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvdd31cd3/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(92,0): at Dsh.Tests.FilesViewModelTests.FolderOperations_CreateRenameAndDeleteOnlyAfterConfirmingDirectories()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostFileTransferTests.Upload_ReplacesTheTargetOnlyOnCommit_AndRejectsOutOfOrderChunks [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfabd01af/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfabd01af/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostFileTransferTests.cs(53,0): at Dsh.Tests.RemoteHostFileTransferTests.Upload_ReplacesTheTargetOnlyOnCommit_AndRejectsOutOfOrderChunks()
+        --- End of stack trace from previous location ---
+dsharp web bridge listening on http://127.0.0.1:44861/ (loopback only)
+machines: local (/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wpl4c9da1)
+web access token: /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wpl4c9da1/run/web.token (new on every start; show it with `dsharp web --print-token`)
+first login: open http://127.0.0.1:44861/#token=<token>, or paste the token into the login page
+from another computer: ssh -N -L 44861:127.0.0.1:44861 zhixi@ansr-nectar-4, then open http://127.0.0.1:44861/ there
+through a jump host: ssh -N -J <user>@<jump-host> -L 44861:127.0.0.1:44861 zhixi@ansr-nectar-4
+from a phone or tablet: forward local port 44861 to 127.0.0.1:44861 on this computer in an SSH client app (e.g. Termius, JuiceSSH, Blink), then open http://127.0.0.1:44861/ in the phone's browser and paste the token
+    Dsh.Tests.HostChatProtocolTests.PluginPermissionsAndCatalog_AreReadFromAndChangedOnHost [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hcmc73b4e/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hcmc73b4e/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/HostChatProtocolTests.cs(83,0): at Dsh.Tests.HostChatProtocolTests.PluginPermissionsAndCatalog_AreReadFromAndChangedOnHost()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostNotifyTests.ConcurrentReadAndAppend_PublishSnapshotsInCommitOrder [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mnxc4286e/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mnxc4286e/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostNotifyTests.cs(89,0): at Dsh.Tests.RemoteHostNotifyTests.ConcurrentReadAndAppend_PublishSnapshotsInCommitOrder()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.PathsOutsideHostRoots_AreRejectedByTheHost_NotTheFileView [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvp8c44ee/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvp8c44ee/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(168,0): at Dsh.Tests.FilesViewModelTests.PathsOutsideHostRoots_AreRejectedByTheHost_NotTheFileView()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.SessionRegistry_RecoversAfterHostRestart_AndReconcilesTerminalsWithTheDaemon [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhr56e0d7/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhr56e0d7/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(189,0): at Dsh.Tests.RemoteHostMultiClientTests.SessionRegistry_RecoversAfterHostRestart_AndReconcilesTerminalsWithTheDaemon()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostFileTransferTests.BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mftf8dd0d/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mftf8dd0d/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostFileTransferTests.cs(31,0): at Dsh.Tests.RemoteHostFileTransferTests.BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostGitTests.TuiAndRemoteDiff_UseTheSameStructuredStatistics [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgt3197e6/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgt3197e6/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostGitTests.cs(63,0): at Dsh.Tests.RemoteHostGitTests.TuiAndRemoteDiff_UseTheSameStructuredStatistics()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.NativePluginAbiTests.PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors [SKIP]
+      未发布原生样例(/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so), 先运行 dotnet publish tests/Dsh.NativePluginSample -c Release
+    Dsh.Tests.HostChatProtocolTests.Truncation_NotifiesOtherClientsBeforeReusedSequenceNumbers [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hctfb493c/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/hctfb493c/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/HostChatProtocolTests.cs(66,0): at Dsh.Tests.HostChatProtocolTests.Truncation_NotifiesOtherClientsBeforeReusedSequenceNumbers()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostNotifyTests.TwoClients_SeeTheSameNotifications_AndTheSameReadState_AcrossARestart [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mna616481/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mna616481/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostNotifyTests.cs(66,0): at Dsh.Tests.RemoteHostNotifyTests.TwoClients_SeeTheSameNotifications_AndTheSameReadState_AcrossARestart()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.Approval_IsBroadcast_FirstAnswerWins_AndResolutionReachesEveryone(rememberForSession: False) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mha9a8f96/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mha9a8f96/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(65,0): at Dsh.Tests.RemoteHostMultiClientTests.Approval_IsBroadcast_FirstAnswerWins_AndResolutionReachesEveryone(Boolean rememberForSession)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.Editor_SavesAtomically_KeepsCrlfAndBom_AndAsksBeforeOverwritingARemoteChange [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fve40ef9e/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fve40ef9e/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(130,0): at Dsh.Tests.FilesViewModelTests.Editor_SavesAtomically_KeepsCrlfAndBom_AndAsksBeforeOverwritingARemoteChange()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostGitTests.StatusDiffAndLog_DescribeTheRepository [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgs8e96ab/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgs8e96ab/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostGitTests.cs(40,0): at Dsh.Tests.RemoteHostGitTests.StatusDiffAndLog_DescribeTheRepository()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostFileTransferTests.PathsOutsideTheAllowedRoots_AreRejected_EvenThroughSymbolicLinks [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfp4035c0/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfp4035c0/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostFileTransferTests.cs(118,0): at Dsh.Tests.RemoteHostFileTransferTests.PathsOutsideTheAllowedRoots_AreRejected_EvenThroughSymbolicLinks()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostNotifyTests.SessionExit_IsRecordedWithItsExitCode_AndListFiltersAndPages [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mne07c14b/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mne07c14b/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostNotifyTests.cs(167,0): at Dsh.Tests.RemoteHostNotifyTests.SessionExit_IsRecordedWithItsExitCode_AndListFiltersAndPages()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FleetConnectionTests.Connected_Exposes_Preexisting_Sessions_Pending_And_Notifications [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fssfe2c86/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fssfe2c86/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FleetConnectionTests.cs(47,0): at Dsh.Tests.FleetConnectionTests.Connected_Exposes_Preexisting_Sessions_Pending_And_Notifications()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GitViewModelTests.StatusIsGrouped_AndEachGroupShowsItsOwnDiff [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvs2a46f4/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvs2a46f4/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/GitViewModelTests.cs(50,0): at Dsh.Tests.GitViewModelTests.StatusIsGrouped_AndEachGroupShowsItsOwnDiff()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.Approval_IsBroadcast_FirstAnswerWins_AndResolutionReachesEveryone(rememberForSession: True) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mha008a66/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mha008a66/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(65,0): at Dsh.Tests.RemoteHostMultiClientTests.Approval_IsBroadcast_FirstAnswerWins_AndResolutionReachesEveryone(Boolean rememberForSession)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.Editor_ShowsBinaryAndOversizedFilesAsInformationOnly [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvb32c8e8/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvb32c8e8/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(150,0): at Dsh.Tests.FilesViewModelTests.Editor_ShowsBinaryAndOversizedFilesAsInformationOnly()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostFileTransferTests.DirectoryOperations_StatMkdirRenameDelete [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfde36ed3/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfde36ed3/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostFileTransferTests.cs(95,0): at Dsh.Tests.RemoteHostFileTransferTests.DirectoryOperations_StatMkdirRenameDelete()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostGitTests.Worktrees_AreListedAddedAndRemoved [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgwee383b/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mgwee383b/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostGitTests.cs(83,0): at Dsh.Tests.RemoteHostGitTests.Worktrees_AreListedAddedAndRemoved()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GitViewModelTests.Worktree_IsAddedOnANewBranch_OffersANewSession_AndIsRemovedAfterConfirmation [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvwafd4e8/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvwafd4e8/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/GitViewModelTests.cs(83,0): at Dsh.Tests.GitViewModelTests.Worktree_IsAddedOnANewBranch_OffersANewSession_AndIsRemovedAfterConfirmation()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.PendingRequests_SurviveDisconnect_AndReachLateJoiners [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhd156d04/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhd156d04/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(103,0): at Dsh.Tests.RemoteHostMultiClientTests.PendingRequests_SurviveDisconnect_AndReachLateJoiners()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.CancelledUpload_LeavesNoRemoteFile [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvca03dc2/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvca03dc2/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(62,0): at Dsh.Tests.FilesViewModelTests.CancelledUpload_LeavesNoRemoteFile()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostFileTransferTests.UnfinishedUpload_IsDiscardedWhenItsConnectionEnds [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfue4c63f/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mfue4c63f/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostFileTransferTests.cs(71,0): at Dsh.Tests.RemoteHostFileTransferTests.UnfinishedUpload_IsDiscardedWhenItsConnectionEnds()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.MachinesViewModelTests.TestConnection_ShowsHostVersionAndPlatform_AndDoctorListsTheChecks [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mvt555955/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mvt555955/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/MachinesViewModelTests.cs(213,0): at Dsh.Tests.MachinesViewModelTests.TestConnection_ShowsHostVersionAndPlatform_AndDoctorListsTheChecks()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostPtyTests.Attach_StartsWithAFullScreenSnapshot_AndResizeReachesThePty [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhqe13da0/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhqe13da0/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostPtyTests.cs(82,0): at Dsh.Tests.RemoteHostPtyTests.Attach_StartsWithAFullScreenSnapshot_AndResizeReachesThePty()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.Handshake_AdvertisesCapabilities_AndReportsTheReleaseVersion [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhvfb92ec/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhvfb92ec/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(261,0): at Dsh.Tests.RemoteHostMultiClientTests.Handshake_AdvertisesCapabilities_AndReportsTheReleaseVersion()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.FilesViewModelTests.BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvtffe788/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fvtffe788/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/FilesViewModelTests.cs(38,0): at Dsh.Tests.FilesViewModelTests.BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.IrohMultiplexingTests.ExistingTcpMaster_CannotExecuteCommandsForAnIrohEndpoint [FAIL]
+      System.IO.IOException : zhixi@127.0.0.1:42517 远端命令失败: Warning: Permanently added '[127.0.0.1]:42517' (ED25519) to the list of known hosts.
+      unix_listener: path "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/md61bfc.0c2pQg2A0l2XTZWd" too long for Unix domain socket
+      Stack Trace:
+        src/Dsh.Fleet.Client/SshTransport.cs(73,0): at Dsh.Fleet.SshTransport.RunAsync(String command, CancellationToken cancellationToken)
+        tests/Dsh.Tests/IrohMultiplexingTests.cs(24,0): at Dsh.Tests.IrohMultiplexingTests.ExistingTcpMaster_CannotExecuteCommandsForAnIrohEndpoint()
+        tests/Dsh.Tests/IrohMultiplexingTests.cs(45,0): at Dsh.Tests.IrohMultiplexingTests.ExistingTcpMaster_CannotExecuteCommandsForAnIrohEndpoint()
+        tests/Dsh.Tests/IrohMultiplexingTests.cs(45,0): at Dsh.Tests.IrohMultiplexingTests.ExistingTcpMaster_CannotExecuteCommandsForAnIrohEndpoint()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostPtyTests.TwoViews_ShareOnePty_SeeEachOthersInput_AndSurviveDisconnect(shareClient: False) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhp27dad9/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhp27dad9/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostPtyTests.cs(47,0): at Dsh.Tests.RemoteHostPtyTests.TwoViews_ShareOnePty_SeeEachOthersInput_AndSurviveDisconnect(Boolean shareClient)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostMultiClientTests.Interrupt_CancelsPendingRequests_AndBroadcastsCancellation [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhi19860b/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhi19860b/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostMultiClientTests.cs(124,0): at Dsh.Tests.RemoteHostMultiClientTests.Interrupt_CancelsPendingRequests_AndBroadcastsCancellation()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostPtyTests.TwoViews_ShareOnePty_SeeEachOthersInput_AndSurviveDisconnect(shareClient: True) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhpc04a76/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/mhpc04a76/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/RemoteHostPtyTests.cs(47,0): at Dsh.Tests.RemoteHostPtyTests.TwoViews_ShareOnePty_SeeEachOthersInput_AndSurviveDisconnect(Boolean shareClient)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.Approval_IsSharedAcrossLogins_AndSurvivesClosingTheOriginator [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbad01578/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbad01578/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(385,0): at Dsh.Tests.WebBridgeTests.Approval_IsSharedAcrossLogins_AndSurvivesClosingTheOriginator()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GuiViewsHeadlessTests.GitView_RendersOneDiffCardPerFileOfTheSelectedCommit [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvg7f2504/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvg7f2504/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/GuiViewsHeadlessTests.cs(65,0): at Dsh.Tests.GuiViewsHeadlessTests.<>c.<<GitView_RendersOneDiffCardPerFileOfTheSelectedCommit>b__3_0>d.MoveNext()
+        --- End of stack trace from previous location ---
+        tests/Dsh.Tests/HeadlessGui.cs(31,0): at Dsh.Tests.HeadlessGui.<>c__DisplayClass4_0.<<RunAsync>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+           at Avalonia.Headless.HeadlessUnitTestSession.<>c__DisplayClass12_0`1.<DispatchCore>b__0()
+        --- End of stack trace from previous location ---
+        tests/Dsh.Tests/HeadlessGui.cs(34,0): at Dsh.Tests.HeadlessGui.RunAsync(Func`1 test)
+        tests/Dsh.Tests/GuiViewsHeadlessTests.cs(48,0): at Dsh.Tests.GuiViewsHeadlessTests.GitView_RendersOneDiffCardPerFileOfTheSelectedCommit()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GuiViewsHeadlessTests.FilesView_ShowsTheFileWithLineNumbersAndHighlighting_AndSavesWhatWasTyped [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvfdec1df/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/gvfdec1df/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/GuiViewsHeadlessTests.cs(44,0): at Dsh.Tests.GuiViewsHeadlessTests.<>c.<<FilesView_ShowsTheFileWithLineNumbersAndHighlighting_AndSavesWhatWasTyped>b__2_0>d.MoveNext()
+        --- End of stack trace from previous location ---
+        tests/Dsh.Tests/HeadlessGui.cs(31,0): at Dsh.Tests.HeadlessGui.<>c__DisplayClass4_0.<<RunAsync>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+           at Avalonia.Headless.HeadlessUnitTestSession.<>c__DisplayClass12_0`1.<DispatchCore>b__0()
+        --- End of stack trace from previous location ---
+        tests/Dsh.Tests/HeadlessGui.cs(34,0): at Dsh.Tests.HeadlessGui.RunAsync(Func`1 test)
+        tests/Dsh.Tests/GuiViewsHeadlessTests.cs(21,0): at Dsh.Tests.GuiViewsHeadlessTests.FilesView_ShowsTheFileWithLineNumbersAndHighlighting_AndSavesWhatWasTyped()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.DetachingOneBusyTerminalView_KeepsOtherViewsAndBrowserRequestsAlive [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbvf7be6c/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbvf7be6c/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(72,0): at Dsh.Tests.WebBridgeTests.DetachingOneBusyTerminalView_KeepsOtherViewsAndBrowserRequestsAlive()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.PluginHostTests.FleetPlugin_DeactivationClosesOwnedLinksButKeepsHostSessions [FAIL]
+      System.AggregateException : One or more errors occurred. (The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fpl1482ac/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fpl1482ac/run/host.sock.) (Test execution timed out after 30000 milliseconds)
+      ---- System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fpl1482ac/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/fpl1482ac/run/host.sock.
+      ---- Test execution timed out after 30000 milliseconds
+      Stack Trace:
+        
+        ----- Inner Stack Trace #1 (System.ArgumentOutOfRangeException) -----
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path, String boundFileName)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/PluginHostTests.cs(99,0): at Dsh.Tests.PluginHostTests.FleetPlugin_DeactivationClosesOwnedLinksButKeepsHostSessions()
+        --- End of stack trace from previous location ---
+        ----- Inner Stack Trace #2 (Xunit.Sdk.TestTimeoutException) -----
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.WebSocket_UsesSharedFleetForRealSessionEvents [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbe501e19/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbe501e19/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(38,0): at Dsh.Tests.WebBridgeTests.WebSocket_UsesSharedFleetForRealSessionEvents()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.ClosingBrowser_AbortsOnlyItsUnfinishedUploads_IncludingUnreadBeginReply(closeBeforeReadingBeginReply: False) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbuda2778/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbuda2778/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(133,0): at Dsh.Tests.WebBridgeTests.ClosingBrowser_AbortsOnlyItsUnfinishedUploads_IncludingUnreadBeginReply(Boolean closeBeforeReadingBeginReply)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.ClosingBrowser_AbortsOnlyItsUnfinishedUploads_IncludingUnreadBeginReply(closeBeforeReadingBeginReply: True) [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbu9609ff/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbu9609ff/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(133,0): at Dsh.Tests.WebBridgeTests.ClosingBrowser_AbortsOnlyItsUnfinishedUploads_IncludingUnreadBeginReply(Boolean closeBeforeReadingBeginReply)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WebBridgeTests.Terminal_SegmentedInput_AndOfflineResize_SurviveHostReconnect [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbrae0492/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/wbrae0492/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/WebBridgeTests.cs(436,0): at Dsh.Tests.WebBridgeTests.Terminal_SegmentedInput_AndOfflineResize_SurviveHostReconnect()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.RemoteHostPtyTests.LocalFleet_Terminal_Registry_And_LivePty_Survive_HostRestart_And_OfflineResize [FAIL]
+      Test execution timed out after 90000 milliseconds
+      Stack Trace:
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GuiWorkspaceTests.HarnessTranscript_RendersHostEvents_AndContinuesAfterAHostRestartWithoutDuplicates [FAIL]
+      System.ArgumentOutOfRangeException : The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/ghaaab76a/run/host.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.daemon-tests/ghaaab76a/run/host.sock.
+      Stack Trace:
+           at System.Net.Sockets.UnixDomainSocketEndPoint..ctor(String path)
+        src/Dsh.Transport/OwnerOnlyFiles.cs(52,0): at Dsh.Transport.OwnerOnlyFiles.ListenUnixSocket(String socketPath, Int32 backlog)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(73,0): at Dsh.RemoteHost.RemoteHostListener.ServeUnixAsync(RemoteHostServer server, String root, LocalEndpointToken token, CancellationToken cancellationToken)
+        src/Dsh.RemoteHost/RemoteHostListener.cs(27,0): at Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(RemoteHostServer server, String root, CancellationToken cancellationToken)
+        tests/Dsh.Tests/HarnessHostFixture.cs(116,0): at Dsh.Tests.HarnessHostFixture.StopHostAsync()
+        tests/Dsh.Tests/HarnessHostFixture.cs(92,0): at Dsh.Tests.HarnessHostFixture.DisposeAsync()
+        tests/Dsh.Tests/GuiWorkspaceTests.cs(274,0): at Dsh.Tests.GuiWorkspaceTests.HarnessTranscript_RendersHostEvents_AndContinuesAfterAHostRestartWithoutDuplicates()
+        --- End of stack trace from previous location ---

@@ -1,0 +1,219 @@
+# >>> generated: settings-schema (do not edit; run: dsharp config schema --write-template)
+# 顶层 settings(默认值来自 HarnessSettings, 取消注释即可覆盖):
+# global_default_model:
+# compaction_model:
+# subagent:  # 映射(见子项)
+#   default_model:
+# providers:  # 映射(见子项)
+#   type:
+#   options:  # 映射(见子项)
+#     baseUrl:
+#     apiKey:
+#     apiKeyEnv:
+#   models:  # 映射(见子项)
+#     name:
+#     tool_call:
+#     system_prompt_update:
+# skills:  # 映射(见子项)
+#   paths:  # 列表
+#   urls:  # 列表
+# rules:  # 列表
+# mcp:  # 映射(见子项)
+#   transport:
+#   command:  # 列表
+#   args:  # 列表
+#   url:
+#   enabled: true
+# a2a:  # 映射(见子项)
+#   enabled:
+#   host:
+#   port:
+#   publicUrl:
+#   authToken:
+#   skill_id:
+#   skill_name:
+#   skill_description:
+#   skill_tags:  # 列表
+#   remotes:  # 映射(见子项)
+#     url:
+#     token:
+#     headers:  # 映射(见子项)
+# compaction:  # 映射(见子项)
+#   auto: true
+#   prune: true
+# safety:  # 映射(见子项)
+#   autoApprove:
+#   blacklist:  # 列表
+# logging:  # 映射(见子项)
+#   level:
+#   buffer_size:
+#   console:
+#   file: true
+#   file_max_mb:
+#   keep_days:  # 天数
+# storage:  # 映射(见子项)
+#   root:  # 统一持久化根; 留空则用 $DSH_HOME 或 ~/.dsh
+#   tool_results:  # 映射(见子项)
+#     max_bytes:  # 超过该字节数的工具结果落盘, 会话里只留头部/尾部与路径
+#     retain_days:  # 落盘结果的保留天数
+#   sessions:  # 各分区目录(相对根 / 绝对路径 / ~ 展开); 留空用同名默认目录
+#   logs:
+#   cache:
+#   checkpoints:
+#   attachments:
+#   telemetry:
+#   run:
+# fleet:  # 映射(见子项)
+#   machines:  # 列表
+#   deploy:  # 映射(见子项)
+#     autoDeploy:
+#     releaseBaseUrl:
+#     releaseVersion:  # latest 或发布标签(带不带 v 前缀均可)
+#     via:  # auto / client / server: 发布包在哪里下载
+#     serverProxy:  # 远端下载发布包时用的代理
+# network:  # 映射(见子项)
+#   outbound_proxy:  # 映射(见子项)
+#     url:  # http://、https://、socks4://、socks4a://、socks5:// 代理 URL, 可带 user:pass@; 留空跟随系统代理
+#     bypass:  # 不走代理的主机(含其子域), 只在 url 非空时生效; 回环地址、不带点的主机名与私网 IP 始终直连
+#     probe_url:  # 连通性自检的探测地址; 留空用 https://www.gstatic.com/generate_204
+# sandbox:  # 映射(见子项)
+#   enabled:  # Plugin sandbox switch; false (the default) keeps plugin loading and execution unchanged.
+# plugins:  # 映射(见子项)
+#   enabled: true
+#   parameters:  # 映射(见子项)
+#   permissions:  # Reserved key beside enabled with read/write/network booleans; null (key omitted) allows everything.
+#     read: true
+#     write: true
+#     network: true
+#
+# 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
+#
+# @deepseek-ai/dsh-account:
+#   platformOrigin:
+#   inferenceOrigin:
+#   allowLoopbackHttp:
+#   enabled:
+#   requestTimeoutMs:  # 毫秒
+#   attemptTimeoutMs:  # 毫秒
+#   logoutMaxRetries:  # 重试次数
+#   logoutRetryDelayMs:  # 毫秒
+#   locale: "zh_CN"
+#   clientPlatform: "web"
+#
+# @deepseek-ai/dsh-checkpoints:
+#   maxPoints:  # 数量上限
+#   keepDays:  # 天数
+#
+# @deepseek-ai/dsh-goal:
+#   defaultMaxGoalRounds:  # 轮数
+#   blockedAfterConsecutiveRounds:  # 轮数
+#
+# @deepseek-ai/dsh-ide-history:
+#   providers:  # 列表
+#   timeline:  # 是否把 IDE 历史并进 `/timestamp` 时间线(供 jump/revert/fork)
+#   timelineLimit:
+#
+# @deepseek-ai/dsh-jobs-local:
+#   maxConcurrentJobsPerOwner:
+#   waitTimeoutMs:  # 毫秒
+#   maxWaitTimeoutMs:  # 毫秒
+#   completionDelivery:
+#   maxConsecutiveWakes: 3
+#
+# @deepseek-ai/dsh-memory:
+#   backend:
+#   file:
+#   capture: true
+#   mongo:  # 映射(见子项)
+#     connectionString: "mongodb://localhost:27017"
+#     database: "dsh_memory"
+#     collection: "memory"
+#     key:
+#
+# @deepseek-ai/dsh-plan-mode:
+#   section:
+#
+# @deepseek-ai/dsh-skill:
+#   providerName:
+#   includeDefaultRoots: true
+#   dshHome:
+#   agentsHome:
+#   customSkillDirs:  # 列表
+#   watch: true
+#   watchUsePolling:
+#   watchStabilityThresholdMs:  # 毫秒
+#   watchPollIntervalMs:  # 毫秒
+#   watchMaxProjects:
+#   watchFollowSymlinks: true
+#   bundledSkillDir:
+#   collectCacheMaxEntries:
+#
+# @deepseek-ai/dsh-subagent:
+#   provider:
+#   toolName:
+#   enableRunInBackground: true
+#   backgroundMode: "one-shot"
+#   agentOptions:  # 映射(见子项)
+#     provider:
+#     model:
+#     reasoningEffort:  # 映射(见子项)
+#     maxTokens:
+#   persona:
+#   toolFilter:  # 映射(见子项)
+#     allow:  # 列表
+#     deny:  # 列表
+#   maxDepth: 3
+#
+# @deepseek-ai/dsh-terminal:
+#   command:
+#   args:  # 列表
+#   rows:
+#   cols:
+#   scrollbackLines:
+#   scrollbackMaxBytes:  # 字节
+#   maxReadBytes:  # 字节
+#   pollIntervalMs:  # 毫秒
+#   idleSilenceMs:  # 毫秒
+#   handoffGraceMs:  # 毫秒
+#   timeoutMs:  # 毫秒
+#   disposeGraceMs:  # 毫秒
+#   enableRunInBackground: true
+#   maxResultBytes:  # 字节
+#
+# @deepseek-ai/dsh-token-meter:
+#   modelPolicies:  # 列表
+#   auto:
+#   thresholdChars:  # 字符数
+#   headChars:  # 字符数
+#   tailChars:  # 字符数
+#
+# @deepseek-ai/dsh-tool-bash.shell:
+#   cwd:
+#   timeoutMs:  # 毫秒
+#   maxTimeoutMs:  # 毫秒
+#   maxOutputBytes:  # 字节
+#   maxSpillBytes:  # 字节
+#   bashPath:
+#   maxOutputChars:  # 字符数
+#   description:
+#
+# @deepseek-ai/dsh-tool-fs.files:
+#   cwd:
+#   maxOutputChars:  # 字符数
+#   description:
+#
+# @deepseek-ai/dsh-toon:
+#   output: true
+#   input:  # 列表
+#
+# @deepseek-ai/dsh-web:
+#   searchProvider:
+#   fetchProvider:
+#
+# @deepseek-ai/dsh-workflow-worker-thread:
+#   subagentProvider: "spawn"
+#   maxRounds:  # 轮数
+#   maxHandoffChars:  # 字符数
+#   maxResultChars:  # 字符数
+#   toolName: "workflow"
+# <<< generated

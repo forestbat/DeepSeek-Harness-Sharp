@@ -1,0 +1,19 @@
+global_default_model: deepseek-official/deepseek-v4-flash
+compaction_model: deepseek-official/deepseek-v4-flash
+logging:
+  file: false
+plugins:
+  "@deepseek-ai/dsh-memory": false
+  "@deepseek-ai/dsh-checkpoints": false
+  "@deepseek-ai/dsh-toon": false
+  "@deepseek-ai/dsh-fs-local.fs":
+    cwd: /tmp/i70.gvuLg6/cli-parameters
+  "@deepseek-ai/dsh-tool-str-replace-editor.fs":
+    maxOutputChars: 64
+    description: Read and edit files using the configured editor.
+  "@deepseek-ai/dsh-tool-bash.shell-persistent":
+    timeoutMs: 10000
+    maxOutputChars: 128
+    description: Run the configured persistent shell.
+  "@deepseek-ai/dsh-tool-todo.plan":
+    allowParallelInProgress: false

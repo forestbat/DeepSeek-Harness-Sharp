@@ -1,0 +1,33 @@
+▸ Secret scan (mode: staged)
+  Scanning 66 file(s)...
+
+
+▸ Scanning file content for secret patterns...
+
+  plans/工具拆包CLI配置面.json
+    ✗ L8: [Database URL] mongodb://lo…017\
+
+  plans/工具拆包交付证据.json
+    ✗ L228: [Database URL] mongodb://lo…7017
+
+  plans/工具拆包只读运行目录快速回归.log
+    ✗ L19: [Database URL] mongodb://lo…7017
+
+  plans/工具拆包实施记录.md
+    ✗ L204: [Database URL] mongodb://lo…017`
+
+  plans/工具拆包快速回归.json
+    ✗ L1: [Database URL] mongodb://lo…7017
+
+  plans/工具拆包快速回归.log
+    ✗ L23: [Database URL] mongodb://lo…7017
+
+  plans/工具拆包环境无效快速回归.log
+    ✗ L38: [Database URL] mongodb://lo…7017
+
+  plans/工具拆包生成配置块.txt
+    ✗ L128: [Database URL] mongodb://lo…7017
+
+▸ 8 potential secret(s) in file content
+
+⚠ 8 finding(s) — review before committing

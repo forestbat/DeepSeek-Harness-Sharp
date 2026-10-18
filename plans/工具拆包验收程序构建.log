@@ -1,0 +1,10 @@
+  Determining projects to restore...
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/plans/工具拆包验收/工具拆包验收.csproj (in 509 ms).
+  63 of 64 projects are up-to-date for restore.
+  工具拆包验收 -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/plans/工具拆包验收/bin/Debug/net10.0/工具拆包验收.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:11.34

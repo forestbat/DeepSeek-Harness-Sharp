@@ -1,0 +1,82 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Dsh.GitInspect -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.GitInspect/bin/Debug/net10.0/Dsh.GitInspect.dll
+  Dsh.Plugins.Generator -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Plugins.Generator/bin/Debug/netstandard2.0/Dsh.Plugins.Generator.dll
+  Dsh.Runtime -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Runtime/bin/Debug/net10.0/Dsh.Runtime.dll
+  Dsh.Plugins.Native -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Plugins.Native/bin/Debug/net10.0/Dsh.Plugins.Native.dll
+  Dsh.Transport -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Transport/bin/Debug/net10.0/Dsh.Transport.dll
+  Dsh.Notifications -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Notifications/bin/Debug/net10.0/Dsh.Notifications.dll
+  Dsh.Plugins.Abstractions -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Plugins.Abstractions/bin/Debug/net10.0/Dsh.Plugins.Abstractions.dll
+  Dsh.Llm -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Llm/bin/Debug/net10.0/Dsh.Llm.dll
+  Dsh.McpResourceServerSample -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.McpResourceServerSample/bin/Debug/net10.0/Dsh.McpResourceServerSample.dll
+  Dsh.Llm.Anthropic -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Llm.Anthropic/bin/Debug/net10.0/Dsh.Llm.Anthropic.dll
+  Dsh.Plugins.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Plugins.Host/bin/Debug/net10.0/Dsh.Plugins.Host.dll
+  Dsh.Pty -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Pty/bin/Debug/net10.0/Dsh.Pty.dll
+  Dsh.ManagedPluginSample -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.ManagedPluginSample/bin/Debug/net10.0/Dsh.ManagedPluginSample.dll
+  Dsh.Core -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Core/bin/Debug/net10.0/Dsh.Core.dll
+  Dsh.Llm.OpenAi -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Llm.OpenAi/bin/Debug/net10.0/Dsh.Llm.OpenAi.dll
+  Dsh.Llm.DeepSeek -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Llm.DeepSeek/bin/Debug/net10.0/Dsh.Llm.DeepSeek.dll
+  Dsh.ScriptHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.ScriptHost/bin/Debug/net10.0/Dsh.ScriptHost.dll
+  Dsh.Jobs -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Jobs/bin/Debug/net10.0/Dsh.Jobs.dll
+  Dsh.IdeHistory -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.IdeHistory/bin/Debug/net10.0/Dsh.IdeHistory.dll
+  Dsh.E2b -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.E2b/bin/Debug/net10.0/Dsh.E2b.dll
+  Dsh.Board -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Board/bin/Debug/net10.0/Dsh.Board.dll
+  Dsh.Schedule -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Schedule/bin/Debug/net10.0/Dsh.Schedule.dll
+  Dsh.Toon -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Toon/bin/Debug/net10.0/Dsh.Toon.dll
+  Dsh.Tools.Search -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tools.Search/bin/Debug/net10.0/Dsh.Tools.Search.dll
+  Dsh.Plugins.Native.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Plugins.Native.Host/bin/Debug/net10.0/Dsh.Plugins.Native.Host.dll
+  Dsh.Tools.Shell -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tools.Shell/bin/Debug/net10.0/Dsh.Tools.Shell.dll
+  Dsh.SessionGraph -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.SessionGraph/bin/Debug/net10.0/Dsh.SessionGraph.dll
+  DshPluginTemplate -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/templates/managed-plugin/bin/Debug/net10.0/DshPluginTemplate.dll
+  Dsh.Tools.Fs -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tools.Fs/bin/Debug/net10.0/Dsh.Tools.Fs.dll
+  Dsh.IocAotSmoke -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.IocAotSmoke/bin/Debug/net10.0/Dsh.IocAotSmoke.dll
+  Dsh.Tools.Plan -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tools.Plan/bin/Debug/net10.0/Dsh.Tools.Plan.dll
+  Dsh.Sdk -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Sdk/bin/Debug/net10.0/Dsh.Sdk.dll
+  Dsh.PtyTerminal -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.PtyTerminal/bin/Debug/net10.0/Dsh.PtyTerminal.dll
+  Dsh.Workflow -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Workflow/bin/Debug/net10.0/Dsh.Workflow.dll
+  Dsh.Ptc -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Ptc/bin/Debug/net10.0/Dsh.Ptc.dll
+  Dsh.Telemetry -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Telemetry/bin/Debug/net10.0/Dsh.Telemetry.dll
+  Dsh.Boot -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Boot/bin/Debug/net10.0/Dsh.Boot.dll
+  Dsh.AgentInstructions -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.AgentInstructions/bin/Debug/net10.0/Dsh.AgentInstructions.dll
+  Dsh.Lsp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Lsp/bin/Debug/net10.0/Dsh.Lsp.dll
+  Dsh.Inspection -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Inspection/bin/Debug/net10.0/Dsh.Inspection.dll
+  Dsh.Account -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Account/bin/Debug/net10.0/Dsh.Account.dll
+  Dsh.A2A -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.A2A/bin/Debug/net10.0/Dsh.A2A.dll
+  Dsh.Memory -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Memory/bin/Debug/net10.0/Dsh.Memory.dll
+  Dsh.Web -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Web/bin/Debug/net10.0/Dsh.Web.dll
+  Dsh.Interaction -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Interaction/bin/Debug/net10.0/Dsh.Interaction.dll
+  Dsh.Interaction.AskUser -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Interaction.AskUser/bin/Debug/net10.0/Dsh.Interaction.AskUser.dll
+  Dsh.Presets -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Presets/bin/Debug/net10.0/Dsh.Presets.dll
+  Dsh.PlanMode -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.PlanMode/bin/Debug/net10.0/Dsh.PlanMode.dll
+  Dsh.Deliverables -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Deliverables/bin/Debug/net10.0/Dsh.Deliverables.dll
+  Dsh.SessionQuery -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.SessionQuery/bin/Debug/net10.0/Dsh.SessionQuery.dll
+  Dsh.Checkpoints -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Checkpoints/bin/Debug/net10.0/Dsh.Checkpoints.dll
+  Dsh.Persistence -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Persistence/bin/Debug/net10.0/Dsh.Persistence.dll
+  Dsh.Skills -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Skills/bin/Debug/net10.0/Dsh.Skills.dll
+  Dsh.Goal -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Goal/bin/Debug/net10.0/Dsh.Goal.dll
+  Dsh.Mcp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Mcp/bin/Debug/net10.0/Dsh.Mcp.dll
+  Dsh.Subagent -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Subagent/bin/Debug/net10.0/Dsh.Subagent.dll
+  Dsh.Acp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Acp/bin/Debug/net10.0/Dsh.Acp.dll
+  Dsh.Compaction -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Compaction/bin/Debug/net10.0/Dsh.Compaction.dll
+  Dsh.AgentAdapters -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.AgentAdapters/bin/Debug/net10.0/Dsh.AgentAdapters.dll
+  Dsh.Tui -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tui/bin/Debug/net10.0/Dsh.Tui.dll
+  Dsh.Tui.GL -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tui.GL/bin/Debug/net10.0/Dsh.Tui.GL.dll
+  Dsh.Tui.Vk -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Tui.Vk/bin/Debug/net10.0/Dsh.Tui.Vk.dll
+  Dsh.RemoteHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.RemoteHost/bin/Debug/net10.0/Dsh.RemoteHost.dll
+  Dsh.Fleet.Client -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Fleet.Client/bin/Debug/net10.0/Dsh.Fleet.Client.dll
+  Dsh.Fleet -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Fleet/bin/Debug/net10.0/Dsh.Fleet.dll
+  Dsh.WebBridge -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.WebBridge/bin/Debug/net10.0/Dsh.WebBridge.dll
+  Dsh.Gui -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Gui/bin/Debug/net10.0/Dsh.Gui.dll
+  Dsh.GuiViewsHarness -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.GuiViewsHarness/bin/Debug/net10.0/dsh-gui-views.dll
+  Dsh.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/Dsh.Host/bin/Debug/net10.0/Dsh.Host.dll
+  DeepSeek-Harness-Sharp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll
+  settings.yaml 模板与配置面一致: /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/DeepSeek-Harness-Sharp/../src/Dsh.Boot/Profiles/Templates/settings.yaml
+  DshGuiHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/DshGuiHost/bin/Debug/net10.0/dsh-gui.dll
+  Dsh.WebHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/Dsh.WebHost/bin/Debug/net10.0/dsharp-web.dll
+  Dsh.Tests -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:34.74

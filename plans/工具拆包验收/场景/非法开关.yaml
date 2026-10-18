@@ -1,0 +1,3 @@
+plugins:
+  "@deepseek-ai/dsh-tool-fs.search":
+    enabled: nope

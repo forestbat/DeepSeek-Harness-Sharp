@@ -1,0 +1,7 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+  Finished:    Dsh.Tests (ID = 'a57dcfe77ca9ab8e12f88a1b1a53408679010ddd36b0d8113365acc76422857c')
+=== TEST EXECUTION SUMMARY ===
+   Dsh.Tests  Total: 2, Errors: 0, Failed: 0, Skipped: 0, Not Run: 0, Time: 6.085s

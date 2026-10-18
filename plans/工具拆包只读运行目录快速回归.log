@@ -1,0 +1,140 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+    Dsh.Tests.NativePluginAbiTests.PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors [SKIP]
+      未发布原生样例(/tmp/m70.nlyNtD/tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so), 先运行 dotnet publish tests/Dsh.NativePluginSample -c Release
+    Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.GuiRemoteWorkspaceTests.RemoteWorkspace_ConnectsOverSsh [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+done
+    Dsh.Tests.MongoMemoryStoreTests.WritesAndReadsMemoryThroughMongo [SKIP]
+      MongoDB is not reachable at mongodb://localhost:27017
+    Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected [SKIP]
+      the tool is registered on Windows only
+dsharp web bridge listening on http://127.0.0.1:42111/ (loopback only)
+machines: local (/tmp/m70.nlyNtD/.daemon-tests/wplcc2682)
+web access token: /tmp/m70.nlyNtD/.daemon-tests/wplcc2682/run/web.token (new on every start; show it with `dsharp web --print-token`)
+first login: open http://127.0.0.1:42111/#token=<token>, or paste the token into the login page
+from another computer: ssh -N -L 42111:127.0.0.1:42111 zhixi@ansr-nectar-4, then open http://127.0.0.1:42111/ there
+through a jump host: ssh -N -J <user>@<jump-host> -L 42111:127.0.0.1:42111 zhixi@ansr-nectar-4
+from a phone or tablet: forward local port 42111 to 127.0.0.1:42111 on this computer in an SSH client app (e.g. Termius, JuiceSSH, Blink), then open http://127.0.0.1:42111/ in the phone's browser and paste the token
+    Dsh.Tests.GuiRemoteWorkspaceTests.AutoDeploy_Uploads_And_Hosts_On_Real_Server [SKIP]
+      未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证
+    Dsh.Tests.MouseReportPtyTests.Reports_Never_Pollute_Input_And_Drag_Resizes_Divider [SKIP]
+      环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "wsl") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.ExistingPersistentShell_KeepsItsDirectoryAfterCdOutsideRoot(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.RemoteHostAgentTests.BuiltInTerminalAgent_ReachesItsFirstScreen_AndStopsWithoutAPrompt(agentKind: "codex") [FAIL]
+      "Codex" did not arrive; received 6675 chars:  temporary dir "/tmp/i70.gvuLg6" (codex_home: AbsolutePathBuf("/tmp/i70.gvuLg6/home/.codex"))
+        Error: Read-only file system (os error 30): failed to connect to /tmp/i70.gvuLg6/home/.codex/app-server-control/app-server-control.sock: No such file or directory (os error 2)
+      To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).
+      
+      Stack Trace:
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/RemoteHostPtyTests.cs(190,0): at Dsh.Tests.RemoteHostPtyTests.TerminalCapture.WaitForAsync(String marker, TimeSpan timeout)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/RemoteHostAgentTests.cs(193,0): at Dsh.Tests.RemoteHostAgentTests.BuiltInTerminalAgent_ReachesItsFirstScreen_AndStopsWithoutAPrompt(String agentKind)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/RemoteHostAgentTests.cs(201,0): at Dsh.Tests.RemoteHostAgentTests.BuiltInTerminalAgent_ReachesItsFirstScreen_AndStopsWithoutAPrompt(String agentKind)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/RemoteHostAgentTests.cs(201,0): at Dsh.Tests.RemoteHostAgentTests.BuiltInTerminalAgent_ReachesItsFirstScreen_AndStopsWithoutAPrompt(String agentKind)
+        --- End of stack trace from previous location ---
+    Dsh.Tests.TuiOverlayCpuTests.Slash_Menu_Does_Not_Mix_Right_Panel_Into_Main [SKIP]
+      环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp
+    Dsh.Tests.JobsTests+PersistentPwsh.TerminatingError_ReportsExitOneAndKeepsTheSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorFollowedBySuccess_HasNoExitMarker [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.FailedNativeCommand_ReportsItsExitCode [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.LocationVariablesFunctionsAndEnvironment_PersistAcrossCalls [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.MultiLineCommandWithQuotesAndNonAscii_RunsAsOneCommand [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Exit_ResetsAndNextCallStartsFresh [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Timeout_ResetsSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorAsLastStatement_IsMergedAndReportedAsExitOne [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.SingleInstanceTests.SecondAcquire_NotifiesFirst_AndReturnsNull [FAIL]
+      System.IO.IOException : The system cannot open the device or file specified. : 'dsh-gui-06ec37eb852a7b3f'. One or more system calls failed: mkdirat(338, "/run/user/1008/.dotnet/shm/session0", OwnerUser_ReadWriteExecute) == -1; errno == EROFS;
+      Stack Trace:
+           at System.Threading.Mutex.CreateMutexCore(Boolean initiallyOwned, String name, NamedWaitHandleOptionsInternal options, Boolean& createdNew)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Gui/Services/SingleInstance.cs(37,0): at Dsh.Gui.Services.SingleInstance.Acquire(String homePath)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/SingleInstanceTests.cs(27,0): at Dsh.Tests.SingleInstanceTests.SecondAcquire_NotifiesFirst_AndReturnsNull()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.SingleInstanceTests.Dispose_ReleasesTheLock_SoANewInstanceCanTakeOver [FAIL]
+      System.IO.IOException : The system cannot open the device or file specified. : 'dsh-gui-b9489ed6ead427dc'. One or more system calls failed: mkdirat(338, "/run/user/1008/.dotnet/shm/session0", OwnerUser_ReadWriteExecute) == -1; errno == EROFS;
+      Stack Trace:
+           at System.Threading.Mutex.CreateMutexCore(Boolean initiallyOwned, String name, NamedWaitHandleOptionsInternal options, Boolean& createdNew)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Gui/Services/SingleInstance.cs(37,0): at Dsh.Gui.Services.SingleInstance.Acquire(String homePath)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/SingleInstanceTests.cs(43,0): at Dsh.Tests.SingleInstanceTests.Dispose_ReleasesTheLock_SoANewInstanceCanTakeOver()
+           at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+           at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+           at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+           at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+    Dsh.Tests.SingleInstanceTests.LockHeldWithoutPipe_DegradesInsteadOfExiting [FAIL]
+      System.IO.IOException : The system cannot open the device or file specified. : 'dsh-gui-8514e2f820e227d3'. One or more system calls failed: mkdirat(338, "/run/user/1008/.dotnet/shm/session0", OwnerUser_ReadWriteExecute) == -1; errno == EROFS;
+      Stack Trace:
+           at System.Threading.Mutex.CreateMutexCore(Boolean initiallyOwned, String name, NamedWaitHandleOptionsInternal options, Boolean& createdNew)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/SingleInstanceTests.cs(58,0): at Dsh.Tests.SingleInstanceTests.LockHeldWithoutPipe_DegradesInsteadOfExiting()
+           at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+           at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+           at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+           at System.Reflection.RuntimeMethodInfo.Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+    Dsh.Tests.PtyInteractiveShellTests.Interactive_Shell_Reports_Job_Control_And_Executes_Command [FAIL]
+      Assert.Contains() Failure: Sub-string not found
+      String:    "echo probe-$(echo ok)\r\n[H[2J[3JThis is the Z Sh"···
+      Not found: "probe-ok"
+      Stack Trace:
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/PtyInteractiveShellTests.cs(63,0): at Dsh.Tests.PtyInteractiveShellTests.Interactive_Shell_Reports_Job_Control_And_Executes_Command()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.GuiWorkspaceTests.SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject [FAIL]
+      System.TimeoutException : timed out waiting for the shell runs in the project directory
+      Stack Trace:
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(518,0): at Dsh.Tests.GuiWorkspaceTests.UntilAsync(Func`1 condition, String what)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(253,0): at Dsh.Tests.GuiWorkspaceTests.<>c__DisplayClass7_0.<<SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(258,0): at Dsh.Tests.GuiWorkspaceTests.<>c__DisplayClass7_0.<<SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(263,0): at Dsh.Tests.GuiWorkspaceTests.<>c__DisplayClass7_0.<<SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/HeadlessGui.cs(31,0): at Dsh.Tests.HeadlessGui.<>c__DisplayClass4_0.<<RunAsync>b__0>d.MoveNext()
+        --- End of stack trace from previous location ---
+           at Avalonia.Headless.HeadlessUnitTestSession.<>c__DisplayClass12_0`1.<DispatchCore>b__0()
+        --- End of stack trace from previous location ---
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/HeadlessGui.cs(34,0): at Dsh.Tests.HeadlessGui.RunAsync(Func`1 test)
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(227,0): at Dsh.Tests.GuiWorkspaceTests.SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject()
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(227,0): at Dsh.Tests.GuiWorkspaceTests.SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject()
+        /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/tests/Dsh.Tests/GuiWorkspaceTests.cs(227,0): at Dsh.Tests.GuiWorkspaceTests.SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject()
+        --- End of stack trace from previous location ---
+  Finished:    Dsh.Tests (ID = 'a57dcfe77ca9ab8e12f88a1b1a53408679010ddd36b0d8113365acc76422857c')
+=== TEST EXECUTION SUMMARY ===
+   Dsh.Tests  Total: 2704, Errors: 0, Failed: 6, Skipped: 31, Not Run: 4, Time: 487.353s

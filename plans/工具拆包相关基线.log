@@ -1,0 +1,63 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+    Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.DefaultCompositionTests.DiscoveredPlugins_ActivateAndRegisterIdeHistoryTool [FAIL]
+      @deepseek-ai/dsh-acp=Failed:The path '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/dsh-default-59bcfcbb93c84cbaa144d6eb5cb18ccd/home/run/dsh-acp.sock' is of an invalid length for use with domain sockets on this platform.  The length must be between 1 and 108 characters, inclusive. (Parameter 'path')
+      Actual value was /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/dsh-default-59bcfcbb93c84cbaa144d6eb5cb18ccd/home/run/dsh-acp.sock.
+      Stack Trace:
+        tests/Dsh.Tests/DefaultCompositionTests.cs(26,0): at Dsh.Tests.DefaultCompositionTests.DiscoveredPlugins_ActivateAndRegisterIdeHistoryTool()
+        --- End of stack trace from previous location ---
+    Dsh.Tests.WorkingDirectoryTests.ExistingPersistentShell_KeepsItsDirectoryAfterCdOutsideRoot(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "wsl") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.JobsTests+PersistentPwsh.FailedNativeCommand_ReportsItsExitCode [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.TerminatingError_ReportsExitOneAndKeepsTheSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorFollowedBySuccess_HasNoExitMarker [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.LocationVariablesFunctionsAndEnvironment_PersistAcrossCalls [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.MultiLineCommandWithQuotesAndNonAscii_RunsAsOneCommand [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Timeout_ResetsSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorAsLastStatement_IsMergedAndReportedAsExitOne [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Exit_ResetsAndNextCallStartsFresh [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+  Finished:    Dsh.Tests (ID = 'bd4de1c75592e175b8e6a76508f096e68e93487493b112519e8ec4470eedc07d')
+=== TEST EXECUTION SUMMARY ===
+   Dsh.Tests  Total: 165, Errors: 0, Failed: 1, Skipped: 25, Not Run: 0, Time: 23.292s

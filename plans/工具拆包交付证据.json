@@ -1,0 +1,487 @@
+{
+  "issue": {
+    "number": 70,
+    "repository": "forestbat/DeepSeek-Harness-Sharp"
+  },
+  "status": "delivered_pull_request_open",
+  "worktree": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages",
+  "branch": "feat/roadmap-tools-packages",
+  "baseCommit": "9896c1c68f2c5be687e2c4a3a7b160d4eacc1826",
+  "sdk": {
+    "path": "/home/zhixi/.dotnet/dotnet",
+    "version": "10.0.402",
+    "platform": "linux-x64"
+  },
+  "dependencyFeed": {
+    "package": "DryIoc.dll.6.0.0.nupkg",
+    "sourceCommit": "b0dde2437facb410482fc8adf3f37f2f8a5fa259",
+    "command": "bash scripts/fetch-dryioc-feed.sh",
+    "exitCode": 0
+  },
+  "tooling": {
+    "riderSearch": "No catalog tools matched Rider MCP analyze_calls get_symbol_info xdebug rider_lint_files",
+    "csharpLsp": "LSP server csharp is NOT INSTALLED; Command not found: csharp-ls",
+    "verificationFallback": "Compiler, analyzers, repository tests, and real CLI/catalog/config entrypoints"
+  },
+  "packageIdDecision": {
+    "status": "proposal_subject_to_author_review",
+    "strategy": "Four capability assemblies, independent leaf plugin IDs, one-to-one configuration rename, no legacy aliases or plugin-to-plugin ProjectReference",
+    "mapping": {
+      "@deepseek-ai/dsh-tool-bash": "@deepseek-ai/dsh-tool-bash.shell",
+      "@deepseek-ai/dsh-subprocess": "@deepseek-ai/dsh-subprocess.shell",
+      "@deepseek-ai/dsh-tool-pwsh": "@deepseek-ai/dsh-tool-pwsh.shell",
+      "@deepseek-ai/dsh-tool-fs": "@deepseek-ai/dsh-tool-fs.files",
+      "@deepseek-ai/dsh-tool-fs-search": "@deepseek-ai/dsh-tool-fs.search",
+      "@deepseek-ai/dsh-tool-todo": "@deepseek-ai/dsh-tool-todo.plan",
+      "@deepseek-ai/dsh-tool-str-replace-editor": "@deepseek-ai/dsh-tool-str-replace-editor.fs",
+      "@deepseek-ai/dsh-fs-local": "@deepseek-ai/dsh-fs-local.fs",
+      "@deepseek-ai/dsh-tool-powershell": "@deepseek-ai/dsh-tool-powershell.shell",
+      "@deepseek-ai/dsh-tool-wsl": "@deepseek-ai/dsh-tool-wsl.shell",
+      "@deepseek-ai/dsh-tool-working-directory": "@deepseek-ai/dsh-tool-working-directory.fs",
+      "@deepseek-ai/dsh-tool-worktree": "@deepseek-ai/dsh-tool-worktree.fs",
+      "@deepseek-ai/dsh-tool-bash-persistent": "@deepseek-ai/dsh-tool-bash.shell-persistent",
+      "@deepseek-ai/dsh-tool-pwsh-persistent": "@deepseek-ai/dsh-tool-pwsh.shell-persistent"
+    }
+  },
+  "checks": {
+    "solutionBuild": {
+      "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; /home/zhixi/.dotnet/dotnet build DeepSeek-Harness-Sharp.slnx --nologo --tl:off -v minimal",
+      "exitCode": 0,
+      "warnings": 0,
+      "errors": 0,
+      "capture": "plans/工具拆包最终构建.log"
+    },
+    "related": {
+      "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 bwrap --die-with-parent --unshare-pid --ro-bind / / --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.dll' -class \"Dsh.Tests.ToolsTests*\" -class \"Dsh.Tests.JobsTests*\" -class \"Dsh.Tests.WorkingDirectoryTests\" -class \"Dsh.Tests.ConfigBootTests\" -class \"Dsh.Tests.DefaultCompositionTests\" -class \"Dsh.Tests.AttachmentTests\" -class \"Dsh.Tests.AnthropicMessagesTests\" -class \"Dsh.Tests.SafetyCommandGuardTests\" -class \"Dsh.Tests.AgentLoopIntegrationTests\" -class \"Dsh.Tests.ToolPackageTests\" -class \"Dsh.Tests.HotPlugTests\" -noColor -result-ctrf plans/工具拆包相关回归.json",
+      "exitCode": 0,
+      "summary": {
+        "tests": 201,
+        "passed": 176,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 25,
+        "other": 0,
+        "suites": 1,
+        "start": 1792293812532,
+        "stop": 1792293825556,
+        "duration": 13024
+      },
+      "capture": "plans/工具拆包相关回归.log",
+      "machineResult": "plans/工具拆包相关回归.json"
+    },
+    "quick": {
+      "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.dll' -trait- 'Category=GpuStress' -trait- 'Category=OnlyGpu' -trait- 'Category=RenderBench' -trait- 'Category=LlmSmoke' -noColor -result-ctrf plans/工具拆包快速回归.json",
+      "exitCode": 0,
+      "summary": {
+        "tests": 2704,
+        "passed": 2668,
+        "failed": 0,
+        "pending": 4,
+        "skipped": 32,
+        "other": 0,
+        "suites": 1,
+        "start": 1792294444059,
+        "stop": 1792294823937,
+        "duration": 379878
+      },
+      "capture": "plans/工具拆包快速回归.log",
+      "machineResult": "plans/工具拆包快速回归.json",
+      "excludedCategories": [
+        "GpuStress",
+        "OnlyGpu",
+        "RenderBench",
+        "LlmSmoke"
+      ],
+      "pendingTests": [
+        "Dsh.Tests.OutboundProxySmokeTests.RealWebFetch_PinsProxyTarget_AndPreservesTlsIdentity(scheme: \"http\", target: \"https://example.com/\")",
+        "Dsh.Tests.OutboundProxySmokeTests.RealLlm_SavedProxyRoutesConfiguredProvider_AndCompletesTurn",
+        "Dsh.Tests.OutboundProxySmokeTests.RealWebFetch_PinsProxyTarget_AndPreservesTlsIdentity(scheme: \"http\", target: \"http://example.com/\")",
+        "Dsh.Tests.OutboundProxySmokeTests.RealWebFetch_PinsProxyTarget_AndPreservesTlsIdentity(scheme: \"socks5\", target: \"https://example.com/\")"
+      ],
+      "skippedTests": [
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: \"pwsh\")",
+          "message": "Required shell for pwsh is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: \"wsl\")",
+          "message": "Windows-only shell; this host is not Windows"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.Timeout_ResetsSession",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: \"powershell\")",
+          "message": "Windows-only shell; this host is not Windows"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.ExistingPersistentShell_KeepsItsDirectoryAfterCdOutsideRoot(tool: \"pwsh_persistent\")",
+          "message": "Required shell for pwsh_persistent is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.GuiRemoteWorkspaceTests.AutoDeploy_Uploads_And_Hosts_On_Real_Server",
+          "message": "未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: \"pwsh_persistent\")",
+          "message": "Required shell for pwsh_persistent is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: \"pwsh_persistent\")",
+          "message": "Required shell for pwsh_persistent is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.NativePluginAbiTests.PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors",
+          "message": "未发布原生样例(/tmp/m70.nlyNtD/tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so), 先运行 dotnet publish tests/Dsh.NativePluginSample -c Release"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.Exit_ResetsAndNextCallStartsFresh",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.FailedNativeCommand_ReportsItsExitCode",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: \"powershell\")",
+          "message": "Windows-only shell; this host is not Windows"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.TerminatingError_ReportsExitOneAndKeepsTheSession",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.ErrorAsLastStatement_IsMergedAndReportedAsExitOne",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.ErrorFollowedBySuccess_HasNoExitMarker",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.TuiOverlayCpuTests.Slash_Menu_Does_Not_Mix_Right_Panel_Into_Main",
+          "message": "环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: \"powershell\")",
+          "message": "Windows-only shell; this host is not Windows"
+        },
+        {
+          "name": "Dsh.Tests.IrohReceiverTests.Incomplete_Systemd_Registration_Can_Be_Disabled_Without_Leaving_A_Blocked_Receiver",
+          "message": "Requires a reachable systemd user manager."
+        },
+        {
+          "name": "Dsh.Tests.GuiRemoteWorkspaceTests.RemoteWorkspace_ConnectsOverSsh",
+          "message": "未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.MultiLineCommandWithQuotesAndNonAscii_RunsAsOneCommand",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: \"pwsh\")",
+          "message": "Required shell for pwsh is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.JobsTests+PersistentPwsh.LocationVariablesFunctionsAndEnvironment_PersistAcrossCalls",
+          "message": "pwsh is unavailable; skipping the persistent PowerShell tests"
+        },
+        {
+          "name": "Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr",
+          "message": "the tool is registered on Windows only"
+        },
+        {
+          "name": "Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: \"pwsh\")",
+          "message": "Required shell for pwsh is unavailable"
+        },
+        {
+          "name": "Dsh.Tests.MouseReportPtyTests.Reports_Never_Pollute_Input_And_Drag_Resizes_Divider",
+          "message": "环境缺少 /tmp/i70.gvuLg6/home/.dsh/settings.yaml, 无法启动 dsharp"
+        },
+        {
+          "name": "Dsh.Tests.MongoMemoryStoreTests.WritesAndReadsMemoryThroughMongo",
+          "message": "MongoDB is not reachable at mongodb://localhost:27017"
+        }
+      ],
+      "additionalUnverifiedScope": "The five existing ToolsTests.Pwsh tests return early when pwsh is missing; their runner pass status is not execution coverage."
+    },
+    "catalog": {
+      "baselineCommit": "9896c1c68f2c5be687e2c4a3a7b160d4eacc1826",
+      "completeCount": 49,
+      "completeExactMatch": true,
+      "capabilityCount": 14,
+      "capabilityExactMatch": true,
+      "allNamesSchemaDescriptionsOutputsAndOrderMatch": true,
+      "completeBefore": "plans/工具拆包目录基线.json",
+      "completeAfter": "plans/工具拆包完整目录最终.json",
+      "capabilityBefore": "plans/工具拆包能力目录基线.json",
+      "capabilityAfter": "plans/工具拆包能力目录最终.json"
+    }
+  },
+  "realSurface": {
+    "cases": [
+      {
+        "id": "default",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-default' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' --dump-config",
+        "expected": "accept",
+        "actualBinaryExitCode": 0,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI默认.log"
+      },
+      {
+        "id": "disabled",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-disabled' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' --dump-config",
+        "expected": "accept",
+        "actualBinaryExitCode": 0,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI禁用.log"
+      },
+      {
+        "id": "mixed",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-mixed' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' --dump-config",
+        "expected": "reject",
+        "actualBinaryExitCode": 134,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI旧新混用.log"
+      },
+      {
+        "id": "malformed",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-malformed' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' --dump-config",
+        "expected": "reject",
+        "actualBinaryExitCode": 134,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI非法开关.log"
+      },
+      {
+        "id": "malformed-root",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-root-malformed' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' --dump-config",
+        "expected": "reject",
+        "actualBinaryExitCode": 134,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI非法根段.log"
+      },
+      {
+        "id": "template",
+        "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-default' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' config schema --verify --path '/tmp/m70.nlyNtD/src/Dsh.Boot/Profiles/Templates/settings.yaml'",
+        "expected": "accept",
+        "actualBinaryExitCode": 0,
+        "assertionDriverExitCode": 0,
+        "capture": "plans/工具拆包CLI模板验证.log"
+      }
+    ],
+    "configurationSchema": {
+      "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /usr/bin/env -u DSH_HOME -u DSH_HARNESS_HOME HOME='/tmp/i70.gvuLg6/cli-default' /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp.dll' config schema --json",
+      "exitCode": 0,
+      "capture": "plans/工具拆包CLI配置面.json"
+    },
+    "parameterLoading": {
+      "command": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' -- /home/zhixi/.dotnet/dotnet '/tmp/m70.nlyNtD/plans/工具拆包验收/bin/Debug/net10.0/工具拆包验收.dll' catalog '/tmp/i70.gvuLg6/cli-parameters' plans/工具拆包CLI参数目录.json",
+      "exitCode": 0,
+      "capture": "plans/工具拆包CLI参数目录.json",
+      "assertions": {
+        "all14NewIdsPresent": true,
+        "noLegacyIdsPresent": true,
+        "fourDomainSwitchesDisabled": true,
+        "optionalServicesStillEnabled": true,
+        "persistentDescriptionApplied": true,
+        "editorDescriptionApplied": true,
+        "planConfigurationApplied": true,
+        "schemaHasNewIds": [
+          "@deepseek-ai/dsh-tool-bash.shell",
+          "@deepseek-ai/dsh-tool-fs.files"
+        ],
+        "schemaHasNoOldIds": true
+      }
+    },
+    "preservedInputs": [
+      {
+        "original": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/cli-disabled/.dsh/settings.yaml",
+        "preserved": "plans/工具拆包验收/场景/禁用.yaml"
+      },
+      {
+        "original": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/cli-mixed/.dsh/settings.yaml",
+        "preserved": "plans/工具拆包验收/场景/旧新混用.yaml"
+      },
+      {
+        "original": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/cli-malformed/.dsh/settings.yaml",
+        "preserved": "plans/工具拆包验收/场景/非法开关.yaml"
+      },
+      {
+        "original": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/cli-root-malformed/.dsh/settings.yaml",
+        "preserved": "plans/工具拆包验收/场景/非法根段.yaml"
+      },
+      {
+        "original": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/cli-parameters/settings.yaml",
+        "preserved": "plans/工具拆包验收/场景/参数迁移.yaml"
+      }
+    ],
+    "llmOrGuiMainSurfaceRequired": false,
+    "method": "Actual built CLI and production PluginHost/Composition/ConfigBoot catalog/config loading; raw output captures, not a mock TUI or mock LLM."
+  },
+  "preExistingFindings": [
+    {
+      "kind": "cross_domain_activation_order",
+      "originalCompactIndexes": [
+        9,
+        9,
+        10
+      ],
+      "currentInvestigationCompactIndexes": [
+        9,
+        10
+      ],
+      "source": "Unchanged PluginScheduler immediate activation plus asynchronous pump, with ToolRuntime enumerating registration order.",
+      "rawOriginalCaptures": [
+        "plans/工具拆包原始复现1.json",
+        "plans/工具拆包原始复现2.json",
+        "plans/工具拆包原始复现3.json"
+      ],
+      "note": "The final single default capture is exactly equal to the original baseline. This does not assert invariant global ordering for every future startup. The deterministic regression composes the actual capability packages directly."
+    }
+  ],
+  "environment": {
+    "commandPrefix": "cd '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' && export TMPDIR='/tmp/i70.gvuLg6' NODE_COMPILE_CACHE='/tmp/i70.gvuLg6/node' BUN_RUNTIME_TRANSPILER_CACHE_PATH='/tmp/i70.gvuLg6/bun' PATH='/home/zhixi/.dotnet:'\"$PATH\" DOTNET_ROOT='/home/zhixi/.dotnet'; ",
+    "namespacePrefix": "HOME='/tmp/i70.gvuLg6/home' DISPLAY=:0 XDG_RUNTIME_DIR='/tmp/i70.gvuLg6/runtime' XDG_CACHE_HOME='/tmp/i70.gvuLg6/xdg-cache' XDG_STATE_HOME='/tmp/i70.gvuLg6/xdg-state' bwrap --die-with-parent --unshare-pid --ro-bind / / --tmpfs /tmp --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages' '/tmp/m70.nlyNtD' --bind '/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW' '/tmp/i70.gvuLg6' --ro-bind /tmp/.X11-unix /tmp/.X11-unix --dev-bind /dev /dev --proc /proc --chdir '/tmp/m70.nlyNtD' --",
+    "runTmpPhysical": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW",
+    "shortTmpAlias": "/tmp/i70.gvuLg6",
+    "shortAssemblyAlias": "/tmp/w70.PGUr2g",
+    "bindTarget": "/tmp/m70.nlyNtD",
+    "privateDisplay": ":0",
+    "xvfbCommand": "Xvfb -displayfd 1 -screen 0 1280x800x24 -nolisten tcp -noreset -ac",
+    "noRealUserDshWrites": true,
+    "noForegroundFocusOrInputInjection": true,
+    "baselineReproductionWorktree": "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline",
+    "baselineTrackedDiffExitCode": 0
+  },
+  "unverifiedPlatforms": [
+    "Windows execution branches (powershell/wsl)",
+    "macOS runtime",
+    "PowerShell 7 execution (pwsh is not installed)",
+    "NativeAOT sample ABI smoke (published sample missing)",
+    "Real SSH workspace smoke (verification receipt absent)",
+    "MongoDB-backed memory smoke (server unavailable)",
+    "systemd user-manager case",
+    "Two real TUI/PTY menu cases requiring an isolated configured settings.yaml",
+    "Four repository Explicit outbound-proxy/LLM smoke cases"
+  ],
+  "delivery": {
+    "testedCodeCommit": "fef508142a7a5f897f0dbcb39ef18bc26be30fff",
+    "codeCommitTitle": "refactor(tools): split capability packages and migrate plugin IDs",
+    "forkHeadAfterCodePush": "fef508142a7a5f897f0dbcb39ef18bc26be30fff",
+    "pullRequest": {
+      "number": 73,
+      "repository": "forestbat/DeepSeek-Harness-Sharp",
+      "url": "https://github.com/forestbat/DeepSeek-Harness-Sharp/pull/73",
+      "base": "master",
+      "head": "ControlNet:feat/roadmap-tools-packages",
+      "closingDirective": "Closes #70",
+      "stateAtCreation": "OPEN",
+      "merged": false
+    },
+    "sourceSecretScan": {
+      "exitCode": 1,
+      "capture": "plans/工具拆包源码秘密扫描.log",
+      "review": "Only two pre-existing credential-free localhost MongoDB defaults in README and generated settings template; manually inspected. No scanner suppression or unrelated config edits."
+    },
+    "evidenceSecretScan": {
+      "exitCode": 1,
+      "filesScanned": 66,
+      "findings": 8,
+      "finalFilesScanned": 68,
+      "finalFindings": 9,
+      "capture": "plans/工具拆包证据秘密扫描.log",
+      "review": "Every hit is the same credential-free localhost MongoDB default or its captured skip/config message; inspected text contexts and traversed machine JSON strings. core.quotePath=false ensures Unicode paths are actually scanned. No suppression."
+    },
+    "evidenceCommitScope": "Only plans evidence, real inputs, independent acceptance program and .omo/knowledges/工具能力包契约.md; product source and repository regression tests must remain identical to testedCodeCommit. Raw captured logs preserve six pre-existing trailing-whitespace lines; non-log diff check is clean.",
+    "finalHeadReceipt": "Final GitHub/fork head is read after the evidence-only commit and reported at delivery; a committed file cannot contain its own commit hash.",
+    "ciAtInitialReadback": {
+      "assessment": "Not yet green; external CI is left to lead, not represented as a local pass.",
+      "completedSuccess": [
+        "判定受影响校验"
+      ],
+      "skipped": [
+        "工作流与选测规则校验"
+      ],
+      "inProgress": [
+        "准备原生 iroh-ssh（win-x64）",
+        "准备原生 iroh-ssh（linux-x64）"
+      ],
+      "queued": [
+        "准备原生 iroh-ssh（osx-arm64）"
+      ]
+    }
+  },
+  "cleanup": {
+    "status": "completed",
+    "processAudit": "plans/工具拆包资源清理后.json",
+    "processCount": 0,
+    "socketCount": 0,
+    "ownedDisplaySession": "bash_40",
+    "xvfbStopped": true,
+    "baselineWorktreeRemoved": true,
+    "pathsRemoved": [
+      "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW",
+      "/tmp/i70.gvuLg6",
+      "/tmp/w70.PGUr2g",
+      "/tmp/m70.nlyNtD",
+      "/home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline"
+    ],
+    "pathReceipt": "plans/工具拆包路径清理回执.log",
+    "additionalCacheReceipt": "plans/工具拆包附加缓存清理回执.log",
+    "additionalCachesRemoved": [".daemon-tests", "artifacts020/test-homes", "artifacts020/test-tmp", "plans/工具拆包验收/bin", "plans/工具拆包验收/obj"],
+    "preservedBuildArtifacts": "Main project bin/obj, packages feed and artifacts020/gui-screenshots real captures",
+    "primaryWorktreePreserved": true,
+    "otherWorktreesUntouched": true
+  }
+  ,
+  "artifactHashes": {
+    "src/Dsh.Tools.Fs/bin/Debug/net10.0/Dsh.Tools.Fs.dll": "0033ffe9059d73d1dd43d93142f3cad1b43f2d8ec4e657da1fca67776e90f1bc",
+    "src/Dsh.Tools.Search/bin/Debug/net10.0/Dsh.Tools.Search.dll": "64af4544da6d7b0372af2ed261734f4ad0106f04ea0abe50bfc1f5160f0e29c3",
+    "src/Dsh.Tools.Shell/bin/Debug/net10.0/Dsh.Tools.Shell.dll": "59c2f7b7ebd48819eeace59b3f07ed2854b10490fc048fd6cfdfa36c5e390160",
+    "src/Dsh.Tools.Plan/bin/Debug/net10.0/Dsh.Tools.Plan.dll": "f6f9f1ac2a7a6a8960ae7799e6a035632282618009b2ff6f8b86f42eb42b234e",
+    "plans/工具拆包目录基线.json": "c3da325f748db0abcc0fff5a08249c1c492b4dffbe1410a14cb23abb57df5ba8",
+    "plans/工具拆包完整目录最终.json": "c3da325f748db0abcc0fff5a08249c1c492b4dffbe1410a14cb23abb57df5ba8",
+    "plans/工具拆包能力目录基线.json": "ae70e44359c1931e59a79c5d7f01cf0907330fc2458098338d1887c65c42d77b",
+    "plans/工具拆包能力目录最终.json": "ae70e44359c1931e59a79c5d7f01cf0907330fc2458098338d1887c65c42d77b",
+    "plans/工具拆包快速回归.json": "f3c27990469b4b478f592e2b6226fa3c5493075faf58e80d44edc6840d88729f",
+    "plans/工具拆包相关回归.json": "4e6db3fd91a35e810647cde1466e511869368b9cae71850edec043b1c6469a5a",
+    "plans/工具拆包CLI默认.log": "16e328f76be83168f46eaacbc1b9c386bfd8f0cc3701287be9a9f68470bd6288",
+    "plans/工具拆包CLI禁用.log": "a0956f28bd47c3bcb4d41b3498c99564a51752a2c41543314b667d7f11731a46",
+    "plans/工具拆包CLI旧新混用.log": "edbf192f35337a50dceb064ccc58f05b3ca537d86d8cfc8fb00fe1b86959c897",
+    "plans/工具拆包CLI非法开关.log": "1e9ec43db416fcef8194ac6f958cf7b83386b2d53de29fecf40112443c98f16c",
+    "plans/工具拆包CLI非法根段.log": "17777534c1304eb84b19339fc63aa67bac1fe9404c3b1d35bd1318243fb68f22",
+    "plans/工具拆包CLI模板验证.log": "38f40ee77ae03e47943cf66cfd6d6448c1c5bf5aa784ba8b75e212ece12cfb7a",
+    "plans/工具拆包CLI配置面.json": "b6efbe6596bb19b45023df225e5d2178bbf1a09703cde04b9c9f16800642061e",
+    "plans/工具拆包CLI参数目录.json": "26a78c0f7e8e08f3db1119629be2dc297d576ceec5fe09efc91cb18181ecda59",
+    "plans/工具拆包验收/场景/禁用.yaml": "b2383797521ff908a42e82d9e900f8b3ec4d73294f5a66848fa74f3c6da92312",
+    "plans/工具拆包验收/场景/旧新混用.yaml": "448287816a713bb1ece3a3f40f96b48fb9e1312df0fbdb750264848fb30192b2",
+    "plans/工具拆包验收/场景/非法开关.yaml": "ddec4fada3e4f476da295678e49aa75908069acf09b8dcdb6fb4929d2f606e03",
+    "plans/工具拆包验收/场景/非法根段.yaml": "3d2a93cded7b5fce693102cd6cb2b89175e3f8ed9c1adc405ab11e3a7d9cb87e",
+    "plans/工具拆包验收/场景/参数迁移.yaml": "823540352a8f54f31bcdb5d23dd9e6355e280e80fabf77b75deb578ae30a3c9b"
+  }
+}

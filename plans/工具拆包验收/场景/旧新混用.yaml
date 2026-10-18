@@ -1,0 +1,3 @@
+plugins:
+  "@deepseek-ai/dsh-tool-todo": false
+  "@deepseek-ai/dsh-tool-todo.plan": true

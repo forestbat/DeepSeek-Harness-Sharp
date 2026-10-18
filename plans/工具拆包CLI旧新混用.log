@@ -1,0 +1,7 @@
+Unhandled exception. Dsh.Runtime.RuntimeException: Plugin package '@deepseek-ai/dsh-tool-todo' moved to '@deepseek-ai/dsh-tool-todo.plan'. Rename its settings.yaml/profile key, preserving enabled, permissions and all parameters, and remove the old key even when the new key is also present. See README: 工具能力包迁移.
+   at Dsh.Boot.PluginSettingsSection.Parse(Object raw) in /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Boot/PluginSettings.cs:line 144
+   at Dsh.Boot.PluginSettingsSection.ParseDocument(String yaml) in /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Boot/PluginSettings.cs:line 131
+   at Dsh.Boot.HarnessSettings.Load(HarnessHome home) in /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/src/Dsh.Boot/HarnessSettings.cs:line 82
+   at Dsh.Host.HarnessEntrypoint.RunAsync(String[] args) in /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/Dsh.Host/HarnessEntrypoint.cs:line 99
+   at DeepSeek_Harness_Sharp.Program.<Main>(String[] args)
+CLI_EXIT=134 CASE=mixed

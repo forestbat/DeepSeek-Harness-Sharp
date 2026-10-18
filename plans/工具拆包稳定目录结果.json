@@ -1,0 +1,3432 @@
+[
+  {
+    "name": "ide_history",
+    "description": "Read IDE local history (VSCode Timeline history and JetBrains Local History) for a file that is not recoverable from git. Use action=list to find historical versions of a path and action=read with the entry timestamp to fetch the content. Read-only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "read",
+            "stores"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute file path to filter by (list/read)."
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Entry timestamp in epoch milliseconds, from a list result (read)."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Optional provider filter: vscode | jetbrains."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum entries to return (list, default 20)."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  {
+    "name": "exit_plan_mode",
+    "description": "Use only in plan mode. Present your plan for the user\u0027s review and, on approval, leave plan mode. Send the COMPLETE plan as markdown, starting with a # heading that names it. The user may approve (carry out the plan from your next step) or keep planning \u2014 their feedback comes back in the tool result; revise and present again.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "type": "string",
+          "description": "The complete plan, as markdown, starting with a # heading that names it."
+        }
+      },
+      "required": [
+        "plan"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approved"
+      ],
+      "properties": {
+        "approved": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    }
+  },
+  {
+    "name": "ask_user_question",
+    "description": "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding. Send one or more questions, each with a stable id that will be echoed in the answer.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "description": "Questions to ask the user before continuing.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable id for this question; echoed in the answer."
+              },
+              "question": {
+                "type": "string",
+                "description": "The specific question to ask the user."
+              },
+              "header": {
+                "type": "string",
+                "description": "Optional short heading for the question, such as \u0022Confirm\u0022 or \u0022Choose Mode\u0022."
+              },
+              "options": {
+                "type": "array",
+                "description": "Optional choices to show the user. If you recommend one, put it first and append \u0022(Recommended)\u0022 to that label.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "Short user-facing option label."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "One sentence explaining the tradeoff or impact."
+                    }
+                  }
+                }
+              },
+              "multi_select": {
+                "type": "boolean",
+                "description": "Whether the user may select more than one option. Defaults to false."
+              }
+            },
+            "required": [
+              "id",
+              "question"
+            ]
+          }
+        }
+      },
+      "required": [
+        "questions"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answers"
+      ],
+      "properties": {
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "selected"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "bash",
+    "description": "Execute a bash command (\u0060bash -c\u0060) and return its stdout/stderr. Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls \u2014 pass \u0060workdir\u0060 instead of using \u0060cd\u0060. Non-zero exits are reported as \u0060[exit code: N]\u0060. On Windows this bash is Git-Bash (MSYS2), not WSL: drives appear as \u0060/c/...\u0060, Windows executables run directly, and Linux-only tools are missing \u2014 use the \u0060wsl\u0060 tool for a real Linux distribution. For PowerShell use \u0060pwsh\u0060 (PowerShell 7, cross-platform) or, on Windows only, \u0060powershell\u0060 (Windows PowerShell 5.1). Current harness environment facts are exposed through managed \u0060$DSH_*\u0060 variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as \u0060[sandbox: file access denied under \u003Cmode\u003E mode]\u0060 \u2014 a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Background execution is not available; long-running commands must finish within the timeout.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to execute."
+        },
+        "description": {
+          "type": "string",
+          "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \u0022ls\u0022 \u2192 \u0022List files in current directory\u0022; \u0022git status\u0022 \u2192 \u0022Show working tree status\u0022; \u0022npm install\u0022 \u2192 \u0022Install package dependencies\u0022."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory for this command. Defaults to the session working directory; a relative path is resolved against it."
+        },
+        "envs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to set for this command (object of string values). \u0060DSH_*\u0060 keys are ignored."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "timedOut",
+        "aborted",
+        "timeoutMs",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "foreground"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        },
+        "stderr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "bash_persistent",
+    "description": "Run commands in a persistent bash shell. State, including the current directory and exported environment variables, persists across calls for this agent. On Windows this bash is Git-Bash (MSYS2), not WSL; use \u0060pwsh_persistent\u0060 for a persistent PowerShell session.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to run. Relative path is preferred in the command."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "board_post",
+    "description": "Post a message to this delegation tree\u0027s shared board. Peer coordination only: material findings, questions, blockers, candidate results. The full formatted message must fit within 4 KiB.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "type",
+        "body"
+      ],
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "Recipient: a participant session id, \u0022main\u0022 (the root session), or \u0022ALL\u0022."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "INFO",
+            "ASK",
+            "RESULT",
+            "HOLD",
+            "VETO"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "Board message id this post corrects or answers."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "seq"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "board_read",
+    "description": "Read this delegation tree\u0027s shared board incrementally. Pass the cursor from your last read as \u0060since\u0060; the result carries the next cursor, a hasMore flag, and the participant roster.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "type": "integer",
+          "description": "Cursor from your last board_read; omit to read from the beginning."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max messages to return (1-50, default 20)."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "messages",
+        "cursor",
+        "hasMore",
+        "participants",
+        "claims"
+      ],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {}
+        },
+        "cursor": {
+          "type": "integer"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "items": {}
+        }
+      }
+    }
+  },
+  {
+    "name": "board_claim",
+    "description": "Soft-reserve a file region (advisory line lock) before editing it. Overlapping claims come back as conflicts; the claim auto-expires after ttl seconds if you forget to release it.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_line",
+        "end_line",
+        "intent"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path being reserved."
+        },
+        "start_line": {
+          "type": "integer",
+          "description": "First line (1-based, inclusive)."
+        },
+        "end_line": {
+          "type": "integer",
+          "description": "Last line (inclusive, \u003E= start_line)."
+        },
+        "intent": {
+          "type": "string",
+          "description": "What you intend to change."
+        },
+        "ttl": {
+          "type": "integer",
+          "description": "Seconds until auto-release (1-3600, default 600)."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "expires_at",
+        "conflicts"
+      ],
+      "properties": {
+        "claim_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "integer"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {}
+        }
+      }
+    }
+  },
+  {
+    "name": "board_release",
+    "description": "Release your soft-reserved file region claim(s): pass claim_id, or path to release all your claims on that path.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "released"
+      ],
+      "properties": {
+        "released": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "read",
+    "description": "Read a UTF-8 text file and return line-numbered content.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to read, resolved by the filesystem backend."
+        },
+        "offset": {
+          "type": "number",
+          "description": "1-based first line to return. Defaults to 1."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum number of lines to return. Defaults to 2000."
+        }
+      },
+      "required": [
+        "file_path"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "offset",
+        "lines",
+        "totalLines"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "number",
+              "text"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "totalLines": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "read_image",
+    "description": "Read a local image file (PNG/JPEG/GIF/BMP/PBM/TGA/TIFF/WEBP/EXR/QOI/ICO/CUR/ANI) and return the image itself to the model. Images whose long edge exceeds 2000px are downscaled automatically; the result states the original size and the coordinate multiplier.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the image file, resolved like the read tool (relative paths use the session working directory). Extension-less files are identified by their content."
+        }
+      },
+      "required": [
+        "file_path"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "image"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attachmentId",
+            "mediaType",
+            "bytes",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "attachmentId": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "original": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "height"
+          ],
+          "properties": {
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "write",
+    "description": "Create or fully replace a UTF-8 text file.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to write, resolved by the filesystem backend."
+        },
+        "content": {
+          "type": "string",
+          "description": "Full UTF-8 text content to write."
+        }
+      },
+      "required": [
+        "file_path",
+        "content"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "operation",
+        "after"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "after": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "edit",
+    "description": "Edit an existing UTF-8 text file by replacing literal text.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to edit, resolved by the filesystem backend."
+        },
+        "old_string": {
+          "type": "string",
+          "description": "Literal text to replace. Must match exactly."
+        },
+        "new_string": {
+          "type": "string",
+          "description": "Literal replacement text. Use an empty string to delete the match."
+        },
+        "replace_all": {
+          "type": "boolean",
+          "description": "Replace all matches. Defaults to false; when false, old_string must appear exactly once."
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "glob",
+    "description": "Find files whose paths match a glob pattern. Returns matching file paths \u2014 never directories \u2014 including hidden and ignored files (VCS metadata directories are excluded). Up to 100 paths come back in modification-time order; a larger result returns the first 100 paths in modification-time order, says so, and reports where the complete sorted list was saved. This tool does not enumerate directory entries.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern to match file paths against (e.g. \u0022**/*.ts\u0022, \u0022src/**/*.test.js\u0022). A pattern with no \u0022/\u0022 matches the basename at any depth, so \u0022*\u0022 and \u0022*.ts\u0022 both search the whole tree; include a separator to anchor the depth."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory to search in. Defaults to the session working directory; a relative path resolves against it."
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "paths"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "grep",
+    "description": "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first 250 matches inline; a capped result reports where the complete match list was saved. Use read on a matched file for surrounding context.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Regular expression to search for (ripgrep syntax)."
+        },
+        "path": {
+          "type": "string",
+          "description": "File or directory to search. Defaults to the session working directory; a relative path resolves against it."
+        },
+        "include": {
+          "type": "string",
+          "description": "One glob filter for which files to search (e.g. \u0022*.ts\u0022, \u0022*.{js,jsx}\u0022). Not a list; negation is not supported."
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matches"
+      ],
+      "properties": {
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "lineNumber",
+              "line"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "lineNumber": {
+                "type": "integer"
+              },
+              "line": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "get_goal",
+    "description": "Read the current same-session goal, including its exact id/revision, objective, phase, completed continuation rounds, round limit, blocker reason when present, and whether another continuation is armed. Call this before updating a goal.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal",
+            "activation"
+          ],
+          "properties": {
+            "goal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "revision",
+                "objective",
+                "phase",
+                "roundsStarted",
+                "maxGoalRounds"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "objective": {
+                  "type": "string"
+                },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "paused",
+                    "blocked",
+                    "complete"
+                  ]
+                },
+                "roundsStarted": {
+                  "type": "integer"
+                },
+                "maxGoalRounds": {
+                  "type": "integer"
+                },
+                "blockedReason": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "activation": {
+              "type": "string",
+              "enum": [
+                "armed",
+                "disarmed"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "create_goal",
+    "description": "Create one persisted same-session completion goal when the current direct human request is a long-running objective that should continue across autonomous goal rounds. You may infer that intent without requiring the user to say \u0022create a goal\u0022. Do not use this for trivial single-turn work. Execution rejects non-human and subagent authority.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "objective": {
+          "type": "string",
+          "description": "The concrete completion objective inferred from the direct human request."
+        },
+        "max_goal_rounds": {
+          "type": "number",
+          "description": "Optional positive safe-integer limit on automatic continuation rounds."
+        }
+      },
+      "required": [
+        "objective"
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal",
+            "activation"
+          ],
+          "properties": {
+            "goal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "revision",
+                "objective",
+                "phase",
+                "roundsStarted",
+                "maxGoalRounds"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "objective": {
+                  "type": "string"
+                },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "paused",
+                    "blocked",
+                    "complete"
+                  ]
+                },
+                "roundsStarted": {
+                  "type": "integer"
+                },
+                "maxGoalRounds": {
+                  "type": "integer"
+                },
+                "blockedReason": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "activation": {
+              "type": "string",
+              "enum": [
+                "armed",
+                "disarmed"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "update_goal",
+    "description": "Update the exact current goal revision. edit, pause, and resume require a direct top-level human request. During an automatic continuation of the current goal, complete and blocked are also allowed. blocked is rejected before the configured minimum round count; the model remains responsible for judging that the same condition persisted across those rounds and must explain it in blocked_reason.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "goal_id": {
+          "type": "string",
+          "description": "Exact id returned by get_goal."
+        },
+        "revision": {
+          "type": "number",
+          "description": "Exact positive revision returned by get_goal."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "edit",
+            "pause",
+            "resume",
+            "complete",
+            "blocked"
+          ],
+          "description": "edit | pause | resume | complete | blocked"
+        },
+        "objective": {
+          "type": "string",
+          "description": "Replacement objective; valid only with action edit."
+        },
+        "max_goal_rounds": {
+          "type": "number",
+          "description": "Replacement cap; valid only with action edit."
+        },
+        "blocked_reason": {
+          "type": "string",
+          "description": "Concrete blocking condition; required only with action blocked."
+        }
+      },
+      "required": [
+        "goal_id",
+        "revision",
+        "action"
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal",
+            "activation"
+          ],
+          "properties": {
+            "goal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "revision",
+                "objective",
+                "phase",
+                "roundsStarted",
+                "maxGoalRounds"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer"
+                },
+                "objective": {
+                  "type": "string"
+                },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "paused",
+                    "blocked",
+                    "complete"
+                  ]
+                },
+                "roundsStarted": {
+                  "type": "integer"
+                },
+                "maxGoalRounds": {
+                  "type": "integer"
+                },
+                "blockedReason": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "activation": {
+              "type": "string",
+              "enum": [
+                "armed",
+                "disarmed"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "job_output",
+    "description": "Read a background job. Stream jobs return only output since the previous read; final-output jobs return their result after settlement. Every response ends with \u0060[status: ...]\u0060. Reads are non-blocking unless \u0060wait: true\u0060, which waits up to the configured cap.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "description": "Job id returned by the tool that started the background work."
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Block until the job reaches a terminal status or the timeout expires. A timed-out wait returns [status: running] and leaves the job alive."
+        },
+        "timeout_ms": {
+          "type": "number",
+          "description": "Max wait in milliseconds (only meaningful with wait: true). Defaults to the configured wait timeout; capped by the configured maximum."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "job"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "job": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "status",
+            "startedAt"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "stopping",
+                "completed",
+                "killed",
+                "failed"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            },
+            "startedAt": {
+              "type": "integer"
+            },
+            "finishedAt": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "job_list",
+    "description": "List your background jobs (running and finished) with their ids, kinds, and statuses.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "status",
+          "startedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "stopping",
+              "completed",
+              "killed",
+              "failed"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "job_kill",
+    "description": "Request cancellation of a running background job by job id. Returns immediately; the job settles as killed once its work actually stops.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "description": "Job id returned by the tool that started the background work."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional short reason, recorded in the log and forwarded to the job."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "job"
+      ],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "cancellation-requested",
+            "already-finished"
+          ]
+        },
+        "job": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "status",
+            "startedAt"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "stopping",
+                "completed",
+                "killed",
+                "failed"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            },
+            "startedAt": {
+              "type": "integer"
+            },
+            "finishedAt": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "present",
+    "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "Usually the 1-2 most important deliverables; at most 8 per call.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path of an existing regular file. Relative paths resolve against the session working directory."
+              },
+              "description": {
+                "type": "string",
+                "description": "Brief description for the user."
+              }
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn",
+        "files"
+      ],
+      "properties": {
+        "turn": {
+          "type": "integer"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "pwsh",
+    "description": "Execute a PowerShell 7 command (\u0060pwsh -Command\u0060) and return its stdout/stderr. Each call runs in a fresh pwsh process: no state (cwd, variables, functions) persists between calls \u2014 pass \u0060workdir\u0060 instead of using \u0060cd\u0060. Paths use the host\u0027s native form (\u0060C:\\...\u0060 on Windows); read environment variables with \u0060$env:NAME\u0060. Non-zero exits are reported as \u0060[exit code: N]\u0060. pwsh is cross-platform PowerShell 7; on Windows prefer it over \u0060powershell\u0060 (Windows PowerShell 5.1) unless a command needs 5.1-only modules or COM. On Linux/macOS native commands and paths are case-sensitive, and \u0060ls\u0060/\u0060cat\u0060/\u0060curl\u0060 are the real executables rather than aliases. Use \u0060bash\u0060 for POSIX shell syntax and \u0060wsl\u0060 for a Linux distribution on Windows. Current harness environment facts are exposed through managed \u0060$env:DSH_*\u0060 variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as \u0060[sandbox: file access denied under \u003Cmode\u003E mode]\u0060 \u2014 a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. On Windows a force-killed command settles as \u0060[exit code: 1]\u0060 without a signal marker \u2014 treat it as an interruption, not a command failure. Background execution is not available; long-running commands must finish within the timeout.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The PowerShell command to execute."
+        },
+        "description": {
+          "type": "string",
+          "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \u0022ls\u0022 \u2192 \u0022List files in current directory\u0022; \u0022git status\u0022 \u2192 \u0022Show working tree status\u0022; \u0022Get-Process\u0022 \u2192 \u0022List running processes\u0022."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory for this command. Defaults to the session working directory; a relative path is resolved against it."
+        },
+        "envs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to set for this command (object of string values). \u0060DSH_*\u0060 keys are ignored."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "timedOut",
+        "aborted",
+        "timeoutMs",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "foreground"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        },
+        "stderr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "pwsh_persistent",
+    "description": "Run PowerShell 7 (\u0060pwsh\u0060) commands in a persistent session. State, including the current location, variables, functions, imported modules and \u0060$env:\u0060 changes, persists across calls for this agent. All output streams are merged into one text result. A failed command ends with \u0060[exit code: N]\u0060: N is the exit code of the last native command when it failed, otherwise 1 when the last statement reported an error or a terminating error was thrown. \u0060exit\u0060 ends the session and the next call starts a fresh one. Use \u0060pwsh\u0060 for a one-off command, \u0060bash_persistent\u0060 for persistent POSIX shell state, and \u0060powershell\u0060 (Windows only) when Windows PowerShell 5.1 is required.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The PowerShell command to run. Relative path is preferred in the command."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "schedule_create",
+    "description": "Create a reminder in the current session that delivers prompt back to this session when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. When the session is resumed after being closed, an overdue one-shot is delivered once and a recurring reminder delivers only its latest missed occurrence.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt",
+        "title"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "Reminder content to deliver when the target becomes due."
+        },
+        "title": {
+          "type": "string",
+          "description": "Concise task name in the user\u0027s language, at most 120 characters. Name only the core action and subject; keep essential target identifiers such as PR numbers and branch names. Do not include execution frequency, scheduled dates or times, time zones, task status, or execution details. Put scheduling information in the timing parameters and execution instructions in prompt."
+        },
+        "after_seconds": {
+          "type": "number",
+          "description": "Delay in whole seconds."
+        },
+        "every_seconds": {
+          "type": "number",
+          "description": "Fixed-rate interval in whole seconds, at least 60, aligned to the time it is saved."
+        },
+        "daily": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "time_zone"
+          ],
+          "description": "Every day at a local time.",
+          "properties": {
+            "time": {
+              "type": "string",
+              "description": "HH:mm:ss with optional 1-3 fractional digits, for example 23:00:00.125."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            }
+          }
+        },
+        "weekly": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "time_zone",
+            "weekdays"
+          ],
+          "description": "On the given weekdays at a local time.",
+          "properties": {
+            "time": {
+              "type": "string",
+              "description": "HH:mm:ss with optional 1-3 fractional digits, for example 09:00:00.125."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            },
+            "weekdays": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "description": "ISO weekdays, Monday 1 through Sunday 7, without repetitions."
+            }
+          }
+        },
+        "cron": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expression",
+            "time_zone"
+          ],
+          "description": "Five-field Vixie cron expression in a time zone.",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "minute hour day-of-month month day-of-week, for example \u0022*/15 9-17 * * 1-5\u0022. Numeric values, *, ascending ranges, */n, a-b/n, and comma-separated lists only; no names, macros, ?, L, W, #, or seconds field. If either day field starts with *, both day fields must match; otherwise either may match."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            }
+          }
+        },
+        "at": {
+          "description": "Absolute one-shot target: YYYY-MM-DDTHH:mm:ss with optional 1-3 fractional digits and uppercase Z or a numeric offset \u002B/-HH:mm (00-23 hours, 00-59 minutes; not -00:00), or a local date, time, and time_zone. A local time that does not exist in the zone is rejected; a repeated local time uses the earlier instant.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "date",
+                "time",
+                "time_zone"
+              ],
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "description": "yyyy-MM-dd"
+                },
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "prompt",
+        "kind",
+        "scheduledAt",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "after",
+            "at",
+            "every",
+            "daily",
+            "weekly",
+            "cron"
+          ]
+        },
+        "scheduledAt": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "scheduled",
+            "overdue"
+          ]
+        },
+        "afterSeconds": {
+          "type": "integer"
+        },
+        "everySeconds": {
+          "type": "integer"
+        },
+        "time": {
+          "type": "string"
+        },
+        "timeZone": {
+          "type": "string"
+        },
+        "weekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "expression": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "schedule_list",
+    "description": "List the active reminders in the current session.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "prompt",
+          "kind",
+          "scheduledAt",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "after",
+              "at",
+              "every",
+              "daily",
+              "weekly",
+              "cron"
+            ]
+          },
+          "scheduledAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "overdue"
+            ]
+          },
+          "afterSeconds": {
+            "type": "integer"
+          },
+          "everySeconds": {
+            "type": "integer"
+          },
+          "time": {
+            "type": "string"
+          },
+          "timeZone": {
+            "type": "string"
+          },
+          "weekdays": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "expression": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "schedule_update",
+    "description": "Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Schedule id returned by schedule_list."
+        },
+        "title": {
+          "type": "string",
+          "description": "New task name; follow the schedule_create title rules."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "New reminder content."
+        },
+        "every_seconds": {
+          "type": "number",
+          "description": "Fixed-rate interval in whole seconds, at least 60, aligned to the time it is saved."
+        },
+        "daily": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "time_zone"
+          ],
+          "description": "Every day at a local time.",
+          "properties": {
+            "time": {
+              "type": "string",
+              "description": "HH:mm:ss with optional 1-3 fractional digits, for example 23:00:00.125."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            }
+          }
+        },
+        "weekly": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "time_zone",
+            "weekdays"
+          ],
+          "description": "On the given weekdays at a local time.",
+          "properties": {
+            "time": {
+              "type": "string",
+              "description": "HH:mm:ss with optional 1-3 fractional digits, for example 09:00:00.125."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            },
+            "weekdays": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "description": "ISO weekdays, Monday 1 through Sunday 7, without repetitions."
+            }
+          }
+        },
+        "cron": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expression",
+            "time_zone"
+          ],
+          "description": "Five-field Vixie cron expression in a time zone.",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "minute hour day-of-month month day-of-week, for example \u0022*/15 9-17 * * 1-5\u0022. Numeric values, *, ascending ranges, */n, a-b/n, and comma-separated lists only; no names, macros, ?, L, W, #, or seconds field. If either day field starts with *, both day fields must match; otherwise either may match."
+            },
+            "time_zone": {
+              "type": "string",
+              "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+            }
+          }
+        },
+        "at": {
+          "description": "Absolute one-shot target: YYYY-MM-DDTHH:mm:ss with optional 1-3 fractional digits and uppercase Z or a numeric offset \u002B/-HH:mm (00-23 hours, 00-59 minutes; not -00:00), or a local date, time, and time_zone. A local time that does not exist in the zone is rejected; a repeated local time uses the earlier instant.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "date",
+                "time",
+                "time_zone"
+              ],
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "description": "yyyy-MM-dd"
+                },
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "title",
+            "prompt",
+            "kind",
+            "scheduledAt",
+            "state"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "after",
+                "at",
+                "every",
+                "daily",
+                "weekly",
+                "cron"
+              ]
+            },
+            "scheduledAt": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "scheduled",
+                "overdue"
+              ]
+            },
+            "afterSeconds": {
+              "type": "integer"
+            },
+            "everySeconds": {
+              "type": "integer"
+            },
+            "time": {
+              "type": "string"
+            },
+            "timeZone": {
+              "type": "string"
+            },
+            "weekdays": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "expression": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "updated",
+            "code"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "updated": {
+              "const": false
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "schedule_not_found",
+                "schedule_ended"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "schedule_delete",
+    "description": "Delete a reminder in the current session, active or ended. Deletion does not retract a reminder message that is already queued.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Exact schedule id."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "deleted"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "code": {
+          "const": "schedule_not_found"
+        }
+      }
+    }
+  },
+  {
+    "name": "session_search",
+    "description": "Search earlier conversation history for a keyword and return matching sessions with snippets.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Keywords to search for in user, assistant and tool text."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum hits; defaults to 20."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hits"
+      ],
+      "properties": {
+        "hits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sessionId",
+              "seq",
+              "type",
+              "snippet"
+            ],
+            "properties": {
+              "sessionId": {
+                "type": "string"
+              },
+              "seq": {
+                "type": "integer"
+              },
+              "type": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "description": "Custom editing tool for viewing, creating and editing files\n* State is persistent across command calls and discussions with the user\n* If \u0060path\u0060 is a file, \u0060view\u0060 displays the result of applying \u0060cat -n\u0060. If \u0060path\u0060 is a directory, \u0060view\u0060 lists non-hidden files and directories up to 2 levels deep\n* The \u0060create\u0060 command cannot be used if the specified \u0060path\u0060 already exists as a file\n* If a \u0060command\u0060 generates a long output, it will be truncated and marked with \u0060\u003Cresponse clipped\u003E\u0060\n* A null placeholder for a parameter unused by the selected command is treated as omitted. Required parameters still need values; omit \u0060str_replace.new_str\u0060 rather than setting it to null when deleting a match\n\nNotes for using the \u0060str_replace\u0060 command:\n* The \u0060old_str\u0060 parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!\n* If the \u0060old_str\u0060 parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in \u0060old_str\u0060 to make it unique\n* The \u0060new_str\u0060 parameter should contain the edited lines that should replace the \u0060old_str\u0060",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "path"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "enum": [
+            "view",
+            "create",
+            "str_replace",
+            "insert"
+          ],
+          "description": "The commands to run. Allowed options are: \u0060view\u0060, \u0060create\u0060, \u0060str_replace\u0060, \u0060insert\u0060."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path to file or directory, e.g. \u0060/repo/file.py\u0060 or \u0060/repo\u0060."
+        },
+        "file_text": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required string parameter of \u0060create\u0060 command, with the content of the file to be created. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "insert_line": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required integer parameter of \u0060insert\u0060 command. The \u0060new_str\u0060 will be inserted AFTER the line \u0060insert_line\u0060 of \u0060path\u0060. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "new_str": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional string parameter of \u0060str_replace\u0060 command containing the new string (if omitted, no string will be added). Required string parameter of \u0060insert\u0060 command containing the string to insert. A null placeholder is accepted only by commands that do not use this parameter."
+        },
+        "old_str": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required string parameter of \u0060str_replace\u0060 command containing the string in \u0060path\u0060 to replace. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "view_range": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional parameter of \u0060view\u0060 command when \u0060path\u0060 points to a file. If omitted or null, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting \u0060[start_line, -1]\u0060 shows all lines from \u0060start_line\u0060 to the end of the file."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "subagent",
+    "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work \u2014 research, a scoped implementation, an analysis \u2014 so it does not consume this conversation\u0027s context. The subagent returns its result, not its intermediate steps. Give it a complete, standalone prompt: it does not see this conversation. Set \u0060run_in_background: true\u0060 to get a job id back immediately instead of waiting for the result. Child LLM selection is optional: omit \u0060provider\u0060, \u0060model\u0060 and \u0060reasoning_effort\u0060 to use the configured child defaults and inherit the rest from this conversation. To run the child on another route, call \u0060list_subagent_models\u0060 and pass one listed \u0060provider\u0060 and \u0060model\u0060 together; changing the route without \u0060reasoning_effort\u0060 uses that model\u0027s default effort.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "prompt"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "A short (3\u20135 word) description of the task to delegate."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The prompt for the subagent. The subagent does not have any of your conversation history, so include all necessary information and context in the prompt."
+        },
+        "run_in_background": {
+          "type": "boolean",
+          "description": "Set to \u0060true\u0060 to run this subagent in the background. \u0060true\u0060 returns a background job id immediately; \u0060false\u0060 waits and returns the subagent\u0027s final reply."
+        },
+        "provider": {
+          "type": "string",
+          "description": "LLM provider id for the child, as listed by \u0060list_subagent_models\u0060. Supply together with \u0060model\u0060; omit both to keep the default route."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model id for the child, as listed by \u0060list_subagent_models\u0060 for that provider. Supply together with \u0060provider\u0060."
+        },
+        "reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort for the child\u0027s route, one of the efforts \u0060list_subagent_models\u0060 lists for it. Omit to inherit a compatible effort or use a newly selected model\u0027s default."
+        }
+      }
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "jobId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "background"
+              ]
+            },
+            "jobId": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "subagentId"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "continuable"
+              ]
+            },
+            "subagentId": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "runId",
+            "output"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "foreground"
+              ]
+            },
+            "runId": {
+              "type": "string"
+            },
+            "output": {
+              "type": "array",
+              "items": {}
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "send_message",
+    "description": "Send a message to a live direct child subagent; the target treats it as a user message injected at the next step boundary. Also usable toward the direct parent of this session while running as a subagent.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content",
+        "target"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Plain-text content delivered as one user message."
+        },
+        "target": {
+          "type": "string",
+          "enum": [
+            "child",
+            "parent"
+          ],
+          "description": "Address a direct child subagent, or the direct parent while running as a subagent."
+        },
+        "childId": {
+          "type": "string",
+          "description": "Target child subagent id (from \u0060subagent\u0060 with run_in_background, or \u0060list_agents\u0060). Required when target is \u0060child\u0060."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "delivered"
+      ],
+      "properties": {
+        "delivered": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "interrupt_agent",
+    "description": "Interrupt a live direct child subagent (cancels its current work). Unknown or already-finished ids are accepted as a no-op.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "childId"
+      ],
+      "properties": {
+        "childId": {
+          "type": "string",
+          "description": "Child subagent id to interrupt (from \u0060subagent\u0060 with run_in_background, or \u0060list_agents\u0060)."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "list_agents",
+    "description": "List the durable subagent identity of every session-backed subagent of this session (continuable and one-shot). Use \u0060scope: \u0022children\u0022\u0060 for direct children or \u0060scope: \u0022descendants\u0022\u0060 for the whole subtree. Corrupt rows are kept as diagnostic entries.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "children",
+            "descendants"
+          ],
+          "description": "Enumeration scope: \u0060children\u0060 lists direct children, \u0060descendants\u0060 lists the entire subtree."
+        }
+      }
+    },
+    "output": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id",
+              "status"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "child"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "idle",
+                  "ready"
+                ]
+              },
+              "parent": {
+                "type": "string"
+              },
+              "depth": {
+                "type": "integer"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id",
+              "reason"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "diagnostic"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "corrupt",
+                  "unsupported",
+                  "unavailable"
+                ]
+              },
+              "parent": {
+                "type": "string"
+              },
+              "depth": {
+                "type": "integer"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "list_subagent_models",
+    "description": "List the LLM routes available to subagents without changing the current agent. Each row is one provider and model (with its reasoning efforts when advertised) that can be passed unchanged as the subagent tool\u0027s \u0060provider\u0060, \u0060model\u0060 and \u0060reasoning_effort\u0060. Only providers with a configured API key are listed. Pass \u0060provider\u0060 to list a single provider\u0027s models.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Registered LLM provider id. Omit to list the routes of every provider."
+        }
+      }
+    },
+    "output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model",
+          "name"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reasoningEfforts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultReasoningEffort": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "terminal_open",
+    "description": "Create a persistent, owner-isolated terminal session from a registered backend type. Use this for shell or REPL state that must survive across tool calls.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Registered terminal backend type, usually \u0022shell\u0022."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional owner-local display name such as \u0022main\u0022 or \u0022gdb\u0022."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Initial working directory. Defaults to the session working directory; a relative path resolves against it."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "running"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "exited"
+                },
+                "exitCode": {
+                  "oneOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "signal": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "exitCode",
+                "signal"
+              ]
+            }
+          ]
+        },
+        "motd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "type",
+        "status",
+        "motd"
+      ]
+    }
+  },
+  {
+    "name": "terminal_send",
+    "description": "Send text to a persistent terminal. By default Enter is submitted and the call waits for a prompt, stdin wait, output silence, timeout, or session exit. Background mode returns a job id for job_output/job_kill.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "text"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Terminal session id returned by terminal_open or terminal_list."
+        },
+        "text": {
+          "type": "string",
+          "description": "UTF-8 text to write to the terminal."
+        },
+        "submit": {
+          "type": "boolean",
+          "description": "Submit Enter after text (default true). Set false for control characters or incomplete REPL input."
+        },
+        "run_in_background": {
+          "type": "boolean",
+          "description": "Return a job id immediately; collect with job_output or stop with job_kill."
+        }
+      }
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "background"
+            },
+            "jobId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "jobId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "foreground"
+            },
+            "viewport": {
+              "type": "string"
+            },
+            "waitReason": {
+              "type": "string",
+              "enum": [
+                "stdin_read",
+                "inferred_idle",
+                "timeout",
+                "session_exit"
+              ]
+            },
+            "sessionStatus": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "running"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "exited"
+                    },
+                    "exitCode": {
+                      "oneOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "signal": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "exitCode",
+                    "signal"
+                  ]
+                }
+              ]
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "viewport",
+            "waitReason",
+            "sessionStatus",
+            "truncated"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "terminal_read",
+    "description": "Read a bounded page of retained output from a persistent terminal without sending input.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Terminal session id."
+        },
+        "offset": {
+          "type": "number",
+          "description": "Newest-relative line offset (default 0)."
+        },
+        "count": {
+          "type": "number",
+          "description": "Requested line count (default 500; backend caps apply)."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "totalLines": {
+          "type": "integer"
+        },
+        "lineBegin": {
+          "type": "integer"
+        },
+        "lineEnd": {
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "text",
+        "totalLines",
+        "lineBegin",
+        "lineEnd",
+        "truncated"
+      ]
+    }
+  },
+  {
+    "name": "terminal_signal",
+    "description": "Send an allowed signal to the current foreground process group of a persistent terminal.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "signal"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Terminal session id."
+        },
+        "signal": {
+          "type": "string",
+          "enum": [
+            "SIGINT",
+            "SIGTERM",
+            "SIGKILL",
+            "SIGTSTP",
+            "SIGHUP"
+          ],
+          "description": "Signal to deliver. Shell-targeted SIGKILL is rejected; use terminal_close."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivered": {
+          "type": "boolean",
+          "const": true
+        },
+        "targetPgid": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "delivered",
+        "targetPgid"
+      ]
+    }
+  },
+  {
+    "name": "terminal_close",
+    "description": "Close one persistent terminal and wait until its captured owned process tree is gone.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Terminal session id."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "closed",
+            "already-closing"
+          ]
+        }
+      },
+      "required": [
+        "sessionId",
+        "outcome"
+      ]
+    }
+  },
+  {
+    "name": "terminal_list",
+    "description": "List persistent terminal sessions owned by the current agent.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "output": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "running"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "exited"
+                  },
+                  "exitCode": {
+                    "oneOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "signal": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "exitCode",
+                  "signal"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "type",
+          "status"
+        ]
+      }
+    }
+  },
+  {
+    "name": "todo_write",
+    "description": "Record and update a structured task list for the current work. Send the ENTIRE list every call \u2014 it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on \u0060in_progress\u0060 \u2014 several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be \u0060in_progress\u0060. Mark a todo \u0060completed\u0060 the moment it is done (do not batch completions), and allow no \u0060in_progress\u0060 item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: \u0060pending\u0060 (not started), \u0060in_progress\u0060 (being worked on now), \u0060completed\u0060 (finished).",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "todos"
+      ],
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The COMPLETE task list, replacing any previous list.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "What the task is \u2014 a short imperative line."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "description": "pending (not started) | in_progress (now) | completed (done)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "todos",
+        "counts"
+      ],
+      "properties": {
+        "todos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ]
+              }
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pending",
+            "inProgress",
+            "completed"
+          ],
+          "properties": {
+            "pending": {
+              "type": "integer"
+            },
+            "inProgress": {
+              "type": "integer"
+            },
+            "completed": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "working_directory",
+    "description": "Read the current working directory, or change it with cd. Relative paths in file tools and newly started shells and terminals resolve against it. Existing persistent shells and terminals keep their own directories. The write permission root stays at the session\u0027s original directory: writing outside it, or starting a shell outside it, needs user approval.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cd": {
+          "type": "string",
+          "description": "Existing directory to enter, absolute or relative to the current directory. Omit to read the current directory."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cwd"
+      ],
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Current absolute working directory."
+        }
+      }
+    }
+  },
+  {
+    "name": "create_worktree",
+    "description": "Create a new Git branch and worktree from a local commit, branch, or tag, then change this session\u0027s working directory to it. The checkout goes to \u003Ccurrent checkout root\u003E/.agents/worktrees/\u003Cname\u003E. Defaults to HEAD and a generated name; no fetch is performed. Uncommitted files stay in the source checkout. Existing branch names or checkout paths fail. Use working_directory with cd to leave; the checkout and branch remain.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "New branch name, also used as the checkout directory. Omit to generate a unique name."
+        },
+        "from": {
+          "type": "string",
+          "description": "Local commit, branch, or tag to start from. Defaults to HEAD."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "branch",
+        "baseCommit",
+        "repositoryRoot"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "baseCommit": {
+          "type": "string"
+        },
+        "repositoryRoot": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web for current information. Provide 1\u20134 queries in the required queries array; set engine to search a specific source such as GitHub or Stack Overflow (the system prompt lists the usable engines). Returns an optional summary answer, a list of source URLs, and the answering engine with its limitations.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Required search queries; accepts 1\u20134 items and merges their results."
+        },
+        "engine": {
+          "type": "string",
+          "description": "Optional search engine id applied to every query, for example baidu, google, bing, duckduckgo, github-repos, github-code or stackoverflow; omit it for the default general web search."
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "truncated"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              },
+              "publishedAt": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "limitations": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "web_fetch",
+    "description": "Fetch the content of a specific HTTP(S) URL and return it decoded to text.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The HTTP(S) URL to fetch."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "statusCode",
+        "body",
+        "truncated"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "statusCode": {
+          "type": "integer"
+        },
+        "body": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "content"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "html"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "content"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "text"
+                  ]
+                },
+                "content": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "ralph",
+    "description": "Run a foreground fresh-agent Ralph loop toward one immutable objective. Use only when the direct human explicitly asks for Ralph or fresh-agent iteration. Each round opens a new child with no parent conversation or prior child session; the shared workspace is long-term memory, and only a bounded structured report crosses rounds. The call returns when a worker reports completion or a concrete blocker, or at the round limit. Ordinary long-running same-session work belongs to goal tools.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective"
+      ],
+      "properties": {
+        "objective": {
+          "type": "string",
+          "description": "The immutable completion objective for every fresh Ralph round."
+        },
+        "maxRounds": {
+          "type": "number",
+          "description": "Optional positive safe-integer round cap, bounded by the deployment ceiling."
+        }
+      }
+    },
+    "output": {}
+  },
+  {
+    "name": "workflow",
+    "description": "Run a C# workflow program that orchestrates subagents at scale. Use this for work that fans out across many independent pieces \u2014 an audit over many files, a migration, multi-angle research, adversarial verification of findings \u2014 where you write the orchestration as a program instead of delegating turn by turn.\n\nThe workflow\u0027s identity rides the \u0060meta\u0060 parameter as JSON: required \u0060name\u0060 (short kebab-case) and \u0060description\u0060 strings, optional \u0060whenToUse\u0060 string and \u0060phases\u0060 array (\u0060{title, detail?, provider?, model?}\u0060). The \u0060script\u0060 parameter is the C# statement body ONLY (plain statements run inside an async method \u2014 NOT a class or method declaration), executed on the same C# script host as run_code: \u0060await\u0060 is available and \u0060return \u003CJsonNode?\u003E\u0060 ends the program. Build the result from \u0060JsonNode\u0060/\u0060JsonObject\u0060/\u0060JsonArray\u0060/\u0060JsonValue\u0060; return \u0060null\u0060 for nothing. Because a \u0060JsonNode\u0060 can have only one parent, call \u0060.DeepClone()\u0060 before placing a value into a second structure (agent() results are already detached).\n\nProgram-body helpers:\n- \u0060await agent(string prompt, JsonObject? opts = null): Task\u003CJsonNode?\u003E\u0060 \u2014 run one subagent to completion. Without \u0060opts[\u0022schema\u0022]\u0060 it resolves to the child\u0027s final text (a string \u0060JsonValue\u0060); with \u0060opts[\u0022schema\u0022]\u0060 (an object-rooted JSON Schema using ONLY type/properties/required/additionalProperties/items/enum/const/oneOf \u2014 no pattern/format/numeric bounds) it resolves to the validated object. Resolves \u0060null\u0060 when the child fails. Other opts: \u0060label\u0060 (display), \u0060phase\u0060 (progress group), and independent \u0060provider\u0060/\u0060model\u0060 LLM target overrides (either may be provided alone). Anything else (\u0060effort\u0060/\u0060isolation\u0060/\u0060agentType\u0060) is rejected loudly.\n- \u0060await pipeline(JsonArray items, params Func\u003CJsonNode?, JsonNode?, int, Task\u003CJsonNode?\u003E\u003E[] stages): Task\u003CJsonNode?\u003E\u0060 \u2014 run each item through the stages independently with NO barrier between stages (prefer this for multi-stage work). Each stage is an \u0060async (prev, item, index) =\u003E ...\u0060 lambda. An ordinary stage throw drops that ITEM to \u0060null\u0060 and skips its remaining stages.\n- \u0060await parallel(Func\u003CTask\u003CJsonNode?\u003E\u003E[] thunks): Task\u003CJsonNode?\u003E\u0060 \u2014 run zero-argument functions concurrently and await ALL of them (a barrier; use only when a stage genuinely needs every prior result together). A throwing thunk resolves to \u0060null\u0060.\n- \u0060await phase(string title)\u0060 \u2014 start a progress phase; \u0060await log(string message)\u0060 \u2014 narrate progress; \u0060JsonNode? args\u0060 \u2014 the tool call\u0027s \u0060args\u0060 input, verbatim.\n\nMisused helpers (bad arguments, unknown options, unsupported schemas, tripped caps) throw errors that ALWAYS kill the program \u2014 they never dissolve into a per-item \u0060null\u0060.\n\nConstraints: concurrency and total-agent caps apply, and the program runs in a separate C# process. Let the agents do the work \u2014 use \u0060agent(...)\u0060 for anything that must go through the audited subagent pipeline \u2014 and keep the script to coordination. The run executes in the foreground: this call returns when the whole program finishes.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "script",
+        "meta"
+      ],
+      "properties": {
+        "script": {
+          "type": "string",
+          "description": "The C# workflow program statement body (runs inside an async method: \u0060await\u0060 allowed; end with \u0060return \u003CJsonNode?\u003E\u0060; plain statements only, no class/method declaration)."
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "name",
+            "description"
+          ],
+          "description": "The workflow identity block (plain JSON \u2014 never code).",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Short kebab-case workflow name."
+            },
+            "description": {
+              "type": "string",
+              "description": "One-line description of what the workflow does."
+            },
+            "whenToUse": {
+              "type": "string",
+              "description": "Optional guidance on when this workflow applies."
+            },
+            "phases": {
+              "type": "array",
+              "description": "Optional phase declarations matched by phase() calls.",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "The phase title phase() calls match by exact string."
+                  },
+                  "detail": {
+                    "type": "string",
+                    "description": "Optional one-line description of the phase."
+                  },
+                  "provider": {
+                    "type": "string",
+                    "description": "Optional provider override this phase is expected to use."
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Optional model override this phase is expected to use."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Optional JSON input exposed to the script as the \u0060args\u0060 global (wrap a bare list as a field, e.g. {\u0022files\u0022: [...]})."
+        }
+      }
+    },
+    "output": {}
+  }
+]

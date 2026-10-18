@@ -1,0 +1,866 @@
+[
+  {
+    "name": "bash",
+    "description": "Execute a bash command (\u0060bash -c\u0060) and return its stdout/stderr. Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls \u2014 pass \u0060workdir\u0060 instead of using \u0060cd\u0060. Non-zero exits are reported as \u0060[exit code: N]\u0060. On Windows this bash is Git-Bash (MSYS2), not WSL: drives appear as \u0060/c/...\u0060, Windows executables run directly, and Linux-only tools are missing \u2014 use the \u0060wsl\u0060 tool for a real Linux distribution. For PowerShell use \u0060pwsh\u0060 (PowerShell 7, cross-platform) or, on Windows only, \u0060powershell\u0060 (Windows PowerShell 5.1). Current harness environment facts are exposed through managed \u0060$DSH_*\u0060 variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as \u0060[sandbox: file access denied under \u003Cmode\u003E mode]\u0060 \u2014 a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Background execution is not available; long-running commands must finish within the timeout.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to execute."
+        },
+        "description": {
+          "type": "string",
+          "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \u0022ls\u0022 \u2192 \u0022List files in current directory\u0022; \u0022git status\u0022 \u2192 \u0022Show working tree status\u0022; \u0022npm install\u0022 \u2192 \u0022Install package dependencies\u0022."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory for this command. Defaults to the session working directory; a relative path is resolved against it."
+        },
+        "envs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to set for this command (object of string values). \u0060DSH_*\u0060 keys are ignored."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "timedOut",
+        "aborted",
+        "timeoutMs",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "foreground"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        },
+        "stderr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "bash_persistent",
+    "description": "Run commands in a persistent bash shell. State, including the current directory and exported environment variables, persists across calls for this agent. On Windows this bash is Git-Bash (MSYS2), not WSL; use \u0060pwsh_persistent\u0060 for a persistent PowerShell session.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to run. Relative path is preferred in the command."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "read",
+    "description": "Read a UTF-8 text file and return line-numbered content.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to read, resolved by the filesystem backend."
+        },
+        "offset": {
+          "type": "number",
+          "description": "1-based first line to return. Defaults to 1."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum number of lines to return. Defaults to 2000."
+        }
+      },
+      "required": [
+        "file_path"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "offset",
+        "lines",
+        "totalLines"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "number",
+              "text"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "totalLines": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "read_image",
+    "description": "Read a local image file (PNG/JPEG/GIF/BMP/PBM/TGA/TIFF/WEBP/EXR/QOI/ICO/CUR/ANI) and return the image itself to the model. Images whose long edge exceeds 2000px are downscaled automatically; the result states the original size and the coordinate multiplier.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the image file, resolved like the read tool (relative paths use the session working directory). Extension-less files are identified by their content."
+        }
+      },
+      "required": [
+        "file_path"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "image"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attachmentId",
+            "mediaType",
+            "bytes",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "attachmentId": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "original": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "height"
+          ],
+          "properties": {
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "write",
+    "description": "Create or fully replace a UTF-8 text file.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to write, resolved by the filesystem backend."
+        },
+        "content": {
+          "type": "string",
+          "description": "Full UTF-8 text content to write."
+        }
+      },
+      "required": [
+        "file_path",
+        "content"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "operation",
+        "after"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update"
+          ]
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "after": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "edit",
+    "description": "Edit an existing UTF-8 text file by replacing literal text.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to edit, resolved by the filesystem backend."
+        },
+        "old_string": {
+          "type": "string",
+          "description": "Literal text to replace. Must match exactly."
+        },
+        "new_string": {
+          "type": "string",
+          "description": "Literal replacement text. Use an empty string to delete the match."
+        },
+        "replace_all": {
+          "type": "boolean",
+          "description": "Replace all matches. Defaults to false; when false, old_string must appear exactly once."
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "glob",
+    "description": "Find files whose paths match a glob pattern. Returns matching file paths \u2014 never directories \u2014 including hidden and ignored files (VCS metadata directories are excluded). Up to 100 paths come back in modification-time order; a larger result returns the first 100 paths in modification-time order, says so, and reports where the complete sorted list was saved. This tool does not enumerate directory entries.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern to match file paths against (e.g. \u0022**/*.ts\u0022, \u0022src/**/*.test.js\u0022). A pattern with no \u0022/\u0022 matches the basename at any depth, so \u0022*\u0022 and \u0022*.ts\u0022 both search the whole tree; include a separator to anchor the depth."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory to search in. Defaults to the session working directory; a relative path resolves against it."
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "paths"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "grep",
+    "description": "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns the first 250 matches inline; a capped result reports where the complete match list was saved. Use read on a matched file for surrounding context.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Regular expression to search for (ripgrep syntax)."
+        },
+        "path": {
+          "type": "string",
+          "description": "File or directory to search. Defaults to the session working directory; a relative path resolves against it."
+        },
+        "include": {
+          "type": "string",
+          "description": "One glob filter for which files to search (e.g. \u0022*.ts\u0022, \u0022*.{js,jsx}\u0022). Not a list; negation is not supported."
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matches"
+      ],
+      "properties": {
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "lineNumber",
+              "line"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "lineNumber": {
+                "type": "integer"
+              },
+              "line": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "pwsh",
+    "description": "Execute a PowerShell 7 command (\u0060pwsh -Command\u0060) and return its stdout/stderr. Each call runs in a fresh pwsh process: no state (cwd, variables, functions) persists between calls \u2014 pass \u0060workdir\u0060 instead of using \u0060cd\u0060. Paths use the host\u0027s native form (\u0060C:\\...\u0060 on Windows); read environment variables with \u0060$env:NAME\u0060. Non-zero exits are reported as \u0060[exit code: N]\u0060. pwsh is cross-platform PowerShell 7; on Windows prefer it over \u0060powershell\u0060 (Windows PowerShell 5.1) unless a command needs 5.1-only modules or COM. On Linux/macOS native commands and paths are case-sensitive, and \u0060ls\u0060/\u0060cat\u0060/\u0060curl\u0060 are the real executables rather than aliases. Use \u0060bash\u0060 for POSIX shell syntax and \u0060wsl\u0060 for a Linux distribution on Windows. Current harness environment facts are exposed through managed \u0060$env:DSH_*\u0060 variables; inspect them when needed. Commands may run under a file sandbox; a blocked file operation is reported as \u0060[sandbox: file access denied under \u003Cmode\u003E mode]\u0060 \u2014 a policy denial, not a bug in the command; do not retry another way. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. On Windows a force-killed command settles as \u0060[exit code: 1]\u0060 without a signal marker \u2014 treat it as an interruption, not a command failure. Background execution is not available; long-running commands must finish within the timeout.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The PowerShell command to execute."
+        },
+        "description": {
+          "type": "string",
+          "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \u0022ls\u0022 \u2192 \u0022List files in current directory\u0022; \u0022git status\u0022 \u2192 \u0022Show working tree status\u0022; \u0022Get-Process\u0022 \u2192 \u0022List running processes\u0022."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry."
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory for this command. Defaults to the session working directory; a relative path is resolved against it."
+        },
+        "envs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables to set for this command (object of string values). \u0060DSH_*\u0060 keys are ignored."
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "timedOut",
+        "aborted",
+        "timeoutMs",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "foreground"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "aborted": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        },
+        "stderr": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "spillPath": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "pwsh_persistent",
+    "description": "Run PowerShell 7 (\u0060pwsh\u0060) commands in a persistent session. State, including the current location, variables, functions, imported modules and \u0060$env:\u0060 changes, persists across calls for this agent. All output streams are merged into one text result. A failed command ends with \u0060[exit code: N]\u0060: N is the exit code of the last native command when it failed, otherwise 1 when the last statement reported an error or a terminating error was thrown. \u0060exit\u0060 ends the session and the next call starts a fresh one. Use \u0060pwsh\u0060 for a one-off command, \u0060bash_persistent\u0060 for persistent POSIX shell state, and \u0060powershell\u0060 (Windows only) when Windows PowerShell 5.1 is required.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The PowerShell command to run. Relative path is preferred in the command."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "description": "Custom editing tool for viewing, creating and editing files\n* State is persistent across command calls and discussions with the user\n* If \u0060path\u0060 is a file, \u0060view\u0060 displays the result of applying \u0060cat -n\u0060. If \u0060path\u0060 is a directory, \u0060view\u0060 lists non-hidden files and directories up to 2 levels deep\n* The \u0060create\u0060 command cannot be used if the specified \u0060path\u0060 already exists as a file\n* If a \u0060command\u0060 generates a long output, it will be truncated and marked with \u0060\u003Cresponse clipped\u003E\u0060\n* A null placeholder for a parameter unused by the selected command is treated as omitted. Required parameters still need values; omit \u0060str_replace.new_str\u0060 rather than setting it to null when deleting a match\n\nNotes for using the \u0060str_replace\u0060 command:\n* The \u0060old_str\u0060 parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!\n* If the \u0060old_str\u0060 parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in \u0060old_str\u0060 to make it unique\n* The \u0060new_str\u0060 parameter should contain the edited lines that should replace the \u0060old_str\u0060",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "path"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "enum": [
+            "view",
+            "create",
+            "str_replace",
+            "insert"
+          ],
+          "description": "The commands to run. Allowed options are: \u0060view\u0060, \u0060create\u0060, \u0060str_replace\u0060, \u0060insert\u0060."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path to file or directory, e.g. \u0060/repo/file.py\u0060 or \u0060/repo\u0060."
+        },
+        "file_text": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required string parameter of \u0060create\u0060 command, with the content of the file to be created. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "insert_line": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required integer parameter of \u0060insert\u0060 command. The \u0060new_str\u0060 will be inserted AFTER the line \u0060insert_line\u0060 of \u0060path\u0060. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "new_str": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional string parameter of \u0060str_replace\u0060 command containing the new string (if omitted, no string will be added). Required string parameter of \u0060insert\u0060 command containing the string to insert. A null placeholder is accepted only by commands that do not use this parameter."
+        },
+        "old_str": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required string parameter of \u0060str_replace\u0060 command containing the string in \u0060path\u0060 to replace. A null placeholder is treated as omitted by commands that do not use this parameter."
+        },
+        "view_range": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional parameter of \u0060view\u0060 command when \u0060path\u0060 points to a file. If omitted or null, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting \u0060[start_line, -1]\u0060 shows all lines from \u0060start_line\u0060 to the end of the file."
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "todo_write",
+    "description": "Record and update a structured task list for the current work. Send the ENTIRE list every call \u2014 it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on \u0060in_progress\u0060 \u2014 several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be \u0060in_progress\u0060. Mark a todo \u0060completed\u0060 the moment it is done (do not batch completions), and allow no \u0060in_progress\u0060 item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: \u0060pending\u0060 (not started), \u0060in_progress\u0060 (being worked on now), \u0060completed\u0060 (finished).",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "todos"
+      ],
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The COMPLETE task list, replacing any previous list.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "What the task is \u2014 a short imperative line."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "description": "pending (not started) | in_progress (now) | completed (done)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "todos",
+        "counts"
+      ],
+      "properties": {
+        "todos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ]
+              }
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pending",
+            "inProgress",
+            "completed"
+          ],
+          "properties": {
+            "pending": {
+              "type": "integer"
+            },
+            "inProgress": {
+              "type": "integer"
+            },
+            "completed": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "working_directory",
+    "description": "Read the current working directory, or change it with cd. Relative paths in file tools and newly started shells and terminals resolve against it. Existing persistent shells and terminals keep their own directories. The write permission root stays at the session\u0027s original directory: writing outside it, or starting a shell outside it, needs user approval.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cd": {
+          "type": "string",
+          "description": "Existing directory to enter, absolute or relative to the current directory. Omit to read the current directory."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cwd"
+      ],
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Current absolute working directory."
+        }
+      }
+    }
+  },
+  {
+    "name": "create_worktree",
+    "description": "Create a new Git branch and worktree from a local commit, branch, or tag, then change this session\u0027s working directory to it. The checkout goes to \u003Ccurrent checkout root\u003E/.agents/worktrees/\u003Cname\u003E. Defaults to HEAD and a generated name; no fetch is performed. Uncommitted files stay in the source checkout. Existing branch names or checkout paths fail. Use working_directory with cd to leave; the checkout and branch remain.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "New branch name, also used as the checkout directory. Omit to generate a unique name."
+        },
+        "from": {
+          "type": "string",
+          "description": "Local commit, branch, or tag to start from. Defaults to HEAD."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "branch",
+        "baseCommit",
+        "repositoryRoot"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "baseCommit": {
+          "type": "string"
+        },
+        "repositoryRoot": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

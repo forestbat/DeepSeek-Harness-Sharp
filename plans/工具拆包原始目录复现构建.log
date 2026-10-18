@@ -1,0 +1,129 @@
+  Determining projects to restore...
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Notifications/Dsh.Notifications.csproj (in 320 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.GitInspect/Dsh.GitInspect.csproj (in 320 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Transport/Dsh.Transport.csproj (in 320 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Pty/Dsh.Pty.csproj (in 326 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj (in 503 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Generator/Dsh.Plugins.Generator.csproj (in 511 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm/Dsh.Llm.csproj (in 523 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.DeepSeek/Dsh.Llm.DeepSeek.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.Anthropic/Dsh.Llm.Anthropic.csproj (in 525 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Jobs/Dsh.Jobs.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Boot/Dsh.Boot.csproj (in 523 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Ptc/Dsh.Ptc.csproj (in 526 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Workflow/Dsh.Workflow.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Skills/Dsh.Skills.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.SessionGraph/Dsh.SessionGraph.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Runtime/Dsh.Runtime.csproj (in 559 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Mcp/Dsh.Mcp.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.SessionQuery/Dsh.SessionQuery.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Host/Dsh.Plugins.Host.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Core/Dsh.Core.csproj (in 574 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Telemetry/Dsh.Telemetry.csproj (in 530 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui.Vk/Dsh.Tui.Vk.csproj (in 527 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Abstractions/Dsh.Plugins.Abstractions.csproj (in 554 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Acp/Dsh.Acp.csproj (in 526 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.A2A/Dsh.A2A.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Schedule/Dsh.Schedule.csproj (in 525 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Memory/Dsh.Memory.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Presets/Dsh.Presets.csproj (in 527 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.OpenAi/Dsh.Llm.OpenAi.csproj (in 571 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Interaction.AskUser/Dsh.Interaction.AskUser.csproj (in 521 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.IdeHistory/Dsh.IdeHistory.csproj (in 239 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui/Dsh.Tui.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui.GL/Dsh.Tui.GL.csproj (in 574 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj (in 592 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Account/Dsh.Account.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Sdk/Dsh.Sdk.csproj (in 555 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.AgentAdapters/Dsh.AgentAdapters.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Interaction/Dsh.Interaction.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Goal/Dsh.Goal.csproj (in 559 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.ScriptHost/Dsh.ScriptHost.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Gui/Dsh.Gui.csproj (in 572 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Fleet/Dsh.Fleet.csproj (in 574 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Lsp/Dsh.Lsp.csproj (in 526 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Persistence/Dsh.Persistence.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Checkpoints/Dsh.Checkpoints.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Toon/Dsh.Toon.csproj (in 558 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tools/Dsh.Tools.csproj (in 572 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Board/Dsh.Board.csproj (in 572 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Web/Dsh.Web.csproj (in 525 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Inspection/Dsh.Inspection.csproj (in 524 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.E2b/Dsh.E2b.csproj (in 606 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Compaction/Dsh.Compaction.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Fleet.Client/Dsh.Fleet.Client.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.PlanMode/Dsh.PlanMode.csproj (in 559 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.RemoteHost/Dsh.RemoteHost.csproj (in 573 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Deliverables/Dsh.Deliverables.csproj (in 574 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Subagent/Dsh.Subagent.csproj (in 574 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/plans/工具拆包验收/工具拆包验收.csproj (in 592 ms).
+  Restored /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/Dsh.Host/Dsh.Host.csproj (in 608 ms).
+  Dsh.Notifications -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Notifications/bin/Debug/net10.0/Dsh.Notifications.dll
+  Dsh.Plugins.Generator -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Generator/bin/Debug/netstandard2.0/Dsh.Plugins.Generator.dll
+  Dsh.Plugins.Native -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Native/bin/Debug/net10.0/Dsh.Plugins.Native.dll
+  Dsh.Runtime -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Runtime/bin/Debug/net10.0/Dsh.Runtime.dll
+  Dsh.GitInspect -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.GitInspect/bin/Debug/net10.0/Dsh.GitInspect.dll
+  Dsh.Transport -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Transport/bin/Debug/net10.0/Dsh.Transport.dll
+  Dsh.Plugins.Abstractions -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Abstractions/bin/Debug/net10.0/Dsh.Plugins.Abstractions.dll
+  Dsh.Plugins.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Host/bin/Debug/net10.0/Dsh.Plugins.Host.dll
+  Dsh.Pty -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Pty/bin/Debug/net10.0/Dsh.Pty.dll
+  Dsh.Boot -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Boot/bin/Debug/net10.0/Dsh.Boot.dll
+  Dsh.Llm -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm/bin/Debug/net10.0/Dsh.Llm.dll
+  Dsh.Llm.Anthropic -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.Anthropic/bin/Debug/net10.0/Dsh.Llm.Anthropic.dll
+  Dsh.Llm.OpenAi -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.OpenAi/bin/Debug/net10.0/Dsh.Llm.OpenAi.dll
+  Dsh.Llm.DeepSeek -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Llm.DeepSeek/bin/Debug/net10.0/Dsh.Llm.DeepSeek.dll
+  Dsh.Core -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Core/bin/Debug/net10.0/Dsh.Core.dll
+  Dsh.Plugins.Native.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Plugins.Native.Host/bin/Debug/net10.0/Dsh.Plugins.Native.Host.dll
+  Dsh.AgentInstructions -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.AgentInstructions/bin/Debug/net10.0/Dsh.AgentInstructions.dll
+  Dsh.SessionGraph -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.SessionGraph/bin/Debug/net10.0/Dsh.SessionGraph.dll
+  Dsh.Board -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Board/bin/Debug/net10.0/Dsh.Board.dll
+  Dsh.Telemetry -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Telemetry/bin/Debug/net10.0/Dsh.Telemetry.dll
+  Dsh.IdeHistory -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.IdeHistory/bin/Debug/net10.0/Dsh.IdeHistory.dll
+  Dsh.Inspection -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Inspection/bin/Debug/net10.0/Dsh.Inspection.dll
+  Dsh.E2b -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.E2b/bin/Debug/net10.0/Dsh.E2b.dll
+  Dsh.ScriptHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.ScriptHost/bin/Debug/net10.0/Dsh.ScriptHost.dll
+  Dsh.Toon -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Toon/bin/Debug/net10.0/Dsh.Toon.dll
+  Dsh.A2A -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.A2A/bin/Debug/net10.0/Dsh.A2A.dll
+  Dsh.Account -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Account/bin/Debug/net10.0/Dsh.Account.dll
+  Dsh.Memory -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Memory/bin/Debug/net10.0/Dsh.Memory.dll
+  Dsh.Jobs -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Jobs/bin/Debug/net10.0/Dsh.Jobs.dll
+  Dsh.Schedule -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Schedule/bin/Debug/net10.0/Dsh.Schedule.dll
+  Dsh.PtyTerminal -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.PtyTerminal/bin/Debug/net10.0/Dsh.PtyTerminal.dll
+  Dsh.Sdk -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Sdk/bin/Debug/net10.0/Dsh.Sdk.dll
+  Dsh.Web -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Web/bin/Debug/net10.0/Dsh.Web.dll
+  Dsh.Interaction -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Interaction/bin/Debug/net10.0/Dsh.Interaction.dll
+  Dsh.Ptc -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Ptc/bin/Debug/net10.0/Dsh.Ptc.dll
+  Dsh.Lsp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Lsp/bin/Debug/net10.0/Dsh.Lsp.dll
+  Dsh.Tools -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tools/bin/Debug/net10.0/Dsh.Tools.dll
+  Dsh.Interaction.AskUser -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Interaction.AskUser/bin/Debug/net10.0/Dsh.Interaction.AskUser.dll
+  Dsh.Goal -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Goal/bin/Debug/net10.0/Dsh.Goal.dll
+  Dsh.Presets -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Presets/bin/Debug/net10.0/Dsh.Presets.dll
+  Dsh.Checkpoints -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Checkpoints/bin/Debug/net10.0/Dsh.Checkpoints.dll
+  Dsh.Workflow -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Workflow/bin/Debug/net10.0/Dsh.Workflow.dll
+  Dsh.PlanMode -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.PlanMode/bin/Debug/net10.0/Dsh.PlanMode.dll
+  Dsh.SessionQuery -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.SessionQuery/bin/Debug/net10.0/Dsh.SessionQuery.dll
+  Dsh.Deliverables -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Deliverables/bin/Debug/net10.0/Dsh.Deliverables.dll
+  Dsh.Mcp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Mcp/bin/Debug/net10.0/Dsh.Mcp.dll
+  Dsh.Skills -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Skills/bin/Debug/net10.0/Dsh.Skills.dll
+  Dsh.Subagent -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Subagent/bin/Debug/net10.0/Dsh.Subagent.dll
+  Dsh.Persistence -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Persistence/bin/Debug/net10.0/Dsh.Persistence.dll
+  Dsh.Compaction -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Compaction/bin/Debug/net10.0/Dsh.Compaction.dll
+  Dsh.Acp -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Acp/bin/Debug/net10.0/Dsh.Acp.dll
+  Dsh.AgentAdapters -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.AgentAdapters/bin/Debug/net10.0/Dsh.AgentAdapters.dll
+  Dsh.Tui -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui/bin/Debug/net10.0/Dsh.Tui.dll
+  Dsh.Tui.GL -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui.GL/bin/Debug/net10.0/Dsh.Tui.GL.dll
+  Dsh.Tui.Vk -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Tui.Vk/bin/Debug/net10.0/Dsh.Tui.Vk.dll
+  Dsh.RemoteHost -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.RemoteHost/bin/Debug/net10.0/Dsh.RemoteHost.dll
+  Dsh.Fleet.Client -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Fleet.Client/bin/Debug/net10.0/Dsh.Fleet.Client.dll
+  Dsh.Fleet -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Fleet/bin/Debug/net10.0/Dsh.Fleet.dll
+  Dsh.Gui -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/src/Dsh.Gui/bin/Debug/net10.0/Dsh.Gui.dll
+  Dsh.Host -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/Dsh.Host/bin/Debug/net10.0/Dsh.Host.dll
+  工具拆包验收 -> /home/zhixi/GitRepos/DeepSeek-Harness-Sharp/.wt/roadmap-tools-packages/.issue70-tmp.Oo6gcW/baseline/plans/工具拆包验收/bin/Debug/net10.0/工具拆包验收.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:37.02

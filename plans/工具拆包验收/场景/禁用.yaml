@@ -1,0 +1,5 @@
+plugins:
+  "@deepseek-ai/dsh-tool-fs.files": false
+  "@deepseek-ai/dsh-tool-fs.search": false
+  "@deepseek-ai/dsh-tool-bash.shell": false
+  "@deepseek-ai/dsh-tool-todo.plan": false

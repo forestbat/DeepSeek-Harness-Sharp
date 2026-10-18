@@ -1,0 +1,7 @@
+REMOVED .daemon-tests
+REMOVED plans/工具拆包验收/bin
+REMOVED plans/工具拆包验收/obj
+REMOVED artifacts020/test-homes
+REMOVED artifacts020/test-tmp
+PRESERVED artifacts020/gui-screenshots (real test captures)
+PRESERVED project bin/obj and packages (verified build/feed artifacts)

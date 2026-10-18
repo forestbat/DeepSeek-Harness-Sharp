@@ -1,0 +1,1644 @@
+{
+  "ownership": "Exact inherited TMPDIR match; environment values and command arguments are not emitted.",
+  "processes": [
+    {
+      "pid": 1159393,
+      "parentPid": 1159389,
+      "executable": "Xvfb"
+    },
+    {
+      "pid": 1159394,
+      "parentPid": 1159389,
+      "executable": "tee"
+    },
+    {
+      "pid": 1162332,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162333,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162334,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162353,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162354,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162355,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162356,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162357,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162358,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162359,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162360,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162361,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162362,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162364,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162365,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162366,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162368,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162397,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162398,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162406,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162407,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162410,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162412,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162415,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162418,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162420,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162425,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162426,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162428,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162429,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162431,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162433,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162435,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162571,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162577,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162579,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162584,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162586,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162590,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162592,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162593,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162595,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162597,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162599,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162601,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162604,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162667,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162671,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162674,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162677,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162680,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162682,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162684,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162686,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162688,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162690,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162692,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162698,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1162699,
+      "parentPid": 1,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1164325,
+      "parentPid": 1162431,
+      "executable": "VBCSCompiler"
+    },
+    {
+      "pid": 1167847,
+      "parentPid": 1162281,
+      "executable": "bwrap"
+    },
+    {
+      "pid": 1167848,
+      "parentPid": 1162281,
+      "executable": "tee"
+    },
+    {
+      "pid": 1167849,
+      "parentPid": 1167847,
+      "executable": "bwrap"
+    },
+    {
+      "pid": 1167852,
+      "parentPid": 1167849,
+      "executable": "dotnet"
+    },
+    {
+      "pid": 1171599,
+      "parentPid": 1167849,
+      "executable": "xsel"
+    }
+  ],
+  "sockets": [
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162397",
+      "pids": [
+        1162397
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162356",
+      "pids": [
+        1162356
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162353",
+      "pids": [
+        1162353
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162682",
+      "pids": [
+        1162682
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162571",
+      "pids": [
+        1162571
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162431",
+      "pids": [
+        1162431
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162354",
+      "pids": [
+        1162354
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162579",
+      "pids": [
+        1162579
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162415-87359517-socket",
+      "pids": [
+        1162415
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162357",
+      "pids": [
+        1162357
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162418-87359517-socket",
+      "pids": [
+        1162418
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162410",
+      "pids": [
+        1162410
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162415",
+      "pids": [
+        1162415
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162692",
+      "pids": [
+        1162692
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162425",
+      "pids": [
+        1162425
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162410-87359517-socket",
+      "pids": [
+        1162410
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162604",
+      "pids": [
+        1162604
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162359",
+      "pids": [
+        1162359
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162599",
+      "pids": [
+        1162599
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162364",
+      "pids": [
+        1162364
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162412",
+      "pids": [
+        1162412
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162428-87359517-socket",
+      "pids": [
+        1162428
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162429-87359517-socket",
+      "pids": [
+        1162429
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162398",
+      "pids": [
+        1162398
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162431-87359517-socket",
+      "pids": [
+        1162431
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162433",
+      "pids": [
+        1162433
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162433-87359517-socket",
+      "pids": [
+        1162433
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162361",
+      "pids": [
+        1162361
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162355",
+      "pids": [
+        1162355
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162428",
+      "pids": [
+        1162428
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162584",
+      "pids": [
+        1162584
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162366",
+      "pids": [
+        1162366
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162586",
+      "pids": [
+        1162586
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162407",
+      "pids": [
+        1162407
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162690",
+      "pids": [
+        1162690
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162688",
+      "pids": [
+        1162688
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162595",
+      "pids": [
+        1162595
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162667",
+      "pids": [
+        1162667
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162699",
+      "pids": [
+        1162699
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162365",
+      "pids": [
+        1162365
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162429",
+      "pids": [
+        1162429
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162680",
+      "pids": [
+        1162680
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162698",
+      "pids": [
+        1162698
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162435-87359517-socket",
+      "pids": [
+        1162435
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162577",
+      "pids": [
+        1162577
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162362",
+      "pids": [
+        1162362
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162360",
+      "pids": [
+        1162360
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162590",
+      "pids": [
+        1162590
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162674",
+      "pids": [
+        1162674
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162677",
+      "pids": [
+        1162677
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162684",
+      "pids": [
+        1162684
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162586-87359519-socket",
+      "pids": [
+        1162586
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162686",
+      "pids": [
+        1162686
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162579-87359519-socket",
+      "pids": [
+        1162579
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162435",
+      "pids": [
+        1162435
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162584-87359519-socket",
+      "pids": [
+        1162584
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162406",
+      "pids": [
+        1162406
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162590-87359519-socket",
+      "pids": [
+        1162590
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "@/tmp/.X11-unix/X0",
+      "pids": [
+        1159393
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162593-87359519-socket",
+      "pids": [
+        1162593
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162358",
+      "pids": [
+        1162358
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162571-87359519-socket",
+      "pids": [
+        1162571
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162577-87359519-socket",
+      "pids": [
+        1162577
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162420",
+      "pids": [
+        1162420
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162601",
+      "pids": [
+        1162601
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162595-87359519-socket",
+      "pids": [
+        1162595
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162418",
+      "pids": [
+        1162418
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162599-87359519-socket",
+      "pids": [
+        1162599
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/m70.nlyNtD/.daemon-tests/mab969ff7/dsh.sock",
+      "pids": [
+        1167852
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/m70.nlyNtD/.daemon-tests/g1fbcb0/run/dsh-acp.sock",
+      "pids": [
+        1167852
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162601-87359519-socket",
+      "pids": [
+        1162601
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162604-87359519-socket",
+      "pids": [
+        1162604
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162592-87359519-socket",
+      "pids": [
+        1162592
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/.X11-unix/X0",
+      "pids": [
+        1159393
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162684-87359521-socket",
+      "pids": [
+        1162684
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162677-87359520-socket",
+      "pids": [
+        1162677
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162667-87359520-socket",
+      "pids": [
+        1162667
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162686-87359521-socket",
+      "pids": [
+        1162686
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162674-87359520-socket",
+      "pids": [
+        1162674
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162699-87359521-socket",
+      "pids": [
+        1162699
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162690-87359521-socket",
+      "pids": [
+        1162690
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162682-87359521-socket",
+      "pids": [
+        1162682
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162698-87359521-socket",
+      "pids": [
+        1162698
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162688-87359521-socket",
+      "pids": [
+        1162688
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162692-87359521-socket",
+      "pids": [
+        1162692
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162597-87359519-socket",
+      "pids": [
+        1162597
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162680-87359521-socket",
+      "pids": [
+        1162680
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162671-87359520-socket",
+      "pids": [
+        1162671
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1164325-87360041-socket",
+      "pids": [
+        1164325
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162593",
+      "pids": [
+        1162593
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162334-87359512-socket",
+      "pids": [
+        1162334
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162333-87359512-socket",
+      "pids": [
+        1162333
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162592",
+      "pids": [
+        1162592
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-2-87364569-socket",
+      "pids": [
+        1167852
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162332-87359512-socket",
+      "pids": [
+        1162332
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162354-87359516-socket",
+      "pids": [
+        1162354
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162356-87359516-socket",
+      "pids": [
+        1162356
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162355-87359516-socket",
+      "pids": [
+        1162355
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162353-87359516-socket",
+      "pids": [
+        1162353
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162361-87359516-socket",
+      "pids": [
+        1162361
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162359-87359516-socket",
+      "pids": [
+        1162359
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162368-87359516-socket",
+      "pids": [
+        1162368
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162360-87359516-socket",
+      "pids": [
+        1162360
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162597",
+      "pids": [
+        1162597
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162358-87359516-socket",
+      "pids": [
+        1162358
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162398-87359516-socket",
+      "pids": [
+        1162398
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162333",
+      "pids": [
+        1162333
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162364-87359516-socket",
+      "pids": [
+        1162364
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162407-87359517-socket",
+      "pids": [
+        1162407
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162362-87359516-socket",
+      "pids": [
+        1162362
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162357-87359516-socket",
+      "pids": [
+        1162357
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162412-87359517-socket",
+      "pids": [
+        1162412
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162365-87359516-socket",
+      "pids": [
+        1162365
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162425-87359517-socket",
+      "pids": [
+        1162425
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/GdwQ2tZE3P3gBNi2cYf7U2uLrIGj49sn7Srj7NC3p_g",
+      "pids": [
+        1164325
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162366-87359516-socket",
+      "pids": [
+        1162366
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162397-87359516-socket",
+      "pids": [
+        1162397
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162368",
+      "pids": [
+        1162368
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162426",
+      "pids": [
+        1162426
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162406-87359517-socket",
+      "pids": [
+        1162406
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162334",
+      "pids": [
+        1162334
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162426-87359517-socket",
+      "pids": [
+        1162426
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162671",
+      "pids": [
+        1162671
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162332",
+      "pids": [
+        1162332
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/i70.gvuLg6/dotnet-diagnostic-1162420-87359517-socket",
+      "pids": [
+        1162420
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162429",
+      "pids": [
+        1162429
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162688",
+      "pids": [
+        1162688
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162366",
+      "pids": [
+        1162366
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162684",
+      "pids": [
+        1162684
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162435",
+      "pids": [
+        1162435
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162362",
+      "pids": [
+        1162362
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162361",
+      "pids": [
+        1162361
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162674",
+      "pids": [
+        1162674
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162577",
+      "pids": [
+        1162577
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162680",
+      "pids": [
+        1162680
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162593",
+      "pids": [
+        1162593
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162431",
+      "pids": [
+        1162431
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162433",
+      "pids": [
+        1162433
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162698",
+      "pids": [
+        1162698
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162592",
+      "pids": [
+        1162592
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162406",
+      "pids": [
+        1162406
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "",
+      "pids": [
+        1171599
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162415",
+      "pids": [
+        1162415
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162690",
+      "pids": [
+        1162690
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162355",
+      "pids": [
+        1162355
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "@/tmp/.X11-unix/X0",
+      "pids": [
+        1159393
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162359",
+      "pids": [
+        1162359
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162365",
+      "pids": [
+        1162365
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162332",
+      "pids": [
+        1162332
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162590",
+      "pids": [
+        1162590
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162667",
+      "pids": [
+        1162667
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162368",
+      "pids": [
+        1162368
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162686",
+      "pids": [
+        1162686
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162410",
+      "pids": [
+        1162410
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162334",
+      "pids": [
+        1162334
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162584",
+      "pids": [
+        1162584
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162364",
+      "pids": [
+        1162364
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162354",
+      "pids": [
+        1162354
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162428",
+      "pids": [
+        1162428
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162601",
+      "pids": [
+        1162601
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162595",
+      "pids": [
+        1162595
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162353",
+      "pids": [
+        1162353
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162418",
+      "pids": [
+        1162418
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162682",
+      "pids": [
+        1162682
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162599",
+      "pids": [
+        1162599
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162356",
+      "pids": [
+        1162356
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162604",
+      "pids": [
+        1162604
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162426",
+      "pids": [
+        1162426
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162412",
+      "pids": [
+        1162412
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162586",
+      "pids": [
+        1162586
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162397",
+      "pids": [
+        1162397
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162333",
+      "pids": [
+        1162333
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162398",
+      "pids": [
+        1162398
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162571",
+      "pids": [
+        1162571
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162407",
+      "pids": [
+        1162407
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162579",
+      "pids": [
+        1162579
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162597",
+      "pids": [
+        1162597
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162425",
+      "pids": [
+        1162425
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162360",
+      "pids": [
+        1162360
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162677",
+      "pids": [
+        1162677
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162671",
+      "pids": [
+        1162671
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162358",
+      "pids": [
+        1162358
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162420",
+      "pids": [
+        1162420
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162357",
+      "pids": [
+        1162357
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162699",
+      "pids": [
+        1162699
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/MSBuild1162692",
+      "pids": [
+        1162692
+      ]
+    }
+  ]
+}

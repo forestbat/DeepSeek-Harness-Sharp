@@ -1,0 +1,5 @@
+{
+  "ownership": "Exact inherited TMPDIR match; environment values and command arguments are not emitted.",
+  "processes": [],
+  "sockets": []
+}

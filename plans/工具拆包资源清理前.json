@@ -1,0 +1,31 @@
+{
+  "ownership": "Exact inherited TMPDIR match; environment values and command arguments are not emitted.",
+  "processes": [
+    {
+      "pid": 1159393,
+      "parentPid": 1159389,
+      "executable": "Xvfb"
+    },
+    {
+      "pid": 1159394,
+      "parentPid": 1159389,
+      "executable": "tee"
+    }
+  ],
+  "sockets": [
+    {
+      "protocol": "unix",
+      "path": "@/tmp/.X11-unix/X0",
+      "pids": [
+        1159393
+      ]
+    },
+    {
+      "protocol": "unix",
+      "path": "/tmp/.X11-unix/X0",
+      "pids": [
+        1159393
+      ]
+    }
+  ]
+}

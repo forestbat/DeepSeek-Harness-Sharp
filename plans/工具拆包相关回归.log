@@ -1,0 +1,57 @@
+xUnit.net v3 In-Process Runner v4.0.2+0c7aa4991f (64-bit .NET 10.0.13)
+  Discovering: Dsh.Tests
+  Discovered:  Dsh.Tests
+  Starting:    Dsh.Tests
+    Dsh.Tests.ToolsTests+Wsl.Envs_AreForwardedIntoTheDistribution [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.DoubleQuotesAndNonAscii_SurviveTheCommandLine [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.NonZeroExit_IsReportedWithStderr [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.Command_ReturnsOutputOrAReadableWslDiagnostic [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Workdir_IsHonored [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+Wsl.BlankDistro_IsRejected [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.ToolsTests+WindowsPowerShell.Command_RunsInWindowsPowerShellDesktopEdition [SKIP]
+      the tool is registered on Windows only
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "wsl") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.OutsideRootShell_RejectsWithoutExecution_ThenRunsAfterApproval(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.ExistingPersistentShell_KeepsItsDirectoryAfterCdOutsideRoot(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.WorkingDirectoryTests.NewShell_StartsInChangedDirectory(tool: "pwsh_persistent") [SKIP]
+      Required shell for pwsh_persistent is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "pwsh") [SKIP]
+      Required shell for pwsh is unavailable
+    Dsh.Tests.WorkingDirectoryTests.RelativeShellWorkdir_ResolvesAgainstChangedDirectory(tool: "powershell") [SKIP]
+      Windows-only shell; this host is not Windows
+    Dsh.Tests.JobsTests+PersistentPwsh.TerminatingError_ReportsExitOneAndKeepsTheSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorFollowedBySuccess_HasNoExitMarker [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.FailedNativeCommand_ReportsItsExitCode [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.LocationVariablesFunctionsAndEnvironment_PersistAcrossCalls [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.MultiLineCommandWithQuotesAndNonAscii_RunsAsOneCommand [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Exit_ResetsAndNextCallStartsFresh [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.Timeout_ResetsSession [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+    Dsh.Tests.JobsTests+PersistentPwsh.ErrorAsLastStatement_IsMergedAndReportedAsExitOne [SKIP]
+      pwsh is unavailable; skipping the persistent PowerShell tests
+  Finished:    Dsh.Tests (ID = 'a57dcfe77ca9ab8e12f88a1b1a53408679010ddd36b0d8113365acc76422857c')
+=== TEST EXECUTION SUMMARY ===
+   Dsh.Tests  Total: 201, Errors: 0, Failed: 0, Skipped: 25, Not Run: 0, Time: 13.025s
