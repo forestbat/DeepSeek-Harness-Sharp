@@ -37,7 +37,10 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
         var hints = options.IncludeInlayHints && capabilities.InlayHint
             ? await InlayHintsAsync(document, cancellationToken).ConfigureAwait(false)
             : [];
-        return new TypeFactsSnapshot([.. facts.SelectMany(fact => fact)], hints);
+        var signatures = options.IncludeSignatures && capabilities.SignatureHelp
+            ? await SignaturesAsync(document, selected, options, cancellationToken).ConfigureAwait(false)
+            : [];
+        return new TypeFactsSnapshot([.. facts.SelectMany(fact => fact)], hints, signatures);
     }
 
     private async Task<IReadOnlyList<TypeFact>> HoverAsync(
@@ -106,6 +109,65 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
         {
             return [];
         }
+    }
+
+    private async Task<IReadOnlyList<SignatureFact>> SignaturesAsync(
+        LspDocument document,
+        IReadOnlyList<SyntaxNode> selected,
+        DocumentAnalysisOptions options,
+        CancellationToken cancellationToken)
+    {
+        var signatures = new IReadOnlyList<SignatureFact>[selected.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, selected.Count),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, options.MaxConcurrency),
+                CancellationToken = cancellationToken,
+            },
+            async (index, token) =>
+            {
+                signatures[index] = await SignatureAsync(document, selected[index], token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        return [.. signatures.SelectMany(signature => signature)];
+    }
+
+    private async Task<IReadOnlyList<SignatureFact>> SignatureAsync(
+        LspDocument document,
+        SyntaxNode node,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await channel.RequestAsync("textDocument/signatureHelp", new JsonObject
+            {
+                ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
+                ["position"] = LspJson.PositionNode(node.SelectionRange.Start),
+            }, cancellationToken).ConfigureAwait(false);
+            var activeParameter = LspJson.Int32(result, "activeParameter");
+            return LspJson.Items(LspJson.Property(result, "signatures"))
+                .Select(signature => new SignatureFact(
+                    SymbolIdentity.For(document.Uri, node),
+                    LspJson.String(signature, "label") ?? string.Empty,
+                    Documentation(LspJson.Property(signature, "documentation")),
+                    activeParameter,
+                    node.SelectionRange))
+                .Where(signature => signature.Label.Length > 0)
+                .ToArray();
+        }
+        catch (Exception error) when (error is LspResponseException or LspRequestTimeoutException)
+        {
+            return [];
+        }
+    }
+
+    private static string? Documentation(JsonElement? documentation)
+    {
+        if (documentation is not { } value)
+            return null;
+        return value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : LspJson.String(value, "value");
     }
 
     private static LspRange? InlayRange(JsonElement item)

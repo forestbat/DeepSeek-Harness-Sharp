@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Lsp.Analysis;
+using Dsh.Lsp.Model;
 using Dsh.Lsp.Protocol;
 
 namespace Dsh.Lsp.Client;
@@ -21,6 +22,9 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
     private readonly LspClientOptions _options;
     private readonly LspDocumentStore _documents = new();
     private readonly Dictionary<string, LspDiagnosticSnapshot> _diagnostics = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _pullResultIds = new(StringComparer.Ordinal);
+    private readonly List<LspWorkspaceFolder> _workspaceFolders;
+    private readonly HashSet<string> _dynamicMethods = new(StringComparer.Ordinal);
     private readonly Task<string> _standardError;
     private readonly Lock _stateGate = new();
     private LspCapabilityProfile _capabilities = EmptyCapabilities();
@@ -32,11 +36,14 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         _connection = connection;
         _options = options;
         _standardError = standardError ?? Task.FromResult(string.Empty);
+        _workspaceFolders = [.. options.EffectiveWorkspaceFolders];
         _connection.Notification += OnNotification;
         _connection.ServerRequestHandler = OnServerRequestAsync;
     }
 
     public event Action<LspDiagnosticSnapshot>? DiagnosticsPublished;
+
+    public event Action<JsonElement?>? ProgressChanged;
 
     public LspCapabilityProfile Capabilities
     {
@@ -48,6 +55,15 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
     }
 
     public LspDocumentStore Documents => _documents;
+
+    public IReadOnlyList<LspWorkspaceFolder> WorkspaceFolders
+    {
+        get
+        {
+            lock (_stateGate)
+                return [.. _workspaceFolders];
+        }
+    }
 
     public JsonElement? ServerCapabilities
     {
@@ -67,7 +83,7 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
 
         _connection.Start();
         var workspaceFolders = new JsonArray();
-        foreach (var folder in _options.EffectiveWorkspaceFolders)
+        foreach (var folder in WorkspaceFolders)
         {
             workspaceFolders.Add(new JsonObject
             {
@@ -199,7 +215,10 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
             ["textDocument"] = new JsonObject { ["uri"] = document.Uri },
         }, cancellationToken).ConfigureAwait(false);
         lock (_stateGate)
+        {
             _diagnostics.Remove(document.Uri);
+            _pullResultIds.Remove(document.Uri);
+        }
     }
 
     public async Task SaveAsync(string uri, string? text = null, CancellationToken cancellationToken = default)
@@ -213,6 +232,113 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         if (text is not null)
             parameters["text"] = text;
         await _connection.NotifyAsync("textDocument/didSave", parameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task WillSaveAsync(
+        string uri,
+        LspSaveReason? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parameters = new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = LspDocumentUri.Normalize(uri) },
+        };
+        if (reason is { } value)
+            parameters["reason"] = (int)value;
+        await _connection.NotifyAsync("textDocument/willSave", parameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<WorkspaceEditFact?> WillSaveWaitUntilAsync(
+        string uri,
+        LspSaveReason? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parameters = new JsonObject
+        {
+            ["textDocument"] = new JsonObject { ["uri"] = LspDocumentUri.Normalize(uri) },
+        };
+        if (reason is { } value)
+            parameters["reason"] = (int)value;
+        var result = await _connection.RequestAsync("textDocument/willSaveWaitUntil", parameters, cancellationToken)
+            .ConfigureAwait(false);
+        return LspOperations.ParseWorkspaceEdit(result);
+    }
+
+    public async Task AddWorkspaceFolderAsync(
+        LspWorkspaceFolder folder,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_stateGate)
+        {
+            if (_workspaceFolders.Any(existing => existing.Uri == folder.Uri))
+                return;
+            _workspaceFolders.Add(folder);
+        }
+
+        await _connection.NotifyAsync("workspace/didChangeWorkspaceFolders", new JsonObject
+        {
+            ["event"] = new JsonObject
+            {
+                ["added"] = new JsonArray(FolderNode(folder)),
+                ["removed"] = new JsonArray(),
+            },
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task RemoveWorkspaceFolderAsync(
+        string uri,
+        CancellationToken cancellationToken = default)
+    {
+        LspWorkspaceFolder? removed;
+        lock (_stateGate)
+        {
+            removed = _workspaceFolders.FirstOrDefault(folder => folder.Uri == uri);
+            if (removed is not null)
+                _workspaceFolders.Remove(removed);
+        }
+
+        if (removed is null)
+            return;
+        await _connection.NotifyAsync("workspace/didChangeWorkspaceFolders", new JsonObject
+        {
+            ["event"] = new JsonObject
+            {
+                ["added"] = new JsonArray(),
+                ["removed"] = new JsonArray(FolderNode(removed)),
+            },
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task UpdateConfigurationAsync(JsonNode? settings, CancellationToken cancellationToken = default)
+        => _connection.NotifyAsync("workspace/didChangeConfiguration", new JsonObject
+        {
+            ["settings"] = settings?.DeepClone(),
+        }, cancellationToken);
+
+    public Task DidChangeWatchedFilesAsync(
+        IReadOnlyList<LspFileEvent> changes,
+        CancellationToken cancellationToken = default)
+    {
+        var items = new JsonArray();
+        foreach (var change in changes)
+        {
+            items.Add(new JsonObject
+            {
+                ["uri"] = change.Uri,
+                ["type"] = (int)change.Type,
+            });
+        }
+
+        return _connection.NotifyAsync("workspace/didChangeWatchedFiles", new JsonObject
+        {
+            ["changes"] = items,
+        }, cancellationToken);
+    }
+
+    public bool Supports(string method)
+    {
+        lock (_stateGate)
+            return _capabilities.Supports(method) || _dynamicMethods.Contains(method);
     }
 
     public LspDiagnosticSnapshot? Diagnostics(string uri)
@@ -363,10 +489,28 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
             .ConfigureAwait(false);
 
     public async Task<JsonElement?> PullDiagnosticsAsync(string uri, CancellationToken cancellationToken = default)
-        => await RequestIfSupportedAsync("textDocument/diagnostic", new JsonObject
+    {
+        var normalized = LspDocumentUri.Normalize(uri);
+        var parameters = new JsonObject
         {
-            ["textDocument"] = LspJson.TextDocumentNode(uri),
-        }, cancellationToken).ConfigureAwait(false);
+            ["textDocument"] = LspJson.TextDocumentNode(normalized),
+        };
+        lock (_stateGate)
+        {
+            if (_pullResultIds.TryGetValue(normalized, out var resultId))
+                parameters["previousResultId"] = resultId;
+        }
+
+        var result = await RequestIfSupportedAsync("textDocument/diagnostic", parameters, cancellationToken)
+            .ConfigureAwait(false);
+        if (result is { } value && LspJson.String(value, "resultId") is { } nextResultId)
+        {
+            lock (_stateGate)
+                _pullResultIds[normalized] = nextResultId;
+        }
+
+        return result;
+    }
 
     public async Task<JsonElement?> RequestAsync(
         string method,
@@ -378,7 +522,7 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         string method,
         JsonObject parameters,
         CancellationToken cancellationToken)
-        => Capabilities.Supports(method)
+        => Supports(method)
             ? await _connection.RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false)
             : null;
 
@@ -391,6 +535,12 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
 
     private void OnNotification(string method, JsonElement? parameters)
     {
+        if (method == "$/progress")
+        {
+            ProgressChanged?.Invoke(parameters);
+            return;
+        }
+
         if (method != "textDocument/publishDiagnostics" || parameters is not { } value)
             return;
         var uri = LspJson.String(value, "uri");
@@ -416,17 +566,38 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         string method,
         JsonElement? parameters,
         CancellationToken cancellationToken)
-        => Task.FromResult<JsonElement?>(method switch
+        => Task.FromResult(method switch
         {
             "workspace/configuration" => WaitForConfiguration(parameters),
-            "workspace/workspaceFolders" => WorkspaceFolders(),
-            "client/registerCapability"
-                or "client/unregisterCapability"
-                or "window/workDoneProgress/create"
+            "workspace/workspaceFolders" => WorkspaceFoldersResponse(),
+            "client/registerCapability" => RegisterCapability(parameters, true),
+            "client/unregisterCapability" => RegisterCapability(parameters, false),
+            "window/workDoneProgress/create"
                 or "window/showMessageRequest" => null,
             "workspace/applyEdit" => JsonSerializer.SerializeToElement(new JsonObject { ["applied"] = false }),
             _ => throw new LspResponseException(-32601, $"unsupported server request: {method}"),
         });
+
+    private JsonElement? RegisterCapability(JsonElement? parameters, bool register)
+    {
+        var methods = LspJson.Items(LspJson.Property(parameters, "registrations"))
+            .Select(item => LspJson.String(item, "method"))
+            .Where(method => method is not null)
+            .Select(method => method!)
+            .ToArray();
+        lock (_stateGate)
+        {
+            foreach (var method in methods)
+            {
+                if (register)
+                    _dynamicMethods.Add(method);
+                else
+                    _dynamicMethods.Remove(method);
+            }
+        }
+
+        return null;
+    }
 
     private JsonElement WaitForConfiguration(JsonElement? parameters)
     {
@@ -437,26 +608,28 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         return JsonSerializer.SerializeToElement(result);
     }
 
-    private JsonElement WorkspaceFolders()
+    private JsonElement WorkspaceFoldersResponse()
     {
         var folders = new JsonArray();
-        foreach (var folder in _options.EffectiveWorkspaceFolders)
-        {
-            folders.Add(new JsonObject
-            {
-                ["uri"] = folder.Uri,
-                ["name"] = folder.Name,
-            });
-        }
+        foreach (var folder in WorkspaceFolders)
+            folders.Add(FolderNode(folder));
 
         return JsonSerializer.SerializeToElement(folders);
     }
+
+    private static JsonObject FolderNode(LspWorkspaceFolder folder)
+        => new()
+        {
+            ["uri"] = folder.Uri,
+            ["name"] = folder.Name,
+        };
 
     private static LspCapabilityProfile EmptyCapabilities()
         => new(
             null,
             null,
             LspTextDocumentSyncKind.None,
+            false,
             false,
             false,
             false,

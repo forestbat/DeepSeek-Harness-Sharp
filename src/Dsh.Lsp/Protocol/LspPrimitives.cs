@@ -44,6 +44,22 @@ public enum LspDiagnosticSeverity
     Hint = 4,
 }
 
+public enum LspSaveReason
+{
+    Save = 1,
+    Manual = 2,
+    FocusOut = 3,
+}
+
+public enum LspFileEventType
+{
+    Created = 1,
+    Changed = 2,
+    Deleted = 3,
+}
+
+public sealed record LspFileEvent(string Uri, LspFileEventType Type);
+
 public sealed record LspDiagnostic(
     LspRange Range,
     LspDiagnosticSeverity Severity,

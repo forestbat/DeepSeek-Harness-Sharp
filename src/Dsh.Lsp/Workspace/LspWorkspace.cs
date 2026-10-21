@@ -27,9 +27,12 @@ public sealed class LspWorkspace : IAsyncDisposable
         _rootPath = Path.GetFullPath(rootPath);
         _options = options ?? new LspClientOptions(_rootPath);
         _analysisOptions = analysisOptions ?? DocumentAnalysisOptions.Default;
+        Index = new WorkspaceIndex(_rootPath);
     }
 
     public string RootPath => _rootPath;
+
+    public WorkspaceIndex Index { get; }
 
     public async Task<DocumentAnalysis> AnalyzeFileAsync(
         string path,
@@ -37,14 +40,172 @@ public sealed class LspWorkspace : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        var (session, document) = await EnsureFileAsync(path, text, cancellationToken).ConfigureAwait(false);
+        return await new DocumentAnalysisService(session, _analysisOptions)
+            .AnalyzeAsync(document, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<DocumentAnalysis> AnalyzeAndIndexFileAsync(
+        string path,
+        string? text = null,
+        CancellationToken cancellationToken = default)
+    {
+        var analysis = await AnalyzeFileAsync(path, text, cancellationToken).ConfigureAwait(false);
+        Index.AddOrUpdate(analysis);
+        return analysis;
+    }
+
+    public async Task<IReadOnlyList<DocumentHighlightFact>> GetHighlightsAsync(
+        string path,
+        LspPosition position,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        return await Operations(session)
+            .HighlightsAsync(document.Uri, position, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<RenameTarget?> PrepareRenameAsync(
+        string path,
+        LspPosition position,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        return await Operations(session)
+            .PrepareRenameAsync(document.Uri, position, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<WorkspaceEditFact?> RenameAsync(
+        string path,
+        LspPosition position,
+        string newName,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        return await Operations(session)
+            .RenameAsync(document.Uri, position, newName, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<CodeActionFact>> GetCodeActionsAsync(
+        string path,
+        LspRange range,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var diagnostics = session.Diagnostics(document.Uri)?.Items ?? [];
+        return await Operations(session)
+            .CodeActionsAsync(document.Uri, range, diagnostics, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<WorkspaceSymbolFact>> GetWorkspaceSymbolsAsync(
+        string languageId,
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        var profile = LanguageCatalog.FindByLanguageId(languageId)
+            ?? throw new NotSupportedException($"no language profile for '{languageId}'");
+        var session = await GetSessionAsync(profile, cancellationToken).ConfigureAwait(false);
+        return await Operations(session)
+            .WorkspaceSymbolsAsync(query, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> GetDefinitionAsync(
+        string path,
+        LspPosition position,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var result = await session.DefinitionAsync(document.Uri, position, cancellationToken).ConfigureAwait(false);
+        return SymbolGraphBuilder.ParseLocations(result);
+    }
+
+    public async Task<IReadOnlyList<SelectionChain>> GetSelectionChainsAsync(
+        string path,
+        IReadOnlyList<LspPosition> positions,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        return await new DocumentAnalysisService(session, _analysisOptions)
+            .GetSelectionChainsAsync(document, positions, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<LspLocation>> GetReferencesAsync(
+        string path,
+        LspPosition position,
+        bool includeDeclaration = true,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var result = await session.ReferencesAsync(document.Uri, position, includeDeclaration, cancellationToken)
+            .ConfigureAwait(false);
+        return SymbolGraphBuilder.ParseLocations(result);
+    }
+
+    public async Task<string?> GetHoverAsync(
+        string path,
+        LspPosition position,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var result = await session.HoverAsync(document.Uri, position, cancellationToken).ConfigureAwait(false);
+        return TypeFactExtractor.HoverText(LspJson.Property(result, "contents")) is { Length: > 0 } text
+            ? text
+            : null;
+    }
+
+    public async Task<IReadOnlyList<LspDiagnostic>> GetDiagnosticsAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var pushed = session.Diagnostics(document.Uri)?.Items ?? [];
+        if (!session.Supports("textDocument/diagnostic"))
+            return pushed;
+        var result = await session.PullDiagnosticsAsync(document.Uri, cancellationToken).ConfigureAwait(false);
+        var pulled = LspJson.String(result, "kind") == "unchanged"
+            ? []
+            : LspDiagnostics.ParseMany(LspJson.Property(result, "items"));
+        return pushed
+            .Concat(pulled)
+            .DistinctBy(diagnostic => (diagnostic.Range, diagnostic.Code, diagnostic.Message))
+            .ToArray();
+    }
+
+    public async Task SaveIndexAsync(string path, CancellationToken cancellationToken = default)
+        => await WorkspaceIndexStore.SaveAsync(path, Index, cancellationToken).ConfigureAwait(false);
+
+    public async Task RestartSessionAsync(string languageId, CancellationToken cancellationToken = default)
+    {
+        var profile = LanguageCatalog.FindByLanguageId(languageId)
+            ?? throw new NotSupportedException($"no language profile for '{languageId}'");
+        if (_sessions.TryRemove(profile.Id, out var existing) && existing.IsValueCreated)
+        {
+            var session = await existing.Value.ConfigureAwait(false);
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
+
+        await GetSessionAsync(profile, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(LspClientSession Session, LspDocument Document)> EnsureFileAsync(
+        string path,
+        string? text,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var fullPath = Path.GetFullPath(path);
         var profile = LanguageCatalog.ResolveByPath(fullPath);
         var session = await GetSessionAsync(profile, cancellationToken).ConfigureAwait(false);
         var document = await EnsureDocumentAsync(session, profile, fullPath, text, cancellationToken)
             .ConfigureAwait(false);
-        return await new DocumentAnalysisService(session, _analysisOptions)
-            .AnalyzeAsync(document, cancellationToken)
-            .ConfigureAwait(false);
+        return (session, document);
     }
 
     public async Task<DocumentAnalysis> AnalyzeTextAsync(
@@ -103,6 +264,21 @@ public sealed class LspWorkspace : IAsyncDisposable
         await session.CloseAsync(LspDocumentUri.FromPath(fullPath), cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task NotifyFileChangedAsync(
+        string path,
+        LspFileEventType type,
+        CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var profile = LanguageCatalog.FindByPath(fullPath);
+        if (profile is null || !_sessions.TryGetValue(profile.Id, out var lazy) || !lazy.IsValueCreated)
+            return;
+        var session = await lazy.Value.ConfigureAwait(false);
+        await session.DidChangeWatchedFilesAsync(
+            [new LspFileEvent(LspDocumentUri.FromPath(fullPath), type)],
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<LspDocument> EnsureDocumentAsync(
         LspClientSession session,
         LanguageServerProfile profile,
@@ -121,6 +297,9 @@ public sealed class LspWorkspace : IAsyncDisposable
 
         return await session.OpenAsync(uri, profile.LanguageIds[0], text, cancellationToken).ConfigureAwait(false);
     }
+
+    private static LspOperations Operations(LspClientSession session)
+        => new(session, session.Capabilities, session.Supports);
 
     public async ValueTask DisposeAsync()
     {

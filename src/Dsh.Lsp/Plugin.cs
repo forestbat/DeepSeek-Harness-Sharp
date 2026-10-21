@@ -1,19 +1,21 @@
 using Dsh.Boot;
+using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Sdk;
+using Dsh.Lsp.Tools;
 
 [assembly: DshPlugin("@deepseek-ai/dsh-lsp")]
 
 namespace Dsh.Lsp;
 
-/** 入口 "lsp":在 stdio 上跑 LSP 服务(initialize/hover/shutdown)。 */
+/** 入口 "lsp":在 stdio 上跑 LSP 服务; 同时注册 lsp_* 工具。 */
 [DshEntrypoint("lsp")]
 public sealed class Plugin : IDshPlugin, IDshEntrypoint
 {
-    public string[] Inject => [];
+    public string[] Inject => [ToolRuntime.ServiceName];
 
-    public IDisposable Apply(Context ctx, object? config) => new CallbackDisposable();
+    public IDisposable Apply(Context ctx, object? config) => LspToolSet.Register(ctx);
 
     public async Task<int> RunAsync(HarnessApp app, PluginEntrypointOptions options, CancellationToken cancellationToken)
     {
@@ -24,10 +26,4 @@ public sealed class Plugin : IDshPlugin, IDshEntrypoint
         return 0;
     }
 
-    private sealed class CallbackDisposable : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
 }

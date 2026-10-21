@@ -164,6 +164,7 @@ public sealed class LspMessageConnection : IAsyncDisposable
         var id = Interlocked.Increment(ref _nextId);
         var completion = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = completion;
+        using var cancellation = cancellationToken.Register(() => _ = CancelAsync(id));
         try
         {
             await WriteAsync(new JsonObject
@@ -177,6 +178,7 @@ public sealed class LspMessageConnection : IAsyncDisposable
         }
         catch (TimeoutException) when (!cancellationToken.IsCancellationRequested)
         {
+            _ = CancelAsync(id);
             throw new LspRequestTimeoutException(method);
         }
         finally
@@ -192,6 +194,19 @@ public sealed class LspMessageConnection : IAsyncDisposable
             ["method"] = method,
             ["params"] = parameters,
         }, cancellationToken);
+
+    private async Task CancelAsync(long id)
+    {
+        try
+        {
+            await NotifyAsync("$/cancelRequest", new JsonObject { ["id"] = id }, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _ = error;
+        }
+    }
 
     private async Task ReadLoopAsync(CancellationToken cancellationToken)
     {

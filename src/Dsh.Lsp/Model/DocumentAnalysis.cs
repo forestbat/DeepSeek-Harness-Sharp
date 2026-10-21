@@ -17,7 +17,10 @@ public sealed record DocumentAnalysisOptions(
     int MaxConcurrency = 4,
     bool IncludeReferences = true,
     bool IncludeTypes = true,
-    bool IncludeInlayHints = true)
+    bool IncludeInlayHints = true,
+    bool IncludeHierarchy = true,
+    int MaxHierarchySymbols = 50,
+    bool IncludeSignatures = true)
 {
     public static DocumentAnalysisOptions Default { get; } = new();
 }
@@ -27,6 +30,8 @@ public sealed record DocumentAnalysis(
     LspCapabilityProfile Capabilities,
     SyntaxSnapshot Syntax,
     SymbolGraph Symbols,
+    ScopeGraph Scopes,
+    HierarchyGraph Hierarchy,
     TypeFactsSnapshot Types,
     IReadOnlyList<LspDiagnostic> Diagnostics,
     ValidationResult Validation)

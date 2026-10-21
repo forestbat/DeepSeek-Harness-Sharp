@@ -24,11 +24,15 @@ public sealed class DocumentAnalysisService(LspClientSession session, DocumentAn
         var symbols = await new SymbolGraphBuilder(session, capabilities)
             .BuildAsync(document, syntax, _options, cancellationToken)
             .ConfigureAwait(false);
+        var scopes = ScopeGraphBuilder.Build(document, syntax);
+        var hierarchy = await new HierarchyGraphBuilder(session, capabilities)
+            .BuildAsync(document, syntax, _options, cancellationToken)
+            .ConfigureAwait(false);
         var types = await new TypeFactExtractor(session, capabilities)
             .ExtractAsync(document, syntax, _options, cancellationToken)
             .ConfigureAwait(false);
         var validation = SnapshotValidator.Validate(document, syntax);
-        return new DocumentAnalysis(document, capabilities, syntax, symbols, types, diagnostics, validation);
+        return new DocumentAnalysis(document, capabilities, syntax, symbols, scopes, hierarchy, types, diagnostics, validation);
     }
 
     public async Task<IReadOnlyList<SelectionChain>> GetSelectionChainsAsync(
@@ -48,10 +52,7 @@ public sealed class DocumentAnalysisService(LspClientSession session, DocumentAn
         if (!capabilities.PullDiagnostics)
             return pushed;
 
-        var result = await session.RequestAsync("textDocument/diagnostic", new JsonObject
-        {
-            ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
-        }, cancellationToken).ConfigureAwait(false);
+        var result = await session.PullDiagnosticsAsync(document.Uri, cancellationToken).ConfigureAwait(false);
         var pulled = ParsePullDiagnostics(result);
         if (pulled.Count == 0)
             return pushed;

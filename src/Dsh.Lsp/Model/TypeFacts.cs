@@ -16,9 +16,17 @@ public sealed record InlayHintFact(
     bool PaddingRight,
     string? Tooltip);
 
+public sealed record SignatureFact(
+    string SymbolId,
+    string Label,
+    string? Documentation,
+    int? ActiveParameter,
+    LspRange Range);
+
 public sealed record TypeFactsSnapshot(
     IReadOnlyList<TypeFact> Facts,
-    IReadOnlyList<InlayHintFact> Hints)
+    IReadOnlyList<InlayHintFact> Hints,
+    IReadOnlyList<SignatureFact> Signatures)
 {
-    public static TypeFactsSnapshot Empty { get; } = new([], []);
+    public static TypeFactsSnapshot Empty { get; } = new([], [], []);
 }

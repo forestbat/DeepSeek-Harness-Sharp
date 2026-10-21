@@ -26,6 +26,7 @@ public sealed record LspCapabilityProfile(
     bool DocumentHighlight,
     bool PrepareRename,
     bool Rename,
+    bool CodeAction,
     bool SignatureHelp,
     bool InlayHint,
     bool CallHierarchy,
@@ -52,6 +53,7 @@ public sealed record LspCapabilityProfile(
         "textDocument/documentHighlight" => DocumentHighlight,
         "textDocument/prepareRename" => PrepareRename,
         "textDocument/rename" => Rename,
+        "textDocument/codeAction" => CodeAction,
         "textDocument/signatureHelp" => SignatureHelp,
         "textDocument/inlayHint" => InlayHint,
         "textDocument/prepareCallHierarchy" => CallHierarchy,
@@ -88,6 +90,7 @@ public static class LspCapabilityParser
             Provider(capabilities, "documentHighlightProvider"),
             PrepareRename(capabilities),
             Provider(capabilities, "renameProvider"),
+            Provider(capabilities, "codeActionProvider"),
             Provider(capabilities, "signatureHelpProvider"),
             Provider(capabilities, "inlayHintProvider"),
             Provider(capabilities, "callHierarchyProvider"),
@@ -145,6 +148,7 @@ public static class LspClientCapabilities
             {
                 ["workspaceFolders"] = true,
                 ["configuration"] = true,
+                ["didChangeWatchedFiles"] = new JsonObject { ["dynamicRegistration"] = true },
                 ["symbol"] = new JsonObject
                 {
                     ["dynamicRegistration"] = false,
@@ -156,7 +160,7 @@ public static class LspClientCapabilities
                 {
                     ["dynamicRegistration"] = false,
                     ["willSave"] = true,
-                    ["willSaveWaitUntil"] = false,
+                    ["willSaveWaitUntil"] = true,
                     ["didSave"] = true,
                 },
                 ["documentSymbol"] = new JsonObject
@@ -190,6 +194,27 @@ public static class LspClientCapabilities
                 ["references"] = Registration(),
                 ["documentHighlight"] = Registration(),
                 ["rename"] = new JsonObject { ["dynamicRegistration"] = false, ["prepareSupport"] = true },
+                ["codeAction"] = new JsonObject
+                {
+                    ["dynamicRegistration"] = false,
+                    ["codeActionLiteralSupport"] = new JsonObject
+                    {
+                        ["codeActionKind"] = new JsonObject
+                        {
+                            ["valueSet"] = new JsonArray(
+                                "",
+                                "quickfix",
+                                "refactor",
+                                "refactor.extract",
+                                "refactor.inline",
+                                "refactor.rewrite",
+                                "source",
+                                "source.organizeImports"),
+                        },
+                    },
+                    ["isPreferredSupport"] = true,
+                    ["disabledSupport"] = true,
+                },
                 ["signatureHelp"] = new JsonObject
                 {
                     ["dynamicRegistration"] = false,

@@ -59,6 +59,12 @@ public sealed class SymbolGraphBuilder(ILspRequestChannel channel, LspCapability
             if (capabilities.Declaration)
                 await AddLocationsAsync(edges, node, "textDocument/declaration", SymbolEdgeKind.Declaration, cancellationToken)
                     .ConfigureAwait(false);
+            if (capabilities.TypeDefinition)
+                await AddLocationsAsync(edges, node, "textDocument/typeDefinition", SymbolEdgeKind.TypeDefinition, cancellationToken)
+                    .ConfigureAwait(false);
+            if (capabilities.Implementation)
+                await AddLocationsAsync(edges, node, "textDocument/implementation", SymbolEdgeKind.Implementation, cancellationToken)
+                    .ConfigureAwait(false);
             if (capabilities.References && options.IncludeReferences)
                 await AddReferencesAsync(edges, node, cancellationToken).ConfigureAwait(false);
             return edges;
