@@ -7,14 +7,14 @@ using Dsh.Transport;
 namespace Dsh.Fleet;
 
 /** OpenSSH authentication, command capture, stdio channels and uploads; no deployment decisions. */
-public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
+public sealed class SshTransport(MachineSpec machine, ISshTransportAdapter? adapter = null) : IRemoteMachineTransport
 {
     public MachineSpec Machine => machine;
 
     internal SshCommandChannel OpenCommand(string command)
     {
         RequirePassword(machine);
-        var startInfo = BuildSshStartInfo(machine, out var askPass);
+        var startInfo = BuildSshStartInfo(machine, out var askPass, adapter: adapter);
         startInfo.ArgumentList.Add(command);
         try
         {
@@ -31,11 +31,11 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
         }
     }
 
-    internal static (ProcessStartInfo StartInfo, string? AskPass, string AuthenticationMarker) CreateProxyStart(MachineSpec machine, DnsEndPoint endpoint, int? localPort = null)
+    internal static (ProcessStartInfo StartInfo, string? AskPass, string AuthenticationMarker) CreateProxyStart(MachineSpec machine, DnsEndPoint endpoint, int? localPort = null, ISshTransportAdapter? adapter = null)
     {
         RequirePassword(machine);
         var marker = $"dsh-ssh-auth-{Guid.NewGuid():N}";
-        var startInfo = BuildSshStartInfo(machine, out var askPass, marker, localPort is not null);
+        var startInfo = BuildSshStartInfo(machine, out var askPass, marker, localPort is not null, adapter);
         var host = endpoint.Host.Contains(':') && !endpoint.Host.StartsWith('[') ? $"[{endpoint.Host}]" : endpoint.Host;
         if (localPort is { } port)
         {
@@ -100,7 +100,7 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
     public async Task<RemoteProcessResult> CaptureAsync(string command, CancellationToken cancellationToken)
     {
         RequirePassword(machine);
-        var startInfo = BuildSshStartInfo(machine, out var askPass);
+        var startInfo = BuildSshStartInfo(machine, out var askPass, adapter: adapter);
         startInfo.ArgumentList.Add(command);
         try
         {
@@ -118,7 +118,7 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
     public string CommandLine(string remoteCommand)
     {
         Collection<string> arguments = [];
-        AddCommonOptions(arguments, machine);
+        AddCommonOptions(arguments, machine, adapter);
         var line = new StringBuilder($"ssh -p {machine.Port}");
         foreach (var argument in arguments)
             line.Append($" {Quote(argument)}");
@@ -131,7 +131,7 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
     {
         var workspace = machine;
         RequirePassword(workspace);
-        var startInfo = BuildScpStartInfo(workspace, out var askPass);
+        var startInfo = BuildScpStartInfo(workspace, out var askPass, adapter);
         startInfo.ArgumentList.Add(localPath);
         startInfo.ArgumentList.Add($"{workspace.User}@{workspace.ConnectionHost}:{remotePath}");
         try
@@ -171,7 +171,7 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
     }
 
 
-    private static ProcessStartInfo BuildSshStartInfo(MachineSpec workspace, out string? askPass, string? authenticationMarker = null, bool localForward = false)
+    private static ProcessStartInfo BuildSshStartInfo(MachineSpec workspace, out string? askPass, string? authenticationMarker = null, bool localForward = false, ISshTransportAdapter? adapter = null)
     {
         var startInfo = new ProcessStartInfo("ssh")
         {
@@ -218,13 +218,13 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
                 arguments.Add("ClearAllForwardings=no");
             }
         }
-        AddCommonOptions(arguments, workspace);
+        AddCommonOptions(arguments, workspace, adapter);
         askPass = ApplyAskPass(startInfo, workspace);
         arguments.Add($"{workspace.User}@{workspace.ConnectionHost}");
         return startInfo;
     }
 
-    private static ProcessStartInfo BuildScpStartInfo(MachineSpec workspace, out string? askPass)
+    private static ProcessStartInfo BuildScpStartInfo(MachineSpec workspace, out string? askPass, ISshTransportAdapter? adapter)
     {
         var startInfo = new ProcessStartInfo("scp")
         {
@@ -238,24 +238,16 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
         arguments.Add("-q");
         arguments.Add("-P");
         arguments.Add(workspace.Port.ToString());
-        AddCommonOptions(arguments, workspace);
+        AddCommonOptions(arguments, workspace, adapter);
         askPass = ApplyAskPass(startInfo, workspace);
         return startInfo;
     }
 
-    private static void AddCommonOptions(Collection<string> arguments, MachineSpec workspace)
+    private static void AddCommonOptions(Collection<string> arguments, MachineSpec workspace, ISshTransportAdapter? adapter)
     {
-        IrohSshTransport.Validate(workspace);
-        if (workspace.IsIroh)
-        {
-            // OpenSSH can reuse a TCP master before it considers ProxyCommand.
-            arguments.Add("-o");
-            arguments.Add("ControlPath=none");
-            arguments.Add("-o");
-            arguments.Add($"ProxyCommand={IrohSshTransport.ProxyCommand(workspace)}");
-            arguments.Add("-o");
-            arguments.Add($"HostKeyAlias=iroh-{workspace.EndpointId!.ToLowerInvariant()}");
-        }
+        workspace.ValidateTransportSettings();
+        if (workspace.Kind is not (MachineKinds.Local or MachineKinds.Ssh))
+            AddAdapterOptions(arguments, workspace, adapter);
         foreach (var option in workspace.SshOptions ?? [])
         {
             arguments.Add("-o");
@@ -285,6 +277,22 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
             arguments.Add("-o");
             arguments.Add($"ProxyCommand={proxy}");
         }
+    }
+
+    private static void AddAdapterOptions(Collection<string> arguments, MachineSpec workspace, ISshTransportAdapter? adapter)
+    {
+        if (adapter is null || adapter.Kind != workspace.Kind)
+            throw new NotSupportedException($"No SSH transport adapter is enabled for machine kind \"{workspace.Kind}\".");
+        var configuration = adapter.Configure(workspace);
+        if (configuration.DisableMultiplexing)
+        {
+            arguments.Add("-o");
+            arguments.Add("ControlPath=none");
+        }
+        arguments.Add("-o");
+        arguments.Add($"ProxyCommand={configuration.ProxyCommand}");
+        arguments.Add("-o");
+        arguments.Add($"HostKeyAlias={configuration.HostKeyAlias}");
     }
 
     private static string? ApplyAskPass(ProcessStartInfo startInfo, MachineSpec workspace)

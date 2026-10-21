@@ -13,7 +13,7 @@ public interface IWebBridgeApplication
 }
 
 /** The plugin owns the real Fleet links and all bridge streams. Deactivation cancels the listener callback and joins it before releasing the shared client. */
-public sealed class WebBridgeRuntime(OutboundProxy? proxy = null) : IDisposable
+public sealed class WebBridgeRuntime(OutboundProxy? proxy = null, ISshTransportAdapter? adapter = null) : IDisposable
 {
     public const string ServiceName = "webBridge";
     public const string ApplicationServiceName = "webBridgeApplication";
@@ -37,7 +37,10 @@ public sealed class WebBridgeRuntime(OutboundProxy? proxy = null) : IDisposable
     private async Task<int> RunCoreAsync(WebBridgeOptions options, Func<FleetClient, CancellationToken, Task<int>> serve, CancellationToken cancellationToken)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token, cancellationToken);
-        await using var fleet = new FleetClient(options.Machines ?? [MachineSpec.Local(options.HostRoot)], options.Fleet ?? new FleetOptions());
+        var connectionOptions = options.Fleet ?? new FleetOptions();
+        if (connectionOptions.SshTransportAdapter is null && adapter is not null)
+            connectionOptions = connectionOptions with { SshTransportAdapter = adapter };
+        await using var fleet = new FleetClient(options.Machines ?? [MachineSpec.Local(options.HostRoot)], connectionOptions);
         fleet.Start();
         try { return await serve(fleet, stop.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { return 0; }

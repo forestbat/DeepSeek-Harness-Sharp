@@ -360,8 +360,64 @@ Server 下载仍只使用 `fleet.deploy.serverProxy`，不启用本机借用选�
 ### 通过 iroh 接入没有公网 SSH 地址的机器
 
 普通 SSH 保持不变；选择 SSH-over-iroh 后，客户端通过稳定的 Endpoint ID 寻址，能直连时直连，否则使用可达的 relay。
-完整发行包自带固定版本的 `iroh-ssh`，无需另装 iroh 或手写 `ProxyCommand`；请保留安装目录中的 `tools/` 及许可文件，系统 OpenSSH 的 `ssh`、`scp` 仍需可用。
-WebBridge 使用运行它的那台机器上的组件，浏览器设备无需安装 iroh；浏览器到 WebBridge 的网络可达性仍需单独解决。
+SSH-over-iroh 是独立的可选程序集 `Dsh.Fleet.Client.Iroh`；基础 `Dsh.Fleet.Client` 不依赖它，正常产品包含接入支持，但不下载或捆绑原生 `iroh-ssh` 命令。
+客户端必须由用户安装 `iroh-ssh` 并放入实际启动进程的 `PATH`，系统 OpenSSH 的 `ssh`、`scp` 仍需可用；产品只检测可执行命令是否存在，不把它当作版本兼容或网络就绪证明。
+GUI 仅在检测到命令后显示新增 Iroh 机器的入口；缺少命令不会隐藏或改写已保存的 Iroh 机器，尝试连接或启用时会明确报告缺少依赖，不自动安装、下载或退回普通 SSH。
+WebBridge 使用运行它的那台机器上的可选程序集和已安装命令，浏览器设备无需安装 iroh；浏览器到 WebBridge 的网络可达性仍需单独解决。
+
+**先在客户端和接收目标准备命令：**
+
+客户端需要支持 `proxy` 的兼容 `iroh-ssh`；接收目标还必须支持 `server --ready-file`，以保留地址发现就绪、失败回滚和接收端进程所有权语义。
+上游固定源码修订 `82e99719f8b4e44c69622140f4acb25e5ae54184` 本身没有 `--ready-file`，不能只安装同名上游版本就认为接收端兼容。
+本仓库的 `scripts/fetch-iroh-ssh.sh` / `.ps1` 是显式调用的开发与 CI 原生测试依赖准备脚本：它们校验该修订、应用 `scripts/iroh-ssh-readiness.patch`，产出可供用户自行安装的兼容命令及许可说明；普通 build/publish 不调用它们。
+以下在仓库根运行，需要 Git、Rust 的 `rustup` / `cargo` 及平台原生编译器；Linux/macOS 还需要 Python 3、curl、tar、jq，Windows 需要 PowerShell 7 和 Visual Studio C++ 工具链。
+已有兼容命令时无需重复安装；下面操作会更新专用 `dsharp-iroh` 安装目录中的文件。
+若同名命令由其他安装管理，先自行选择保留或调整安装位置，示例不会覆盖它。
+
+Linux x64 示例（macOS Apple Silicon 把 `RID` 改成 `osx-arm64`，其他架构使用脚本支持的对应 RID）：
+
+```bash
+(
+set -e
+RID=linux-x64
+install_dir="$HOME/.local/lib/dsharp-iroh"
+link_path="$HOME/.local/bin/iroh-ssh"
+if { [ -e "$link_path" ] || [ -L "$link_path" ]; } && [ "$(readlink "$link_path" 2>/dev/null)" != "$install_dir/iroh-ssh" ]; then
+    printf 'Refusing to replace an existing iroh-ssh installation at %s\n' "$link_path" >&2
+    exit 1
+fi
+bash scripts/fetch-iroh-ssh.sh "$RID"
+mkdir -p "$install_dir" "$HOME/.local/bin"
+cp artifacts/iroh-ssh/"$RID"/{iroh-ssh,LICENSE.txt,THIRD-PARTY-LICENSES.txt,NOTICE.txt,READINESS.patch} "$install_dir/"
+if [ ! -L "$link_path" ]; then
+    ln -s "$install_dir/iroh-ssh" "$link_path"
+fi
+export PATH="$HOME/.local/bin:$PATH"
+iroh-ssh version
+iroh-ssh server --help
+dsh-gui
+)
+```
+
+Windows x64（在 PowerShell 7 中运行；ARM64 使用 `win-arm64`）：
+
+```powershell
+$rid = 'win-x64'
+pwsh -NoProfile -File scripts/fetch-iroh-ssh.ps1 -Rid $rid
+$install = Join-Path $env:LOCALAPPDATA 'dsharp-iroh'
+New-Item -ItemType Directory -Force $install | Out-Null
+'iroh-ssh.exe', 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'NOTICE.txt', 'READINESS.patch' |
+    ForEach-Object { Copy-Item "artifacts/iroh-ssh/$rid/$_" $install -Force }
+$env:PATH = "$install;$env:PATH"
+iroh-ssh version
+iroh-ssh server --help
+dsh-gui
+```
+
+检查 `server --help` 中确有 `--ready-file`；命令存在但不兼容时，接收端启用仍会明确失败。
+以上 `PATH` 修改仅作用于示例的执行环境及其子进程；从该环境启动 `dsh-gui` 可让 GUI 继承它，从桌面图标、Finder 或服务启动则需在对应登录/启动环境配置同一目录并重新启动应用。
+不要只修改交互式 shell 的 `PATH` 就假定桌面 GUI 或远端非交互 SSH 同样可见。
+在接收目标重复相应安装步骤，使目标本地的 `dsharp remote enable` 以及远端非交互 SSH 启动的 `dsharp` 都能通过其 `PATH` 找到兼容命令；已有 SSH 自动启用只部署接收端产品，不替目标安装原生命令。
 
 **已有一次可达的 SSH 连接：**
 
@@ -372,13 +428,13 @@ dsharp machine test home
 ```
 
 GUI 中添加或选择普通 SSH 机器，然后点击「通过现有 SSH 启用 Iroh」。
-客户端单独部署接收端，通过真实 iroh SSH 命令验证认证与身份后才保存转换后的机器配置，不替换正在运行的 Host。
+客户端单独部署接收端产品（目标端兼容原生命令须预先安装），通过真实 iroh SSH 命令验证认证与身份后才保存转换后的机器配置，不替换正在运行的 Host。
 失败或取消保留原 SSH 配置；本次新启动的接收端会回滚，已有运行中的接收端只复用、不擅自重配。
 如果 SSH 本身已经断开而无法确认回滚，错误会明确要求在目标端运行 `dsharp remote disable`，不把清理失败当作成功。
 
 **客户端完全无法 SSH 到达目标：**
 
-先通过本机操作、云控制台或其他已有方式，把包含此功能的完整发行包放到目标机器并运行：
+先通过本机操作、云控制台或其他已有方式，把包含可选接入支持的发行包放到目标机器，完成上面的兼容命令安装与 `PATH` 配置后运行：
 
 ```bash
 dsharp remote enable                         # 默认连接目标本机 127.0.0.1:22 的 sshd
@@ -418,7 +474,8 @@ macOS 15 及以后，LaunchAgent 的局域网发现和直连需要用户在「�
 这些规则不影响已有的 SSH 认证与 host-key 校验；未授权 LAN 且配置的 relay 不可达时，启用会失败并保留原 Endpoint ID，不会提权、替换 relay 或退回旧 IP。
 详见 Apple [TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy)。
 
-完整发行包以实际提供的 RID 资产为准；从源码构建需要 Git，并获取固定源码、应用随包附带的发现就绪补丁；Windows 构建使用 PowerShell 7，跨架构构建还需要相应编译器与目标工具链。
+可用发行平台以实际提供的 RID 资产为准；原生命令由用户独立安装，许可与补丁随显式准备的测试依赖保留，不进入普通产品归档。
+跨架构编译原生测试依赖还需要相应编译器、sysroot 与目标工具链。
 
 ### 可选：由用户管理 systemd 服务
 
@@ -517,8 +574,9 @@ Windows 可将 `dsharp-web-win-x64.zip` 解压到 `%LOCALAPPDATA%\\dsharp-web` �
 <details>
 <summary><b>未发布</b> — SSH-over-iroh 与 SSH 命令流代理</summary>
 
-- 多机连接新增 Endpoint ID 接入、客户端内置 iroh-ssh、已有 SSH 自动启用与目标端本地启用两种入口，沿用原有 SSH 认证和 Fleet 会话生命周期。
-- 接收端启动会同步地址发现就绪再验证 SSH 隧道，发布包附带上游修改补丁及来源说明。
+- 多机连接新增 Endpoint ID 接入、独立可选 `Dsh.Fleet.Client.Iroh` 程序集、已有 SSH 自动启用与目标端本地启用两种入口，沿用原有 SSH 认证和 Fleet 会话生命周期。
+- 原生 `iroh-ssh` 由用户安装并通过启动进程的 `PATH` 检测，产品构建与发行包不下载、不捆绑；缺少命令时不显示 GUI 新增入口，不改动已有配置。
+- 接收端要求兼容的 `server --ready-file` 命令，同步地址发现就绪再验证 SSH 隧道；仓库保留显式原生测试依赖准备脚本、固定来源和补丁说明。
 - macOS 接收端嵌入本地网络用途声明，局域网接入遵循用户授权，不静默提权。
 - 使用方法与平台差异见「通过 iroh 接入没有公网 SSH 地址的机器」。
 - CLI 新增 `machine tunnel` 配置、实际 HTTP(S) 自检及共享出口的 `use`/`direct`，TUI 通过 `/proxy via`、`/proxy direct` 与 `/proxy reload` 使用同一选择；受管租约保留认证、TLS 和连接释放边界，不修改基准或远端 Host 的出口配置。

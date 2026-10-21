@@ -27,7 +27,7 @@
     <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
       <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="6" IsEnabled="{Binding !Busy}">
         <Button Classes="Primary" Content="新增 SSH 机器" Command="{Binding NewSshCommand}" />
-        <Button Classes="Ghost" Content="新增 Iroh 机器" Command="{Binding NewIrohCommand}" />
+        <Button Classes="Ghost" Content="新增 Iroh 机器" Command="{Binding NewIrohCommand}" IsVisible="{Binding IrohAvailable}" />
         <Button Classes="Ghost" Content="新增本机 home" Command="{Binding NewLocalCommand}" />
         <Button Classes="Ghost" Content="删除" Command="{Binding DeleteCommand}" />
       </WrapPanel>
@@ -73,7 +73,7 @@
             <TextBlock Classes="Label" Text="名称" />
             <TextBox Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" PlaceholderText="唯一，不能叫 local，不能含 /" />
             <TextBlock Grid.Row="1" Classes="Label" Text="类型" />
-            <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static vm:MachineEditorViewModel.Kinds}" SelectedItem="{Binding Kind, Mode=TwoWay}" />
+            <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind, Mode=TwoWay}" />
           </Grid>
           <TextBlock Classes="Tertiary" TextWrapping="Wrap" Text="ssh：普通 SSH；iroh：SSH-over-iroh；local：本机 home。两种远端连接共用 SSH 认证。" />
 
@@ -126,8 +126,14 @@
             <Button Classes="Ghost" Content="测试连接" Command="{Binding TestConnectionCommand}" IsEnabled="{Binding !Busy}" />
             <Button Classes="Ghost" Content="部署 / 升级" Command="{Binding DeployCommand}" IsEnabled="{Binding !Busy}" />
             <CheckBox Content="强制重新部署" IsChecked="{Binding ForceDeploy, Mode=TwoWay}" VerticalAlignment="Center" IsEnabled="{Binding !Busy}" />
-            <Button Classes="Ghost" Content="通过现有 SSH 启用 Iroh" Command="{Binding EnableIrohCommand}" IsEnabled="{Binding !Busy}"
-                    IsVisible="{Binding Editor.IsSsh, FallbackValue=False}" />
+            <Button Classes="Ghost" Content="通过现有 SSH 启用 Iroh" Command="{Binding EnableIrohCommand}" IsEnabled="{Binding !Busy}">
+              <Button.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="IrohAvailable" />
+                  <Binding Path="Editor.IsSsh" FallbackValue="False" />
+                </MultiBinding>
+              </Button.IsVisible>
+            </Button>
             <Button Classes="Ghost" Content="运行诊断" Command="{Binding RunDoctorCommand}" IsEnabled="{Binding !Busy}" />
             <Button Classes="Ghost" Content="取消操作" Command="{Binding CancelOperationCommand}" IsEnabled="{Binding Busy}" />
           </WrapPanel>

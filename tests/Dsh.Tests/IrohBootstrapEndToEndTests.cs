@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 
 namespace Dsh.Tests;
 
@@ -11,6 +12,7 @@ public sealed class IrohBootstrapEndToEndTests
     public async Task RejectedIrohHostKey_PreservesSshConfiguration_AndPreexistingReceiver(bool preexistingReceiver)
     {
         var executable = FleetSshEndToEndTests.RequireEnvironment();
+        _ = IrohSshComponent.RequireExecutable();
         var ct = TestContext.Current.CancellationToken;
         await using var server = await TestSshServer.StartAsync(ct);
         var root = TempTree.CreateSocketDirectory("ib");
@@ -31,6 +33,7 @@ public sealed class IrohBootstrapEndToEndTests
             var store = new MachineStore(new HarnessHome(Path.Combine(root, "client")));
             var options = FleetConnectionTests.TestOptions with
             {
+                SshTransportAdapter = new IrohSshTransport(),
                 Deploy = new DeploySettings { Via = DownloadVia.Client },
                 ArchiveFactory = (_, rid, token) => FleetSshEndToEndTests.BuildArchiveAsync(executable, rid, server.Root, token),
             };

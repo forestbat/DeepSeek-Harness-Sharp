@@ -73,6 +73,11 @@ public sealed class GuiViewsHeadlessTests
         {
             var store = new MachineStore(new HarnessHome(home));
             store.Upsert(MachineSpec.Ssh("build", "build.internal", MachineSpec.DefaultSshPort, "dev", SshAuth.Agent));
+            store.Upsert(MachineSpec.Ssh("iroh-build", "bootstrap.internal", MachineSpec.DefaultSshPort, "dev", SshAuth.Agent) with
+            {
+                Kind = MachineKinds.Iroh,
+                EndpointId = new string('a', MachineSpec.IrohEndpointIdLength),
+            });
             var viewModel = new MachinesViewModel(store, new FleetOptions());
             viewModel.Load("build");
             var window = Show(new MachinesView { DataContext = viewModel });
@@ -81,11 +86,10 @@ public sealed class GuiViewsHeadlessTests
             var rows = window.GetVisualDescendants().OfType<ListBoxItem>().Select(item => ((MachineRowViewModel)item.DataContext!).Name).ToList();
             var hostBox = window.GetVisualDescendants().OfType<TextBox>().First(box => box.Text == "build.internal");
 
-            Assert.Equal(["local", "build"], rows);
+            Assert.Equal(["local", "build", "iroh-build"], rows);
             Assert.True(hostBox.IsEffectivelyVisible);
 
-            viewModel.Editor!.Kind = MachineKinds.Iroh;
-            viewModel.Editor.EndpointId = new string('a', 64);
+            viewModel.Selected = viewModel.Machines.Single(machine => machine.Name == "iroh-build");
             Dispatcher.UIThread.RunJobs();
             var endpointBox = window.GetVisualDescendants().OfType<TextBox>().Single(box => box.Text == new string('a', 64));
             Assert.False(hostBox.IsEffectivelyVisible);
@@ -95,8 +99,8 @@ public sealed class GuiViewsHeadlessTests
             endpointBox.Text = new string('b', 64);
             await viewModel.SaveCommand.ExecuteAsync(null);
             Assert.False(viewModel.StatusIsError, viewModel.Status);
-            var converted = Assert.Single(store.Load().Machines);
-            Assert.Equal((MachineKinds.Iroh, "build.internal", new string('b', 64)), (converted.Kind, converted.Host, converted.EndpointId));
+            var saved = Assert.Single(store.Load().Machines, machine => machine.Name == "iroh-build");
+            Assert.Equal((MachineKinds.Iroh, "bootstrap.internal", new string('b', MachineSpec.IrohEndpointIdLength)), (saved.Kind, saved.Host, saved.EndpointId));
             window.Close();
         }
         finally

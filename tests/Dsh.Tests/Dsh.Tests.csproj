@@ -120,6 +120,7 @@
     <ProjectReference Include="..\..\src\Dsh.WebBridge\Dsh.WebBridge.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Fleet\Dsh.Fleet.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Fleet.Client\Dsh.Fleet.Client.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Fleet.Client.Iroh\Dsh.Fleet.Client.Iroh.csproj" />
     <ProjectReference Include="..\..\Dsh.Host\Dsh.Host.csproj" />
     <ProjectReference Include="..\..\DeepSeek-Harness-Sharp\DeepSeek-Harness-Sharp.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />

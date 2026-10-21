@@ -16,6 +16,8 @@ foreach ($directory in @($TuiPublishDir, $GuiPublishDir)) {
 }
 foreach ($directory in @($TuiPublishDir, $GuiPublishDir, $WebPublishDir)) {
     $files = @(Get-ChildItem $directory -Recurse -File)
+    $bundledIroh = @($files | Where-Object { $_.Name -in @('iroh-ssh', 'iroh-ssh.exe') })
+    if ($bundledIroh.Count -ne 0) { throw "Publish bundles optional Iroh command: $($bundledIroh.Name -join ', ')" }
     $bundledSqlite = @($files | Where-Object { $_.Name -match '^(?:lib)?(?:e_sqlite3|sqlite3|winsqlite3)(?:\.\d+)*\.(?:dll|so|dylib|a|lib)(?:\.\d+)*$' })
     if ($bundledSqlite.Count -ne 0) { throw "Publish bundles optional system SQLite libraries: $($bundledSqlite.Name -join ', ')" }
     $bytes = ($files | Measure-Object -Property Length -Sum).Sum

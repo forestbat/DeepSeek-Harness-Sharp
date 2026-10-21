@@ -12,6 +12,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
     private const int DiagnosticCapacity = 8192;
     private readonly object _gate = new();
     private readonly bool _persistent;
+    private readonly ISshTransportAdapter? _adapter;
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationTokenSource _failure = new();
     private readonly TaskCompletionSource _authenticated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -30,9 +31,10 @@ internal sealed class SshProxyProcess : IAsyncDisposable
     private bool _askPassRemovalFailed;
     private bool _resourcesReleased;
 
-    internal SshProxyProcess(bool persistent)
+    internal SshProxyProcess(bool persistent, ISshTransportAdapter? adapter = null)
     {
         _persistent = persistent;
+        _adapter = adapter;
         Process = new Process { EnableRaisingEvents = true };
         Process.Exited += OnExited;
         FailureToken = _failure.Token;
@@ -52,7 +54,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 cancellationToken.ThrowIfCancellationRequested();
-                var setup = SshTransport.CreateProxyStart(machine, endpoint, localPort);
+                var setup = SshTransport.CreateProxyStart(machine, endpoint, localPort, _adapter);
                 Process.StartInfo = setup.StartInfo;
                 _askPass = setup.AskPass;
                 _authenticationMarker = setup.AuthenticationMarker;

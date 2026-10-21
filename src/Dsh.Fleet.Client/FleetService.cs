@@ -14,13 +14,14 @@ public sealed class FleetService : IDisposable
     private readonly bool _ownsProxy;
     private bool _disposed;
 
-    public FleetService(HarnessHome home, Context? context = null)
+    public FleetService(HarnessHome home, Context? context = null, ISshTransportAdapter? adapter = null)
     {
         Home = home;
         Store = new MachineStore(home);
         _ownsProxy = context?.GetProp(OutboundProxy.PropName) is not OutboundProxy;
         var proxy = _ownsProxy ? new OutboundProxy() : OutboundProxy.FromContext(context!);
-        OutboundRoute = new BorrowedOutboundRoute(home, proxy);
+        SshTransportAdapter = adapter;
+        OutboundRoute = new BorrowedOutboundRoute(home, proxy, adapter);
         if (context is not null)
         {
             _runtimeLease = OutboundRoute.AcquireAsync().AsTask();
@@ -32,6 +33,7 @@ public sealed class FleetService : IDisposable
     public HarnessHome Home { get; }
     public MachineStore Store { get; }
     public BorrowedOutboundRoute OutboundRoute { get; }
+    public ISshTransportAdapter? SshTransportAdapter { get; }
 
     public FleetClient CreateClient(FleetOptions options)
     {
@@ -45,6 +47,7 @@ public sealed class FleetService : IDisposable
                 LocalHome = Home,
                 LocalProxy = OutboundRoute.Proxy,
                 AcquireOutboundRoute = OutboundRoute.AcquireAsync,
+                SshTransportAdapter = options.SshTransportAdapter ?? this.SshTransportAdapter,
             });
             client.Disposed += RemoveClient;
             _clients.Add(client);

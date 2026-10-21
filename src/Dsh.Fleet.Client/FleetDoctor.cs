@@ -33,7 +33,7 @@ public static class FleetDoctor
 
     public static async Task<IReadOnlyList<DoctorCheck>> CheckAsync(MachineSpec machine, FleetOptions options, CancellationToken cancellationToken, IRemoteMachineTransport? transport = null)
     {
-        transport ??= new SshTransport(machine);
+        transport ??= new SshTransport(machine, options.SshTransportAdapter);
         List<DoctorCheck> checks = [];
         if (!machine.IsLocal)
         {

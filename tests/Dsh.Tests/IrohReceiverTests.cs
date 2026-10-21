@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 
 namespace Dsh.Tests;
 

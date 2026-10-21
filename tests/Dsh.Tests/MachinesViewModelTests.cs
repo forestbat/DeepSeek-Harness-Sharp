@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.Gui.ViewModels;
 using Dsh.RemoteHost;
 
@@ -56,6 +57,26 @@ public sealed class MachinesViewModelTests : IDisposable
         Assert.Equal(4, changes);
     }
 
+    [Fact]
+    public async Task MissingIrohCapability_RejectsConvertingAnSshMachineWithoutChangingTheStore()
+    {
+        var machine = MachineSpec.Ssh("target", "server.internal", MachineSpec.DefaultSshPort, "fixture-user", SshAuth.Agent);
+        var store = new MachineStore(new HarnessHome(_home));
+        store.Upsert(machine);
+        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        viewModel.Load("target");
+
+        Assert.False(viewModel.NewIrohCommand.CanExecute(null));
+        Assert.False(viewModel.EnableIrohCommand.CanExecute(null));
+        Assert.DoesNotContain(MachineKinds.Iroh, viewModel.Editor!.Kinds);
+        viewModel.Editor.Kind = MachineKinds.Iroh;
+        viewModel.Editor.EndpointId = new string('a', MachineSpec.IrohEndpointIdLength);
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.StatusIsError);
+        Assert.Equal(machine, Assert.Single(store.Load().Machines));
+    }
+
     [Theory]
     [InlineData(MachineKinds.Ssh)]
     [InlineData(MachineKinds.Iroh)]
@@ -72,6 +93,7 @@ public sealed class MachinesViewModelTests : IDisposable
         store.Upsert(machine);
         var viewModel = new MachinesViewModel(store, new FleetOptions());
         viewModel.Load("target");
+        Assert.Equal(kind == MachineKinds.Iroh, viewModel.Editor!.Kinds.Contains(MachineKinds.Iroh));
         viewModel.Editor!.Name = "renamed";
         viewModel.Editor.RemotePath = "/srv/updated";
 
@@ -113,7 +135,7 @@ public sealed class MachinesViewModelTests : IDisposable
     public async Task IrohMachines_RoundTripAndRemainIrohWhenEdited(string auth)
     {
         var store = new MachineStore(new HarnessHome(_home));
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(store, new FleetOptions { SshTransportAdapter = new IrohSshTransport() });
         viewModel.Load();
         viewModel.NewIrohCommand.Execute(null);
         var editor = viewModel.Editor!;

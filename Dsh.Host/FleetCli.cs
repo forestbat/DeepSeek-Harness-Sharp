@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.Pty;
 using Dsh.RemoteHost;
 using Dsh.Transport;
@@ -153,6 +154,8 @@ internal static class FleetCli
     private static async Task<MachineSpec> SshMachineAsync(string name, FleetArguments arguments)
     {
         var endpoint = arguments.Value("--endpoint-id");
+        if (endpoint is not null)
+            _ = IrohSshComponent.RequireExecutable();
         var host = arguments.Value("--host") ?? (endpoint is not null ? "" : throw new InvalidOperationException("machine add requires --host, --endpoint-id or --local --home"));
         var port = Port(arguments, "--port");
         var key = arguments.Value("--key");
@@ -325,7 +328,7 @@ internal static class FleetCli
                     return await FailAsync("machine tunnel test requires an absolute HTTP(S) probe URL without credentials or a fragment");
                 if (MachineStore.ValidateOutboundTunnel(machine) is null)
                     return await FailAsync("machine has no outbound tunnel configured");
-                await using var tunnel = new SshOutboundTunnel(machine);
+                await using var tunnel = new SshOutboundTunnel(machine, context.SshTransportAdapter);
                 using var outbound = new OutboundProxy();
                 outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, tunnel.ConnectAsync);
                 if (outbound.CaptureRoute(destination).ProxyUri is null)
@@ -390,7 +393,7 @@ internal static class FleetCli
         if (machine.IsLocal)
             return await FailAsync($"{machine.Name} is this computer; it runs this dsharp and needs no deployment");
         var deploy = context.Store.Load().Deploy;
-        var result = await new RemoteDsharpInstaller(new SshTransport(machine)).EnsureAsync(
+        var result = await new RemoteDsharpInstaller(new SshTransport(machine, context.SshTransportAdapter), context.SshTransportAdapter).EnsureAsync(
             deploy, step => Console.Error.WriteLine(step), context.Cancellation, force: context.Arguments.Has("--force"),
             localHome: context.Home);
         await Console.Out.WriteLineAsync(result.AlreadyPresent
@@ -604,8 +607,9 @@ internal sealed record FleetCliContext(
     CancellationToken Cancellation) : IAsyncDisposable
 {
     private BorrowedOutboundRoute? _outboundRoute;
+    public ISshTransportAdapter SshTransportAdapter { get; } = new IrohSshTransport();
 
-    public BorrowedOutboundRoute OutboundRoute => _outboundRoute ??= new BorrowedOutboundRoute(Home, new OutboundProxy());
+    public BorrowedOutboundRoute OutboundRoute => _outboundRoute ??= new BorrowedOutboundRoute(Home, new OutboundProxy(), SshTransportAdapter);
 
     public async ValueTask DisposeAsync()
     {
@@ -631,6 +635,7 @@ internal sealed record FleetCliContext(
             Deploy = deploy ? settings : settings with { AutoDeploy = false },
             // Only an actual local archive download acquires this home's borrowed route.
             LocalHome = Home,
+            SshTransportAdapter = SshTransportAdapter,
             AutoReconnect = false,
             StartLocalHost = startLocalHost ? StartLocalHostAsync : null,
         };

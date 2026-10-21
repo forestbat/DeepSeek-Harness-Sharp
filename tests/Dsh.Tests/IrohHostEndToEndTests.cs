@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.RemoteHost;
 using Dsh.Transport;
 
@@ -21,6 +22,7 @@ public sealed class IrohHostEndToEndTests
             var endpoint = source with { Kind = MachineKinds.Iroh, Host = "192.0.2.1", EndpointId = receiver.EndpointId };
             var options = FleetConnectionTests.TestOptions with
             {
+                SshTransportAdapter = new IrohSshTransport(),
                 Deploy = new DeploySettings { Via = DownloadVia.Client },
                 ArchiveFactory = (_, rid, token) => FleetSshEndToEndTests.BuildArchiveAsync(executable, rid, server.Root, token),
             };

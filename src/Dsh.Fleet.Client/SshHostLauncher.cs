@@ -31,9 +31,9 @@ public static class SshHostLauncher
         }
     }
 
-    public static async Task<Connection> ConnectAsync(MachineSpec machine, string? hostCommandPath, string clientName, CancellationToken cancellationToken)
+    public static async Task<Connection> ConnectAsync(MachineSpec machine, string? hostCommandPath, string clientName, CancellationToken cancellationToken, ISshTransportAdapter? adapter = null)
     {
-        var channel = new SshTransport(machine).OpenCommand(HarnessCommand(machine, hostCommandPath));
+        var channel = new SshTransport(machine, adapter).OpenCommand(HarnessCommand(machine, hostCommandPath));
         try
         {
             var client = await RemoteHostClient.ConnectAsync(channel.Stream, token: null, clientName, cancellationToken).ConfigureAwait(false);

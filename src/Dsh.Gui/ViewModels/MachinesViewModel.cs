@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.ViewModels;
@@ -36,6 +37,10 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     [ObservableProperty]
     private DeploySettingsEditorViewModel? _deploy;
 
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NewIrohCommand), nameof(EnableIrohCommand))]
+    private bool _irohAvailable;
+
     /** 部署时无论远端版本都重新部署。 */
     [ObservableProperty]
     private bool _forceDeploy;
@@ -46,6 +51,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     public void Load(string? select = null)
     {
         var config = store.Load();
+        IrohAvailable = options.SshTransportAdapter is { Kind: MachineKinds.Iroh, IsAvailable: true };
         Deploy ??= DeploySettingsEditorViewModel.From(config.Deploy);
         var known = Machines.ToDictionary(row => row.Name, StringComparer.Ordinal);
         Machines.Clear();
@@ -74,13 +80,13 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     {
         DoctorChecks.Clear();
         if (value is not null)
-            Editor = value.IsImplicit ? null : MachineEditorViewModel.From(value.Spec);
+            Editor = value.IsImplicit ? null : MachineEditorViewModel.From(value.Spec, IrohAvailable);
     }
 
     [RelayCommand]
     private void NewSsh() => StartNew(MachineKinds.Ssh);
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(IrohAvailable))]
     private void NewIroh() => StartNew(MachineKinds.Iroh);
 
     [RelayCommand]
@@ -145,7 +151,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     {
         if (spec.IsLocal)
             throw new InvalidOperationException($"{spec.Name} 是本机，运行的就是这份 dsharp，不需要部署");
-        var result = await new RemoteDsharpInstaller(new SshTransport(spec)).EnsureAsync(Deploy?.ToSettings() ?? store.Load().Deploy, Log, cancellationToken, options.ArchiveFactory, ForceDeploy, options.LocalProxy,
+        var result = await new RemoteDsharpInstaller(new SshTransport(spec, options.SshTransportAdapter), options.SshTransportAdapter).EnsureAsync(Deploy?.ToSettings() ?? store.Load().Deploy, Log, cancellationToken, options.ArchiveFactory, ForceDeploy, options.LocalProxy,
             options.LocalHome ?? new Dsh.Boot.HarnessHome(Path.GetDirectoryName(store.FilePath)!));
         Log(result.AlreadyPresent
             ? $"{spec.Name}: {result.CommandPath} 已是 {RemoteHostServer.ReleaseVersion} 或更新的版本（勾选“强制重新部署”可覆盖）"
@@ -153,7 +159,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     });
 
     /** 经当前普通 SSH 配置启用目标端 iroh, 实测隧道可用后才保存转换后的清单。 */
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(IrohAvailable))]
     private Task EnableIrohAsync()
     {
         var originalName = Editor?.OriginalName;
@@ -186,7 +192,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     private void StartNew(string kind)
     {
         Selected = null;
-        Editor = new MachineEditorViewModel { Kind = kind };
+        Editor = new MachineEditorViewModel(IrohAvailable) { Kind = kind };
     }
 
     /** 改名时替换原记录且保持位置; 新名称不能与另一台机器重名。 */
@@ -195,6 +201,9 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     private FleetConfig PlanChange(MachineSpec spec, string? originalName)
     {
         var config = store.Load();
+        IrohAvailable = options.SshTransportAdapter is { Kind: MachineKinds.Iroh, IsAvailable: true };
+        if (spec.IsIroh && !IrohAvailable && !config.Machines.Any(machine => machine.Name == originalName && machine.IsIroh))
+            throw new InvalidOperationException("Iroh requires an installed iroh-ssh command available to this application.");
         if (spec.Name != originalName && config.Machines.Any(machine => machine.Name == spec.Name))
             throw new InvalidOperationException($"已有名为 {spec.Name} 的机器");
         var replaced = originalName is not null && config.Machines.Any(machine => machine.Name == originalName);

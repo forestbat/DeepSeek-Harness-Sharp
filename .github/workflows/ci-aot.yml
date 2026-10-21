@@ -43,20 +43,6 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
-      - name: Download native iroh-ssh built in this run
-        uses: actions/download-artifact@v4
-        with:
-          name: iroh-ssh-${{ inputs.os }}
-          path: artifacts
-
-      - name: Extract native component without a consumer cache
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/iroh-ssh | Out-Null
-          $tar = if ($IsWindows) { Join-Path ([Environment]::GetFolderPath('System')) 'tar.exe' } else { 'tar' }
-          & $tar -xf artifacts/iroh-ssh-component.tar -C artifacts/iroh-ssh
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Prepare local NuGet feed
         shell: bash
         run: |
@@ -106,20 +92,11 @@ jobs:
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
           GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
           WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
-          test ! -d "artifacts/iroh-ssh/$RID/target"
-          test ! -f "artifacts/iroh-ssh/$RID/source.tar.gz"
-          FILE=iroh-ssh
-          if [ "$RUNNER_OS" = "Windows" ]; then FILE=iroh-ssh.exe; fi
           for OUTPUT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
-            "$OUTPUT/tools/$FILE" version
-            test -s "$OUTPUT/tools/iroh-ssh.LICENSE.txt"
-            test -s "$OUTPUT/tools/iroh-ssh.THIRD-PARTY-LICENSES.txt"
-            test -s "$OUTPUT/tools/iroh-ssh.NOTICE.txt"
-            cmp "artifacts/iroh-ssh/$RID/$FILE" "$OUTPUT/tools/$FILE"
-            cmp "artifacts/iroh-ssh/$RID/LICENSE.txt" "$OUTPUT/tools/iroh-ssh.LICENSE.txt"
-            cmp "artifacts/iroh-ssh/$RID/THIRD-PARTY-LICENSES.txt" "$OUTPUT/tools/iroh-ssh.THIRD-PARTY-LICENSES.txt"
-            cmp src/Dsh.Fleet.Client/iroh-ssh.NOTICE.txt "$OUTPUT/tools/iroh-ssh.NOTICE.txt"
-            cmp scripts/iroh-ssh-readiness.patch "$OUTPUT/tools/iroh-ssh.READINESS.patch"
+            if find "$OUTPUT" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
+              echo "::error::NativeAOT products must not bundle the optional native Iroh command"
+              exit 1
+            fi
           done
           bash scripts/assert-aot-output.sh "$PUB"
           bash scripts/assert-aot-output.sh "$GUI_PUB" dsh-gui
@@ -161,8 +138,6 @@ jobs:
           if [ "$RID" = "linux-x64" ]; then
             CLASSES+=(-class Dsh.Tests.NativePluginAbiTests)
           fi
-          test ! -d "artifacts/iroh-ssh/$RID/target"
-          test ! -f "artifacts/iroh-ssh/$RID/source.tar.gz"
           # Run the real JIT test host with the guard and probe from the published release.
           for NATIVE in dsh_plugin_guard dsh_fault_probe; do
             FILE="$(printf '%s\n' "$PUB"/* | grep -E "/(lib)?$NATIVE\.(dll|so|dylib)$")"

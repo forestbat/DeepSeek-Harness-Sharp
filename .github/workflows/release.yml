@@ -83,16 +83,37 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
-      - name: 缓存固定源码构建的 iroh-ssh
-        uses: actions/cache@v4
-        with:
-          path: |
-            artifacts/iroh-ssh/*/iroh-ssh
-            artifacts/iroh-ssh/*/iroh-ssh.exe
-            artifacts/iroh-ssh/*/LICENSE.txt
-            artifacts/iroh-ssh/*/THIRD-PARTY-LICENSES.txt
-            artifacts/iroh-ssh/*/build.sha256
-          key: iroh-ssh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-iroh-ssh.*') }}
+      - name: Provision the explicit patched native Iroh test dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows)
+              RID=win-x64
+              pwsh -NoProfile -File scripts/fetch-iroh-ssh.ps1 -Rid "$RID"
+              DIRECTORY="$(cygpath -w "$PWD/artifacts/iroh-ssh/$RID")"
+              ;;
+            Linux)
+              RID=linux-x64
+              bash scripts/fetch-iroh-ssh.sh "$RID"
+              DIRECTORY="$PWD/artifacts/iroh-ssh/$RID"
+              ;;
+            macOS)
+              RID=osx-arm64
+              bash scripts/fetch-iroh-ssh.sh "$RID"
+              DIRECTORY="$PWD/artifacts/iroh-ssh/$RID"
+              ;;
+            *) exit 1 ;;
+          esac
+          printf '%s\n' "$DIRECTORY" >> "$GITHUB_PATH"
+
+      - name: Validate the installed native Iroh test dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v iroh-ssh
+          iroh-ssh version
+          iroh-ssh server --help | grep -F -- --ready-file
 
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
         shell: bash
@@ -130,6 +151,11 @@ jobs:
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ matrix.native-cc }}
 
+      - name: Check macOS non-admin headless SSH LAN receiver
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/test-iroh-macos-lan.sh
+
       - name: 运行测试（排除 GpuStress / OnlyGpu / LlmSmoke / RenderBench）
         shell: bash
         run: |
@@ -145,6 +171,9 @@ jobs:
             -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench")
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ARGS+=(-method- Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay)
+          fi
           if command -v timeout >/dev/null 2>&1; then
             ARGS=(timeout 900 "${ARGS[@]}")
           fi
@@ -214,17 +243,6 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
-      - name: 缓存固定源码构建的 iroh-ssh
-        uses: actions/cache@v4
-        with:
-          path: |
-            artifacts/iroh-ssh/*/iroh-ssh
-            artifacts/iroh-ssh/*/iroh-ssh.exe
-            artifacts/iroh-ssh/*/LICENSE.txt
-            artifacts/iroh-ssh/*/THIRD-PARTY-LICENSES.txt
-            artifacts/iroh-ssh/*/build.sha256
-          key: iroh-ssh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-iroh-ssh.*') }}
-
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
         shell: bash
         run: |
@@ -290,13 +308,10 @@ jobs:
           mkdir -p "$STAGE/plugins"
           cp -R "$PUB/." "$STAGE/"
           for DISTRIBUTION in "$STAGE" "$WEB_PUB"; do
-            IROH="$DISTRIBUTION/tools/iroh-ssh"
-            if [ "$RUNNER_OS" = "Windows" ]; then IROH="$IROH.exe"; fi
-            test -f "$IROH"
-            test -f "$DISTRIBUTION/tools/iroh-ssh.LICENSE.txt"
-            test -f "$DISTRIBUTION/tools/iroh-ssh.NOTICE.txt"
-            test -f "$DISTRIBUTION/tools/iroh-ssh.THIRD-PARTY-LICENSES.txt"
-            "$IROH" version
+            if find "$DISTRIBUTION" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
+              echo "::error::Release products must not bundle the optional native Iroh command"
+              exit 1
+            fi
           done
           NATIVES=(dsh_plugin_guard)
           if [ "$FLAVOR" = "aot" ]; then

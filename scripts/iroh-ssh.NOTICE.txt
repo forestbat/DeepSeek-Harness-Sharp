@@ -9,13 +9,13 @@ signed record is acknowledged by the existing N0 PKARR service after relay regis
 The original background publishers remain responsible for subsequent address changes.
 The macOS executable embeds its bundle identity, Local Network usage description, and Bonjour service declaration.
 This declares its purpose; it neither grants permission nor elevates the receiver.
-Patch: iroh-ssh.READINESS.patch, bundled next to this notice.
+Patch: READINESS.patch, distributed next to this test fixture notice.
 Patch SHA256: e383bd31cfe47d8ac57bb732ee53f31f24f6d94e8ec48d5a41cd59d26ed4f58c
-License: MIT, reproduced in iroh-ssh.LICENSE.txt next to this notice.
-Locked Rust dependency package versions, license expressions, and their bundled license files are reproduced in iroh-ssh.THIRD-PARTY-LICENSES.txt.
+License: MIT, reproduced in LICENSE.txt next to this notice.
+Locked Rust dependency package versions, license expressions, and their included license files are reproduced in THIRD-PARTY-LICENSES.txt.
 Each package entry includes a version-specific source download URL so recipients can obtain its corresponding source, including the MPL-2.0-covered attohttpc crate.
 
-All bundled platforms are built from this same source revision and pinned local patch.
+All test fixture platforms are built from this same source revision and pinned local patch.
 The mutable upstream release assets are not used, including the linux-aarch64 asset built against a different iroh version.
-The bundled component is a separate executable and invokes the operating system's OpenSSH client only when its connection commands are used.
+The optional test fixture is a separate executable and invokes the operating system's OpenSSH client only when its connection commands are used.
 dsharp uses its proxy and server commands to carry the existing SSH protocol over iroh, without bypassing SSH authentication or host-key verification.

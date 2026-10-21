@@ -84,14 +84,17 @@ public sealed class DoctorCheckRow(DoctorCheck check)
  * 新增或编辑一台机器的表单, 覆盖 MachineSpec 的全部字段。
  * 本机条目只用名称与 harness home; 普通 SSH 用主机, SSH-over-iroh 用 Endpoint ID, 两者共用 SSH 认证与远端设置。
  */
-public sealed partial class MachineEditorViewModel : ObservableObject
+public sealed partial class MachineEditorViewModel(bool allowIroh = false) : ObservableObject
 {
     private const int MaxPort = 65535;
     private OutboundTunnelSpec? OutboundTunnel { get; init; }
 
     public static IReadOnlyList<string> AuthModes { get; } = [SshAuth.Agent, SshAuth.Key, SshAuth.Password];
 
-    public static IReadOnlyList<string> Kinds { get; } = [MachineKinds.Ssh, MachineKinds.Iroh, MachineKinds.Local];
+    private static readonly string[] AllKinds = [MachineKinds.Ssh, MachineKinds.Iroh, MachineKinds.Local];
+    private static readonly string[] BasicKinds = [MachineKinds.Ssh, MachineKinds.Local];
+
+    public IReadOnlyList<string> Kinds => allowIroh ? AllKinds : BasicKinds;
 
     /** 编辑已有机器时的原名称(改名保存时替换原记录); 新增时为 null。 */
     public string? OriginalName { get; init; }
@@ -154,7 +157,7 @@ public sealed partial class MachineEditorViewModel : ObservableObject
 
     public bool IsKey => Auth == SshAuth.Key;
 
-    public static MachineEditorViewModel From(MachineSpec spec) => new()
+    public static MachineEditorViewModel From(MachineSpec spec, bool allowIroh = false) => new(allowIroh || spec.IsIroh)
     {
         OriginalName = spec.Name,
         Name = spec.Name,

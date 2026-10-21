@@ -1,5 +1,5 @@
 #requires -Version 7
-# Build the bundled component from one verified source revision for every RID.
+# Explicitly provision the optional native test dependency from one verified source revision.
 # Windows builds require PowerShell 7: pwsh -NoProfile -File scripts/fetch-iroh-ssh.ps1 -Rid win-x64
 param(
     [Parameter(Mandatory = $true)]
@@ -24,7 +24,7 @@ $Output = Join-Path $WorkDir $File
 $Stamp = Join-Path $WorkDir 'build.sha256'
 $License = Join-Path $WorkDir 'LICENSE.txt'
 $ThirdParty = Join-Path $WorkDir 'THIRD-PARTY-LICENSES.txt'
-$BundledPatch = Join-Path $WorkDir 'READINESS.patch'
+$FixturePatch = Join-Path $WorkDir 'READINESS.patch'
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $Sha = [System.Security.Cryptography.SHA256]::Create()
 try { $LockHash = [BitConverter]::ToString($Sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($WorkDir.ToUpperInvariant()))).Replace('-', '') }
@@ -35,17 +35,18 @@ $StageDir = $null
 try {
     try { [void]$Mutex.WaitOne(); $Acquired = $true }
     catch [System.Threading.AbandonedMutexException] { $Acquired = $true }
-    if ((Test-Path -LiteralPath $Output) -and (Test-Path -LiteralPath $Stamp) -and (Test-Path -LiteralPath $License) -and (Test-Path -LiteralPath $ThirdParty) -and (Test-Path -LiteralPath $BundledPatch) -and (Get-FileHash -LiteralPath $BundledPatch -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PatchSha256) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'iroh-ssh.NOTICE.txt') -Destination (Join-Path $WorkDir 'NOTICE.txt') -Force
+    if ((Test-Path -LiteralPath $Output) -and (Test-Path -LiteralPath $Stamp) -and (Test-Path -LiteralPath $License) -and (Test-Path -LiteralPath $ThirdParty) -and (Test-Path -LiteralPath $FixturePatch) -and (Get-FileHash -LiteralPath $FixturePatch -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PatchSha256) {
         $Hash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
         $LicenseHash = (Get-FileHash -LiteralPath $License -Algorithm SHA256).Hash.ToLowerInvariant()
         $ThirdPartyHash = (Get-FileHash -LiteralPath $ThirdParty -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ((Get-Content -LiteralPath $Stamp -Raw).Trim() -eq "v3 $Revision $PatchSha256 $Toolchain $Target $Hash $LicenseHash $ThirdPartyHash") { return }
+        if ((Get-Content -LiteralPath $Stamp -Raw).Trim() -eq "v4 $Revision $PatchSha256 $Toolchain $Target $Hash $LicenseHash $ThirdPartyHash") { return }
     }
     # Windows tar handles drive-letter archives even when Git Bash supplied the parent PATH.
     $Tar = Join-Path ([Environment]::GetFolderPath('System')) 'tar.exe'
-    if (-not (Test-Path -LiteralPath $Tar)) { throw 'Building bundled iroh-ssh requires the Windows system tar.exe.' }
+    if (-not (Test-Path -LiteralPath $Tar)) { throw 'Building the optional iroh-ssh test dependency requires the Windows system tar.exe.' }
     foreach ($Command in @('rustup', 'cargo', 'git')) {
-        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { throw "Building bundled iroh-ssh requires $Command." }
+        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { throw "Building the optional iroh-ssh test dependency requires $Command." }
     }
     $StageDir = Join-Path $WorkDir ".stage-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $StageDir | Out-Null
@@ -142,7 +143,7 @@ try {
     $Notices = [System.Text.StringBuilder]::new()
     [void]$Notices.AppendLine('Corresponding source for each version-locked Rust crate is available at the download URL below.')
     [void]$Notices.AppendLine('For MPL-2.0 components, including attohttpc, these links provide the corresponding source covered by that license.')
-    [void]$Notices.AppendLine("iroh-ssh modifications: see bundled iroh-ssh.READINESS.patch (SHA256 $PatchSha256).")
+    [void]$Notices.AppendLine("iroh-ssh modifications: see READINESS.patch next to this file (SHA256 $PatchSha256).")
     foreach ($Package in ($Metadata | ConvertFrom-Json).packages) {
         [void]$Notices.AppendLine("`n=== $($Package.name) $($Package.version) ($($Package.license)) ===")
         if ($Package.name -eq 'iroh-ssh' -and -not $Package.source) {
@@ -161,7 +162,7 @@ try {
     $LicenseHash = (Get-FileHash -LiteralPath $StageLicense -Algorithm SHA256).Hash.ToLowerInvariant()
     $ThirdPartyHash = (Get-FileHash -LiteralPath $StageThirdParty -Algorithm SHA256).Hash.ToLowerInvariant()
     $StageStamp = Join-Path $StageDir 'build.sha256'
-    Set-Content -LiteralPath $StageStamp -Value "v3 $Revision $PatchSha256 $Toolchain $Target $Hash $LicenseHash $ThirdPartyHash" -Encoding ascii
+    Set-Content -LiteralPath $StageStamp -Value "v4 $Revision $PatchSha256 $Toolchain $Target $Hash $LicenseHash $ThirdPartyHash" -Encoding ascii
     foreach ($Generated in @($File, 'LICENSE.txt', 'THIRD-PARTY-LICENSES.txt', 'READINESS.patch')) {
         Move-Item -LiteralPath (Join-Path $StageDir $Generated) -Destination (Join-Path $WorkDir $Generated) -Force
     }

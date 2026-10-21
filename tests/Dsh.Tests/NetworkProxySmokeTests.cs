@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.Runtime;
 using Dsh.Transport;
 using Dsh.Core;
@@ -106,7 +107,7 @@ public sealed class NetworkProxySmokeTests
                 EndpointId = receiver.EndpointId,
                 OutboundTunnel = new(mode, $"http://{user}:{password}@127.0.0.1:{forwarding.Port}"),
             };
-            await using var tunnel = new SshOutboundTunnel(machine);
+            await using var tunnel = new SshOutboundTunnel(machine, new IrohSshTransport());
             var commands = new ConcurrentQueue<string>();
             using var outbound = new OutboundProxy();
             outbound.ConfigureBorrowed(tunnel.ProxyUri.AbsoluteUri, (endpoint, token) => ConnectObservedAsync(tunnel, endpoint, token, commands));

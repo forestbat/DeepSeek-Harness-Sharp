@@ -5,7 +5,7 @@ using Dsh.Runtime;
 namespace Dsh.Fleet;
 
 /// <summary>Owns one Context's selection and asynchronous consumer leases, not any target Host or PTY.</summary>
-public sealed class BorrowedOutboundRoute(HarnessHome home, OutboundProxy proxy) : IOutboundRouteController, IAsyncDisposable
+public sealed class BorrowedOutboundRoute(HarnessHome home, OutboundProxy proxy, ISshTransportAdapter? adapter = null) : IOutboundRouteController, IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -155,7 +155,7 @@ public sealed class BorrowedOutboundRoute(HarnessHome home, OutboundProxy proxy)
     {
         var spec = new MachineStore(home).Load().Find(machine)
             ?? throw new InvalidOperationException("The selected outbound machine does not exist.");
-        return new SshOutboundTunnel(spec);
+        return new SshOutboundTunnel(spec, adapter);
     }
 
     private async Task ValidateAsync(SshOutboundTunnel draft, CancellationToken cancellationToken)

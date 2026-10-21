@@ -3,7 +3,7 @@ using System.Security;
 using System.Text;
 using System.Xml.Linq;
 
-namespace Dsh.Fleet;
+namespace Dsh.Fleet.Iroh;
 
 public static partial class IrohReceiver
 {

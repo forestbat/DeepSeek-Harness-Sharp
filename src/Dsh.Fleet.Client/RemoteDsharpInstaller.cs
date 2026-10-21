@@ -12,7 +12,7 @@ namespace Dsh.Fleet;
  * 部署只提供二进制; 首次连接通过 stdio 桥按需启动独立宿主, 不安装系统服务。
  * 只支持 POSIX 远端(Linux/macOS); Windows 远端明确报不支持。
  */
-public sealed class RemoteDsharpInstaller(IRemoteMachineTransport transport)
+public sealed class RemoteDsharpInstaller(IRemoteMachineTransport transport, ISshTransportAdapter? adapter = null)
 {
 
     /**
@@ -273,14 +273,14 @@ public sealed class RemoteDsharpInstaller(IRemoteMachineTransport transport)
 
     private static string LastLine(string output) => Lines(output).LastOrDefault() ?? "";
 
-    private static async Task<string> DownloadAsync(DeploySettings settings, string rid, OutboundProxy? proxy, HarnessHome? home, CancellationToken cancellationToken)
+    private async Task<string> DownloadAsync(DeploySettings settings, string rid, OutboundProxy? proxy, HarnessHome? home, CancellationToken cancellationToken)
     {
         using var download = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         download.CancelAfter(DownloadTimeout);
         // A download owns only its short-lived route. It cannot retire a workspace's or Host's shared Context.
         using var ownedProxy = home is not null || proxy is null ? new OutboundProxy() : null;
         var outbound = ownedProxy ?? proxy!;
-        await using var route = home is null ? null : new BorrowedOutboundRoute(home, outbound);
+        await using var route = home is null ? null : new BorrowedOutboundRoute(home, outbound, adapter);
         await using var lease = route is null ? null : await route.AcquireAsync(download.Token).ConfigureAwait(false);
         using var client = new HttpClient(outbound.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         var path = Path.Combine(Path.GetTempPath(), $"dsharp-{rid}-{Guid.NewGuid():N}.tar.gz");

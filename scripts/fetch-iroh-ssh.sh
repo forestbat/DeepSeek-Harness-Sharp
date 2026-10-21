@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the bundled component from one verified source revision for every RID.
+# Explicitly provision the optional native test dependency from one verified source revision.
 set -euo pipefail
 
 SCRIPT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/fetch-iroh-ssh.sh"
@@ -50,15 +50,16 @@ sha256() {
 }
 
 [ "$(sha256 "$PATCH")" = "$PATCH_SHA256" ] || { echo 'iroh-ssh readiness patch SHA256 mismatch.' >&2; exit 1; }
+cp "$ROOT_DIR/scripts/iroh-ssh.NOTICE.txt" "$WORK_DIR/NOTICE.txt"
 if [ -f "$OUTPUT" ] && [ -f "$STAMP" ] && [ -f "$WORK_DIR/LICENSE.txt" ] && [ -f "$WORK_DIR/THIRD-PARTY-LICENSES.txt" ] && [ -f "$WORK_DIR/READINESS.patch" ] && [ "$(sha256 "$WORK_DIR/READINESS.patch")" = "$PATCH_SHA256" ]; then
-    EXPECTED="v3 $REVISION $PATCH_SHA256 $TOOLCHAIN $TARGET $(sha256 "$OUTPUT") $(sha256 "$WORK_DIR/LICENSE.txt") $(sha256 "$WORK_DIR/THIRD-PARTY-LICENSES.txt")"
+    EXPECTED="v4 $REVISION $PATCH_SHA256 $TOOLCHAIN $TARGET $(sha256 "$OUTPUT") $(sha256 "$WORK_DIR/LICENSE.txt") $(sha256 "$WORK_DIR/THIRD-PARTY-LICENSES.txt")"
     if [ "$(cat "$STAMP")" = "$EXPECTED" ]; then
         case "$RID" in win-*) ;; *) chmod 755 "$OUTPUT" ;; esac
         exit 0
     fi
 fi
 for COMMAND in curl tar rustup cargo jq git; do
-    command -v "$COMMAND" >/dev/null 2>&1 || { echo "Building bundled iroh-ssh requires $COMMAND." >&2; exit 1; }
+    command -v "$COMMAND" >/dev/null 2>&1 || { echo "Building the optional iroh-ssh test dependency requires $COMMAND." >&2; exit 1; }
 done
 STAGE_DIR="$(mktemp -d "$WORK_DIR/.stage.XXXXXXXX")"
 trap 'rm -rf -- "$STAGE_DIR"' EXIT
@@ -142,7 +143,7 @@ jq -r '.packages[] | [.name, .version, (.license // "unspecified"), .manifest_pa
 {
     printf 'Corresponding source for each version-locked Rust crate is available at the download URL below.\n'
     printf 'For MPL-2.0 components, including attohttpc, these links provide the corresponding source covered by that license.\n'
-    printf 'iroh-ssh modifications: see bundled iroh-ssh.READINESS.patch (SHA256 %s).\n' "$PATCH_SHA256"
+    printf 'iroh-ssh modifications: see READINESS.patch next to this file (SHA256 %s).\n' "$PATCH_SHA256"
     while IFS=$'\t' read -r NAME VERSION LICENSE MANIFEST SOURCE; do
         printf '\n=== %s %s (%s) ===\n' "$NAME" "$VERSION" "$LICENSE"
         if [ "$NAME" = iroh-ssh ] && [ "$SOURCE" = local ]; then
@@ -161,6 +162,6 @@ jq -r '.packages[] | [.name, .version, (.license // "unspecified"), .manifest_pa
         done < <(find "$PACKAGE_DIR" -maxdepth 2 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -print0)
     done < "$STAGE_DIR/dependencies.tsv"
 } > "$STAGE_DIR/THIRD-PARTY-LICENSES.txt"
-printf 'v3 %s %s %s %s %s %s %s\n' "$REVISION" "$PATCH_SHA256" "$TOOLCHAIN" "$TARGET" "$(sha256 "$STAGE_DIR/$FILE")" "$(sha256 "$STAGE_DIR/LICENSE.txt")" "$(sha256 "$STAGE_DIR/THIRD-PARTY-LICENSES.txt")" > "$STAGE_DIR/build.sha256"
+printf 'v4 %s %s %s %s %s %s %s\n' "$REVISION" "$PATCH_SHA256" "$TOOLCHAIN" "$TARGET" "$(sha256 "$STAGE_DIR/$FILE")" "$(sha256 "$STAGE_DIR/LICENSE.txt")" "$(sha256 "$STAGE_DIR/THIRD-PARTY-LICENSES.txt")" > "$STAGE_DIR/build.sha256"
 for GENERATED in "$FILE" LICENSE.txt THIRD-PARTY-LICENSES.txt READINESS.patch; do mv -f "$STAGE_DIR/$GENERATED" "$WORK_DIR/$GENERATED"; done
 mv -f "$STAGE_DIR/build.sha256" "$STAMP"

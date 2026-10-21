@@ -164,7 +164,7 @@ public sealed class MachineStore(HarnessHome home)
             throw new InvalidOperationException($"SSH machine \"{incomplete.Name}\" has no host");
         foreach (var machine in machines)
         {
-            IrohSshTransport.Validate(machine);
+            machine.ValidateTransportSettings();
             ValidateOutboundTunnel(machine);
         }
     }

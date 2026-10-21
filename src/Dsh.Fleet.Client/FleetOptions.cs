@@ -45,6 +45,8 @@ public sealed record FleetOptions
 
     public Dsh.Boot.HarnessHome? LocalHome { get; init; }
 
+    public ISshTransportAdapter? SshTransportAdapter { get; init; }
+
     public bool AutoReconnect { get; init; } = true;
 
     public TimeSpan InitialBackoff { get; init; } = DefaultInitialBackoff;

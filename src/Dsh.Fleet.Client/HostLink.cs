@@ -40,7 +40,7 @@ internal sealed class HostLink(RemoteHostClient client, SshHostLauncher.Connecti
 
     public static async Task<HostLink> OpenSshAsync(MachineSpec machine, string? commandPath, FleetOptions options, CancellationToken cancellationToken)
     {
-        var connection = await SshHostLauncher.ConnectAsync(machine, commandPath, options.ClientName, cancellationToken).ConfigureAwait(false);
+        var connection = await SshHostLauncher.ConnectAsync(machine, commandPath, options.ClientName, cancellationToken, options.SshTransportAdapter).ConfigureAwait(false);
         return new HostLink(connection.Client, connection);
     }
 

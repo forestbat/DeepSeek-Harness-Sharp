@@ -1,4 +1,0 @@
-<Project>
-  <!-- Native components belong to the final executable RID, not a project reference's SDK-stripped RID. -->
-  <Import Project="$(MSBuildThisFileDirectory)src/Dsh.Fleet.Client/IrohSshComponent.targets" Condition="'$(OutputType)' == 'Exe' or '$(OutputType)' == 'WinExe' or '$(IsTestProject)' == 'true' or '$(IsTestingPlatformApplication)' == 'true'" />
-</Project>

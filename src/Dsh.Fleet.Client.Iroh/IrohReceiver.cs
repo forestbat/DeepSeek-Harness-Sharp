@@ -7,7 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Dsh.Boot;
 
-namespace Dsh.Fleet;
+namespace Dsh.Fleet.Iroh;
 
 public sealed record IrohReceiverStatus(string EndpointId, bool Running, string ServiceDescription);
 
@@ -24,7 +24,7 @@ public static partial class IrohReceiver
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(sshPort, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(sshPort, 65535);
-        IrohSshTransport.ValidateRelayUrls(relayUrls);
+        MachineSpec.ValidateRelayUrls(relayUrls);
         var executable = IrohSshComponent.RequireExecutable();
         var root = ReceiverRoot(home);
         await PreparePrivateDirectoryAsync(root, cancellationToken).ConfigureAwait(false);

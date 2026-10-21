@@ -11,6 +11,7 @@ public sealed class SshOutboundTunnel : IAsyncDisposable
     private MachineSpec? _machine;
     private Uri? _proxyUri;
     private readonly bool _localForward;
+    private readonly ISshTransportAdapter? _adapter;
     private readonly HashSet<SshProxyStream> _connections = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly Action<SshProxyStream> _released;
@@ -21,13 +22,14 @@ public sealed class SshOutboundTunnel : IAsyncDisposable
     private bool _disposed;
     private bool _lifetimeCancellationRequested;
 
-    public SshOutboundTunnel(MachineSpec machine)
+    public SshOutboundTunnel(MachineSpec machine, ISshTransportAdapter? adapter = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         _proxyUri = MachineStore.ValidateOutboundTunnel(machine)
             ?? throw new InvalidOperationException("The machine has no outbound tunnel configured.");
         _machine = machine;
         _localForward = machine.OutboundTunnel!.Mode == "localForward";
+        _adapter = adapter;
         _released = Release;
     }
 
@@ -72,7 +74,7 @@ public sealed class SshOutboundTunnel : IAsyncDisposable
             else
             {
                 machine = _machine;
-                connection = new SshProxyStream(new SshProxyProcess(persistent: false), ownsProcess: true, _released);
+                connection = new SshProxyStream(new SshProxyProcess(persistent: false, _adapter), ownsProcess: true, _released);
                 _connections.Add(connection);
             }
         }
@@ -136,7 +138,7 @@ public sealed class SshOutboundTunnel : IAsyncDisposable
                 port = ((IPEndPoint)candidate.LocalEndPoint!).Port;
             }
             _forwardPort = port;
-            _forward = owner = new SshProxyProcess(persistent: true);
+            _forward = owner = new SshProxyProcess(persistent: true, _adapter);
             starting = owner.StartAsync(_machine, endpoint, port, _lifetime.Token);
         }
         await starting.ConfigureAwait(false);

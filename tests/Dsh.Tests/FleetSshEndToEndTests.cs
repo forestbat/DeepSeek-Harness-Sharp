@@ -488,7 +488,7 @@ internal sealed class TestSshServer : IAsyncDisposable
         PubkeyAuthentication yes
         Subsystem sftp {SftpServer}
         SetEnv HOME={Path.Combine(root, "home")} DOTNET_ROOT={DotnetRoot}
-        ForceCommand cd "$HOME" && exec "$SHELL" -c "$SSH_ORIGINAL_COMMAND"
+        ForceCommand cd "$HOME" && PATH={RemoteShell.Quote(Environment.GetEnvironmentVariable("PATH") ?? "")} exec "$SHELL" -c "$SSH_ORIGINAL_COMMAND"
         LogLevel INFO
         """;
 

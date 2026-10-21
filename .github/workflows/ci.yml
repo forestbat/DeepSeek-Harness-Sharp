@@ -76,9 +76,9 @@ jobs:
         run: python3 -m unittest discover -s tests/ci -v
 
   iroh-component:
-    name: 准备原生 iroh-ssh（${{ matrix.rid }}）
+    name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
     needs: changes
-    if: needs.changes.outputs.tests == 'true' || needs.changes.outputs.jit == 'true' || needs.changes.outputs.aot == 'true'
+    if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -107,7 +107,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: artifacts/iroh-ssh-component.tar
-          key: iroh-ssh-tar-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-iroh-ssh.*', 'scripts/iroh-ssh-readiness.patch') }}
+          key: iroh-ssh-test-tar-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-iroh-ssh.*', 'scripts/iroh-ssh-readiness.patch', 'scripts/iroh-ssh.NOTICE.txt') }}
       - name: 解包已缓存的原生组件
         if: steps.iroh-cache.outputs.cache-hit == 'true'
         shell: pwsh
@@ -155,7 +155,7 @@ jobs:
   test:
     name: 测试（${{ matrix.platform.os }}，${{ matrix.suite }}）
     needs: [changes, iroh-component]
-    if: needs.changes.outputs.tests == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && (needs.iroh-component.result == 'success' || needs.iroh-component.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +185,7 @@ jobs:
 
   build:
     name: 三入口发布验收（${{ matrix.rid }}，JIT）
-    needs: [changes, iroh-component]
+    needs: changes
     if: needs.changes.outputs.jit == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -218,18 +218,6 @@ jobs:
           dotnet-version: '10.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
-      - name: 获取本轮构建的原生 iroh-ssh
-        uses: actions/download-artifact@v4
-        with:
-          name: iroh-ssh-${{ matrix.os }}
-          path: artifacts
-      - name: 解包本轮原生组件（不使用消费者缓存）
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts/iroh-ssh | Out-Null
-          $tar = if ($IsWindows) { Join-Path ([Environment]::GetFolderPath('System')) 'tar.exe' } else { 'tar' }
-          & $tar -xf artifacts/iroh-ssh-component.tar -C artifacts/iroh-ssh
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
         shell: bash
         run: |
@@ -243,8 +231,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FILE=iroh-ssh
-          if [ "$RUNNER_OS" = "Windows" ]; then FILE=iroh-ssh.exe; fi
           for PROJECT in DeepSeek-Harness-Sharp DshGuiHost Dsh.WebHost; do
             dotnet publish "$PROJECT/$PROJECT.csproj" \
               -c Release -r ${{ matrix.rid }} \
@@ -252,14 +238,10 @@ jobs:
               -p:DshNativeCompiler=${{ matrix.native-cc }} \
               --nologo -v m
             PUB="$PROJECT/bin/Release/net10.0/${{ matrix.rid }}/publish"
-            test ! -d "artifacts/iroh-ssh/${{ matrix.rid }}/target"
-            test ! -f "artifacts/iroh-ssh/${{ matrix.rid }}/source.tar.gz"
-            "$PUB/tools/$FILE" version
-            test -s "$PUB/tools/iroh-ssh.LICENSE.txt"
-            test -s "$PUB/tools/iroh-ssh.THIRD-PARTY-LICENSES.txt"
-            test -s "$PUB/tools/iroh-ssh.NOTICE.txt"
-            cmp "artifacts/iroh-ssh/${{ matrix.rid }}/$FILE" "$PUB/tools/$FILE"
-            cmp scripts/iroh-ssh-readiness.patch "$PUB/tools/iroh-ssh.READINESS.patch"
+            if find "$PUB" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
+              echo "::error::$PROJECT must not bundle the optional native Iroh command"
+              exit 1
+            fi
             printf '%s\n' "$PUB"/* | grep -E '/(lib)?dsh_plugin_guard\.(dll|so|dylib)$' || { echo "::error::$PROJECT 发布产物缺少 dsh_plugin_guard"; exit 1; }
           done
       - name: GUI 主线程冒烟（macOS）
@@ -316,7 +298,7 @@ jobs:
 
   aot:
     name: AOT 构建（${{ matrix.rid }}）
-    needs: [changes, iroh-component]
+    needs: changes
     if: needs.changes.outputs.aot == 'true'
     strategy:
       fail-fast: false

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Sockets;
 using Dsh.Boot;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.Transport;
 using Dsh.Runtime;
 
@@ -96,7 +97,7 @@ public static class WebBridgeCommand
     private static WebBridgeOptions Options(string root, int port, Func<MachineSpec, CancellationToken, Task>? startLocalHost, OutboundProxy? localProxy)
     {
         var config = new MachineStore(new HarnessHome(root)).Load();
-        var fleet = new FleetOptions { ClientName = WebBridgeServer.DefaultClientName, Deploy = config.Deploy, StartLocalHost = startLocalHost, LocalProxy = localProxy ?? new OutboundProxy() };
+        var fleet = new FleetOptions { ClientName = WebBridgeServer.DefaultClientName, Deploy = config.Deploy, StartLocalHost = startLocalHost, LocalProxy = localProxy ?? new OutboundProxy(), SshTransportAdapter = new IrohSshTransport() };
         return new WebBridgeOptions(root, port, [MachineSpec.Local(root), .. config.Machines], fleet);
     }
 

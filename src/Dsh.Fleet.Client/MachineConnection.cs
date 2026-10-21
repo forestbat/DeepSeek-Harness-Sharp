@@ -190,7 +190,7 @@ public sealed class MachineConnection : IAsyncDisposable
         if (_options.Deploy.AutoDeploy)
         {
             SetState(MachineConnectionState.Deploying, null);
-            var deployed = await new RemoteDsharpInstaller(new SshTransport(Machine)).EnsureAsync(
+            var deployed = await new RemoteDsharpInstaller(new SshTransport(Machine, _options.SshTransportAdapter), _options.SshTransportAdapter).EnsureAsync(
                 _options.Deploy, step => SetState(MachineConnectionState.Deploying, step), cancellationToken, _options.ArchiveFactory,
                 localProxy: _options.LocalProxy, localHome: _options.LocalHome).ConfigureAwait(false);
             return _commandPath = deployed.CommandPath;
@@ -198,7 +198,7 @@ public sealed class MachineConnection : IAsyncDisposable
 
         try
         {
-            return _commandPath = (await new RemoteDsharpInstaller(new SshTransport(Machine)).InspectAsync(cancellationToken).ConfigureAwait(false)).CommandPath;
+            return _commandPath = (await new RemoteDsharpInstaller(new SshTransport(Machine, _options.SshTransportAdapter), _options.SshTransportAdapter).InspectAsync(cancellationToken).ConfigureAwait(false)).CommandPath;
         }
         catch (NotSupportedException)
         {

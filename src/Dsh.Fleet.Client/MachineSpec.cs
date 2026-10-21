@@ -48,6 +48,7 @@ public sealed record MachineSpec(
     OutboundTunnelSpec? OutboundTunnel = null)
 {
     public const int DefaultSshPort = 22;
+    public const int IrohEndpointIdLength = 64;
 
     /** The implicit machine every client has: the host on this computer. */
     public const string LocalName = "local";
@@ -57,6 +58,37 @@ public sealed record MachineSpec(
 
     public static MachineSpec Ssh(string name, string host, int port, string user, string auth)
         => new(name, MachineKinds.Ssh, host, port, user, auth);
+
+    /** Validates persisted transport data independently of optional implementations and installed commands. */
+    public void ValidateTransportSettings()
+    {
+        ValidateRelayUrls(RelayUrls ?? []);
+        if (!IsIroh)
+            return;
+        if (EndpointId is not { Length: IrohEndpointIdLength } endpoint || endpoint.Any(character => !char.IsAsciiHexDigit(character)))
+            throw new InvalidOperationException($"iroh machine \"{Name}\" requires a {IrohEndpointIdLength}-character hexadecimal Endpoint ID");
+        if (!string.IsNullOrEmpty(Proxy) || (SshOptions ?? []).Any(IsProxyOverride))
+            throw new InvalidOperationException("iroh machines manage their transport; remove ProxyCommand, ProxyJump and Proxy settings");
+    }
+
+    public static void ValidateRelayUrls(IReadOnlyList<string> relayUrls)
+    {
+        foreach (var relay in relayUrls)
+            if (!Uri.TryCreate(relay, UriKind.Absolute, out var uri)
+                || uri.Scheme is not ("https" or "http") || uri.Host.Length == 0
+                || uri.UserInfo.Length > 0 || uri.Fragment.Length > 0)
+                throw new InvalidOperationException("iroh relay URLs must be absolute HTTP(S) addresses without credentials or fragments");
+    }
+
+    private static bool IsProxyOverride(string option)
+    {
+        var name = option.AsSpan().TrimStart("= \t");
+        var separator = name.IndexOfAny("= \t");
+        if (separator >= 0)
+            name = name[..separator];
+        return name.Equals("ProxyCommand", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("ProxyJump", StringComparison.OrdinalIgnoreCase);
+    }
 
     [JsonIgnore]
     public bool IsLocal => Kind == MachineKinds.Local;

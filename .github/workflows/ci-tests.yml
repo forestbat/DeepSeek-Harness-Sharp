@@ -48,12 +48,14 @@ jobs:
           cache-dependency-path: '**/*.csproj'
 
       - name: Download the native iroh-ssh built for this run
+        if: inputs.suite == 'quick'
         uses: actions/download-artifact@v4
         with:
           name: iroh-ssh-${{ inputs.os }}
           path: artifacts
 
       - name: Extract the native component without a consumer cache
+        if: inputs.suite == 'quick'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts/iroh-ssh | Out-Null
@@ -67,6 +69,8 @@ jobs:
             default { throw "Unsupported runner OS: $env:RUNNER_OS" }
           }
           "IROH_RID=$rid" >> $env:GITHUB_ENV
+          $directory = [System.IO.Path]::GetFullPath("artifacts/iroh-ssh/$rid")
+          $directory >> $env:GITHUB_PATH
 
       - name: Prepare local NuGet feed (packages/, DryIoc.dll)
         shell: bash
@@ -113,23 +117,22 @@ jobs:
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
-      - name: Check bundled native iroh-ssh, licenses, and readiness patch
+      - name: Validate the explicitly installed native Iroh test fixture
+        if: inputs.suite == 'quick'
         shell: bash
         run: |
           set -euo pipefail
-          # Consumers only extract this run's artifact; rebuilding the component must fail this check.
-          test ! -d "artifacts/iroh-ssh/$IROH_RID/target"
-          test ! -f "artifacts/iroh-ssh/$IROH_RID/source.tar.gz"
-          FILE=iroh-ssh
-          if [ "$RUNNER_OS" = "Windows" ]; then FILE=iroh-ssh.exe; fi
-          OUTPUTS=(DeepSeek-Harness-Sharp/bin/Debug/net10.0 tests/Dsh.Tests/bin/Debug/net10.0)
-          for OUTPUT in "${OUTPUTS[@]}"; do
-            "$OUTPUT/tools/$FILE" version
-            test -s "$OUTPUT/tools/iroh-ssh.LICENSE.txt"
-            test -s "$OUTPUT/tools/iroh-ssh.THIRD-PARTY-LICENSES.txt"
-            test -s "$OUTPUT/tools/iroh-ssh.NOTICE.txt"
-            cmp scripts/iroh-ssh-readiness.patch "$OUTPUT/tools/iroh-ssh.READINESS.patch"
-          done
+          # Test consumers only extract this run's fixture; they never build it.
+          FIXTURE="artifacts/iroh-ssh/$IROH_RID"
+          test ! -d "$FIXTURE/target"
+          test ! -f "$FIXTURE/source.tar.gz"
+          test -s "$FIXTURE/LICENSE.txt"
+          test -s "$FIXTURE/THIRD-PARTY-LICENSES.txt"
+          cmp scripts/iroh-ssh.NOTICE.txt "$FIXTURE/NOTICE.txt"
+          cmp scripts/iroh-ssh-readiness.patch "$FIXTURE/READINESS.patch"
+          command -v iroh-ssh
+          iroh-ssh version
+          iroh-ssh server --help | grep -F -- --ready-file
 
 
       - name: Check macOS non-admin headless SSH LAN receiver

@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
 using Dsh.Fleet;
+using Dsh.Fleet.Iroh;
 using Dsh.Transport;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -72,7 +73,7 @@ public sealed class WebBridgeServer : IAsyncDisposable
         FleetClient? fleet = null;
         try
         {
-            fleet = suppliedFleet ?? new FleetClient(options.Machines ?? [MachineSpec.Local(options.HostRoot)], options.Fleet ?? new FleetOptions { ClientName = DefaultClientName });
+            fleet = suppliedFleet ?? new FleetClient(options.Machines ?? [MachineSpec.Local(options.HostRoot)], options.Fleet ?? new FleetOptions { ClientName = DefaultClientName, SshTransportAdapter = new IrohSshTransport() });
             LocalEndpointToken? accessToken = null;
             var machines = fleet;
             app.Use(async (context, next) =>

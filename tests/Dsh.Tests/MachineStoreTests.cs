@@ -23,7 +23,7 @@ public sealed class MachineStoreTests : IDisposable
             MachineSpec.Ssh("home", "", 22, "dev", SshAuth.Key) with
             {
                 Kind = MachineKinds.Iroh,
-                EndpointId = new string('a', IrohSshTransport.EndpointIdLength),
+                EndpointId = new string('a', MachineSpec.IrohEndpointIdLength),
                 RelayUrls = ["https://relay.example.org/"],
                 KeyPath = "/keys/home",
             },

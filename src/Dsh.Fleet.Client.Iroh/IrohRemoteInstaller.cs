@@ -1,4 +1,4 @@
-namespace Dsh.Fleet;
+namespace Dsh.Fleet.Iroh;
 
 /** Converts a reachable SSH machine only after deploying the receiver and executing a command through its iroh tunnel. */
 public static class IrohRemoteInstaller
@@ -7,11 +7,11 @@ public static class IrohRemoteInstaller
     {
         if (machine.Kind != MachineKinds.Ssh)
             throw new ArgumentException("Automatic iroh setup requires a reachable normal SSH machine; use dsharp remote enable on the target for local setup.", nameof(machine));
-        IrohSshTransport.ValidateRelayUrls(machine.RelayUrls ?? []);
+        MachineSpec.ValidateRelayUrls(machine.RelayUrls ?? []);
         _ = IrohSshComponent.RequireExecutable();
         progress?.Invoke("Deploying the current dsharp receiver over the existing SSH connection …");
         var transport = new SshTransport(machine);
-        var commandPath = await new RemoteDsharpInstaller(transport).EnsureReceiverAsync(options.Deploy, progress, cancellationToken, options.ArchiveFactory, options.LocalProxy, options.LocalHome).ConfigureAwait(false);
+        var commandPath = await new RemoteDsharpInstaller(transport, options.SshTransportAdapter).EnsureReceiverAsync(options.Deploy, progress, cancellationToken, options.ArchiveFactory, options.LocalProxy, options.LocalHome).ConfigureAwait(false);
         var connection = (await transport.RunAsync("printf '%s' \"$SSH_CONNECTION\"", cancellationToken).ConfigureAwait(false))
             .Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (connection is not [_, _, _, var portText] || !int.TryParse(portText, out var sshPort) || sshPort is <= 0 or > ushort.MaxValue)
@@ -41,11 +41,11 @@ public static class IrohRemoteInstaller
                 EndpointId = endpoint,
                 Port = sshPort,
                 Proxy = null,
-                SshOptions = machine.SshOptions?.Where(option => !IrohSshTransport.IsProxyOverride(option)).ToArray(),
+                SshOptions = machine.SshOptions?.Where(option => !IsProxyOverride(option)).ToArray(),
                 RelayUrls = machine.RelayUrls?.ToArray(),
             };
             progress?.Invoke($"Verifying SSH authentication and a real remote command through iroh endpoint {endpoint} …");
-            var observed = ParseStatus(await new SshTransport(converted).RunAsync($"{receiverCommand} info", cancellationToken).ConfigureAwait(false));
+            var observed = ParseStatus(await new SshTransport(converted, options.SshTransportAdapter).RunAsync($"{receiverCommand} info", cancellationToken).ConfigureAwait(false));
             if (!observed.Running || !string.Equals(observed.EndpointId, endpoint, StringComparison.Ordinal))
                 throw new IOException("The receiver reached through iroh did not report the expected running persistent endpoint.");
             cancellationToken.ThrowIfCancellationRequested();
@@ -81,9 +81,16 @@ public static class IrohRemoteInstaller
         if (endpoints.Length != 1 || states.Length != 1 || !bool.TryParse(states[0]["running=".Length..], out var running))
             throw new IOException("The target did not return exactly one endpointId= and running= receiver status.");
         var endpoint = endpoints[0]["endpointId=".Length..].Trim();
-        if ((running || endpoint.Length > 0) && (endpoint.Length != IrohSshTransport.EndpointIdLength || endpoint.Any(c => !char.IsAsciiHexDigit(c))))
+        if ((running || endpoint.Length > 0) && (endpoint.Length != MachineSpec.IrohEndpointIdLength || endpoint.Any(c => !char.IsAsciiHexDigit(c))))
             throw new IOException("The target returned an invalid iroh endpoint ID; expected exactly 64 hexadecimal characters.");
         return new IrohReceiverStatus(endpoint.ToLowerInvariant(), running, "");
+    }
+
+    private static bool IsProxyOverride(string option)
+    {
+        var name = option.Split(['=', ' ', '\t'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return string.Equals(name, "ProxyCommand", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "ProxyJump", StringComparison.OrdinalIgnoreCase);
     }
 
 }
