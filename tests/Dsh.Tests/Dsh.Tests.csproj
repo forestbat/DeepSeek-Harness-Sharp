@@ -102,6 +102,8 @@
     <ProjectReference Include="..\..\src\Dsh.A2A\Dsh.A2A.csproj" />
     <ProjectReference Include="..\..\src\Dsh.AgentInstructions\Dsh.AgentInstructions.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Lsp\Dsh.Lsp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Lsp.CSharp\Dsh.Lsp.CSharp.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Lsp.Python\Dsh.Lsp.Python.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Telemetry\Dsh.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Dsh.E2b\Dsh.E2b.csproj" />
     <ProjectReference Include="..\..\src\Dsh.SessionGraph\Dsh.SessionGraph.csproj" />
