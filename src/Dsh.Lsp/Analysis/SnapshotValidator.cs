@@ -9,8 +9,37 @@ public static class SnapshotValidator
     public static ValidationResult Validate(LspDocument document, SyntaxSnapshot snapshot)
     {
         var issues = new List<ValidationIssue>();
+        var identities = new HashSet<(int StartLine, int StartCharacter, int EndLine, int EndCharacter, string Name)>();
         foreach (var node in snapshot.Roots)
-            ValidateNode(document, node, null, issues);
+            ValidateNode(document, node, null, issues, identities);
+        foreach (var chain in snapshot.SelectionChains ?? [])
+        {
+            foreach (var range in chain.Ranges)
+                ValidateRange(document, range, "selectionRange", issues);
+        }
+        if (snapshot.Cst is { } cst)
+        {
+            ValidateRange(document, cst.Range, "cst.range", issues);
+            if (cst.StartByte < 0 || cst.EndByte < cst.StartByte)
+                issues.Add(new ValidationIssue("cst-bytes", "invalid CST byte range", cst.Range));
+            foreach (var root in snapshot.ParserRoots ?? [])
+            {
+                if (!cst.Range.Contains(root.Range))
+                    issues.Add(new ValidationIssue("cst-root-range", "parser root is outside CST", root.Range));
+            }
+
+            if (snapshot.ParserRoots is { Count: > 0 } parserRoots)
+            {
+                foreach (var match in snapshot.IdentityMatches)
+                {
+                    if (match.ParserNode is null)
+                        issues.Add(new ValidationIssue(
+                            "cst-identity",
+                            $"LSP node '{match.LspNode.Name}' has no parser identity",
+                            match.LspNode.Range));
+                }
+            }
+        }
         foreach (var token in snapshot.SemanticTokens)
             ValidateToken(document, token, issues);
         foreach (var folding in snapshot.FoldingRanges)
@@ -24,10 +53,23 @@ public static class SnapshotValidator
         LspDocument document,
         SyntaxNode node,
         SyntaxNode? parent,
-        List<ValidationIssue> issues)
+        List<ValidationIssue> issues,
+        HashSet<(int StartLine, int StartCharacter, int EndLine, int EndCharacter, string Name)> identities)
     {
         ValidateRange(document, node.Range, "syntax.range", issues);
         ValidateRange(document, node.SelectionRange, "syntax.selectionRange", issues);
+        if (!identities.Add((
+            node.Range.Start.Line,
+            node.Range.Start.Character,
+            node.Range.End.Line,
+            node.Range.End.Character,
+            node.Name)))
+        {
+            issues.Add(new ValidationIssue(
+                "duplicate-node",
+                $"duplicate node identity for '{node.Name}'",
+                node.Range));
+        }
         if (!node.Range.Contains(node.SelectionRange))
             issues.Add(new ValidationIssue(
                 "selection-outside-range",
@@ -38,8 +80,22 @@ public static class SnapshotValidator
                 "child-outside-parent",
                 $"node '{node.Name}' is outside its parent '{parent.Name}'",
                 node.Range));
-        foreach (var child in node.Children)
-            ValidateNode(document, child, node, issues);
+        for (var index = 0; index < node.Children.Count; index++)
+        {
+            var child = node.Children[index];
+            for (var other = index + 1; other < node.Children.Count; other++)
+            {
+                if (child.Range.Overlaps(node.Children[other].Range))
+                {
+                    issues.Add(new ValidationIssue(
+                        "sibling-overlap",
+                        $"siblings '{child.Name}' and '{node.Children[other].Name}' overlap",
+                        child.Range));
+                }
+            }
+
+            ValidateNode(document, child, node, issues, identities);
+        }
     }
 
     private static void ValidateToken(LspDocument document, SemanticToken token, List<ValidationIssue> issues)

@@ -37,7 +37,14 @@ public sealed record LspCapabilityProfile(
     bool WorkspaceSymbol,
     string PositionEncoding,
     IReadOnlyList<string> SemanticTokenTypes,
-    IReadOnlyList<string> SemanticTokenModifiers)
+    IReadOnlyList<string> SemanticTokenModifiers,
+    bool Completion = false,
+    bool Formatting = false,
+    bool RangeFormatting = false,
+    bool DocumentLink = false,
+    bool DocumentColor = false,
+    bool CodeLens = false,
+    bool ExecuteCommand = false)
 {
     public bool Supports(string method) => method switch
     {
@@ -63,6 +70,13 @@ public sealed record LspCapabilityProfile(
         "textDocument/implementation" => Implementation,
         "textDocument/diagnostic" => PullDiagnostics,
         "workspace/symbol" => WorkspaceSymbol,
+        "textDocument/completion" => Completion,
+        "textDocument/formatting" => Formatting,
+        "textDocument/rangeFormatting" => RangeFormatting,
+        "textDocument/documentLink" => DocumentLink,
+        "textDocument/documentColor" => DocumentColor,
+        "textDocument/codeLens" => CodeLens,
+        "workspace/executeCommand" => ExecuteCommand,
         _ => false,
     };
 }
@@ -103,7 +117,14 @@ public static class LspCapabilityParser
             Provider(LspJson.Property(capabilities, "workspace"), "symbolProvider"),
             LspJson.String(capabilities, "positionEncoding") ?? "utf-16",
             Strings(legend, "tokenTypes"),
-            Strings(legend, "tokenModifiers"));
+            Strings(legend, "tokenModifiers"),
+            Provider(capabilities, "completionProvider"),
+            Provider(capabilities, "documentFormattingProvider"),
+            Provider(capabilities, "documentRangeFormattingProvider"),
+            Provider(capabilities, "documentLinkProvider"),
+            Provider(capabilities, "documentColorProvider"),
+            Provider(capabilities, "codeLensProvider"),
+            Provider(capabilities, "executeCommandProvider"));
     }
 
     private static LspTextDocumentSyncKind ParseSync(JsonElement? capabilities)

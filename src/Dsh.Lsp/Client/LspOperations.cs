@@ -182,7 +182,8 @@ public sealed class LspOperations(
                 LspJson.String(LspJson.Property(item, "disabled"), "reason"),
                 ParseWorkspaceEdit(LspJson.Property(item, "edit")),
                 LspJson.Property(item, "data"),
-                item.Clone()))
+                item.Clone(),
+                ParseCommand(LspJson.Property(item, "command"))))
             .Where(action => action.Title.Length > 0)
             .ToArray();
 
@@ -219,6 +220,19 @@ public sealed class LspOperations(
 
     private static bool OptionBool(JsonElement change, string name)
         => LspJson.Boolean(LspJson.Property(change, "options"), name);
+
+    private static CommandFact? ParseCommand(JsonElement? command)
+    {
+        if (command is not { ValueKind: JsonValueKind.Object } value)
+            return null;
+        var name = LspJson.String(value, "command");
+        return name is null
+            ? null
+            : new CommandFact(
+                LspJson.String(value, "title") ?? name,
+                name,
+                LspJson.Property(value, "arguments"));
+    }
 
     private static JsonObject DiagnosticNode(LspDiagnostic diagnostic)
     {

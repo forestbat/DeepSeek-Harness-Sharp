@@ -2,6 +2,11 @@
 
 namespace Dsh.Lsp.Model;
 
+public sealed record SyntaxIdentityMatch(
+    string Id,
+    SyntaxNode LspNode,
+    SyntaxNode? ParserNode);
+
 public sealed record SyntaxNode(
     string Name,
     string? Detail,
@@ -9,7 +14,13 @@ public sealed record SyntaxNode(
     LspRange Range,
     LspRange SelectionRange,
     IReadOnlyList<string> Tags,
-    IReadOnlyList<SyntaxNode> Children)
+    IReadOnlyList<SyntaxNode> Children,
+    string? Role = null,
+    bool IsError = false,
+    int DocumentVersion = 0,
+    string? Provenance = null,
+    string? ParentId = null,
+    string? Id = null)
 {
     public string Kind => LspSymbolKinds.Name(SymbolKind);
 
@@ -54,8 +65,28 @@ public sealed record SyntaxSnapshot(
     IReadOnlyList<SemanticToken> SemanticTokens,
     IReadOnlyList<FoldingRange> FoldingRanges,
     IReadOnlyList<LspDiagnostic> Diagnostics,
-    CstNode? Cst = null)
+    CstNode? Cst = null,
+    IReadOnlyList<SelectionChain>? SelectionChains = null,
+    string SourceKind = "lsp",
+    bool IsPartial = false,
+    IReadOnlyList<SyntaxNode>? ParserRoots = null)
 {
+    public IReadOnlyList<SyntaxIdentityMatch> IdentityMatches
+    {
+        get
+        {
+            var parserNodes = (ParserRoots ?? [])
+                .SelectMany(root => new[] { root }.Concat(root.Descendants()))
+                .ToArray();
+            return Nodes
+                .Select(node => new SyntaxIdentityMatch(
+                    node.Id ?? $"{node.Range.Start.Line}:{node.Range.Start.Character}|{node.Name}",
+                    node,
+                    FindParserMatch(node, parserNodes)))
+                .ToArray();
+        }
+    }
+
     public IReadOnlyList<SyntaxNode> Nodes
     {
         get
@@ -69,6 +100,44 @@ public sealed record SyntaxSnapshot(
 
             return nodes;
         }
+    }
+
+    public IReadOnlyList<SyntaxNode> ErrorNodes
+        => Diagnostics
+            .Select(diagnostic => new SyntaxNode(
+                diagnostic.Message,
+                diagnostic.Code,
+                0,
+                diagnostic.Range,
+                diagnostic.Range,
+                [],
+                [],
+                Role: "diagnostic",
+                IsError: true,
+                DocumentVersion: Version,
+                Provenance: "diagnostics"))
+            .ToArray();
+
+    public IReadOnlyList<CstNode> TriviaNodes
+        => Cst is null
+            ? Array.Empty<CstNode>()
+            : new[] { Cst }.Concat(Cst.Descendants()).Where(node => node.IsExtra).ToArray();
+
+    public IReadOnlyList<CstNode> CstErrorNodes
+        => Cst is null
+            ? Array.Empty<CstNode>()
+            : new[] { Cst }.Concat(Cst.Descendants()).Where(node => node.IsError).ToArray();
+
+    private static SyntaxNode? FindParserMatch(SyntaxNode lspNode, IReadOnlyList<SyntaxNode> parserNodes)
+    {
+        var candidates = parserNodes
+            .Where(candidate => candidate.Name == lspNode.Name && candidate.Range.Overlaps(lspNode.Range))
+            .ToArray();
+        return candidates.FirstOrDefault(candidate => candidate.Range == lspNode.Range)
+            ?? candidates
+                .OrderBy(candidate => candidate.Range.End.CompareTo(candidate.Range.Start))
+                .FirstOrDefault(candidate => candidate.Range.Contains(lspNode.Range)
+                    || lspNode.Range.Contains(candidate.Range));
     }
 
     public SyntaxNode? FindAt(LspPosition position)

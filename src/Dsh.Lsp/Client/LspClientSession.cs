@@ -566,7 +566,9 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
         string method,
         JsonElement? parameters,
         CancellationToken cancellationToken)
-        => Task.FromResult(method switch
+        => method == "workspace/applyEdit"
+            ? ApplyWorkspaceEditAsync(parameters)
+            : Task.FromResult(method switch
         {
             "workspace/configuration" => WaitForConfiguration(parameters),
             "workspace/workspaceFolders" => WorkspaceFoldersResponse(),
@@ -574,9 +576,38 @@ public sealed class LspClientSession : ILspRequestChannel, IAsyncDisposable
             "client/unregisterCapability" => RegisterCapability(parameters, false),
             "window/workDoneProgress/create"
                 or "window/showMessageRequest" => null,
-            "workspace/applyEdit" => JsonSerializer.SerializeToElement(new JsonObject { ["applied"] = false }),
             _ => throw new LspResponseException(-32601, $"unsupported server request: {method}"),
         });
+
+    private Task<JsonElement?> ApplyWorkspaceEditAsync(JsonElement? parameters)
+    {
+        var edit = LspOperations.ParseWorkspaceEdit(LspJson.Property(parameters, "edit"));
+        if (edit is null)
+            return Task.FromResult<JsonElement?>(WorkspaceEditResponse(false, "workspace edit is empty"));
+        if (edit.FileOperations is { Count: > 0 })
+            return Task.FromResult<JsonElement?>(WorkspaceEditResponse(false, "file operations are not supported by the in-memory client"));
+        foreach (var documentEdit in edit.Documents)
+        {
+            if (!_documents.TryGet(documentEdit.Uri, out var document) || document is null)
+                return Task.FromResult<JsonElement?>(WorkspaceEditResponse(false, $"document is not open: {documentEdit.Uri}"));
+            var application = WorkspaceEditApplier.Apply(document, documentEdit.Edits);
+            if (!application.IsValid)
+                return Task.FromResult<JsonElement?>(WorkspaceEditResponse(
+                    false,
+                    string.Join("; ", application.Issues.Select(issue => issue.Message))));
+            _documents.Change(document.Uri, [LspTextChange.Full(application.Text)]);
+        }
+
+        return Task.FromResult<JsonElement?>(WorkspaceEditResponse(true, null));
+    }
+
+    private static JsonElement WorkspaceEditResponse(bool applied, string? failureReason)
+    {
+        var result = new JsonObject { ["applied"] = applied };
+        if (failureReason is not null)
+            result["failureReason"] = failureReason;
+        return JsonSerializer.SerializeToElement(result);
+    }
 
     private JsonElement? RegisterCapability(JsonElement? parameters, bool register)
     {

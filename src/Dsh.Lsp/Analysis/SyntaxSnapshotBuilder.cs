@@ -14,6 +14,16 @@ public sealed class SyntaxSnapshotBuilder(ILspRequestChannel channel, LspCapabil
         IReadOnlyList<LspDiagnostic> diagnostics,
         CancellationToken cancellationToken = default)
     {
+        var snapshot = await BuildShallowAsync(document, diagnostics, cancellationToken).ConfigureAwait(false);
+        var tokens = await GetSemanticTokensAsync(document, cancellationToken).ConfigureAwait(false);
+        return snapshot with { SemanticTokens = tokens };
+    }
+
+    public async Task<SyntaxSnapshot> BuildShallowAsync(
+        LspDocument document,
+        IReadOnlyList<LspDiagnostic> diagnostics,
+        CancellationToken cancellationToken = default)
+    {
         var symbolsTask = capabilities.DocumentSymbol
             ? channel.RequestAsync("textDocument/documentSymbol", new JsonObject
             {
@@ -26,62 +36,154 @@ public sealed class SyntaxSnapshotBuilder(ILspRequestChannel channel, LspCapabil
                 ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
             }, cancellationToken)
             : Task.FromResult<JsonElement?>(null);
-        var tokensTask = capabilities.SemanticTokens
-            ? channel.RequestAsync("textDocument/semanticTokens/full", new JsonObject
+        await Task.WhenAll(symbolsTask, foldingTask).ConfigureAwait(false);
+        var symbols = ParseSymbols(await symbolsTask.ConfigureAwait(false), document.Version);
+        var sourceKind = "lsp";
+        var partial = !capabilities.DocumentSymbol;
+        if (symbols.Count == 0 && !capabilities.DocumentSymbol)
+        {
+            symbols = await FallbackSymbolsAsync(document, diagnostics, cancellationToken).ConfigureAwait(false);
+            if (symbols.Count > 0)
             {
-                ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
-            }, cancellationToken)
-            : Task.FromResult<JsonElement?>(null);
+                sourceKind = "lsp-fallback";
+                partial = false;
+            }
+        }
 
-        await Task.WhenAll(symbolsTask, foldingTask, tokensTask).ConfigureAwait(false);
         return new SyntaxSnapshot(
             document.Uri,
             document.Version,
             document.LanguageId,
-            ParseSymbols(await symbolsTask.ConfigureAwait(false)),
-            ParseSemanticTokens(await tokensTask.ConfigureAwait(false)),
+            symbols,
+            [],
             ParseFoldingRanges(await foldingTask.ConfigureAwait(false)),
-            diagnostics);
+            diagnostics,
+            SourceKind: sourceKind,
+            IsPartial: partial);
     }
 
-    private static IReadOnlyList<SyntaxNode> ParseSymbols(JsonElement? result)
+    private async Task<IReadOnlyList<SyntaxNode>> FallbackSymbolsAsync(
+        LspDocument document,
+        IReadOnlyList<LspDiagnostic> diagnostics,
+        CancellationToken cancellationToken)
+    {
+        if (capabilities.WorkspaceSymbol)
+        {
+            foreach (var query in new[] { "", "*" })
+            {
+                var result = await channel.RequestAsync("workspace/symbol", new JsonObject { ["query"] = query }, cancellationToken)
+                    .ConfigureAwait(false);
+                var symbols = LspJson.Items(result)
+                    .Where(item => LspJson.String(LspJson.Property(item, "location"), "uri") == document.Uri)
+                    .Select(item => ParseSymbolInformation(item, document.Version))
+                    .ToArray();
+                if (symbols.Length > 0)
+                    return symbols;
+            }
+        }
+
+        if (!capabilities.SelectionRange)
+            return [];
+        var position = diagnostics.FirstOrDefault()?.Range.Start ?? LspPosition.Zero;
+        var response = await channel.RequestAsync("textDocument/selectionRange", new JsonObject
+        {
+            ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
+            ["positions"] = new JsonArray(new JsonObject
+            {
+                ["line"] = position.Line,
+                ["character"] = position.Character,
+            }),
+        }, cancellationToken).ConfigureAwait(false);
+        var first = LspJson.Items(response).FirstOrDefault();
+        return first.ValueKind == JsonValueKind.Object && SelectionNode(first) is { } selection
+            ? [selection]
+            : [];
+    }
+
+    private static SyntaxNode? SelectionNode(JsonElement item)
+    {
+        var range = LspJson.Range(LspJson.Property(item, "range"));
+        if (range is null)
+            return null;
+        var parent = LspJson.Property(item, "parent");
+        var children = parent is { ValueKind: JsonValueKind.Object } && SelectionNode(parent.Value) is { } child
+            ? new[] { child }
+            : Array.Empty<SyntaxNode>();
+        return new SyntaxNode(
+            "selection",
+            null,
+            0,
+            range.Value,
+            range.Value,
+            [],
+            children,
+            Role: "selection",
+            Provenance: "textDocument/selectionRange");
+    }
+
+    public async Task<IReadOnlyList<SemanticToken>> GetSemanticTokensAsync(
+        LspDocument document,
+        CancellationToken cancellationToken = default)
+    {
+        if (!capabilities.SemanticTokens)
+            return [];
+        var result = await channel.RequestAsync("textDocument/semanticTokens/full", new JsonObject
+        {
+            ["textDocument"] = LspJson.TextDocumentNode(document.Uri),
+        }, cancellationToken).ConfigureAwait(false);
+        return ParseSemanticTokens(result);
+    }
+
+    private static IReadOnlyList<SyntaxNode> ParseSymbols(JsonElement? result, int version)
     {
         var items = LspJson.Items(result);
         if (items.Count == 0)
             return [];
         return items[0].TryGetProperty("location", out _)
-            ? items.Select(ParseSymbolInformation).ToArray()
-            : items.Select(ParseDocumentSymbol).ToArray();
+            ? items.Select(item => ParseSymbolInformation(item, version)).ToArray()
+            : items.Select(item => ParseDocumentSymbol(item, version)).ToArray();
     }
 
-    private static SyntaxNode ParseDocumentSymbol(JsonElement item)
+    private static SyntaxNode ParseDocumentSymbol(JsonElement item, int version)
     {
         var range = LspJson.Range(LspJson.Property(item, "range")) ?? EmptyRange();
         var selectionRange = LspJson.Range(LspJson.Property(item, "selectionRange")) ?? range;
+        var name = LspJson.String(item, "name") ?? string.Empty;
         return new SyntaxNode(
-            LspJson.String(item, "name") ?? string.Empty,
+            name,
             LspJson.String(item, "detail"),
             LspJson.Int32(item, "kind") ?? 0,
             range,
             selectionRange,
             Tags(item),
             LspJson.Items(LspJson.Property(item, "children"))
-                .Select(ParseDocumentSymbol)
-                .ToArray());
+                .Select(child => ParseDocumentSymbol(child, version))
+                .ToArray(),
+            Role: "documentSymbol",
+            IsError: false,
+            DocumentVersion: version,
+            Provenance: "textDocument/documentSymbol",
+            Id: $"{selectionRange.Start.Line}:{selectionRange.Start.Character}|{name}");
     }
 
-    private static SyntaxNode ParseSymbolInformation(JsonElement item)
+    private static SyntaxNode ParseSymbolInformation(JsonElement item, int version)
     {
         var location = LspJson.Property(item, "location");
         var range = LspJson.Range(LspJson.Property(location, "range")) ?? EmptyRange();
+        var name = LspJson.String(item, "name") ?? string.Empty;
         return new SyntaxNode(
-            LspJson.String(item, "name") ?? string.Empty,
+            name,
             LspJson.String(item, "containerName"),
             LspJson.Int32(item, "kind") ?? 0,
             range,
             range,
             Tags(item),
-            []);
+            [],
+            Role: "documentSymbol",
+            IsError: false,
+            DocumentVersion: version,
+            Provenance: "textDocument/documentSymbol",
+            Id: $"{range.Start.Line}:{range.Start.Character}|{name}");
     }
 
     private static IReadOnlyList<string> Tags(JsonElement item)

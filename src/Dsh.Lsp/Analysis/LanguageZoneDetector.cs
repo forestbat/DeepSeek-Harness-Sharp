@@ -32,10 +32,11 @@ public static partial class LanguageZoneDetector
             var range = new LspRange(document.PositionAt(group.Index), document.PositionAt(group.Index + group.Length));
             zones.Add(new LanguageZone(
                 $"markdown-{zones.Count}",
-                ZonePath(document, profile.Extensions[0]),
+                ZonePath(document, profile.Extensions[0], zones.Count),
                 profile.LanguageIds[0],
                 group.Value,
-                range));
+                range,
+                document.Uri));
         }
 
         return zones;
@@ -62,10 +63,11 @@ public static partial class LanguageZoneDetector
             var range = new LspRange(document.PositionAt(group.Index), document.PositionAt(group.Index + group.Length));
             zones.Add(new LanguageZone(
                 $"html-{languageId}-{zones.Count}",
-                ZonePath(document, profile.Extensions[0]),
+                ZonePath(document, profile.Extensions[0], zones.Count),
                 profile.LanguageIds[0],
                 group.Value,
-                range));
+                range,
+                document.Uri));
         }
     }
 
@@ -78,10 +80,15 @@ public static partial class LanguageZoneDetector
     [GeneratedRegex(@"<style[^>]*>(?<code>.*?)</style\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex HtmlStyle();
 
-    private static string ZonePath(LspDocument document, string extension)
+    private static string ZonePath(LspDocument document, string extension, int index)
     {
         if (LspDocumentUri.TryGetPath(document.Uri, out var path))
-            return Path.ChangeExtension(path, extension);
-        return $"{document.Uri}{extension}";
+        {
+            var directory = Path.GetDirectoryName(path) ?? Path.GetTempPath();
+            var stem = Path.GetFileNameWithoutExtension(path);
+            return Path.Combine(directory, $"{stem}.zone{index}{extension}");
+        }
+
+        return $"{document.Uri}.zone{index}{extension}";
     }
 }

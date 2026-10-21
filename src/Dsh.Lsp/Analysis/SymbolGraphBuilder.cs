@@ -25,7 +25,9 @@ public sealed class SymbolGraphBuilder(ILspRequestChannel channel, LspCapability
                 node.Detail,
                 document.Uri,
                 node.Range,
-                node.SelectionRange))
+                node.SelectionRange,
+                document.Version,
+                "textDocument/documentSymbol"))
             .ToArray();
         if (selected.Length == 0)
             return new SymbolGraph(document.Uri, document.Version, [], []);
@@ -40,12 +42,12 @@ public sealed class SymbolGraphBuilder(ILspRequestChannel channel, LspCapability
             },
             async (index, token) =>
             {
-                edges[index] = await ResolveAsync(selected[index], options, token).ConfigureAwait(false);
+                edges[index] = await ResolveSymbolAsync(selected[index], options, token).ConfigureAwait(false);
             }).ConfigureAwait(false);
         return new SymbolGraph(document.Uri, document.Version, selected, [.. edges.SelectMany(edge => edge)]);
     }
 
-    private async Task<IReadOnlyList<SymbolEdge>> ResolveAsync(
+    public async Task<IReadOnlyList<SymbolEdge>> ResolveSymbolAsync(
         SymbolNode node,
         DocumentAnalysisOptions options,
         CancellationToken cancellationToken)

@@ -9,7 +9,9 @@ public sealed record SymbolNode(
     string? Detail,
     string Uri,
     LspRange Range,
-    LspRange SelectionRange);
+    LspRange SelectionRange,
+    int DocumentVersion = 0,
+    string? Provenance = null);
 
 public enum SymbolEdgeKind
 {
@@ -24,7 +26,9 @@ public sealed record SymbolEdge(
     string FromId,
     SymbolEdgeKind Kind,
     LspLocation Target,
-    string SourceMethod);
+    string SourceMethod,
+    bool IsResolved = true,
+    string? UnresolvedReason = null);
 
 public sealed record SymbolGraph(
     string Uri,

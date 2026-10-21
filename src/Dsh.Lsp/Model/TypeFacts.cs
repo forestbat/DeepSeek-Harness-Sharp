@@ -9,7 +9,9 @@ public sealed record TypeFact(
     LspRange? Range,
     string? RawMarkdown,
     string? Format = null,
-    string? Language = null);
+    string? Language = null,
+    TypeExpression? Expression = null,
+    int DocumentVersion = 0);
 
 public sealed record InlayHintFact(
     LspRange Range,
@@ -24,9 +26,14 @@ public sealed record SignatureFact(
     string? Documentation,
     int? ActiveParameter,
     LspRange Range,
-    IReadOnlyList<SignatureParameterFact>? Parameters = null);
+    IReadOnlyList<SignatureParameterFact>? Parameters = null,
+    TypeExpression? ReturnType = null,
+    int DocumentVersion = 0);
 
-public sealed record SignatureParameterFact(string Label, string? Documentation);
+public sealed record SignatureParameterFact(
+    string Label,
+    string? Documentation,
+    TypeExpression? Type = null);
 
 public sealed record TypeFactsSnapshot(
     IReadOnlyList<TypeFact> Facts,

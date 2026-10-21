@@ -172,7 +172,7 @@ public sealed class LspMessageConnection : IAsyncDisposable
                 ["jsonrpc"] = "2.0",
                 ["id"] = id,
                 ["method"] = method,
-                ["params"] = parameters,
+                ["params"] = parameters?.DeepClone(),
             }, cancellationToken).ConfigureAwait(false);
             return await completion.Task.WaitAsync(_requestTimeout, cancellationToken).ConfigureAwait(false);
         }
@@ -192,7 +192,7 @@ public sealed class LspMessageConnection : IAsyncDisposable
         {
             ["jsonrpc"] = "2.0",
             ["method"] = method,
-            ["params"] = parameters,
+            ["params"] = parameters?.DeepClone(),
         }, cancellationToken);
 
     private async Task CancelAsync(long id)

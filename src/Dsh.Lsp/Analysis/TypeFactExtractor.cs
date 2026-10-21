@@ -7,7 +7,10 @@ using Dsh.Lsp.Protocol;
 namespace Dsh.Lsp.Analysis;
 
 /** Turns presentation-level hover and inlay-hint responses into separate type facts. */
-public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityProfile capabilities)
+public sealed class TypeFactExtractor(
+    ILspRequestChannel channel,
+    LspCapabilityProfile capabilities,
+    IStructuredTypeProvider? structuredTypes = null)
 {
     public async Task<TypeFactsSnapshot> ExtractAsync(
         LspDocument document,
@@ -63,6 +66,9 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
             var display = HoverText(contents);
             if (string.IsNullOrWhiteSpace(display))
                 return [];
+            var expression = structuredTypes is null
+                ? null
+                : await structuredTypes.ResolveAsync(document, node.SelectionRange, cancellationToken).ConfigureAwait(false);
             return
             [
                 new TypeFact(
@@ -72,7 +78,9 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
                     LspJson.Range(LspJson.Property(result, "range")) ?? node.SelectionRange,
                     display,
                     LspJson.String(contents, "kind"),
-                    LspJson.String(contents, "language")),
+                    LspJson.String(contents, "language"),
+                    expression,
+                    DocumentVersion: document.Version),
             ];
         }
         catch (Exception error) when (error is LspResponseException or LspRequestTimeoutException)
@@ -155,7 +163,8 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
                     Documentation(LspJson.Property(signature, "documentation")),
                     activeParameter,
                     node.SelectionRange,
-                    Parameters(LspJson.Property(signature, "parameters"))))
+                    Parameters(LspJson.Property(signature, "parameters")),
+                    DocumentVersion: document.Version))
                 .Where(signature => signature.Label.Length > 0)
                 .ToArray();
         }

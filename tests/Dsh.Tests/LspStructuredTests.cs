@@ -1,10 +1,11 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Lsp.Analysis;
 using Dsh.Lsp.Catalog;
 using Dsh.Lsp.Client;
 using Dsh.Lsp.Model;
 using Dsh.Lsp.Protocol;
+using Dsh.Lsp.TreeSitter;
 using Dsh.Lsp.Workspace;
 
 namespace Dsh.Tests;
@@ -35,6 +36,14 @@ public sealed class LspStructuredTests
         Assert.Equal("json", LanguageCatalog.ResolveByPath("settings.jsonc").Id);
         Assert.Equal("ruby", LanguageCatalog.ResolveByPath("Gemfile").Id);
         Assert.Equal("powershell", LanguageCatalog.ResolveByPath("build.ps1").Id);
+    }
+
+    [Fact]
+    public void TreeSitterCatalog_CoversEveryLanguageProfile()
+    {
+        Assert.Equal(30, TreeSitterGrammarCatalog.GrammarNames.Count);
+        foreach (var profile in LanguageCatalog.All)
+            Assert.True(TreeSitterGrammarCatalog.GrammarNames.ContainsKey(profile.Id), profile.Id);
     }
 
     [Fact]
@@ -436,6 +445,23 @@ public sealed class LspStructuredTests
     }
 
     [Fact]
+    public void WorkspaceIndex_TracksTransitiveDependents()
+    {
+        var one = AnalysisWithReference("file:///one.cs", "file:///two.cs");
+        var two = AnalysisWithReference("file:///two.cs", "file:///three.cs");
+        var three = AnalysisFor("file:///three.cs", "class Three {}");
+        var index = new WorkspaceIndex(Path.GetTempPath());
+        index.AddOrUpdate(one);
+        index.AddOrUpdate(two);
+        index.AddOrUpdate(three);
+
+        var affected = index.Invalidate("file:///three.cs");
+
+        Assert.Contains("file:///one.cs", affected);
+        Assert.Contains("file:///two.cs", affected);
+    }
+
+    [Fact]
     public void WorkspaceIndex_ReplacesOnlyTheChangedDocument()
     {
         var first = AnalysisFor("file:///one.cs", "class One {}");
@@ -452,6 +478,32 @@ public sealed class LspStructuredTests
         Assert.Contains(index.AllSymbols, symbol => symbol.Name == "Changed");
         Assert.Contains(index.AllSymbols, symbol => symbol.Name == "Two");
         Assert.DoesNotContain(index.AllSymbols, symbol => symbol.Name == "One");
+    }
+
+    [Fact]
+    public void SyntaxSnapshot_MatchesIdentityRecursively()
+    {
+        var rootRange = new LspRange(new LspPosition(0, 0), new LspPosition(2, 0));
+        var childRange = new LspRange(new LspPosition(1, 0), new LspPosition(1, 5));
+        var lspChild = new SyntaxNode("Child", null, 5, childRange, childRange, [], [], Id: "lsp-child");
+        var lspRoot = new SyntaxNode("Root", null, 5, rootRange, rootRange, [], [lspChild], Id: "lsp-root");
+        var parserChild = new SyntaxNode("Child", null, 5, childRange, childRange, [], [], Id: "parser-child");
+        var parserRoot = new SyntaxNode("Root", null, 5, rootRange, rootRange, [], [parserChild], Id: "parser-root");
+        var snapshot = new SyntaxSnapshot(
+            "file:///identity.cs",
+            1,
+            "csharp",
+            [lspRoot],
+            [],
+            [],
+            [],
+            ParserRoots: [parserRoot]);
+
+        var matches = snapshot.IdentityMatches;
+
+        Assert.Equal(2, matches.Count);
+        Assert.All(matches, match => Assert.NotNull(match.ParserNode));
+        Assert.Equal("parser-child", matches.Single(match => match.LspNode.Name == "Child").ParserNode!.Id);
     }
 
     private static LspCapabilityProfile Capabilities(string json)
@@ -484,6 +536,20 @@ public sealed class LspStructuredTests
             TypeFactsSnapshot.Empty,
             [],
             ValidationResult.Empty);
+    }
+
+    private static DocumentAnalysis AnalysisWithReference(string uri, string targetUri)
+    {
+        var analysis = AnalysisFor(uri, "class Source {}");
+        var source = analysis.Symbols.Nodes[0];
+        var target = new LspLocation(targetUri, new LspRange(new LspPosition(0, 0), new LspPosition(0, 5)));
+        return analysis with
+        {
+            Symbols = analysis.Symbols with
+            {
+                Edges = [new SymbolEdge(source.Id, SymbolEdgeKind.Reference, target, "test")],
+            },
+        };
     }
 
     private static JsonElement ParseJson(string json)

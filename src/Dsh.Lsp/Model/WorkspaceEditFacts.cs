@@ -36,6 +36,11 @@ public sealed record WorkspaceSymbolFact(
     string Uri,
     LspRange Range);
 
+public sealed record CommandFact(
+    string Title,
+    string Command,
+    JsonElement? Arguments = null);
+
 public sealed record CodeActionFact(
     string Title,
     string? Kind,
@@ -44,4 +49,5 @@ public sealed record CodeActionFact(
     string? DisabledReason,
     WorkspaceEditFact? Edit,
     JsonElement? Data = null,
-    JsonElement? Raw = null);
+    JsonElement? Raw = null,
+    CommandFact? Command = null);
