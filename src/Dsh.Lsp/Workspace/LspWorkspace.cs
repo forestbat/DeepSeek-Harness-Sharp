@@ -532,6 +532,11 @@ public sealed class LspWorkspace : IAsyncDisposable
             ]);
         }
 
+        if (action.Edit is null && action.Raw is { } raw)
+        {
+            action = await ResolveCodeActionAsync(path, raw, cancellationToken).ConfigureAwait(false) ?? action;
+        }
+
         return await ApplyCodeActionEditAsync(action, writeToDisk, cancellationToken).ConfigureAwait(false);
     }
 

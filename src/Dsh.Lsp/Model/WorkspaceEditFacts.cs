@@ -43,4 +43,5 @@ public sealed record CodeActionFact(
     bool IsDisabled,
     string? DisabledReason,
     WorkspaceEditFact? Edit,
-    JsonElement? Data = null);
+    JsonElement? Data = null,
+    JsonElement? Raw = null);

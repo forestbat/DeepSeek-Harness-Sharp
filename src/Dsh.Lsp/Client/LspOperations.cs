@@ -181,7 +181,8 @@ public sealed class LspOperations(
                 LspJson.Boolean(item, "disabled"),
                 LspJson.String(LspJson.Property(item, "disabled"), "reason"),
                 ParseWorkspaceEdit(LspJson.Property(item, "edit")),
-                LspJson.Property(item, "data")))
+                LspJson.Property(item, "data"),
+                item.Clone()))
             .Where(action => action.Title.Length > 0)
             .ToArray();
 
