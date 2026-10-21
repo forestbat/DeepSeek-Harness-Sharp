@@ -254,6 +254,25 @@ public sealed class LspServer : IAsyncDisposable
                 return Json(await HierarchyRelationsAsync(method, parameters, cancellationToken).ConfigureAwait(false));
             case "textDocument/willSaveWaitUntil":
                 return Json(new JsonArray());
+            case "textDocument/completion":
+            case "textDocument/formatting":
+            case "textDocument/rangeFormatting":
+            case "textDocument/documentLink":
+            case "textDocument/documentColor":
+            case "textDocument/colorPresentation":
+            case "textDocument/codeLens":
+                return await ForwardAsync(method, parameters, cancellationToken).ConfigureAwait(false);
+            case "workspace/executeCommand":
+                var openDocument = _documents.OpenDocuments.FirstOrDefault();
+                return openDocument is null
+                    ? null
+                    : await _backend.RequestAsync(
+                        openDocument.Uri,
+                        method,
+                        parameters is { } commandParams
+                            ? JsonNode.Parse(commandParams.GetRawText()) as JsonObject
+                            : null,
+                        cancellationToken).ConfigureAwait(false);
             default:
                 throw new LspResponseException(-32601, $"unknown LSP method: {method}");
         }
@@ -383,6 +402,21 @@ public sealed class LspServer : IAsyncDisposable
         return Json(result);
     }
 
+    private async Task<JsonElement?> ForwardAsync(
+        string method,
+        JsonElement? parameters,
+        CancellationToken cancellationToken)
+    {
+        var uri = LspJson.String(LspJson.Property(parameters, "textDocument"), "uri");
+        if (uri is null)
+            return null;
+        return await _backend.RequestAsync(
+            uri,
+            method,
+            parameters is { } value ? JsonNode.Parse(value.GetRawText()) as JsonObject : null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static JsonObject? ChainNode(IReadOnlyList<LspRange> ranges, int index)
         => index >= ranges.Count
             ? null
@@ -459,6 +493,17 @@ public sealed class LspServer : IAsyncDisposable
             {
                 ["textDocumentSync"] = 2,
                 ["documentSymbolProvider"] = true,
+                ["completionProvider"] = new JsonObject
+                {
+                    ["triggerCharacters"] = new JsonArray(),
+                    ["resolveProvider"] = false,
+                },
+                ["documentFormattingProvider"] = true,
+                ["documentRangeFormattingProvider"] = true,
+                ["documentLinkProvider"] = new JsonObject { ["resolveProvider"] = false },
+                ["documentColorProvider"] = true,
+                ["codeLensProvider"] = new JsonObject { ["resolveProvider"] = false },
+                ["executeCommandProvider"] = new JsonObject { ["commands"] = new JsonArray() },
                 ["foldingRangeProvider"] = true,
                 ["selectionRangeProvider"] = true,
                 ["definitionProvider"] = true,

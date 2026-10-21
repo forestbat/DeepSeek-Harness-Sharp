@@ -80,6 +80,13 @@ public sealed class LspTests
 
     private sealed class FakeBackend : ILspServerBackend
     {
+        public Task<JsonElement?> RequestAsync(
+            string uri,
+            string method,
+            System.Text.Json.Nodes.JsonObject? parameters,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<JsonElement?>(null);
+
         public Task<DocumentAnalysis> AnalyzeAsync(
             string uri,
             string languageId,

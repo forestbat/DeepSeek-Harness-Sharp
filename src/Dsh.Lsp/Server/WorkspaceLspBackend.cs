@@ -2,6 +2,7 @@
 using Dsh.Lsp.Protocol;
 using Dsh.Lsp.Workspace;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Dsh.Lsp.Server;
 
@@ -9,6 +10,13 @@ namespace Dsh.Lsp.Server;
 public sealed class WorkspaceLspBackend(LspWorkspace workspace) : ILspServerBackend
 {
     public LspWorkspace Workspace { get; } = workspace;
+
+    public Task<JsonElement?> RequestAsync(
+        string uri,
+        string method,
+        JsonObject? parameters,
+        CancellationToken cancellationToken = default)
+        => Workspace.RequestAsync(PathFor(uri), method, parameters, cancellationToken);
 
     public Task<DocumentAnalysis> AnalyzeAsync(
         string uri,

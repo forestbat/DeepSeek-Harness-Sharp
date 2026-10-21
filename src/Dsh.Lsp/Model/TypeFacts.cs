@@ -23,7 +23,10 @@ public sealed record SignatureFact(
     string Label,
     string? Documentation,
     int? ActiveParameter,
-    LspRange Range);
+    LspRange Range,
+    IReadOnlyList<SignatureParameterFact>? Parameters = null);
+
+public sealed record SignatureParameterFact(string Label, string? Documentation);
 
 public sealed record TypeFactsSnapshot(
     IReadOnlyList<TypeFact> Facts,

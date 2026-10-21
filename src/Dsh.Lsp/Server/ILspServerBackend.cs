@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsh.Lsp.Model;
 using Dsh.Lsp.Protocol;
 
@@ -6,6 +7,12 @@ namespace Dsh.Lsp.Server;
 
 public interface ILspServerBackend : IAsyncDisposable
 {
+    Task<JsonElement?> RequestAsync(
+        string uri,
+        string method,
+        JsonObject? parameters,
+        CancellationToken cancellationToken = default);
+
     Task<DocumentAnalysis> AnalyzeAsync(
         string uri,
         string languageId,

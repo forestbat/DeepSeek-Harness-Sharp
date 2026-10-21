@@ -19,6 +19,37 @@ public sealed record ZoneAnalysis(
         => Analysis.Diagnostics
             .Select(diagnostic => diagnostic with { Range = Mapping.Map(diagnostic.Range) })
             .ToArray();
+
+    public IReadOnlyList<SyntaxNode> MappedRoots
+        => Analysis.Syntax.Roots.Select(MapNode).ToArray();
+
+    public IReadOnlyList<SymbolNode> MappedSymbols
+        => Analysis.Symbols.Nodes
+            .Select(symbol => symbol with
+            {
+                Id = $"{Zone.Id}|{symbol.Id}",
+                Uri = Zone.Path,
+                Range = Mapping.Map(symbol.Range),
+                SelectionRange = Mapping.Map(symbol.SelectionRange),
+            })
+            .ToArray();
+
+    public IReadOnlyList<TypeFact> MappedTypes
+        => Analysis.Types.Facts
+            .Select(fact => fact with
+            {
+                SymbolId = $"{Zone.Id}|{fact.SymbolId}",
+                Range = fact.Range is { } range ? Mapping.Map(range) : null,
+            })
+            .ToArray();
+
+    private SyntaxNode MapNode(SyntaxNode node)
+        => node with
+        {
+            Range = Mapping.Map(node.Range),
+            SelectionRange = Mapping.Map(node.SelectionRange),
+            Children = node.Children.Select(MapNode).ToArray(),
+        };
 }
 
 public sealed record ZoneMapping(LspRange ParentRange)

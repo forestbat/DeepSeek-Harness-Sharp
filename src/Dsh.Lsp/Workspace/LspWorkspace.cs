@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Dsh.Lsp.Analysis;
 using Dsh.Lsp.Catalog;
 using Dsh.Lsp.Client;
@@ -148,6 +149,19 @@ public sealed class LspWorkspace : IAsyncDisposable
         var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
         var result = await session.DefinitionAsync(document.Uri, position, cancellationToken).ConfigureAwait(false);
         return SymbolGraphBuilder.ParseLocations(result);
+    }
+
+    public async Task<JsonElement?> RequestAsync(
+        string path,
+        string method,
+        JsonObject? parameters,
+        CancellationToken cancellationToken = default)
+    {
+        var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
+        var request = parameters?.DeepClone() as JsonObject ?? new JsonObject();
+        if (request["textDocument"] is null)
+            request["textDocument"] = LspJson.TextDocumentNode(document.Uri);
+        return await session.RequestAsync(method, request, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<SelectionChain>> GetSelectionChainsAsync(
@@ -501,6 +515,25 @@ public sealed class LspWorkspace : IAsyncDisposable
                 new DocumentEditResult(action.Title, null, [new ValidationIssue("code-action", "code action has no edit", null)]),
             ])
             : await ApplyWorkspaceEditAsync(action.Edit, writeToDisk, cancellationToken).ConfigureAwait(false);
+
+    public async Task<WorkspaceEditApplyResult> ApplyCodeActionAsync(
+        string path,
+        LspRange range,
+        string title,
+        bool writeToDisk = false,
+        CancellationToken cancellationToken = default)
+    {
+        var actions = await GetCodeActionsAsync(path, range, cancellationToken).ConfigureAwait(false);
+        var action = actions.FirstOrDefault(candidate => candidate.Title.Equals(title, StringComparison.Ordinal));
+        if (action is null)
+        {
+            return new WorkspaceEditApplyResult([
+                new DocumentEditResult(path, null, [new ValidationIssue("code-action", $"code action not found: {title}", null)]),
+            ]);
+        }
+
+        return await ApplyCodeActionEditAsync(action, writeToDisk, cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task RestartSessionAsync(string languageId, CancellationToken cancellationToken = default)
     {

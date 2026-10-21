@@ -154,7 +154,8 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
                     LspJson.String(signature, "label") ?? string.Empty,
                     Documentation(LspJson.Property(signature, "documentation")),
                     activeParameter,
-                    node.SelectionRange))
+                    node.SelectionRange,
+                    Parameters(LspJson.Property(signature, "parameters"))))
                 .Where(signature => signature.Label.Length > 0)
                 .ToArray();
         }
@@ -171,6 +172,24 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
         return value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : LspJson.String(value, "value");
+    }
+
+    private static IReadOnlyList<SignatureParameterFact> Parameters(JsonElement? parameters)
+        => LspJson.Items(parameters)
+            .Select(parameter => new SignatureParameterFact(
+                ParameterLabel(LspJson.Property(parameter, "label")),
+                Documentation(LspJson.Property(parameter, "documentation"))))
+            .ToArray();
+
+    private static string ParameterLabel(JsonElement? label)
+    {
+        if (label is not { } value)
+            return string.Empty;
+        if (value.ValueKind == JsonValueKind.String)
+            return value.GetString() ?? string.Empty;
+        return value.ValueKind == JsonValueKind.Array
+            ? string.Join(',', value.EnumerateArray().Select(item => item.GetRawText()))
+            : string.Empty;
     }
 
     private static LspRange? InlayRange(JsonElement item)
