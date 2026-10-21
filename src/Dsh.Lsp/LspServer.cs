@@ -273,6 +273,17 @@ public sealed class LspServer : IAsyncDisposable
                             ? JsonNode.Parse(commandParams.GetRawText()) as JsonObject
                             : null,
                         cancellationToken).ConfigureAwait(false);
+            case "workspace/diagnostic":
+                var diagnosticDocument = _documents.OpenDocuments.FirstOrDefault();
+                return diagnosticDocument is null
+                    ? null
+                    : await _backend.RequestAsync(
+                        diagnosticDocument.Uri,
+                        method,
+                        parameters is { } diagnosticParams
+                            ? JsonNode.Parse(diagnosticParams.GetRawText()) as JsonObject
+                            : null,
+                        cancellationToken).ConfigureAwait(false);
             default:
                 throw new LspResponseException(-32601, $"unknown LSP method: {method}");
         }
@@ -523,7 +534,7 @@ public sealed class LspServer : IAsyncDisposable
                 ["diagnosticProvider"] = new JsonObject
                 {
                     ["interFileDependencies"] = false,
-                    ["workspaceDiagnostics"] = false,
+                    ["workspaceDiagnostics"] = true,
                 },
                 ["semanticTokensProvider"] = new JsonObject
                 {
