@@ -241,18 +241,15 @@ public sealed class MachineStoreTests : IDisposable
         Assert.False(File.Exists(store.FilePath));
     }
 
-    [Fact]
-    public void LocalForward_Is_Explicitly_Unsupported_And_Local_Machines_Cannot_Have_Tunnels()
+    [Theory]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public void Local_Machines_Cannot_Have_Tunnels(string mode)
     {
         var store = new MachineStore(new HarnessHome(_root));
-        var machine = MachineSpec.Ssh("target", "ssh.example", 22, "dev", SshAuth.Agent) with
-        {
-            OutboundTunnel = new OutboundTunnelSpec("localForward", "http://proxy.example:3128", 1234),
-        };
-        Assert.Contains("localForward", Assert.Throws<NotSupportedException>(() => store.Upsert(machine)).Message);
         Assert.Throws<InvalidOperationException>(() => store.Upsert(MachineSpec.Local("/unused", "second") with
         {
-            OutboundTunnel = new OutboundTunnelSpec("proxyCommand", "http://proxy.example:3128"),
+            OutboundTunnel = new OutboundTunnelSpec(mode, "http://proxy.example:3128"),
         }));
         Assert.False(File.Exists(store.FilePath));
         Assert.Null(MachineStore.ValidateOutboundTunnel(MachineSpec.Local()));
@@ -272,8 +269,12 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(document, File.ReadAllText(home.SettingsFile));
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task Tunnel_Cli_Set_Show_Clear_Use_Local_Settings_And_Redact_Stdin_Authentication()
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand", null)]
+    [InlineData("localForward", null)]
+    [InlineData("localForward", 1)]
+    [InlineData("localForward", 65535)]
+    public async Task Tunnel_Cli_Set_Show_Clear_Use_Local_Settings_And_Redact_Stdin_Authentication(string mode, int? localPort)
     {
         var home = new HarnessHome(_root);
         const string unrelated = "custom_section:\n  retained: value\nnetwork:\n  outbound_proxy:\n    url: http://base.example:3128\n";
@@ -283,17 +284,20 @@ public sealed class MachineStoreTests : IDisposable
         var sibling = MachineSpec.Ssh("sibling", "other.invalid", 22, "dev", SshAuth.Agent);
         store.Save(new FleetConfig([target, sibling], new DeploySettings { ServerProxy = "http://deploy.example:3128" }));
         const string url = "https://tunnel-user:tunnel%2Dsecret@logical-proxy.example:8443";
-        var set = await FleetRemoteProxyTests.RunCliAsync(_root, $$"""{"mode":"proxyCommand","proxyUrl":"{{url}}"}""", TestContext.Current.CancellationToken, "machine", "tunnel", "target", "set", "--json-stdin");
+        var input = $$"""{"mode":"{{mode}}","proxyUrl":"{{url}}","localPort":{{(localPort is null ? "null" : localPort.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))}}}""";
+        var set = await FleetRemoteProxyTests.RunCliAsync(_root, input, TestContext.Current.CancellationToken, "machine", "tunnel", "target", "set", "--json-stdin");
         AssertTunnelCliSafeSuccess(set);
-        Assert.Equal(target with { OutboundTunnel = new OutboundTunnelSpec("proxyCommand", url) }, store.Load().Find("target"));
+        Assert.Equal(target with { OutboundTunnel = new OutboundTunnelSpec(mode, url, localPort) }, store.Load().Find("target"));
         Assert.Equal(sibling, store.Load().Find("sibling"));
         Assert.StartsWith(unrelated, File.ReadAllText(home.SettingsFile), StringComparison.Ordinal);
         var beforeShow = File.ReadAllText(home.SettingsFile);
         var show = await FleetRemoteProxyTests.RunCliAsync(_root, null, TestContext.Current.CancellationToken, "machine", "tunnel", "target", "show");
         AssertTunnelCliSafeSuccess(show);
         using var shown = JsonDocument.Parse(show.Output);
-        Assert.Equal("proxyCommand", shown.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(mode, shown.RootElement.GetProperty("mode").GetString());
         Assert.Equal("https://***@logical-proxy.example:8443", shown.RootElement.GetProperty("proxyUrl").GetString());
+        if (localPort is { } port)
+            Assert.Equal(port, shown.RootElement.GetProperty("localPort").GetInt32());
         Assert.Equal(beforeShow, File.ReadAllText(home.SettingsFile));
         var clear = await FleetRemoteProxyTests.RunCliAsync(_root, null, TestContext.Current.CancellationToken, "machine", "tunnel", "target", "clear");
         AssertTunnelCliSafeSuccess(clear);
@@ -315,8 +319,9 @@ public sealed class MachineStoreTests : IDisposable
     [InlineData("""{"proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128"}""")]
     [InlineData("""{"mode":"proxyCommand","proxyUrl":null}""")]
     [InlineData("""{"mode":"proxyCommand","proxyUrl":"ftp://tunnel-user:tunnel-secret@proxy.example:21"}""")]
-    [InlineData("""{"mode":"localForward","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128"}""")]
     [InlineData("""{"mode":"proxyCommand","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128","localPort":1080}""")]
+    [InlineData("""{"mode":"localForward","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128","localPort":0}""")]
+    [InlineData("""{"mode":"localForward","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128","localPort":65536}""")]
     [InlineData("""{"mode":"proxyCommand","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128","unknown":true}""")]
     [InlineData("""{"mode":"proxyCommand","proxyUrl":"http://proxy.example:3128","proxyUrl":"http://tunnel-user:tunnel-secret@proxy.example:3128"}""")]
     public async Task Tunnel_Cli_Invalid_Stdin_Is_Private_And_Does_Not_Save(string input)

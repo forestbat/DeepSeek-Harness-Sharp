@@ -31,8 +31,8 @@ internal static partial class SettingsDocument
     }
 
     /**
-     * 按顶层键合并回写:previous 是文件当前内容的序列化结果,next 是要保存的序列化结果。
-     * 只改写两者不同的顶层段,新增的段追加到末尾,消失的段删除;注释、生成块与模型之外的键原样保留。
+     * Merge top-level edits relative to the caller's saved snapshot, not the latest file snapshot.
+     * Unchanged sections retain concurrent writers' contents, comments and unknown keys.
      */
     public static string MergeTopLevel(string text, string previous, string next)
     {

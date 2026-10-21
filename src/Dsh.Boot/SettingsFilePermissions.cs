@@ -1,24 +1,36 @@
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
+
 namespace Dsh.Boot;
 
-/**
- * settings.yaml 含 apiKey/authToken/SSH 密码等机密, 落盘一律收紧为「仅属主可读写」。
- * Windows 文件系统无 Unix 权限位, 权限由用户 profile 的 ACL 保证, 故只在类 Unix 上设置。
- */
+/** Creates private settings temporary files without exposing their contents before permissions are restricted. */
 internal static class SettingsFilePermissions
 {
     private const UnixFileMode OwnerReadWrite = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    private const int WriteBufferSize = 4096;
 
-    /** 写入内容, 并把文件收紧为仅属主可读写。 */
     public static void Write(string path, string content)
     {
-        File.WriteAllText(path, content);
-        Restrict(path);
+        using var writer = new StreamWriter(OperatingSystem.IsWindows()
+            ? CreateWindows(path)
+            : new FileStream(path, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = OwnerReadWrite,
+            }));
+        writer.Write(content);
     }
 
-    /** 把已落盘的文件收紧为仅属主可读写(Windows 跳过)。 */
-    public static void Restrict(string path)
+    [SupportedOSPlatform("windows")]
+    private static FileStream CreateWindows(string path)
     {
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, OwnerReadWrite);
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var owner = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("cannot resolve the current Windows user");
+        security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.FullControl, AccessControlType.Allow));
+        return new FileInfo(path).Create(FileMode.CreateNew, FileSystemRights.FullControl, FileShare.None, WriteBufferSize, FileOptions.None, security);
     }
 }

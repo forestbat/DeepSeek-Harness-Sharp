@@ -230,7 +230,7 @@ public sealed class RemoteHostCapabilityTests
     public async Task NetworkReload_ReadsOnlyTheHostsFile_RetiresItsOldPool_AndRejectsSnapshots()
     {
         using var environment = await GuiTestEnvironment.CreateAsync();
-        await using var backend = await HarnessRemoteHostBackend.CreateAsync(environment.App, HostPtyDaemonForTests.Unused, Ct);
+        await using var backend = await HarnessRemoteHostBackend.CreateAsync(environment.App, HostPtyDaemonForTests.Unused, TestContext.Current.CancellationToken);
         await using var fixture = await HostFixture.CreateAsync(backend, Ct);
         await using var first = new TestForwardProxy(keepAlive: true);
         await using var second = new TestForwardProxy(keepAlive: true);
@@ -263,7 +263,7 @@ public sealed class RemoteHostCapabilityTests
     public async Task OutboundOnlyHost_RejectsReload_WhileRealGetSetAndProbeRemainUsable()
     {
         using var environment = await GuiTestEnvironment.CreateAsync();
-        await using var backend = await HarnessRemoteHostBackend.CreateAsync(environment.App, HostPtyDaemonForTests.Unused, Ct);
+        await using var backend = await HarnessRemoteHostBackend.CreateAsync(environment.App, HostPtyDaemonForTests.Unused, TestContext.Current.CancellationToken);
         await using var forwarding = new TestForwardProxy();
         var outbound = new OutboundOnlyNetwork(backend.Network!);
         await using var fixture = await HostFixture.CreateAsync(new CoreOnlyBackend(backend, outbound), Ct);

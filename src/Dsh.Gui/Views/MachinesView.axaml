@@ -65,7 +65,7 @@
                    IsVisible="{Binding Editor, Converter={x:Static ObjectConverters.IsNull}}"
                    Text="本机（默认 harness home）隐式存在，不能编辑或删除；可以对它测试连接与运行诊断。" />
 
-        <StackPanel Spacing="8" DataContext="{Binding Editor}" x:DataType="vm:MachineEditorViewModel"
+        <StackPanel Spacing="8" DataContext="{Binding $parent[UserControl].((vm:MachinesViewModel)DataContext).Editor}" x:DataType="vm:MachineEditorViewModel"
                     IsEnabled="{Binding !$parent[UserControl].((vm:MachinesViewModel)DataContext).Busy}"
                     IsVisible="{Binding $parent[UserControl].((vm:MachinesViewModel)DataContext).Editor, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}">
           <TextBlock Classes="Title" Text="机器" />
@@ -175,7 +175,7 @@
           </ItemsControl>
         </StackPanel>
 
-        <StackPanel Spacing="8" DataContext="{Binding Deploy}" x:DataType="vm:DeploySettingsEditorViewModel">
+        <StackPanel Spacing="8" DataContext="{Binding $parent[UserControl].((vm:MachinesViewModel)DataContext).Deploy}" x:DataType="vm:DeploySettingsEditorViewModel">
           <TextBlock Classes="Title" Text="自动部署设置（所有 SSH 机器共用）" />
           <CheckBox Content="远端缺少 dsharp 或版本较旧时自动下载并部署" IsChecked="{Binding AutoDeploy, Mode=TwoWay}" />
           <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="8">

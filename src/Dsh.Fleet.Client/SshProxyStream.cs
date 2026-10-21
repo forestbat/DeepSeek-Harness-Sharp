@@ -1,18 +1,17 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using Dsh.Runtime;
 
 namespace Dsh.Fleet;
 
-/// <summary>Owns an SSH process, bounded diagnostic reader and both sides of its TCP stream.</summary>
-internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
+/// <summary>Owns one authenticated SSH process independently of the streams using it.</summary>
+internal sealed class SshProxyProcess : IAsyncDisposable
 {
     private const int DiagnosticCapacity = 8192;
     private readonly object _gate = new();
-    private MachineSpec? _machine;
-    private readonly DnsEndPoint _endpoint;
-    private readonly Action<SshProxyStream> _released;
+    private readonly bool _persistent;
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationTokenSource _failure = new();
     private readonly TaskCompletionSource _authenticated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -21,110 +20,146 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task _diagnostics = Task.CompletedTask;
     private Task _observing = Task.CompletedTask;
-    private Stream? _input;
-    private Stream? _output;
+    private Task? _disposal;
     private string? _askPass;
     private string? _authenticationMarker;
     private string _failureDetail = "The SSH proxy transport failed.";
     private bool _started;
     private bool _disposed;
-    private bool _processReleased;
-    private bool _ownerReleased;
     private bool _discardDiagnosticLine;
+    private bool _askPassRemovalFailed;
+    private bool _resourcesReleased;
 
-    internal SshProxyStream(MachineSpec machine, DnsEndPoint endpoint, Action<SshProxyStream> released)
+    internal SshProxyProcess(bool persistent)
     {
-        _machine = machine;
-        _endpoint = endpoint;
-        _released = released;
+        _persistent = persistent;
         Process = new Process { EnableRaisingEvents = true };
         Process.Exited += OnExited;
         FailureToken = _failure.Token;
     }
 
     internal Process Process { get; }
-    public CancellationToken FailureToken { get; }
+    internal CancellationToken FailureToken { get; }
+    internal Stream Input => Process.StandardInput.BaseStream;
+    internal Stream Output => Process.StandardOutput.BaseStream;
+    internal Task<int> ExitClassified => _exitClassified.Task;
 
-    internal async Task StartAsync(CancellationToken cancellationToken)
+    internal async Task StartAsync(MachineSpec machine, DnsEndPoint endpoint, int? localPort, CancellationToken cancellationToken)
+    {
+        try
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                cancellationToken.ThrowIfCancellationRequested();
+                var setup = SshTransport.CreateProxyStart(machine, endpoint, localPort);
+                Process.StartInfo = setup.StartInfo;
+                _askPass = setup.AskPass;
+                _authenticationMarker = setup.AuthenticationMarker;
+                if (!Process.Start())
+                    throw new IOException("Failed to start the SSH proxy transport.");
+                _started = true;
+                _diagnostics = DrainDiagnosticsAsync(Process.StandardError);
+                _observing = ObserveExitAsync();
+                if (Process.HasExited)
+                    _exited.TrySetResult();
+                machine = null!;
+            }
+            using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyProcess)state!).Dispose(), this);
+            await _authenticated.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ThrowIfFailed();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
+        }
+        catch
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                SignalFailure();
+            Dispose();
+            throw;
+        }
+        finally
+        {
+            machine = null!;
+        }
+    }
+
+    private void OnExited(object? sender, EventArgs args)
     {
         lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            (ProcessStartInfo StartInfo, string? AskPass, string AuthenticationMarker) setup;
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                setup = SshTransport.CreateProxyStart(_machine!, _endpoint);
-            }
-            finally
-            {
-                _machine = null;
-            }
-            Process.StartInfo = setup.StartInfo;
-            _askPass = setup.AskPass;
-            _authenticationMarker = setup.AuthenticationMarker;
-            if (!Process.Start())
-                throw new IOException("Failed to start the SSH proxy transport.");
-            _started = true;
-            _input = Process.StandardInput.BaseStream;
-            _output = Process.StandardOutput.BaseStream;
-            _diagnostics = DrainDiagnosticsAsync(Process.StandardError);
-            _observing = ObserveExitAsync();
-            if (Process.HasExited)
-                _exited.TrySetResult();
+            if (_started && !_exitClassified.Task.IsCompleted)
+                ClassifyExit();
+            _exited.TrySetResult();
         }
-        using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Dispose(), this);
-        await _authenticated.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
     }
-
-    private void OnExited(object? sender, EventArgs args) => _exited.TrySetResult();
 
     private async Task ObserveExitAsync()
     {
         try
         {
             await _exited.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-            var exitCode = Process.ExitCode;
-            try
+            lock (_gate)
             {
-                if (exitCode != 0)
-                    SignalFailure();
-                else if (!_authenticated.Task.IsCompleted)
-                    _authenticated.TrySetException(new IOException("SSH ended before authentication completed."));
+                if (!_exitClassified.Task.IsCompleted)
+                    ClassifyExit();
             }
-            finally
-            {
-                // Failure callbacks retire the HTTP generation before any reader can expose EOF.
-                _exitClassified.TrySetResult(exitCode);
-            }
+            await _exitClassified.Task.ConfigureAwait(false);
         }
         finally
         {
             await _closed.Task.ConfigureAwait(false);
-            try
+            await _diagnostics.ConfigureAwait(false);
+        }
+    }
+
+    private void ClassifyExit()
+    {
+        try
+        {
+            var exitCode = Process.ExitCode;
+            // A persistent forward has no successful unsolicited completion, including exit 0.
+            if (exitCode != 0 || _persistent)
+                SignalFailure();
+            else if (!_authenticated.Task.IsCompleted)
+                _authenticated.TrySetException(new IOException("SSH ended before authentication completed."));
+            _exitClassified.TrySetResult(exitCode);
+        }
+        catch (Exception error)
+        {
+            // Exit classification also carries cleanup errors to asynchronous disposal.
+            _exitClassified.TrySetException(error);
+        }
+    }
+
+    internal void ThrowIfFailed(bool observeExit = false)
+    {
+        if (observeExit)
+        {
+            lock (_gate)
             {
-                await _diagnostics.ConfigureAwait(false);
-            }
-            finally
-            {
-                ReleaseProcess();
+                if (_started && !_disposed && Process.HasExited)
+                    ClassifyExit();
             }
         }
+        if (FailureToken.IsCancellationRequested)
+            throw new IOException(_failureDetail);
     }
 
     private void SignalFailure()
     {
-        if (Volatile.Read(ref _disposed))
-            return;
-        _authenticated.TrySetException(new IOException(_failureDetail));
-        try
+        lock (_gate)
         {
-            _failure.Cancel();
-        }
-        finally
-        {
-            Dispose();
+            if (_disposed)
+                return;
+            _authenticated.TrySetException(new IOException(_failureDetail));
+            try
+            {
+                _failure.Cancel();
+            }
+            finally
+            {
+                Dispose();
+            }
         }
     }
 
@@ -143,8 +178,8 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
         {
             if (!Volatile.Read(ref _disposed))
             {
-                _authenticated.TrySetException(new IOException("The SSH diagnostic stream failed before authentication completed."));
-                Dispose();
+                _failureDetail = "The SSH diagnostic stream failed.";
+                SignalFailure();
             }
         }
         finally
@@ -179,6 +214,7 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
     {
         if (_authenticationMarker is not null && line.Trim().Equals(_authenticationMarker, StringComparison.Ordinal))
         {
+            // ssh_session2 sets up local forwards before it runs this target-only LocalCommand.
             DeleteAskPass();
             _authenticated.TrySetResult();
         }
@@ -186,52 +222,229 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
             _failureDetail = "SSH authentication failed.";
         else if (line.Contains("open failed", StringComparison.OrdinalIgnoreCase))
             _failureDetail = "SSH could not connect to the remote proxy endpoint.";
+        else if (line.Contains("forwarding failed", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("Address already in use", StringComparison.OrdinalIgnoreCase))
+            _failureDetail = "SSH could not bind the local proxy forwarding port.";
     }
 
-    private void DeleteAskPass()
+    private void DeleteAskPass(bool retryCleanup = false)
     {
         lock (_gate)
         {
             if (_askPass is not { } path)
                 return;
+            if (_askPassRemovalFailed && !retryCleanup)
+                throw new IOException("The SSH authentication secret could not be removed.");
             try
             {
                 File.Delete(path);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                // Keep ownership so disposal can retry cleanup; never expose the secret path.
+                _askPassRemovalFailed = true;
+                // Retain ownership if removal fails; never expose a secret path.
                 throw new IOException("The SSH authentication secret could not be removed.");
             }
             _askPass = null;
+            _askPassRemovalFailed = false;
         }
     }
 
-    private void ReleaseProcess()
+    internal void Dispose(bool retryCleanup = false)
     {
         lock (_gate)
         {
-            if (!_processReleased)
+            if (_disposed)
             {
-                Process.Exited -= OnExited;
-                Process.Dispose();
-                _failure.Dispose();
-                _stop.Dispose();
-                _processReleased = true;
+                DeleteAskPass(retryCleanup);
+                return;
+            }
+            _disposed = true;
+            try
+            {
+                _stop.Cancel();
+                if (_started && !Process.HasExited)
+                {
+                    try
+                    {
+                        Process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The exit event may win the race with this normal shutdown.
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (_started)
+                    {
+                        Input.Dispose();
+                        Output.Dispose();
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        DeleteAskPass(retryCleanup);
+                    }
+                    finally
+                    {
+                        _authenticated.TrySetCanceled();
+                        _closed.TrySetResult();
+                    }
+                }
             }
         }
-        ReleaseOwnerIfComplete();
     }
 
-    private void ReleaseOwnerIfComplete()
+    public ValueTask DisposeAsync() => ReleaseAsync(retryCleanup: true);
+
+    internal ValueTask ReleaseAsync(bool retryCleanup)
     {
         lock (_gate)
         {
-            if (!_processReleased || _askPass is not null || _ownerReleased)
-                return;
-            _ownerReleased = true;
+            if (_disposal is null)
+                _disposal = ReleaseProcessAsync(retryCleanup);
+            else if (retryCleanup && !_disposal.IsCompletedSuccessfully)
+                _disposal = RetryProcessReleaseAsync(_disposal);
+            return new ValueTask(_disposal);
         }
-        _released(this);
+    }
+
+    private async Task RetryProcessReleaseAsync(Task previous)
+    {
+        try
+        {
+            await previous.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        }
+        catch (Exception) when (previous.IsFaulted || previous.IsCanceled)
+        {
+            // Only a new explicit disposal requests this retry after the prior attempt has settled.
+            await ReleaseProcessAsync(retryCleanup: true).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ReleaseProcessAsync(bool retryCleanup)
+    {
+        try
+        {
+            Dispose(retryCleanup);
+        }
+        finally
+        {
+            if (!_resourcesReleased)
+            {
+                try
+                {
+                    await _observing.ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        Process.Exited -= OnExited;
+                        Process.Dispose();
+                        _failure.Dispose();
+                        _stop.Dispose();
+                        _resourcesReleased = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// <summary>Owns one command stream or one loopback connection to a shared SSH forward.</summary>
+internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
+{
+    private readonly object _gate = new();
+    private readonly SshProxyProcess _owner;
+    private readonly bool _ownsProcess;
+    private readonly Action<SshProxyStream> _released;
+    private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task _disposal;
+    private CancellationTokenRegistration _failureRegistration;
+    private Stream? _input;
+    private Stream? _output;
+    private Socket? _connectingSocket;
+    private bool _disposed;
+
+    internal SshProxyStream(SshProxyProcess owner, bool ownsProcess, Action<SshProxyStream> released)
+    {
+        _owner = owner;
+        _ownsProcess = ownsProcess;
+        _released = released;
+        _disposal = FinishDisposalAsync();
+    }
+
+    internal Process Process => _owner.Process;
+    public CancellationToken FailureToken => _owner.FailureToken;
+    public object FailureOwner => _owner;
+
+    internal async Task StartAsync(MachineSpec machine, DnsEndPoint endpoint, CancellationToken cancellationToken)
+    {
+        var starting = _owner.StartAsync(machine, endpoint, null, cancellationToken);
+        machine = null!;
+        await starting.ConfigureAwait(false);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _input = _owner.Input;
+            _output = _owner.Output;
+        }
+        RegisterFailure();
+        _owner.ThrowIfFailed();
+    }
+
+    internal async Task ConnectLoopbackAsync(int localPort, CancellationToken cancellationToken)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                _connectingSocket = socket;
+            }
+            RegisterFailure();
+            _owner.ThrowIfFailed();
+            using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Close(retryCleanup: false), this);
+            await socket.ConnectAsync(IPAddress.Loopback, localPort, cancellationToken).ConfigureAwait(false);
+            _owner.ThrowIfFailed();
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                cancellationToken.ThrowIfCancellationRequested();
+                _input = _output = new NetworkStream(socket, ownsSocket: true);
+                _connectingSocket = null;
+            }
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_connectingSocket, socket))
+                    _connectingSocket = null;
+            }
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    private void RegisterFailure()
+    {
+        var registration = FailureToken.UnsafeRegister(static state => ((SshProxyStream)state!).Close(retryCleanup: false), this);
+        lock (_gate)
+        {
+            if (_disposed)
+                registration.Unregister();
+            else
+                _failureRegistration = registration;
+        }
     }
 
     private void CloseInputAtEnd()
@@ -239,7 +452,7 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            // -W may keep SSH alive after remote output EOF until its local input also ends.
+            // -W may keep SSH alive after remote output EOF until local input also ends.
             _input!.Dispose();
         }
     }
@@ -266,11 +479,13 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
         if (buffer.Length == 0)
             return 0;
         var count = _output!.Read(buffer);
-        if (count == 0)
+        if (count == 0 && _ownsProcess)
         {
             CloseInputAtEnd();
-            CheckEnd(_exitClassified.Task.GetAwaiter().GetResult());
+            CheckEnd(_owner.ExitClassified.GetAwaiter().GetResult());
         }
+        else
+            _owner.ThrowIfFailed(observeExit: count == 0);
         return count;
     }
 
@@ -280,16 +495,18 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
         cancellationToken.ThrowIfCancellationRequested();
         if (buffer.Length == 0)
             return 0;
-        using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Dispose(), this);
+        using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Close(retryCleanup: false), this);
         var count = await _output!.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-        if (count == 0)
+        if (count == 0 && _ownsProcess)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CloseInputAtEnd();
-            var exitCode = await _exitClassified.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var exitCode = await _owner.ExitClassified.WaitAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             CheckEnd(exitCode);
         }
+        else
+            _owner.ThrowIfFailed(observeExit: count == 0);
         return count;
     }
 
@@ -307,7 +524,7 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
     public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
-        using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Dispose(), this);
+        using var registration = cancellationToken.UnsafeRegister(static state => ((SshProxyStream)state!).Close(retryCleanup: false), this);
         await _input!.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
     }
 
@@ -319,54 +536,44 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
 
     protected override void Dispose(bool disposing)
     {
-        if (!disposing)
-            return;
-        try
-        {
-            lock (_gate)
-            {
-                if (_disposed)
-                {
-                    DeleteAskPass();
-                    return;
-                }
-                _disposed = true;
-                _machine = null;
-                try
-                {
-                    _stop.Cancel();
-                    if (_started && !Process.HasExited)
-                        Process.Kill(entireProcessTree: true);
-                }
-                finally
-                {
-                    try
-                    {
-                        _input?.Dispose();
-                        _output?.Dispose();
-                    }
-                    finally
-                    {
-                        CompleteClose();
-                    }
-                }
-            }
-        }
-        finally
-        {
-            if (!_started)
-                ReleaseProcess();
-            else
-                ReleaseOwnerIfComplete();
-        }
+        if (disposing)
+            Close(retryCleanup: true);
         base.Dispose(disposing);
     }
 
-    private void CompleteClose()
+    private void Close(bool retryCleanup)
     {
+        Socket? connectingSocket;
+        bool alreadyDisposed;
+        lock (_gate)
+        {
+            alreadyDisposed = _disposed;
+            _disposed = true;
+            connectingSocket = _connectingSocket;
+            _connectingSocket = null;
+        }
+        if (alreadyDisposed)
+        {
+            if (_ownsProcess && retryCleanup)
+                _owner.Dispose(retryCleanup: true);
+            RetryDisposal(retryCleanup);
+            return;
+        }
         try
         {
-            DeleteAskPass();
+            _failureRegistration.Unregister();
+            connectingSocket?.Dispose();
+            try
+            {
+                _input?.Dispose();
+                if (!ReferenceEquals(_input, _output))
+                    _output?.Dispose();
+            }
+            finally
+            {
+                if (_ownsProcess)
+                    _owner.Dispose(retryCleanup);
+            }
         }
         finally
         {
@@ -374,15 +581,48 @@ internal sealed class SshProxyStream : Stream, IOutboundTransportLifetime
         }
     }
 
-    public override async ValueTask DisposeAsync()
+    private async Task FinishDisposalAsync(bool retryCleanup = false)
+    {
+        // Even a retry must not acquire the process/tunnel locks while holding the stream lock.
+        await _closed.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        if (_ownsProcess)
+            await _owner.ReleaseAsync(retryCleanup).ConfigureAwait(false);
+        _released(this);
+    }
+
+    private Task RetryDisposal(bool retryCleanup)
+    {
+        lock (_gate)
+        {
+            if (retryCleanup && !_disposal.IsCompletedSuccessfully)
+                _disposal = RetryStreamReleaseAsync(_disposal);
+            return _disposal;
+        }
+    }
+
+    private async Task RetryStreamReleaseAsync(Task previous)
     {
         try
         {
-            Dispose();
+            await previous.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        }
+        catch (Exception) when (previous.IsFaulted || previous.IsCanceled)
+        {
+            await FinishDisposalAsync(retryCleanup: true).ConfigureAwait(false);
+        }
+    }
+
+    public override ValueTask DisposeAsync() => ReleaseAsync(retryCleanup: true);
+
+    internal async ValueTask ReleaseAsync(bool retryCleanup)
+    {
+        try
+        {
+            Close(retryCleanup);
         }
         finally
         {
-            await _observing.ConfigureAwait(false);
+            await RetryDisposal(retryCleanup: false).ConfigureAwait(false);
             GC.SuppressFinalize(this);
         }
     }

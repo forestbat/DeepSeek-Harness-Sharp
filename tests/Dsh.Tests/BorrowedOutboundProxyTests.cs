@@ -33,7 +33,7 @@ public sealed class BorrowedOutboundProxyTests
             HarnessSettings.SaveBorrowedOutboundMachine(home, "missing");
             proxy.SuspendBorrowed();
             await using var owner = new BorrowedOutboundRoute(home, proxy);
-            using var canceled = new CancellationTokenSource();
+            using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             canceled.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await owner.AcquireAsync(canceled.Token));
             await owner.DisposeAsync();
@@ -55,7 +55,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task RetiredSshGeneration_ReleasesItsMachineCredentials_WhileOldConsumersRemainReachable()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remote = new TestForwardProxy(requiredCredential: "retired-proxy-user:retired-proxy-secret");
         var root = TempTree.CreateSocketDirectory("b80c");
         try
@@ -123,7 +123,7 @@ public sealed class BorrowedOutboundProxyTests
             HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{baseline.Port}" }, proxy);
             await using var route = new BorrowedOutboundRoute(home, proxy);
             using var consumer = new HttpClient(proxy.CreateHandler());
-            var initial = consumer.GetStringAsync("http://example.com/before-owner-unload", Ct);
+            var initial = consumer.GetStringAsync("http://example.com/before-owner-unload", TestContext.Current.CancellationToken);
             Assert.Equal("GET http://example.com/before-owner-unload HTTP/1.1", await baseline.WaitForRequestAsync(Ct));
             await using var lease = await route.AcquireAsync(Ct);
             baseline.ReleaseResponse();
@@ -168,7 +168,7 @@ public sealed class BorrowedOutboundProxyTests
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root));
             using var consumer = new HttpClient(OutboundProxy.FromContext(app.Ctx).CreateHandler());
             Assert.NotNull(await Record.ExceptionAsync(() => consumer.GetStringAsync("http://example.com/disabled-fleet", Ct)));
-            var agent = (await app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: root))).Agent;
+            var agent = (await app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: root), TestContext.Current.CancellationToken)).Agent;
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             Assert.IsType<CommandResult.Error>((await commands.Execute(agent, "/proxy reload", Ct))!.Result);
             Assert.Empty(baseline.Requests);
@@ -204,7 +204,7 @@ public sealed class BorrowedOutboundProxyTests
             var fleet = Assert.IsType<FleetService>(app.Ctx.Get<FleetService>(FleetService.ServiceName));
             await using var frontend = fleet.CreateClient(new FleetOptions());
             using var consumer = new HttpClient(fleet.OutboundRoute.Proxy.CreateHandler());
-            Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync($"http://127.0.0.1:{endpoint.Port}/startup", Ct));
+            Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync($"http://127.0.0.1:{endpoint.Port}/startup", TestContext.Current.CancellationToken));
             Assert.Equal(InvalidBaselineProxyUrl, HarnessSettings.Load(home).Network?.OutboundProxy?.Url);
             Assert.Null(HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
         }
@@ -225,7 +225,7 @@ public sealed class BorrowedOutboundProxyTests
             using var proxy = new OutboundProxy();
             HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{baseline.Port}" }, proxy);
             await using var route = new BorrowedOutboundRoute(home, proxy);
-            await using var lease = await route.AcquireAsync(Ct);
+            await using var lease = await route.AcquireAsync(TestContext.Current.CancellationToken);
             using var consumer = new HttpClient(proxy.CreateHandler());
             Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync("http://example.com/before-invalid-baseline", Ct));
             new HarnessSettings
@@ -247,7 +247,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task PluginOwnerDisposal_CancelsItsPendingDraft_AndAwaitsAllClientRouteLeases()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var first = new TestForwardProxy(keepAlive: true);
         await using var draft = new TestForwardProxy(pauseResponses: true);
         var root = TempTree.CreateSocketDirectory("b80u");
@@ -277,11 +277,57 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
+    [Theory(Timeout = 90000)]
+    [InlineData(DownloadVia.Client)]
+    [InlineData(DownloadVia.Auto)]
+    public async Task LocalArchiveDownload_RejectsAnInvalidBorrowedSelection_WithoutUsingTheBaseline(string via)
+    {
+        FleetSshEndToEndTests.RequireEnvironment();
+        if (via == DownloadVia.Auto && !File.Exists("/usr/bin/curl") && !File.Exists("/usr/bin/wget"))
+            Assert.Skip("automatic remote-download coverage needs curl or wget on the loopback SSH server");
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
+        await using var baseline = new TestForwardProxy();
+        var root = TempTree.CreateSocketDirectory("b80d");
+        using var releases = new TcpListener(IPAddress.Loopback, 0);
+        releases.Start();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        try
+        {
+            var home = new HarnessHome(root);
+            using var proxy = new OutboundProxy();
+            HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{baseline.Port}" }, proxy);
+            HarnessSettings.SaveBorrowedOutboundMachine(home, "missing");
+            var before = await File.ReadAllTextAsync(home.SettingsFile, Ct);
+            var serving = via == DownloadVia.Auto
+                ? FleetSshEndToEndTests.ServeReleaseAsync(releases, null, cancellation.Token)
+                : Task.CompletedTask;
+            var port = ((IPEndPoint)releases.LocalEndpoint).Port;
+            var progress = new List<string>();
+            var installer = new RemoteDsharpInstaller(new SshTransport(ssh.Machine("download-target", root)));
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => installer.EnsureAsync(
+                new DeploySettings { Via = via, ReleaseBaseUrl = $"http://127.0.0.1:{port}/releases" },
+                progress.Add, Ct, localHome: home));
+            Assert.Equal("The selected outbound machine does not exist.", failure.Message);
+            await serving;
+            Assert.Equal(via == DownloadVia.Auto, progress.Any(message => message.Contains("改由本地下发", StringComparison.Ordinal)));
+            Assert.False(releases.Pending(), "A rejected local archive route must never make a direct HTTP request.");
+            Assert.Empty(baseline.Requests);
+            Assert.Equal(before, await File.ReadAllTextAsync(home.SettingsFile, Ct));
+            Assert.Null((await installer.InspectAsync(Ct)).CommandPath);
+            Assert.False(File.Exists(Path.Combine(ssh.Home, ".dsharp", RuntimeInformation.RuntimeIdentifier, ".dsharp-version")));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            TempTree.Delete(root);
+        }
+    }
+
     [Fact(Timeout = 90000)]
     public async Task CancellingClientDownload_ReleasesOnlyItsShortRoute_WhileAnExistingConsumerKeepsItsConnection()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var forwarding = new TestForwardProxy(keepAlive: true, pauseResponses: true);
         var root = TempTree.CreateSocketDirectory("b80q");
         try
@@ -301,7 +347,7 @@ public sealed class BorrowedOutboundProxyTests
                 new DeploySettings { Via = DownloadVia.Client, ReleaseBaseUrl = "http://releases.example.test/releases" },
                 progress.Add, cancellation.Token, force: true, localHome: home);
             var request = await forwarding.WaitForRequestAsync(Ct);
-            Assert.True(request.StartsWith("GET http://releases.example.test/releases/latest/download/", StringComparison.Ordinal));
+            Assert.StartsWith("GET http://releases.example.test/releases/latest/download/", request, StringComparison.Ordinal);
             await cancellation.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await download);
             forwarding.ReleaseResponse();
@@ -336,7 +382,7 @@ public sealed class BorrowedOutboundProxyTests
             using var proxy = new OutboundProxy();
             HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{baseline.Port}" }, proxy);
             await using var route = new BorrowedOutboundRoute(home, proxy);
-            var lease = await route.AcquireAsync(Ct);
+            var lease = await route.AcquireAsync(TestContext.Current.CancellationToken);
             using var consumer = new HttpClient(proxy.CreateHandler());
             Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync("http://example.com/original-direct", Ct));
             HarnessSettings.SaveBorrowedOutboundMachine(home, invalidSelection);
@@ -365,7 +411,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task UnreachableSavedSelection_ReportsTheTransportFailure_WithoutClearingItOrUsingTheBaseline()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var unused = new TestForwardProxy();
         await using var baseline = new TestForwardProxy();
         var root = TempTree.CreateSocketDirectory("b80n");
@@ -398,7 +444,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task RealCli_UseAndDirect_PersistTheSelection_WithoutChangingTheBaselineOrDeployingTheSelectedMachine()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var first = new TestForwardProxy(keepAlive: true);
         await using var second = new TestForwardProxy(keepAlive: true);
         await using var baseline = new TestForwardProxy(keepAlive: true);
@@ -444,7 +490,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task SharedConsumers_SwitchReloadAndLastRelease_RetireOwnedSshButPreserveTheTargetHostAndPty()
     {
         var executable = FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var first = new TestForwardProxy(keepAlive: true);
         await using var second = new TestForwardProxy(keepAlive: true);
         var root = TempTree.CreateSocketDirectory("b80l");
@@ -506,7 +552,7 @@ public sealed class BorrowedOutboundProxyTests
     {
         var executable = FleetSshEndToEndTests.RequireEnvironment();
         var guard = FleetSshEndToEndTests.RealHomeGuard.Capture();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         var root = TempTree.CreateSocketDirectory("b80a");
         var remote = TempTree.CreateSocketDirectory("b80r");
         try
@@ -561,7 +607,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task FleetClients_ShareTheContextRoute_UntilTheLastAsyncConsumerDisposes()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var forwarding = new TestForwardProxy(keepAlive: true);
         var root = TempTree.CreateSocketDirectory("b80f");
         try
@@ -592,7 +638,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task CancellingASelectionDraft_DoesNotRetireAnotherConsumersRouteOrPersistTheDraft()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var first = new TestForwardProxy(keepAlive: true);
         await using var draft = new TestForwardProxy(pauseResponses: true);
         var root = TempTree.CreateSocketDirectory("b80d");
@@ -628,7 +674,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task Consumers_CancelIndependently_AndLastLeaseClosesTheSharedRoute()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var forwarding = new TestForwardProxy(keepAlive: true, pauseResponses: true);
         var root = TempTree.CreateSocketDirectory("b80c");
         try
@@ -677,7 +723,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task SelectAndReload_RetireOldBodiesAndCredentials_WithoutReplayingRequests()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var first = new TestForwardProxy(requiredCredential: "first:secret-a", keepAlive: true, pauseResponses: true);
         await using var second = new TestForwardProxy(requiredCredential: "second:secret-b", keepAlive: true);
         await using var baseline = new TestForwardProxy(keepAlive: true);
@@ -724,32 +770,46 @@ public sealed class BorrowedOutboundProxyTests
     }
 
     [Fact(Timeout = 90000)]
-    public async Task Selection_WriteFailureAndInvalidDraftPreserveTheExistingConsumerAndFile()
+    public async Task CandidatePublicationFailure_RetainsTheActiveGeneration_AndDisposesTheDraft()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        var cancellation = TestContext.Current.CancellationToken;
+        await using var ssh = await TestSshServer.StartAsync(cancellation);
         await using var first = new TestForwardProxy(keepAlive: true);
-        await using var second = new TestForwardProxy(keepAlive: true);
+        await using var second = new TestForwardProxy(keepAlive: true, pauseResponses: true);
         var root = TempTree.CreateSocketDirectory("b80w");
         try
         {
             var home = Configure(root, ssh, first, "A");
             new MachineStore(home).Upsert(ssh.Machine("B", root) with { OutboundTunnel = new("proxyCommand", $"http://127.0.0.1:{second.Port}") });
-            var original = await File.ReadAllTextAsync(home.SettingsFile, Ct);
+            var original = await File.ReadAllTextAsync(home.SettingsFile, cancellation);
+            var preserved = Path.Combine(root, "preserved-settings.yaml");
             using var proxy = new OutboundProxy();
             await using var route = new BorrowedOutboundRoute(home, proxy);
-            await using var lease = await route.AcquireAsync(Ct);
+            await using var lease = await route.AcquireAsync(cancellation);
             using var client = new HttpClient(proxy.CreateHandler());
-            Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync("http://example.com/before-save", Ct));
-            await Assert.ThrowsAsync<InvalidOperationException>(() => route.SelectAsync("missing", Ct));
-            Directory.CreateDirectory($"{home.SettingsFile}.tmp");
-            var failure = await Record.ExceptionAsync(() => route.SelectAsync("B", Ct));
-            Assert.True(failure is IOException or UnauthorizedAccessException);
-            Assert.True(original == await File.ReadAllTextAsync(home.SettingsFile, Ct), "A failed write must preserve the complete settings document.");
-            Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync("http://example.com/after-failed-save", Ct));
+            Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync("http://example.com/before-save", cancellation));
+            var failure = Record.ExceptionAsync(() => route.SelectAsync("B", cancellation));
+            try
+            {
+                Assert.Contains("route-validation", await second.WaitForRequestAsync(cancellation), StringComparison.Ordinal);
+                File.Move(home.SettingsFile, preserved);
+                Directory.CreateDirectory(home.SettingsFile);
+            }
+            finally
+            {
+                second.ReleaseResponse();
+            }
+            var error = await failure;
+            Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString());
+            Assert.Equal(original, await File.ReadAllTextAsync(preserved, cancellation));
+            Directory.Delete(home.SettingsFile);
+            File.Move(preserved, home.SettingsFile);
+            Assert.Equal("A", HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
+            Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync("http://example.com/after-failed-save", cancellation));
             Assert.Equal(1, first.Connections);
-            Assert.Contains(second.Requests, value => value.Contains("route-validation", StringComparison.Ordinal));
-            await FleetConnectionTests.WaitForAsync(() => second.ActiveConnections == 0);
+            await second.WaitForClosedConnectionAsync(cancellation);
+            Assert.Equal(0, second.ActiveConnections);
         }
         finally
         {
@@ -761,7 +821,7 @@ public sealed class BorrowedOutboundProxyTests
     public async Task InvalidSavedSelection_FailsClosed_AndNeverClearsOrFallsBackToBaseline()
     {
         FleetSshEndToEndTests.RequireEnvironment();
-        await using var ssh = await TestSshServer.StartAsync(Ct);
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var forwarding = new TestForwardProxy(keepAlive: true);
         await using var baseline = new TestForwardProxy(keepAlive: true);
         var root = TempTree.CreateSocketDirectory("b80i");

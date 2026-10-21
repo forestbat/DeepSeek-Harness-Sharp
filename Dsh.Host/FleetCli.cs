@@ -603,31 +603,21 @@ internal sealed record FleetCliContext(
     Func<HarnessHome, string, Task<int>> ResumeHarness,
     CancellationToken Cancellation) : IAsyncDisposable
 {
-    private readonly OutboundProxy _proxy = new();
     private BorrowedOutboundRoute? _outboundRoute;
-    private Task<IAsyncDisposable>? _outboundLease;
 
-    public BorrowedOutboundRoute OutboundRoute => _outboundRoute ??= new BorrowedOutboundRoute(Home, _proxy);
+    public BorrowedOutboundRoute OutboundRoute => _outboundRoute ??= new BorrowedOutboundRoute(Home, new OutboundProxy());
 
     public async ValueTask DisposeAsync()
     {
-        var routeDisposal = _outboundRoute?.DisposeAsync().AsTask();
+        if (_outboundRoute is not { } route)
+            return;
         try
         {
-            if (_outboundLease is not null)
-                await (await _outboundLease.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false);
+            await route.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
-            try
-            {
-                if (routeDisposal is not null)
-                    await routeDisposal.ConfigureAwait(false);
-            }
-            finally
-            {
-                _proxy.Dispose();
-            }
+            route.Proxy.Dispose();
         }
     }
 
@@ -635,17 +625,11 @@ internal sealed record FleetCliContext(
     public FleetOptions Options(bool deploy, bool startLocalHost)
     {
         var settings = Store.Load().Deploy;
-        if (_outboundLease is null && settings.Via != DownloadVia.Server)
-        {
-            var acquisition = OutboundRoute.AcquireAsync().AsTask();
-            acquisition.GetAwaiter().GetResult();
-            _outboundLease = acquisition;
-        }
         return new FleetOptions
         {
             ClientName = $"cli@{Environment.MachineName}",
             Deploy = deploy ? settings : settings with { AutoDeploy = false },
-            LocalProxy = _proxy,
+            // Only an actual local archive download acquires this home's borrowed route.
             LocalHome = Home,
             AutoReconnect = false,
             StartLocalHost = startLocalHost ? StartLocalHostAsync : null,

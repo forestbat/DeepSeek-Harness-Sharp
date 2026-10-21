@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Dsh.Boot;
 using Dsh.Fleet;
 using Dsh.RemoteHost;
@@ -128,8 +129,106 @@ public sealed class FleetSshEndToEndTests
         guard.AssertUnchanged();
     }
 
-    [Fact(Timeout = 360000)]
-    public async Task Remote_Download_Through_Real_Ssh_Proxy_Deploys_A_Working_Host()
+    [Theory(Timeout = 240000)]
+    [InlineData("missing", DownloadVia.Client)]
+    [InlineData("missing", DownloadVia.Auto)]
+    [InlineData("unavailable", DownloadVia.Client)]
+    [InlineData("unavailable", DownloadVia.Auto)]
+    public async Task Cli_ManagesTheRealSshTarget_WithAnInvalidLocalBorrowedRoute_ButClientDownloadFailsClosed(string selection, string via)
+    {
+        var executable = RequireEnvironment();
+        var guard = RealHomeGuard.Capture();
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
+        await using var targetProxy = new TestForwardProxy();
+        await using var localBaseline = new TestForwardProxy();
+        var targetHome = RealHostProcesses.CreateHome("fmrt");
+        var clientHome = RealHostProcesses.CreateHome("fmrc");
+        using var unavailable = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        unavailable.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        try
+        {
+            var machine = ssh.Machine("managed-target", targetHome);
+            var deployed = await new RemoteDsharpInstaller(new SshTransport(machine)).EnsureAsync(
+                new DeploySettings { Via = DownloadVia.Client }, null, Ct,
+                (_, rid, token) => BuildArchiveAsync(executable, rid, ssh.Root, token));
+            await using var host = await SshHostLauncher.ConnectAsync(machine, deployed.CommandPath, "cli-route-boundary", Ct);
+            var original = await host.Client.Network.GetOutboundAsync(Ct);
+            var identity = LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(targetHome));
+            Assert.NotNull(identity);
+            var home = new HarnessHome(clientHome);
+            var store = new MachineStore(home);
+            store.Upsert(machine);
+            var port = ((IPEndPoint)unavailable.LocalEndPoint!).Port;
+            store.Upsert(ssh.Machine("unavailable", clientHome) with
+            {
+                Port = port,
+                OutboundTunnel = new("proxyCommand", $"http://127.0.0.1:{port}"),
+            });
+            store.Save(store.Load() with
+            {
+                Deploy = new DeploySettings { Via = via, ReleaseBaseUrl = "http://releases.example.test/releases" },
+            });
+            using var baseline = new Dsh.Runtime.OutboundProxy();
+            HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{localBaseline.Port}" }, baseline);
+            HarnessSettings.SaveBorrowedOutboundMachine(home, selection);
+            var localBefore = await File.ReadAllTextAsync(home.SettingsFile, Ct);
+
+            var tested = await FleetCliProcess.RunAsync(executable, clientHome, "machine", "test", machine.Name);
+            Assert.True(tested.ExitCode == 0, tested.Error);
+            Assert.Contains($"host {RemoteHostServer.ReleaseVersion}", tested.Output, StringComparison.Ordinal);
+            Assert.Contains($"harness home {targetHome}", tested.Output, StringComparison.Ordinal);
+            var shown = await FleetRemoteProxyTests.RunCliAsync(clientHome, null, Ct, "machine", "proxy", machine.Name, "show");
+            Assert.True(shown.ExitCode == 0, shown.Error);
+            var shownState = JsonSerializer.Deserialize(shown.Output, NetworkProtocolJsonContext.Default.RemoteOutboundProxyState)!;
+            Assert.Equal((original.OwnerId, targetHome, original.Revision), (shownState.OwnerId, shownState.HostHome, shownState.Revision));
+            var targetUrl = $"http://127.0.0.1:{targetProxy.Port}";
+            var saved = await FleetRemoteProxyTests.RunCliAsync(clientHome, $$"""{"url":"{{targetUrl}}"}""", Ct,
+                "machine", "proxy", machine.Name, "set", "--json-stdin");
+            Assert.True(saved.ExitCode == 0, saved.Error);
+            var live = await host.Client.Network.GetOutboundAsync(Ct);
+            Assert.Equal((original.OwnerId, targetHome, targetUrl), (live.OwnerId, live.HostHome, live.Settings.Url));
+            Assert.NotEqual(original.Revision, live.Revision);
+            Assert.Equal(targetUrl, HarnessSettings.Load(new HarnessHome(targetHome)).Network?.OutboundProxy?.Url);
+            const string probe = "http://1.1.1.1/managed-target";
+            var probed = await FleetRemoteProxyTests.RunCliAsync(clientHome, null, Ct,
+                "machine", "proxy", machine.Name, "test", "--probe-url", probe);
+            Assert.True(probed.ExitCode == 0, probed.Error);
+            Assert.Equal([$"GET {probe} HTTP/1.1"], targetProxy.Requests);
+            Assert.Equal(live.Revision, (await host.Client.Network.GetOutboundAsync(Ct)).Revision);
+            var cleared = await FleetRemoteProxyTests.RunCliAsync(clientHome, null, Ct, "machine", "proxy", machine.Name, "clear");
+            Assert.True(cleared.ExitCode == 0, cleared.Error);
+            Assert.Null((await host.Client.Network.GetOutboundAsync(Ct)).Settings.Url);
+            Assert.Null(HarnessSettings.Load(new HarnessHome(targetHome)).Network?.OutboundProxy);
+            Assert.Equal(localBefore, await File.ReadAllTextAsync(home.SettingsFile, Ct));
+
+            store.Save(store.Load() with { Deploy = store.Load().Deploy with { Via = DownloadVia.Client } });
+            var rejected = await FleetCliProcess.RunAsync(executable, clientHome, "machine", "deploy", machine.Name, "--force");
+            Assert.NotEqual(0, rejected.ExitCode);
+            Assert.Contains("正在准备", rejected.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("正在上传", rejected.Error, StringComparison.Ordinal);
+            if (selection == "missing")
+                Assert.Contains("The selected outbound machine does not exist.", rejected.Error, StringComparison.Ordinal);
+            Assert.Equal(selection, HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
+            Assert.Empty(localBaseline.Requests);
+            Assert.True(await host.Client.PingAsync(Ct) > 0);
+            Assert.True(identity == LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(targetHome)),
+                "Management and a rejected local download must preserve the authenticated target Host.");
+            Assert.Equal(RemoteHostServer.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(ssh.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
+        }
+        finally
+        {
+            RealHostProcesses.KillAll(targetHome);
+            RealHostProcesses.KillAll(clientHome);
+            TempTree.Delete(targetHome);
+            TempTree.Delete(clientHome);
+        }
+        guard.AssertUnchanged();
+    }
+
+    [Theory(Timeout = 360000)]
+    [InlineData(DownloadVia.Server)]
+    [InlineData(DownloadVia.Auto)]
+    public async Task Remote_Download_Through_Real_Ssh_Proxy_Deploys_A_Working_Host_DespiteInvalidLocalBorrowedSelection(string via)
     {
         var executable = RequireEnvironment();
         if (!File.Exists("/usr/bin/curl") && !File.Exists("/usr/bin/wget"))
@@ -137,12 +236,19 @@ public sealed class FleetSshEndToEndTests
         var guard = RealHomeGuard.Capture();
         await using var server = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         var harness = TempTree.CreateSocketDirectory("fd");
+        var clientHome = RealHostProcesses.CreateHome("fdr");
+        await using var localBaseline = new TestForwardProxy();
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         using var transferCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         try
         {
             var direct = server.Machine("download-proxy", harness);
+            var home = new HarnessHome(clientHome);
+            using var baseline = new Dsh.Runtime.OutboundProxy();
+            HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = $"http://127.0.0.1:{localBaseline.Port}" }, baseline);
+            HarnessSettings.SaveBorrowedOutboundMachine(home, "missing");
+            var localBefore = await File.ReadAllTextAsync(home.SettingsFile, Ct);
             // Another authenticated SSH connection to the real sshd proxies direct-tcpip, not an echo stand-in.
             var proxy = $"ssh -T -p {direct.Port} -i {RemoteShell.Quote(direct.KeyPath!)} {string.Join(' ', direct.SshOptions!.Select(option => $"-o {RemoteShell.Quote(option)}"))} -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o IdentitiesOnly=yes -W %h:%p {direct.User}@{direct.Host}";
             var machine = direct with { Proxy = proxy };
@@ -151,11 +257,11 @@ public sealed class FleetSshEndToEndTests
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             var settings = new DeploySettings
             {
-                Via = DownloadVia.Server,
+                Via = via,
                 ReleaseBaseUrl = $"http://127.0.0.1:{port}/releases",
             };
             var transport = new SshTransport(machine);
-            var deployed = await new RemoteDsharpInstaller(transport).EnsureAsync(settings, null, Ct);
+            var deployed = await new RemoteDsharpInstaller(transport).EnsureAsync(settings, null, Ct, localHome: home);
             await serving;
             Assert.False(deployed.AlreadyPresent);
             Assert.Equal(RemoteHostServer.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(server.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
@@ -163,17 +269,20 @@ public sealed class FleetSshEndToEndTests
             Assert.Equal(harness, (await connection.Client.InfoAsync(Ct)).HomeRoot);
             await connection.Client.PingAsync(Ct);
             Assert.False(Directory.Exists(Path.Combine(server.Home, ".config", "systemd", "user")));
+            Assert.Equal(localBefore, await File.ReadAllTextAsync(home.SettingsFile, Ct));
+            Assert.Empty(localBaseline.Requests);
         }
         finally
         {
             transferCancellation.Cancel();
             RealHostProcesses.KillAll(harness);
             TempTree.Delete(harness);
+            TempTree.Delete(clientHome);
         }
         guard.AssertUnchanged();
     }
 
-    private static async Task ServeReleaseAsync(TcpListener listener, string archive, CancellationToken cancellationToken)
+    internal static async Task ServeReleaseAsync(TcpListener listener, string? archive, CancellationToken cancellationToken)
     {
         using var client = await listener.AcceptTcpClientAsync(cancellationToken);
         await using var stream = client.GetStream();
@@ -182,6 +291,13 @@ public sealed class FleetSshEndToEndTests
         Assert.Equal($"GET /releases/latest/download/{RemoteDsharpInstaller.AssetName(Rid)} HTTP/1.1", request);
         while (await reader.ReadLineAsync(cancellationToken) is { Length: > 0 })
         {
+        }
+        if (archive is null)
+        {
+            await using var missing = new StreamWriter(stream, leaveOpen: true);
+            await missing.WriteAsync("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            await missing.FlushAsync(cancellationToken);
+            return;
         }
         await using var file = File.OpenRead(archive);
         await using (var writer = new StreamWriter(stream, leaveOpen: true))
@@ -388,4 +504,75 @@ internal sealed class TestSshServer : IAsyncDisposable
 
     private Task WaitListeningAsync(CancellationToken cancellationToken)
         => _listening.Task.WaitAsync(StartTimeout, cancellationToken);
+}
+
+/// <summary>Holds an actual SSH ProxyCommand before target authentication, using a private control socket rather than a fabricated SSH handshake.</summary>
+internal sealed class SshAuthenticationGate : IAsyncDisposable
+{
+    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private TcpClient? _control;
+
+    public SshAuthenticationGate() => _listener.Start();
+
+    public string? AskPass { get; private set; }
+
+    public MachineSpec Wrap(MachineSpec machine)
+    {
+        Assert.True(File.Exists("/bin/bash"), "The real authentication gate requires POSIX bash.");
+        var port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        var options = string.Join(' ', (machine.SshOptions ?? []).Select(option => $"-o {RemoteShell.Quote(option)}"));
+        var onward = $"exec ssh -T -F /dev/null -p {machine.Port} -i {RemoteShell.Quote(machine.KeyPath!)} {options} -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -W %h:%p {RemoteShell.Quote($"{machine.User}@{machine.Host}")}";
+        var command = $"exec 3<>/dev/tcp/127.0.0.1/{port}; printf '%%s\\n' \"$SSH_ASKPASS\" >&3; IFS= read -r release <&3; exec 3>&-; {onward}";
+        return machine with
+        {
+            Auth = SshAuth.Password,
+            Password = "synthetic-gate-password",
+            Proxy = $"/bin/bash -c {RemoteShell.Quote(command)}",
+            SshOptions = [.. machine.SshOptions ?? [], $"IdentityFile={machine.KeyPath}", "PreferredAuthentications=publickey", "IdentitiesOnly=yes", "IdentityAgent=none"],
+        };
+    }
+
+    public async Task WaitForBlockedAuthenticationAsync(Task pending, CancellationToken cancellationToken)
+    {
+        _control?.Dispose();
+        _control = null;
+        AskPass = null;
+        using var handshakeLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var blocked = ReadHandshakeAsync(handshakeLifetime.Token);
+        if (await Task.WhenAny(blocked, pending) == pending)
+        {
+            await handshakeLifetime.CancelAsync();
+            try
+            {
+                await blocked;
+            }
+            catch (OperationCanceledException) when (handshakeLifetime.IsCancellationRequested)
+            {
+            }
+            await pending;
+            Assert.Fail("The actual request completed before reaching the SSH authentication gate.");
+        }
+        await blocked;
+    }
+
+    private async Task ReadHandshakeAsync(CancellationToken cancellationToken)
+    {
+        _control = await _listener.AcceptTcpClientAsync(cancellationToken);
+        using var reader = new StreamReader(_control.GetStream(), leaveOpen: true);
+        AskPass = await reader.ReadLineAsync(cancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(AskPass), "The actual pending SSH must identify its authentication-owned askpass.");
+    }
+
+    public async Task ReleaseAsync(CancellationToken cancellationToken)
+    {
+        Assert.NotNull(_control);
+        await _control.GetStream().WriteAsync("continue\n"u8.ToArray(), cancellationToken);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _control?.Dispose();
+        _listener.Stop();
+        return ValueTask.CompletedTask;
+    }
 }

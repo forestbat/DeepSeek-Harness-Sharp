@@ -3,6 +3,9 @@ using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Interaction;
 using Dsh.Runtime;
+using Dsh.Fleet;
+using System.Diagnostics;
+using System.IO.Pipes;
 
 namespace Dsh.Tests;
 
@@ -102,7 +105,9 @@ public sealed class NetworkSettingsPersistenceTests
     {
         var original = $"{Prefix}network: {{outbound_proxy: {{url: '{FirstProxy}', bypass: [keep.example]}}, canary: keep}}{Suffix}";
         await using var fixture = await Fixture.CreateAsync(original);
-        Directory.CreateDirectory($"{fixture.Home.SettingsFile}.tmp");
+        var snapshot = Path.Combine(fixture.Home.Root, "preserved.yaml");
+        File.Move(fixture.Home.SettingsFile, snapshot);
+        Directory.CreateDirectory(fixture.Home.SettingsFile);
         var changes = 0;
         fixture.Facade.Changed += () => changes++;
 
@@ -110,7 +115,8 @@ public sealed class NetworkSettingsPersistenceTests
 
         Assert.NotNull(error);
         Assert.True(error is IOException or UnauthorizedAccessException, error.ToString());
-        Assert.Equal(original, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        Assert.True(Directory.Exists(fixture.Home.SettingsFile));
+        Assert.Equal(original, await File.ReadAllTextAsync(snapshot, TestContext.Current.CancellationToken));
         Assert.Equal(new Uri(FirstProxy), fixture.Proxy.Address);
         Assert.Null(fixture.Proxy.ProxyFor(new Uri("https://keep.example/")));
         Assert.Equal(0, changes);
@@ -277,6 +283,260 @@ public sealed class NetworkSettingsPersistenceTests
         finally
         {
             TempTree.Delete(root);
+        }
+    }
+
+    [Fact]
+    public void StaleLoadedSettings_SaveOnlyTheirEdits_AcrossRepeatedSaves()
+    {
+        var root = TempTree.CreateSocketDirectory("nps");
+        try
+        {
+            var home = new HarnessHome(root);
+            File.WriteAllText(home.SettingsFile, $"{Prefix}network: {{canary: keep}}{Suffix}");
+            var settings = HarnessSettings.Load(home);
+            HarnessSettings.SaveBorrowedOutboundMachine(home, "first-machine");
+            settings.GlobalDefaultModel = "provider/first";
+            settings.Save(home);
+            Assert.Equal("first-machine", HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
+
+            HarnessSettings.SaveBorrowedOutboundMachine(home, "second-machine");
+            settings.CompactionModel = "provider/compact";
+            settings.Save(home);
+            var saved = HarnessSettings.Load(home);
+            Assert.Equal("provider/first", saved.GlobalDefaultModel);
+            Assert.Equal("provider/compact", saved.CompactionModel);
+            Assert.Equal("second-machine", saved.Network?.BorrowedOutboundMachine);
+            Assert.Contains("canary: keep", File.ReadAllText(home.SettingsFile));
+
+            var destination = new HarnessHome(Path.Combine(root, "destination"));
+            Directory.CreateDirectory(destination.Root);
+            File.WriteAllText(destination.SettingsFile, $"{Prefix}network: {{borrowed_outbound_machine: destination-machine}}{Suffix}");
+            settings.Save(destination);
+            var copied = HarnessSettings.Load(destination);
+            Assert.Equal("provider/first", copied.GlobalDefaultModel);
+            Assert.Equal("provider/compact", copied.CompactionModel);
+            Assert.Null(copied.Network?.BorrowedOutboundMachine);
+            Assert.Equal("second-machine", HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
+
+            new HarnessSettings { GlobalDefaultModel = "provider/full" }.Save(home);
+            saved = HarnessSettings.Load(home);
+            Assert.Equal("provider/full", saved.GlobalDefaultModel);
+            Assert.Null(saved.Network);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Theory(Timeout = 90000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentProcesses_PreserveNetworkChildrenAndCompleteDocument_WithoutBlockingOtherHomes(bool independentHome)
+    {
+        var root = TempTree.CreateSocketDirectory("npc");
+        var otherRoot = TempTree.CreateSocketDirectory("npi");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        var cancellation = deadline.Token;
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var children = new List<SettingsWriterProcess>();
+        Task? publication = null;
+        try
+        {
+            var home = new HarnessHome(root);
+            var writerRoot = independentHome ? otherRoot : Path.Combine(root, ".");
+            var writerHome = new HarnessHome(OperatingSystem.IsWindows() ? writerRoot.ToUpperInvariant() : writerRoot);
+            var original = $"{Prefix}network: {{canary: {{nested: [one, two]}}}} # keep network{Suffix}";
+            File.WriteAllText(home.SettingsFile, original);
+            if (independentHome)
+                File.WriteAllText(writerHome.SettingsFile, original);
+            var settings = HarnessSettings.Load(home);
+            settings.Plugins["transaction-owner"] = new PluginSetting { Parameters = new() { ["values"] = PausedValues() } };
+            publication = Task.Run(() => settings.SavePlugins(home), CancellationToken.None);
+            await entered.Task.WaitAsync(cancellation);
+
+            foreach (var role in new[] { "borrowed", "proxy", "fleet-one", "fleet-two", "save" })
+                children.Add(await SettingsWriterProcess.StartAsync(writerHome, role, cancellation));
+            var completed = Task.WhenAll(children.Select(child => child.Saved));
+            if (independentHome)
+                await completed.WaitAsync(cancellation);
+            else
+            {
+                var firstSaved = Task.WhenAny(children.Select(child => child.Saved));
+                var exclusionWindow = Task.Delay(TimeSpan.FromSeconds(1), cancellation);
+                Assert.Same(exclusionWindow, await Task.WhenAny(firstSaved, exclusionWindow));
+            }
+            release.Set();
+            await publication.WaitAsync(cancellation);
+            await completed.WaitAsync(cancellation);
+            foreach (var child in children)
+                await child.AssertSuccessAsync(cancellation);
+
+            var saved = HarnessSettings.Load(writerHome);
+            Assert.Equal("selected-machine", saved.Network?.BorrowedOutboundMachine);
+            Assert.Equal(SecondProxy, saved.Network?.OutboundProxy?.Url);
+            Assert.Equal("provider/process", saved.GlobalDefaultModel);
+            Assert.Equal(["fleet-one", "fleet-two"], new MachineStore(writerHome).Load().Machines.Select(machine => machine.Name).Order().ToArray());
+            var text = File.ReadAllText(writerHome.SettingsFile);
+            Assert.Contains("canary: {nested: [one, two]}", text);
+            Assert.Contains("# keep network", text);
+            Assert.Contains("custom_root: [keep, me]", text);
+            Assert.Contains("# keep fleet", text);
+            Assert.Equal(text.ReplaceLineEndings("\r\n"), text);
+            Assert.True(HarnessSettings.Load(home).Plugins.ContainsKey("transaction-owner"));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(writerHome.SettingsFile));
+        }
+        finally
+        {
+            release.Set();
+            try
+            {
+                if (publication is not null)
+                    await publication.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+            }
+            finally
+            {
+                try
+                {
+                    await Task.WhenAll(children.Select(child => child.DisposeAsync().AsTask()));
+                }
+                finally
+                {
+                    TempTree.Delete(root);
+                    TempTree.Delete(otherRoot);
+                }
+            }
+        }
+
+        IEnumerable<object?> PausedValues()
+        {
+            entered.SetResult();
+            if (!release.Wait(TimeSpan.FromSeconds(60), cancellation))
+                throw new TimeoutException("The settings publication was not released.");
+            yield return "preserved";
+        }
+    }
+
+    [Fact(Explicit = true, Timeout = 90000)]
+    public async Task SettingsWriterChild_UsesProductionSaves()
+    {
+        var pipeName = Environment.GetEnvironmentVariable("DSH_SETTINGS_TEST_PIPE");
+        if (pipeName is null)
+            Assert.Skip("This entry point is run only by an isolated settings writer process.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(deadline.Token);
+        await using var writer = new StreamWriter(pipe) { AutoFlush = true };
+        await writer.WriteLineAsync("ready");
+        var home = new HarnessHome(Environment.GetEnvironmentVariable(HarnessHome.HomeEnv)!);
+        switch (Environment.GetEnvironmentVariable("DSH_SETTINGS_TEST_ROLE"))
+        {
+            case "borrowed":
+                HarnessSettings.SaveBorrowedOutboundMachine(home, "selected-machine");
+                break;
+            case "proxy":
+                using (var proxy = new OutboundProxy())
+                    HarnessSettings.SaveOutboundProxy(home, new OutboundProxySettings { Url = SecondProxy }, proxy);
+                break;
+            case "fleet-one":
+            case "fleet-two":
+                new MachineStore(home).Upsert(new MachineSpec(Environment.GetEnvironmentVariable("DSH_SETTINGS_TEST_ROLE")!, MachineKinds.Ssh, "example.invalid"));
+                break;
+            case "save":
+                var settings = HarnessSettings.Load(home);
+                settings.GlobalDefaultModel = "provider/process";
+                settings.Save(home);
+                break;
+            default:
+                throw new InvalidOperationException("Unknown settings writer role.");
+        }
+        await writer.WriteLineAsync("saved");
+    }
+
+    private sealed class SettingsWriterProcess : IAsyncDisposable
+    {
+        private readonly Process _process;
+        private readonly NamedPipeServerStream _pipe;
+        private readonly StreamReader _reader;
+        private readonly Task<string> _stdout;
+        private readonly Task<string> _stderr;
+
+        private SettingsWriterProcess(Process process, NamedPipeServerStream pipe)
+        {
+            _process = process;
+            _pipe = pipe;
+            _reader = new StreamReader(pipe);
+            _stdout = process.StandardOutput.ReadToEndAsync();
+            _stderr = process.StandardError.ReadToEndAsync();
+        }
+
+        public Task<string?> Saved { get; private set; } = Task.FromResult<string?>(null);
+
+        public static async Task<SettingsWriterProcess> StartAsync(HarnessHome home, string role, CancellationToken cancellation)
+        {
+            var name = OperatingSystem.IsWindows()
+                ? $"dsh-settings-test-{Guid.NewGuid():N}"
+                : Path.Combine(home.Root, role);
+            if (!OperatingSystem.IsWindows())
+                TempTree.AssertFitsMacOsSocketLimit(name);
+            var pipe = new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            var executable = Path.Combine(AppContext.BaseDirectory, $"{typeof(NetworkSettingsPersistenceTests).Assembly.GetName().Name}{(OperatingSystem.IsWindows() ? ".exe" : "")}");
+            var start = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in new[] { "-method", $"{typeof(NetworkSettingsPersistenceTests).FullName}.{nameof(SettingsWriterChild_UsesProductionSaves)}", "-explicit", "on", "-parallelMode", "none", "-trait-", "Category=LlmSmoke" })
+                start.ArgumentList.Add(argument);
+            start.Environment[HarnessHome.HomeEnv] = home.Root;
+            start.Environment["DSH_SETTINGS_TEST_PIPE"] = name;
+            start.Environment["DSH_SETTINGS_TEST_ROLE"] = role;
+            var child = new SettingsWriterProcess(Process.Start(start)!, pipe);
+            try
+            {
+                await pipe.WaitForConnectionAsync(cancellation);
+                Assert.Equal("ready", await child._reader.ReadLineAsync(cancellation));
+                child.Saved = child._reader.ReadLineAsync(cancellation).AsTask();
+                return child;
+            }
+            catch
+            {
+                await child.DisposeAsync();
+                throw;
+            }
+        }
+
+        public async Task AssertSuccessAsync(CancellationToken cancellation)
+        {
+            Assert.Equal("saved", await Saved.WaitAsync(cancellation));
+            await _process.WaitForExitAsync(cancellation);
+            Assert.Equal(0, _process.ExitCode);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!_process.HasExited)
+            {
+                try
+                {
+                    _process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException) when (_process.HasExited)
+                {
+                }
+            }
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await _process.WaitForExitAsync(deadline.Token);
+            await Task.WhenAll(_stdout, _stderr).WaitAsync(deadline.Token);
+            _reader.Dispose();
+            await _pipe.DisposeAsync();
+            _process.Dispose();
         }
     }
 

@@ -3,6 +3,8 @@ using Dsh.Runtime;
 using System.Text.Encodings.Web;
 using Dsh.Runtime.Logging;
 using YamlDotNet.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Dsh.Boot;
 
@@ -61,6 +63,9 @@ public sealed class HarnessSettings
     [YamlIgnore]
     public Dictionary<string, PluginSetting> Plugins { get; set; } = [];
 
+    private string? _savedDocument;
+    private string? _savedPath;
+
     private const string MinimalSettingsTemplate = """
         global_default_model: deepseek-official/deepseek-v4-flash
         compaction_model: deepseek-official/deepseek-v4-flash
@@ -78,13 +83,21 @@ public sealed class HarnessSettings
 
     public static HarnessSettings Load(HarnessHome home)
     {
-        var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
-        if (!File.Exists(path))
-            SettingsFilePermissions.Write(path, LoadTemplate());
-        var text = ReadSettingsTextShared(path);
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath, initialize: true);
+    }
+
+    private static HarnessSettings LoadSnapshot(string path, string canonicalPath, bool initialize)
+    {
+        var exists = File.Exists(path);
+        var text = exists ? ReadSettingsTextShared(path) : LoadTemplate();
+        if (!exists && initialize)
+            WriteAtomic(path, text);
         var settings = Parse(text);
         settings.Plugins = PluginSettingsSection.ParseDocument(text);
+        settings._savedDocument = text;
+        settings._savedPath = canonicalPath;
         return settings;
     }
 
@@ -95,34 +108,68 @@ public sealed class HarnessSettings
             .Build()
             .Deserialize<HarnessSettings>(text);
 
-    /** 只改写与文件现状不同的顶层段:注释、生成块、未知键与 plugins 段保持原文。 */
+    /** Runs a synchronous mutation under one cross-process transaction; false leaves the document unchanged. */
+    public static bool Update(HarnessHome home, Func<HarnessSettings, bool> update)
+    {
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        var settings = LoadSnapshot(home.SettingsFile, transaction.CanonicalPath, initialize: false);
+        if (!update(settings))
+            return false;
+        Directory.CreateDirectory(home.Root);
+        settings.SaveSnapshot(home.SettingsFile, transaction.CanonicalPath);
+        return true;
+    }
+
+    /** Initializes a migration destination without racing another settings writer or locking the source. */
+    internal static void CopyIfMissing(HarnessHome source, HarnessHome destination)
+    {
+        using var transaction = new SettingsWriteLock(destination.SettingsFile);
+        if (!File.Exists(destination.SettingsFile) && File.Exists(source.SettingsFile))
+            WriteAtomic(destination.SettingsFile, ReadSettingsTextShared(source.SettingsFile));
+    }
+
+    /** Applies the caller's changed top-level sections without reverting other writers' unchanged sections. */
     public void Save(HarnessHome home)
     {
-        var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        SaveSnapshot(home.SettingsFile, transaction.CanonicalPath);
+    }
+
+    private void SaveSnapshot(string path, string canonicalPath)
+    {
         // Strings that read back as another type (a password "null", a key "123") are quoted, or they would not round-trip.
         var serializer = new StaticSerializerBuilder(new DshYamlStaticContext())
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .WithQuotingNecessaryStrings()
             .Build();
         var text = serializer.Serialize(this);
-        if (!File.Exists(path))
+        var existing = File.Exists(path) ? ReadSettingsTextShared(path) : _savedPath == canonicalPath ? _savedDocument : null;
+        if (existing is null)
         {
             WriteAtomic(path, text);
+            _savedDocument = text;
+            _savedPath = canonicalPath;
             return;
         }
-        var existing = ReadSettingsTextShared(path);
-        WriteAtomic(path, SettingsDocument.MergeTopLevel(existing, serializer.Serialize(Parse(existing)), text));
+        var previous = _savedPath == canonicalPath ? _savedDocument ?? existing : existing;
+        var updated = SettingsDocument.MergeTopLevel(existing, serializer.Serialize(Parse(previous)), text);
+        _ = Parse(updated);
+        WriteAtomic(path, updated);
+        _savedDocument = text;
+        _savedPath = canonicalPath;
     }
 
     public void SavePlugins(HarnessHome home)
     {
         var path = Path.Combine(home.Root, "settings.yaml");
         Directory.CreateDirectory(home.Root);
-        if (!File.Exists(path))
-            SettingsFilePermissions.Write(path, LoadTemplate());
-        var text = ReadSettingsTextShared(path);
-        WriteAtomic(path, SettingsDocument.ReplacePluginsBlock(text, SettingsDocument.RenderPlugins(Plugins)));
+        using var transaction = new SettingsWriteLock(path);
+        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
+        _ = Parse(text);
+        var updated = SettingsDocument.ReplacePluginsBlock(text, SettingsDocument.RenderPlugins(Plugins));
+        _ = Parse(updated);
+        WriteAtomic(path, updated);
     }
 
     /** Validate independently, persist only the owned child, then publish the route to existing clients. */
@@ -138,6 +185,7 @@ public sealed class HarnessSettings
             .Serialize(value).TrimEnd();
         var path = home.SettingsFile;
         Directory.CreateDirectory(home.Root);
+        using var transaction = new SettingsWriteLock(path);
         var existing = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
         _ = Parse(existing);
         var updated = SettingsDocument.ReplaceMappingChild(existing, "network", "outbound_proxy", serialized);
@@ -152,6 +200,7 @@ public sealed class HarnessSettings
         var serialized = machine is null ? null : $"\"{JavaScriptEncoder.Default.Encode(machine)}\"";
         var path = home.SettingsFile;
         Directory.CreateDirectory(home.Root);
+        using var transaction = new SettingsWriteLock(path);
         var existing = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
         _ = Parse(existing);
         var updated = SettingsDocument.ReplaceMappingChild(existing, "network", "borrowed_outbound_machine", serialized);
@@ -170,12 +219,60 @@ public sealed class HarnessSettings
     /** 先写同目录临时文件再改名,避免进程中断留下半截配置; settings.yaml 一律收紧为仅属主可读写。 */
     private static void WriteAtomic(string path, string content)
     {
-        var temporary = $"{path}.tmp";
-        SettingsFilePermissions.Write(temporary, content);
-        if (File.Exists(path))
-            File.Replace(temporary, path, destinationBackupFileName: null);
-        else
-            File.Move(temporary, path);
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            SettingsFilePermissions.Write(temporary, content);
+            if (File.Exists(path))
+                File.Replace(temporary, path, destinationBackupFileName: null);
+            else
+                File.Move(temporary, path);
+        }
+        finally
+        {
+            File.Delete(temporary);
+        }
+    }
+
+    /** The mutex covers the document, not just its rename; unrelated homes never share a lock. */
+    private sealed class SettingsWriteLock : IDisposable
+    {
+        private readonly Mutex _mutex;
+
+        public string CanonicalPath { get; }
+
+        public SettingsWriteLock(string path)
+        {
+            var canonical = Path.GetFullPath(path);
+            if (OperatingSystem.IsWindows())
+                canonical = canonical.ToUpperInvariant();
+            CanonicalPath = canonical;
+            var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+            _mutex = new Mutex(false, $"Dsh.Settings.{digest}", new NamedWaitHandleOptions
+            {
+                CurrentUserOnly = true,
+                CurrentSessionOnly = false,
+            });
+            try
+            {
+                _mutex.WaitOne();
+            }
+            catch (AbandonedMutexException)
+            {
+                // The prior writer exited; atomic publication left either the old or the new document.
+            }
+            catch
+            {
+                _mutex.Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            _mutex.ReleaseMutex();
+            _mutex.Dispose();
+        }
     }
 
     public (string Provider, string Model)? ResolveDefaultModel() => ParseModelRoute(GlobalDefaultModel);

@@ -95,12 +95,9 @@ public static class HarnessStorage
 
     private static void CopySettingsIfMissing(HarnessHome from, HarnessHome to)
     {
-        if (File.Exists(to.SettingsFile) || !File.Exists(from.SettingsFile))
-            return;
         try
         {
-            File.Copy(from.SettingsFile, to.SettingsFile);
-            SettingsFilePermissions.Restrict(to.SettingsFile);
+            HarnessSettings.CopyIfMissing(from, to);
         }
         catch (IOException)
         {

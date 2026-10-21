@@ -28,7 +28,7 @@ public sealed class IrohReceiverTests
         }
     }
 
-    [Theory]
+    [Theory(Timeout = 30000)]
     [InlineData(false, false, true)]
     [InlineData(true, false, false)]
     [InlineData(false, true, false)]
@@ -40,10 +40,18 @@ public sealed class IrohReceiverTests
             return;
         }
         var root = TempTree.CreateDirectory("iroh-owned-process");
-        using var receiver = Process.Start("/bin/sleep", ["120"])!;
+        using var receiver = Process.Start(new ProcessStartInfo("/bin/cat")
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+        })!;
         using var unrelated = Process.Start("/bin/sleep", ["120"])!;
         try
         {
+            const string ReadyLine = "receiver-ready";
+            await receiver.StandardInput.WriteLineAsync(ReadyLine.AsMemory(), TestContext.Current.CancellationToken);
+            Assert.Equal(ReadyLine, await receiver.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken));
             var home = new HarnessHome(root);
             var state = IrohReceiver.ReceiverRoot(home);
             Directory.CreateDirectory(state);
@@ -67,8 +75,8 @@ public sealed class IrohReceiverTests
                 receiver.Kill();
             if (!unrelated.HasExited)
                 unrelated.Kill();
-            await receiver.WaitForExitAsync(TestContext.Current.CancellationToken);
-            await unrelated.WaitForExitAsync(TestContext.Current.CancellationToken);
+            await receiver.WaitForExitAsync(CancellationToken.None);
+            await unrelated.WaitForExitAsync(CancellationToken.None);
             TempTree.Delete(root);
         }
     }

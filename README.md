@@ -286,15 +286,21 @@ network:
     bypass: [example.com, "*.example.org"]
 ```
 
-### 通过 SSH 命令流借用远端代理
+### 通过 SSH 借用远端代理
 
-已保存的 SSH 或 SSH-over-iroh 机器可配置独立的 `outboundTunnel`，通过受管 `ssh -T -W` 字节流访问远端 TCP 代理。
+已保存的 SSH 或 SSH-over-iroh 机器可配置独立的 `outboundTunnel`，通过 `proxyCommand` 的受管 `ssh -T -W` 字节流，或 `localForward` 的受管 `ssh -N -L` 本地转发访问远端 TCP 代理。
 远端只需可用的 SSH 和代理，不要求安装 `dsharp` 或启动 Host；这与设置目标 Host 自身出口的 `machine proxy` 命令不同。
 
 保存 `outbound-tunnel.json`，内容例如：
 
 ```json
 {"mode":"proxyCommand","proxyUrl":"http://127.0.0.1:7890"}
+```
+
+需要本地监听时，可将同一文件写为：
+
+```json
+{"mode":"localForward","proxyUrl":"http://127.0.0.1:7890","localPort":17890}
 ```
 
 ```bash
@@ -307,15 +313,21 @@ PowerShell 中保存时使用 `Get-Content -Raw .\outbound-tunnel.json | dsharp 
 `proxyUrl` 从远端视角解析，`127.0.0.1` 指该 SSH 机器；支持 HTTP、HTTPS、SOCKS4/4a/5，并保留代理的原始主机名、TLS 校验和认证。
 含认证信息的 URL 只通过 stdin 输入，输入文件应仅自己可读并加入 `.gitignore`，不要放进命令参数、提交或评论。
 
-配置保存在 `fleet.machines[].outboundTunnel`，也可直接填写 `mode: proxyCommand` 和 `proxyUrl`；两项必须同时有效。
-本机机器不接受此配置；`proxyCommand` 不接受 `localPort`，`localForward` 模式明确返回尚不支持。
+配置保存在 `fleet.machines[].outboundTunnel`，也可直接填写 `mode` 和 `proxyUrl`；两项必须同时有效。
+本机机器不接受此配置；`proxyCommand` 不接受 `localPort`，`localForward` 的 `localPort` 可省略或设为 1 至 65535。
 它不会修改 `network.outbound_proxy`、机器的 SSH `proxy`、`fleet.deploy.serverProxy` 或其他机器；`clear` 只删除该机器的 `outboundTunnel`。
 保存配置本身不会将 TUI、GUI 或其它请求切换到借用出口；这里的 `test` 使用独立、用完即释放的出口实例。
+
+`localForward` 仅监听客户端的 `127.0.0.1`，逻辑代理主机名、认证和 TLS 身份仍取自 `proxyUrl`。
+省略 `localPort` 时向 OS 申请一次候选端口；固定端口被占用或候选交接冲突时明确失败，不抢占、不杀占用者，也不循环更换端口，只有下一独立操作才能重建。
+临时端口、SSH PID 和 askpass 不写入配置。
+同一路由代际内复用一个受管 SSH 进程，每个 TCP 连接独立释放，取消一个请求不会关闭其他消费者的连接。
 
 `test` 实际发送 HTTP(S) 请求并消费响应正文，输出脱敏状态，成功状态退出码为 0，连接、认证、TLS 或请求失败时为非零。
 自检目标不能被直连规则排除；正常请求仍保留既有 bypass 和安全校验，进入借用路由后失败不会回退或重放原请求，SSH 掉线后仅下一次新请求可重建。
 TCP HTTP/1.1 和 HTTP/2 可用，借用出口强制 HTTP/3 会明确报不支持；取消或命令退出会等待自有 SSH、流及 askpass 清理，不会停止目标 Host 或 PTY。
 受管隧道保留 SSH 的 `LocalCommand`/`PermitLocalCommand` 来识别目标认证完成，`sshOptions` 不得显式设置这两项，SSH 配置文件中的同名命令也不会用于该隧道；普通 Host 连接保持原有认证行为。
+`localForward` 同时固定 `ForkAfterAuthentication=no` 和 `ClearAllForwardings=no`，保持所属进程在前台并保留受管监听；用户选项或 SSH 配置文件不能覆盖这两项。
 
 配置好机器后，显式选择当前 home 的共享借用出口：
 
@@ -326,7 +338,7 @@ dsharp machine tunnel build use
 TUI 中使用 `/proxy via build` 选择机器，`/proxy direct` 清除选择，`/proxy reload` 重新读取当前 TUI 的配置。
 机器名中的空格可直接跟在 `/proxy via` 后面。
 CLI 与 TUI 共用 `settings.yaml` 的 `network.borrowed_outbound_machine`；默认 null 仅使用基准本机出口，不建立 SSH。
-选择前会验证机器、隧道和探测请求；验证或保存失败保留原选择和路由，已保存的无效借用选择明确失败，不暗中退回基准或另一台机器。
+选择前会验证机器、隧道和探测请求；验证或保存失败保留原选择和路由，已保存的无效借用选择在实际本机 HTTP 消费时明确失败，不暗中退回基准或另一台机器。
 基准的 `/proxy set`、`/proxy clear`、`/proxy test` 仍只操作或检查 `network.outbound_proxy`，不会解除借用选择。
 
 ```bash
@@ -337,10 +349,12 @@ dsharp machine tunnel build clear
 `direct` 只清除共享选择；随后可用 `clear` 删除已不需要的机器隧道定义。
 不要用删除隧道定义代替清除仍在使用的选择。
 共享的是同一 home 的选择，不是跨进程共享连接：各 Context 独立持有运行期租约，同一 Context 的消费者共用该代路由。
+同一 home 的配置保存协调进程间的完整读取、修改和替换，避免借用选择与基准出口等不同配置项的并发保存互相覆盖；不同 home 独立保存。
 切换、重载、最后消费者退出或卸载会关闭旧代自有连接、SSH 与 askpass，不会结束目标 Host、后台会话或 PTY，也不会重放已经发出的请求。
 本机 Host 是独立消费者，需要支持 `network.reload` 的连接客户端单独请求它重读自身文件；不会接收客户端的完整网络配置快照。
 仅提供 `network.outbound` 的旧 Host 仍可读取、保存和探测基准出口，但不支持此重载。
 Server 下载仍只使用 `fleet.deploy.serverProxy`，不启用本机借用选择。
+不需要本机下载的 SSH/远端 Host 管理不会获取本机出口租约；Client 下载或 Auto 回退本机下载时才按共享选择消费本机出口。
 
 
 ### 通过 iroh 接入没有公网 SSH 地址的机器

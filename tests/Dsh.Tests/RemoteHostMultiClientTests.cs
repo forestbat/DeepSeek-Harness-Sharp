@@ -171,17 +171,22 @@ public sealed class RemoteHostMultiClientTests
         await host.RestartHostAsync(Ct);
 
         var after = await host.ConnectAsync("after", Ct);
+        var activity = host.Backend.Sessions.Get(ptyId)!.LastActivityAt + 1;
+        host.Backend.Sessions.Touch(ptyId, activity);
         var sessions = await after.ListHostSessionsAsync(Ct);
-        var restoredHarness = Assert.Single(sessions, session => session.SessionId == harness.Id);
-        Assert.Equal(HostSessionStatuses.Exited, restoredHarness.Status);
-        var restoredTerminal = Assert.Single(sessions, session => session.SessionId == ptyId);
-        Assert.Equal(HostSessionKinds.Terminal, restoredTerminal.Kind);
-        Assert.Equal("build shell", restoredTerminal.Title);
-        Assert.Equal(HostSessionStatuses.Running, restoredTerminal.Status);
-
         var changes = after.HostSessionChangesAsync(Ct);
         var initial = await NextAsync(changes);
-        Assert.Equal(sessions, initial.Snapshot);
+        ReadOnlySpan<IReadOnlyList<RemoteHostSession>> snapshots = [sessions, Assert.IsAssignableFrom<IReadOnlyList<RemoteHostSession>>(initial.Snapshot)];
+        // The handshake snapshot and list response describe independently sampled registry states.
+        foreach (var snapshot in snapshots)
+        {
+            var restoredHarness = Assert.Single(snapshot, session => session.SessionId == harness.Id);
+            Assert.Equal(HostSessionStatuses.Exited, restoredHarness.Status);
+            var restoredTerminal = Assert.Single(snapshot, session => session.SessionId == ptyId);
+            Assert.Equal(HostSessionKinds.Terminal, restoredTerminal.Kind);
+            Assert.Equal("build shell", restoredTerminal.Title);
+            Assert.Equal(HostSessionStatuses.Running, restoredTerminal.Status);
+        }
         Assert.Null(initial.Session);
         await after.ResumeSessionAsync(harness.Id, Selection, Spec, Ct);
         Assert.Equal(HostSessionStatuses.Idle, (await NextAsync(changes, change => change.Session?.SessionId == harness.Id)).Session!.Status);

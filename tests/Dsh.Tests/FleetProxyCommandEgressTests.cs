@@ -17,14 +17,16 @@ public sealed class FleetProxyCommandEgressTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory(Timeout = 60000)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task HttpAndAuthenticatedSocks_UseRealSshCommandStreams(bool socks)
+    [InlineData("proxyCommand", false)]
+    [InlineData("proxyCommand", true)]
+    [InlineData("localForward", false)]
+    [InlineData("localForward", true)]
+    public async Task HttpAndAuthenticatedSocks_UseRealSshCommandStreams(string mode, bool socks)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(socks: socks, requiredCredential: Credential);
-        var machine = CreateMachine(ssh, remoteProxy, socks);
+        var machine = CreateMachine(ssh, remoteProxy, socks, mode: mode);
         await using var tunnel = new SshOutboundTunnel(machine);
         using var outbound = new OutboundProxy();
         outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, tunnel.ConnectAsync);
@@ -44,8 +46,10 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal(0, remoteProxy.ActiveConnections);
     }
 
-    [Fact(Timeout = 120000)]
-    public async Task JumpAuthentication_DoesNotDeleteAskPassBeforeTheTargetsEncryptedKeyPrompt()
+    [Theory(Timeout = 120000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task JumpAuthentication_DoesNotDeleteAskPassBeforeTheTargetsEncryptedKeyPrompt(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         if (!File.Exists("/bin/bash"))
@@ -57,11 +61,12 @@ public sealed class FleetProxyCommandEgressTests
             await using var jump = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
             await using var origin = new TestForwardProxy(keepAlive: true);
             await using var remoteProxy = new TestForwardProxy(requiredCredential: Credential, forward: true);
-            var machine = CreateMachine(target, remoteProxy);
+            var machine = CreateMachine(target, remoteProxy, mode: mode);
             var encryptedKey = Path.Combine(root, "encrypted_client_key");
             const string passphrase = "synthetic-key-passphrase";
             File.Copy(machine.KeyPath!, encryptedKey);
-            File.SetUnixFileMode(encryptedKey, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(encryptedKey, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             await TestSshServer.RunAsync("ssh-keygen", ["-q", "-p", "-P", "", "-N", passphrase, "-f", encryptedKey],
                 TestContext.Current.CancellationToken);
 
@@ -164,14 +169,16 @@ public sealed class FleetProxyCommandEgressTests
         }
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task BaselineChangesAndInvalidBorrowedUpdates_DoNotInterruptTheBorrowedRequest()
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task BaselineChangesAndInvalidBorrowedUpdates_DoNotInterruptTheBorrowedRequest(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(requiredCredential: Credential, pauseResponses: true);
         await using var latestBaseline = new TestForwardProxy(requiredCredential: ReplacementCredential);
-        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy));
+        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, mode: mode));
         using var outbound = new OutboundProxy();
         outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, tunnel.ConnectAsync);
         using var client = new HttpClient(outbound.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
@@ -194,12 +201,60 @@ public sealed class FleetProxyCommandEgressTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task KillingTheOwnedSsh_AbortsWithoutReplay_AndOnlyANewRequestRebuilds()
+    public async Task LastClosedSocket_DoesNotLoseTheSharedSshFailure()
+    {
+        FleetSshEndToEndTests.RequireEnvironment();
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
+        await using var remoteProxy = new TestForwardProxy();
+        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false, mode: "localForward"));
+        SshProxyStream? connected = null;
+        async ValueTask<Stream> Connect(DnsEndPoint endpoint, CancellationToken token)
+        {
+            connected = (SshProxyStream)await tunnel.ConnectAsync(endpoint, token);
+            return connected;
+        }
+        using var outbound = new OutboundProxy();
+        outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, Connect);
+        var originalRoute = outbound.CaptureRoute(new Uri(Target));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        deadline.CancelAfter(SignalTimeout);
+        using (var first = new HttpClient(outbound.CreateHandler()))
+            Assert.Equal(TestForwardProxy.ProxiedBody, await first.GetStringAsync($"{Target}before-idle-exit", deadline.Token));
+        Assert.Equal(1, await remoteProxy.WaitForClosedConnectionAsync(deadline.Token));
+        Assert.Equal(0, remoteProxy.ActiveConnections);
+        var oldStream = Assert.IsType<SshProxyStream>(connected);
+        await oldStream.DisposeAsync();
+        Assert.False(oldStream.CanRead);
+        Assert.False(oldStream.Process.HasExited);
+        Assert.False(originalRoute.CancellationToken.IsCancellationRequested);
+        var oldPort = Assert.IsType<int>(tunnel.LocalPort);
+        var exited = oldStream.Process.WaitForExitAsync(deadline.Token);
+        oldStream.Process.Kill(entireProcessTree: true);
+        await exited;
+        Assert.True(originalRoute.CancellationToken.IsCancellationRequested,
+            "A shared SSH failure must retire the captured route even after every HTTP socket and pool has closed.");
+        FleetLocalForwardEgressTests.AssertPortCanRebind(oldPort);
+        using (var next = new HttpClient(outbound.CreateHandler()))
+            Assert.Equal(TestForwardProxy.ProxiedBody, await next.GetStringAsync($"{Target}after-idle-exit", deadline.Token));
+        Assert.NotSame(oldStream.Process, connected!.Process);
+        Assert.Equal([$"GET {Target}before-idle-exit HTTP/1.1", $"GET {Target}after-idle-exit HTTP/1.1"], remoteProxy.Requests.ToArray());
+        var finalPort = Assert.IsType<int>(tunnel.LocalPort);
+        var finalExited = connected.Process.WaitForExitAsync(deadline.Token);
+        await tunnel.DisposeAsync();
+        await tunnel.DisposeAsync();
+        await finalExited;
+        FleetLocalForwardEgressTests.AssertPortCanRebind(finalPort);
+    }
+
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task KillingTheOwnedSsh_AbortsWithoutReplay_AndOnlyANewRequestRebuilds(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(pauseResponses: true);
-        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false));
+        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false, mode: mode));
         var connections = new ConcurrentQueue<SshProxyStream>();
         async ValueTask<Stream> Connect(DnsEndPoint endpoint, CancellationToken token)
         {
@@ -212,28 +267,42 @@ public sealed class FleetProxyCommandEgressTests
         using var client = new HttpClient(outbound.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         deadline.CancelAfter(SignalTimeout);
+        var originalRoute = outbound.CaptureRoute(new Uri(Target));
         var paused = client.GetStringAsync($"{Target}interrupted", Ct);
         await remoteProxy.WaitForRequestAsync(deadline.Token);
         var owned = Assert.Single(connections);
+        var originalPort = tunnel.LocalPort;
         var exited = owned.Process.WaitForExitAsync(deadline.Token);
+        var retiredAtExit = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        owned.Process.Exited += (_, _) => retiredAtExit.TrySetResult(originalRoute.CancellationToken.IsCancellationRequested);
         owned.Process.Kill(entireProcessTree: true);
         await exited;
+        Assert.True(await retiredAtExit.Task.WaitAsync(deadline.Token),
+            "An unexpected SSH exit must retire the captured HTTP route before exit observers can release a pending response.");
         remoteProxy.ReleaseResponse();
         var failure = await Record.ExceptionAsync(async () => await paused.WaitAsync(deadline.Token));
         Assert.True(failure is HttpRequestException or IOException or OperationCanceledException, "The interrupted request must fail rather than fall back or time out.");
+        Assert.False(deadline.IsCancellationRequested, "The interrupted send must fail before the watchdog.");
         Assert.Equal([$"GET {Target}interrupted HTTP/1.1"], remoteProxy.Requests.ToArray());
+        if (originalPort is { } port)
+            FleetLocalForwardEgressTests.AssertPortCanRebind(port);
         var fresh = client.GetStringAsync($"{Target}fresh", Ct);
         await remoteProxy.WaitForRequestAsync(deadline.Token);
         remoteProxy.ReleaseResponse();
         Assert.Equal(TestForwardProxy.ProxiedBody, await fresh.WaitAsync(deadline.Token));
         Assert.Equal([$"GET {Target}interrupted HTTP/1.1", $"GET {Target}fresh HTTP/1.1"], remoteProxy.Requests.ToArray());
-        Assert.Equal(2, connections.Count);
+        var recovered = connections.ToArray();
+        Assert.Equal(2, recovered.Length);
+        Assert.NotSame(recovered[0].Process, recovered[1].Process);
+        Assert.NotEqual(originalRoute.Generation, outbound.CaptureRoute(new Uri(Target)).Generation);
     }
 
     [Theory(Timeout = 180000)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task KillOrCancelAndRepeatedDispose_PreserveTheRemoteHostAndRunningPty(bool cancelRequest)
+    [InlineData("proxyCommand", false)]
+    [InlineData("proxyCommand", true)]
+    [InlineData("localForward", false)]
+    [InlineData("localForward", true)]
+    public async Task KillOrCancelAndRepeatedDispose_PreserveTheRemoteHostAndRunningPty(string mode, bool cancelRequest)
     {
         var executable = FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
@@ -244,7 +313,7 @@ public sealed class FleetProxyCommandEgressTests
             TempTree.AssertFitsMacOsSocketLimit(RemoteHostEndpoint.SocketPath(home));
             var machine = ssh.Machine("proxy-host-survival", home) with
             {
-                OutboundTunnel = new OutboundTunnelSpec("proxyCommand", $"http://{Credential}@localhost:{remoteProxy.Port}"),
+                OutboundTunnel = new OutboundTunnelSpec(mode, $"http://{Credential}@localhost:{remoteProxy.Port}"),
             };
             await using var host = await SshHostLauncher.ConnectAsync(machine, executable, "proxy-host-survival", Ct);
             Assert.True((await host.Client.InfoAsync(Ct)).HomeRoot == home, "SSH must connect to the dedicated target Host.");
@@ -293,13 +362,16 @@ public sealed class FleetProxyCommandEgressTests
             {
                 Assert.Equal($"GET {requestTarget} HTTP/1.1", await remoteProxy.WaitForRequestAsync(deadline.Token));
                 var owned = Assert.Single(connections);
+                var localPort = tunnel.LocalPort;
+                owned.Process.StartInfo.Environment.TryGetValue("SSH_ASKPASS", out var askPass);
                 // Subscribe before termination: production cleanup may promptly dispose the Process object.
                 var exited = owned.Process.WaitForExitAsync(deadline.Token);
                 if (cancelRequest)
                     await cancelled.CancelAsync();
                 else
                     owned.Process.Kill();
-                await exited;
+                if (!cancelRequest || mode == "proxyCommand")
+                    await exited;
                 remoteProxy.ReleaseResponse();
                 if (cancelRequest)
                     await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await pending.WaitAsync(deadline.Token));
@@ -309,6 +381,8 @@ public sealed class FleetProxyCommandEgressTests
                     Assert.True(failure is HttpRequestException or IOException or OperationCanceledException,
                         "Killing only the owned proxy SSH must fail the paused request, without success or a watchdog timeout.");
                 }
+                Assert.False(deadline.IsCancellationRequested,
+                    $"The interrupted request must settle before the watchdog; streams={connections.Count}, active={remoteProxy.ActiveConnections}, transportFailed={owned.FailureToken.IsCancellationRequested}, requests={string.Join(" | ", remoteProxy.Requests)}.");
                 Assert.Equal(1, await remoteProxy.WaitForClosedConnectionAsync(deadline.Token));
                 Assert.Equal(0, remoteProxy.ActiveConnections);
                 await AssertOriginalHostAndShellAsync(phase, 50, 5);
@@ -317,6 +391,10 @@ public sealed class FleetProxyCommandEgressTests
                 await owned.DisposeAsync();
                 await tunnel.DisposeAsync();
                 await tunnel.DisposeAsync();
+                await exited;
+                Assert.False(File.Exists(askPass));
+                if (localPort is { } port)
+                    FleetLocalForwardEgressTests.AssertPortCanRebind(port);
                 Assert.False(owned.CanRead);
                 Assert.False(owned.CanWrite);
                 await AssertOriginalHostAndShellAsync("after-dispose", 60, 6);
@@ -347,13 +425,15 @@ public sealed class FleetProxyCommandEgressTests
         }
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task ChangingCredentialsAtTheSameProxyEndpoint_RetiresTheOldAuthenticatedPool()
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task ChangingCredentialsAtTheSameProxyEndpoint_RetiresTheOldAuthenticatedPool(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(requiredCredential: Credential, keepAlive: true);
-        var machine = CreateMachine(ssh, remoteProxy);
+        var machine = CreateMachine(ssh, remoteProxy, mode: mode);
         await using var original = new SshOutboundTunnel(machine);
         await using var replacement = new SshOutboundTunnel(machine with
         {
@@ -378,13 +458,15 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal(1, remoteProxy.ActiveConnections);
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task CancellingOneRequest_DoesNotRetireAnotherConsumersRoute()
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task CancellingOneRequest_DoesNotRetireAnotherConsumersRoute(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(pauseResponses: true);
-        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false));
+        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false, mode: mode));
         using var outbound = new OutboundProxy();
         outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, tunnel.ConnectAsync);
         using var client = new HttpClient(outbound.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
@@ -406,14 +488,16 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal([$"GET {Target}cancelled HTTP/1.1", $"GET {Target}surviving HTTP/1.1"], remoteProxy.Requests.ToArray());
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task BypassIsDirect_AndForcedHttp3FailsWithoutOpeningSsh()
+    [Theory(Timeout = 60000)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task BypassIsDirect_AndForcedHttp3FailsWithoutOpeningSsh(string mode)
     {
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy();
         await using var origin = new TestForwardProxy();
-        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false));
+        await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false, mode: mode));
         using var outbound = new OutboundProxy();
         outbound.ConfigureBorrowed(tunnel.ProxyUri.OriginalString, tunnel.ConnectAsync);
         using var client = new HttpClient(outbound.CreateHandler());
@@ -429,10 +513,10 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal(0, remoteProxy.Connections);
     }
 
-    private static MachineSpec CreateMachine(TestSshServer ssh, TestForwardProxy proxy, bool socks = false, bool authenticated = true)
+    private static MachineSpec CreateMachine(TestSshServer ssh, TestForwardProxy proxy, bool socks = false, bool authenticated = true, string mode = "proxyCommand")
         => ssh.Machine("command-stream", ssh.Home) with
         {
-            OutboundTunnel = new OutboundTunnelSpec("proxyCommand",
+            OutboundTunnel = new OutboundTunnelSpec(mode,
                 $"{(socks ? "socks5" : "http")}://{(authenticated ? $"{Credential}@" : "")}localhost:{proxy.Port}"),
         };
 }

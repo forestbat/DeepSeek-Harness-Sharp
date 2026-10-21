@@ -31,14 +31,23 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
         }
     }
 
-    internal static (ProcessStartInfo StartInfo, string? AskPass, string AuthenticationMarker) CreateProxyStart(MachineSpec machine, DnsEndPoint endpoint)
+    internal static (ProcessStartInfo StartInfo, string? AskPass, string AuthenticationMarker) CreateProxyStart(MachineSpec machine, DnsEndPoint endpoint, int? localPort = null)
     {
         RequirePassword(machine);
         var marker = $"dsh-ssh-auth-{Guid.NewGuid():N}";
-        var startInfo = BuildSshStartInfo(machine, out var askPass, marker);
+        var startInfo = BuildSshStartInfo(machine, out var askPass, marker, localPort is not null);
         var host = endpoint.Host.Contains(':') && !endpoint.Host.StartsWith('[') ? $"[{endpoint.Host}]" : endpoint.Host;
-        startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, "-W");
-        startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, $"{host}:{endpoint.Port}");
+        if (localPort is { } port)
+        {
+            startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, "-N");
+            startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, "-L");
+            startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, $"127.0.0.1:{port}:{host}:{endpoint.Port}");
+        }
+        else
+        {
+            startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, "-W");
+            startInfo.ArgumentList.Insert(startInfo.ArgumentList.Count - 1, $"{host}:{endpoint.Port}");
+        }
         return (startInfo, askPass, marker);
     }
 
@@ -162,7 +171,7 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
     }
 
 
-    private static ProcessStartInfo BuildSshStartInfo(MachineSpec workspace, out string? askPass, string? authenticationMarker = null)
+    private static ProcessStartInfo BuildSshStartInfo(MachineSpec workspace, out string? askPass, string? authenticationMarker = null, bool localForward = false)
     {
         var startInfo = new ProcessStartInfo("ssh")
         {
@@ -201,6 +210,13 @@ public sealed class SshTransport(MachineSpec machine) : IRemoteMachineTransport
             arguments.Add("ControlMaster=no");
             arguments.Add("-o");
             arguments.Add("ControlPath=none");
+            if (localForward)
+            {
+                arguments.Add("-o");
+                arguments.Add("ForkAfterAuthentication=no");
+                arguments.Add("-o");
+                arguments.Add("ClearAllForwardings=no");
+            }
         }
         AddCommonOptions(arguments, workspace);
         askPass = ApplyAskPass(startInfo, workspace);

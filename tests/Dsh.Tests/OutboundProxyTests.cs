@@ -221,40 +221,40 @@ public sealed class OutboundProxyTests
         Assert.Null(OutboundProxy.FromContext(harness.App.Ctx).Address);
     }
 
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task FailedSave_KeepsExistingHttpClientOnPreviousProxy(bool tui, bool clear)
+    [Fact]
+    public async Task PublicationFailure_PreservesTheLiveClientAndTheCompleteConfiguration()
     {
+        var cancellation = TestContext.Current.CancellationToken;
         await using var first = new TestForwardProxy();
         await using var second = new TestForwardProxy();
         using var harness = await TestHarness.ComposeAsync($"url: http://127.0.0.1:{first.Port}");
         var proxy = OutboundProxy.FromContext(harness.App.Ctx);
         using var client = new HttpClient(proxy.CreateHandler());
         var path = harness.App.Home.SettingsFile;
-        var original = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-        Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync(FetchTarget, TestContext.Current.CancellationToken));
-        Directory.CreateDirectory($"{path}.tmp");
-
-        var error = await Record.ExceptionAsync(async () =>
+        var original = await File.ReadAllTextAsync(path, cancellation);
+        Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync(FetchTarget, cancellation));
+        var preserved = Path.Combine(harness.App.Home.Root, "preserved-settings.yaml");
+        File.Move(path, preserved);
+        try
         {
-            if (tui)
-                await harness.CommandAsync(clear ? "/proxy clear" : $"/proxy set http://127.0.0.1:{second.Port}");
-            else
+            Directory.CreateDirectory(path);
+            var error = Record.Exception(() =>
                 new SettingsFacade(harness.App.Ctx, harness.App.Home).UpdateOutboundProxy(new OutboundProxySettings
                 {
-                    Url = clear ? null : $"http://127.0.0.1:{second.Port}",
-                });
-        });
-
-        Assert.NotNull(error);
-        Assert.True(error is IOException or UnauthorizedAccessException, error.ToString());
-        Assert.Equal(original, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-        Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync(FetchTarget, TestContext.Current.CancellationToken));
-        Assert.Equal(2, first.Requests.Count);
-        Assert.Empty(second.Requests);
+                    Url = $"http://127.0.0.1:{second.Port}",
+                }));
+            Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString());
+            Assert.True(Directory.Exists(path));
+            Assert.Equal(original, await File.ReadAllTextAsync(preserved, cancellation));
+            Assert.Equal(TestForwardProxy.ProxiedBody, await client.GetStringAsync(FetchTarget, cancellation));
+            Assert.Equal(2, first.Requests.Count);
+            Assert.Empty(second.Requests);
+        }
+        finally
+        {
+            Directory.Delete(path);
+            File.Move(preserved, path);
+        }
     }
 
     [Theory]

@@ -8,6 +8,8 @@ namespace Dsh.Runtime;
 public interface IOutboundTransportLifetime
 {
     CancellationToken FailureToken { get; }
+    /// <summary>Stable identity of the failure source, whose lifetime may exceed one connection.</summary>
+    object FailureOwner { get; }
 }
 
 /// <summary>Keeps pools only for live route generations, never replaying a retired send.</summary>
@@ -163,6 +165,7 @@ internal sealed class OutboundResourceLifetime
     private static readonly object Registered = new();
     private readonly object _gate = new();
     private readonly ConditionalWeakTable<IDisposable, object> _resources = new();
+    private ConditionalWeakTable<object, TransportFailureRegistration>? _transportFailures;
     private readonly CancellationTokenSource _cancellation = new();
     private bool _retired;
 
@@ -192,6 +195,40 @@ internal sealed class OutboundResourceLifetime
     {
         lock (_gate)
             _resources.Remove(resource);
+    }
+
+    internal void ObserveTransportFailure(IOutboundTransportLifetime transport, OutboundProxy.RouteGeneration route)
+    {
+        var owners = Volatile.Read(ref _transportFailures);
+        if (owners is null)
+        {
+            lock (_gate)
+                owners = _transportFailures ??= new();
+        }
+        var owner = transport.FailureOwner;
+        lock (owners)
+        {
+            if (owners.TryGetValue(owner, out _))
+                return;
+            var registration = new TransportFailureRegistration(transport.FailureToken, route);
+            Register(registration);
+            owners.Add(owner, registration);
+        }
+    }
+
+    private sealed class TransportFailureRegistration(CancellationToken failure, OutboundProxy.RouteGeneration route) : IDisposable
+    {
+        private CancellationTokenRegistration _registration = failure.UnsafeRegister(
+            static state => ((OutboundProxy.RouteGeneration)state!).ReportTransportFailure(), route);
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            _registration.Unregister();
+            _registration = default;
+        }
     }
 
     internal IDisposable[] BeginRetirement()
@@ -245,7 +282,6 @@ internal sealed class OutboundConnectionStream : Stream
     private readonly OutboundResourceLifetime _generation;
     private readonly OutboundResourceLifetime? _connections;
     private int _disposed;
-    private CancellationTokenRegistration _transportFailure;
 
     private OutboundConnectionStream(Stream inner, OutboundResourceLifetime generation, OutboundResourceLifetime? connections)
     {
@@ -275,8 +311,7 @@ internal sealed class OutboundConnectionStream : Stream
             generation.Register(tracked);
             connections?.Register(tracked);
             if (stream is IOutboundTransportLifetime transport)
-                tracked._transportFailure = transport.FailureToken.UnsafeRegister(
-                    static state => ((OutboundProxy.RouteGeneration)state!).ReportTransportFailure(), route);
+                generation.ObserveTransportFailure(transport, route);
             generation.ThrowIfRetired();
             connections?.ThrowIfRetired();
             linked.Token.ThrowIfCancellationRequested();
@@ -352,7 +387,6 @@ internal sealed class OutboundConnectionStream : Stream
         {
             try
             {
-                _transportFailure.Dispose();
                 _inner.Dispose();
             }
             finally
@@ -370,7 +404,6 @@ internal sealed class OutboundConnectionStream : Stream
             return;
         try
         {
-            _transportFailure.Dispose();
             await _inner.DisposeAsync().ConfigureAwait(false);
         }
         finally
