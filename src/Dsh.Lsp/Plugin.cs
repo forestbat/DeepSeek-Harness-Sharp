@@ -1,29 +1,17 @@
-using Dsh.Boot;
-using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
-using Dsh.Sdk;
 using Dsh.Lsp.Tools;
+using Dsh.Lsp.TreeSitter;
 
 [assembly: DshPlugin("@deepseek-ai/dsh-lsp")]
 
 namespace Dsh.Lsp;
 
-/** 入口 "lsp":在 stdio 上跑 LSP 服务; 同时注册 lsp_* 工具。 */
-[DshEntrypoint("lsp")]
-public sealed class Plugin : IDshPlugin, IDshEntrypoint
+/** LSP 是能力, 不是入口; 有工具运行时时注册 lsp_* 工具。 */
+public sealed class Plugin : IDshPlugin
 {
-    public string[] Inject => [ToolRuntime.ServiceName];
+    public string[] Inject => [];
 
-    public IDisposable Apply(Context ctx, object? config) => LspToolSet.Register(ctx);
-
-    public async Task<int> RunAsync(HarnessApp app, PluginEntrypointOptions options, CancellationToken cancellationToken)
-    {
-        await using var transport = new JsonRpcLineTransport(Console.In, Console.Out);
-        transport.RequestHandler = new LspServer().HandleRequestAsync;
-        transport.Start();
-        await transport.WhenClosedAsync().WaitAsync(cancellationToken);
-        return 0;
-    }
-
+    public IDisposable Apply(Context ctx, object? config)
+        => LspToolSet.Register(ctx, TreeSitterConfig.CreateProvider(config));
 }

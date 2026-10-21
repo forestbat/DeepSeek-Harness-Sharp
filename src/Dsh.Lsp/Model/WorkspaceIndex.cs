@@ -29,10 +29,17 @@ public sealed record SymbolReferenceHit(
     IndexedReference Reference,
     bool Outgoing);
 
+public sealed record IndexInvalidation(
+    string Uri,
+    IReadOnlyList<string> RemovedSymbols,
+    IReadOnlyList<string> AddedSymbols);
+
 /** In-memory cross-file symbol index. A loaded snapshot is read-only until the next AddOrUpdate. */
 public sealed class WorkspaceIndex(string root)
 {
     private readonly Dictionary<string, DocumentAnalysis> _documents = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IndexedSymbol[]> _symbolsByUri = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IndexedReference[]> _referencesByUri = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
     private WorkspaceIndexSnapshot? _snapshot;
 
@@ -47,12 +54,30 @@ public sealed class WorkspaceIndex(string root)
         }
     }
 
-    public void AddOrUpdate(DocumentAnalysis analysis)
+    public IndexInvalidation AddOrUpdate(DocumentAnalysis analysis)
     {
         lock (_gate)
         {
+            var uri = LspDocumentUri.Normalize(analysis.Document.Uri);
+            var removed = _symbolsByUri.TryGetValue(uri, out var oldSymbols)
+                ? oldSymbols.Select(symbol => symbol.Id).ToArray()
+                : [];
+            var added = analysis.Symbols.Nodes
+                .Select(symbol => Index(analysis, symbol))
+                .ToArray();
+            var references = analysis.Symbols.Edges
+                .Select(edge => new IndexedReference(
+                    edge.FromId,
+                    edge.Kind,
+                    edge.Target.Uri,
+                    edge.Target.Range,
+                    edge.SourceMethod))
+                .ToArray();
             _snapshot = null;
-            _documents[analysis.Document.Uri] = analysis;
+            _documents[uri] = analysis;
+            _symbolsByUri[uri] = added;
+            _referencesByUri[uri] = references;
+            return new IndexInvalidation(uri, removed, [.. added.Select(symbol => symbol.Id)]);
         }
     }
 
@@ -61,7 +86,10 @@ public sealed class WorkspaceIndex(string root)
         lock (_gate)
         {
             _snapshot = null;
-            return _documents.Remove(LspDocumentUri.Normalize(uri));
+            var normalized = LspDocumentUri.Normalize(uri);
+            _symbolsByUri.Remove(normalized);
+            _referencesByUri.Remove(normalized);
+            return _documents.Remove(normalized);
         }
     }
 
@@ -71,8 +99,8 @@ public sealed class WorkspaceIndex(string root)
         {
             lock (_gate)
             {
-                return _documents.Values
-                    .SelectMany(analysis => analysis.Symbols.Nodes.Select(symbol => Index(analysis, symbol)))
+                return _symbolsByUri.Values
+                    .SelectMany(symbols => symbols)
                     .Concat(_snapshot?.Symbols ?? [])
                     .ToArray();
             }
@@ -85,13 +113,8 @@ public sealed class WorkspaceIndex(string root)
         {
             lock (_gate)
             {
-                return _documents.Values
-                    .SelectMany(analysis => analysis.Symbols.Edges.Select(edge => new IndexedReference(
-                        edge.FromId,
-                        edge.Kind,
-                        edge.Target.Uri,
-                        edge.Target.Range,
-                        edge.SourceMethod)))
+                return _referencesByUri.Values
+                    .SelectMany(references => references)
                     .Concat(_snapshot?.References ?? [])
                     .ToArray();
             }

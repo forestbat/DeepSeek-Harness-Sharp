@@ -67,7 +67,13 @@ public sealed record LspDiagnostic(
     string? Source,
     string Message,
     IReadOnlyList<string> Tags,
-    JsonElement? Data);
+    JsonElement? Data,
+    IReadOnlyList<LspDiagnosticRelatedInformation>? RelatedInformation = null,
+    string? CodeDescription = null);
+
+public sealed record LspDiagnosticRelatedInformation(
+    string Message,
+    LspLocation Location);
 
 public static class LspDocumentUri
 {

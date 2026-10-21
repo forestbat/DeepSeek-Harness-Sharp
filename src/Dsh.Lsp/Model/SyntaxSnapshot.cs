@@ -53,7 +53,8 @@ public sealed record SyntaxSnapshot(
     IReadOnlyList<SyntaxNode> Roots,
     IReadOnlyList<SemanticToken> SemanticTokens,
     IReadOnlyList<FoldingRange> FoldingRanges,
-    IReadOnlyList<LspDiagnostic> Diagnostics)
+    IReadOnlyList<LspDiagnostic> Diagnostics,
+    CstNode? Cst = null)
 {
     public IReadOnlyList<SyntaxNode> Nodes
     {

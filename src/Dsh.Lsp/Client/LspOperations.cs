@@ -93,6 +93,24 @@ public sealed class LspOperations(
         return ParseCodeActions(result);
     }
 
+    public async Task<CodeActionFact?> ResolveCodeActionAsync(
+        JsonElement action,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Supported("codeAction/resolve") || action.ValueKind != JsonValueKind.Object)
+            return null;
+        var result = await channel.RequestAsync(
+            "codeAction/resolve",
+            JsonNode.Parse(action.GetRawText()) as JsonObject,
+            cancellationToken).ConfigureAwait(false);
+        if (result is not { } value)
+            return null;
+        var items = value.ValueKind == JsonValueKind.Array
+            ? value
+            : JsonSerializer.SerializeToElement(new JsonArray(JsonNode.Parse(value.GetRawText())));
+        return ParseCodeActions(items).FirstOrDefault();
+    }
+
     public async Task<IReadOnlyList<WorkspaceSymbolFact>> WorkspaceSymbolsAsync(
         string query,
         CancellationToken cancellationToken = default)
@@ -133,7 +151,8 @@ public sealed class LspOperations(
                 LspJson.Boolean(item, "isPreferred"),
                 LspJson.Boolean(item, "disabled"),
                 LspJson.String(LspJson.Property(item, "disabled"), "reason"),
-                ParseWorkspaceEdit(LspJson.Property(item, "edit"))))
+                ParseWorkspaceEdit(LspJson.Property(item, "edit")),
+                LspJson.Property(item, "data")))
             .Where(action => action.Title.Length > 0)
             .ToArray();
 

@@ -59,7 +59,8 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
             };
             var result = await channel.RequestAsync("textDocument/hover", parameters, cancellationToken)
                 .ConfigureAwait(false);
-            var display = HoverText(LspJson.Property(result, "contents"));
+            var contents = LspJson.Property(result, "contents");
+            var display = HoverText(contents);
             if (string.IsNullOrWhiteSpace(display))
                 return [];
             return
@@ -69,7 +70,9 @@ public sealed class TypeFactExtractor(ILspRequestChannel channel, LspCapabilityP
                     display,
                     "textDocument/hover",
                     LspJson.Range(LspJson.Property(result, "range")) ?? node.SelectionRange,
-                    display),
+                    display,
+                    LspJson.String(contents, "kind"),
+                    LspJson.String(contents, "language")),
             ];
         }
         catch (Exception error) when (error is LspResponseException or LspRequestTimeoutException)

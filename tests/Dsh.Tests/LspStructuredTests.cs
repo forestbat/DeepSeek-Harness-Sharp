@@ -404,8 +404,75 @@ public sealed class LspStructuredTests
         Assert.Contains(graph.Edges, edge => edge.Kind == HierarchyEdgeKind.Subtype);
     }
 
+    [Fact]
+    public void WorkspaceEditApplier_RejectsOverlapsAndAppliesDescending()
+    {
+        var document = LspDocument.Create("file:///edit.cs", "csharp", "class C {}");
+        var application = WorkspaceEditApplier.Apply(document, [
+            new TextEditFact(new LspRange(new LspPosition(0, 6), new LspPosition(0, 7)), "D"),
+            new TextEditFact(new LspRange(new LspPosition(0, 0), new LspPosition(0, 5)), "struct"),
+        ]);
+        Assert.True(application.IsValid);
+        Assert.Equal("struct D {}", application.Text);
+
+        var overlap = WorkspaceEditApplier.Apply(document, [
+            new TextEditFact(new LspRange(new LspPosition(0, 0), new LspPosition(0, 6)), "A"),
+            new TextEditFact(new LspRange(new LspPosition(0, 3), new LspPosition(0, 7)), "B"),
+        ]);
+        Assert.False(overlap.IsValid);
+        Assert.Contains(overlap.Issues, issue => issue.Code == "edit-overlap");
+    }
+
+    [Fact]
+    public void WorkspaceIndex_ReplacesOnlyTheChangedDocument()
+    {
+        var first = AnalysisFor("file:///one.cs", "class One {}");
+        var second = AnalysisFor("file:///two.cs", "class Two {}");
+        var index = new WorkspaceIndex(Path.GetTempPath());
+        index.AddOrUpdate(first);
+        index.AddOrUpdate(second);
+        Assert.Equal(2, index.AllSymbols.Count);
+
+        var replacement = AnalysisFor("file:///one.cs", "class Changed {}");
+        var invalidation = index.AddOrUpdate(replacement);
+        Assert.Contains(invalidation.RemovedSymbols, id => id.Contains("One"));
+        Assert.Contains(invalidation.AddedSymbols, id => id.Contains("Changed"));
+        Assert.Contains(index.AllSymbols, symbol => symbol.Name == "Changed");
+        Assert.Contains(index.AllSymbols, symbol => symbol.Name == "Two");
+        Assert.DoesNotContain(index.AllSymbols, symbol => symbol.Name == "One");
+    }
+
     private static LspCapabilityProfile Capabilities(string json)
         => LspCapabilityParser.Parse(ParseJson(json));
+
+    private static DocumentAnalysis AnalysisFor(string uri, string text)
+    {
+        var document = LspDocument.Create(uri, "csharp", text);
+        var name = text.StartsWith("class ", StringComparison.Ordinal)
+            ? text[6..].Trim().TrimEnd('{', '}', ' ')
+            : "C";
+        var node = new SyntaxNode(
+            name,
+            null,
+            5,
+            new LspRange(new LspPosition(0, 0), document.PositionAt(document.Length)),
+            new LspRange(new LspPosition(0, 6), new LspPosition(0, 6 + name.Length)),
+            [],
+            []);
+        var snapshot = new SyntaxSnapshot(uri, document.Version, document.LanguageId, [node], [], [], []);
+        return new DocumentAnalysis(
+            document,
+            Capabilities("""{"capabilities":{}}"""),
+            snapshot,
+            new SymbolGraph(uri, document.Version,
+                [new SymbolNode(SymbolIdentity.For(uri, node), name, "class", null, uri, node.Range, node.SelectionRange)],
+                []),
+            ScopeGraphBuilder.Build(document, snapshot),
+            HierarchyGraph.Empty(uri, document.Version),
+            TypeFactsSnapshot.Empty,
+            [],
+            ValidationResult.Empty);
+    }
 
     private static JsonElement ParseJson(string json)
     {

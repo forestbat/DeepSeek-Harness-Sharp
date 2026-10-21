@@ -6,6 +6,7 @@ using Dsh.Llm;
 using Dsh.Lsp.Catalog;
 using Dsh.Lsp.Model;
 using Dsh.Lsp.Protocol;
+using Dsh.Lsp.TreeSitter;
 using Dsh.Lsp.Workspace;
 using Dsh.Runtime;
 
@@ -17,7 +18,7 @@ public static class LspToolSet
     public const string AnalyzeTool = "lsp_analyze";
     public const string QueryTool = "lsp_query";
 
-    public static IDisposable Register(Context context)
+    public static IDisposable Register(Context context, ISyntaxTreeProvider? syntaxTreeProvider = null)
     {
         var tools = context.Get<ToolRuntime>(ToolRuntime.ServiceName, false);
         if (tools is null)
@@ -32,7 +33,7 @@ public static class LspToolSet
                 Description = "Return the symbol outline, diagnostics, scopes, types, symbol edges, and hierarchy for a source file through its language server.",
                 Parameters = Parameters(),
                 Output = Output(),
-                Execute = (args, exec) => AnalyzeAsync(args, exec, workspaces),
+                Execute = (args, exec) => AnalyzeAsync(args, exec, workspaces, syntaxTreeProvider),
                 IsConcurrencySafe = _ => true,
             }),
             tools.Register(new ToolDefinition
@@ -41,7 +42,7 @@ public static class LspToolSet
                 Description = "Query a language server for definition, references, hover, diagnostics, highlights, rename edits, code actions, outline, or workspace symbols.",
                 Parameters = Parameters(),
                 Output = Output(),
-                Execute = (args, exec) => QueryAsync(args, exec, workspaces),
+                Execute = (args, exec) => QueryAsync(args, exec, workspaces, syntaxTreeProvider),
                 IsConcurrencySafe = _ => true,
             }),
         };
@@ -51,9 +52,10 @@ public static class LspToolSet
     private static async Task<object?> AnalyzeAsync(
         JsonElement args,
         ToolRunContext exec,
-        ConcurrentDictionary<string, LspWorkspace> workspaces)
+        ConcurrentDictionary<string, LspWorkspace> workspaces,
+        ISyntaxTreeProvider? syntaxTreeProvider)
     {
-        var (workspace, path) = Resolve(args, exec, workspaces);
+        var (workspace, path) = Resolve(args, exec, workspaces, syntaxTreeProvider);
         var text = LspJson.String(args, "text");
         var analysis = await workspace.AnalyzeAndIndexFileAsync(path, text, exec.Signal).ConfigureAwait(false);
         return AnalyzeNode(analysis);
@@ -62,9 +64,10 @@ public static class LspToolSet
     private static async Task<object?> QueryAsync(
         JsonElement args,
         ToolRunContext exec,
-        ConcurrentDictionary<string, LspWorkspace> workspaces)
+        ConcurrentDictionary<string, LspWorkspace> workspaces,
+        ISyntaxTreeProvider? syntaxTreeProvider)
     {
-        var (workspace, path) = Resolve(args, exec, workspaces);
+        var (workspace, path) = Resolve(args, exec, workspaces, syntaxTreeProvider);
         var operation = LspJson.String(args, "operation") ?? "hover";
         var position = Position(args);
         switch (operation)
@@ -108,14 +111,17 @@ public static class LspToolSet
     private static (LspWorkspace Workspace, string Path) Resolve(
         JsonElement args,
         ToolRunContext exec,
-        ConcurrentDictionary<string, LspWorkspace> workspaces)
+        ConcurrentDictionary<string, LspWorkspace> workspaces,
+        ISyntaxTreeProvider? syntaxTreeProvider)
     {
         var path = LspJson.String(args, "path") ?? throw new ArgumentException("path is required");
         var root = LspJson.String(args, "root")
             ?? exec.Agent?.Session.WorkingDirectory
             ?? Environment.CurrentDirectory;
         var fullPath = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path));
-        var workspace = workspaces.GetOrAdd(Path.GetFullPath(root), location => new LspWorkspace(location));
+        var workspace = workspaces.GetOrAdd(
+            Path.GetFullPath(root),
+            location => new LspWorkspace(location, syntaxTreeProvider: syntaxTreeProvider));
         return (workspace, fullPath);
     }
 
@@ -143,6 +149,7 @@ public static class LspToolSet
                 ["languageId"] = analysis.Document.LanguageId,
             },
             ["roots"] = Nodes(analysis.Syntax.Roots),
+            ["cst"] = analysis.Syntax.Cst is { } cst ? Cst(cst) : null,
             ["symbols"] = new JsonObject
             {
                 ["nodes"] = new JsonArray(analysis.Symbols.Nodes.Select(SymbolNode).ToArray()),
@@ -190,6 +197,20 @@ public static class LspToolSet
             ["detail"] = node.Detail,
             ["uri"] = node.Uri,
             ["range"] = RangeNode(node.Range),
+        };
+
+    private static JsonObject Cst(CstNode node)
+        => new()
+        {
+            ["type"] = node.Type,
+            ["field"] = node.FieldName,
+            ["named"] = node.IsNamed,
+            ["missing"] = node.IsMissing,
+            ["extra"] = node.IsExtra,
+            ["startByte"] = node.StartByte,
+            ["endByte"] = node.EndByte,
+            ["range"] = RangeNode(node.Range),
+            ["children"] = new JsonArray(node.Children.Select(child => (JsonNode?)Cst(child)).ToArray()),
         };
 
     private static JsonObject SymbolEdge(SymbolEdge edge)

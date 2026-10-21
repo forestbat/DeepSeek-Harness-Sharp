@@ -1,4 +1,5 @@
-﻿using Dsh.Lsp.Protocol;
+﻿using System.Text.Json;
+using Dsh.Lsp.Protocol;
 
 namespace Dsh.Lsp.Model;
 
@@ -25,4 +26,5 @@ public sealed record CodeActionFact(
     bool IsPreferred,
     bool IsDisabled,
     string? DisabledReason,
-    WorkspaceEditFact? Edit);
+    WorkspaceEditFact? Edit,
+    JsonElement? Data = null);

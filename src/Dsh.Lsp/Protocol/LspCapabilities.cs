@@ -54,6 +54,7 @@ public sealed record LspCapabilityProfile(
         "textDocument/prepareRename" => PrepareRename,
         "textDocument/rename" => Rename,
         "textDocument/codeAction" => CodeAction,
+        "codeAction/resolve" => CodeAction,
         "textDocument/signatureHelp" => SignatureHelp,
         "textDocument/inlayHint" => InlayHint,
         "textDocument/prepareCallHierarchy" => CallHierarchy,

@@ -3,11 +3,15 @@ using System.Text.Json.Nodes;
 using Dsh.Lsp.Client;
 using Dsh.Lsp.Model;
 using Dsh.Lsp.Protocol;
+using Dsh.Lsp.TreeSitter;
 
 namespace Dsh.Lsp.Analysis;
 
 /** Coordinates the layered analysis for one open document. */
-public sealed class DocumentAnalysisService(LspClientSession session, DocumentAnalysisOptions? options = null)
+public sealed class DocumentAnalysisService(
+    LspClientSession session,
+    DocumentAnalysisOptions? options = null,
+    ISyntaxTreeProvider? syntaxTreeProvider = null)
 {
     private readonly DocumentAnalysisOptions _options = options ?? DocumentAnalysisOptions.Default;
 
@@ -21,6 +25,9 @@ public sealed class DocumentAnalysisService(LspClientSession session, DocumentAn
         var syntax = await new SyntaxSnapshotBuilder(session, capabilities)
             .BuildAsync(document, diagnostics, cancellationToken)
             .ConfigureAwait(false);
+        if (syntaxTreeProvider is not null
+            && await syntaxTreeProvider.TryParseAsync(document, cancellationToken).ConfigureAwait(false) is { } cst)
+            syntax = syntax with { Cst = cst };
         var symbols = await new SymbolGraphBuilder(session, capabilities)
             .BuildAsync(document, syntax, _options, cancellationToken)
             .ConfigureAwait(false);
@@ -52,7 +59,15 @@ public sealed class DocumentAnalysisService(LspClientSession session, DocumentAn
         if (!capabilities.PullDiagnostics)
             return pushed;
 
-        var result = await session.PullDiagnosticsAsync(document.Uri, cancellationToken).ConfigureAwait(false);
+        JsonElement? result;
+        try
+        {
+            result = await session.PullDiagnosticsAsync(document.Uri, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is LspResponseException or LspRequestTimeoutException)
+        {
+            return pushed;
+        }
         var pulled = ParsePullDiagnostics(result);
         if (pulled.Count == 0)
             return pushed;

@@ -7,7 +7,9 @@ public sealed record TypeFact(
     string Display,
     string SourceMethod,
     LspRange? Range,
-    string? RawMarkdown);
+    string? RawMarkdown,
+    string? Format = null,
+    string? Language = null);
 
 public sealed record InlayHintFact(
     LspRange Range,
