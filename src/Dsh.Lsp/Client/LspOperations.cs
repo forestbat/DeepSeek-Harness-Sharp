@@ -133,14 +133,43 @@ public sealed class LspOperations(
                 AddDocument(documents, property.Name, property.Value);
         }
 
+        var operations = new List<WorkspaceFileOperation>();
         foreach (var change in LspJson.Items(LspJson.Property(value, "documentChanges")))
         {
+            switch (LspJson.String(change, "kind"))
+            {
+                case "create":
+                    if (LspJson.String(change, "uri") is { } createUri)
+                        operations.Add(new WorkspaceFileOperation(
+                            WorkspaceFileOperationKind.Create,
+                            createUri,
+                            Overwrite: OptionBool(change, "overwrite"),
+                            IgnoreIfExists: OptionBool(change, "ignoreIfExists")));
+                    continue;
+                case "rename":
+                    if (LspJson.String(change, "oldUri") is { } oldUri && LspJson.String(change, "newUri") is { } newUri)
+                        operations.Add(new WorkspaceFileOperation(
+                            WorkspaceFileOperationKind.Rename,
+                            oldUri,
+                            newUri,
+                            OptionBool(change, "overwrite"),
+                            OptionBool(change, "ignoreIfExists")));
+                    continue;
+                case "delete":
+                    if (LspJson.String(change, "uri") is { } deleteUri)
+                        operations.Add(new WorkspaceFileOperation(
+                            WorkspaceFileOperationKind.Delete,
+                            deleteUri,
+                            IgnoreIfExists: OptionBool(change, "ignoreIfExists")));
+                    continue;
+            }
+
             var uri = LspJson.String(LspJson.Property(change, "textDocument"), "uri");
             if (uri is not null)
-                AddDocument(documents, uri, LspJson.Property(change, "edits"));
+                AddDocument(documents, uri, LspJson.Property(change, "edits"), LspJson.Int32(LspJson.Property(change, "textDocument"), "version"));
         }
 
-        return documents.Count == 0 ? null : new WorkspaceEditFact(documents);
+        return documents.Count == 0 && operations.Count == 0 ? null : new WorkspaceEditFact(documents, operations);
     }
 
     public static IReadOnlyList<CodeActionFact> ParseCodeActions(JsonElement? result)
@@ -176,7 +205,7 @@ public sealed class LspOperations(
             .Select(symbol => symbol!)
             .ToArray();
 
-    private static void AddDocument(List<DocumentEdits> documents, string uri, JsonElement? edits)
+    private static void AddDocument(List<DocumentEdits> documents, string uri, JsonElement? edits, int? version = null)
     {
         var textEdits = LspJson.Items(edits)
             .Select(edit => new TextEditFact(
@@ -184,8 +213,11 @@ public sealed class LspOperations(
                 LspJson.String(edit, "newText") ?? string.Empty))
             .ToArray();
         if (textEdits.Length > 0)
-            documents.Add(new DocumentEdits(uri, textEdits));
+            documents.Add(new DocumentEdits(uri, textEdits, version));
     }
+
+    private static bool OptionBool(JsonElement change, string name)
+        => LspJson.Boolean(LspJson.Property(change, "options"), name);
 
     private static JsonObject DiagnosticNode(LspDiagnostic diagnostic)
     {

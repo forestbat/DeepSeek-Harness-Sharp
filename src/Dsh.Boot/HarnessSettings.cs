@@ -55,6 +55,9 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "sandbox")]
     public SandboxSettings? Sandbox { get; set; }
 
+    [YamlMember(Alias = "external_editor")]
+    public List<ExternalEditorDefinition> ExternalEditor { get; set; } = [];
+
     [YamlIgnore]
     public Dictionary<string, PluginSetting> Plugins { get; set; } = [];
 
@@ -260,6 +263,19 @@ public sealed class SafetySettings
 
     [YamlMember(Alias = "blacklist")]
     public List<string> Blacklist { get; set; } = [];
+}
+
+/** 用户配置的外部编辑器；列表第一项是 favorite。 */
+public sealed class ExternalEditorDefinition
+{
+    [YamlMember(Alias = "name")]
+    public string? Name { get; set; }
+
+    [YamlMember(Alias = "command")]
+    public string? Command { get; set; }
+
+    [YamlMember(Alias = "args")]
+    public List<string> Args { get; set; } = [];
 }
 
 /** Plugin sandbox switch; per-plugin grants live under plugins."<package>".permissions. */

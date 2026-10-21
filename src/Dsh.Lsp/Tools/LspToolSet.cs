@@ -284,6 +284,18 @@ public static class LspToolSet
             ["code"] = diagnostic.Code,
             ["source"] = diagnostic.Source,
             ["message"] = diagnostic.Message,
+            ["codeDescription"] = diagnostic.CodeDescription,
+            ["tags"] = diagnostic.Tags.Count == 0
+                ? null
+                : new JsonArray(diagnostic.Tags.Select(tag => (JsonNode?)tag).ToArray()),
+            ["relatedInformation"] = diagnostic.RelatedInformation is { Count: > 0 } related
+                ? new JsonArray(related.Select(item => (JsonNode?)new JsonObject
+                {
+                    ["message"] = item.Message,
+                    ["uri"] = item.Location.Uri,
+                    ["range"] = RangeNode(item.Location.Range),
+                }).ToArray())
+                : null,
         }).ToArray());
 
     private static JsonArray Locations(IReadOnlyList<LspLocation> locations)

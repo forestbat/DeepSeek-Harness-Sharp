@@ -32,7 +32,8 @@ public sealed record SymbolReferenceHit(
 public sealed record IndexInvalidation(
     string Uri,
     IReadOnlyList<string> RemovedSymbols,
-    IReadOnlyList<string> AddedSymbols);
+    IReadOnlyList<string> AddedSymbols,
+    IReadOnlyList<string> AffectedUris);
 
 /** In-memory cross-file symbol index. A loaded snapshot is read-only until the next AddOrUpdate. */
 public sealed class WorkspaceIndex(string root)
@@ -65,6 +66,17 @@ public sealed class WorkspaceIndex(string root)
             var added = analysis.Symbols.Nodes
                 .Select(symbol => Index(analysis, symbol))
                 .ToArray();
+            var removedRanges = removed
+                .Select(id => oldSymbols?.FirstOrDefault(symbol => symbol.Id == id))
+                .Where(symbol => symbol is not null)
+                .Select(symbol => symbol!)
+                .ToArray();
+            var affected = _referencesByUri
+                .Where(pair => pair.Key != uri && pair.Value.Any(reference =>
+                    reference.TargetUri == uri
+                    && removedRanges.Any(symbol => symbol.Range.Overlaps(reference.TargetRange))))
+                .Select(pair => pair.Key)
+                .ToArray();
             var references = analysis.Symbols.Edges
                 .Select(edge => new IndexedReference(
                     edge.FromId,
@@ -77,7 +89,28 @@ public sealed class WorkspaceIndex(string root)
             _documents[uri] = analysis;
             _symbolsByUri[uri] = added;
             _referencesByUri[uri] = references;
-            return new IndexInvalidation(uri, removed, [.. added.Select(symbol => symbol.Id)]);
+            return new IndexInvalidation(uri, removed, [.. added.Select(symbol => symbol.Id)], affected);
+        }
+    }
+
+    public IReadOnlyList<string> Invalidate(string uri)
+    {
+        lock (_gate)
+        {
+            var normalized = LspDocumentUri.Normalize(uri);
+            if (!_symbolsByUri.TryGetValue(normalized, out var symbols))
+                return [];
+            var affected = _referencesByUri
+                .Where(pair => pair.Key != normalized && pair.Value.Any(reference =>
+                    reference.TargetUri == normalized
+                    && symbols.Any(symbol => symbol.Range.Overlaps(reference.TargetRange))))
+                .Select(pair => pair.Key)
+                .ToArray();
+            _symbolsByUri.Remove(normalized);
+            _referencesByUri.Remove(normalized);
+            _documents.Remove(normalized);
+            _snapshot = null;
+            return affected;
         }
     }
 

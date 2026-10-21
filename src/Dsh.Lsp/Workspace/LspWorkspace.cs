@@ -61,6 +61,15 @@ public sealed class LspWorkspace : IAsyncDisposable
         return analysis;
     }
 
+    public async Task<(DocumentAnalysis Analysis, IndexInvalidation Invalidation)> AnalyzeAndIndexWithInvalidationAsync(
+        string path,
+        string? text = null,
+        CancellationToken cancellationToken = default)
+    {
+        var analysis = await AnalyzeFileAsync(path, text, cancellationToken).ConfigureAwait(false);
+        return (analysis, Index.AddOrUpdate(analysis));
+    }
+
     public async Task<IReadOnlyList<DocumentHighlightFact>> GetHighlightsAsync(
         string path,
         LspPosition position,
@@ -241,6 +250,7 @@ public sealed class LspWorkspace : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var results = new List<DocumentEditResult>();
+        var textPlans = new List<TextPlan>();
         foreach (var documentEdit in edit.Documents)
         {
             if (!LspDocumentUri.TryGetPath(documentEdit.Uri, out var path))
@@ -249,30 +259,223 @@ public sealed class LspWorkspace : IAsyncDisposable
                     documentEdit.Uri,
                     null,
                     [new ValidationIssue("edit-uri", "workspace edit target is not a file URI", null)]));
-                continue;
+                return new WorkspaceEditApplyResult(results);
             }
 
             var (session, document) = await EnsureFileAsync(path, null, cancellationToken).ConfigureAwait(false);
-            var application = WorkspaceEditApplier.Apply(document, documentEdit.Edits);
-            if (application.IsValid && application.Text != document.Text)
+            if (documentEdit.Version is { } version && version != document.Version)
             {
-                if (writeToDisk)
-                    await File.WriteAllTextAsync(path, application.Text, cancellationToken).ConfigureAwait(false);
-                await session.ChangeAsync(
-                    document.Uri,
-                    [LspTextChange.Full(application.Text)],
-                    cancellationToken).ConfigureAwait(false);
-                Index.Remove(document.Uri);
+                results.Add(new DocumentEditResult(
+                    documentEdit.Uri,
+                    null,
+                    [new ValidationIssue("edit-version", $"document version {version} does not match {document.Version}", null)]));
+                return new WorkspaceEditApplyResult(results);
+            }
+
+            var application = WorkspaceEditApplier.Apply(document, documentEdit.Edits);
+            if (!application.IsValid)
+            {
+                results.Add(new DocumentEditResult(documentEdit.Uri, null, application.Issues));
+                return new WorkspaceEditApplyResult(results);
             }
 
             results.Add(new DocumentEditResult(
                 documentEdit.Uri,
-                application.IsValid ? application.Text : null,
-                application.Issues));
+                application.Text,
+                []));
+            if (application.Text != document.Text)
+                textPlans.Add(new TextPlan(document.Uri, path, session, document, application.Text));
+        }
+
+        var operations = edit.FileOperations ?? [];
+        var operationPlans = new List<FilePlan>();
+        foreach (var operation in operations)
+        {
+            if (!LspDocumentUri.TryGetPath(operation.Uri, out var sourcePath))
+            {
+                results.Add(new DocumentEditResult(
+                    operation.Uri,
+                    null,
+                    [new ValidationIssue("edit-uri", "file operation target is not a file URI", null)]));
+                return new WorkspaceEditApplyResult(results);
+            }
+
+            var targetPath = sourcePath;
+            if (operation.NewUri is { } newUri)
+            {
+                if (!LspDocumentUri.TryGetPath(newUri, out targetPath))
+                {
+                    results.Add(new DocumentEditResult(
+                        newUri,
+                        null,
+                        [new ValidationIssue("edit-uri", "rename target is not a file URI", null)]));
+                    return new WorkspaceEditApplyResult(results);
+                }
+            }
+
+            var issue = ValidateFileOperation(operation, sourcePath, targetPath);
+            if (issue is null)
+            {
+                operationPlans.Add(new FilePlan(operation, sourcePath, targetPath));
+                results.Add(new DocumentEditResult(operation.Uri, null, []));
+            }
+            else
+            {
+                results.Add(new DocumentEditResult(operation.Uri, null, [issue]));
+                return new WorkspaceEditApplyResult(results);
+            }
+        }
+
+        if (operationPlans.Count > 0 && !writeToDisk)
+        {
+            results.Add(new DocumentEditResult(
+                edit.Documents.FirstOrDefault()?.Uri ?? "",
+                null,
+                [new ValidationIssue("edit-disk", "file operations require writeToDisk", null)]));
+            return new WorkspaceEditApplyResult(results);
+        }
+
+        var textBackups = textPlans.ToDictionary(plan => plan.Path, plan => plan.Original.Text, StringComparer.Ordinal);
+        var fileBackups = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var created = new List<string>();
+        var renamed = new List<(string Source, string Target)>();
+        try
+        {
+            if (writeToDisk)
+            {
+                foreach (var plan in textPlans)
+                    await File.WriteAllTextAsync(plan.Path, plan.Text, cancellationToken).ConfigureAwait(false);
+                foreach (var plan in operationPlans)
+                {
+                    switch (plan.Operation.Kind)
+                    {
+                        case WorkspaceFileOperationKind.Create:
+                            if (File.Exists(plan.SourcePath) && plan.Operation.IgnoreIfExists)
+                                break;
+                            var existed = File.Exists(plan.SourcePath);
+                            if (!existed || plan.Operation.Overwrite)
+                            {
+                                if (existed)
+                                    fileBackups[plan.SourcePath] = await File.ReadAllBytesAsync(plan.SourcePath, cancellationToken).ConfigureAwait(false);
+                                Directory.CreateDirectory(Path.GetDirectoryName(plan.SourcePath)!);
+                                await File.WriteAllTextAsync(plan.SourcePath, string.Empty, cancellationToken).ConfigureAwait(false);
+                                if (!existed)
+                                    created.Add(plan.SourcePath);
+                            }
+                            break;
+                        case WorkspaceFileOperationKind.Rename:
+                            if (File.Exists(plan.TargetPath) && plan.Operation.IgnoreIfExists)
+                                break;
+                            fileBackups[plan.SourcePath] = await File.ReadAllBytesAsync(plan.SourcePath, cancellationToken).ConfigureAwait(false);
+                            File.Move(plan.SourcePath, plan.TargetPath, plan.Operation.Overwrite);
+                            renamed.Add((plan.SourcePath, plan.TargetPath));
+                            break;
+                        case WorkspaceFileOperationKind.Delete:
+                            if (!File.Exists(plan.SourcePath) && plan.Operation.IgnoreIfExists)
+                                break;
+                            fileBackups[plan.SourcePath] = await File.ReadAllBytesAsync(plan.SourcePath, cancellationToken).ConfigureAwait(false);
+                            File.Delete(plan.SourcePath);
+                            break;
+                    }
+                }
+            }
+
+            foreach (var plan in textPlans)
+            {
+                await plan.Session.ChangeAsync(
+                    plan.Uri,
+                    [LspTextChange.Full(plan.Text)],
+                    cancellationToken).ConfigureAwait(false);
+                Index.Remove(plan.Uri);
+            }
+        }
+        catch (Exception error)
+        {
+            await RollbackAsync(textPlans, textBackups, fileBackups, created, renamed, writeToDisk, cancellationToken)
+                .ConfigureAwait(false);
+            results.Add(new DocumentEditResult(
+                textPlans.FirstOrDefault()?.Uri ?? "",
+                null,
+                [new ValidationIssue("edit-rollback", $"workspace edit rolled back: {error.Message}", null)]));
         }
 
         return new WorkspaceEditApplyResult(results);
     }
+
+    private static ValidationIssue? ValidateFileOperation(
+        WorkspaceFileOperation operation,
+        string sourcePath,
+        string targetPath)
+    {
+        return operation.Kind switch
+        {
+            WorkspaceFileOperationKind.Create when File.Exists(sourcePath)
+                && !operation.Overwrite && !operation.IgnoreIfExists
+                => new ValidationIssue("file-exists", $"file already exists: {sourcePath}", null),
+            WorkspaceFileOperationKind.Rename when !File.Exists(sourcePath)
+                && !operation.IgnoreIfExists
+                => new ValidationIssue("file-missing", $"rename source does not exist: {sourcePath}", null),
+            WorkspaceFileOperationKind.Rename when File.Exists(targetPath)
+                && !operation.Overwrite && !operation.IgnoreIfExists
+                => new ValidationIssue("file-exists", $"rename target already exists: {targetPath}", null),
+            WorkspaceFileOperationKind.Delete when !File.Exists(sourcePath)
+                && !operation.IgnoreIfExists
+                => new ValidationIssue("file-missing", $"delete target does not exist: {sourcePath}", null),
+            _ => null,
+        };
+    }
+
+    private static async Task RollbackAsync(
+        IReadOnlyList<TextPlan> plans,
+        IReadOnlyDictionary<string, string> textBackups,
+        IReadOnlyDictionary<string, byte[]> fileBackups,
+        IReadOnlyList<string> created,
+        IReadOnlyList<(string Source, string Target)> renamed,
+        bool writeToDisk,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (source, target) in renamed.AsEnumerable().Reverse())
+        {
+            if (File.Exists(target))
+                File.Move(target, source, overwrite: true);
+        }
+
+        foreach (var path in created)
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+
+        foreach (var (path, bytes) in fileBackups)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllBytesAsync(path, bytes, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var plan in plans)
+        {
+            if (!textBackups.TryGetValue(plan.Path, out var original))
+                continue;
+            if (writeToDisk)
+                await File.WriteAllTextAsync(plan.Path, original, cancellationToken).ConfigureAwait(false);
+            await plan.Session.ChangeAsync(
+                plan.Uri,
+                [LspTextChange.Full(original)],
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed record TextPlan(
+        string Uri,
+        string Path,
+        LspClientSession Session,
+        LspDocument Original,
+        string Text);
+
+    private sealed record FilePlan(
+        WorkspaceFileOperation Operation,
+        string SourcePath,
+        string TargetPath);
 
     public async Task<WorkspaceEditApplyResult> ApplyRenameAsync(
         string path,
@@ -361,9 +564,30 @@ public sealed class LspWorkspace : IAsyncDisposable
                 var zone = zones[index];
                 var analysis = await AnalyzeTextAsync(zone.LanguageId, zone.Path, zone.Text, token)
                     .ConfigureAwait(false);
-                results[index] = new ZoneAnalysis(zone, analysis);
+                results[index] = new ZoneAnalysis(
+                    zone,
+                    analysis,
+                    new ZoneMapping(zone.ParentRange ?? new LspRange(LspPosition.Zero, LspPosition.Zero)));
             }).ConfigureAwait(false);
         return [.. results.Where(result => result is not null).Select(result => result!)];
+    }
+
+    public async Task<DocumentAnalysis> AnalyzeWithZonesAsync(
+        string path,
+        string? text = null,
+        CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var profile = LanguageCatalog.ResolveByPath(fullPath);
+        var analysis = await AnalyzeFileAsync(fullPath, text, cancellationToken).ConfigureAwait(false);
+        var zones = LanguageZoneDetector.Detect(analysis.Document, profile.Id);
+        if (zones.Count == 0)
+            return analysis;
+        var zoneAnalyses = await AnalyzeZonesAsync(zones, 2, cancellationToken).ConfigureAwait(false);
+        var diagnostics = analysis.Diagnostics
+            .Concat(zoneAnalyses.SelectMany(zone => zone.MappedDiagnostics))
+            .ToArray();
+        return analysis with { Diagnostics = diagnostics, Zones = zoneAnalyses };
     }
 
     public async Task<LspClientSession> GetSessionAsync(
@@ -413,7 +637,7 @@ public sealed class LspWorkspace : IAsyncDisposable
         var fullPath = Path.GetFullPath(path);
         var uri = LspDocumentUri.FromPath(fullPath);
         if (type != LspFileEventType.Created)
-            Index.Remove(uri);
+            Index.Invalidate(uri);
         var profile = LanguageCatalog.FindByPath(fullPath);
         if (profile is null || !_sessions.TryGetValue(profile.Id, out var lazy) || !lazy.IsValueCreated)
             return;

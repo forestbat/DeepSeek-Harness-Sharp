@@ -34,7 +34,8 @@ public sealed record DocumentAnalysis(
     HierarchyGraph Hierarchy,
     TypeFactsSnapshot Types,
     IReadOnlyList<LspDiagnostic> Diagnostics,
-    ValidationResult Validation)
+    ValidationResult Validation,
+    IReadOnlyList<ZoneAnalysis>? Zones = null)
 {
     public bool IsValid => Validation.IsValid;
 }

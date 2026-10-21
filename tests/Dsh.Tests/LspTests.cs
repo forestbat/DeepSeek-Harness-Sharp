@@ -65,11 +65,12 @@ public sealed class LspTests
         while (await LspFrameCodec.ReadAsync(output, TestContext.Current.CancellationToken) is { } frame)
             messages.Add(frame);
 
-        var initialize = messages.Single(message => message.GetProperty("id").GetInt32() == 1)
+        var initialize = messages.Single(message => message.TryGetProperty("id", out var id) && id.GetInt32() == 1)
             .GetProperty("result");
         Assert.True(initialize.GetProperty("capabilities").GetProperty("documentSymbolProvider").GetBoolean());
-        Assert.True(initialize.GetProperty("capabilities").GetProperty("semanticTokensProvider").GetProperty("full").GetBoolean());
-        var symbols = messages.Single(message => message.GetProperty("id").GetInt32() == 2)
+        Assert.True(initialize.GetProperty("capabilities").GetProperty("semanticTokensProvider")
+            .GetProperty("full").GetProperty("delta").GetBoolean());
+        var symbols = messages.Single(message => message.TryGetProperty("id", out var id) && id.GetInt32() == 2)
             .GetProperty("result");
         Assert.Equal("C", Assert.Single(symbols.EnumerateArray()).GetProperty("name").GetString());
     }

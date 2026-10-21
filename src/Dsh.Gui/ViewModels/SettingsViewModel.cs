@@ -16,6 +16,7 @@ namespace Dsh.Gui.ViewModels;
 public enum SettingsSection
 {
     Appearance,
+    Editor,
     Model,
     Account,
     Safety,
@@ -83,6 +84,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<SettingsNavItemViewModel> Sections { get; } =
     [
         new(SettingsSection.Appearance, "外观"),
+        new(SettingsSection.Editor, "编辑器"),
         new(SettingsSection.Model, "模型提供者"),
         new(SettingsSection.Account, "账号"),
         new(SettingsSection.Safety, "安全策略"),
@@ -118,6 +120,8 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public ObservableCollection<McpRowViewModel> McpServers { get; } = [];
 
+    public ObservableCollection<ExternalEditorRowViewModel> ExternalEditors { get; } = [];
+
     public ObservableCollection<ShortcutRowViewModel> Shortcuts { get; } =
     [
         new("Enter", "发送消息"),
@@ -140,6 +144,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isAppearanceSection = true;
+
+    [ObservableProperty]
+    private bool _isEditorSection;
 
     [ObservableProperty]
     private bool _isModelSection;
@@ -269,6 +276,24 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _status = "";
 
     [ObservableProperty]
+    private ExternalEditorRowViewModel? _selectedExternalEditor;
+
+    [ObservableProperty]
+    private string _editorName = "";
+
+    [ObservableProperty]
+    private string _editorCommand = "";
+
+    [ObservableProperty]
+    private string _editorArgs = "";
+
+    [ObservableProperty]
+    private string _editorPath = "";
+
+    [ObservableProperty]
+    private string _editorStatus = "";
+
+    [ObservableProperty]
     private bool _isWorking;
 
     /** 模型切换后只需刷新推理强度候选; 完整 Reload 会读盘并重查 GPU/版本, 在点击链路里太重。 */
@@ -292,7 +317,19 @@ public sealed partial class SettingsViewModel : ObservableObject
         SessionsPath = Path.Combine(_home.Root, "sessions");
         ConfigPath = Path.Combine(_home.Root, "settings.yaml");
         LoadHarnessSettings();
+        LoadExternalEditors();
         LoadVersion();
+    }
+
+    private void LoadExternalEditors()
+    {
+        ExternalEditors.Clear();
+        foreach (var editor in HarnessSettings.Load(_home).ExternalEditor)
+            ExternalEditors.Add(new ExternalEditorRowViewModel(
+                editor.Name ?? "",
+                editor.Command ?? "",
+                string.Join(' ', editor.Args)));
+        SelectedExternalEditor = ExternalEditors.FirstOrDefault();
     }
 
     private void LoadGpuAdapters(string saved)
@@ -377,6 +414,84 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         FontSize = 13.5;
         PersistAppearance();
+    }
+
+    [RelayCommand]
+    private void AddExternalEditor()
+    {
+        if (string.IsNullOrWhiteSpace(EditorCommand))
+        {
+            EditorStatus = "command 不能为空";
+            return;
+        }
+
+        var row = new ExternalEditorRowViewModel(
+            string.IsNullOrWhiteSpace(EditorName) ? EditorCommand : EditorName.Trim(),
+            EditorCommand.Trim(),
+            EditorArgs.Trim());
+        ExternalEditors.Add(row);
+        SelectedExternalEditor = row;
+        EditorName = "";
+        EditorCommand = "";
+        EditorArgs = "";
+        EditorStatus = "已加入列表，点击保存生效；列表第一项是 favorite";
+    }
+
+    [RelayCommand]
+    private void RemoveExternalEditor()
+    {
+        if (SelectedExternalEditor is not { } row)
+            return;
+        ExternalEditors.Remove(row);
+        SelectedExternalEditor = ExternalEditors.FirstOrDefault();
+    }
+
+    [RelayCommand]
+    private void MakeFavorite()
+    {
+        if (SelectedExternalEditor is not { } row)
+            return;
+        ExternalEditors.Remove(row);
+        ExternalEditors.Insert(0, row);
+        SelectedExternalEditor = row;
+        EditorStatus = "已设为 favorite（列表第一项）";
+    }
+
+    [RelayCommand]
+    private void SaveExternalEditors()
+    {
+        _facade.UpdateExternalEditors(ExternalEditors
+            .Where(row => row.Command.Length > 0)
+            .Select(row => new ExternalEditorDefinition
+            {
+                Name = row.Name,
+                Command = row.Command,
+                Args = row.Args.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList(),
+            })
+            .ToArray());
+        EditorStatus = "编辑器列表已保存";
+    }
+
+    [RelayCommand]
+    private void LaunchExternalEditor()
+    {
+        if (string.IsNullOrWhiteSpace(EditorPath))
+        {
+            EditorStatus = "请填写要打开的文件路径";
+            return;
+        }
+
+        try
+        {
+            var launcher = _ctx.Get<IExternalEditorLauncher>(IExternalEditorLauncher.ServiceName, false)
+                ?? throw new InvalidOperationException("external editor tool plugin is not loaded");
+            var launch = launcher.Launch(EditorPath.Trim(), SelectedExternalEditor?.Name);
+            EditorStatus = $"已启动 {launch.Editor}（PID {launch.ProcessId}）";
+        }
+        catch (Exception error)
+        {
+            EditorStatus = error.Message;
+        }
     }
 
     /**
@@ -668,6 +783,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         foreach (var item in Sections)
             item.IsSelected = ReferenceEquals(item, section);
         IsAppearanceSection = Section == SettingsSection.Appearance;
+        IsEditorSection = Section == SettingsSection.Editor;
         IsModelSection = Section == SettingsSection.Model;
         IsAccountSection = Section == SettingsSection.Account;
         IsSafetySection = Section == SettingsSection.Safety;
@@ -680,6 +796,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsAboutSection = Section == SettingsSection.About;
         if (Section == SettingsSection.Model)
             LoadHarnessSettings();
+        if (Section == SettingsSection.Editor)
+            LoadExternalEditors();
         if (Section == SettingsSection.Plugins)
             LoadPluginRows();
         if (Section == SettingsSection.Network)
@@ -798,6 +916,8 @@ public sealed partial class SettingsNavItemViewModel(SettingsSection section, st
 }
 
 public sealed record ProviderRowViewModel(string Name, string Type, string BaseUrl, int ModelCount);
+
+public sealed record ExternalEditorRowViewModel(string Name, string Command, string Args);
 
 /**
  * "选择模型提供者"下拉的一项。

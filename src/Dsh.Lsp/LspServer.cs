@@ -39,6 +39,8 @@ public sealed class LspServer : IAsyncDisposable
     private readonly LspDocumentStore _documents = new();
     private readonly Dictionary<string, DocumentAnalysis> _analysis = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _analysisGate = new(1, 1);
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private Stream? _output;
     private bool _exit;
 
     public LspServer(ILspServerBackend backend, bool ownsBackend = true)
@@ -59,6 +61,7 @@ public sealed class LspServer : IAsyncDisposable
 
     public async Task RunAsync(Stream input, Stream output, CancellationToken cancellationToken = default)
     {
+        _output = output;
         while (!_exit && !cancellationToken.IsCancellationRequested)
         {
             var frame = await LspFrameCodec.ReadAsync(input, cancellationToken).ConfigureAwait(false);
@@ -92,11 +95,53 @@ public sealed class LspServer : IAsyncDisposable
                     response["result"] = null;
                 else
                     response["error"] = error;
-                await LspFrameCodec.WriteAsync(output, response, cancellationToken).ConfigureAwait(false);
+                await WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
             await HandleNotificationAsync(method, parameters).ConfigureAwait(false);
+            if (method is "textDocument/didOpen" or "textDocument/didChange"
+                && LspJson.String(LspJson.Property(parameters, "textDocument"), "uri") is { } changedUri)
+                _ = PublishDiagnosticsAsync(changedUri, cancellationToken);
+        }
+    }
+
+    private async Task WriteFrameAsync(JsonObject message, CancellationToken cancellationToken)
+    {
+        if (_output is not { } output)
+            return;
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await LspFrameCodec.WriteAsync(output, message, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    private async Task PublishDiagnosticsAsync(string uri, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var analysis = await AnalyzeAsync(uri, cancellationToken).ConfigureAwait(false);
+            var document = Document(uri);
+            await WriteFrameAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["method"] = "textDocument/publishDiagnostics",
+                ["params"] = new JsonObject
+                {
+                    ["uri"] = LspDocumentUri.Normalize(uri),
+                    ["version"] = document?.Version,
+                    ["diagnostics"] = new JsonArray(analysis.Diagnostics.Select(DiagnosticNode).ToArray()),
+                },
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _ = error;
         }
     }
 
@@ -119,6 +164,12 @@ public sealed class LspServer : IAsyncDisposable
                 return Json(await SelectionsAsync(parameters, cancellationToken).ConfigureAwait(false));
             case "textDocument/semanticTokens/full":
                 return Json(SemanticTokens(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false)));
+            case "textDocument/semanticTokens/full/delta":
+                return Json(SemanticTokens(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false)));
+            case "textDocument/semanticTokens/range":
+                return Json(SemanticTokens(
+                    await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false),
+                    LspJson.Range(LspJson.Property(parameters, "range"))));
             case "textDocument/diagnostic":
                 return Json(DiagnosticResponse(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false)));
             case "textDocument/definition":
@@ -175,15 +226,23 @@ public sealed class LspServer : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
                 return resolvedAction is null ? Json(actionParameters) : Json(ActionNode(resolvedAction));
             case "textDocument/inlayHint":
-                return Json(InlayHints(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false)));
+                return Json(InlayHints(
+                    await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false),
+                    LspJson.Range(LspJson.Property(parameters, "range"))));
             case "textDocument/signatureHelp":
                 return Json(Signatures(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false)));
             case "workspace/symbol":
                 var query = LspJson.String(parameters, "query") ?? string.Empty;
-                var languageId = _documents.OpenDocuments.FirstOrDefault()?.LanguageId;
-                if (languageId is null)
+                var languageIds = _documents.OpenDocuments
+                    .Select(document => document.LanguageId)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (languageIds.Length == 0)
                     return Json(new JsonArray());
-                return Json(WorkspaceSymbols(await _backend.WorkspaceSymbolsAsync(languageId, query, cancellationToken).ConfigureAwait(false)));
+                var workspaceSymbols = new List<WorkspaceSymbolFact>();
+                foreach (var languageId in languageIds)
+                    workspaceSymbols.AddRange(await _backend.WorkspaceSymbolsAsync(languageId, query, cancellationToken).ConfigureAwait(false));
+                return Json(WorkspaceSymbols(workspaceSymbols));
             case "textDocument/prepareCallHierarchy":
                 return Json(HierarchyItems(await AnalyzeAsync(Uri(parameters), cancellationToken).ConfigureAwait(false), Position(parameters)));
             case "textDocument/prepareTypeHierarchy":
@@ -423,7 +482,8 @@ public sealed class LspServer : IAsyncDisposable
                 },
                 ["semanticTokensProvider"] = new JsonObject
                 {
-                    ["full"] = true,
+                    ["full"] = new JsonObject { ["delta"] = true },
+                    ["range"] = true,
                     ["legend"] = new JsonObject
                     {
                         ["tokenTypes"] = new JsonArray(SemanticTokenTypes.Select(value => (JsonNode?)value).ToArray()),
@@ -462,7 +522,7 @@ public sealed class LspServer : IAsyncDisposable
             ["kind"] = folding.Kind,
         }).ToArray());
 
-    private static JsonObject SemanticTokens(DocumentAnalysis analysis)
+    private static JsonObject SemanticTokens(DocumentAnalysis analysis, LspRange? requestedRange = null)
     {
         var typeIndex = SemanticTokenTypes
             .Select((type, index) => (type, index))
@@ -474,6 +534,7 @@ public sealed class LspServer : IAsyncDisposable
         var previousLine = 0;
         var previousCharacter = 0;
         foreach (var token in analysis.Syntax.SemanticTokens
+                     .Where(token => requestedRange is not { } limit || token.Range.Overlaps(limit))
                      .OrderBy(token => token.Range.Start)
                      .ThenBy(token => token.Range.End))
         {
@@ -522,8 +583,10 @@ public sealed class LspServer : IAsyncDisposable
             ["kind"] = highlight.Kind switch { "text" => 1, "read" => 2, "write" => 3, _ => 1 },
         }).ToArray());
 
-    private static JsonArray InlayHints(DocumentAnalysis analysis)
-        => new(analysis.Types.Hints.Select(hint => (JsonNode?)new JsonObject
+    private static JsonArray InlayHints(DocumentAnalysis analysis, LspRange? requestedRange = null)
+        => new(analysis.Types.Hints
+            .Where(hint => requestedRange is not { } limit || hint.Range.Overlaps(limit))
+            .Select(hint => (JsonNode?)new JsonObject
         {
             ["position"] = LspJson.PositionNode(hint.Range.Start),
             ["label"] = hint.Label,
@@ -563,16 +626,63 @@ public sealed class LspServer : IAsyncDisposable
         if (edit is null)
             return null;
         var changes = new JsonObject();
+        var documentChanges = new JsonArray();
         foreach (var document in edit.Documents)
         {
-            changes[document.Uri] = new JsonArray(document.Edits.Select(textEdit => (JsonNode?)new JsonObject
+            var edits = new JsonArray(document.Edits.Select(textEdit => (JsonNode?)new JsonObject
             {
                 ["range"] = LspJson.RangeNode(textEdit.Range),
                 ["newText"] = textEdit.NewText,
             }).ToArray());
+            changes[document.Uri] = edits.DeepClone();
+            documentChanges.Add(new JsonObject
+            {
+                ["textDocument"] = new JsonObject
+                {
+                    ["uri"] = document.Uri,
+                    ["version"] = document.Version,
+                },
+                ["edits"] = edits,
+            });
         }
 
-        return new JsonObject { ["changes"] = changes };
+        foreach (var operation in edit.FileOperations ?? [])
+        {
+            documentChanges.Add(operation.Kind switch
+            {
+                WorkspaceFileOperationKind.Create => new JsonObject
+                {
+                    ["kind"] = "create",
+                    ["uri"] = operation.Uri,
+                    ["options"] = new JsonObject
+                    {
+                        ["overwrite"] = operation.Overwrite,
+                        ["ignoreIfExists"] = operation.IgnoreIfExists,
+                    },
+                },
+                WorkspaceFileOperationKind.Rename => new JsonObject
+                {
+                    ["kind"] = "rename",
+                    ["oldUri"] = operation.Uri,
+                    ["newUri"] = operation.NewUri,
+                    ["options"] = new JsonObject
+                    {
+                        ["overwrite"] = operation.Overwrite,
+                        ["ignoreIfExists"] = operation.IgnoreIfExists,
+                    },
+                },
+                _ => new JsonObject
+                {
+                    ["kind"] = "delete",
+                    ["uri"] = operation.Uri,
+                    ["options"] = new JsonObject { ["ignoreIfExists"] = operation.IgnoreIfExists },
+                },
+            });
+        }
+
+        return edit.FileOperations is { Count: > 0 } || edit.Documents.Any(document => document.Version is not null)
+            ? new JsonObject { ["documentChanges"] = documentChanges }
+            : new JsonObject { ["changes"] = changes };
     }
 
     private static JsonArray Actions(IReadOnlyList<CodeActionFact> actions)
@@ -687,5 +797,6 @@ public sealed class LspServer : IAsyncDisposable
         if (_ownsBackend)
             await _backend.DisposeAsync().ConfigureAwait(false);
         _analysisGate.Dispose();
+        _writeGate.Dispose();
     }
 }

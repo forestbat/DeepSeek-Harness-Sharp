@@ -82,6 +82,53 @@
             </Border>
           </StackPanel>
 
+          <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsEditorSection}">
+            <TextBlock Text="编辑器" Classes="Title" />
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Text="已配置编辑器（第一项是 favorite）" Classes="Secondary" />
+                <ListBox ItemsSource="{Binding Preferences.ExternalEditors}"
+                         SelectedItem="{Binding Preferences.SelectedExternalEditor}" MaxHeight="220">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ExternalEditorRowViewModel">
+                      <Grid ColumnDefinitions="170,220,*">
+                        <TextBlock Text="{Binding Name}" Classes="Secondary" />
+                        <TextBlock Grid.Column="1" Text="{Binding Command}" Classes="Mono" />
+                        <TextBlock Grid.Column="2" Text="{Binding Args}" Classes="Tertiary" TextTrimming="CharacterEllipsis" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Classes="Ghost" Content="设为 favorite" Command="{Binding Preferences.MakeFavoriteCommand}" />
+                  <Button Classes="Ghost" Content="删除" Command="{Binding Preferences.RemoveExternalEditorCommand}" />
+                  <Button Classes="Primary" Content="保存列表" Command="{Binding Preferences.SaveExternalEditorsCommand}" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Text="添加编辑器" Classes="Secondary" />
+                <TextBox Text="{Binding Preferences.EditorName}" PlaceholderText="名称，例如 VS Code" />
+                <TextBox Text="{Binding Preferences.EditorCommand}" PlaceholderText="命令，例如 code / notepad.exe" />
+                <TextBox Text="{Binding Preferences.EditorArgs}" PlaceholderText="参数模板，例如 -g {path}:{line}:{column}" />
+                <Button Classes="Primary" Content="加入列表" Command="{Binding Preferences.AddExternalEditorCommand}" />
+                <TextBlock Text="未配置时使用系统默认编辑器；LLM 工具 open_external_editor 默认启动 favorite。"
+                           Classes="Tertiary" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Text="启动编辑器" Classes="Secondary" />
+                <TextBox Text="{Binding Preferences.EditorPath}" PlaceholderText="要打开的文件路径" />
+                <Button Classes="Primary" Content="启动当前选中的编辑器" Command="{Binding Preferences.LaunchExternalEditorCommand}" />
+                <TextBlock Text="{Binding Preferences.EditorStatus}" Classes="Tertiary" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsModelSection}">
             <TextBlock Text="模型提供者" Classes="Title" />
 

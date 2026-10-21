@@ -14,6 +14,7 @@ using Dsh.Plugins;
 [assembly: DshPlugin(Dsh.Tools.Plugin.ToolWsl)]
 [assembly: DshPlugin(Dsh.Tools.Plugin.ToolWorkingDirectory)]
 [assembly: DshPlugin(Dsh.Tools.Plugin.ToolWorktree)]
+[assembly: DshPlugin(Dsh.Tools.Plugin.ToolExternalEditor)]
 
 namespace Dsh.Tools;
 
@@ -31,6 +32,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     internal const string ToolWsl = "@deepseek-ai/dsh-tool-wsl";
     internal const string ToolWorkingDirectory = "@deepseek-ai/dsh-tool-working-directory";
     internal const string ToolWorktree = "@deepseek-ai/dsh-tool-worktree";
+    internal const string ToolExternalEditor = "@deepseek-ai/dsh-tool-external-editor";
 
     public string[] Inject => packageName switch
     {
@@ -46,6 +48,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
         FsLocal => [],
         ToolWorkingDirectory => [ToolRuntime.ServiceName, SystemPrompt.ServiceName],
         ToolWorktree => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SubprocessService.ServiceName],
+        ToolExternalEditor => [ToolRuntime.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
@@ -63,6 +66,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
         FsLocal => LocalFsService.Register(ctx, ConfigOf(config)?.GetValueOrDefault("cwd") as string),
         ToolWorkingDirectory => WorkingDirectoryTool.Register(ctx),
         ToolWorktree => WorktreeTool.Register(ctx),
+        ToolExternalEditor => ExternalEditorTool.Register(ctx),
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 

@@ -84,6 +84,17 @@ rules: []
 sandbox:
   enabled: false
 
+# 外部编辑器启动器:列表第一项是 favorite, LLM 的 open_external_editor 默认启动它。
+# 不配置时使用系统默认编辑器: Windows 记事本、macOS 文本编辑、Linux nano。
+# 占位符: {path}/{file} 文件路径, {line} 行号, {column} 列号。
+# external_editor:
+#   - name: VS Code
+#     command: code
+#     args: ["--goto", "{path}:{line}:{column}"]
+#   - name: Notepad
+#     command: notepad.exe
+#     args: ["{path}"]
+
 # 插件开关:true/false 或 {enabled: true, permissions: {...}, ...插件参数}
 # 插件发现即启用;只有这里显式禁用的插件才会关闭。/plugins 命令会改写本段(GUI 插件市场同样写这里)。
 # permissions 是与 enabled 并列的保留键,不会作为参数交给插件:read/write/network 三项布尔值,未写的项与未写 permissions 时均为允许;
@@ -228,6 +239,10 @@ plugins:
 #     bypass:  # 不走代理的主机(含其子域), 只在 url 非空时生效; 回环地址、不带点的主机名与私网 IP 始终直连
 #     probe_url:  # 连通性自检的探测地址; 留空用 https://www.gstatic.com/generate_204
 #   borrowed_outbound_machine:
+# external_editor:  # 列表(第一项为 favorite)
+#   name:
+#   command:
+#   args:  # 列表
 # sandbox:  # 映射(见子项)
 #   enabled:  # Plugin sandbox switch; false (the default) keeps plugin loading and execution unchanged.
 # plugins:  # 映射(见子项)

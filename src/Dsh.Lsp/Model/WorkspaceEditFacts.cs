@@ -9,9 +9,25 @@ public sealed record RenameTarget(LspRange Range, string Placeholder);
 
 public sealed record TextEditFact(LspRange Range, string NewText);
 
-public sealed record DocumentEdits(string Uri, IReadOnlyList<TextEditFact> Edits);
+public sealed record DocumentEdits(string Uri, IReadOnlyList<TextEditFact> Edits, int? Version = null);
 
-public sealed record WorkspaceEditFact(IReadOnlyList<DocumentEdits> Documents);
+public enum WorkspaceFileOperationKind
+{
+    Create,
+    Rename,
+    Delete,
+}
+
+public sealed record WorkspaceFileOperation(
+    WorkspaceFileOperationKind Kind,
+    string Uri,
+    string? NewUri = null,
+    bool Overwrite = false,
+    bool IgnoreIfExists = false);
+
+public sealed record WorkspaceEditFact(
+    IReadOnlyList<DocumentEdits> Documents,
+    IReadOnlyList<WorkspaceFileOperation>? FileOperations = null);
 
 public sealed record WorkspaceSymbolFact(
     string Name,

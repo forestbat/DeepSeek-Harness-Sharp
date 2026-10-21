@@ -31,6 +31,14 @@ public sealed class SettingsFacade(Context ctx, HarnessHome home)
         Changed?.Invoke();
     }
 
+    public void UpdateExternalEditors(IReadOnlyList<ExternalEditorDefinition> editors)
+    {
+        var settings = Load();
+        settings.ExternalEditor = [.. editors];
+        settings.Save(home);
+        Changed?.Invoke();
+    }
+
     /** 某个插件的参数段(例如 GUI 自己的外观/显卡设置); 合并已有键后写回。 */
     public void SavePluginParameters(string package, IReadOnlyDictionary<string, object?> parameters)
     {

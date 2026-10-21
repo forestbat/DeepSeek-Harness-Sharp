@@ -424,6 +424,18 @@ public sealed class LspStructuredTests
     }
 
     [Fact]
+    public void LanguageZoneDetector_FindsMarkdownFencesAndMapsPositions()
+    {
+        var document = LspDocument.Create("file:///README.md", "markdown", "```typescript\nconst x = 1;\n```\n");
+        var zone = Assert.Single(LanguageZoneDetector.Detect(document, "markdown"));
+        Assert.Equal("typescript", zone.LanguageId);
+        Assert.Contains("const x", zone.Text);
+        Assert.NotNull(zone.ParentRange);
+        var mapped = new ZoneMapping(zone.ParentRange!.Value).Map(new LspPosition(0, 0));
+        Assert.Equal(1, mapped.Line);
+    }
+
+    [Fact]
     public void WorkspaceIndex_ReplacesOnlyTheChangedDocument()
     {
         var first = AnalysisFor("file:///one.cs", "class One {}");
