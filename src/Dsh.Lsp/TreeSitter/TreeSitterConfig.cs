@@ -20,6 +20,8 @@ public static class TreeSitterConfig
                     .Where(pair => pair.Value is string)
                     .ToDictionary(pair => pair.Key, pair => (string)pair.Value!, StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (language, path) in TreeSitterGrammarCatalog.Discover(runtimePath))
+            grammars.TryAdd(language, path);
         var allowed = section.TryGetValue("allowedLanguages", out var allowedValue)
             && allowedValue is IEnumerable<object?> items
                 ? items.OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase)

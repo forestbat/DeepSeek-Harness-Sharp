@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -13,6 +14,8 @@ public interface ISyntaxTreeProvider
 {
     string Name { get; }
 
+    bool SupportsIncremental => false;
+
     Task<CstNode?> TryParseAsync(LspDocument document, CancellationToken cancellationToken = default);
 }
 
@@ -23,6 +26,7 @@ public interface ISyntaxTreeProvider
 public sealed class TreeSitterSidecarProvider(TreeSitterOptions options) : ISyntaxTreeProvider
 {
     private const string DriverResource = "Dsh.Lsp.TreeSitter.sidecar.cjs";
+    private readonly ConcurrentDictionary<string, (string Text, CstNode Cst)> _cache = new(StringComparer.Ordinal);
 
     public string Name => "tree-sitter";
 
@@ -35,6 +39,8 @@ public sealed class TreeSitterSidecarProvider(TreeSitterOptions options) : ISynt
         LastError = null;
         if (!options.Allows(document.LanguageId))
             return null;
+        if (_cache.TryGetValue(document.Uri, out var cached) && cached.Text == document.Text)
+            return cached.Cst;
         if (Encoding.UTF8.GetByteCount(document.Text) > options.MaxFileBytes)
         {
             LastError = $"file exceeds Tree-sitter limit of {options.MaxFileBytes} bytes";
@@ -57,7 +63,11 @@ public sealed class TreeSitterSidecarProvider(TreeSitterOptions options) : ISynt
         var driver = EnsureDriver();
         var request = new JsonObject
         {
-            ["grammar"] = Path.GetFullPath(grammar),
+            ["language"] = document.LanguageId,
+            ["grammar"] = Path.GetFullPath(
+                Path.IsPathRooted(grammar)
+                    ? grammar
+                    : Path.Combine(options.RuntimePath!, grammar)),
             ["runtimePath"] = Path.GetFullPath(options.RuntimePath),
             ["source"] = document.Text,
         };
@@ -111,7 +121,10 @@ public sealed class TreeSitterSidecarProvider(TreeSitterOptions options) : ISynt
             if (!json.RootElement.TryGetProperty("root", out var root))
                 return null;
             var byteMap = Utf8ByteMap.Build(document.Text);
-            return ParseNode(root, byteMap, document, 0);
+            var parsed = ParseNode(root, byteMap, document, 0);
+            if (parsed is not null)
+                _cache[document.Uri] = (document.Text, parsed);
+            return parsed;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -177,8 +190,6 @@ public sealed class TreeSitterSidecarProvider(TreeSitterOptions options) : ISynt
         var directory = Path.Combine(Path.GetTempPath(), "dsh-lsp");
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "tree-sitter-sidecar.cjs");
-        if (File.Exists(path))
-            return path;
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(DriverResource)
             ?? throw new InvalidOperationException($"missing embedded resource {DriverResource}");
         using var output = File.Create(path);
