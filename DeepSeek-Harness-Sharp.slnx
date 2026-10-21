@@ -35,6 +35,8 @@
     <Project Path="src/Dsh.Llm.OpenAi/Dsh.Llm.OpenAi.csproj" />
     <Project Path="src/Dsh.Llm/Dsh.Llm.csproj" />
     <Project Path="src/Dsh.Lsp/Dsh.Lsp.csproj" />
+    <Project Path="src/Dsh.Lsp.CSharp/Dsh.Lsp.CSharp.csproj" />
+    <Project Path="src/Dsh.Lsp.Python/Dsh.Lsp.Python.csproj" />
     <Project Path="src/Dsh.Mcp/Dsh.Mcp.csproj" />
     <Project Path="src/Dsh.Memory/Dsh.Memory.csproj" />
     <Project Path="src/Dsh.Notifications/Dsh.Notifications.csproj" />
