@@ -208,14 +208,23 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     public bool HasError => Error.Length > 0;
 
-    public bool HasQuestion => QuestionHint.Length > 0;
+    public ObservableCollection<QuestionItemViewModel> Questions { get; } = [];
 
     [ObservableProperty]
-    private string _questionHint = "";
+    private string _questionTitle = "";
+
+    [ObservableProperty]
+    private string _questionRequestId = "";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SubmitAnswersCommand))]
+    private bool _hasQuestions;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SubmitAnswersCommand))]
+    private bool _isSendingAnswers;
 
     partial void OnErrorChanged(string value) => OnPropertyChanged(nameof(HasError));
-
-    partial void OnQuestionHintChanged(string value) => OnPropertyChanged(nameof(HasQuestion));
 
     public bool IsConnected => _connection?.State == MobileConnectionState.Connected;
 
@@ -278,6 +287,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         OnPropertyChanged(nameof(IsConnected));
         Sessions.Clear();
         HasApproval = false;
+        foreach (var question in Questions)
+            question.Changed -= OnAnswerChanged;
+        Questions.Clear();
+        QuestionRequestId = "";
+        QuestionTitle = "";
+        HasQuestions = false;
     }
 
     [RelayCommand]
@@ -430,8 +445,72 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         ApprovalDetail = approval is null
             ? ""
             : (approval.Reason is { Length: > 0 } reason ? reason : approval.Arguments ?? "");
-        var questions = connection.Pending.Questions.Count;
-        QuestionHint = questions == 0 ? "" : $"有 {questions} 个待回答的问题，请在桌面端回答";
+        ApplyQuestions(connection.Pending.Questions.FirstOrDefault());
+    }
+
+    /** 只在 requestId 变化时重建题目, 否则用户已经勾好的选项会被待决广播刷掉。 */
+    private void ApplyQuestions(RemoteQuestionRequest? request)
+    {
+        var id = request?.RequestId ?? "";
+        if (id == QuestionRequestId)
+            return;
+        foreach (var question in Questions)
+            question.Changed -= OnAnswerChanged;
+        Questions.Clear();
+        QuestionRequestId = id;
+        if (request is null)
+        {
+            HasQuestions = false;
+            QuestionTitle = "";
+            return;
+        }
+        var session = SessionTitle(request.SessionId);
+        QuestionTitle = request.Questions.Count == 1
+            ? $"{request.Questions[0].Question} · {session}"
+            : $"需要你回答 {request.Questions.Count} 个问题 · {session}";
+        foreach (var item in request.Questions)
+        {
+            var question = new QuestionItemViewModel(item);
+            question.Changed += OnAnswerChanged;
+            Questions.Add(question);
+        }
+        HasQuestions = true;
+        SubmitAnswersCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnAnswerChanged() => SubmitAnswersCommand.NotifyCanExecuteChanged();
+
+    private bool CanSubmitAnswers()
+        => !IsSendingAnswers
+        && HasQuestions
+        && Questions.All(question => question.SelectedLabels.Count > 0 || question.Custom.Trim().Length > 0);
+
+    [RelayCommand(CanExecute = nameof(CanSubmitAnswers))]
+    private async Task SubmitAnswersAsync()
+    {
+        if (_connection is null || QuestionRequestId.Length == 0)
+            return;
+        IsSendingAnswers = true;
+        try
+        {
+            var answers = Questions
+                .Select(question => new RemoteQuestionAnswerItem(
+                    question.Id,
+                    question.SelectedLabels,
+                    question.Custom.Trim() is { Length: > 0 } custom ? custom : null))
+                .ToList();
+            var lease = await _connection.WaitConnectedAsync(_lifetime.Token);
+            var accepted = await lease.Client.RespondQuestionAsync(QuestionRequestId, answers, _lifetime.Token);
+            Error = accepted ? "" : "问题已被其他客户端回答";
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Error = $"提交回答失败: {error.Message}";
+        }
+        finally
+        {
+            IsSendingAnswers = false;
+        }
     }
 
     private string SessionTitle(string sessionId)

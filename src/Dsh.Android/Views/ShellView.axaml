@@ -142,10 +142,6 @@
 
       <StackPanel Grid.Row="2" Margin="12,4" Spacing="6">
         <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
-        <TextBlock Text="{Binding QuestionHint}"
-                   Classes="hint"
-                   Foreground="#F2B94A"
-                   IsVisible="{Binding HasQuestion}" />
         <Border Background="#2C2317" CornerRadius="12" Padding="12,10" IsVisible="{Binding HasApproval}">
           <StackPanel Spacing="8">
             <TextBlock Text="{Binding ApprovalTitle}" FontSize="14" FontWeight="SemiBold" Foreground="#F2B94A" />
@@ -155,6 +151,34 @@
               <Button Grid.Column="1" Content="允许" Command="{Binding AllowCommand}" HorizontalAlignment="Stretch" Margin="4,0,0,0" />
             </Grid>
           </StackPanel>
+        </Border>
+
+        <Border Background="#1A2432" CornerRadius="12" Padding="12,10" IsVisible="{Binding HasQuestions}">
+          <ScrollViewer MaxHeight="320">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{Binding QuestionTitle}" FontSize="14" FontWeight="SemiBold"
+                         Foreground="#8AB4F8" TextWrapping="Wrap" />
+              <ItemsControl ItemsSource="{Binding Questions}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:QuestionItemViewModel">
+                    <StackPanel Spacing="4" Margin="0,0,0,8">
+                      <TextBlock Text="{Binding Question}" FontSize="14" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding Detail}" Classes="hint" IsVisible="{Binding HasDetail}" />
+                      <ItemsControl ItemsSource="{Binding Options}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:QuestionOptionViewModel">
+                            <CheckBox Content="{Binding Label}" IsChecked="{Binding IsSelected}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBox Text="{Binding Custom}" PlaceholderText="其他答案（可选）" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button Content="提交回答" Command="{Binding SubmitAnswersCommand}" HorizontalAlignment="Stretch" />
+            </StackPanel>
+          </ScrollViewer>
         </Border>
       </StackPanel>
 
