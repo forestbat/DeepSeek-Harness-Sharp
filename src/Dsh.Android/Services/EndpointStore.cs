@@ -27,7 +27,7 @@ public sealed class EndpointStore
             return new HostEndpoint("", 47321, "");
         var host = preferences.GetString(HostKey, "") ?? "";
         var port = int.TryParse(preferences.GetString(PortKey, ""), out var parsed) ? parsed : 47321;
-        return new HostEndpoint(host, port, preferences.GetString(TokenKey, "") ?? "");
+        return new HostEndpoint(host, port, SecretBox.Unprotect(preferences.GetString(TokenKey, "") ?? ""));
     }
 
     public void Save(HostEndpoint endpoint)
@@ -40,7 +40,7 @@ public sealed class EndpointStore
             return;
         editor.PutString(HostKey, endpoint.Host);
         editor.PutString(PortKey, endpoint.Port.ToString());
-        editor.PutString(TokenKey, endpoint.Token);
+        editor.PutString(TokenKey, SecretBox.Protect(endpoint.Token));
         editor.Apply();
     }
 
