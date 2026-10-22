@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -98,4 +99,16 @@ public sealed partial class ShellView : UserControl
     }
 
     private void OnClearAttachment(object? sender, RoutedEventArgs e) => _viewModel?.ClearAttachment();
+
+    private async void OnCopyPublicKey(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel is null || _viewModel.PublicKeyLine.Length == 0)
+            return;
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+        var transfer = new DataTransfer();
+        transfer.Add(DataTransferItem.CreateText(_viewModel.PublicKeyLine));
+        await clipboard.SetDataAsync(transfer);
+    }
 }

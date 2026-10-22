@@ -95,15 +95,20 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     public MobileShellViewModel(EndpointStore store)
     {
         _store = store;
-        var endpoint = store.Load();
-        _host = endpoint.Host;
-        _portText = endpoint.Port.ToString();
-        _token = endpoint.Token;
+        var profile = store.Load();
+        _transport = profile.Transport;
+        _host = profile.Host;
+        _portText = profile.Port.ToString();
+        _token = profile.Token;
+        _sshUser = profile.SshUser;
+        _fingerprint = profile.SshFingerprint;
         _events = new DispatcherBridge<RemoteEventInfo>(ApplyEvents);
         ShareInbox.Changed += DrainShares;
         DrainShares();
+        if (profile.Transport == HostTransportKind.Ssh)
+            EnsureKey();
         // 保存过完整地址就自动连: 手机端没有稳定的桌面入口, 每次启动都要手点一次连接只会拖慢回到会话的速度。
-        if (endpoint.IsComplete)
+        if (profile.IsComplete)
             _ = ConnectAsync();
     }
 
@@ -147,6 +152,62 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     [ObservableProperty]
     private string _token = "";
+
+    [ObservableProperty]
+    private HostTransportKind _transport = HostTransportKind.Tcp;
+
+    [ObservableProperty]
+    private string _sshUser = "";
+
+    [ObservableProperty]
+    private string _publicKeyLine = "";
+
+    [ObservableProperty]
+    private bool _showPublicKey;
+
+    private string _fingerprint = "";
+
+    public bool UseSsh => Transport == HostTransportKind.Ssh;
+
+    public bool UseTcp => Transport == HostTransportKind.Tcp;
+
+    partial void OnTransportChanged(HostTransportKind value)
+    {
+        OnPropertyChanged(nameof(UseSsh));
+        OnPropertyChanged(nameof(UseTcp));
+        if (value == HostTransportKind.Ssh)
+        {
+            if (PortText.Trim() == "47321")
+                PortText = "22";
+            EnsureKey();
+        }
+        else if (PortText.Trim() == "22")
+        {
+            PortText = "47321";
+        }
+    }
+
+    [RelayCommand]
+    private void UseTcpTransport() => Transport = HostTransportKind.Tcp;
+
+    [RelayCommand]
+    private void UseSshTransport() => Transport = HostTransportKind.Ssh;
+
+    [RelayCommand]
+    private void ShowKey() => EnsureKey();
+
+    /** 首次进入 SSH 时生成一对 RSA 密钥; 私钥经 SecretBox 加密后落盘, 公钥只用于展示。 */
+    private void EnsureKey()
+    {
+        var pem = _store.LoadPrivateKey();
+        if (pem is null)
+        {
+            pem = SshKeyPair.GeneratePrivateKeyPem();
+            _store.SavePrivateKey(pem);
+        }
+        PublicKeyLine = SshKeyPair.PublicKeyLine(pem) ?? "";
+        ShowPublicKey = PublicKeyLine.Length > 0;
+    }
 
     [ObservableProperty]
     private string _status = "未连接";
@@ -247,16 +308,33 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             Error = "端口无效";
             return;
         }
-        var endpoint = new HostEndpoint(Host.Trim(), port, Token.Trim());
-        if (!endpoint.IsComplete)
+        var profile = new HostProfile(Transport, Host.Trim(), port, Token.Trim(), SshUser.Trim(), _fingerprint);
+        if (!profile.IsComplete)
         {
-            Error = "请填写主机与端口";
+            Error = profile.Transport == HostTransportKind.Ssh ? "请填写主机、端口与 SSH 用户名" : "请填写主机与端口";
             return;
         }
+        string? keyPem = null;
+        if (profile.Transport == HostTransportKind.Ssh)
+        {
+            EnsureKey();
+            keyPem = _store.LoadPrivateKey();
+            if (keyPem is null)
+            {
+                Error = "SSH 私钥生成失败";
+                return;
+            }
+            // 旧版本留下的明文私钥在这里迁移成 Keystore 加密格式。
+            _store.SavePrivateKey(keyPem);
+        }
 
-        _store.Save(endpoint);
+        _store.Save(profile);
         await DisconnectAsync();
-        var connection = new MobileHostConnection(endpoint);
+        var connection = new MobileHostConnection(profile, keyPem, fingerprint =>
+        {
+            _fingerprint = fingerprint;
+            _store.SaveFingerprint(fingerprint);
+        });
         connection.Changed += OnConnectionChanged;
         _connection = connection;
         Error = "";
