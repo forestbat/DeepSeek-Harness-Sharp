@@ -360,7 +360,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task OpenSessionAsync(SessionRowViewModel row)
     {
-        await CloseSessionAsync();
+        await StopFollowingAsync();
         _openSessionId = row.Id;
         Page = MobilePage.Chat;
         OnPropertyChanged(nameof(ChatTitle));
@@ -423,7 +423,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         });
     }
 
-    private async Task CloseSessionAsync()
+    /** 停止跟随后台订阅并清空消息; 不动 SelectedSession, 供"换一个会话"与"返回列表"共用。 */
+    private async Task StopFollowingAsync()
     {
         var lifetime = _sessionLifetime;
         _sessionLifetime = null;
@@ -436,11 +437,17 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _renderedSeq = 0;
         _transcript = new SubagentTranscript();
         Messages.Clear();
-        SelectedSession = null;
         Error = "";
+        SendCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task CloseSessionAsync()
+    {
+        await StopFollowingAsync();
+        SelectedSession = null;
+        Page = _connection is null ? MobilePage.Connect : MobilePage.Sessions;
         OnPropertyChanged(nameof(ChatTitle));
         OnPropertyChanged(nameof(ChatSubtitle));
-        SendCommand.NotifyCanExecuteChanged();
     }
 
     /** UI 线程上的批量落盘: 只在这一个地方改 Messages, 后台线程不碰绑定集合。 */
