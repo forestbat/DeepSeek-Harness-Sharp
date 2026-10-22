@@ -157,7 +157,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private string _approvalDetail = "";
 
     [ObservableProperty]
-    private int _questionCount;
+    private string _questionHint = "";
 
     public bool ShowConnect => Page == MobilePage.Connect;
 
@@ -167,7 +167,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     public bool HasError => Error.Length > 0;
 
+    public bool HasQuestion => QuestionHint.Length > 0;
+
     partial void OnErrorChanged(string value) => OnPropertyChanged(nameof(HasError));
+
+    partial void OnQuestionHintChanged(string value) => OnPropertyChanged(nameof(HasQuestion));
 
     public bool IsConnected => _connection?.State == MobileConnectionState.Connected;
 
@@ -344,12 +348,19 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         var approval = connection.Pending.Approvals.FirstOrDefault();
         HasApproval = approval is not null;
         _approvalRequestId = approval?.RequestId ?? "";
-        ApprovalTitle = approval is null ? "" : $"{approval.Tool} 请求批准";
+        // 待决列表是全局的: 标题里带上会话名, 避免在 A 会话里误批 B 会话的请求。
+        ApprovalTitle = approval is null
+            ? ""
+            : $"{approval.Tool} 请求批准 · {SessionTitle(approval.SessionId)}";
         ApprovalDetail = approval is null
             ? ""
             : (approval.Reason is { Length: > 0 } reason ? reason : approval.Arguments ?? "");
-        QuestionCount = connection.Pending.Questions.Count;
+        var questions = connection.Pending.Questions.Count;
+        QuestionHint = questions == 0 ? "" : $"有 {questions} 个待回答的问题，请在桌面端回答";
     }
+
+    private string SessionTitle(string sessionId)
+        => Sessions.FirstOrDefault(row => row.Id == sessionId)?.Title ?? sessionId;
 
     partial void OnSelectedSessionChanged(SessionRowViewModel? value)
     {

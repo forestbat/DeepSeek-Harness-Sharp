@@ -140,8 +140,12 @@
         </ItemsControl>
       </ScrollViewer>
 
-      <StackPanel Grid.Row="2" Margin="12,4" Spacing="6" IsVisible="{Binding HasApproval}">
-        <Border Background="#2C2317" CornerRadius="12" Padding="12,10">
+      <StackPanel Grid.Row="2" Margin="12,4" Spacing="6">
+        <TextBlock Text="{Binding QuestionHint}"
+                   Classes="hint"
+                   Foreground="#F2B94A"
+                   IsVisible="{Binding HasQuestion}" />
+        <Border Background="#2C2317" CornerRadius="12" Padding="12,10" IsVisible="{Binding HasApproval}">
           <StackPanel Spacing="8">
             <TextBlock Text="{Binding ApprovalTitle}" FontSize="14" FontWeight="SemiBold" Foreground="#F2B94A" />
             <TextBlock Text="{Binding ApprovalDetail}" Classes="hint" MaxHeight="120" />
