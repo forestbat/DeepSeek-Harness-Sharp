@@ -13,6 +13,7 @@
     <Project Path="src/Dsh.Acp/Dsh.Acp.csproj" />
     <Project Path="src/Dsh.AgentAdapters/Dsh.AgentAdapters.csproj" />
     <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
+    <Project Path="src/Dsh.Android/Dsh.Android.csproj" />
     <Project Path="src/Dsh.Board/Dsh.Board.csproj" />
     <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
     <Project Path="src/Dsh.Checkpoints/Dsh.Checkpoints.csproj" />

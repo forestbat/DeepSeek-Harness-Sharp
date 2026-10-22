@@ -3,6 +3,10 @@
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Dsh.Android" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />

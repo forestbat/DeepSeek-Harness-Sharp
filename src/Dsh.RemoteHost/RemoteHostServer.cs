@@ -45,6 +45,9 @@ public sealed class RemoteHostServer(
 
     private bool RequiresToken => Token is not null;
 
+    /** 非回环监听必须先有 token; 监听器用它拒绝"裸端口直接暴露全部能力"。 */
+    public bool HasToken => Token is { Length: > 0 };
+
     /** Capabilities describe the services this backend actually supplies, not protocol knowledge. */
     private readonly IReadOnlyList<string> _capabilities = CapabilitiesOf(backend);
 

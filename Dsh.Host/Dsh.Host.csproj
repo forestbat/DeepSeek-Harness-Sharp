@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\src\Dsh.*\*.csproj"
-                      Exclude="..\src\Dsh.WebBridge\Dsh.WebBridge.csproj;..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
+                      Exclude="..\src\Dsh.Android\Dsh.Android.csproj;..\src\Dsh.WebBridge\Dsh.WebBridge.csproj;..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
   </ItemGroup>
 
   <!--

@@ -71,6 +71,43 @@ public static class RemoteHostListener
         }
     }
 
+    /**
+     * 面向局域网的 TCP 监听: 连接直接进入 JSON-RPC, 访问控制由握手里的 token(RemoteHostServerOptions.Token)负责。
+     * 与 loopback 监听不同, 这里没有 run 目录里的 LocalEndpointToken 前导; 调用方必须给出 token, 否则一条裸端口就能拿到宿主的全部能力。
+     * listening 在真正绑定后回调, 端口写 0 时调用方据此拿到系统分配的端口。
+     */
+    public static async Task ServeTcpAsync(RemoteHostServer server, IPEndPoint endpoint, CancellationToken cancellationToken, Func<IPEndPoint, Task>? listening = null)
+    {
+        if (!endpoint.Address.Equals(IPAddress.Loopback) && !server.HasToken)
+            throw new InvalidOperationException("a host listening on a non-loopback address requires an access token");
+        var listener = new TcpListener(endpoint);
+        listener.Start();
+        try
+        {
+            if (listening is not null)
+                await listening((IPEndPoint)listener.LocalEndpoint).ConfigureAwait(false);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                TcpClient client;
+                try
+                {
+                    client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception error) when (cancellationToken.IsCancellationRequested
+                    && error is OperationCanceledException or SocketException or ObjectDisposedException)
+                {
+                    break;
+                }
+
+                _ = ServeConnectionAsync(server, new NetworkStream(client.Client, ownsSocket: true), client, cancellationToken);
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     [UnsupportedOSPlatform("windows")]
     private static async Task ServeUnixAsync(RemoteHostServer server, string? root, LocalEndpointToken token, CancellationToken cancellationToken)
     {
@@ -115,6 +152,22 @@ public static class RemoteHostListener
             {
                 if (await PresentsTokenAsync(stream, token, cancellationToken).ConfigureAwait(false))
                     await server.ServeAsync(stream, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is IOException or OperationCanceledException or SocketException)
+            {
+            }
+        }
+    }
+
+    /** 局域网连接: token 在 JSON-RPC 握手里校验, 这里只负责把连接交给宿主。 */
+    private static async Task ServeConnectionAsync(RemoteHostServer server, Stream stream, IDisposable owner, CancellationToken cancellationToken)
+    {
+        using (owner)
+        await using (stream)
+        {
+            try
+            {
+                await server.ServeAsync(stream, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (error is IOException or OperationCanceledException or SocketException)
             {
