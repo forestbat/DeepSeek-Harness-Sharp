@@ -100,9 +100,36 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _portText = endpoint.Port.ToString();
         _token = endpoint.Token;
         _events = new DispatcherBridge<RemoteEventInfo>(ApplyEvents);
+        ShareInbox.Changed += DrainShares;
+        DrainShares();
         // 保存过完整地址就自动连: 手机端没有稳定的桌面入口, 每次启动都要手点一次连接只会拖慢回到会话的速度。
         if (endpoint.IsComplete)
             _ = ConnectAsync();
+    }
+
+    /** 分享进来的文字/图片先在 UI 线程落到输入框或附件槽, 发送仍由用户确认。 */
+    private void DrainShares()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(DrainShares);
+            return;
+        }
+        while (ShareInbox.Take() is { } item)
+        {
+            if (item.Error.Length > 0)
+            {
+                Error = item.Error;
+                continue;
+            }
+            if (item.Text.Length > 0)
+            {
+                Input = Input.Length == 0 ? item.Text : $"{Input}\n{item.Text}";
+                continue;
+            }
+            if (item.Image.Length > 0 && item.MediaType.Length > 0)
+                SetAttachment(item.Name, item.MediaType, item.Image);
+        }
     }
 
     public ObservableCollection<SessionRowViewModel> Sessions { get; } = [];

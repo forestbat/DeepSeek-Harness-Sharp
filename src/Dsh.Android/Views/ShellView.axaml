@@ -87,9 +87,10 @@
     </ScrollViewer>
 
     <!-- 会话列表 -->
-    <Grid Grid.Row="1" IsVisible="{Binding ShowSessions}" RowDefinitions="Auto,*">
+    <Grid Grid.Row="1" IsVisible="{Binding ShowSessions}" RowDefinitions="Auto,Auto,*">
       <TextBlock Grid.Row="0" Margin="16,14,16,6" Text="会话" FontSize="16" FontWeight="SemiBold" />
-      <ListBox Grid.Row="1"
+      <TextBlock Grid.Row="1" Classes="error" Margin="16,0,16,4" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+      <ListBox Grid.Row="2"
                ItemsSource="{Binding Sessions}"
                SelectedItem="{Binding SelectedSession}"
                SelectionMode="Single"
@@ -112,7 +113,6 @@
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
-      <TextBlock Grid.Row="1" Classes="error" Margin="16,4" Text="{Binding Error}" IsVisible="{Binding HasError}" />
     </Grid>
 
     <!-- 会话内容 -->
@@ -141,6 +141,7 @@
       </ScrollViewer>
 
       <StackPanel Grid.Row="2" Margin="12,4" Spacing="6">
+        <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
         <TextBlock Text="{Binding QuestionHint}"
                    Classes="hint"
                    Foreground="#F2B94A"
