@@ -116,7 +116,7 @@
     </Grid>
 
     <!-- 会话内容 -->
-    <Grid Grid.Row="1" IsVisible="{Binding ShowChat}" RowDefinitions="Auto,*,Auto,Auto">
+    <Grid Grid.Row="1" IsVisible="{Binding ShowChat}" RowDefinitions="Auto,*,Auto,Auto,Auto">
       <StackPanel Grid.Row="0" Margin="16,10,16,4" Spacing="2">
         <TextBlock Text="{Binding ChatTitle}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
         <TextBlock Text="{Binding ChatSubtitle}" Classes="hint" />
@@ -157,8 +157,18 @@
         </Border>
       </StackPanel>
 
-      <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Margin="12,6,12,16">
-        <TextBox Grid.Column="0"
+      <Border Grid.Row="3" Background="#1B1E24" CornerRadius="10" Padding="12,8" Margin="12,2"
+              IsVisible="{Binding HasAttachment}">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0" Text="{Binding AttachmentSummary}" Classes="hint" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="移除" Padding="10,2" MinHeight="32" Click="OnClearAttachment" />
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto" Margin="12,6,12,16">
+        <Button Grid.Column="0" Content="＋" FontSize="18" Padding="14,4" Margin="0,0,8,0"
+                VerticalAlignment="Bottom" Click="OnPickAttachment" />
+        <TextBox Grid.Column="1"
                  Text="{Binding Input}"
                  PlaceholderText="发送消息…"
                  AcceptsReturn="True"
@@ -166,7 +176,7 @@
                  TextWrapping="Wrap"
                  VerticalContentAlignment="Center"
                  Margin="0,0,8,0" />
-        <Button Grid.Column="1" Content="发送" Command="{Binding SendCommand}" VerticalAlignment="Bottom" />
+        <Button Grid.Column="2" Content="发送" Command="{Binding SendCommand}" VerticalAlignment="Bottom" />
       </Grid>
     </Grid>
 

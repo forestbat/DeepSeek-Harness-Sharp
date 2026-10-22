@@ -157,7 +157,21 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private string _approvalDetail = "";
 
     [ObservableProperty]
-    private string _questionHint = "";
+    [NotifyCanExecuteChangedFor(nameof(SendCommand))]
+    private bool _hasAttachment;
+
+    [ObservableProperty]
+    private string _attachmentName = "";
+
+    [ObservableProperty]
+    private string? _attachmentMediaType;
+
+    [ObservableProperty]
+    private string _attachmentBase64 = "";
+
+    public string AttachmentSummary => $"{AttachmentName} · {AttachmentBytes / 1024} KB";
+
+    private int AttachmentBytes => AttachmentBase64.Length * 3 / 4;
 
     public bool ShowConnect => Page == MobilePage.Connect;
 
@@ -168,6 +182,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     public bool HasError => Error.Length > 0;
 
     public bool HasQuestion => QuestionHint.Length > 0;
+
+    [ObservableProperty]
+    private string _questionHint = "";
 
     partial void OnErrorChanged(string value) => OnPropertyChanged(nameof(HasError));
 
@@ -210,6 +227,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         Page = MobilePage.Sessions;
         Status = "连接中…";
         StatusBrush = Brushes.Orange;
+        ConnectionServiceBridge.Publish(Status);
+        if (MainActivity.IsForeground)
+            ConnectionServiceBridge.Start();
         connection.Start();
     }
 
@@ -224,6 +244,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             await connection.DisposeAsync();
         }
         await CloseSessionAsync();
+        ConnectionServiceBridge.Stop();
         Page = MobilePage.Connect;
         Status = "未连接";
         StatusBrush = Brushes.Gray;
@@ -243,8 +264,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private async Task SendAsync()
     {
         var text = Input.Trim();
-        if (text.Length == 0 || _connection is null || _openSessionId.Length == 0)
+        if ((text.Length == 0 && !HasAttachment) || _connection is null || _openSessionId.Length == 0)
             return;
+        IReadOnlyList<RemoteImageBlock> images = HasAttachment && AttachmentMediaType is { Length: > 0 } mediaType
+            ? [new RemoteImageBlock(mediaType, 0, 0, AttachmentName, AttachmentBase64)]
+            : [];
         Input = "";
         IsSending = true;
         try
@@ -253,7 +277,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             // 与桌面端一致: 先恢复 harness 会话(agent 还活着时是空操作), 否则发给已退出会话的消息会丢。
             if (SelectedSession?.Kind == HostSessionKinds.Harness)
                 await lease.Client.ResumeSessionAsync(_openSessionId, null, null, _lifetime.Token);
-            await lease.Client.SendMessageAsync(_openSessionId, text, [], _lifetime.Token);
+            await lease.Client.SendMessageAsync(_openSessionId, text, images, _lifetime.Token);
+            ClearAttachment();
             Error = "";
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -267,7 +292,29 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private bool CanSend() => !IsSending && Input.Trim().Length > 0 && _openSessionId.Length > 0;
+    private bool CanSend() => !IsSending && (Input.Trim().Length > 0 || HasAttachment) && _openSessionId.Length > 0;
+
+    /** 由视图的文件选择器写入; 只保留图片本身, 不持有 Android 的 content URI 或流。 */
+    public void SetAttachment(string name, string mediaType, byte[] bytes)
+    {
+        AttachmentName = name;
+        AttachmentMediaType = mediaType;
+        AttachmentBase64 = Convert.ToBase64String(bytes);
+        HasAttachment = true;
+        OnPropertyChanged(nameof(AttachmentSummary));
+        Error = "";
+    }
+
+    public void ReportError(string message) => Error = message;
+
+    public void ClearAttachment()
+    {
+        HasAttachment = false;
+        AttachmentName = "";
+        AttachmentMediaType = null;
+        AttachmentBase64 = "";
+        OnPropertyChanged(nameof(AttachmentSummary));
+    }
 
     [RelayCommand]
     private Task AllowAsync() => RespondApprovalAsync(true);
@@ -312,6 +359,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             MobileConnectionState.Reconnecting => ("重连中…", Brushes.Orange),
             _ => ("未连接", Brushes.Gray),
         };
+        ConnectionServiceBridge.Publish(Status);
         if (connection.State == MobileConnectionState.Connected)
         {
             OnPropertyChanged(nameof(IsConnected));
