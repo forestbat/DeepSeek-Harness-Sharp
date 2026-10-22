@@ -7,7 +7,7 @@ namespace Dsh.Gui.ViewModels;
  * 子会话事件到消息的最小渲染器: 复用主会话的可见语义(用户/正文/思考/工具/结果/上下文注入),
  * 不涉及轨迹与统计, 也不写入会话; 主会话渲染行为不受影响。
  */
-internal sealed class SubagentTranscript
+public sealed class SubagentTranscript
 {
     /** Source plugin name of the system messages that carry an ACP agent's plan (see the host's ACP transcript). */
     private const string AcpPlanSource = "acp-plan";

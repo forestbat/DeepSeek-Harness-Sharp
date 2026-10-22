@@ -1,10 +1,6 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="Dsh.Android" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />

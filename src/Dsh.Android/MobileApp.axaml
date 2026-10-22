@@ -4,17 +4,5 @@
              RequestedThemeVariant="Dark">
   <Application.Styles>
     <FluentTheme />
-    <StyleInclude Source="avares://Dsh.Gui/Themes/Controls.axaml" />
-    <StyleInclude Source="avares://Dsh.Gui/Themes/Workspace.axaml" />
   </Application.Styles>
-  <Application.Resources>
-    <ResourceDictionary>
-      <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://Dsh.Gui/Themes/Tokens.axaml" />
-        <ResourceInclude Source="avares://Dsh.Gui/Themes/Icons.axaml" />
-        <ResourceInclude Source="avares://Dsh.Gui/Themes/MessageTemplates.axaml" />
-        <ResourceInclude Source="avares://Dsh.Gui/Themes/WorkspaceTemplates.axaml" />
-      </ResourceDictionary.MergedDictionaries>
-    </ResourceDictionary>
-  </Application.Resources>
 </Application>

@@ -4,7 +4,7 @@ using LlmTextBlock = Dsh.Llm.TextBlock;
 namespace Dsh.Gui.ViewModels;
 
 /** 会话事件里的内容块到纯文本的提取: 主会话与子代理只读视图共用, 保证两处渲染口径一致。 */
-internal static class SessionText
+public static class SessionText
 {
     public static string ContentText(IReadOnlyList<ContentBlock> blocks) => MessageText.Flatten(blocks);
 

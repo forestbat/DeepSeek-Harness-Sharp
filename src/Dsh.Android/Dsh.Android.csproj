@@ -16,6 +16,25 @@
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <_JdkFromLocal Condition="Exists('$(LOCALAPPDATA)\Microsoft')">$([System.IO.Directory]::GetDirectories('$(LOCALAPPDATA)\Microsoft', 'jdk-21*'))</_JdkFromLocal>
+    <_JdkFromProgramFiles Condition="Exists('$(ProgramFiles)\Microsoft')">$([System.IO.Directory]::GetDirectories('$(ProgramFiles)\Microsoft', 'jdk-21*'))</_JdkFromProgramFiles>
+  </PropertyGroup>
+
+  <!-- JDK/Android SDK 自动发现: IDE 直接打开 slnx 时没有命令行 -p 参数, 找不到 JDK 会让整个项目加载失败。 -->
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(JAVA_HOME)' != '' and Exists('$(JAVA_HOME)\bin\javac.exe')">
+    <JavaSdkDirectory>$(JAVA_HOME)</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(_JdkFromLocal)' != ''">
+    <JavaSdkDirectory>$([System.String]::Copy('$(_JdkFromLocal)').Split(';')[0])</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(_JdkFromProgramFiles)' != ''">
+    <JavaSdkDirectory>$([System.String]::Copy('$(_JdkFromProgramFiles)').Split(';')[0])</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AndroidSdkDirectory)' == '' and Exists('$(LOCALAPPDATA)\Android\Sdk')">
+    <AndroidSdkDirectory>$(LOCALAPPDATA)\Android\Sdk</AndroidSdkDirectory>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.4" />
     <PackageReference Include="Avalonia.Android" Version="12.1.4" />
@@ -25,7 +44,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Dsh.Gui\Dsh.Gui.csproj" />
+    <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost\Dsh.RemoteHost.csproj" />
   </ItemGroup>
 
 </Project>
