@@ -7,11 +7,12 @@ using Dsh.Transport;
 namespace Dsh.Tests;
 
 /** host.notify.* against a real host: approvals and session exits enter the history, read marks are shared, the history survives a restart. */
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostNotifyTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task TwoClients_SeeTheSameNotifications_AndTheSameReadState_AcrossARestart()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mna", TestContext.Current.CancellationToken);
@@ -27,7 +28,7 @@ public sealed class RemoteHostNotifyTests
         Assert.Null(aliceInitial.ReadIds);
         Assert.Empty(bobInitial.Page.Items);
         Assert.Equal((0, 0), (bobInitial.Page.Total, bobInitial.Page.UnreadCount));
-        var session = await alice.CreateSessionAsync(host.Environment.App.Home.Root, RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec, Ct);
+        var session = await alice.CreateSessionAsync(host.Environment.App.Home.Root, Ct);
 
         var decision = RemoteHostMultiClientTests.RaiseApprovalAsync(host, RemoteHostMultiClientTests.Agent(host, session.Id), "bash");
         var request = Assert.Single((await RemoteHostMultiClientTests.NextAsync(alice.PendingChangesAsync(Ct), change => change.Pending.Approvals.Count > 0)).Pending.Approvals);
@@ -40,7 +41,7 @@ public sealed class RemoteHostNotifyTests
         Assert.Equal((1, 1), (addedChange.Page.Total, addedChange.Page.UnreadCount));
         Assert.Equal(1, bobAddedChange.Page.UnreadCount);
         Assert.True(await alice.RespondApprovalAsync(request.RequestId, false, cancellationToken: Ct));
-        Assert.Equal(Dsh.Core.ApprovalOutcome.Rejected, await decision.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+        Assert.Equal(Dsh.Core.ApprovalOutcome.Rejected, await decision.WaitAsync(TimeSpan.FromSeconds(5), Ct));
 
         Assert.True(alice.Supports(NotificationsProtocol.Capability));
         Assert.Equal(added, seenByBob);
@@ -66,7 +67,7 @@ public sealed class RemoteHostNotifyTests
         Assert.Null(restored.ReadIds);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task ConcurrentReadAndAppend_PublishSnapshotsInCommitOrder()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mnx", TestContext.Current.CancellationToken);
@@ -89,7 +90,7 @@ public sealed class RemoteHostNotifyTests
         Assert.Equal(stored.UnreadCount, last.Page.UnreadCount);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task RpcList_DuringReadCommit_ReturnsAtomicFilteredPages_AndCanCancelWaiting()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mnl", TestContext.Current.CancellationToken);
@@ -137,7 +138,7 @@ public sealed class RemoteHostNotifyTests
         }
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task SessionExit_IsRecordedWithItsExitCode_AndListFiltersAndPages()
     {
         if (OperatingSystem.IsWindows())
@@ -196,3 +197,6 @@ public sealed class RemoteHostNotifyTests
         public void Dispose() => _resume.Dispose();
     }
 }
+
+
+

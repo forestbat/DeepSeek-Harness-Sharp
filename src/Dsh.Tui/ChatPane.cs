@@ -23,6 +23,7 @@ public sealed class ChatPane : ITuiPane
     private AskUserQuestionRequest? _questionRequest;
     private readonly List<AskUserQuestionAnswerItem> _questionAnswers = [];
     private readonly HashSet<int> _questionSelection = [];
+    private readonly Dictionary<int, string> _questionDrafts = [];
     private int _questionIndex;
     private string? _stashedInput;
     private int _stashedCursor;
@@ -919,6 +920,7 @@ public sealed class ChatPane : ITuiPane
         _questionIndex = 0;
         _questionAnswers.Clear();
         _questionSelection.Clear();
+        _questionDrafts.Clear();
         _stashedInput = Input;
         _stashedCursor = Cursor;
         Input = "";
@@ -941,6 +943,8 @@ public sealed class ChatPane : ITuiPane
                 AppendRaw($"    [{index + 1}] {option.Label}{(option.Description is null ? "" : $" - {option.Description}")}\n");
             }
         }
+        Input = _questionDrafts.GetValueOrDefault(_questionIndex, "");
+        Cursor = Input.Length;
         RefreshQuestionStatus();
     }
 
@@ -1015,6 +1019,7 @@ public sealed class ChatPane : ITuiPane
             StatusText = "请先选择选项或输入回答";
             return;
         }
+        _questionDrafts[_questionIndex] = Input;
         _questionAnswers.Add(new AskUserQuestionAnswerItem(question.Id, selected, custom.Length > 0 ? custom : null));
         _questionSelection.Clear();
         Input = "";
@@ -1033,6 +1038,7 @@ public sealed class ChatPane : ITuiPane
     {
         var pending = PendingQuestions;
         PendingQuestions = null;
+        _questionDrafts.Clear();
         _questionRequest = null;
         _questionSelection.Clear();
         if (_stashedInput is not null)

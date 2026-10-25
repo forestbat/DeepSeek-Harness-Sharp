@@ -141,9 +141,11 @@ public sealed partial class DecisionQuestionViewModel : ObservableObject
     {
         Item = question;
         Options = [.. (question.Options ?? []).Select(option => new DecisionOptionViewModel(option))];
-        AllowCustom = question.Options is not { Count: > 0 };
         foreach (var option in Options)
+        {
+            option.SelectCommand = new RelayCommand(() => Select(option));
             option.Changed += () => Notify();
+        }
     }
 
     public AskUserQuestionItem Item { get; }
@@ -164,7 +166,7 @@ public sealed partial class DecisionQuestionViewModel : ObservableObject
 
     public bool MultiSelect => Item.MultiSelect;
 
-    public bool AllowCustom { get; }
+    public bool AllowCustom => true;
 
     public string ApproveLabel => Item.Intent?.Approve ?? "";
 
@@ -220,6 +222,8 @@ public sealed partial class DecisionOptionViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isSelected;
+
+    public RelayCommand? SelectCommand { get; set; }
 
     partial void OnIsSelectedChanged(bool value) => Changed?.Invoke();
 }

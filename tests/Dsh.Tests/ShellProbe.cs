@@ -9,24 +9,47 @@ internal static class ShellProbe
 
     private static readonly Lazy<bool> BashAvailable = new(() => Probe("bash", "-c \"exit 0\""));
     private static readonly Lazy<bool> PwshAvailable = new(() => Probe("pwsh", "-NoLogo -NoProfile -NonInteractive -Command exit 0"));
+    private static int _wslAvailable;
 
     public static bool Bash => BashAvailable.Value;
 
     public static bool Pwsh => PwshAvailable.Value;
 
-    private static bool Probe(string executable, string arguments)
+    public static bool Wsl
+    {
+        get
+        {
+            if (Volatile.Read(ref _wslAvailable) == 1)
+                return true;
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                if (Probe(Path.Combine(Environment.SystemDirectory, "wsl.exe"), "--exec uname -s", "Linux", 3000))
+                {
+                    Volatile.Write(ref _wslAvailable, 1);
+                    return true;
+                }
+                Thread.Sleep(200);
+            }
+            return false;
+        }
+    }
+
+    private static bool Probe(string executable, string arguments, string? expected = null, int timeoutMs = ProbeTimeoutMs)
     {
         Process? process = null;
         try
         {
-            process = Process.Start(new ProcessStartInfo(executable, arguments)
+            process = TestProcessScope.Start(new ProcessStartInfo(executable, arguments)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            return process is not null && process.WaitForExit(ProbeTimeoutMs) && process.ExitCode == 0;
+            if (process is null || !process.WaitForExit(timeoutMs) || process.ExitCode != 0)
+                return false;
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            return expected is null || string.Equals(output, expected, StringComparison.Ordinal);
         }
         catch (Exception)
         {

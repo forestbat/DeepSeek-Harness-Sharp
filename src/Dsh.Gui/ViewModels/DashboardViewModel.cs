@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using Dsh.Fleet;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
+using Dsh.Transport;
 
 namespace Dsh.Gui.ViewModels;
 
@@ -47,14 +48,29 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
     private static readonly TimeSpan ActivityClock = TimeSpan.FromSeconds(30);
 
     private readonly FleetWorkspace _fleet;
+    private readonly GuiSettings? _gui;
+    private readonly SessionActions? _actions;
+    private readonly Func<(string Machine, string SessionId)>? _current;
     private readonly Dictionary<(string Machine, string Session), SessionCardViewModel> _cards = [];
     private readonly Dictionary<string, DashboardMachineViewModel> _machines = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Machine, string? Project), DashboardProjectViewModel> _projects = [];
     private readonly DispatcherTimer _clock;
 
-    public DashboardViewModel(FleetWorkspace fleet)
+    private bool _suppressLayoutSave;
+
+    public DashboardViewModel(
+        FleetWorkspace fleet,
+        GuiSettings? gui = null,
+        SessionActions? actions = null,
+        Func<(string Machine, string SessionId)>? current = null)
     {
         _fleet = fleet;
+        _gui = gui;
+        _actions = actions;
+        _current = current;
+        _suppressLayoutSave = true;
+        IsDetailsLayout = gui?.Load().DashboardLayout == GuiSettings.LayoutDetails;
+        _suppressLayoutSave = false;
         FilterChips =
         [
             new("全部", (int)DashboardFilter.All) { IsSelected = true },
@@ -78,6 +94,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<DashboardMachineViewModel> Machines { get; } = [];
 
+    public ObservableCollection<SessionCardViewModel> RecentCards { get; } = [];
+
     public IReadOnlyList<DashboardChipViewModel> FilterChips { get; }
 
     public IReadOnlyList<DashboardChipViewModel> SortChips { get; }
@@ -90,6 +108,15 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private DashboardSort _sort = DashboardSort.Activity;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCardsLayout))]
+    [NotifyPropertyChangedFor(nameof(LayoutLabel))]
+    private bool _isDetailsLayout;
+
+    public bool IsCardsLayout => !IsDetailsLayout;
+
+    public string LayoutLabel => IsDetailsLayout ? "卡片视图" : "详细信息";
 
     [ObservableProperty]
     private string _searchText = "";
@@ -130,6 +157,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
     /** Raised with the machine and project the new session should default to (null when started from the toolbar). */
     public event Action<string?, string?>? NewSessionRequested;
 
+    public event Action<string, string, bool>? ActionReported;
+
     public SessionCardViewModel? Find(string machine, string sessionId)
         => _cards.GetValueOrDefault((machine, sessionId));
 
@@ -148,6 +177,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
         AttentionCount = AllCards.Count(card => card.NeedsAttention);
         OfflineMachineCount = states.Values.Count(status => status.State is MachineConnectionState.Offline or MachineConnectionState.Reconnecting);
         SessionCount = AllCards.Count;
+        var recentLimit = _gui?.Load().RecentSessionCount ?? 20;
+        CollectionSync.Sync(RecentCards, [.. AllCards.OrderByDescending(card => card.LastActivityAt).Take(recentLimit)]);
         RebuildGroups(states);
     }
 
@@ -166,6 +197,24 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
     }
 
     partial void OnSearchTextChanged(string value) => Refresh();
+
+    partial void OnIsDetailsLayoutChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsCardsLayout));
+        if (_suppressLayoutSave || _gui is null)
+            return;
+        _gui.Save(_gui.Load() with
+        {
+            DashboardLayout = value ? GuiSettings.LayoutDetails : GuiSettings.LayoutCards,
+        });
+    }
+
+    [RelayCommand]
+    private void SetLayout(string layout)
+        => IsDetailsLayout = layout == GuiSettings.LayoutDetails;
+
+    [RelayCommand]
+    private void ToggleLayout() => IsDetailsLayout = !IsDetailsLayout;
 
     [RelayCommand]
     private void SelectFilter(DashboardChipViewModel? chip)
@@ -196,6 +245,76 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private void BeginRename(SessionCardViewModel? card)
+    {
+        if (card is null)
+            return;
+        card.RenameDraft = card.Title;
+        card.IsRenaming = true;
+    }
+
+    [RelayCommand]
+    private async Task CommitRenameAsync(SessionCardViewModel? card)
+    {
+        if (card is null || !card.IsRenaming || _actions is null)
+            return;
+        card.IsRenaming = false;
+        var title = card.RenameDraft.Trim();
+        if (title.Length == 0 || title == card.Title)
+            return;
+        try
+        {
+            await _actions.RenameAsync(ToRef(card), title, CancellationToken.None);
+            ActionReported?.Invoke("已重命名", title, false);
+            Refresh();
+        }
+        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        {
+            ActionReported?.Invoke("重命名失败", error.Message, true);
+        }
+    }
+
+    [RelayCommand]
+    private void CancelRename(SessionCardViewModel? card)
+    {
+        if (card is not null)
+            card.IsRenaming = false;
+    }
+
+    [RelayCommand]
+    private async Task ExportLogAsync(SessionCardViewModel? card)
+    {
+        if (card is null || _actions is null)
+            return;
+        try
+        {
+            var path = await _actions.ExportLogAsync(ToRef(card), CancellationToken.None);
+            ActionReported?.Invoke("已导出日志", path, false);
+        }
+        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        {
+            ActionReported?.Invoke("导出失败", error.Message, true);
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteAsync(SessionCardViewModel? card)
+    {
+        if (card is null || _actions is null)
+            return;
+        try
+        {
+            await _actions.DeleteAsync(ToRef(card), CancellationToken.None);
+            ActionReported?.Invoke("会话已删除", card.Title, false);
+            Refresh();
+        }
+        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        {
+            ActionReported?.Invoke("删除失败", error.Message, true);
+        }
+    }
+
+    [RelayCommand]
     private void Stop(SessionCardViewModel? card)
     {
         if (card is { CanStop: true })
@@ -221,6 +340,16 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ShowAttention() => Filter = DashboardFilter.Attention;
 
+    private SessionRef ToRef(SessionCardViewModel card)
+        => new(
+            card.Machine,
+            card.SessionId,
+            card.Title,
+            card.ProjectPath,
+            card.Kind,
+            card.IsCurrent,
+            card.Session);
+
     private IReadOnlyList<SessionCardViewModel> UpdateCards(Dictionary<string, FleetMachineStatus> states)
     {
         var seen = new HashSet<(string, string)>();
@@ -233,6 +362,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IDisposable
                 card.Update(session, state);
             else
                 _cards[key] = card = new SessionCardViewModel(machine, session) { MachineState = state };
+            card.IsCurrent = _current?.Invoke() is { } current && current.Machine == machine && current.SessionId == session.SessionId;
             seen.Add(key);
             cards.Add(card);
         }

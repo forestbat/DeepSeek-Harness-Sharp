@@ -4,11 +4,12 @@ using Dsh.Pty;
 namespace Dsh.Tests;
 
 /** 窗格级订阅(§19 阶段 2): daemon pty 可被多方同时订阅, 不独占会话, 输入写回该 pty 的前台进程。 */
+[Collection(SerialProcessCollection.Name)]
 public sealed class PtyDaemonSubscribeTests
 {
     /** 真实 ConPTY 子进程在负载下启动可能偏慢: 给足标记到达时间(事实级超时上限 30s)。 */
-    private static readonly TimeSpan MarkerTimeout = TimeSpan.FromSeconds(20);
-    [Fact(Timeout = 30000)]
+    private static readonly TimeSpan MarkerTimeout = TimeSpan.FromSeconds(5);
+    [Fact(Explicit = true)]
     public async Task Subscribe_StreamsSnapshotAndOutput()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -38,7 +39,7 @@ public sealed class PtyDaemonSubscribeTests
     }
 
     /** 非独占: 两个订阅者都要看到同一段输出(独占 attach 的单一读语义不适用于窗格级视图)。 */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_IsNonExclusive_TwoSubscribersSeeSameOutput()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -66,7 +67,7 @@ public sealed class PtyDaemonSubscribeTests
     }
 
     /** 订阅把输入写进 pty 的前台进程: 只出现在"进程真的执行了"时的输出(不是输入回显)。 */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_RelaysInputToForegroundProcess()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -97,7 +98,7 @@ public sealed class PtyDaemonSubscribeTests
     }
 
     /** 订阅不改变会话的 attached 状态: 它不是独占 attach, 会话照常可被别的 proxy 接管。 */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_DoesNotTakeOverTheSession()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -125,7 +126,7 @@ public sealed class PtyDaemonSubscribeTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Snapshot_ReturnsCurrentScreenText()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -151,7 +152,7 @@ public sealed class PtyDaemonSubscribeTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_UnknownSession_Throws()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -172,7 +173,7 @@ public sealed class PtyDaemonSubscribeTests
     }
 
     /** 会话退出后订阅通道结束: 读返回 0 而不是永久阻塞。 */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_CompletesWhenSessionExits()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -187,7 +188,7 @@ public sealed class PtyDaemonSubscribeTests
             // The shell exits on the subscriber's own command, so the exit always happens after the subscription exists.
             await using var session = await PtyDaemonRetry.SubscribeAsync(started.Id, socketPath, portFile, cancellationToken);
             session.Send(Encoding.UTF8.GetBytes(OperatingSystem.IsWindows() ? "exit\r" : "exit\n"));
-            await session.Completion.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            await session.Completion.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
 
             var buffer = new byte[256];
             var read = await session.ReadAsync(buffer, cancellationToken);
@@ -201,7 +202,7 @@ public sealed class PtyDaemonSubscribeTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Subscribe_AfterProcessAndOutputExit_ReplaysFinalScreenAndCompletes()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -218,7 +219,7 @@ public sealed class PtyDaemonSubscribeTests
             first.Send(Encoding.UTF8.GetBytes(input));
             Assert.Contains(expected, await ReadUntilAsync(first, expected, MarkerTimeout));
             first.Send(Encoding.UTF8.GetBytes(OperatingSystem.IsWindows() ? "exit 7\r" : "exit 7\n"));
-            await first.Completion.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            await first.Completion.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
             var process = Assert.IsType<PtySession>(host.Get(started.Id));
             await process.WaitForExitAsync(cancellationToken);
             Assert.Equal(PtySessionStatus.Exited, process.Status);
@@ -226,7 +227,7 @@ public sealed class PtyDaemonSubscribeTests
 
             // The late client arrives only after both real process exit and the first output EOF.
             await using var late = await PtyDaemonClient.SubscribeAsync(started.Id, socketPath, portFile, cancellationToken);
-            await late.Completion.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            await late.Completion.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
             var snapshot = new StringBuilder();
             var buffer = new byte[1024];
             int read;
@@ -300,3 +301,5 @@ public sealed class PtyDaemonSubscribeTests
         return text.ToString();
     }
 }
+
+

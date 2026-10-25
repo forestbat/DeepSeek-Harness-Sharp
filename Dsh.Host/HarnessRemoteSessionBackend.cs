@@ -12,9 +12,9 @@ namespace Dsh.Host;
 /** Core harness sessions and their ordered history/live event stream. */
 internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, ExternalAgentSessions agents) : IRemoteSessionBackend
 {
-    public Task<IReadOnlyList<RemoteSessionInfo>> ListSessionsAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken)
     {
-        var byId = new Dictionary<string, RemoteSessionInfo>(StringComparer.Ordinal);
+        var byId = new Dictionary<string, RemoteSessionSummary>(StringComparer.Ordinal);
         foreach (var snapshot in runtime.Persistence?.List() ?? [])
         {
             if (snapshot.Header.IsSubagent)
@@ -27,20 +27,19 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
                 continue;
             byId[agent.Id.Value] = Describe(agent);
         }
-        return Task.FromResult<IReadOnlyList<RemoteSessionInfo>>([.. byId.Values.OrderByDescending(info => info.UpdatedAt)]);
+        return Task.FromResult<IReadOnlyList<RemoteSessionSummary>>([.. byId.Values.OrderByDescending(info => info.UpdatedAt)]);
     }
 
-    public async Task<RemoteSessionInfo> CreateSessionAsync(string cwd, RemoteModelSelection? selection, RemoteProviderSpec? provider, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken cancellationToken)
     {
         var resolved = HostPathPolicy.Expand(cwd);
-        var options = runtime.ResolveAgentOptions(selection, provider);
-        var handle = await runtime.Registry.Create(new CreateAgentOptions(Cwd: resolved, AgentOptions: options), cancellationToken).ConfigureAwait(false);
+        var handle = await runtime.Registry.Create(new CreateAgentOptions(Cwd: resolved), cancellationToken).ConfigureAwait(false);
         runtime.Own(handle);
         runtime.Track(handle.Agent);
         return Describe(handle.Agent);
     }
 
-    public async Task<RemoteSessionInfo> ResumeSessionAsync(string sessionId, RemoteModelSelection? selection, RemoteProviderSpec? provider, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken)
     {
         var id = SessionId.Create(sessionId);
         if (runtime.Registry.Get(id) is { } live)
@@ -48,10 +47,8 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
             runtime.Track(live);
             return Describe(live);
         }
-        var options = runtime.ResolveAgentOptions(selection, provider);
-        var handle = await runtime.Registry.Resume(new ResumeAgentOptions(id, options), cancellationToken).ConfigureAwait(false);
+        var handle = await runtime.Registry.Resume(new ResumeAgentOptions(id), cancellationToken).ConfigureAwait(false);
         runtime.Own(handle);
-        ApplySelectionOnResume(handle.Agent, selection);
         runtime.Track(handle.Agent);
         return Describe(handle.Agent);
     }
@@ -61,34 +58,14 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         var id = SessionId.Create(sessionId);
         var approvals = runtime.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false);
         if (runtime.Store.Get(id) is { } session)
-            return Task.FromResult(new RemoteSessionSnapshot(DshJson.Serialize(session.Header),
-                [.. session.SnapshotEvents().Select(item => ToInfo(sessionId, item))],
+            return Task.FromResult(new RemoteSessionSnapshot(session.Header, session.SnapshotEvents(),
                 approvals?.EffectivePolicy(session).ToString()));
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read)
             ?? throw new InvalidOperationException($"unknown session: {sessionId}");
         var events = handle.Read();
         var restored = Session.FromRestore(id, events, handle.Header, handle.InheritedEventCount);
-        return Task.FromResult(new RemoteSessionSnapshot(DshJson.Serialize(handle.Header),
-            [.. events.Select(item => ToInfo(sessionId, item))], approvals?.EffectivePolicy(restored).ToString()));
+        return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, approvals?.EffectivePolicy(restored).ToString()));
     }
-
-    /** Existing request headers outrank AgentOptions; append a change only when the requested selection differs. */
-    private static void ApplySelectionOnResume(IAgent agent, RemoteModelSelection? selection)
-    {
-        if (selection is null || !HarnessRemoteRuntime.HasSelection(selection))
-            return;
-        if (agent.Session.RequestHeader() is not { } current || MatchesSelection(current, selection))
-            return;
-        agent.Session.Append(new RequestHeaderPayload(
-            RequestHeader.Canonicalize(new EpochHeader(new LlmCallConfig(selection.Provider, selection.Model, HarnessRemoteRuntime.EffortOf(selection)))),
-            RequestHeaderReasons.Change,
-            true));
-    }
-
-    private static bool MatchesSelection(EpochHeader header, RemoteModelSelection selection)
-        => string.Equals(header.Config.Provider, selection.Provider, StringComparison.Ordinal)
-            && string.Equals(header.Config.Model, selection.Model, StringComparison.Ordinal)
-            && header.Config.ReasoningEffort == HarnessRemoteRuntime.EffortOf(selection);
 
     public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
     {
@@ -130,7 +107,7 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
     }
 
     /** Install live listeners before taking history so subscribe replies cannot lose subsequent events. */
-    public Task<RemoteHostStream<RemoteEventInfo>> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken)
+    public Task<RemoteHostStream<RemoteSessionEvent>> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken)
     {
         var id = SessionId.Create(sessionId);
         var session = runtime.Store.Get(id);
@@ -138,19 +115,19 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         if (session is null && stored is null)
             throw new InvalidOperationException($"unknown session: {sessionId}");
         var reset = fromSeq > (session?.Seq ?? stored?.EventCount ?? long.MaxValue);
-        var buffer = Channel.CreateUnbounded<RemoteEventInfo>();
+        var buffer = Channel.CreateUnbounded<RemoteSessionEvent>();
         var unsubscribe = runtime.App.Ctx.On<SessionEventNotification>(notification =>
         {
             if (notification.Session.Id == id)
-                buffer.Writer.TryWrite(ToInfo(sessionId, notification.Event));
+                buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, notification.Event));
         });
         var unsubscribeTruncate = runtime.App.Ctx.On<SessionTruncateNotification>(notification =>
         {
             if (notification.Session.Id != id)
                 return;
-            buffer.Writer.TryWrite(new RemoteEventInfo(sessionId, "", 0, Reset: true));
+            buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, Reset: true));
             foreach (var item in notification.Session.SnapshotEvents())
-                buffer.Writer.TryWrite(ToInfo(sessionId, item));
+                buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, item));
         });
         ValueTask Release()
         {
@@ -162,7 +139,7 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         try
         {
             var history = session?.SnapshotEvents(reset ? 0 : fromSeq) ?? ReadPersisted(id, reset ? 0 : fromSeq);
-            return Task.FromResult(new RemoteHostStream<RemoteEventInfo>(
+            return Task.FromResult(new RemoteHostStream<RemoteSessionEvent>(
                 LiveEventsAsync(sessionId, history, buffer, fromSeq, reset, cancellationToken), Release));
         }
         catch
@@ -172,39 +149,39 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         }
     }
 
-    private static async IAsyncEnumerable<RemoteEventInfo> LiveEventsAsync(
+    private static async IAsyncEnumerable<RemoteSessionEvent> LiveEventsAsync(
         string sessionId,
         IReadOnlyList<SessionEvent> history,
-        Channel<RemoteEventInfo> buffer,
+        Channel<RemoteSessionEvent> buffer,
         long fromSeq,
         bool reset,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var next = reset ? 0 : fromSeq;
         if (reset)
-            yield return new RemoteEventInfo(sessionId, "", 0, Reset: true);
+            yield return new RemoteSessionEvent(sessionId, Reset: true);
         foreach (var sessionEvent in history)
         {
             next = sessionEvent.Seq + 1;
-            yield return ToInfo(sessionId, sessionEvent);
+            yield return new RemoteSessionEvent(sessionId, sessionEvent);
         }
         await foreach (var item in buffer.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (!item.Reset && item.Sequence < next)
+            if (!item.Reset && item.Event is { } current && current.Seq < next)
                 continue;
-            next = item.Reset ? 0 : item.Sequence + 1;
+            next = item.Reset ? 0 : (item.Event?.Seq ?? next - 1) + 1;
             yield return item;
         }
     }
 
-    private static RemoteSessionInfo Describe(IAgent agent)
+    private static RemoteSessionSummary Describe(IAgent agent)
     {
         var header = agent.Session.Header;
-        return new RemoteSessionInfo(header.Id.Value, header.Cwd ?? "", agent.Status.ToString(), header.CreatedAt,
+        return new RemoteSessionSummary(header.Id.Value, header.Cwd ?? "", agent.Status.ToString(), header.CreatedAt,
             header.Title, Summarize(agent.Session), LastEventTime(agent.Session));
     }
 
-    private static RemoteSessionInfo Describe(SessionHeader header)
+    private static RemoteSessionSummary Describe(SessionHeader header)
         => new(header.Id.Value, header.Cwd ?? "", "Idle", header.CreatedAt, header.Title, null, header.CreatedAt);
 
     private static string? Summarize(Session session)
@@ -227,8 +204,6 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         return events.Count == 0 ? session.Header.CreatedAt : events[^1].Time;
     }
 
-    private static RemoteEventInfo ToInfo(string sessionId, SessionEvent sessionEvent)
-        => new(sessionId, DshJson.Serialize(sessionEvent), sessionEvent.Seq);
 
     private IReadOnlyList<SessionEvent> ReadPersisted(SessionId id, long fromSeq)
     {

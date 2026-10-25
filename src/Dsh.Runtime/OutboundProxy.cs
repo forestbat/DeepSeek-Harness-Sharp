@@ -539,6 +539,12 @@ public sealed partial class OutboundProxy : IWebProxy, ICredentials, IDisposable
         return UserInfoPattern().Replace(text, RedactedUserInfo);
     }
 
+    /** Editable secret fields show a redacted value: keep the saved secret unless the user changed the text. */
+    public static string? ResolveEdited(string displayed, string? saved)
+        => saved is { Length: > 0 } && displayed == RedactUrlCredentials(saved, saved)
+            ? saved
+            : string.IsNullOrWhiteSpace(displayed) ? null : displayed.Trim();
+
     private static string RedactUserInfoSecrets(string text, string userInfo)
     {
         var separator = userInfo.IndexOf(':');

@@ -39,7 +39,7 @@
         </Button>
       </WrapPanel>
 
-      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="10">
         <ItemsControl Grid.Column="0" ItemsSource="{Binding FilterChips}" VerticalAlignment="Center">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
@@ -76,7 +76,9 @@
             </Flyout>
           </Button.Flyout>
         </Button>
-        <Button Grid.Column="3" Classes="Primary" Command="{Binding NewSessionCommand}" ToolTip.Tip="在任意机器上新建会话">
+        <Button Grid.Column="3" Classes="Chip" Command="{Binding ToggleLayoutCommand}" Content="{Binding LayoutLabel}"
+                ToolTip.Tip="切换卡片与详细信息布局" />
+        <Button Grid.Column="4" Classes="Primary" Command="{Binding NewSessionCommand}" ToolTip.Tip="在任意机器上新建会话">
           <StackPanel Orientation="Horizontal" Spacing="6">
             <Path Classes="Icon" Stroke="{DynamicResource Brush.Text.OnAccent}" Data="{StaticResource Icon.Plus}" />
             <TextBlock Text="新建会话" VerticalAlignment="Center" />
@@ -123,17 +125,24 @@
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:DashboardProjectViewModel">
                       <StackPanel Spacing="6" Margin="0,0,0,6">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Folder}" />
-                          <TextBlock Text="{Binding Name}" Classes="Secondary" FontWeight="SemiBold" VerticalAlignment="Center" />
-                          <TextBlock Text="{Binding PathLabel}" Classes="Tertiary" VerticalAlignment="Center" />
-                          <Button Classes="Icon" Width="22" Height="22" ToolTip.Tip="在这个项目里新建会话"
+                        <Grid ColumnDefinitions="*,Auto">
+                          <Button Classes="Ghost" HorizontalAlignment="Left" Padding="4,2" Command="{Binding ToggleCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                              <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
+                              <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Folder}" />
+                              <TextBlock Text="{Binding Name}" Classes="Secondary" FontWeight="SemiBold" VerticalAlignment="Center" />
+                              <TextBlock Text="{Binding PathLabel}" Classes="Tertiary" VerticalAlignment="Center" />
+                            </StackPanel>
+                          </Button>
+                          <Button Grid.Column="1" Classes="Icon" Width="22" Height="22" ToolTip.Tip="在这个项目里新建会话"
                                   Command="{Binding $parent[UserControl].((vm:DashboardViewModel)DataContext).NewSessionInProjectCommand}"
                                   CommandParameter="{Binding}">
                             <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.Plus}" />
                           </Button>
-                        </StackPanel>
-                        <ItemsControl ItemsSource="{Binding Sessions}">
+                        </Grid>
+                        <Grid IsVisible="{Binding IsExpanded}">
+                        <ItemsControl ItemsSource="{Binding Sessions}"
+                                      IsVisible="{Binding $parent[UserControl].((vm:DashboardViewModel)DataContext).IsCardsLayout}">
                           <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                               <WrapPanel />
@@ -146,6 +155,7 @@
                                 <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
                                   <Button Grid.Row="0" Classes="Ghost" Padding="0" HorizontalAlignment="Stretch"
                                           HorizontalContentAlignment="Stretch" ToolTip.Tip="打开会话"
+                                          IsEnabled="{Binding !IsRenaming}"
                                           Command="{Binding $parent[UserControl].((vm:DashboardViewModel)DataContext).OpenCommand}"
                                           CommandParameter="{Binding}">
                                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
@@ -154,7 +164,12 @@
                                       </Border>
                                       <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Title}" Classes="Body" FontWeight="SemiBold"
-                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                                   IsVisible="{Binding !IsRenaming}" />
+                                        <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
+                                                 AttachedToVisualTree="OnRenameAttached"
+                                                 KeyDown="OnRenameKeyDown"
+                                                 LostFocus="OnRenameLostFocus" />
                                         <TextBlock Text="{Binding AgentLabel}" Classes="Tertiary" TextTrimming="CharacterEllipsis" />
                                       </StackPanel>
                                       <Border Grid.Column="2" Classes="Pill" Classes.attention="{Binding NeedsAttention}"
@@ -196,12 +211,45 @@
                                         <TextBlock Text="新窗口" />
                                       </StackPanel>
                                     </Button>
+                                    <Button Classes="Icon" Width="24" Height="24" ToolTip.Tip="更多"
+                                            Click="OnSessionMenuClick">
+                                      <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Menu}" />
+                                    </Button>
                                   </StackPanel>
                                 </Grid>
                               </Border>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding Sessions}"
+                                      IsVisible="{Binding $parent[UserControl].((vm:DashboardViewModel)DataContext).IsDetailsLayout}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SessionCardViewModel">
+                              <Border Classes="SessionCard" Classes.attention="{Binding NeedsAttention}"
+                                      Classes.offline="{Binding !IsMachineOnline}" Margin="0,0,0,4" Padding="10,6">
+                                <Grid ColumnDefinitions="2*,*,*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
+                                  <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Title}" IsVisible="{Binding !IsRenaming}" TextTrimming="CharacterEllipsis" />
+                                    <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
+                                             AttachedToVisualTree="OnRenameAttached"
+                                             KeyDown="OnRenameKeyDown"
+                                             LostFocus="OnRenameLostFocus" />
+                                  </StackPanel>
+                                  <TextBlock Grid.Column="1" Text="{Binding Machine}" Classes="Tertiary" VerticalAlignment="Center" />
+                                  <TextBlock Grid.Column="2" Text="{Binding ProjectName}" Classes="Tertiary" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                  <TextBlock Grid.Column="3" Text="{Binding AgentLabel}" Classes="Tertiary" VerticalAlignment="Center" />
+                                  <TextBlock Grid.Column="4" Text="{Binding PendingLabel}" Classes="Tertiary" VerticalAlignment="Center" IsVisible="{Binding HasPending}" />
+                                  <TextBlock Grid.Column="5" Text="{Binding LastActivityText}" Classes="Tertiary" VerticalAlignment="Center" />
+                                  <Button Grid.Column="6" Classes="Icon" Width="24" Height="24" ToolTip.Tip="更多"
+                                          Click="OnSessionMenuClick">
+                                    <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Menu}" />
+                                  </Button>
+                                </Grid>
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        </Grid>
                       </StackPanel>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>

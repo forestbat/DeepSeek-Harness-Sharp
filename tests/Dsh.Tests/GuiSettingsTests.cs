@@ -31,6 +31,8 @@ public sealed class GuiSettingsTests : IDisposable
         Assert.True(snapshot.GpuEnabled);
         Assert.Equal(GuiSettings.CloseTray, snapshot.CloseAction);
         Assert.True(snapshot.RememberBounds);
+        Assert.Equal(GuiSettings.LayoutCards, snapshot.DashboardLayout);
+        Assert.Equal(20, snapshot.RecentSessionCount);
     }
 
     [Fact]
@@ -51,6 +53,8 @@ public sealed class GuiSettingsTests : IDisposable
             WindowX = -12,
             WindowMaximized = true,
             SidebarVisible = false,
+            DashboardLayout = GuiSettings.LayoutDetails,
+            RecentSessionCount = 7,
         });
 
         var reloaded = settings.Load();
@@ -58,6 +62,8 @@ public sealed class GuiSettingsTests : IDisposable
         Assert.Equal(GuiSettings.ThemeLight, reloaded.Theme);
         Assert.Equal(15, reloaded.FontSize);
         Assert.Equal(GuiSettings.ViewFilesystem, reloaded.WorkspaceView);
+        Assert.Equal(GuiSettings.LayoutDetails, reloaded.DashboardLayout);
+        Assert.Equal(7, reloaded.RecentSessionCount);
         Assert.Equal(GuiSettings.CloseQuit, reloaded.CloseAction);
         Assert.False(reloaded.GpuEnabled);
         Assert.Equal("software", reloaded.GpuBackend);
@@ -66,6 +72,17 @@ public sealed class GuiSettingsTests : IDisposable
         Assert.Equal(-12, reloaded.WindowX);
         Assert.True(reloaded.WindowMaximized);
         Assert.False(reloaded.SidebarVisible);
+    }
+
+    [Fact]
+    public void RecentSessionCount_IsClampedAndUnknownLayoutFallsBackToCards()
+    {
+        var settings = new GuiSettings(new HarnessHome(_home));
+        settings.Save(settings.Load() with { RecentSessionCount = 0, DashboardLayout = "bogus" });
+        var reloaded = settings.Load();
+
+        Assert.Equal(1, reloaded.RecentSessionCount);
+        Assert.Equal(GuiSettings.LayoutCards, reloaded.DashboardLayout);
     }
 
     [Fact]

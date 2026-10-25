@@ -8,15 +8,16 @@ using Dsh.Transport;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public sealed class FleetProxyCommandEgressTests
 {
     private const string Credential = "synthetic-user:synthetic-secret";
     private const string ReplacementCredential = "replacement-user:replacement-secret";
     private const string Target = "http://example.com/";
-    private static readonly TimeSpan SignalTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SignalTimeout = TimeSpan.FromSeconds(5);
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand", false)]
     [InlineData("proxyCommand", true)]
     [InlineData("localForward", false)]
@@ -46,7 +47,7 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal(0, remoteProxy.ActiveConnections);
     }
 
-    [Theory(Timeout = 120000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task JumpAuthentication_DoesNotDeleteAskPassBeforeTheTargetsEncryptedKeyPrompt(string mode)
@@ -169,7 +170,7 @@ public sealed class FleetProxyCommandEgressTests
         }
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task BaselineChangesAndInvalidBorrowedUpdates_DoNotInterruptTheBorrowedRequest(string mode)
@@ -200,7 +201,7 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Single(remoteProxy.Requests);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task LastClosedSocket_DoesNotLoseTheSharedSshFailure()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -246,7 +247,7 @@ public sealed class FleetProxyCommandEgressTests
         FleetLocalForwardEgressTests.AssertPortCanRebind(finalPort);
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task KillingTheOwnedSsh_AbortsWithoutReplay_AndOnlyANewRequestRebuilds(string mode)
@@ -297,7 +298,7 @@ public sealed class FleetProxyCommandEgressTests
         Assert.NotEqual(originalRoute.Generation, outbound.CaptureRoute(new Uri(Target)).Generation);
     }
 
-    [Theory(Timeout = 180000)]
+    [Theory]
     [InlineData("proxyCommand", false)]
     [InlineData("proxyCommand", true)]
     [InlineData("localForward", false)]
@@ -341,7 +342,8 @@ public sealed class FleetProxyCommandEgressTests
                 Assert.Equal(shellPid, await File.ReadAllTextAsync(Path.Combine(home, $"{markerPrefix}.pid"), arrival.Token));
             }
 
-            await using var tunnel = new SshOutboundTunnel(machine);
+            await using var gate = new SshAuthenticationGate();
+            await using var tunnel = new SshOutboundTunnel(gate.Wrap(machine));
             var connections = new ConcurrentQueue<SshProxyStream>();
             async ValueTask<Stream> Connect(DnsEndPoint endpoint, CancellationToken token)
             {
@@ -360,10 +362,16 @@ public sealed class FleetProxyCommandEgressTests
             var pending = client.GetStringAsync(requestTarget, cancelled.Token);
             try
             {
+                await gate.WaitForBlockedAuthenticationAsync(pending, deadline.Token);
+                var askPass = gate.AskPass;
+                Assert.False(string.IsNullOrWhiteSpace(askPass), "The actual pending SSH must identify its authentication-owned askpass.");
+                Assert.True(File.Exists(askPass), "The target handshake must still own its real askpass before authentication.");
+                await gate.ReleaseAsync(deadline.Token);
                 Assert.Equal($"GET {requestTarget} HTTP/1.1", await remoteProxy.WaitForRequestAsync(deadline.Token));
                 var owned = Assert.Single(connections);
                 var localPort = tunnel.LocalPort;
-                owned.Process.StartInfo.Environment.TryGetValue("SSH_ASKPASS", out var askPass);
+                Assert.Equal(askPass, owned.Process.StartInfo.Environment["SSH_ASKPASS"]);
+                Assert.False(File.Exists(askPass), "Successful target authentication must remove its owned askpass before request interruption.");
                 // Subscribe before termination: production cleanup may promptly dispose the Process object.
                 var exited = owned.Process.WaitForExitAsync(deadline.Token);
                 if (cancelRequest)
@@ -425,7 +433,7 @@ public sealed class FleetProxyCommandEgressTests
         }
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task ChangingCredentialsAtTheSameProxyEndpoint_RetiresTheOldAuthenticatedPool(string mode)
@@ -458,7 +466,7 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal(1, remoteProxy.ActiveConnections);
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task CancellingOneRequest_DoesNotRetireAnotherConsumersRoute(string mode)
@@ -488,7 +496,7 @@ public sealed class FleetProxyCommandEgressTests
         Assert.Equal([$"GET {Target}cancelled HTTP/1.1", $"GET {Target}surviving HTTP/1.1"], remoteProxy.Requests.ToArray());
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task BypassIsDirect_AndForcedHttp3FailsWithoutOpeningSsh(string mode)

@@ -26,7 +26,7 @@ public class TerminalPtyEndToEndTests
         MaxReadBytes = 256 * 1024,
     };
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task ShellToolLoop_ExecutesCommandSurvivesInterruptAndCloses()
     {
         var resolved = PtyTerminalConfigResolver.Resolve(FastConfig);
@@ -52,14 +52,14 @@ public class TerminalPtyEndToEndTests
 
         var sent = await TerminalTestTools.Execute(tools, "terminal_send", new { sessionId, text = "echo dsh-pty-probe" }, agent);
         Assert.False(sent.IsError, TerminalTestTools.TextOf(sent));
-        var probe = await ReadUntilAsync(tools, agent, sessionId, "dsh-pty-probe", TimeSpan.FromSeconds(20));
+        var probe = await ReadUntilAsync(tools, agent, sessionId, "dsh-pty-probe", TimeSpan.FromSeconds(5));
         Assert.Contains("dsh-pty-probe", probe);
 
         var signalled = await TerminalTestTools.Execute(tools, "terminal_signal", new { sessionId, signal = "SIGINT" }, agent);
         Assert.False(signalled.IsError, TerminalTestTools.TextOf(signalled));
         await Task.Delay(500, TestContext.Current.CancellationToken);
 
-        var afterInterrupt = await SendUntilAsync(tools, agent, sessionId, "echo dsh-pty-after-interrupt", "dsh-pty-after-interrupt", TimeSpan.FromSeconds(8));
+        var afterInterrupt = await SendUntilAsync(tools, agent, sessionId, "echo dsh-pty-after-interrupt", "dsh-pty-after-interrupt", TimeSpan.FromSeconds(5));
         Assert.Contains("dsh-pty-after-interrupt", afterInterrupt);
 
         var closed = await TerminalTestTools.Execute(tools, "terminal_close", new { sessionId }, agent);

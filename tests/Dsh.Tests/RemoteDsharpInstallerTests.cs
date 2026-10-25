@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using Dsh.Fleet;
+using Dsh.RemoteHost;
 
 namespace Dsh.Tests;
 
@@ -41,23 +41,43 @@ public sealed class RemoteDsharpInstallerTests
         Assert.Equal("https://host/releases/download/v1.2.3/dsharp-osx-arm64.tar.gz", RemoteDsharpInstaller.AssetUrl(settings with { ReleaseVersion = "v1.2.3" }, "osx-arm64"));
     }
 
-    /** 远端更旧或版本不可读才升级; 相同或更新则复用; 预发布/构建后缀不参与比较。 */
-    [Theory]
-    [InlineData("0.2.0", "0.2.0", true)]
-    [InlineData("0.3.0", "0.2.0", true)]
-    [InlineData("v0.2", "0.2.0", true)]
-    [InlineData("0.2.0-rc1", "0.2.0", true)]
-    [InlineData("0.1.9", "0.2.0", false)]
-    [InlineData("0.2.0", "0.10.0", false)]
-    [InlineData("", "0.2.0", false)]
-    [InlineData(null, "0.2.0", false)]
-    [InlineData("garbled", "0.2.0", false)]
-    public void Installed_Version_Is_Reused_Only_When_Not_Older(string? installed, string current, bool reuse)
-        => Assert.Equal(reuse, ReleaseVersions.CanReuse(installed, current));
+    [Fact]
+    public async Task Protocol_Marker_Is_Used_For_Reuse_And_Release_Is_Only_Diagnostic()
+    {
+        var machine = MachineSpec.Ssh("fake", "host.invalid", 22, "dev", SshAuth.Agent);
+        var installer = new RemoteDsharpInstaller(new FakeTransport(machine, HostProtocol.Version, "9.9.9"));
+        var installation = await installer.InspectAsync(TestContext.Current.CancellationToken);
+        var result = await installer.EnsureAsync(
+            new DeploySettings { ReleaseBaseUrl = "https://example.invalid" }, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HostProtocol.Version, installation.Protocol);
+        Assert.Equal("9.9.9", installation.Version);
+        Assert.True(result.AlreadyPresent);
+    }
+
+    [Fact]
+    public void ProtocolMismatch_DistinguishesRemoteOlderAndNewer()
+    {
+        Assert.False(new HostProtocolMismatchException(2, 1).RemoteIsNewer);
+        Assert.True(new HostProtocolMismatchException(2, 3).RemoteIsNewer);
+    }
+
+    [Fact]
+    public async Task MissingProtocolMarker_ForcesOneRedeploy()
+    {
+        var machine = MachineSpec.Ssh("fake", "host.invalid", 22, "dev", SshAuth.Agent);
+        var transport = new FakeTransport(machine, null, "1.0");
+        var result = await new RemoteDsharpInstaller(transport).EnsureAsync(
+            new DeploySettings { Via = DownloadVia.Client }, null, TestContext.Current.CancellationToken,
+            (_, _, _) => Task.FromResult("archive.tar.gz"));
+
+        Assert.False(result.AlreadyPresent);
+        Assert.Contains(transport.Commands, command => command.Contains(".dsharp-protocol", StringComparison.Ordinal));
+    }
 
 
     /** 真实 shell: 只停“旧二进制路径 + host serve”的进程, 同机另一个 dsharp 的宿主与执行脚本的 shell 都不受影响。 */
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Stop_Command_Stops_Only_The_Host_Of_That_Binary()
     {
         if (OperatingSystem.IsWindows())
@@ -71,11 +91,11 @@ public sealed class RemoteDsharpInstallerTests
         {
             var old = FakeHostBinary(Path.Combine(root, "old"));
             var other = FakeHostBinary(Path.Combine(root, "other"));
-            using var oldHost = Process.Start(old, ["host", "serve"]);
-            using var otherHost = Process.Start(other, ["host", "serve"]);
+            using var oldHost = TestProcessScope.Start(old, ["host", "serve"]);
+            using var otherHost = TestProcessScope.Start(other, ["host", "serve"]);
             await Task.Delay(200, TestContext.Current.CancellationToken);
 
-            using var shell = Process.Start("/bin/sh", ["-c", RemoteDsharpInstaller.StopHostCommand(old) + "echo done"]);
+            using var shell = TestProcessScope.Start("/bin/sh", ["-c", RemoteDsharpInstaller.StopHostCommand(old) + "echo done"]);
             await shell.WaitForExitAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(0, shell.ExitCode);
@@ -99,5 +119,30 @@ public sealed class RemoteDsharpInstallerTests
         File.WriteAllText(path, "#!/bin/sh\nwhile :; do sleep 1; done\n");
         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return path;
+    }
+
+    private sealed class FakeTransport(MachineSpec machine, int? protocol, string release) : IRemoteMachineTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public MachineSpec Machine => machine;
+
+        public Task<RemoteProcessResult> CaptureAsync(string command, CancellationToken cancellationToken)
+            => Task.FromResult(command.Contains("home=", StringComparison.Ordinal)
+                ? new RemoteProcessResult(0,
+                    $"home=/home/dev\npath=/home/dev/.dsharp/linux-x64/dsharp\nversion={release}\nprotocol={protocol}\n", "")
+                : new RemoteProcessResult(0, "Linux\nx86_64\n", ""));
+
+        public Task<string> RunAsync(string command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            if (command.Contains("home=", StringComparison.Ordinal))
+                return Task.FromResult($"home=/home/dev\npath=/home/dev/.dsharp/linux-x64/dsharp\nversion={release}\nprotocol={protocol}\n");
+            return Task.FromResult(command.Contains("tar -xf", StringComparison.Ordinal) ? "/home/dev/.dsharp/linux-x64" : "");
+        }
+
+        public Task UploadAsync(string localPath, string remotePath, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public string CommandLine(string remoteCommand) => remoteCommand;
     }
 }

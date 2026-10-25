@@ -13,7 +13,7 @@ public sealed class AccountGuiHeadlessTests
     public async Task SettingsAccountSection_RendersAndWiresRealService() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var window = new MainWindow(environment.App, await environment.OpenChatAsync());
         var viewModel = window.ViewModel!;
         window.Show();

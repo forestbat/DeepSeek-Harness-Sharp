@@ -1,8 +1,11 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Gui.ViewModels;
 
@@ -11,9 +14,11 @@ namespace Dsh.Gui.Views;
 public sealed partial class ChatView : UserControl
 {
     private const double StickyTolerance = 24;
+    private const RoutingStrategies ScrollInputRoutes = RoutingStrategies.Tunnel | RoutingStrategies.Bubble;
 
     private MainViewModel? _viewModel;
     private bool _sticky = true;
+    private RoutedEventArgs? _scrollInput;
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _presetFlyout;
@@ -24,6 +29,20 @@ public sealed partial class ChatView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         MessageList.AddHandler(ScrollViewer.ScrollChangedEvent, OnScrollChanged);
+        MessageList.AddHandler(InputElement.PointerWheelChangedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.AddHandler(InputElement.KeyDownEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.AddHandler(InputElement.PointerPressedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.AddHandler(InputElement.PointerMovedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.AddHandler(InputElement.PointerReleasedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.PropertyChanged += (_, change) =>
+        {
+            if (change.Property != ListBox.ScrollProperty)
+                return;
+            if (change.OldValue is ScrollViewer previous)
+                previous.PropertyChanged -= OnScrollPropertyChanged;
+            if (change.NewValue is ScrollViewer current)
+                current.PropertyChanged += OnScrollPropertyChanged;
+        };
         PropertyChanged += (_, change) =>
         {
             if (change.Property == IsVisibleProperty && IsVisible)
@@ -50,12 +69,50 @@ public sealed partial class ChatView : UserControl
         _viewModel = null;
     }
 
-    /** 只在贴底时跟随流式输出; 用户向上翻阅时保持位置。 */
+    private void OnScrollInput(object? sender, RoutedEventArgs e) =>
+        _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
+
+    private bool IsScrollBarInput(Visual? source)
+    {
+        var inScrollBar = false;
+        for (var visual = source; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is ScrollBar)
+                inScrollBar = true;
+            if (visual is ScrollViewer scroll)
+                return inScrollBar && ReferenceEquals(scroll, MessageList.Scroll);
+        }
+        return false;
+    }
+
+    // Observe manual offset changes before ScrollChanged combines them with layout changes.
+    private void OnScrollPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs change)
+    {
+        if (change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
+            return;
+        var manual = _scrollInput is PointerWheelEventArgs
+            || _scrollInput is KeyEventArgs { Key: Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End }
+            || _scrollInput is PointerEventArgs pointer && IsScrollBarInput(pointer.Source as Visual);
+        if (!manual)
+            return;
+        var previous = change.GetOldValue<Vector>().Y;
+        var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+        // A smaller scroll range can clamp the offset without the reader scrolling.
+        if (scroll.Offset.Y < Math.Min(previous, maximum) || !_sticky)
+            _sticky = scroll.Offset.Y >= maximum - StickyTolerance;
+    }
+
+    /** Follow layout growth only while pinned; scrolling can leave or rejoin the tail. */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
-        if (e.Source is not ScrollViewer scroll)
+        if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
-        _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
+        var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
+        // Preserve pinned intent through growth after immediate offset intent was observed.
+        if (!layoutChanged || !_sticky)
+            _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
+        if (layoutChanged && _sticky)
+            scroll.ScrollToEnd();
     }
 
     private void ScrollToMessage(MessageViewModel message)
@@ -75,7 +132,7 @@ public sealed partial class ChatView : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             if (_sticky && _viewModel?.Messages.Count is > 0)
-                MessageList.ScrollIntoView(_viewModel.Messages[^1]);
+                (MessageList.Scroll as ScrollViewer)?.ScrollToEnd();
         });
     }
 

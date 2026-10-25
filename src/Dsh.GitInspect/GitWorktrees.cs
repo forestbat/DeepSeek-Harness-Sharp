@@ -1,22 +1,5 @@
 namespace Dsh.GitInspect;
 
-/** One entry of `git worktree list --porcelain`; IsMain marks the main working tree (always listed first). */
-public sealed record GitWorktree(
-    string Path,
-    string? Head,
-    string? Branch,
-    bool IsMain,
-    bool IsBare,
-    bool IsDetached,
-    bool IsLocked,
-    bool IsPrunable);
-
-/**
- * Request for `git worktree add`.
- * NewBranch creates a branch at StartPoint (HEAD when null); without NewBranch, StartPoint may name an existing branch to check out.
- */
-public sealed record GitWorktreeAddRequest(string Path, string? NewBranch = null, string? StartPoint = null);
-
 /**
  * Parser for `git worktree list --porcelain`: attribute lines, records ended by an empty line.
  * With `-z` (git 2.36+) attributes are NUL terminated instead of newline terminated, so paths may contain newlines.

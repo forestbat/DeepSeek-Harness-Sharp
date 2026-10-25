@@ -171,7 +171,7 @@ public static class NativePluginBridge
     {
         public string[] Inject => [];
 
-        public IDisposable Apply(Context ctx, object? config)
-            => (IDisposable)CreateDefinition(plugin).Apply(ctx, config)!;
+        public async Task<IDisposable?> ApplyAsync(Context ctx, object? config, CancellationToken cancellationToken = default)
+            => await CreateDefinition(plugin).Apply(ctx, config, cancellationToken).ConfigureAwait(false) as IDisposable;
     }
 }

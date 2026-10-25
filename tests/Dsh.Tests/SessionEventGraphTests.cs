@@ -26,7 +26,7 @@ public sealed class SessionEventGraphTests : IDisposable
     private const string SummaryText = "## Current Work\n- graph summary";
     private const int CompactionContextWindow = 4000;
     private const int PrunableResultChars = 20000;
-    private static readonly TimeSpan EventTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan EventTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly string[] CompactableTurns =
     [

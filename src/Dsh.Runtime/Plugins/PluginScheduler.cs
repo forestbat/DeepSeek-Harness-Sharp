@@ -169,16 +169,15 @@ public sealed class PluginScheduler
         Enqueue();
     }
 
-    internal void OnActivationStateChanged(PluginActivation activation, ActivationState state)
+    internal void OnActivationStateChanged() => Enqueue();
+
+    /** 在发布 Active 之前捕获依赖归属: 泵线程一旦看到 Active 就会据此判定是否需要重建。 */
+    internal void CaptureDependencies(PluginActivation activation)
     {
-        if (state == ActivationState.Active)
-        {
-            Dictionary<string, PluginActivation> providers;
-            lock (_sync)
-                providers = new Dictionary<string, PluginActivation>(_providers, StringComparer.Ordinal);
-            activation.CaptureDependencies(providers);
-        }
-        Enqueue();
+        Dictionary<string, PluginActivation> providers;
+        lock (_sync)
+            providers = new Dictionary<string, PluginActivation>(_providers, StringComparer.Ordinal);
+        activation.CaptureDependencies(providers);
     }
 
     /**

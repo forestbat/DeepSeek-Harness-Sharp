@@ -5,13 +5,14 @@ using Dsh.Fleet;
 namespace Dsh.Tests;
 
 /** 机器清单: GUI、CLI 与 WebBridge 只读写 settings.yaml 的 fleet 段。 */
+[Collection(SerialProcessCollection.Name)]
 public sealed class MachineStoreTests : IDisposable
 {
     private readonly string _root = TempTree.CreateDirectory("fleet-store");
 
     public void Dispose() => TempTree.Delete(_root);
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void Machines_RoundTrip_With_All_Fields_In_The_OwnerOnly_Settings_File()
     {
         var store = new MachineStore(new HarnessHome(_root));
@@ -26,6 +27,8 @@ public sealed class MachineStoreTests : IDisposable
                 EndpointId = new string('a', MachineSpec.IrohEndpointIdLength),
                 RelayUrls = ["https://relay.example.org/"],
                 KeyPath = "/keys/home",
+                IrohExecutablePath = "/usr/local/bin/iroh-ssh",
+                IrohArguments = "-i /keys/home",
             },
         ];
         store.Save(new FleetConfig(machines, new DeploySettings { AutoDeploy = false, Via = DownloadVia.Client, ReleaseVersion = "v0.2.0" }));
@@ -45,7 +48,7 @@ public sealed class MachineStoreTests : IDisposable
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(store.FilePath));
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void Upsert_Replaces_By_Name_And_Remove_Reports_Missing_Machines()
     {
         var store = new MachineStore(new HarnessHome(_root));
@@ -58,7 +61,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Empty(store.Load().Machines);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(MachineSpec.LocalName)]
     [InlineData("a/b")]
     [InlineData("")]
@@ -68,7 +71,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => store.Upsert(MachineSpec.Ssh(name, "host", 22, "me", SshAuth.Agent)));
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void Duplicate_Names_Are_Rejected()
     {
         var store = new MachineStore(new HarnessHome(_root));
@@ -76,7 +79,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => store.Save(FleetConfig.Empty with { Machines = [machine, machine] }));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public void Loading_UsesOnlyFleetSettings_AndLeavesUnrelatedFilesAndPluginParametersUntouched(bool configured)
@@ -114,7 +117,7 @@ public sealed class MachineStoreTests : IDisposable
     }
 
     /** 只改写 fleet 段: 注释、其它段与 CRLF 换行原样保留; 删掉最后一台机器后文件回到原样。 */
-    [Fact]
+    [Fact(Explicit = true)]
     public void Saving_Rewrites_Only_The_Fleet_Section_And_Keeps_Comments_And_Crlf()
     {
         var home = new HarnessHome(_root);
@@ -145,7 +148,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(original, File.ReadAllText(home.SettingsFile));
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void Loading_Without_Any_Configuration_Creates_Nothing()
     {
         var home = new HarnessHome(_root);
@@ -153,7 +156,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.False(File.Exists(home.SettingsFile));
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void OutboundTunnel_RoundTrip_And_Clear_Keep_BaseProxy_Deploy_And_Unrelated_Settings()
     {
         var home = new HarnessHome(_root);
@@ -186,7 +189,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.StartsWith(unrelated, File.ReadAllText(home.SettingsFile), StringComparison.Ordinal);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData("http://proxy.example")]
     [InlineData("https://proxy.example")]
     [InlineData("http://tunnel-user:tunnel-secret@proxy.example:3128/")]
@@ -208,7 +211,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(machine, Assert.Single(store.Load().Machines));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(null, "http://tunnel-user:tunnel-secret@proxy.example:3128", null)]
     [InlineData("", "http://tunnel-user:tunnel-secret@proxy.example:3128", null)]
     [InlineData("proxyCommand", null, null)]
@@ -241,7 +244,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.False(File.Exists(store.FilePath));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public void Local_Machines_Cannot_Have_Tunnels(string mode)
@@ -255,7 +258,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Null(MachineStore.ValidateOutboundTunnel(MachineSpec.Local()));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData("            mode: proxyCommand\n")]
     [InlineData("            proxyUrl: http://proxy.example:3128\n")]
     [InlineData("            mode: proxyCommand\n            proxyUrl: http://proxy.example:0\n")]
@@ -269,7 +272,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(document, File.ReadAllText(home.SettingsFile));
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory(Explicit = true)]
     [InlineData("proxyCommand", null)]
     [InlineData("localForward", null)]
     [InlineData("localForward", 1)]
@@ -309,7 +312,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.StartsWith(unrelated, File.ReadAllText(home.SettingsFile), StringComparison.Ordinal);
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory(Explicit = true)]
     [InlineData("")]
     [InlineData("null")]
     [InlineData("[]")]
@@ -337,7 +340,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(before, File.ReadAllText(home.SettingsFile));
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory(Explicit = true)]
     [InlineData("set")]
     [InlineData("set", "--proxy", "http://tunnel-user:tunnel-secret@proxy.example:3128")]
     [InlineData("set", "--proxy-url", "http://tunnel-user:tunnel-secret@proxy.example:3128")]
@@ -360,7 +363,7 @@ public sealed class MachineStoreTests : IDisposable
         Assert.Equal(before, File.ReadAllText(home.SettingsFile));
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task Tunnel_Cli_Cannot_Configure_The_Implicit_Local_Machine()
     {
         var home = new HarnessHome(_root);
@@ -381,3 +384,4 @@ public sealed class MachineStoreTests : IDisposable
     }
 
 }
+

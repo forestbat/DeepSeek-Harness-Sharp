@@ -1074,7 +1074,7 @@ public sealed class ChatWindow : IDisposable
     {
         try
         {
-            var lines = await Task.Run(() => LoadGitLinesAsync(cwd, _lifetime.Token));
+            var lines = await Task.Run(() => LoadGitLinesAsync(_ctx, cwd, _lifetime.Token));
             QueueAction(() =>
             {
                 _gitLines = lines;
@@ -1099,22 +1099,29 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    internal static async Task<IReadOnlyList<string>> LoadGitLinesAsync(string cwd, CancellationToken cancellationToken = default)
+    internal static Task<IReadOnlyList<string>> LoadGitLinesAsync(Context ctx, string cwd, CancellationToken cancellationToken = default)
     {
-        var inspector = new GitInspector(cwd);
+        var git = ctx.Get<IGitService>(IGitService.ServiceName, false);
+        return git is null
+            ? Task.FromResult<IReadOnlyList<string>>(["(非 git 仓库或 git 不可用)"])
+            : LoadGitLinesAsync(git, cwd, cancellationToken);
+    }
+
+    internal static async Task<IReadOnlyList<string>> LoadGitLinesAsync(IGitService git, string cwd, CancellationToken cancellationToken = default)
+    {
         GitStatus status;
         try
         {
-            status = await inspector.StatusAsync(cancellationToken);
+            status = await git.StatusAsync(cwd, cancellationToken);
         }
-        catch (GitCommandException)
+        catch (Exception)
         {
             return ["(非 git 仓库或 git 不可用)"];
         }
         if (status.IsClean && status.Branch.Oid is null)
             return ["(无变更)"];
         var target = status.IsClean ? GitDiffTarget.OfCommit(status.Branch.Oid!) : GitDiffTarget.Uncommitted;
-        var summary = await inspector.DiffSummaryAsync(target, cancellationToken: cancellationToken);
+        var summary = await git.DiffSummaryAsync(cwd, target, cancellationToken: cancellationToken);
         return status.IsClean && summary.Files.Count == 0
             ? ["(无变更)"]
             : GitPanel.Format(summary, status.IsClean ? "上次提交" : "未提交改动");
@@ -2897,3 +2904,4 @@ public sealed class ChatWindow : IDisposable
 
     private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId, string? PtyId = null);
 }
+

@@ -19,7 +19,7 @@
       <ItemsControl ItemsSource="{Binding Preferences.Sections}" Margin="12,0,10,12">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:SettingsNavItemViewModel">
-            <Button Classes="SessionItem" Classes.selected="{Binding IsSelected}"
+            <Button Name="SettingsSectionButton" Classes="SessionItem" Classes.selected="{Binding IsSelected}"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                     Command="{Binding SelectCommand}" CommandParameter="{Binding}">
               <TextBlock Text="{Binding Label}" />
@@ -38,11 +38,11 @@
               <StackPanel Spacing="8">
                 <TextBlock Text="主题" Classes="Secondary" />
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Button Classes="Chip" Classes.selected="{Binding Preferences.IsDarkTheme}" Content="深色"
+                  <Button Name="ThemeDark" Classes="Chip" Classes.selected="{Binding Preferences.IsDarkTheme}" Content="深色"
                           Command="{Binding Preferences.SelectThemeCommand}" CommandParameter="dark" />
-                  <Button Classes="Chip" Classes.selected="{Binding Preferences.IsLightTheme}" Content="浅色"
+                  <Button Name="ThemeLight" Classes="Chip" Classes.selected="{Binding Preferences.IsLightTheme}" Content="浅色"
                           Command="{Binding Preferences.SelectThemeCommand}" CommandParameter="light" />
-                  <Button Classes="Chip" Classes.selected="{Binding Preferences.IsSystemTheme}" Content="跟随系统"
+                  <Button Name="ThemeSystem" Classes="Chip" Classes.selected="{Binding Preferences.IsSystemTheme}" Content="跟随系统"
                           Command="{Binding Preferences.SelectThemeCommand}" CommandParameter="system" />
                 </StackPanel>
                 <TextBlock Text="主题写入 settings.yaml 的 gui 参数 theme（dark / light / system）。" Classes="Tertiary" TextWrapping="Wrap" />
@@ -333,33 +333,95 @@
                 <TextBlock Text="本机出口代理" FontWeight="SemiBold" />
                 <TextBlock Text="本机发出的 web_search、web_fetch、模型请求、下载远端 dsharp 等出站 HTTP 都经它访问外网；留空跟随系统代理。远程服务器自己的代理不在这里配置。"
                            Classes="Tertiary" TextWrapping="Wrap" />
-                <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="6">
-                  <TextBlock Text="代理地址" Classes="Tertiary" VerticalAlignment="Center" />
-                  <TextBox Grid.Column="1" Text="{Binding Preferences.OutboundProxyUrl}"
-                           PlaceholderText="留空 = 跟随系统代理；如 http://127.0.0.1:7890、socks5://user:pass@127.0.0.1:1080" />
-                  <TextBlock Grid.Row="1" Text="直连主机" Classes="Tertiary" VerticalAlignment="Top" Margin="0,6,0,0" />
-                  <TextBox Grid.Row="1" Grid.Column="1" AcceptsReturn="True" Height="80" TextWrapping="Wrap"
-                           Text="{Binding Preferences.OutboundProxyBypassText}"
-                           PlaceholderText="每行一个，含子域，如 api.deepseek.com；回环地址与不带点的主机名总是直连" />
-                  <TextBlock Grid.Row="2" Text="探测地址" Classes="Tertiary" VerticalAlignment="Center" />
-                  <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Preferences.OutboundProxyProbeUrl}"
-                           PlaceholderText="{Binding Preferences.OutboundProxyProbePlaceholder}" />
-                </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Button Classes="Primary" Content="保存" Command="{Binding Preferences.SaveNetworkCommand}" />
-                  <Button Classes="Ghost" Content="连通性自检" Command="{Binding Preferences.CheckProxyCommand}" />
+                <StackPanel Spacing="8" IsEnabled="{Binding !Preferences.SaveNetworkCommand.IsRunning}">
+                  <TextBlock Text="代理地址（凭据默认遮蔽；点击编辑后才显示完整草稿）" Classes="Tertiary" TextWrapping="Wrap" />
+                  <TextBox Name="LocalProxyUrl" Text="{Binding Preferences.OutboundProxyUrl, Mode=TwoWay}"
+                           IsReadOnly="{Binding !Preferences.IsEditingOutboundProxy}"
+                           PlaceholderText="留空 = 跟随系统代理；支持 http / https / socks4 / socks4a / socks5"
+                           TextWrapping="Wrap" />
+                  <Button Name="LocalProxyEdit" Classes="Ghost" HorizontalAlignment="Left" Content="编辑代理与探测地址"
+                          Command="{Binding Preferences.EditOutboundProxyCommand}" />
+                  <TextBlock Text="直连主机（每行一个）" Classes="Tertiary" />
+                  <TextBox Name="LocalProxyBypass" AcceptsReturn="True" Height="80" TextWrapping="Wrap"
+                           Text="{Binding Preferences.OutboundProxyBypassText, Mode=TwoWay}"
+                           PlaceholderText="如 api.deepseek.com；回环地址与不带点的主机名总是直连" />
+                  <TextBlock Text="探测地址" Classes="Tertiary" />
+                  <TextBox Name="LocalProxyProbeUrl" Text="{Binding Preferences.OutboundProxyProbeUrl, Mode=TwoWay}"
+                           IsReadOnly="{Binding !Preferences.IsEditingOutboundProxy}"
+                           PlaceholderText="{Binding Preferences.OutboundProxyProbePlaceholder}" TextWrapping="Wrap" />
                 </StackPanel>
-                <SelectableTextBlock Text="{Binding Preferences.ProxyCheckResult}" TextWrapping="Wrap" />
+                <WrapPanel Orientation="Horizontal">
+                  <Button Name="LocalProxySave" Classes="Primary" Content="保存本机基准出口" Margin="0,0,8,8"
+                          Command="{Binding Preferences.SaveNetworkCommand}" />
+                  <Button Classes="Ghost" Content="取消保存 / 重载" Margin="0,0,8,8"
+                          Command="{Binding Preferences.SaveNetworkCancelCommand}" />
+                  <Button Name="LocalProxyProbe" Classes="Ghost" Content="检查本机出口代理" Margin="0,0,8,8"
+                          Command="{Binding Preferences.CheckProxyCommand}" IsEnabled="{Binding !Preferences.LocalProxyProbe.IsRunning}" />
+                  <Button Name="LocalProxyCancel" Classes="Ghost" Content="取消本机检查" Margin="0,0,8,8"
+                          Command="{Binding Preferences.LocalProxyProbe.CancelCommand}" />
+                </WrapPanel>
+                <TextBlock Text="自检使用当前未保存的基准草稿，不会写入文件。" Classes="Tertiary" TextWrapping="Wrap" />
+                <StackPanel Spacing="4">
+                  <TextBlock Text="{Binding Preferences.LocalProxyProbe.Label}" Classes="Secondary" />
+                  <StackPanel Spacing="4" IsVisible="{Binding Preferences.LocalProxyProbe.HasResult}">
+                    <TextBlock Text="{Binding Preferences.LocalProxyProbe.IdentityText}" Classes="Tertiary" TextWrapping="Wrap" />
+                    <WrapPanel Orientation="Horizontal">
+                      <TextBlock Text="{Binding Preferences.LocalProxyProbe.OutcomeText}" Classes="Secondary" Margin="0,0,12,4" />
+                      <TextBlock Text="{Binding Preferences.LocalProxyProbe.StageText}" Classes="Tertiary" Margin="0,0,12,4" />
+                      <TextBlock Text="{Binding Preferences.LocalProxyProbe.HttpStatusText}" Classes="Mono" Margin="0,0,12,4" />
+                    </WrapPanel>
+                    <SelectableTextBlock Name="LocalProxyResult" Text="{Binding Preferences.LocalProxyProbe.Detail}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <SelectableTextBlock Text="{Binding Preferences.NetworkStatus}" TextWrapping="Wrap" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+              <StackPanel Spacing="8">
+                <TextBlock Text="本机借用远端出口" FontWeight="SemiBold" />
+                <TextBlock Text="显式选择已配置出口隧道的 SSH / iroh 机器。选择会验证后保存 network.borrowed_outbound_machine，并重载当前进程和已连接同 home 本机 Host；不会修改本机基准 URL、SSH 代理、远端出口或部署代理。"
+                           Classes="Tertiary" TextWrapping="Wrap" />
+                <TextBlock Text="已保存的借用选择" Classes="Tertiary" />
+                <TextBlock Text="{Binding Preferences.SavedBorrowedOutboundMachine}" Classes="Secondary" TextWrapping="Wrap" />
+                <ComboBox Name="BorrowedMachine" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding Preferences.BorrowedOutboundMachines}"
+                          SelectedItem="{Binding Preferences.SelectedBorrowedOutboundMachine, Mode=TwoWay}"
+                          IsEnabled="{Binding !Preferences.IsChangingBorrowedOutbound}"
+                          PlaceholderText="请先在远程机器的出口隧道中配置代理端点和模式" />
+                <WrapPanel Orientation="Horizontal">
+                  <Button Name="BorrowedSelect" Classes="Primary" Content="验证并保存借用" Margin="0,0,8,8"
+                          Command="{Binding Preferences.SelectBorrowedOutboundCommand}"
+                          IsEnabled="{Binding !Preferences.IsChangingBorrowedOutbound}" />
+                  <Button Name="BorrowedClear" Classes="Ghost" Content="清除借用（使用基准）" Margin="0,0,8,8"
+                          Command="{Binding Preferences.ClearBorrowedOutboundCommand}"
+                          IsEnabled="{Binding !Preferences.IsChangingBorrowedOutbound}" />
+                  <Button Name="BorrowedSelectCancel" Classes="Ghost" Content="取消选择 / 重载" Margin="0,0,8,8"
+                          Command="{Binding Preferences.SelectBorrowedOutboundCancelCommand}" />
+                  <Button Name="BorrowedClearCancel" Classes="Ghost" Content="取消清除 / 重载" Margin="0,0,8,8"
+                          Command="{Binding Preferences.ClearBorrowedOutboundCancelCommand}" />
+                  <Button Name="BorrowedProbe" Classes="Ghost" Content="仅验证借用（不保存）" Margin="0,0,8,8"
+                          Command="{Binding Preferences.ValidateBorrowedOutboundCommand}"
+                          IsEnabled="{Binding !Preferences.BorrowedOutboundProbe.IsRunning}" />
+                  <Button Name="BorrowedCancel" Classes="Ghost" Content="取消借用验证" Margin="0,0,8,8"
+                          Command="{Binding Preferences.BorrowedOutboundProbe.CancelCommand}" />
+                </WrapPanel>
+                <TextBlock Text="独立验证使用所选机器和已保存的探测地址，不更改当前借用选择；清除后仍保留本机基准出口配置。" Classes="Tertiary" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Preferences.BorrowedOutboundProbe.Label}" Classes="Secondary" />
+                <StackPanel Spacing="4" IsVisible="{Binding Preferences.BorrowedOutboundProbe.HasResult}">
+                  <TextBlock Text="{Binding Preferences.BorrowedOutboundProbe.IdentityText}" Classes="Tertiary" TextWrapping="Wrap" />
+                  <WrapPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Preferences.BorrowedOutboundProbe.OutcomeText}" Classes="Secondary" Margin="0,0,12,4" />
+                    <TextBlock Text="{Binding Preferences.BorrowedOutboundProbe.StageText}" Classes="Tertiary" Margin="0,0,12,4" />
+                    <TextBlock Text="{Binding Preferences.BorrowedOutboundProbe.HttpStatusText}" Classes="Mono" Margin="0,0,12,4" />
+                  </WrapPanel>
+                  <SelectableTextBlock Name="BorrowedResult" Text="{Binding Preferences.BorrowedOutboundProbe.Detail}" TextWrapping="Wrap" />
+                </StackPanel>
+                <SelectableTextBlock Text="{Binding Preferences.BorrowedOutboundStatus}" TextWrapping="Wrap" />
               </StackPanel>
             </Border>
           </StackPanel>
 
-          <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsRemoteSection}">
-            <TextBlock Text="远程" Classes="Title" />
-            <TextBlock Text="机器清单与远端部署设置保存在 settings.yaml 的 fleet 段，与侧栏“机器”页、dsharp machine 和 dsharp host web 共用。" Classes="Tertiary" TextWrapping="Wrap" />
-            <views:MachinesView DataContext="{Binding Workspace.Machines}" Margin="-12,0" />
-            <TextBlock Text="本机下载部署包走“网络”页的本机出口代理；fleet.deploy.serverProxy 仅供远端 curl/wget 下载部署包，不设置远端机器的一般网络出口。" Classes="Tertiary" TextWrapping="Wrap" />
-          </StackPanel>
 
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsAboutSection}">
             <TextBlock Text="关于" Classes="Title" />
@@ -388,6 +450,6 @@
     </Grid>
 
     <TextBlock Grid.Row="2" Text="{Binding Preferences.Status}" Classes="Tertiary"
-               Margin="20,0,20,10" TextTrimming="CharacterEllipsis" />
+               Margin="20,0,20,10" TextWrapping="Wrap" MaxHeight="90" />
   </Grid>
 </UserControl>

@@ -8,10 +8,10 @@ using Dsh.Transport;
 
 namespace Dsh.Host;
 
-internal sealed class HarnessRemoteNetworkBackend(HarnessHome home, OutboundProxy proxy, IOutboundRouteController? controller = null)
-    : IRemoteNetworkBackend, IRemoteNetworkReloadBackend
+internal sealed class HarnessRemoteNetworkBackend(HarnessHome home, OutboundProxy proxy, IOutboundRouteController? controller = null) :
+   IRemoteNetworkBackend, IRemoteNetworkReloadBackend
 {
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _gate = new SemaphoreSlim(1, 1);
     private readonly string _ownerId = Guid.NewGuid().ToString("N");
 
     public async Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken)

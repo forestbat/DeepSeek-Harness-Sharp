@@ -5,6 +5,7 @@ using Dsh.RemoteHost;
 namespace Dsh.Tests;
 
 /** 文件视图的视图模型对真实 host(进程内 harness 后端 + loopback 监听)的上传下载、目录操作与编辑保存。 */
+[Collection(SerialProcessCollection.Name)]
 public sealed class FilesViewModelTests : IDisposable
 {
     private readonly string _local = TempTree.CreateDirectory("files-vm");
@@ -13,7 +14,7 @@ public sealed class FilesViewModelTests : IDisposable
 
     public void Dispose() => TempTree.Delete(_local);
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fvt", TestContext.Current.CancellationToken);
@@ -38,7 +39,7 @@ public sealed class FilesViewModelTests : IDisposable
         Assert.Equal(["blob.bin", "copy.bin"], Directory.GetFiles(_local).Select(Path.GetFileName).Order());
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task CancelledUpload_LeavesNoRemoteFile()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fvc", TestContext.Current.CancellationToken);
@@ -62,7 +63,7 @@ public sealed class FilesViewModelTests : IDisposable
         Assert.DoesNotContain(viewModel.Roots[0].Children, child => child.Name == "large.bin");
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task FolderOperations_CreateRenameAndDeleteOnlyAfterConfirmingDirectories()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fvd", TestContext.Current.CancellationToken);
@@ -92,7 +93,7 @@ public sealed class FilesViewModelTests : IDisposable
         Assert.False(viewModel.StatusIsError, viewModel.Status);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task Editor_SavesAtomically_KeepsCrlfAndBom_AndAsksBeforeOverwritingARemoteChange()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fve", TestContext.Current.CancellationToken);
@@ -130,7 +131,7 @@ public sealed class FilesViewModelTests : IDisposable
         Assert.Empty(Directory.GetFiles(root, "*.part"));
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task Editor_ShowsBinaryAndOversizedFilesAsInformationOnly()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fvb", TestContext.Current.CancellationToken);
@@ -150,7 +151,7 @@ public sealed class FilesViewModelTests : IDisposable
         Assert.Equal([(FileEditorMode.TooLarge, true, ""), (FileEditorMode.Binary, true, "")], modes);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 5000)]
     public async Task PathsOutsideHostRoots_AreRejectedByTheHost_NotTheFileView()
     {
         await using var host = await HarnessHostFixture.CreateAsync("fvp", Ct);

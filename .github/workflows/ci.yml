@@ -252,7 +252,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for PROJECT in DeepSeek-Harness-Sharp DshGuiHost Dsh.WebHost; do
+          for PROJECT in DeepSeek-Harness-Sharp Dsh.GuiHost Dsh.WebHost; do
             dotnet publish "$PROJECT/$PROJECT.csproj" \
               -c Release -r ${{ matrix.rid }} \
               -p:DebugSymbols=false -p:DebugType=none \
@@ -270,7 +270,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PUB="DshGuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          PUB="Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
           EXE="$PUB/dsh-gui"
           test -f "$EXE" || { echo "::error::找不到 $EXE"; exit 1; }
           chmod +x "$EXE"
@@ -296,7 +296,7 @@ jobs:
           pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
             -WebPublishDir "Dsh.WebHost/bin/Release/net10.0/${{ matrix.rid }}/publish" \
             -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/${{ matrix.rid }}/publish" \
-            -GuiPublishDir "DshGuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
+            -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
       - name: 归档三个入口的独立完整发布根
         shell: bash
         run: |
@@ -307,7 +307,7 @@ jobs:
             TAR="$(cygpath -u "$WINDIR")/System32/tar.exe"
           fi
           "$TAR" -cf "artifacts/${{ matrix.rid }}-cli.tar" -C "DeepSeek-Harness-Sharp/bin/Release/net10.0/${{ matrix.rid }}/publish" .
-          "$TAR" -cf "artifacts/${{ matrix.rid }}-gui.tar" -C "DshGuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish" .
+          "$TAR" -cf "artifacts/${{ matrix.rid }}-gui.tar" -C "Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish" .
           "$TAR" -cf "artifacts/${{ matrix.rid }}-web.tar" -C "Dsh.WebHost/bin/Release/net10.0/${{ matrix.rid }}/publish" .
       - uses: actions/upload-artifact@v4
         with:

@@ -222,6 +222,8 @@ public sealed class WorkingDirectoryTests : IDisposable
                 Assert.Skip("Windows-only shell; this host is not Windows");
             if (tool == "wsl" && !File.Exists(Path.Combine(Environment.SystemDirectory, "wsl.exe")))
                 Assert.Skip("WSL is not installed on this Windows host");
+            if (tool == "wsl" && !ShellProbe.Wsl)
+                Assert.Skip("WSL/Linux is unavailable or unresponsive");
         }
         else if (tool.StartsWith("bash", StringComparison.Ordinal) ? !ShellProbe.Bash : !ShellProbe.Pwsh)
             Assert.Skip($"Required shell for {tool} is unavailable");
@@ -415,7 +417,7 @@ public sealed class WorkingDirectoryTests : IDisposable
         };
         foreach (var argument in arguments)
             info.ArgumentList.Add(argument);
-        using var process = Process.Start(info)!;
+        using var process = TestProcessScope.Start(info)!;
         var output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);

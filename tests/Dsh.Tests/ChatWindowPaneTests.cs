@@ -24,7 +24,7 @@ public sealed class TuiThemeCollection;
 public sealed class ChatWindowPaneTests : IDisposable
 {
     /** Upper bound for a real shell to draw its prompt or the output of one command. */
-    private static readonly TimeSpan ShellOutputTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ShellOutputTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PanePollInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly string _homeDir = Path.Combine(
@@ -370,7 +370,7 @@ public sealed class ChatWindowPaneTests : IDisposable
      * 但"看到它的会话 + 响应 Ctrl+X"与任何 pty 一致 —— 横幅列出它的会话, Ctrl+X . 请对面切会话,
      * 绝不把别人的对话界面镜像进来当这一层的内容。
      */
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 5000)]
     public async Task Overview_Enter_Foreign_Dsh_Pty_Hosts_Terminal_And_Switches_Its_Sessions()
     {
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
@@ -438,7 +438,7 @@ public sealed class ChatWindowPaneTests : IDisposable
      * 进入"本 TUI 自己所在的 pty"= 打开这一层的视图: **不 detach**, 由 DSH 为这一层托一个本地 shell
      * (该 pty 的程序是常驻 DSH, 没有 shell 可用), 底部状态行写明当前在 pty 层, Ctrl+X 仍归 DSH。
      */
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 5000)]
     public async Task Overview_Enter_Own_Pty_Opens_Pty_Layer_Without_Detaching()
     {
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
@@ -494,7 +494,7 @@ public sealed class ChatWindowPaneTests : IDisposable
     /**
      * pty 层拉不起 shell(受限环境/GPU 模式等): 仍要开出这一层的窗格并让 Ctrl+X 快捷键可用。
      */
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 5000)]
     public async Task Overview_Enter_Pty_Layer_Without_Shell_Still_Handles_CtrlX()
     {
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
@@ -536,7 +536,7 @@ public sealed class ChatWindowPaneTests : IDisposable
      * §19 阶段 2 端到端: 真 daemon 里的真 pty → RemoteTerminalBacking → 真 ShellPane。
      * 键入必须被前台进程执行并把输出渲染进窗格(证明"进入 pty 后能跑命令", 不是只铺了张静态快照)。
      */
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Remote_Pane_Runs_Command_Through_Real_Daemon_Pty()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

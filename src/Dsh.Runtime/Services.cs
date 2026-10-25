@@ -91,21 +91,38 @@ internal sealed class ServiceTable(IServiceRegistry registry)
 
     public EffectHandle Provide(Context ctx, string name, object? value, Func<bool>? check)
     {
+        // 卸载/取消后旧 activation 不得继续发布服务: Provide 与事件注册走同一道活性闸门。
+        ctx.Activation.AssertActive();
         var impl = new ServiceImpl { Name = name, Check = check, Owner = ctx.Activation, Types = TypeIndexOf(value) };
         lock (_sync)
         {
             if (_services.TryGetValue(name, out var occupied))
                 throw new RuntimeException("SERVICE_REGISTERED", $"service \"{name}\" has been registered at <{occupied.Owner.Name}>");
             _services[name] = impl;
+            try
+            {
+                // 元数据与容器实例必须同一步可见, 并发的同名 Unregister 不能删掉后来者的实例。
+                registry.Register(name, value);
+            }
+            catch
+            {
+                _services.Remove(name);
+                throw;
+            }
         }
-        registry.Register(name, value);
         ctx.Root.Scheduler.OnServiceProvided(name, ctx.Activation);
         ctx.Activation.TrackProvided(name);
         var effect = new EffectHandle($"provide({name})", () =>
         {
             lock (_sync)
-                _services.Remove(name);
-            registry.Unregister(name);
+            {
+                // 只撤销本注册: 同名后继提供者(热重载)的元数据与实例不能被旧 effect 顺手删掉。
+                if (_services.TryGetValue(name, out var current) && ReferenceEquals(current, impl))
+                {
+                    _services.Remove(name);
+                    registry.Unregister(name);
+                }
+            }
             ctx.Root.Scheduler.OnServiceRemoved(name, ctx.Activation);
             return Task.CompletedTask;
         });

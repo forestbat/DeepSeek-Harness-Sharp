@@ -5,11 +5,11 @@ namespace Dsh.Tests;
 public class PtyDaemonTests(ITestOutputHelper output)
 {
     private static readonly string TestRoot = Path.Combine(FindRepositoryRoot(), ".daemon-tests");
-    private static readonly TimeSpan ReadReleaseTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadReleaseTimeout = TimeSpan.FromSeconds(5);
     private const int ExitCodeAfterOutputCloses = 7;
     private const int ExitDelayAfterOutputClosesSeconds = 1;
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task List_ReturnsEmpty_WhenNoSessionsExist()
     {
         if (OperatingSystem.IsWindows())
@@ -31,7 +31,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Start_ThenList_ContainsStartedSession()
     {
         if (OperatingSystem.IsWindows())
@@ -59,7 +59,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Host_ReadWrite_RoundTrips()
     {
         if (OperatingSystem.IsWindows())
@@ -76,7 +76,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         Assert.Contains("GOT:hello", text);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Host_ConcurrentReadThenDelayedWrite_RoundTrips()
     {
         if (OperatingSystem.IsWindows())
@@ -98,7 +98,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         Assert.Contains("GOT:hello", text);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Host_Read_SmallBuffers_DrainsPendingChunk_WhileChildWaitsForInput()
     {
         if (OperatingSystem.IsWindows())
@@ -173,7 +173,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         return text.ToString();
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Attach_RelaysSessionInputAndOutput()
     {
         if (OperatingSystem.IsWindows())
@@ -249,7 +249,7 @@ public class PtyDaemonTests(ITestOutputHelper output)
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Dispose_RemovesSocketFile()
     {
         if (OperatingSystem.IsWindows())

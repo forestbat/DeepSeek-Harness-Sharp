@@ -5,6 +5,9 @@ namespace Dsh.Notifications;
 /** Low-frequency notification state: one in-memory list and an atomically replaced JSON snapshot, including read marks. */
 public sealed class NotificationHistory
 {
+    private const int AtomicFileRetries = 3;
+    private static readonly TimeSpan AtomicFileRetryDelay = TimeSpan.FromMilliseconds(10);
+
     private readonly string _path;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly Lock _stateLock = new();
@@ -126,10 +129,21 @@ public sealed class NotificationHistory
         try
         {
             await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(records, NotificationsJsonContext.Default.IReadOnlyListNotificationRecord), cancellationToken);
-            if (File.Exists(_path))
-                File.Replace(temporary, _path, null);
-            else
-                File.Move(temporary, _path);
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(_path))
+                        File.Replace(temporary, _path, null);
+                    else
+                        File.Move(temporary, _path);
+                    break;
+                }
+                catch (IOException) when (attempt < AtomicFileRetries)
+                {
+                    await Task.Delay(AtomicFileRetryDelay, cancellationToken);
+                }
+            }
         }
         finally
         {

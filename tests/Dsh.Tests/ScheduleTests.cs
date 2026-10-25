@@ -366,7 +366,7 @@ public static class ScheduleTests
     public sealed class AgentLoopDelivery
     {
         /** Bounds every wait so a stuck turn fails this test instead of hanging the whole run. */
-        private static readonly TimeSpan TurnDeadline = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan TurnDeadline = TimeSpan.FromSeconds(5);
 
         private sealed class ScriptedAdapter : LlmAdapter
         {
@@ -589,7 +589,7 @@ public static class ScheduleTests
     /** The composed harness: plugin-scoped service, system clock, and jsonl persistence across a cold resume. */
     public sealed class ComposedResume
     {
-        private static readonly TimeSpan DeliveryDeadline = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan DeliveryDeadline = TimeSpan.FromSeconds(5);
 
         [Theory]
         [InlineData(false)]

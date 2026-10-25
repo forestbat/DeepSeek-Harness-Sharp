@@ -63,19 +63,12 @@ public sealed class HarnessSettings
     private string? _savedDocument;
     private string? _savedPath;
 
-    private const string MinimalSettingsTemplate = """
-        global_default_model: deepseek-official/deepseek-v4-flash
-        compaction_model: deepseek-official/deepseek-v4-flash
-        plugins:
-          "@deepseek-ai/dsh-memory": false
-          "@deepseek-ai/dsh-checkpoints": false
-          "@deepseek-ai/dsh-toon": false
-        """;
-
     public static string LoadTemplate(string? baseDirectory = null)
     {
         var templatePath = Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "Profiles", "Templates", "settings.yaml");
-        return File.Exists(templatePath) ? File.ReadAllText(templatePath) : MinimalSettingsTemplate;
+        if (!File.Exists(templatePath))
+            throw new FileNotFoundException("找不到随包发布的 settings.yaml 模板; 安装不完整, 请重新安装或修复安装。", templatePath);
+        return File.ReadAllText(templatePath);
     }
 
     public static HarnessSettings Load(HarnessHome home)

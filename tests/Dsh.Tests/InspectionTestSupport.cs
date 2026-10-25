@@ -14,7 +14,7 @@ internal static class InspectionTestPlugin
         {
             Name = package,
             Inject = plugin.Inject,
-            Apply = (ctx, config) => plugin.Apply(ctx, config),
+            Apply = (ctx, config, _) => Task.FromResult<object?>(plugin.Apply(ctx, config)),
         };
     }
 }

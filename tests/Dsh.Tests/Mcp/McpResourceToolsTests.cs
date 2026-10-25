@@ -122,7 +122,7 @@ public sealed class McpResourceToolsTests(McpResourceServerFixture fixture) : IC
 {
     private const string GuideText = "# Guide\nResource text served by the sample MCP server.";
     private const string LogoPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-    private static readonly TimeSpan NotificationDeadline = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan NotificationDeadline = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(50);
 
     private static string TextOf(ToolExecutionResult result)

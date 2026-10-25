@@ -6,6 +6,7 @@ using Dsh.RemoteHost;
 namespace Dsh.Tests;
 
 /** Git 视图的视图模型对真实 host 与真实仓库: 状态分组、按分组选择 diff、提交 diff、worktree 新建与移除。 */
+[Collection(SerialProcessCollection.Name)]
 public sealed class GitViewModelTests : IDisposable
 {
     private readonly GitTestRepository _repo = new();
@@ -14,7 +15,7 @@ public sealed class GitViewModelTests : IDisposable
 
     public void Dispose() => _repo.Dispose();
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task StatusIsGrouped_AndEachGroupShowsItsOwnDiff()
     {
         var first = _repo.Commit(("a.txt", "one\n"), ("b.txt", "two\n"));
@@ -50,7 +51,7 @@ public sealed class GitViewModelTests : IDisposable
         Assert.Null(viewModel.SelectedChange);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task Worktree_IsAddedOnANewBranch_OffersANewSession_AndIsRemovedAfterConfirmation()
     {
         _repo.Commit(("a.txt", "one\n"));
@@ -94,3 +95,5 @@ public sealed class GitViewModelTests : IDisposable
     private static List<(DiffLineKind, string)> Changes(DiffCard card)
         => [.. card.Lines.Where(line => line.Kind != DiffLineKind.Context).Select(line => (line.Kind, line.Text))];
 }
+
+

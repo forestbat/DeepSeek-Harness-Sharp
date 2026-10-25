@@ -90,7 +90,7 @@ public sealed class SiteSearchSmokeTests
             var handle = await agents.Create(new CreateAgentOptions(SessionId.Create($"search-smoke-{Guid.NewGuid():N}"), Directory.GetCurrentDirectory(), new AgentOptions(providerId, modelId)), TestContext.Current.CancellationToken);
             var agent = (AgentLoopAgent)handle.Agent;
             agent.Followup(MessageFactory.CreateUserText("Call web_search exactly once with engine bing and queries [\"roslyn\"]. Do not call any other tools. In the final response cite one returned source URL and state that Bing RSS ranking may differ from the interactive search."));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             var events = agent.Session.SnapshotEvents().Select(sessionEvent => sessionEvent.Data).ToList();
             var call = Assert.Single(events.OfType<ToolCallPayload>(), call => call.Name == WebSearchTool.ToolName);
             using var arguments = JsonDocument.Parse(call.Arguments);

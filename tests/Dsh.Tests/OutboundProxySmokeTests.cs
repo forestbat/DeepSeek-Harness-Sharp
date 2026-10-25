@@ -10,6 +10,9 @@ namespace Dsh.Tests;
 /** Explicit public-network smoke: real forwarding and default HTTPS SNI/certificate validation. */
 public sealed class OutboundProxySmokeTests
 {
+    private static readonly string[] ProxyEnvironmentVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+    private static readonly Lazy<Task<bool>> PublicNetwork = new(ProbePublicNetworkAsync);
+
     [Theory(Explicit = true)]
     [InlineData("http", "http://example.com/")]
     [InlineData("http", "https://example.com/")]
@@ -17,6 +20,11 @@ public sealed class OutboundProxySmokeTests
     [InlineData("socks5", "https://example.com/")]
     public async Task RealWebFetch_PinsProxyTarget_AndPreservesTlsIdentity(string scheme, string target)
     {
+        if (!await PublicNetwork.Value)
+        {
+            Assert.Skip("public network is unavailable on this machine");
+            return;
+        }
         await using var server = new TestForwardProxy(socks: scheme == "socks5", forward: true);
         var proxy = new OutboundProxy();
         proxy.Configure($"{scheme}://127.0.0.1:{server.Port}", null);
@@ -31,7 +39,7 @@ public sealed class OutboundProxySmokeTests
         AssertExampleDomain(result, target);
         var line = Assert.Single(server.Requests);
         var destination = line.StartsWith("SOCKS ", StringComparison.Ordinal) || line.StartsWith("CONNECT ", StringComparison.Ordinal)
-            ? new Uri($"http://{line.Split(' ')[1]}").Host
+            ? AuthorityHost(line.Split(' ')[1])
             : new Uri(line.Split(' ')[1]).Host;
         Assert.True(IPAddress.TryParse(destination, out _), line);
         Assert.True(WebFetchHttpNetwork.IsPublicIpAddress(destination), line);
@@ -51,6 +59,16 @@ public sealed class OutboundProxySmokeTests
     [InlineData("https://example.com/")]
     public async Task RealWebFetch_SystemDefaultRoute_PreservesTlsIdentity(string target)
     {
+        if (ProxyEnvironmentVariables.All(name => string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name))))
+        {
+            Assert.Skip("this entry point is run by the system-proxy parent with a controlled proxy");
+            return;
+        }
+        if (!await PublicNetwork.Value)
+        {
+            Assert.Skip("public network is unavailable on this machine");
+            return;
+        }
         var proxy = new OutboundProxy();
         Assert.Null(proxy.Address);
 
@@ -63,6 +81,11 @@ public sealed class OutboundProxySmokeTests
     [Fact(Explicit = true)]
     public async Task RealWebFetch_SystemDefaultProxy_ForwardsPublicHttpAndTlsInIsolatedProcess()
     {
+        if (!await PublicNetwork.Value)
+        {
+            Assert.Skip("public network is unavailable on this machine");
+            return;
+        }
         await using var server = new TestForwardProxy(forward: true);
         var child = await OutboundProxyProcess.RunAsync(
             $"{typeof(OutboundProxySmokeTests).FullName}.{nameof(RealWebFetch_SystemDefaultRoute_PreservesTlsIdentity)}",
@@ -90,6 +113,11 @@ public sealed class OutboundProxySmokeTests
     [InlineData("https://example.com/")]
     public async Task RealWebFetch_Bypass_ConnectsDirectlyWithoutUsingConfiguredProxy(string target)
     {
+        if (!await PublicNetwork.Value)
+        {
+            Assert.Skip("public network is unavailable on this machine");
+            return;
+        }
         await using var server = new TestForwardProxy(forward: true);
         var proxy = new OutboundProxy();
         proxy.Configure($"http://127.0.0.1:{server.Port}", ["example.com"]);
@@ -136,7 +164,7 @@ public sealed class OutboundProxySmokeTests
             var handle = await agents.Create(new CreateAgentOptions(SessionId.Create($"proxy-smoke-{Guid.NewGuid():N}"), Directory.GetCurrentDirectory(), new AgentOptions(providerId, modelId)), TestContext.Current.CancellationToken);
             var agent = (AgentLoopAgent)handle.Agent;
             agent.Followup(MessageFactory.CreateUserText("只回复两个字:收到"));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             Assert.Contains(agent.Session.SnapshotEvents().Select(item => item.Data).OfType<AssistantMessagePayload>(), item => item.Message.Content.Count > 0);
             Assert.Contains(server.Requests, line => line.StartsWith("CONNECT ", StringComparison.Ordinal));
             Assert.Equal($"http://127.0.0.1:{server.Port}", HarnessSettings.Load(home).Network?.OutboundProxy?.Url);
@@ -144,6 +172,30 @@ public sealed class OutboundProxySmokeTests
         finally
         {
             TempTree.Delete(directory);
+        }
+    }
+
+    private static string AuthorityHost(string authority)
+    {
+        if (authority.StartsWith('['))
+            return new Uri($"http://{authority}").Host;
+        var separator = authority.LastIndexOf(':');
+        return separator > 0 ? authority[..separator] : authority;
+    }
+
+    private static async Task<bool> ProbePublicNetworkAsync()
+    {
+        using var handler = new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(2) };
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(3) };
+        try
+        {
+            using var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "https://example.com/"),
+                HttpCompletionOption.ResponseHeadersRead);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        {
+            return false;
         }
     }
 }

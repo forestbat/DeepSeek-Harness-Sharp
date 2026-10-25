@@ -29,7 +29,7 @@ public sealed class IrohReceiverTests
         }
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false, false, true)]
     [InlineData(true, false, false)]
     [InlineData(false, true, false)]
@@ -41,13 +41,13 @@ public sealed class IrohReceiverTests
             return;
         }
         var root = TempTree.CreateDirectory("iroh-owned-process");
-        using var receiver = Process.Start(new ProcessStartInfo("/bin/cat")
+        using var receiver = TestProcessScope.Start(new ProcessStartInfo("/bin/cat")
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
         })!;
-        using var unrelated = Process.Start("/bin/sleep", ["120"])!;
+        using var unrelated = TestProcessScope.Start("/bin/sleep", ["120"])!;
         try
         {
             const string ReadyLine = "receiver-ready";
@@ -102,13 +102,13 @@ public sealed class IrohReceiverTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Incomplete_Systemd_Registration_Can_Be_Disabled_Without_Leaving_A_Blocked_Receiver()
     {
         if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/systemctl"))
             Assert.Skip("Requires a systemd user manager.");
         var ct = TestContext.Current.CancellationToken;
-        using var manager = Process.Start(new ProcessStartInfo("/usr/bin/systemctl", ["--user", "show", "--property=Version"])
+        using var manager = TestProcessScope.Start(new ProcessStartInfo("/usr/bin/systemctl", ["--user", "show", "--property=Version"])
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,

@@ -300,7 +300,7 @@ public class SessionTests
         }
 
         start.Set();
-        Assert.True(writer.Join(TimeSpan.FromSeconds(30)), "writer thread did not finish");
+        Assert.True(writer.Join(TimeSpan.FromSeconds(5)), "writer thread did not finish");
         foreach (var reader in readers)
             reader.Join(TimeSpan.FromSeconds(5));
 

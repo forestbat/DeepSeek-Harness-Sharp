@@ -196,10 +196,10 @@ public sealed class InspectionToolsTests
             Ctx.Plugin(new PluginDefinition
             {
                 Name = "seed-provider",
-                Apply = (ctx, _) =>
+                Apply = (ctx, _, _) =>
                 {
                     ctx.Provide("seed-provided", new object());
-                    return null;
+                    return Task.FromResult<object?>(null);
                 },
             });
             Ctx.Plugin(InspectionTestPlugin.Definition(InspectTools));

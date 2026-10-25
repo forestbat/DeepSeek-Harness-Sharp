@@ -3,7 +3,7 @@ namespace Dsh.Tests;
 /** tui kill-pty 指定 id 的后端: 只终止被点名的那个 daemon PTY 会话。 */
 public sealed class PtyDaemonKillTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Kill_Stops_Only_The_Requested_Session()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -45,7 +45,7 @@ public sealed class PtyDaemonKillTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Kill_Unknown_Id_Reports_Not_Found()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

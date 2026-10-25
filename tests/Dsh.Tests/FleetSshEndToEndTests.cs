@@ -15,6 +15,7 @@ namespace Dsh.Tests;
  * The sshd gives sessions a test HOME and starts them there, so deployment lands in the test directory exactly as it would in a real home; nothing under the real ~/.ssh or ~/.dsharp is touched.
  * Covers automatic deployment, the on-demand detached host, `host --serve --stdio`, listing sessions, reconnecting after the ssh process dies, and the CLI on that machine.
  */
+[Collection(SerialProcessCollection.Name)]
 public sealed class FleetSshEndToEndTests
 {
     private const string Sshd = "/usr/sbin/sshd";
@@ -22,11 +23,11 @@ public sealed class FleetSshEndToEndTests
     /** The sshd serves this machine, so deployment picks this machine's runtime identifier. */
     private static readonly string Rid = RuntimeInformation.RuntimeIdentifier;
 
-    private static readonly TimeSpan SettleTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(OperatingSystem.IsMacOS() ? 20 : 5);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 360000)]
+    [Fact]
     public async Task Deploys_Serves_Lists_AndReconnects_OverRealSsh()
     {
         var executable = RequireEnvironment();
@@ -53,7 +54,7 @@ public sealed class FleetSshEndToEndTests
             Assert.True(connection.State == MachineConnectionState.Connected, connection.Detail);
             Assert.Contains(MachineConnectionState.Deploying, states);
             var deployed = Path.Combine(server.Home, ".dsharp", Rid);
-            Assert.Equal(RemoteHostServer.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(deployed, ".dsharp-version"), Ct));
+            Assert.Equal(HostProtocol.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(deployed, ".dsharp-version"), Ct));
             Assert.Equal(harness, connection.Info!.HomeRoot);
             Assert.True(File.Exists(Path.Combine(harness, "run", "host.sock")), "the first connection must start the host under the machine's harness home");
             Assert.False(Directory.Exists(Path.Combine(server.Home, ".config", "systemd", "user")), "deployment and on-demand startup must not install a user service");
@@ -71,7 +72,7 @@ public sealed class FleetSshEndToEndTests
             await using (var before = RemoteHostPtyTests.TerminalCapture.Attach(lease.Client, shell))
             {
                 await before.SendAsync("printf '%s\\n' \"$$\" > before.pid; echo before-$((40+2))\n");
-                await before.WaitForAsync("before-42", TimeSpan.FromSeconds(20));
+                await before.WaitForAsync("before-42", TimeSpan.FromSeconds(5));
             }
             var shellPid = await File.ReadAllTextAsync(Path.Combine(harness, "before.pid"), Ct);
             var duplicate = await transport.CaptureAsync(
@@ -94,7 +95,7 @@ public sealed class FleetSshEndToEndTests
             await using (var after = RemoteHostPtyTests.TerminalCapture.Attach(reconnected.Client, shell))
             {
                 await after.SendAsync("printf '%s\\n' \"$$\" > after.pid; echo after-$((50+5))\n");
-                await after.WaitForAsync("after-55", TimeSpan.FromSeconds(20));
+                await after.WaitForAsync("after-55", TimeSpan.FromSeconds(5));
             }
             Assert.Equal(shellPid, await File.ReadAllTextAsync(Path.Combine(harness, "after.pid"), Ct));
 
@@ -129,7 +130,7 @@ public sealed class FleetSshEndToEndTests
         guard.AssertUnchanged();
     }
 
-    [Theory(Timeout = 240000)]
+    [Theory]
     [InlineData("missing", DownloadVia.Client)]
     [InlineData("missing", DownloadVia.Auto)]
     [InlineData("unavailable", DownloadVia.Client)]
@@ -175,7 +176,7 @@ public sealed class FleetSshEndToEndTests
 
             var tested = await FleetCliProcess.RunAsync(executable, clientHome, "machine", "test", machine.Name);
             Assert.True(tested.ExitCode == 0, tested.Error);
-            Assert.Contains($"host {RemoteHostServer.ReleaseVersion}", tested.Output, StringComparison.Ordinal);
+            Assert.Contains($"host {HostProtocol.ReleaseVersion}", tested.Output, StringComparison.Ordinal);
             Assert.Contains($"harness home {targetHome}", tested.Output, StringComparison.Ordinal);
             var shown = await FleetRemoteProxyTests.RunCliAsync(clientHome, null, Ct, "machine", "proxy", machine.Name, "show");
             Assert.True(shown.ExitCode == 0, shown.Error);
@@ -213,7 +214,7 @@ public sealed class FleetSshEndToEndTests
             Assert.True(await host.Client.PingAsync(Ct) > 0);
             Assert.True(identity == LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(targetHome)),
                 "Management and a rejected local download must preserve the authenticated target Host.");
-            Assert.Equal(RemoteHostServer.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(ssh.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
+            Assert.Equal(HostProtocol.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(ssh.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
         }
         finally
         {
@@ -225,7 +226,7 @@ public sealed class FleetSshEndToEndTests
         guard.AssertUnchanged();
     }
 
-    [Theory(Timeout = 360000)]
+    [Theory]
     [InlineData(DownloadVia.Server)]
     [InlineData(DownloadVia.Auto)]
     public async Task Remote_Download_Through_Real_Ssh_Proxy_Deploys_A_Working_Host_DespiteInvalidLocalBorrowedSelection(string via)
@@ -264,7 +265,7 @@ public sealed class FleetSshEndToEndTests
             var deployed = await new RemoteDsharpInstaller(transport).EnsureAsync(settings, null, Ct, localHome: home);
             await serving;
             Assert.False(deployed.AlreadyPresent);
-            Assert.Equal(RemoteHostServer.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(server.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
+            Assert.Equal(HostProtocol.ReleaseVersion, await File.ReadAllTextAsync(Path.Combine(server.Home, ".dsharp", Rid, ".dsharp-version"), Ct));
             await using var connection = await SshHostLauncher.ConnectAsync(machine, deployed.CommandPath, "remote-download-test", Ct);
             Assert.Equal(harness, (await connection.Client.InfoAsync(Ct)).HomeRoot);
             await connection.Client.PingAsync(Ct);
@@ -378,7 +379,7 @@ public sealed class FleetSshEndToEndTests
  */
 internal sealed class TestSshServer : IAsyncDisposable
 {
-    private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(5);
 
     /**
      * scp speaks SFTP since OpenSSH 9.0, and ForceCommand wraps subsystem requests too, so the sftp subsystem must be a program the forced shell can run (internal-sftp cannot).
@@ -414,7 +415,7 @@ internal sealed class TestSshServer : IAsyncDisposable
         var port = FreePort();
         var config = Path.Combine(root, "sshd_config");
         await File.WriteAllTextAsync(config, Config(root, port), cancellationToken);
-        var process = Process.Start(new ProcessStartInfo("/usr/sbin/sshd", ["-D", "-e", "-f", config])
+        var process = TestProcessScope.Start(new ProcessStartInfo("/usr/sbin/sshd", ["-D", "-e", "-f", config])
         {
             UseShellExecute = false,
             RedirectStandardError = true,
@@ -458,7 +459,7 @@ internal sealed class TestSshServer : IAsyncDisposable
 
     public static async Task RunAsync(string fileName, string[] arguments, CancellationToken cancellationToken)
     {
-        using var process = Process.Start(new ProcessStartInfo(fileName, arguments) { UseShellExecute = false, RedirectStandardError = true })
+        using var process = TestProcessScope.Start(new ProcessStartInfo(fileName, arguments) { UseShellExecute = false, RedirectStandardError = true })
             ?? throw new InvalidOperationException($"failed to start {fileName}");
         var error = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
@@ -567,6 +568,12 @@ internal sealed class SshAuthenticationGate : IAsyncDisposable
     {
         Assert.NotNull(_control);
         await _control.GetStream().WriteAsync("continue\n"u8.ToArray(), cancellationToken);
+    }
+
+    public async Task WaitForClosedAsync(CancellationToken cancellationToken)
+    {
+        Assert.NotNull(_control);
+        Assert.Equal(0, await _control.GetStream().ReadAsync(new byte[1], cancellationToken));
     }
 
     public ValueTask DisposeAsync()

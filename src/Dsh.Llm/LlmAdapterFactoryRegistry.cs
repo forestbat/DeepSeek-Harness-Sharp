@@ -12,15 +12,20 @@ public sealed class LlmAdapterFactoryRegistry(Context ctx) : Service(ctx, Servic
     private sealed record Entry(string Source, ILlmAdapterFactory Factory);
 
     private readonly List<Entry> _factories = [];
+    private readonly Lock _sync = new();
 
     public IDisposable Register(string source, ILlmAdapterFactory factory)
     {
         var entry = new Entry(source, factory);
-        _factories.Add(entry);
+        lock (_sync)
+            _factories.Add(entry);
         Ctx.Emit(new LlmAdapterFactoriesUpdatedNotification());
         return new Subscription(() =>
         {
-            if (_factories.Remove(entry))
+            bool removed;
+            lock (_sync)
+                removed = _factories.Remove(entry);
+            if (removed)
                 Ctx.Emit(new LlmAdapterFactoriesUpdatedNotification());
         });
     }
@@ -32,7 +37,10 @@ public sealed class LlmAdapterFactoryRegistry(Context ctx) : Service(ctx, Servic
 
     public bool TryResolve(string wire, out string source, out ILlmAdapterFactory? factory)
     {
-        foreach (var entry in _factories)
+        Entry[] entries;
+        lock (_sync)
+            entries = [.. _factories];
+        foreach (var entry in entries)
         {
             foreach (var definition in entry.Factory.Wires)
             {
@@ -49,12 +57,18 @@ public sealed class LlmAdapterFactoryRegistry(Context ctx) : Service(ctx, Servic
     }
 
     public IReadOnlyList<(string Source, ILlmAdapterFactory Factory)> ListAll()
-        => _factories.Select(entry => (entry.Source, entry.Factory)).ToList();
+    {
+        lock (_sync)
+            return _factories.Select(entry => (entry.Source, entry.Factory)).ToList();
+    }
 
     /** 某个工厂的 wire 定义(用于解析默认 baseUrl/apiKeyEnv)。 */
     public LlmWireDefinition? DefinitionFor(string wire)
     {
-        foreach (var entry in _factories)
+        Entry[] entries;
+        lock (_sync)
+            entries = [.. _factories];
+        foreach (var entry in entries)
         {
             foreach (var definition in entry.Factory.Wires)
             {

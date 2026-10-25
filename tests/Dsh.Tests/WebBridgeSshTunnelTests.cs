@@ -17,11 +17,11 @@ public sealed class WebBridgeSshTunnelTests
 {
     private const string RemoteMachine = "e2e";
 
-    private static readonly TimeSpan DeployTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DeployTimeout = TimeSpan.FromSeconds(OperatingSystem.IsMacOS() ? 20 : 5);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 360000)]
+    [Fact]
     public async Task BrowserSockets_ShareOneDeployedSshConnection_AndTerminalSurvivesInitiatingPageClose()
     {
         var ct = TestContext.Current.CancellationToken;

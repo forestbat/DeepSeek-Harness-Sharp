@@ -118,7 +118,7 @@ public sealed class MemoryCaptureTests
 
     private static async Task WaitFor(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (!condition())
         {
             if (DateTime.UtcNow > deadline)

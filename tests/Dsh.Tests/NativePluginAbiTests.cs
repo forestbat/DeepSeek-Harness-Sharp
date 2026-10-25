@@ -27,7 +27,7 @@ public sealed class NativePluginAbiTests
         var tools = new ToolRuntime(ctx);
         var load = NativePluginLibrary.TryLoad(PublishedSamplePath());
         Assert.True(load.Succeeded, load.Reason);
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(load.Plugin!).Apply(ctx, null)!;
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(load.Plugin!).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         var message = $"大消息-{new string('x', LargeMessageLength)}";
         var result = await tools.Execute(new ToolExecutionInput

@@ -37,13 +37,14 @@ public sealed class ToolRuntime : Service
     public const string ServiceName = "tools";
 
     /** 一条工具注册:definition 携带的最终名字(重名消解后)与注册来源包名(null = Apply 之外注册,归属未知)。 */
-    private sealed record ToolEntry(ToolDefinition Definition, string? Owner);
+    private sealed record ToolEntry(ToolDefinition Definition, string? Owner, Guid RegistrationId);
 
     private sealed class ToolLayer
     {
         public NamedEntries<ToolEntry> Tools { get; }
         public AnonymousEntries<ToolRestriction> Restrictions { get; } = new();
         public AnonymousEntries<Func<ToolExecution, string?>> Guards { get; } = new();
+        public Lock RegistrationGate { get; } = new();
         public ToolPresentationMode? Mode { get; set; }
 
         public ToolLayer(ScopeKey? scope)
@@ -92,30 +93,42 @@ public sealed class ToolRuntime : Service
         }
         var owner = PluginApplyScope.CurrentPlugin;
         var registeredName = definition.Name;
+        var registrationId = Guid.NewGuid();
         return _layers.Effect(Ctx, scope,
             layer =>
             {
-                var existing = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
-                if (existing.Value is not null)
+                lock (layer.RegistrationGate)
                 {
-                    registeredName = ResolveNameConflict(registeredName, owner, existing.Value, layer);
-                }
-                var entry = registeredName == definition.Name
-                    ? new ToolEntry(definition, owner)
-                    : new ToolEntry(new ToolDefinition
+                    var existing = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
+                    if (existing.Value is not null)
                     {
-                        Name = registeredName,
-                        Description = definition.Description,
-                        Parameters = definition.Parameters,
-                        Output = definition.Output,
-                        Execute = definition.Execute,
-                        FinalizeContent = definition.FinalizeContent,
-                        TimeoutMs = definition.TimeoutMs,
-                        IsConcurrencySafe = definition.IsConcurrencySafe,
-                    }, owner);
-                layer.Tools.Insert(registeredName, entry);
+                        registeredName = ResolveNameConflict(registeredName, owner, existing.Value, layer);
+                    }
+                    var entry = registeredName == definition.Name
+                        ? new ToolEntry(definition, owner, registrationId)
+                        : new ToolEntry(new ToolDefinition
+                        {
+                            Name = registeredName,
+                            Description = definition.Description,
+                            Parameters = definition.Parameters,
+                            Output = definition.Output,
+                            Execute = definition.Execute,
+                            FinalizeContent = definition.FinalizeContent,
+                            TimeoutMs = definition.TimeoutMs,
+                            IsConcurrencySafe = definition.IsConcurrencySafe,
+                        }, owner, registrationId);
+                    layer.Tools.Insert(registeredName, entry);
+                }
             },
-            layer => layer.Tools.Remove(registeredName));
+            layer =>
+            {
+                lock (layer.RegistrationGate)
+                {
+                    var current = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
+                    if (current.Value?.RegistrationId == registrationId)
+                        layer.Tools.Remove(registeredName);
+                }
+            });
     }
 
     /**

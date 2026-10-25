@@ -3,6 +3,7 @@
   <Import Project="..\..\src\Dsh.Plugins.Generator\DshPluginHost.props" />
 
   <PropertyGroup>
+    <NoWarn>$(NoWarn);CS1701</NoWarn>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -56,6 +57,7 @@
           Link="Profiles\Templates\settings.yaml"
           CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="ScheduleUpstreamFixtures.json" LogicalName="Dsh.Tests.ScheduleUpstreamFixtures.json" />
+    <None Update="NetworkGuiDriver.java" CopyToOutputDirectory="PreserveNewest" />
     <!-- Search API responses captured from the real GitHub and Stack Exchange APIs; the engine tests replay them through a local handler. -->
     <None Update="Web\ApiSamples\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
@@ -111,14 +113,15 @@
     <ProjectReference Include="..\..\src\Dsh.Memory\Dsh.Memory.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Pty\Dsh.Pty.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Transport\Dsh.Transport.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.RemoteHost\Dsh.RemoteHost.csproj" />
     <ProjectReference Include="..\..\src\Dsh.GitInspect\Dsh.GitInspect.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Notifications\Dsh.Notifications.csproj" />
     <ProjectReference Include="..\..\src\Dsh.AgentAdapters\Dsh.AgentAdapters.csproj" />
     <ProjectReference Include="..\..\src\Dsh.WebBridge\Dsh.WebBridge.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Fleet\Dsh.Fleet.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.Fleet.Client\Dsh.Fleet.Client.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.Fleet.Client.Iroh\Dsh.Fleet.Client.Iroh.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.RemoteHost.Server\Dsh.RemoteHost.Server.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Fleet\Dsh.Fleet.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Fleet.Iroh\Dsh.Fleet.Iroh.csproj" />
     <ProjectReference Include="..\..\Dsh.Host\Dsh.Host.csproj" />
     <ProjectReference Include="..\..\DeepSeek-Harness-Sharp\DeepSeek-Harness-Sharp.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />
@@ -133,6 +136,19 @@
     <Copy SourceFiles="@(_McpResourceServerRuntime)"
           DestinationFiles="@(_McpResourceServerRuntime->'$(TargetDir)mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- A standalone startup hook must not load the test assembly's plugin-registration module initializers into dsharp. -->
+  <Target Name="BuildNetworkGuiObserver" AfterTargets="Build"
+          Inputs="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs;@(ReferencePath)"
+          Outputs="$(TargetDir)network-gui-observer.dll">
+    <Csc Sources="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs"
+         References="@(ReferencePath)"
+         OutputAssembly="$(TargetDir)network-gui-observer.dll"
+         TargetType="Library" DefineConstants="NETWORK_GUI_OBSERVER"
+         Nullable="enable" LangVersion="$(LangVersion)"
+         NoStandardLib="true" NoConfig="true" Deterministic="true"
+         UseSharedCompilation="false" EmitDebugInformation="false" />
   </Target>
 
 </Project>

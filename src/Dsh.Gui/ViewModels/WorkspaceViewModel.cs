@@ -2,6 +2,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Dsh.Boot;
 using Dsh.Fleet;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
@@ -25,15 +26,29 @@ public enum WorkspaceDestination
 public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly Dictionary<(string Machine, string Session), FleetSessionViewModel> _windows = [];
+    private readonly Dictionary<FleetSessionViewModel, Task> _retirements = [];
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private Task? _disposal;
+    private bool _closingSessions;
     private readonly Action<string, string, bool> _toast;
+    private readonly Func<WorkspacePageContext>? _pageContext;
     private (string Machine, string SessionId)? _pendingOpen;
 
-    public WorkspaceViewModel(FleetWorkspace fleet, Func<HarnessModelChoice> harnessModel, Action<string, string, bool> toast)
+    public WorkspaceViewModel(
+        FleetWorkspace fleet,
+        Action<string, string, bool> toast,
+        GuiSettings? gui = null,
+        HarnessHome? home = null,
+        Func<(string Machine, string SessionId)>? current = null,
+        Func<WorkspacePageContext>? pageContext = null)
     {
         Fleet = fleet;
         _toast = toast;
-        Actions = new FleetSessionActions(fleet, harnessModel);
-        Dashboard = new DashboardViewModel(fleet);
+        _pageContext = pageContext;
+        Actions = new FleetSessionActions(fleet);
+        SessionActions = new SessionActions(fleet, home ?? fleet.Options.LocalHome ?? new HarnessHome(Environment.CurrentDirectory), current);
+        Dashboard = new DashboardViewModel(fleet, gui, SessionActions, current);
+        Dashboard.ActionReported += toast;
         Notifications = new NotificationCenterViewModel(fleet, (machine, session) => Dashboard.Find(machine, session)?.Title) { Toast = toast };
         Palette = new CommandPaletteViewModel(() => Dashboard.AllCards);
         Machines = new MachinesViewModel(fleet.Store, fleet.Options);
@@ -55,6 +70,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
 
     public FleetSessionActions Actions { get; }
 
+    public SessionActions SessionActions { get; }
+
     public DashboardViewModel Dashboard { get; }
 
     public NotificationCenterViewModel Notifications { get; }
@@ -63,7 +80,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
 
     public WorkspacePages Pages { get; } = new();
 
-    /** Machine management, shared by its workspace page and the settings page's remote section. */
+    /** Opens the folder picker used by path-based host pages (Git). */
+    public Func<Task<string?>>? FolderPicker { get; set; }
+
+    private string? GitWorkspaceMachine { get; set; }
+
+    private string? GitWorkspacePath { get; set; }
+
+    /** Machine management, shared by its workspace page and the machine page navigation. */
     public MachinesViewModel Machines { get; }
 
     [ObservableProperty]
@@ -99,8 +123,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     /** Questions are answered in the decision dialog that the main window shows. */
     public event Func<DecisionViewModel, Task<object?>>? DecisionRequested;
 
-    /** The main chat shell can handle local harness cards with its full composer and trace UI. */
-    public event Action<string>? LocalChatRequested;
+    /** The main chat shell handles harness/ACP cards on any machine with its full composer and trace UI. */
+    public event Action<string, string>? ChatRequested;
 
     public void Start() => Fleet.Start();
 
@@ -108,6 +132,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     public void OpenSession(string machine, string sessionId)
     {
         _pendingOpen = null;
+        if (_closingSessions || _disposal is not null)
+            return;
         if (_windows.TryGetValue((machine, sessionId), out var windowed))
         {
             SessionWindowFocusRequested?.Invoke(windowed);
@@ -129,6 +155,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     /** Moves the session into its own window; when the main window shows it, the same view moves over without attaching again. */
     public void OpenInWindow(SessionCardViewModel card)
     {
+        if (_closingSessions || _disposal is not null)
+            return;
+        if (card.Kind is HostSessionKinds.Harness or HostSessionKinds.Acp)
+        {
+            ShowInMain(card);
+            return;
+        }
         var key = (card.Machine, card.SessionId);
         if (_windows.TryGetValue(key, out var existing))
         {
@@ -146,10 +179,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         SessionWindowRequested?.Invoke(session);
     }
 
-    public async Task SessionWindowClosedAsync(FleetSessionViewModel session)
+    public Task SessionWindowClosedAsync(FleetSessionViewModel session)
     {
-        _windows.Remove((session.Machine, session.SessionId));
-        await session.DisposeAsync();
+        var retirement = RetireSession(session);
+        if (_windows.GetValueOrDefault((session.Machine, session.SessionId)) == session)
+            _windows.Remove((session.Machine, session.SessionId));
+        return retirement;
     }
 
     /** Back to the dashboard; the session view is closed, the dashboard keeps its filter, search and scroll position. */
@@ -157,7 +192,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     public void ShowDashboard()
     {
         _pendingOpen = null;
-        _ = CloseActiveAsync();
+        CloseActive();
         PageContent = null;
         ActivePage = null;
         NavigationRequested?.Invoke(WorkspaceDestination.Dashboard);
@@ -169,7 +204,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         if (entry is null)
             return;
         _pendingOpen = null;
-        var context = new WorkspacePageContext(Fleet, ActiveSession?.Machine, ActiveSession?.Card.ProjectPath);
+        var context = _pageContext?.Invoke() ?? new WorkspacePageContext(ActiveSession?.Machine, ActiveSession?.Card.ProjectPath);
+        if (entry.Id == WorkspacePages.Git && GitWorkspacePath is { Length: > 0 } explicitGitPath)
+            context = new(GitWorkspaceMachine ?? context.Machine, explicitGitPath);
         PageContent = entry.Create(context);
         ActivePage = entry;
         NavigationRequested?.Invoke(WorkspaceDestination.Page);
@@ -197,7 +234,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
                 git.NewSessionRequested += worktree => NewSession(machine, worktree.Path);
                 await git.RefreshAsync();
                 return git;
-            })));
+            },
+            folderPicker: () => FolderPicker?.Invoke() ?? Task.FromResult<string?>(null),
+            pathSelected: (machine, path) => (GitWorkspaceMachine, GitWorkspacePath) = (machine, path))));
         Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
     }
 
@@ -215,38 +254,59 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
      */
     public async Task ReloadMachinesAsync()
     {
-        if (ActivePage is not null)
-            await CloseActiveAsync();
-        else if (ActiveSession is not null)
-            ShowDashboard();
-        foreach (var session in _windows.Values.ToList())
-            SessionWindowCloseRequested?.Invoke(session);
-        await Fleet.ReloadAsync();
-        Machines.AttachFleet(Fleet.Client);
+        await _connectionGate.WaitAsync();
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposal is not null, this);
+            _closingSessions = true;
+            if (ActivePage is not null)
+                CloseActive();
+            else
+                ShowDashboard();
+            await CloseSessionsAsync();
+            await Fleet.ReloadAsync();
+            Machines.AttachFleet(Fleet.Client);
+        }
+        finally
+        {
+            _closingSessions = false;
+            _connectionGate.Release();
+        }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => new(_disposal ??= DisposeCoreAsync());
+
+    private async Task DisposeCoreAsync()
     {
-        Fleet.Changed -= OnFleetChanged;
-        PageContent = null;
-        Machines.AttachFleet(null);
-        await CloseActiveAsync();
-        foreach (var session in _windows.Values.ToList())
-            await session.DisposeAsync();
-        _windows.Clear();
-        Notifications.Dispose();
-        Dashboard.Dispose();
-        await Fleet.DisposeAsync();
+        Machines.BeginNetworkShutdown();
+        await Machines.WaitForNetworkOperationsAsync();
+        await _connectionGate.WaitAsync();
+        try
+        {
+            _closingSessions = true;
+            Fleet.Changed -= OnFleetChanged;
+            PageContent = null;
+            Machines.AttachFleet(null);
+            CloseActive();
+            await CloseSessionsAsync();
+            Notifications.Dispose();
+            Dashboard.Dispose();
+            await Fleet.DisposeAsync();
+        }
+        finally
+        {
+            _connectionGate.Release();
+        }
     }
 
     private void ShowInMain(SessionCardViewModel card)
     {
-        _ = CloseActiveAsync();
-        if (card.Machine == MachineSpec.LocalName && card.Kind == HostSessionKinds.Harness && LocalChatRequested is { } openChat)
+        CloseActive();
+        if (card.Kind is HostSessionKinds.Harness or HostSessionKinds.Acp && ChatRequested is { } openChat)
         {
             PageContent = null;
             ActivePage = null;
-            openChat(card.SessionId);
+            openChat(card.Machine, card.SessionId);
             return;
         }
         ActiveSession = CreateSession(card);
@@ -257,7 +317,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
 
     private FleetSessionViewModel CreateSession(SessionCardViewModel card)
     {
-        var session = new FleetSessionViewModel(Fleet, Actions, card, Notifications);
+            var session = new FleetSessionViewModel(Fleet, card, Notifications);
         session.BackRequested += _ => ShowDashboard();
         session.StopRequested += item => _ = StopAsync(item);
         session.ResumeRequested += item => _ = ResumeAsync(item);
@@ -265,12 +325,38 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         return session;
     }
 
-    private async Task CloseActiveAsync()
+    private void CloseActive()
     {
         if (ActiveSession is not { } active)
             return;
+        RetireSession(active);
         ActiveSession = null;
-        await active.DisposeAsync();
+    }
+
+    /** Navigation releases the view immediately, but its resources stay owned until the connection can retire. */
+    private Task RetireSession(FleetSessionViewModel session)
+    {
+        foreach (var (completed, task) in _retirements)
+            if (task.IsCompletedSuccessfully)
+                _retirements.Remove(completed);
+        if (!_retirements.TryGetValue(session, out var retirement))
+        {
+            retirement = session.DisposeAsync().AsTask();
+            _retirements.Add(session, retirement);
+        }
+        return retirement;
+    }
+
+    private async Task CloseSessionsAsync()
+    {
+        foreach (var session in _windows.Values.ToList())
+        {
+            _ = RetireSession(session);
+            SessionWindowCloseRequested?.Invoke(session);
+        }
+        _windows.Clear();
+        await Task.WhenAll(_retirements.Values);
+        _retirements.Clear();
     }
 
     private async Task StopAsync(SessionCardViewModel card)

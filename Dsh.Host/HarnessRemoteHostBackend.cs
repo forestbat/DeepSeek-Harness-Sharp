@@ -24,7 +24,9 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
         Sessions = services.Registry;
         Notifications = services.Notifications;
         Files = new HostFileSystem(HostPathPolicy.ForHome(Sessions, app.Home.Root));
-        Git = new HostGitService(Files.Policy);
+        Git = app.Ctx.Get<IGitService>(IGitService.ServiceName, false) is { } git
+            ? new HostGitService(Files.Policy, git)
+            : null;
         _ptys = ptys;
         _agents = agents;
         _decisions = new HarnessDecisionBridge(app.Ctx, Pending);
@@ -36,12 +38,10 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
         SessionEditing = new HarnessRemoteSessionEditingBackend(_runtime, Agent);
         if (app.Ctx.Get<IPluginManager>("pluginManager", false) is { } plugins)
             Plugins = new HarnessRemotePluginsBackend(app, plugins);
-        if (app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false) is { } models)
-            Models = new HarnessRemoteModelsBackend(models);
         if (app.Ctx.GetProp(OutboundProxy.PropName) is OutboundProxy proxy)
             Network = new HarnessRemoteNetworkBackend(app.Home, proxy, app.Ctx.Get<IOutboundRouteController>(IOutboundRouteController.ServiceName, false));
         var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
-        _info = new HostInfo(HostProtocol.Version, RemoteHostServer.ReleaseVersion, platform, app.Home.Root);
+        _info = new HostInfo(HostProtocol.Version, HostProtocol.ReleaseVersion, platform, app.Home.Root);
     }
 
     /** Restore the registry and reconcile the daemon before exposing any domain. */
@@ -63,11 +63,10 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
     public IRemoteAgentBackend Agent { get; }
     public IRemotePtyBackend Pty { get; }
     public HostFileSystem Files { get; }
-    public HostGitService Git { get; }
+    public HostGitService? Git { get; }
     public HostNotificationCenter Notifications { get; }
     public IRemoteSessionEditingBackend SessionEditing { get; }
     public IRemotePluginsBackend? Plugins { get; }
-    public IRemoteModelsBackend? Models { get; }
     public IRemoteNetworkBackend? Network { get; }
 
     public Task<HostInfo> InfoAsync(CancellationToken cancellationToken) => Task.FromResult(_info);

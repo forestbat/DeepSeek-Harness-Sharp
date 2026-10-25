@@ -1,39 +1,5 @@
 namespace Dsh.GitInspect;
 
-/** Change kinds shared by status and diff, mapped from git's single-letter status codes. */
-public enum GitChangeKind
-{
-    Modified,
-    Added,
-    Deleted,
-    Renamed,
-    Copied,
-    TypeChanged,
-    Unmerged,
-}
-
-/** One changed path; OriginalPath is set for renames and copies. */
-public sealed record GitFileChange(string Path, GitChangeKind Kind, string? OriginalPath = null);
-
-/**
- * Branch header of `git status --porcelain=v2 --branch`.
- * Head is null when detached, Oid is null before the first commit, Ahead/Behind are null without an upstream.
- */
-public sealed record GitBranchStatus(string? Head, string? Oid, string? Upstream, int? Ahead, int? Behind)
-{
-    public bool IsDetached => Head is null;
-}
-
-public sealed record GitStatus(
-    GitBranchStatus Branch,
-    IReadOnlyList<GitFileChange> Staged,
-    IReadOnlyList<GitFileChange> Unstaged,
-    IReadOnlyList<string> Untracked,
-    IReadOnlyList<GitFileChange> Conflicted)
-{
-    public bool IsClean => Staged.Count == 0 && Unstaged.Count == 0 && Untracked.Count == 0 && Conflicted.Count == 0;
-}
-
 /** Parser for `git status --porcelain=v2 -z --branch` (https://git-scm.com/docs/git-status#_porcelain_format_version_2). */
 internal static class GitStatusParser
 {

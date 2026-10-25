@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 
 public sealed class LspTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Initialize_ReturnsCapabilitiesAndServerInfo()
     {
         var input = new StringReader("""
@@ -24,7 +24,7 @@ public sealed class LspTests
         await transport.StopAsync();
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Hover_ReturnsPlainText()
     {
         var input = new StringReader("""

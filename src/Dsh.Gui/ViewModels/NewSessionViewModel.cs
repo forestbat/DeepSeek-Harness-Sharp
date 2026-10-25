@@ -46,10 +46,12 @@ public sealed class AgentChoiceViewModel(RemoteAgentCatalogEntry entry)
  * The new-session form: machine, agent (from the machine's catalog), project directory, terminal or ACP mode, git worktree, initial prompt, and the command of a user-defined agent.
  * Harness sessions start with the GUI's current model; everything else is decided by the host (host.agent.start).
  */
-public sealed partial class NewSessionViewModel : ObservableObject
+public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
 {
     private readonly FleetWorkspace _fleet;
     private readonly FleetSessionActions _actions;
+    private CancellationTokenSource? _catalogLoad;
+    private bool _disposed;
 
     public NewSessionViewModel(FleetWorkspace fleet, FleetSessionActions actions, string? machine, string? projectPath)
     {
@@ -123,14 +125,22 @@ public sealed partial class NewSessionViewModel : ObservableObject
 
     public bool IsNewWorktree => Worktree == NewSessionWorktree.New;
 
-    public RemoteHostSession? Started { get; private set; }
+    public RemoteSessionSummary? Started { get; private set; }
 
     public event Action<NewSessionViewModel>? Completed;
 
     /** The view shows the remote folder picker for the machine's files domain and returns the chosen directory. */
-    public event Func<IRemoteFiles, string?, Task<string?>>? BrowseRequested;
+    public event Func<RemoteFilesClient, string?, Task<string?>>? BrowseRequested;
 
-    partial void OnMachineChanged(string? value) => _ = LoadCatalogAsync();
+    partial void OnMachineChanged(string? value)
+    {
+        if (_disposed)
+            return;
+        _catalogLoad?.Cancel();
+        _catalogLoad?.Dispose();
+        _catalogLoad = new CancellationTokenSource();
+        _ = LoadCatalogAsync(_catalogLoad.Token);
+    }
 
     partial void OnAgentChanged(AgentChoiceViewModel? value) => UseAcp = value?.Entry is { SupportsTerminal: false, SupportsAcp: true };
 
@@ -154,6 +164,16 @@ public sealed partial class NewSessionViewModel : ObservableObject
 
     [RelayCommand]
     private void Cancel() => Completed?.Invoke(this);
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _catalogLoad?.Cancel();
+        _catalogLoad?.Dispose();
+        _catalogLoad = null;
+    }
 
     private bool CanStart()
         => !IsBusy && Agent is { IsAvailable: true } && ProjectPath.Trim().Length > 0 && (!NeedsCommand || CommandLine.Trim().Length > 0);
@@ -203,22 +223,30 @@ public sealed partial class NewSessionViewModel : ObservableObject
         _ => null,
     };
 
-    private async Task LoadCatalogAsync()
+    private async Task LoadCatalogAsync(CancellationToken cancellationToken)
     {
         Agents.Clear();
         Agent = null;
-        if (await LeaseAsync() is not { } lease)
+        if (Machine is null || _fleet.Find(Machine) is not { } connection)
+        {
+            Status = Machine is null ? "" : $"{Machine} 不存在";
             return;
+        }
+        Status = connection.State == MachineConnectionState.Connected ? "" : $"等待 {Machine} 连接";
         try
         {
-            foreach (var entry in await lease.Client.Agent.AgentCatalogAsync(CancellationToken.None))
+            var lease = await connection.WaitConnectedAsync(cancellationToken);
+            var entries = await lease.Client.Agent.AgentCatalogAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var entry in entries)
                 Agents.Add(new AgentChoiceViewModel(entry));
             Agent = Agents.FirstOrDefault(item => item.IsAvailable);
             Status = "";
         }
         catch (Exception error) when (error is IOException or JsonRpcException or OperationCanceledException)
         {
-            Status = $"读取 Agent 列表失败: {error.Message}";
+            if (!cancellationToken.IsCancellationRequested)
+                Status = $"读取 Agent 列表失败: {error.Message}";
         }
     }
 
@@ -291,3 +319,5 @@ public sealed partial class NewSessionViewModel : ObservableObject
         return words.Count > 0 ? new RemoteAgentCommand(words[0], words[1..]) : throw new ArgumentException("the command is empty");
     }
 }
+
+

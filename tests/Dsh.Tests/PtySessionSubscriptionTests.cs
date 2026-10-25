@@ -6,13 +6,13 @@ namespace Dsh.Tests;
 /** PtySession 的窗格级订阅: 首帧是状态重建快照, 输出广播给每个订阅者, 订阅不独占会话。 */
 public sealed class PtySessionSubscriptionTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Subscribe_FirstFrame_IsScreenSnapshot()
     {
         using var host = new PtyHost();
         using var session = await host.StartAsync(StartInfo(OutputShell("SNAPMARK")), cancellationToken: TestContext.Current.CancellationToken);
 
-        await ReadUntilAsync(session, "SNAPMARK", TimeSpan.FromSeconds(8));
+        await ReadUntilAsync(session, "SNAPMARK", TimeSpan.FromSeconds(5));
 
         using var subscription = session.Subscribe();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -24,7 +24,7 @@ public sealed class PtySessionSubscriptionTests
         Assert.Contains("SNAPMARK", snapshot);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Subscribe_BroadcastsToEverySubscriber()
     {
         using var host = new PtyHost();
@@ -35,11 +35,11 @@ public sealed class PtySessionSubscriptionTests
         var (input, expected) = MarkerCommand();
         await session.WriteAsync(Encoding.UTF8.GetBytes(input), TestContext.Current.CancellationToken);
 
-        Assert.Contains(expected, await ReadUntilAsync(first, expected, TimeSpan.FromSeconds(8)));
-        Assert.Contains(expected, await ReadUntilAsync(second, expected, TimeSpan.FromSeconds(8)));
+        Assert.Contains(expected, await ReadUntilAsync(first, expected, TimeSpan.FromSeconds(5)));
+        Assert.Contains(expected, await ReadUntilAsync(second, expected, TimeSpan.FromSeconds(5)));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Subscribe_CompletesAfterSessionExits()
     {
         using var host = new PtyHost();
@@ -52,7 +52,7 @@ public sealed class PtySessionSubscriptionTests
             Encoding.UTF8.GetBytes(OperatingSystem.IsWindows() ? "echo BYE & exit\r" : "echo BYE; exit\n"),
             TestContext.Current.CancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
         var text = new StringBuilder();
         while (await subscription.Output.WaitToReadAsync(timeout.Token))
         {
@@ -63,7 +63,7 @@ public sealed class PtySessionSubscriptionTests
         Assert.Contains("BYE", text.ToString());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task DisposeSubscription_StopsDelivery_WithoutStoppingSession()
     {
         using var host = new PtyHost();
@@ -75,7 +75,7 @@ public sealed class PtySessionSubscriptionTests
         // 退订后会话仍然可写可读(订阅不拥有会话)。
         var (input, expected) = MarkerCommand();
         await session.WriteAsync(Encoding.UTF8.GetBytes(input), TestContext.Current.CancellationToken);
-        Assert.Contains(expected, await ReadUntilAsync(session, expected, TimeSpan.FromSeconds(8)));
+        Assert.Contains(expected, await ReadUntilAsync(session, expected, TimeSpan.FromSeconds(5)));
     }
 
     private static PtyStartInfo StartInfo((string FileName, string[] Arguments) command)

@@ -2,14 +2,6 @@ using System.Globalization;
 
 namespace Dsh.GitInspect;
 
-public sealed record GitCommitSummary(
-    string Sha,
-    string ShortSha,
-    string AuthorName,
-    string AuthorEmail,
-    DateTimeOffset AuthorDate,
-    string Subject);
-
 /** Parser for `git log -z` with GitLogParser.Format: commits are NUL separated, fields are unit-separator (0x1F) separated. */
 internal static class GitLogParser
 {

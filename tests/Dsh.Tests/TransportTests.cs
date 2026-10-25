@@ -1,4 +1,4 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -298,7 +298,7 @@ public sealed class JsonRpcPeerTests
         await cancel.CancelAsync();
         fixture.Server.Start();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => large);
-        var after = await fixture.Client.RequestAsync("ping", cancellationToken: Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var after = await fixture.Client.RequestAsync("ping", cancellationToken: Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
         Assert.True(after!.Value.GetProperty("ok").GetBoolean());
     }

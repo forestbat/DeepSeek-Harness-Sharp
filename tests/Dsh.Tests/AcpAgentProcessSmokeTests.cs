@@ -9,11 +9,10 @@ namespace Dsh.Tests;
  * The handshake test makes no model call; the LlmSmoke tests send real prompts through OpenCode's configured model.
  * Starting OpenCode is CPU heavy for several seconds, so these run serially instead of skewing timing-sensitive tests in parallel.
  */
-[Collection(SerialProcessCollection.Name)]
 public sealed class AcpAgentProcessSmokeTests : IDisposable
 {
-    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(90);
-    private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(4);
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TurnTimeout = TimeSpan.FromSeconds(5);
 
     /** Child-process-only OpenCode configuration: keep its configured model and ask before running tools. */
     private static readonly IReadOnlyDictionary<string, string> PermissionEnvironment = new Dictionary<string, string>

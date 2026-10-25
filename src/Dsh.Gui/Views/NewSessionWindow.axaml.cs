@@ -13,10 +13,24 @@ public sealed partial class NewSessionWindow : Window
     public NewSessionWindow(NewSessionViewModel form) : this()
     {
         DataContext = form;
-        form.Completed += _ => Close();
+        form.Completed += OnCompleted;
         form.BrowseRequested += BrowseAsync;
     }
 
-    private async Task<string?> BrowseAsync(IRemoteFiles files, string? initial)
+    protected override void OnClosed(EventArgs e)
+    {
+        if (DataContext is NewSessionViewModel form)
+        {
+            form.Completed -= OnCompleted;
+            form.BrowseRequested -= BrowseAsync;
+            form.Dispose();
+        }
+        base.OnClosed(e);
+    }
+
+    private void OnCompleted(NewSessionViewModel form) => Close();
+
+    private async Task<string?> BrowseAsync(RemoteFilesClient files, string? initial)
         => await new RemoteFolderPickerWindow(files, initial).ShowDialog<string?>(this);
 }
+

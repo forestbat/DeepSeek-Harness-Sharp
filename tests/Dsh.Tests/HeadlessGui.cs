@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 /** Avalonia.Headless.XUnit 12.1.2 依赖 xunit.v3.extensibility.core 3.2.2, 与本仓库 xunit.v3 4.0.1 不兼容(发现阶段 MissingMethodException), 故自行实现等价集成。 */
 internal static class HeadlessGui
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     private static HeadlessUnitTestSession Session
         => HeadlessUnitTestSession.GetOrStartForAssembly(typeof(GuiHeadlessAppBuilder).Assembly);

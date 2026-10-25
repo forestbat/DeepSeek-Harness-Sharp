@@ -14,7 +14,11 @@ public interface IDshPlugin
      *  类型须有公共无参构造(带默认值的 record 即可);null 表示沿用无类型字典。 */
     Type? ConfigType => null;
 
-    IDisposable Apply(Context ctx, object? config);
+    IDisposable Apply(Context ctx, object? config)
+        => throw new NotSupportedException("the plugin implements only ApplyAsync");
+
+    Task<IDisposable?> ApplyAsync(Context ctx, object? config, CancellationToken cancellationToken = default)
+        => Task.FromResult<IDisposable?>(Apply(ctx, config));
 }
 
 /** 一个被杀掉/跳过/装载失败的插件制品与原因,供宿主逐文件 WARN、/plugins list 失败分组与 doctor。 */

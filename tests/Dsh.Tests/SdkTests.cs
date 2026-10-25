@@ -27,7 +27,7 @@ public sealed class SdkTests
             """);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Transport_HandlesIncomingRequestAndWritesResponse()
     {
         var input = new StringReader("""
@@ -49,7 +49,7 @@ public sealed class SdkTests
         await transport.StopAsync();
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Transport_OversizedLine_GetsErrorAndClosesWithoutReadingFurther()
     {
         const int oversizedLineChars = 2 * 1024 * 1024;
@@ -65,7 +65,7 @@ public sealed class SdkTests
         };
 
         transport.Start();
-        await transport.WhenClosedAsync().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await transport.WhenClosedAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(["1", "2"], handled);
         using var error = JsonDocument.Parse(output.ToString().TrimEnd().Split('\n')[^1]);
@@ -97,8 +97,8 @@ public sealed class SdkTests
 
         await transport.StopAsync();
 
-        await Assert.ThrowsAsync<JsonRpcTransportClosedException>(() => pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
-        Assert.Null(await transport.Closed.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<JsonRpcTransportClosedException>(() => pending.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Null(await transport.Closed.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<JsonRpcTransportClosedException>(() => transport.RequestAsync("after-close", cancellationToken: TestContext.Current.CancellationToken));
     }
 
@@ -112,9 +112,9 @@ public sealed class SdkTests
 
         var second = transport.RequestAsync("second", cancellationToken: TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAsync<IOException>(() => first.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
-        await Assert.ThrowsAsync<IOException>(() => second.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
-        Assert.IsType<IOException>(await transport.Closed.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<IOException>(() => first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<IOException>(() => second.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.IsType<IOException>(await transport.Closed.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         var written = output.ToString();
         Assert.Throws<IOException>(() => transport.Notify("after-failure"));
         Assert.Equal(written, output.ToString());
@@ -245,7 +245,7 @@ public sealed class SdkTests
         Directory.Delete(home, true);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task SdkServer_AcceptsTsWireInitializeRequest()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));

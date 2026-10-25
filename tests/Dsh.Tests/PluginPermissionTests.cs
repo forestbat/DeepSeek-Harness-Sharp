@@ -7,12 +7,13 @@ using Dsh.Tui;
 namespace Dsh.Tests;
 
 /** Sandbox switch and plugins."<package>".permissions: parsing, typed read model and the /plugins write-back. */
+[Collection(GuiSerialCollection.CollectionName)]
 public sealed class PluginPermissionTests
 {
     private const string Todo = "@deepseek-ai/dsh-tool-todo";
     private const string OuterComment = "# keep: comment above the plugins block";
     private const string TrailingComment = "# keep: comment after the plugins block";
-    private static readonly TimeSpan SubmitTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SubmitTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(25);
 
     private static readonly string SettingsWithComments = $"""
@@ -87,7 +88,7 @@ public sealed class PluginPermissionTests
     [Fact]
     public async Task BanWrite_EnableWrite_RoundTrip_PreservesComments()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
+        await using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
         var home = environment.App.Home;
 
         Assert.Contains("denied", await RunAsync(environment, $"/plugins ban_write {Todo}"));
@@ -112,7 +113,7 @@ public sealed class PluginPermissionTests
     [Fact]
     public async Task BanWrite_ReportsUnknownPackage_AndUsage()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
+        await using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
 
         Assert.Contains("not found", await RunAsync(environment, "/plugins ban_write @acme/missing"));
         var commands = environment.App.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
@@ -124,7 +125,7 @@ public sealed class PluginPermissionTests
     [Fact]
     public async Task TuiOverlay_BanWrite_PicksPackage_AndWritesSettings()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
+        await using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
         using var chat = new ChatWindow(environment.App.Ctx, environment.Agent, environment.App.Home);
 
         Type(chat, "/plugins");
@@ -184,3 +185,4 @@ public sealed class PluginPermissionTests
     private static void Press(ChatWindow chat, ConsoleKey key)
         => chat.HandleKey(new ConsoleKeyInfo('\0', key, false, false, false));
 }
+

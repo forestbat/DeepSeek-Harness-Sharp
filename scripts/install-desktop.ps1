@@ -11,15 +11,15 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 
 if (-not $Target) {
     $candidates = @(
-        (Join-Path $repoRoot "DshGuiHost\bin\Release\net10.0\dsh-gui.exe"),
-        (Join-Path $repoRoot "DshGuiHost\bin\Debug\net10.0\dsh-gui.exe"),
+        (Join-Path $repoRoot "Dsh.GuiHost\bin\Release\net10.0\dsh-gui.exe"),
+        (Join-Path $repoRoot "Dsh.GuiHost\bin\Debug\net10.0\dsh-gui.exe"),
         (Join-Path $repoRoot "artifacts020\gui\dsh-gui.exe")
     )
     $Target = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 
 if (-not $Target -or -not (Test-Path -LiteralPath $Target)) {
-    Write-Error "找不到 dsh-gui.exe; 先构建 DshGuiHost, 或用 -Target 指定路径"
+    Write-Error "找不到 dsh-gui.exe; 先构建 Dsh.GuiHost, 或用 -Target 指定路径"
 }
 
 if (-not $Icon -or -not (Test-Path -LiteralPath $Icon)) {

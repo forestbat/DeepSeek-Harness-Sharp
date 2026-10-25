@@ -8,7 +8,7 @@ public sealed class IrohOutboundRouteTests
 {
     private const string ConsumerUrl = "http://example.invalid/iroh-optional-consumer";
 
-    [Theory(Timeout = 120000)]
+    [Theory]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task SatelliteTransport_CarriesRealHttpConsumersThroughTheSelectedMachine(string mode)
@@ -22,7 +22,7 @@ public sealed class IrohOutboundRouteTests
         var home = new HarnessHome(root);
         try
         {
-            var receiver = IrohRemoteInstaller.ParseStatus(await new SshTransport(source).RunAsync($"{RemoteShell.Prelude(source)}{RemoteShell.Quote(executable)} remote enable --ssh-port {source.Port}", ct));
+            var receiver = IrohRemoteInstaller.ParseStatus(await new SshTransport(source).RunAsync($"{RemoteShell.Prelude(source)}{RemoteShell.Quote(executable)} iroh-remote enable --ssh-port {source.Port}", ct));
             var machine = source with
             {
                 Kind = MachineKinds.Iroh,

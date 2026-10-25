@@ -67,14 +67,14 @@ internal static class Program
         window.Content = view == "files" ? await FilesAsync(host.Files, project, style) : await GitAsync(host.Git, host.Files, project, style);
     }
 
-    private static async Task<Control> FilesAsync(IRemoteFiles filesDomain, string project, RemotePathStyle style)
+    private static async Task<Control> FilesAsync(RemoteFilesClient filesDomain, string project, RemotePathStyle style)
     {
         var files = new FilesViewModel(filesDomain, project, style);
         await files.LoadAsync();
         return new FilesView { DataContext = files };
     }
 
-    private static async Task<Control> GitAsync(IRemoteGit gitDomain, IRemoteFiles filesDomain, string project, RemotePathStyle style)
+    private static async Task<Control> GitAsync(RemoteGitClient gitDomain, RemoteFilesClient filesDomain, string project, RemotePathStyle style)
     {
         var git = new GitViewModel(gitDomain, filesDomain, project, style);
         git.NewSessionRequested += async worktree => await Console.Out.WriteLineAsync($"new session requested in {worktree.Path}");
@@ -82,3 +82,4 @@ internal static class Program
         return new GitView { DataContext = git };
     }
 }
+

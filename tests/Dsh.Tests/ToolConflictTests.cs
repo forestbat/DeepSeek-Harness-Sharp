@@ -6,7 +6,7 @@ using Dsh.Runtime.Composition;
 
 namespace Dsh.Tests;
 
-/** 工具重名消解(§3.5): 冲突时后注册者改名为「包名末段-工具名」; 同插件重复注册仍是错误。 */
+/** 工具重名消解(§3.5): 独立插件并行 Apply 时后完成者改名为「包名末段-工具名」; 同插件重复注册仍是错误。 */
 public sealed class ToolConflictTests
 {
     private static ToolDefinition EchoTool(string name, string marker)
@@ -45,12 +45,14 @@ public sealed class ToolConflictTests
         ]);
 
         Assert.All(composition.Activations, activation => Assert.Equal(ActivationState.Active, activation.State));
-        Assert.Equal("first", tools.Get("save")!.Description);
-        Assert.Equal("second", tools.Get("dsh-memory-save")!.Description);
+        var baseTool = tools.Get("save")!;
+        var renamedName = tools.Get("dsh-memory-save") is null ? "memory-save" : "dsh-memory-save";
+        var renamedTool = tools.Get(renamedName)!;
+        Assert.Equal(["first", "second"], new[] { baseTool.Description, renamedTool.Description }.Order());
         Assert.Contains(ctx.Logger.Buffer, message =>
             message.Type == LoggerType.Warn
             && message.Text.Contains("\"save\"")
-            && message.Text.Contains("dsh-memory-save"));
+            && message.Text.Contains(renamedName));
     }
 
     [Fact]

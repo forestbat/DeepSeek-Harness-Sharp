@@ -77,7 +77,9 @@ public sealed class PluginCatalog
                 Inject = probe.Inject,
                 InjectTypes = probe.InjectTypes,
                 ConfigType = probe.ConfigType,
-                Apply = (ctx, config) => Create().Apply(ctx, BindConfig(probe.ConfigType, config, ctx)),
+                Apply = async (ctx, config, cancellationToken) =>
+                    await Create().ApplyAsync(ctx, BindConfig(probe.ConfigType, config, ctx), cancellationToken)
+                        .ConfigureAwait(false),
             };
         }
 

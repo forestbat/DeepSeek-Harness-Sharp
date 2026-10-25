@@ -1,4 +1,5 @@
 using Dsh.Core;
+using Dsh.Fleet;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -6,8 +7,18 @@ using Dsh.Llm;
 namespace Dsh.Tests;
 
 /** GUI 里可独立验证的组件: 审批提示、消息折叠、token 统计、统一决策窗口。 */
+[Collection(GuiSerialCollection.CollectionName)]
 public sealed class GuiComponentTests
 {
+    [Fact]
+    public void NetworkProbe_HasNoPlaceholderBeforeTheFirstRun()
+    {
+        var probe = new NetworkProbeViewModel(ProxyProbeLayer.Ssh);
+
+        Assert.False(probe.HasResult);
+        Assert.Equal("", probe.OutcomeText);
+    }
+
     /** Just above TokenStatsViewModel's 0.1 s floor for a measurable request. */
     private static readonly TimeSpan MeasurableRequest = TimeSpan.FromMilliseconds(150);
 
@@ -136,7 +147,7 @@ public sealed class GuiComponentTests
     [Fact]
     public async Task DecisionViewModel_ApprovalOutcomes_FollowTheClickedAction()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var request = new ApprovalRequest(
             environment.Agent,
             "bash",
@@ -166,7 +177,7 @@ public sealed class GuiComponentTests
     [Fact]
     public async Task DecisionViewModel_SingleSelectReplaces_AndSubmitNeedsAnswer()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var question = new AskUserQuestionItem(
             "q1",
             "选择策略",
@@ -191,7 +202,7 @@ public sealed class GuiComponentTests
     [Fact]
     public async Task DecisionViewModel_MultiSelectKeepsBoth_AndCustomTextCountsAsAnswer()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var question = new AskUserQuestionItem(
             "q2",
             "选择多项",
@@ -212,6 +223,11 @@ public sealed class GuiComponentTests
         freeDecision.Questions[0].CustomText = "按我的方案来";
         Assert.True(freeDecision.CanSubmit);
         Assert.Equal("按我的方案来", freeDecision.BuildAnswer()!.Answers[0].Custom);
+
+        single.CustomText = "补充说明";
+        var combined = decision.BuildAnswer()!.Answers[0];
+        Assert.Equal(2, combined.Selected.Count);
+        Assert.Equal("补充说明", combined.Custom);
     }
 
     /** 选择模型提供者: 前 7 项是协议族(只带 Type), 其后是按 id 排序、带 ProviderId 的目录 provider; 两类都带段前缀。 */

@@ -53,4 +53,28 @@ public sealed class IrohSshTransportTests
             TempTree.Delete(root);
         }
     }
+
+    [Fact]
+    public void ExplicitExecutableAndArguments_AreUsedWithoutPathLookup()
+    {
+        var root = TempTree.CreateDirectory("iroh-explicit");
+        try
+        {
+            var executable = Path.Combine(root, "iroh-ssh");
+            File.WriteAllText(executable, "");
+            var configuration = new IrohSshTransport().Configure(Machine with
+            {
+                IrohExecutablePath = executable,
+                IrohArguments = "-i ~/.ssh/id_ed25519",
+            });
+
+            Assert.Contains(executable, configuration.ProxyCommand);
+            Assert.Contains("proxy aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", configuration.ProxyCommand);
+            Assert.EndsWith("-i ~/.ssh/id_ed25519", configuration.ProxyCommand);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
 }

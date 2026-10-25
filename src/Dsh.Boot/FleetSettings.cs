@@ -67,6 +67,14 @@ public sealed class MachineSettings
     [YamlMember(Alias = "relayUrls")]
     public List<string>? RelayUrls { get; set; }
 
+    /** 本机 iroh-ssh 可执行文件路径; 留空时从 PATH 解析。 */
+    [YamlMember(Alias = "irohExecutablePath")]
+    public string? IrohExecutablePath { get; set; }
+
+    /** 传给 iroh-ssh 的其他参数。 */
+    [YamlMember(Alias = "irohArguments")]
+    public string? IrohArguments { get; set; }
+
     /** Optional application egress borrowed through SSH, independent of the machine's SSH proxy. */
     [YamlMember(Alias = "outboundTunnel")]
     public OutboundTunnelSettings? OutboundTunnel { get; set; }

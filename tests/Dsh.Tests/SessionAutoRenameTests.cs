@@ -139,7 +139,7 @@ public class SessionAutoRenameTests
     /** 持久化层会先写首行兜底标题, 所以盯住模型标题有没有落定, 而不是"标题非空"。 */
     private static async Task WaitForTitleAsync(AgentLoopAgent agent, string expected)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline
             && !string.Equals(agent.Session.Header.Title, expected, StringComparison.Ordinal))
             await Task.Delay(25, TestContext.Current.CancellationToken);

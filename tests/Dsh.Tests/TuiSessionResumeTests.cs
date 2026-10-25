@@ -7,11 +7,10 @@ using Dsh.Persistence;
 
 namespace Dsh.Tests;
 
-[Collection(SerialProcessCollection.Name)]
 public sealed class TuiSessionResumeTests
 {
     private const string History = "resume-visible-history";
-    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(5);
 
     [Theory]
     [InlineData("tui", "--session", "{id}")]
@@ -102,7 +101,7 @@ public sealed class TuiSessionResumeTests
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
         start.Environment[HarnessHome.ChildHomeEnv] = home.Root;
-        using var process = Process.Start(start)!;
+        using var process = TestProcessScope.Start(start)!;
         process.StandardInput.Close();
         return await ReadResultAsync(process);
     }

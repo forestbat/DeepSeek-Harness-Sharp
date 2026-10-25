@@ -11,10 +11,25 @@ public sealed record PluginDefinition
     /** 插件自带配置类型:非 null 时组合层先把 config 绑定成该类型再进 Apply。 */
     public Type? ConfigType { get; init; }
 
-    public required Func<Context, object?, object?> Apply { get; init; }
+    public required Func<Context, object?, CancellationToken, Task<object?>> Apply { get; init; }
 
     public static PluginDefinition From(
         Func<Context, object?, object?> apply,
+        string? name = null,
+        IReadOnlyList<string>? inject = null,
+        IReadOnlyList<Type>? injectTypes = null)
+    {
+        return new PluginDefinition
+        {
+            Name = name ?? apply.Method.Name,
+            Inject = inject ?? [],
+            InjectTypes = injectTypes ?? [],
+            Apply = (ctx, config, _) => Task.FromResult(apply(ctx, config)),
+        };
+    }
+
+    public static PluginDefinition From(
+        Func<Context, object?, CancellationToken, Task<object?>> apply,
         string? name = null,
         IReadOnlyList<string>? inject = null,
         IReadOnlyList<Type>? injectTypes = null)

@@ -5,8 +5,8 @@ using Dsh.RemoteHost;
 
 namespace Dsh.Gui.ViewModels;
 
-/** “选择远端目录”对话框状态: 经 IRemoteFiles 逐层浏览远端目录树, 选定即回填路径。 */
-public sealed partial class RemoteFolderPickerViewModel(IRemoteFiles files) : ObservableObject
+/** “选择远端目录”对话框状态: 经 RemoteFilesClient 逐层浏览远端目录树, 选定即回填路径。 */
+public sealed partial class RemoteFolderPickerViewModel(RemoteFilesClient files) : ObservableObject
 {
     private string? _parent;
 
@@ -74,3 +74,4 @@ public sealed partial class RemoteFolderPickerViewModel(IRemoteFiles files) : Ob
     [RelayCommand]
     private void Cancel() => Cancelled?.Invoke();
 }
+

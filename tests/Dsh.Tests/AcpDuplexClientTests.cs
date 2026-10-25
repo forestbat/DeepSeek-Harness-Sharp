@@ -13,7 +13,7 @@ namespace Dsh.Tests;
  */
 public sealed class AcpDuplexClientTests : IAsyncDisposable
 {
-    private static readonly TimeSpan StepTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StepTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Pipe _toAgent = new();
     private readonly Pipe _toClient = new();

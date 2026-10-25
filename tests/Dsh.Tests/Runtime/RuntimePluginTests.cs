@@ -130,10 +130,11 @@ public class RuntimePluginTests
     }
 
     [Fact]
-    public void Plugin_RejectsIndefiniteWaitOnceSettled()
+    public async Task Plugin_RejectsIndefiniteWaitOnceSettled()
     {
         var ctx = new Context();
         var activation = ctx.Plugin(PluginDefinition.From((_, _) => null, "simple"));
+        await activation.WaitAsync();
         Assert.True(activation.WaitAsync().IsCompletedSuccessfully);
     }
 }

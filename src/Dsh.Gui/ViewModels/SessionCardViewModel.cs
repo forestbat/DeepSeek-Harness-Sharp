@@ -9,19 +9,19 @@ namespace Dsh.Gui.ViewModels;
  * One session of one machine as the dashboard, the command palette and the session header show it.
  * The card is updated in place when the host reports a change, so lists keep their items (and the user's scroll position).
  */
-public sealed partial class SessionCardViewModel(string machine, RemoteHostSession session) : ObservableObject
+public sealed partial class SessionCardViewModel(string machine, RemoteSessionSummary session) : ObservableObject
 {
     public string Machine { get; } = machine;
 
     public string SessionId { get; } = session.SessionId;
 
-    public RemoteHostSession Session { get; private set; } = session;
+    public RemoteSessionSummary Session { get; private set; } = session;
 
     /** The machine's connection state; sessions of an unreachable machine show their last known values, greyed out. */
     [ObservableProperty]
     private MachineConnectionState _machineState = MachineConnectionState.Connected;
 
-    public string Kind => Session.Kind;
+    public string Kind => Session.Kind ?? HostSessionKinds.Harness;
 
     public string? AgentKind => Session.AgentKind;
 
@@ -29,13 +29,13 @@ public sealed partial class SessionCardViewModel(string machine, RemoteHostSessi
 
     public string ProjectName => SessionPresentation.ProjectName(Session.ProjectPath);
 
-    public string AgentLabel => SessionPresentation.AgentLabel(Session.AgentKind, Session.Kind);
+    public string AgentLabel => SessionPresentation.AgentLabel(Session.AgentKind, Kind);
 
-    public string KindLabel => SessionPresentation.KindLabel(Session.Kind);
+    public string KindLabel => SessionPresentation.KindLabel(Kind);
 
-    public string BadgeGlyph => SessionPresentation.Badge(Session.AgentKind, Session.Kind).Glyph;
+    public string BadgeGlyph => SessionPresentation.Badge(Session.AgentKind, Kind).Glyph;
 
-    public IBrush BadgeBrush => SolidColorBrush.Parse(SessionPresentation.Badge(Session.AgentKind, Session.Kind).Color);
+    public IBrush BadgeBrush => SolidColorBrush.Parse(SessionPresentation.Badge(Session.AgentKind, Kind).Color);
 
     public string Title => string.IsNullOrWhiteSpace(Session.Title) ? AgentLabel : Session.Title;
 
@@ -76,7 +76,23 @@ public sealed partial class SessionCardViewModel(string machine, RemoteHostSessi
     /** Text the quick switcher matches against: title, agent, project, machine and id. */
     public string SearchText => $"{Title} {AgentLabel} {Session.ProjectPath} {Machine} {SessionId}";
 
-    public void Update(RemoteHostSession session, MachineConnectionState machineState)
+    [ObservableProperty]
+    private bool _isCurrent;
+
+    [ObservableProperty]
+    private bool _isRenaming;
+
+    [ObservableProperty]
+    private string _renameDraft = "";
+
+    public SessionCardViewModel? RenameEditor => IsRenaming ? this : null;
+
+    partial void OnIsRenamingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(RenameEditor));
+    }
+
+    public void Update(RemoteSessionSummary session, MachineConnectionState machineState)
     {
         Session = session;
         MachineState = machineState;

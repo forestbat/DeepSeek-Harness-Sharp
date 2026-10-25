@@ -6,10 +6,10 @@ namespace Dsh.Tests;
 
 public sealed class IrohReceiverEndToEndTests
 {
-    [Fact(Timeout = 180000)]
+    [Fact]
     public Task TargetCli_Readiness_And_Restart_Work_Without_A_Direct_Host_Address() => ExerciseReceiverLifecycleAsync(false, TestContext.Current.CancellationToken);
 
-    [Fact(Timeout = 180000)]
+    [Fact]
     public Task TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay() => ExerciseReceiverLifecycleAsync(true, TestContext.Current.CancellationToken);
 
     private static async Task ExerciseReceiverLifecycleAsync(bool directOnly, CancellationToken ct)
@@ -21,7 +21,7 @@ public sealed class IrohReceiverEndToEndTests
         var direct = server.Machine("receiver", root);
         string[] relays = directOnly ? ["http://127.0.0.1:9"] : [];
         var readyPath = IrohReceiver.ReadinessPath(IrohReceiver.ReceiverRoot(new HarnessHome(root)));
-        var command = $"{RemoteShell.Prelude(direct)}{RemoteShell.Quote(executable)} remote";
+        var command = $"{RemoteShell.Prelude(direct)}{RemoteShell.Quote(executable)} iroh-remote";
         var enable = $"{command} enable --ssh-port {direct.Port}{(directOnly ? " --relay-url http://127.0.0.1:9" : "")}";
         var activation = Guid.NewGuid().ToString("N");
         try

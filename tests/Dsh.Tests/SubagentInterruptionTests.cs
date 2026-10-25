@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Runtime;
@@ -12,7 +12,7 @@ namespace Dsh.Tests;
 
 public class SubagentInterruptionTests
 {
-    private static readonly TimeSpan RunCompletionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RunCompletionTimeout = TimeSpan.FromSeconds(5);
 
     private sealed class ControlledAdapter(
         Func<GenerateOptions, CancellationToken, IAsyncEnumerable<StreamChunk>> handler) : LlmAdapter

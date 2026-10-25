@@ -12,7 +12,7 @@ public sealed class ToonPluginTests
 {
     private const string Package = "@deepseek-ai/dsh-toon";
 
-    private static (Context Ctx, ToolRuntime Tools) CreateHost(object? pluginConfig = null)
+    private static async Task<(Context Ctx, ToolRuntime Tools)> CreateHost(object? pluginConfig = null)
     {
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
@@ -21,7 +21,7 @@ public sealed class ToonPluginTests
         var host = new PluginHost();
         host.RegisterCompiledIn();
         var definition = host.Catalog.CreateDefinition(Package);
-        ctx.Plugin(definition, pluginConfig);
+        await ctx.Plugin(definition, pluginConfig).WaitAsync();
         return (ctx, tools);
     }
 
@@ -38,7 +38,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task InputWhitelist_ToolResultBecomesToon()
     {
-        var (ctx, tools) = CreateHost(new Dictionary<string, object?> { ["input"] = "echo" });
+        var (ctx, tools) = await CreateHost(new Dictionary<string, object?> { ["input"] = "echo" });
         using var registration = tools.Register(EchoTool("echo"));
 
         var result = await tools.Execute(new ToolExecutionInput
@@ -58,7 +58,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task Output_RegistersDispatcher_AndStripsOriginalSchemas()
     {
-        var (ctx, tools) = CreateHost();
+        var (ctx, tools) = await CreateHost();
         using var registration = tools.Register(EchoTool("echo"));
         var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
 
@@ -72,7 +72,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task Dispatcher_InvokesTarget_WithToonArguments()
     {
-        var (ctx, tools) = CreateHost();
+        var (ctx, tools) = await CreateHost();
         using var registration = tools.Register(EchoTool("echo"));
 
         var result = await tools.Execute(new ToolExecutionInput
@@ -92,7 +92,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task Dispatcher_AcceptsJsonObjectArguments()
     {
-        var (_, tools) = CreateHost();
+        var (_, tools) = await CreateHost();
         using var registration = tools.Register(EchoTool("echo"));
 
         // 模型偶尔把目标参数直接写成 JSON 对象而非 TOON 文本: 不应报 "given key was not present"。
@@ -114,7 +114,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task Dispatcher_RejectsSelfDispatch()
     {
-        var (ctx, tools) = CreateHost();
+        var (ctx, tools) = await CreateHost();
 
         var result = await tools.Execute(new ToolExecutionInput
         {
@@ -132,7 +132,7 @@ public sealed class ToonPluginTests
     [Fact]
     public async Task Dispatcher_TreatsNullArgumentsAsEmptyObject()
     {
-        var (_, tools) = CreateHost();
+        var (_, tools) = await CreateHost();
         using var registration = tools.Register(EchoTool("echo"));
 
         // 无参工具把 arguments 写成 null(或省略): 目标参数应归一为 {}, 不能变成 JSON Null 元素。

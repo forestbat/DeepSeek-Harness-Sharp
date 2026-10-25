@@ -1,7 +1,6 @@
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Fleet;
-using Dsh.Fleet.Iroh;
 using Dsh.Runtime;
 using Dsh.RemoteHost;
 
@@ -16,6 +15,10 @@ public sealed class FleetWorkspace : IAsyncDisposable
 {
     private readonly Func<FleetClient> _factory;
     private readonly DispatcherBridge<bool> _changes;
+    private readonly SemaphoreSlim _reloadGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly object _disposeGate = new();
+    private Task? _disposal;
     private bool _disposed;
 
     /** store is the machine list the client is built from (the machine management page edits it); options are the connection options before the stored deployment preferences apply. */
@@ -48,7 +51,7 @@ public sealed class FleetWorkspace : IAsyncDisposable
         {
             ClientName = GuiSettings.RemoteClientName,
             LocalHome = home,
-            SshTransportAdapter = new IrohSshTransport(),
+            SshTransportAdapter = FleetService.DefaultSshTransportAdapter,
             StartLocalHost = startLocalHost is null ? null : (machine, token) => startLocalHost(machine.HarnessHome ?? home.Root, token),
         };
         return new FleetWorkspace(store, options, () =>
@@ -81,21 +84,71 @@ public sealed class FleetWorkspace : IAsyncDisposable
     /** Rebuilds the client from the factory (the machine list may have changed) and starts it. */
     public async Task ReloadAsync()
     {
-        var previous = Client;
-        Detach(previous);
-        Client = Attach(_factory());
-        Client.Start();
-        _changes.Enqueue(true);
-        await previous.DisposeAsync();
+        await _reloadGate.WaitAsync(_lifetime.Token);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var replacement = _factory();
+            var previous = Client;
+            Detach(previous);
+            Client = Attach(replacement);
+            Client.Start();
+            _changes.Enqueue(true);
+            await previous.DisposeAsync();
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
     }
 
-    public async ValueTask DisposeAsync()
+    /** A same-home Host owns its independent runtime; reload it without replacing its connection or consumers. */
+    public async Task ReloadLocalOutboundAsync(string home, CancellationToken cancellationToken)
     {
-        if (_disposed)
-            return;
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _reloadGate.WaitAsync(operation.Token);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var canonical = Path.TrimEndingDirectorySeparator(Path.GetFullPath(home));
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            foreach (var connection in Client.Machines)
+            {
+                if (!connection.Machine.IsLocal || connection.State != MachineConnectionState.Connected
+                    || connection.Info?.HomeRoot is not { } actual)
+                    continue;
+                if (string.Equals(canonical, Path.TrimEndingDirectorySeparator(Path.GetFullPath(actual)), comparison))
+                    await new FleetNetwork(connection).ReloadLocalAsync(canonical, operation.Token);
+            }
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_disposeGate)
+            return new ValueTask(_disposal ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         _disposed = true;
-        Detach(Client);
-        await Client.DisposeAsync();
+        await _lifetime.CancelAsync();
+        await _reloadGate.WaitAsync();
+        try
+        {
+            Detach(Client);
+            await Client.DisposeAsync();
+        }
+        finally
+        {
+            _reloadGate.Release();
+            _reloadGate.Dispose();
+            _lifetime.Dispose();
+        }
     }
 
     private FleetClient Attach(FleetClient client)

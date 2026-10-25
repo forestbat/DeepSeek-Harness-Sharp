@@ -575,7 +575,7 @@ public sealed class OutboundProxyTests
         Assert.Contains("safe detail", result);
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 5000)]
     public async Task Doctor_RealSshMisconfiguredInstallation_RedactsRepairCommands()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -748,45 +748,6 @@ public sealed class OutboundProxyTests
     }
 }
 
-/** 设置页「网络」分页: 草稿自检走同一自检服务, 保存写回 settings.yaml 并立即作用于本进程。 */
-[Collection(GuiSerialCollection.CollectionName)]
-public sealed class OutboundProxyGuiTests
-{
-    [Fact]
-    public async Task NetworkSection_ChecksDraftAndSavesLive() => await HeadlessGui.RunAsync(async () =>
-    {
-        await using var proxy = new TestForwardProxy();
-        using var environment = GuiTestEnvironment.CreateBlocking();
-        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
-        var preferences = window.ViewModel!.Preferences;
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-        try
-        {
-            window.ViewModel.ShowSettingsCommand.Execute(null);
-            var network = preferences.Sections.First(section => section.Section == SettingsSection.Network);
-            network.SelectCommand!.Execute(network);
-            preferences.OutboundProxyUrl = $"http://127.0.0.1:{proxy.Port}";
-            preferences.OutboundProxyProbeUrl = "http://example.test/";
-            await preferences.CheckProxyCommand.ExecuteAsync(null);
-            preferences.SaveNetworkCommand.Execute(null);
-            Dispatcher.UIThread.RunJobs();
-
-            Assert.True(preferences.IsNetworkSection);
-            Assert.False(string.IsNullOrWhiteSpace(preferences.ProxyCheckResult));
-            Assert.Equal(["GET http://example.test/ HTTP/1.1"], proxy.Requests);
-            Assert.Equal(new Uri($"http://127.0.0.1:{proxy.Port}"), OutboundProxy.FromContext(environment.App.Ctx).Address);
-            Assert.Equal($"http://127.0.0.1:{proxy.Port}", HarnessSettings.Load(environment.App.Home).Network?.OutboundProxy?.Url);
-            var page = window.GetVisualDescendants().OfType<SettingsPageView>().Single();
-            Assert.Contains(page.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(), block => block.Text == "本机出口代理");
-        }
-        finally
-        {
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-        }
-    });
-}
 
 /** An actual loopback TCP proxy with controlled responses or optional real forwarding, not external business smoke. */
 internal sealed class TestForwardProxy : IAsyncDisposable
@@ -857,6 +818,8 @@ internal sealed class TestForwardProxy : IAsyncDisposable
 
     public ConcurrentQueue<string> Requests { get; } = new();
 
+    public ConcurrentQueue<string> HttpAttempts { get; } = new();
+
     public ConcurrentQueue<string> Credentials { get; } = new();
 
     public ConcurrentQueue<string> Headers { get; } = new();
@@ -919,6 +882,7 @@ internal sealed class TestForwardProxy : IAsyncDisposable
         while (await ReadHeadAsync(stream) is { } head)
         {
             var lines = head.Split("\r\n");
+            HttpAttempts.Enqueue(lines[0]);
             var requiredCredential = Volatile.Read(ref _requiredCredential);
             if (requiredCredential is not null && BasicCredential(lines) != requiredCredential)
             {

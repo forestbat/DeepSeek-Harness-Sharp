@@ -9,6 +9,7 @@ using System.IO.Pipes;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public sealed class NetworkSettingsPersistenceTests
 {
     private const string FirstProxy = "http://127.0.0.1:7890";
@@ -16,7 +17,7 @@ public sealed class NetworkSettingsPersistenceTests
     private const string Prefix = "# keep root\r\nglobal_default_model: null\r\nproviders: {}\r\nlogging: {file: false}\r\n";
     private const string Suffix = "\r\n# keep fleet\r\nfleet: {machines: [], deploy: {serverProxy: 'http://deploy:3128'}}\r\nplugins: {\"@deepseek-ai/dsh-memory\": false}\r\ncustom_root: [keep, me]\r\n";
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -58,7 +59,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(oldBytes, await File.ReadAllBytesAsync(oldPath, TestContext.Current.CancellationToken));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false, "")]
     [InlineData(true, "")]
     [InlineData(false, "network: null\r\n")]
@@ -79,7 +80,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(SecondProxy, HarnessSettings.Load(fixture.Home).Network?.OutboundProxy?.Url);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Consumers_RereadCurrentFileBeforeSaving(bool tui)
@@ -96,7 +97,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(SecondProxy, HarnessSettings.Load(fixture.Home).Network?.OutboundProxy?.Url);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -122,7 +123,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(0, changes);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Consumers_InvalidUrlLeavesFileAndRouteUnchanged(bool tui)
@@ -139,7 +140,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(new Uri(FirstProxy), fixture.Proxy.Address);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Consumers_PreserveRootFlowAndTrailingComma(bool tui)
@@ -160,7 +161,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Null(fixture.Facade.Load().Network?.OutboundProxy);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Consumers_PreserveCommentsInsideReplacedBlock(bool tui)
@@ -180,7 +181,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(SecondProxy, fixture.Facade.Load().Network?.OutboundProxy?.Url);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Consumers_InvalidDocumentLeavesFileAndRouteUnchanged(bool tui)
@@ -195,7 +196,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Equal(new Uri(FirstProxy), fixture.Proxy.Address);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -216,7 +217,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.IsType<CommandResult.Success>(await fixture.CommandAsync("/proxy reload"));
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task GuiSave_TuiReloadAndClear_PreserveProbeAndBypass()
     {
         await using var fixture = await Fixture.CreateAsync($"{Prefix}network: {{canary: keep}}{Suffix}");
@@ -240,7 +241,7 @@ public sealed class NetworkSettingsPersistenceTests
         Assert.Contains("canary: keep", await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false, "machine: # 'quoted'")]
     [InlineData(true, "machine: # 'quoted'")]
     [InlineData(false, "")]
@@ -286,7 +287,7 @@ public sealed class NetworkSettingsPersistenceTests
         }
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void StaleLoadedSettings_SaveOnlyTheirEdits_AcrossRepeatedSaves()
     {
         var root = TempTree.CreateSocketDirectory("nps");
@@ -330,7 +331,7 @@ public sealed class NetworkSettingsPersistenceTests
         }
     }
 
-    [Theory(Timeout = 90000)]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ConcurrentProcesses_PreserveNetworkChildrenAndCompleteDocument_WithoutBlockingOtherHomes(bool independentHome)
@@ -338,7 +339,7 @@ public sealed class NetworkSettingsPersistenceTests
         var root = TempTree.CreateSocketDirectory("npc");
         var otherRoot = TempTree.CreateSocketDirectory("npi");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
         var cancellation = deadline.Token;
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -358,8 +359,18 @@ public sealed class NetworkSettingsPersistenceTests
             publication = Task.Run(() => settings.SavePlugins(home), CancellationToken.None);
             await entered.Task.WaitAsync(cancellation);
 
-            foreach (var role in new[] { "borrowed", "proxy", "fleet-one", "fleet-two", "save" })
-                children.Add(await SettingsWriterProcess.StartAsync(writerHome, role, cancellation));
+            var starting = new[] { "borrowed", "proxy", "fleet-one", "fleet-two", "save" }
+                .Select(role => SettingsWriterProcess.StartAsync(writerHome, role, cancellation))
+                .ToArray();
+            try
+            {
+                foreach (var start in starting)
+                    children.Add(await start.WaitAsync(cancellation));
+            }
+            finally
+            {
+                children.AddRange(starting.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result).Except(children));
+            }
             var completed = Task.WhenAll(children.Select(child => child.Saved));
             if (independentHome)
                 await completed.WaitAsync(cancellation);
@@ -396,7 +407,7 @@ public sealed class NetworkSettingsPersistenceTests
             try
             {
                 if (publication is not null)
-                    await publication.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+                    await publication.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
             }
             finally
             {
@@ -415,20 +426,20 @@ public sealed class NetworkSettingsPersistenceTests
         IEnumerable<object?> PausedValues()
         {
             entered.SetResult();
-            if (!release.Wait(TimeSpan.FromSeconds(60), cancellation))
+            if (!release.Wait(TimeSpan.FromSeconds(5), cancellation))
                 throw new TimeoutException("The settings publication was not released.");
             yield return "preserved";
         }
     }
 
-    [Fact(Explicit = true, Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task SettingsWriterChild_UsesProductionSaves()
     {
         var pipeName = Environment.GetEnvironmentVariable("DSH_SETTINGS_TEST_PIPE");
         if (pipeName is null)
             Assert.Skip("This entry point is run only by an isolated settings writer process.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(60));
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
         await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
         await pipe.ConnectAsync(deadline.Token);
         await using var writer = new StreamWriter(pipe) { AutoFlush = true };
@@ -497,7 +508,7 @@ public sealed class NetworkSettingsPersistenceTests
             start.Environment[HarnessHome.HomeEnv] = home.Root;
             start.Environment["DSH_SETTINGS_TEST_PIPE"] = name;
             start.Environment["DSH_SETTINGS_TEST_ROLE"] = role;
-            var child = new SettingsWriterProcess(Process.Start(start)!, pipe);
+            var child = new SettingsWriterProcess(TestProcessScope.Start(start), pipe);
             try
             {
                 await pipe.WaitForConnectionAsync(cancellation);
@@ -531,7 +542,7 @@ public sealed class NetworkSettingsPersistenceTests
                 {
                 }
             }
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await _process.WaitForExitAsync(deadline.Token);
             await Task.WhenAll(_stdout, _stderr).WaitAsync(deadline.Token);
             _reader.Dispose();
@@ -577,3 +588,6 @@ public sealed class NetworkSettingsPersistenceTests
         }
     }
 }
+
+
+

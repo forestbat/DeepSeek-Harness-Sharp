@@ -11,6 +11,7 @@ public sealed class WebRuntime : Service
 
     private readonly Dictionary<string, IWebSearchProvider> _searchProviders = [];
     private readonly Dictionary<string, IWebFetchProvider> _fetchProviders = [];
+    private readonly Lock _sync = new();
     private readonly string? _searchProviderId;
     private readonly string? _fetchProviderId;
 
@@ -58,7 +59,12 @@ public sealed class WebRuntime : Service
 
     /** Usable search providers ordered by id, for prompts and error hints. */
     public IReadOnlyList<IWebSearchProvider> SearchEngines()
-        => _searchProviders.Values.Where(provider => provider.Available()).OrderBy(provider => provider.Id, StringComparer.Ordinal).ToList();
+    {
+        IWebSearchProvider[] snapshot;
+        lock (_sync)
+            snapshot = [.. _searchProviders.Values];
+        return snapshot.Where(provider => provider.Available()).OrderBy(provider => provider.Id, StringComparer.Ordinal).ToList();
+    }
 
     public Task<WebFetchResult> Fetch(WebFetchRequest request, CancellationToken signal = default)
     {
@@ -68,31 +74,46 @@ public sealed class WebRuntime : Service
 
     private IDisposable RegisterProvider<T>(Dictionary<string, T> store, T provider) where T : IWebProvider
     {
-        if (store.ContainsKey(provider.Id))
+        lock (_sync)
         {
-            throw new WebError($"a web provider with id \"{provider.Id}\" is already registered", WebErrorCodes.DuplicateProvider);
+            if (store.ContainsKey(provider.Id))
+            {
+                throw new WebError($"a web provider with id \"{provider.Id}\" is already registered", WebErrorCodes.DuplicateProvider);
+            }
         }
         return new EffectHandleDisposable(Ctx.Effect(() =>
         {
-            store[provider.Id] = provider;
-            return (Action)(() => store.Remove(provider.Id));
+            lock (_sync)
+                store[provider.Id] = provider;
+            return (Action)(() =>
+            {
+                lock (_sync)
+                    store.Remove(provider.Id);
+            });
         }, "web.registerProvider()"));
     }
 
     private IWebSearchProvider ResolveNamedEngine(string engine)
     {
-        if (_searchProviders.TryGetValue(engine, out var named) && named.Available())
+        IWebSearchProvider? named;
+        lock (_sync)
+            _searchProviders.TryGetValue(engine, out named);
+        if (named is not null && named.Available())
             return named;
         var state = named is null ? "is not registered" : $"is registered but unavailable ({named.Description})";
         var usable = string.Join(", ", SearchEngines().Select(provider => provider.Id));
         throw new WebError($"search engine \"{engine}\" {state}; usable engines: {(usable.Length > 0 ? usable : "none")}", WebErrorCodes.InvalidArgs);
     }
 
-    private static T ResolveProvider<T>(Dictionary<string, T> providers, string? configuredId, Func<T, bool> implicitCandidate) where T : IWebProvider
+    private T ResolveProvider<T>(Dictionary<string, T> providers, string? configuredId, Func<T, bool> implicitCandidate) where T : IWebProvider
     {
+        T[] snapshot;
+        lock (_sync)
+            snapshot = [.. providers.Values];
         if (configuredId is not null)
         {
-            if (!providers.TryGetValue(configuredId, out var configured))
+            var configured = snapshot.FirstOrDefault(provider => string.Equals(provider.Id, configuredId, StringComparison.Ordinal));
+            if (configured is null)
             {
                 throw new WebError($"configured web provider \"{configuredId}\" is not registered", WebErrorCodes.ProviderConfiguredMissing);
             }
@@ -103,10 +124,10 @@ public sealed class WebRuntime : Service
             return configured;
         }
 
-        var usable = providers.Values.Where(provider => implicitCandidate(provider) && provider.Available()).ToList();
+        var usable = snapshot.Where(provider => implicitCandidate(provider) && provider.Available()).ToList();
         if (usable.Count == 0)
         {
-            var named = string.Join(", ", providers.Values.Where(provider => !implicitCandidate(provider) && provider.Available()).Select(provider => provider.Id));
+            var named = string.Join(", ", snapshot.Where(provider => !implicitCandidate(provider) && provider.Available()).Select(provider => provider.Id));
             var hint = named.Length > 0 ? $"; name one of these engines instead: {named}" : "";
             throw new WebError($"no usable web provider is registered{hint}", WebErrorCodes.ProviderUnavailable);
         }

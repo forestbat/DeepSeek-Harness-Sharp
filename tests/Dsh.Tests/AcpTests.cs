@@ -11,7 +11,7 @@ namespace Dsh.Tests;
 
 public sealed class AcpTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Initialize_ReturnsAcpProtocolMetadata()
     {
         var input = new StringReader("""

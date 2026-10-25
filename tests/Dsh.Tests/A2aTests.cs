@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Text;
 using System.Net.Sockets;
 using Dsh.A2A;
@@ -191,7 +191,7 @@ public sealed class A2aTests
 
         var response = await client.SendMessageAsync(
             new SendMessageRequest { Message = UserMessage(chunked ? new string('x', 8 * 1024) : "hi") }, cancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
+            .WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
         var taskId = response.Task!.Id;
         var task = await WaitTerminalAsync(client, taskId, cancellationToken);
 
@@ -458,9 +458,28 @@ public sealed class A2aTests
             fixture.Dispose();
         }
 
-        using var closedClient = new TcpClient();
-        await Assert.ThrowsAsync<SocketException>(() =>
-            closedClient.ConnectAsync(IPAddress.Loopback, new Uri(endpoint).Port, cancellationToken).AsTask());
+        await AssertListenerEventuallyClosedAsync(new Uri(endpoint).Port, cancellationToken);
+    }
+
+    /** The Kestrel listener can finish closing just after Dispose returns; observe the port until the connection is refused. */
+    private static async Task AssertListenerEventuallyClosedAsync(int port, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            using var client = new TcpClient();
+            try
+            {
+                await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken);
+            }
+            catch (SocketException)
+            {
+                return;
+            }
+            if (DateTime.UtcNow >= deadline)
+                Assert.Fail($"listener on loopback:{port} remained reachable after dispose");
+            await Task.Delay(50, cancellationToken);
+        }
     }
 
     [Fact]

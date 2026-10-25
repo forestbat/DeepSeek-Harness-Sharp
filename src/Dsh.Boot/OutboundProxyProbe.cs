@@ -102,7 +102,7 @@ public static class OutboundProxyProbe
             cancellationToken.ThrowIfCancellationRequested();
             return new OutboundProxyProbeResult(false, OutboundProxy.RedactUrlCredentials($"{layer}不通: 代理 {via} 要求认证或用户名密码错误(HTTP 407)", proxyUrl, probe.AbsoluteUri), ProxyAuthStage, (int)status);
         }
-        return new OutboundProxyProbeResult(true, OutboundProxy.RedactUrlCredentials($"{layer}出口可达: 经 {via} 访问 {probe.AbsoluteUri} 返回 HTTP {(int)status}, 耗时 {watch.ElapsedMilliseconds} ms; 不代表业务成功", proxyUrl, probe.AbsoluteUri), HttpTargetStage, (int)status);
+        return new OutboundProxyProbeResult(true, OutboundProxy.RedactUrlCredentials($"{layer}出口可达: 经 {via} 访问 {probe.AbsoluteUri} 返回 HTTP {(int)status}, 耗时 {watch.ElapsedMilliseconds} ms", proxyUrl, probe.AbsoluteUri), HttpTargetStage, (int)status);
     }
 
     private static string Flatten(Exception error)

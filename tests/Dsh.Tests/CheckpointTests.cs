@@ -227,7 +227,7 @@ public sealed class CheckpointTests
     private static async Task WaitUntilAsync(Func<bool> condition, string what)
     {
         // CI runner 上 git 进程创建 + 磁盘/杀软扫描很慢, 首个检查点可能远超 15s; 放宽上限(满足即返回)。
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             if (condition())

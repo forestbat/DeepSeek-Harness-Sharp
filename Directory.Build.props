@@ -8,7 +8,7 @@
       程序集版本(AssemblyVersion)被钉在 ABI 基线 1.0.0.0 不动: 已编译插件是按程序集版本引用 Dsh.Plugins.Abstractions 等契约程序集的,
       让 AssemblyVersion 跟着发布号走, 旧插件解析引用时会直接 FileNotFoundException。
     -->
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
   </PropertyGroup>
 </Project>

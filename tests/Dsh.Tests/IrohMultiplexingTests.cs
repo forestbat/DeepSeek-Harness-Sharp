@@ -5,7 +5,7 @@ namespace Dsh.Tests;
 
 public sealed class IrohMultiplexingTests
 {
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task ExistingTcpMaster_CannotExecuteCommandsForAnIrohEndpoint()
     {
         _ = FleetSshEndToEndTests.RequireEnvironment();
@@ -27,7 +27,7 @@ public sealed class IrohMultiplexingTests
             await TestSshServer.RunAsync("ssh", ["-S", socket, "-O", "check", $"{source.User}@{source.ConnectionHost}"], ct);
             var endpoint = master with { Kind = MachineKinds.Iroh, Host = "", EndpointId = new string('0', MachineSpec.IrohEndpointIdLength), RelayUrls = ["http://127.0.0.1:9"] };
             using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            attempt.CancelAfter(TimeSpan.FromSeconds(10));
+            attempt.CancelAfter(TimeSpan.FromSeconds(5));
             try
             {
                 var observed = await new SshTransport(endpoint, new IrohSshTransport()).CaptureAsync("printf '%s' multiplexed-tcp-bypass; touch route-bypassed", attempt.Token);

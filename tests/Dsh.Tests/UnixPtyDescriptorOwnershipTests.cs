@@ -25,7 +25,7 @@ public sealed class UnixPtyDescriptorOwnershipTests
     private const int HangupWaitMilliseconds = 1000;
     internal const string SpawnFailureProbeArgument = "--unix-pty-spawn-failure-probe";
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task ConcurrentSpawns_DoNotInheritSlaves_AndOriginalSlaveClosesIndependently()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -76,7 +76,7 @@ public sealed class UnixPtyDescriptorOwnershipTests
             Assert.DoesNotContain("FD-LEAKED", report);
         });
 
-        using (var process = Process.Start(new ProcessStartInfo("/bin/sh")
+        using (var process = TestProcessScope.Start(new ProcessStartInfo("/bin/sh")
         {
             ArgumentList = { "-c", $"""if [ -e /dev/fd/{held.Master} ] || [ -e /dev/fd/{held.Slave} ]; then echo FD-LEAKED; else echo FD-ISOLATED; fi""" },
             RedirectStandardOutput = true,
@@ -141,7 +141,7 @@ public sealed class UnixPtyDescriptorOwnershipTests
         };
         foreach (var argument in command.Arguments)
             startInfo.ArgumentList.Add(argument == PtcScriptHost.HostArgument ? SpawnFailureProbeArgument : argument);
-        using var process = Process.Start(startInfo)
+        using var process = TestProcessScope.Start(startInfo)
             ?? throw new InvalidOperationException("The native descriptor probe did not start.");
         var cancellationToken = TestContext.Current.CancellationToken;
         try

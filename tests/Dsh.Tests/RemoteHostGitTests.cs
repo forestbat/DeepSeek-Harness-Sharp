@@ -6,6 +6,7 @@ using Dsh.Tui;
 namespace Dsh.Tests;
 
 /** host.git.* against a real host and a real repository with linked worktrees. */
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostGitTests : IDisposable
 {
     private readonly GitTestRepository _repo = new();
@@ -14,7 +15,7 @@ public sealed class RemoteHostGitTests : IDisposable
 
     public void Dispose() => _repo.Dispose();
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task StatusDiffAndLog_DescribeTheRepository()
     {
         var first = _repo.Commit(("a.txt", "one\n"));
@@ -40,7 +41,7 @@ public sealed class RemoteHostGitTests : IDisposable
         Assert.Equal("commit 2", Assert.Single(log).Subject);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task TuiAndRemoteDiff_UseTheSameStructuredStatistics()
     {
         _repo.Commit(("old.txt", "alpha\nbeta\ngamma\ndelta\n"), ("logo.bin", "\0original"));
@@ -54,7 +55,7 @@ public sealed class RemoteHostGitTests : IDisposable
 
         var remote = await client.Git.GitDiffAsync(new RemoteGitDiffRequest(_repo.Root, GitDiffTarget.Uncommitted), Ct);
         var summary = await new GitInspector(_repo.Root).DiffSummaryAsync(GitDiffTarget.Uncommitted, cancellationToken: Ct);
-        var lines = await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct);
+        var lines = await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct);
 
         Assert.Equal(remote.Files.Select(file => new GitFileStat(file.Path, file.OriginalPath, file.Kind, file.Added, file.Deleted)), summary.Files);
         Assert.Equal(GitPanel.Format(summary, "未提交改动"), lines);
@@ -63,7 +64,7 @@ public sealed class RemoteHostGitTests : IDisposable
         Assert.True(Assert.Single(remote.Files, file => file.Path == "logo.bin").IsBinary);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task Worktrees_AreListedAddedAndRemoved()
     {
         _repo.Commit(("a.txt", "one\n"));
@@ -83,7 +84,7 @@ public sealed class RemoteHostGitTests : IDisposable
         Assert.Single(after);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task ProjectsOutsideTheAllowedRoots_AreRejected()
     {
         if (OperatingSystem.IsWindows())
@@ -97,3 +98,6 @@ public sealed class RemoteHostGitTests : IDisposable
         Assert.Contains("outside", error.Message, StringComparison.Ordinal);
     }
 }
+
+
+

@@ -21,6 +21,8 @@ public sealed class GuiSettings(HarnessHome home)
     public const string SortUpdated = "updated";
     public const string SortName = "name";
     public const string TraceAll = "all";
+    public const string LayoutCards = "cards";
+    public const string LayoutDetails = "details";
 
     public const double MinFontSize = 11;
     public const double MaxFontSize = 18;
@@ -62,6 +64,10 @@ public sealed record GuiSettingsSnapshot
 
     public string SortSessions { get; init; } = GuiSettings.SortUpdated;
 
+    public string DashboardLayout { get; init; } = GuiSettings.LayoutCards;
+
+    public int RecentSessionCount { get; init; } = 20;
+
     public bool ShowOnlyWithSessions { get; init; }
 
     public string TraceFilter { get; init; } = GuiSettings.TraceAll;
@@ -102,6 +108,8 @@ public sealed record GuiSettingsSnapshot
             WorkspaceView = Text(parameters, "workspaceView") ?? GuiSettings.ViewSolution,
             DefaultWorkspace = Text(parameters, "defaultWorkspace"),
             SortSessions = Text(parameters, "sortSessions") ?? GuiSettings.SortUpdated,
+            DashboardLayout = Text(parameters, "dashboardLayout") is GuiSettings.LayoutDetails ? GuiSettings.LayoutDetails : GuiSettings.LayoutCards,
+            RecentSessionCount = (int)Clamp(Number(parameters, "recentSessions") ?? 20, 1, 100),
             ShowOnlyWithSessions = Flag(parameters, "showOnlyWithSessions") ?? false,
             TraceFilter = Text(parameters, "traceFilter") ?? GuiSettings.TraceAll,
             CloseAction = Text(parameters, "closeAction") ?? GuiSettings.CloseTray,
@@ -127,6 +135,8 @@ public sealed record GuiSettingsSnapshot
         ["workspaceView"] = WorkspaceView,
         ["defaultWorkspace"] = DefaultWorkspace,
         ["sortSessions"] = SortSessions,
+        ["dashboardLayout"] = DashboardLayout,
+        ["recentSessions"] = RecentSessionCount,
         ["showOnlyWithSessions"] = ShowOnlyWithSessions,
         ["traceFilter"] = TraceFilter,
         ["closeAction"] = CloseAction,
