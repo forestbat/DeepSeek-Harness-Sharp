@@ -22,7 +22,6 @@
     <Project Path="src/Dsh.E2b/Dsh.E2b.csproj" />
     <Project Path="src/Dsh.Fleet.Iroh/Dsh.Fleet.Iroh.csproj" />
     <Project Path="src/Dsh.Fleet/Dsh.Fleet.csproj" />
-    <Project Path="src/Dsh.Fleet.Client/Dsh.Fleet.Client.csproj" />
     <Project Path="src/Dsh.GitInspect/Dsh.GitInspect.csproj" />
     <Project Path="src/Dsh.Goal/Dsh.Goal.csproj" />
     <Project Path="src/Dsh.Gui/Dsh.Gui.csproj" />

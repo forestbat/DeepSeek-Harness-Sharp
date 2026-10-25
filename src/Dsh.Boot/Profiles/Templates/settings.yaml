@@ -239,12 +239,9 @@ plugins:
 #     bypass:  # 不走代理的主机(含其子域), 只在 url 非空时生效; 回环地址、不带点的主机名与私网 IP 始终直连
 #     probe_url:  # 连通性自检的探测地址; 留空用 https://www.gstatic.com/generate_204
 #   borrowed_outbound_machine:
-# external_editor:  # 列表(第一项为 favorite)
-#   name:
-#   command:
-#   args:  # 列表
 # sandbox:  # 映射(见子项)
 #   enabled:  # Plugin sandbox switch; false (the default) keeps plugin loading and execution unchanged.
+# external_editor:  # 列表
 # plugins:  # 映射(见子项)
 #   enabled: true
 #   parameters:  # 映射(见子项)

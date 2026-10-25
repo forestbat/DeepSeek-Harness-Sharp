@@ -53,6 +53,14 @@ public sealed class SettingsFacade(Context ctx, HarnessHome home, FleetWorkspace
         await ReloadLocalHostsAsync(cancellationToken);
     }
 
+    public void UpdateExternalEditors(IReadOnlyList<ExternalEditorDefinition> editors)
+    {
+        var settings = Load();
+        settings.ExternalEditor = [.. editors];
+        settings.Save(home);
+        Changed?.Invoke();
+    }
+
     public IReadOnlyList<string> BorrowedOutboundMachines()
         => new MachineStore(home).Load().Machines
             .Where(machine => !machine.IsLocal && machine.OutboundTunnel is not null)
