@@ -6,6 +6,7 @@ using Dsh.Tools;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public partial class ToolsTests : IDisposable
 {
     private readonly Context _ctx;

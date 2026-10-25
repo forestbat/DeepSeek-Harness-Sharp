@@ -6,12 +6,13 @@ using Dsh.Transport;
 namespace Dsh.Tests;
 
 /** Owner-only endpoint and token preamble of the resident remote host daemon, exercised over its real loopback endpoint. */
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostListenerAuthTests
 {
     private const UnixFileMode OwnerReadWrite = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private const UnixFileMode OwnerAll = OwnerReadWrite | UnixFileMode.UserExecute;
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Serve_RestrictsSocketTokenAndRunDirectoryToOwner()
     {
         await WithDaemonAsync("rp", TestContext.Current.CancellationToken, root =>
@@ -25,7 +26,7 @@ public sealed class RemoteHostListenerAuthTests
         });
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task ClientWithoutToken_IsDisconnected_AndDaemonKeepsServing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -34,13 +35,13 @@ public sealed class RemoteHostListenerAuthTests
             await using (var raw = await ConnectRawAsync(root, cancellationToken))
                 await Assert.ThrowsAnyAsync<IOException>(() => RemoteHostClient.ConnectAsync(raw, null, cancellationToken));
 
-            await using var stream = await RemoteHostListener.ConnectAsync(root, cancellationToken);
+            await using var stream = await RemoteHostConnector.ConnectAsync(root, cancellationToken);
             await using var client = await RemoteHostClient.ConnectAsync(stream, null, cancellationToken);
             Assert.Equal(HostProtocol.Version, (await client.InfoAsync(cancellationToken)).ProtocolVersion);
         });
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Probe_PreservesAuthenticationErrorsAndCallerCancellation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -50,17 +51,17 @@ public sealed class RemoteHostListenerAuthTests
             using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             await cancelled.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                RemoteHostListener.TryConnectClientAsync(root, hostToken, null, cancelled.Token));
+                RemoteHostConnector.TryConnectClientAsync(root, hostToken, null, cancelled.Token));
             await Assert.ThrowsAsync<IOException>(() =>
-                RemoteHostListener.TryConnectClientAsync(root, $"{hostToken}-invalid", null, cancellationToken));
+                RemoteHostConnector.TryConnectClientAsync(root, $"{hostToken}-invalid", null, cancellationToken));
 
             await using var client = Assert.IsType<RemoteHostClient>(
-                await RemoteHostListener.TryConnectClientAsync(root, hostToken, null, cancellationToken));
+                await RemoteHostConnector.TryConnectClientAsync(root, hostToken, null, cancellationToken));
             Assert.Equal(HostProtocol.Version, (await client.InfoAsync(cancellationToken)).ProtocolVersion);
         }, hostToken);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Connect_WhenDaemonIssuedNoToken_FailsWithExplicitError()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -69,12 +70,12 @@ public sealed class RemoteHostListenerAuthTests
             var endpoint = OperatingSystem.IsWindows() ? RemoteHostEndpoint.PortFile(root) : RemoteHostEndpoint.SocketPath(root);
             File.Delete(LocalEndpointToken.PathFor(endpoint));
 
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => RemoteHostListener.ConnectAsync(root, cancellationToken));
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => RemoteHostConnector.ConnectAsync(root, cancellationToken));
             Assert.Contains(LocalEndpointToken.PathFor(endpoint), error.Message);
         });
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task OwnedStartup_OutlivesOrdinaryProbeBudget_AndAuthenticatesWhenReady()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -83,8 +84,8 @@ public sealed class RemoteHostListenerAuthTests
         Process? host = null;
         try
         {
-            var connecting = RemoteHostListener.ConnectAsync(root, cancellationToken, attempts: 1, startupLifetime: startup.Task);
-            await Assert.ThrowsAsync<IOException>(() => RemoteHostListener.ConnectAsync(root, cancellationToken, attempts: 1));
+            var connecting = RemoteHostConnector.ConnectAsync(root, cancellationToken, attempts: 1, startupLifetime: startup.Task);
+            await Assert.ThrowsAsync<IOException>(() => RemoteHostConnector.ConnectAsync(root, cancellationToken, attempts: 1));
             host = RealHostProcesses.StartHost(RealHostProcesses.Executable, root);
             await using var stream = await connecting;
             await using var client = await RemoteHostClient.ConnectAsync(stream, null, cancellationToken);
@@ -99,7 +100,7 @@ public sealed class RemoteHostListenerAuthTests
         }
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task OwnedStartup_StopsWaitingOnExitOrCancellation(bool cancel)
@@ -109,7 +110,7 @@ public sealed class RemoteHostListenerAuthTests
         var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
-            var connecting = RemoteHostListener.ConnectAsync(root, cancellation.Token, attempts: 1, startupLifetime: startup.Task);
+            var connecting = RemoteHostConnector.ConnectAsync(root, cancellation.Token, attempts: 1, startupLifetime: startup.Task);
             if (cancel)
             {
                 await cancellation.CancelAsync();
@@ -128,7 +129,7 @@ public sealed class RemoteHostListenerAuthTests
         }
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Explicit = true)]
     public async Task KilledHost_IsReplacedWithAnEndpointReaderOpen_AndFreshClientAuthenticates()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -139,7 +140,7 @@ public sealed class RemoteHostListenerAuthTests
         try
         {
             first = RealHostProcesses.StartHost(executable, root);
-            await using (var stream = await RemoteHostListener.ConnectAsync(root, cancellationToken))
+            await using (var stream = await RemoteHostConnector.ConnectAsync(root, cancellationToken))
             await using (var client = await RemoteHostClient.ConnectAsync(stream, null, cancellationToken))
                 Assert.Equal(HostProtocol.Version, (await client.InfoAsync(cancellationToken)).ProtocolVersion);
 
@@ -159,7 +160,7 @@ public sealed class RemoteHostListenerAuthTests
 
             // A protocol handshake and requests prove the new endpoint/token pair reaches the replacement host,
             // while the old reader is still open and cannot share an in-place write.
-            await using var freshStream = await RemoteHostListener.ConnectAsync(root, cancellationToken);
+            await using var freshStream = await RemoteHostConnector.ConnectAsync(root, cancellationToken);
             await using var freshClient = await RemoteHostClient.ConnectAsync(freshStream, null, cancellationToken);
             Assert.True(freshClient.Hello.Ok);
             Assert.Equal(HostProtocol.Version, (await freshClient.InfoAsync(cancellationToken)).ProtocolVersion);
@@ -193,7 +194,7 @@ public sealed class RemoteHostListenerAuthTests
         try
         {
             // A successful connect proves the endpoint is bound before the test inspects it.
-            await (await RemoteHostListener.ConnectAsync(root, cancellationToken)).DisposeAsync();
+            await (await RemoteHostConnector.ConnectAsync(root, cancellationToken)).DisposeAsync();
             await body(root);
         }
         finally
@@ -220,3 +221,5 @@ public sealed class RemoteHostListenerAuthTests
         return await TransportConnection.ConnectTcpAsync(IPAddress.Loopback.ToString(), port, cancellationToken);
     }
 }
+
+

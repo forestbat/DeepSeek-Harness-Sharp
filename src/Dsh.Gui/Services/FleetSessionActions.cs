@@ -3,17 +3,12 @@ using Dsh.RemoteHost;
 
 namespace Dsh.Gui.Services;
 
-/** The model a harness session on any machine is started or resumed with: the GUI's current provider and model, and the provider's endpoint so a host without that provider can register it. */
-public readonly record struct HarnessModelChoice(RemoteModelSelection? Selection, RemoteProviderSpec? Provider);
-
 /**
  * Lifecycle operations on fleet sessions, shared by the dashboard, the session view and the command palette.
  * Every call goes through the machine's current connection and waits for it to be connected; failures surface as exceptions for the caller to report.
  */
-public sealed class FleetSessionActions(FleetWorkspace fleet, Func<HarnessModelChoice> harnessModel)
+public sealed class FleetSessionActions(FleetWorkspace fleet)
 {
-    public HarnessModelChoice HarnessModel => harnessModel();
-
     public async Task<HostLease> LeaseAsync(string machine, CancellationToken cancellationToken)
         => await Connection(machine).WaitConnectedAsync(cancellationToken);
 
@@ -28,24 +23,16 @@ public sealed class FleetSessionActions(FleetWorkspace fleet, Func<HarnessModelC
     }
 
     /** Resumes an exited session and returns its actual ID, including a new terminal-mode agent ID. */
-    public async Task<string> ResumeAsync(string machine, RemoteHostSession session, CancellationToken cancellationToken)
+    public async Task<string> ResumeAsync(string machine, RemoteSessionSummary session, CancellationToken cancellationToken)
     {
         var lease = await LeaseAsync(machine, cancellationToken);
         if (session.Kind != HostSessionKinds.Harness)
             return (await lease.Client.Agent.ResumeAgentAsync(session.SessionId, cancellationToken)).SessionId;
-        var (selection, provider) = HarnessModel;
-        return (await lease.Client.ResumeSessionAsync(session.SessionId, selection, provider, cancellationToken)).Id;
+        return (await lease.Client.ResumeSessionAsync(session.SessionId, cancellationToken)).Id;
     }
 
-    /** Starts a session of any kind; harness sessions use the GUI's current model unless the request names one. */
-    public async Task<RemoteHostSession> StartAsync(string machine, RemoteAgentStartRequest request, CancellationToken cancellationToken)
-    {
-        var lease = await LeaseAsync(machine, cancellationToken);
-        if (request.AgentKind == HostAgentKinds.Dsharp && request.Selection is null)
-        {
-            var (selection, provider) = HarnessModel;
-            request = request with { Selection = selection, Provider = provider };
-        }
-        return await lease.Client.Agent.StartAgentAsync(request, cancellationToken);
-    }
+    /** Starts a session of any kind; the host chooses its own model for harness sessions. */
+    public async Task<RemoteSessionSummary> StartAsync(string machine, RemoteAgentStartRequest request, CancellationToken cancellationToken)
+        => await (await LeaseAsync(machine, cancellationToken)).Client.Agent.StartAgentAsync(request, cancellationToken);
 }
+

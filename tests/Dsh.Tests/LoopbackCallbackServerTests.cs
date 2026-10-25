@@ -1,4 +1,4 @@
-﻿using System.Net.Sockets;
+using System.Net.Sockets;
 using System.Text;
 using Dsh.Account;
 
@@ -26,7 +26,7 @@ public sealed class LoopbackCallbackServerTests
         await using var server = new LoopbackCallbackServer();
         server.Start();
         var state = AccountPkce.NewState();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var wait = server.WaitForCodeAsync(state, timeout.Token);
 
         Assert.Contains("400", await SendAsync($"{server.RedirectUri}?code=abc&state=wrong"));

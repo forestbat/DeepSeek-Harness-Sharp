@@ -17,6 +17,11 @@ on:
         description: 'quick, regression-1, regression-2, regression-3, or raw'
         required: true
         type: string
+      quick-cohort:
+        description: 'Quick test class cohort: all, fleet-iroh, or remainder'
+        required: false
+        type: string
+        default: 'all'
 
 permissions:
   contents: read
@@ -118,7 +123,7 @@ jobs:
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
       - name: Validate the explicitly installed native Iroh test fixture
-        if: inputs.suite == 'quick'
+        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
         shell: bash
         run: |
           set -euo pipefail
@@ -136,7 +141,7 @@ jobs:
 
 
       - name: Check macOS non-admin headless SSH LAN receiver
-        if: inputs.suite == 'quick' && runner.os == 'macOS'
+        if: inputs.suite == 'quick' && runner.os == 'macOS' && inputs.quick-cohort != 'remainder'
         shell: bash
         run: bash scripts/test-iroh-macos-lan.sh
       - name: Start a standalone PTY daemon from the current build
@@ -218,11 +223,21 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ]; then
             # MCP resource tests run in each of the three required regression suites.
             ARGS+=(-parallel none
+              -reporter verbose
               -class- Dsh.Tests.Mcp.McpResourceToolsTests
               -method- Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay)
+            # Complementary class cohorts preserve coverage under the existing per-run watchdog.
+            if ${{ inputs.quick-cohort == 'fleet-iroh' }}; then
+              ARGS+=(-class 'Dsh.Tests.Fleet*' -class 'Dsh.Tests.Iroh*')
+            elif ${{ inputs.quick-cohort == 'remainder' }}; then
+              ARGS+=(-class- 'Dsh.Tests.Fleet*' -class- 'Dsh.Tests.Iroh*')
+            fi
             echo "Running: ${ARGS[*]}"
-            "${ARGS[@]}" &
+            # The background runner's CLI children need the default SIGINT disposition.
+            set -m
+            "${ARGS[@]}" </dev/null &
             TESTPID=$!
+            set +m
             ( sleep 600; kill -9 "$TESTPID" 2>/dev/null ) &
             WATCH=$!
             set +e
@@ -283,7 +298,7 @@ jobs:
           "$EXE" "${ARGS[@]}"
 
       - name: Check schedule time zones with invariant globalization
-        if: inputs.suite == 'quick'
+        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
         shell: pwsh
         run: |
           $runtime = Get-Content tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.runtimeconfig.json -Raw | ConvertFrom-Json -AsHashtable
@@ -294,7 +309,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check native containment (NativeGuardTests, ${{ inputs.native-cc }}, no skips)
-        if: inputs.suite == 'quick'
+        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
         shell: bash
         run: |
           set -euo pipefail

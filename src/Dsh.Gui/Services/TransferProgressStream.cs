@@ -2,7 +2,7 @@ namespace Dsh.Gui.Services;
 
 /**
  * 透传读写并累计字节数的流包装: 分块上传读源流、分块下载写目标流时, 每读/写一块就报告累计字节数。
- * 这样进度来自 IRemoteFiles.UploadFileAsync/DownloadFileAsync 本身的分块循环, 不另写一套传输循环。
+ * 这样进度来自 RemoteFilesClient.UploadFileAsync/DownloadFileAsync 本身的分块循环, 不另写一套传输循环。
  */
 public sealed class TransferProgressStream(Stream inner, Action<long> progress) : Stream
 {
@@ -60,3 +60,4 @@ public sealed class TransferProgressStream(Stream inner, Action<long> progress) 
         return bytes;
     }
 }
+

@@ -30,7 +30,7 @@ public class Win32GuiShot {
 [Win32GuiShot]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 
 $root = Split-Path -Parent $PSScriptRoot
-$exe = if ($ExePath.Length -gt 0) { $ExePath } else { Join-Path $root "DshGuiHost\bin\Debug\net10.0\dsh-gui.exe" }
+$exe = if ($ExePath.Length -gt 0) { $ExePath } else { Join-Path $root "Dsh.GuiHost\bin\Debug\net10.0\dsh-gui.exe" }
 if (-not (Test-Path $exe)) { throw "先构建目标启动器: $exe" }
 
 $arguments = @()

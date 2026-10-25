@@ -6,7 +6,7 @@ name: 发布 Release（JIT + AOT）
 # 每次发布同时产出 JIT 与 AOT 两档(与 ci.yml 不同: ci.yml 只在合入/手动时校验 AOT)。
 # JIT 资产保持 dsharp-<rid> 的旧名(远端自动部署按此名下载), AOT 资产带 -aot 后缀。
 # 发布说明由 GitHub 自动生成（--generate-notes），不在仓库里维护手写前端。
-# 发布前先跑一遍测试（排除需要 GPU/桌面/外部模型的类别），测试不过就不构建、不发布。
+# 测试只在 ci.yml 中运行；本工作流读取该 commit 的 CI 结果，只构建和发布测试通过的平台。
 on:
   push:
     tags:
@@ -16,6 +16,11 @@ on:
       tag:
         description: '已存在的 tag（如 v0.1.1）；请先把 tag 推到仓库'
         required: true
+      os:
+        description: '发布平台；all 表示每个 CI 测试通过的平台都独立构建发布'
+        type: choice
+        options: [all, windows, linux, macos]
+        default: all
       dry_run:
         description: '只构建与打包，不创建/更新 Release'
         type: boolean
@@ -23,6 +28,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -34,7 +40,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.detect.outputs.tag }}
+      sha: ${{ steps.detect.outputs.sha }}
+      requested: ${{ steps.detect.outputs.requested }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - id: detect
         name: 解析 tag
         shell: bash
@@ -42,200 +54,130 @@ jobs:
           EVENT: ${{ github.event_name }}
           IN_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+          IN_OS: ${{ inputs.os }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
             TAG="$IN_TAG"
+            REQUESTED="${IN_OS:-all}"
           else
             TAG="$REF_NAME"
+            REQUESTED="all"
           fi
           if [ -z "$TAG" ]; then
             echo "::error::没有解析到 tag"
             exit 1
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"
-
-  test:
-    name: 测试（${{ matrix.os }}）
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        # 原生库(guard 与 fault probe)的 C 编译器驱动, 经 -p:DshNativeCompiler 交给 PluginGuard.props。
-        # Windows 主构建用发布所用的 MSVC(cl), 再用 clang-cl 重建并重跑原生遏制回归。
-        include:
-          - os: windows-latest
-            native-cc: cl
-            native-cc-alt: clang-cl
-          - os: ubuntu-latest
-            native-cc: clang
-          - os: macos-latest
-            native-cc: clang
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-          cache: true
-          cache-dependency-path: '**/*.csproj'
-
-      - name: Provision the explicit patched native Iroh test dependency
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Windows)
-              RID=win-x64
-              pwsh -NoProfile -File scripts/fetch-iroh-ssh.ps1 -Rid "$RID"
-              DIRECTORY="$(cygpath -w "$PWD/artifacts/iroh-ssh/$RID")"
+          case "$REQUESTED" in
+            all|windows|linux|macos) ;;
+            *)
+              echo "::error::未知发布平台: $REQUESTED"
+              exit 1
               ;;
-            Linux)
-              RID=linux-x64
-              bash scripts/fetch-iroh-ssh.sh "$RID"
-              DIRECTORY="$PWD/artifacts/iroh-ssh/$RID"
-              ;;
-            macOS)
-              RID=osx-arm64
-              bash scripts/fetch-iroh-ssh.sh "$RID"
-              DIRECTORY="$PWD/artifacts/iroh-ssh/$RID"
-              ;;
-            *) exit 1 ;;
           esac
-          printf '%s\n' "$DIRECTORY" >> "$GITHUB_PATH"
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          SHA=$(git rev-parse "$TAG^{commit}")
+          {
+            echo "tag=$TAG"
+            echo "sha=$SHA"
+            echo "requested=$REQUESTED"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG sha=$SHA requested=$REQUESTED"
 
-      - name: Validate the installed native Iroh test dependency
+  gate:
+    name: 读取 CI 测试结果
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.gate.outputs.windows }}
+      linux: ${{ steps.gate.outputs.linux }}
+      macos: ${{ steps.gate.outputs.macos }}
+      matrix: ${{ steps.gate.outputs.matrix }}
+    steps:
+      - id: gate
+        name: 按平台读取 ci.yml 结果
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          REQUESTED: ${{ needs.prepare.outputs.requested }}
         run: |
           set -euo pipefail
-          command -v iroh-ssh
-          iroh-ssh version
-          iroh-ssh server --help | grep -F -- --ready-file
-
-      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
+          RUN_ID=$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$SHA&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == "构建校验" and .status == "completed")][0].id // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::找不到 $SHA 已完成的 ci.yml 运行；先让 CI 跑完再发布"
+            exit 1
           fi
+          echo "using ci run $RUN_ID"
 
-      - name: 检查 C 工具链（Clang/LLVM；Windows 另需 MSVC）
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            if ! command -v clang-cl >/dev/null 2>&1; then
-              choco install llvm --no-progress -y
-              printf '%s\n' 'C:\Program Files\LLVM\bin' >> "$GITHUB_PATH"
-              export PATH="/c/Program Files/LLVM/bin:$PATH"
+          check_os() {
+            local prefix="测试（$1"
+            gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" \
+              | jq -r --arg prefix "$prefix" '
+                [.jobs[] | select(.name | startswith($prefix))] as $jobs
+                | if ($jobs | length) == 0 then "missing"
+                  elif any($jobs[]; .conclusion != "success" and .conclusion != "skipped") then "failed"
+                  elif any($jobs[]; .conclusion == "success") then "passed"
+                  else "skipped" end'
+          }
+
+          enabled() { [ "$REQUESTED" = "all" ] || [ "$REQUESTED" = "$1" ]; }
+          declare -A STATES
+          for platform in windows linux macos; do
+            if ! enabled "$platform"; then
+              STATES[$platform]=false
+              continue
             fi
-            clang-cl --version
-            "/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' \
-              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'Common7\Tools\VsDevCmd.bat'
-          else
-            if ! command -v clang >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends clang
+            case "$platform" in
+              windows) runner=windows-latest ;;
+              linux) runner=ubuntu-latest ;;
+              macos) runner=macos-latest ;;
+            esac
+            state=$(check_os "$runner")
+            echo "$platform=$state"
+            if [ "$state" = "passed" ]; then
+              STATES[$platform]=true
+            else
+              STATES[$platform]=false
+              echo "::warning::$platform CI 测试未通过（$state），跳过该平台构建"
             fi
-            clang --version
+          done
+
+          {
+            echo "windows=${STATES[windows]}"
+            echo "linux=${STATES[linux]}"
+            echo "macos=${STATES[macos]}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "${STATES[windows]}" = false ] && [ "${STATES[linux]}" = false ] && [ "${STATES[macos]}" = false ]; then
+            echo "::error::没有请求的平台通过 CI 测试"
+            exit 1
           fi
 
-      - name: 编译测试工程（Debug，含插件夹具与 fault probe）
-        run: >
-          dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
-          -p:DshNativeCompiler=${{ matrix.native-cc }}
-
-      - name: Check macOS non-admin headless SSH LAN receiver
-        if: runner.os == 'macOS'
-        shell: bash
-        run: bash scripts/test-iroh-macos-lan.sh
-
-      - name: 运行测试（排除 GpuStress / OnlyGpu / LlmSmoke / RenderBench）
-        shell: bash
-        run: |
-          set -euo pipefail
-          # GpuStress 需要真实 GPU 压测；OnlyGpu 是功能性的 GPU/桌面渲染用例(无 GPU/EGL 的 runner 跑不了)；
-          # RenderBench 需要桌面渲染环境；LlmSmoke 需要外部模型接口与密钥。
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
-          if [ ! -x "$EXE" ]; then
-            EXE="$EXE.exe"
-          fi
-          ARGS=("$EXE" -noColor
-            -trait- "Category=GpuStress"
-            -trait- "Category=OnlyGpu"
-            -trait- "Category=LlmSmoke"
-            -trait- "Category=RenderBench")
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=(-method- Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay)
-          fi
-          if command -v timeout >/dev/null 2>&1; then
-            ARGS=(timeout 900 "${ARGS[@]}")
-          fi
-          echo "运行: ${ARGS[*]}"
-          "${ARGS[@]}"
-
-      - name: 原生遏制回归（NativeGuardTests，${{ matrix.native-cc }}，跳过即失败）
-        shell: bash
-        run: |
-          set -euo pipefail
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
-          if [ ! -x "$EXE" ]; then
-            EXE="$EXE.exe"
-          fi
-          "$EXE" -noColor -class Dsh.Tests.NativeGuardTests -failSkips
-
-      - name: 换用 ${{ matrix.native-cc-alt }} 重建原生库并重跑原生遏制回归
-        if: matrix.native-cc-alt != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo \
-            -p:DshNativeCompiler=${{ matrix.native-cc-alt }} "-flp:verbosity=normal;logfile=native-alt.log"
-          # 构建日志里的编译命令证明 guard 与 probe 确由替换后的驱动重建。
-          grep -E '${{ matrix.native-cc-alt }} /nologo' native-alt.log
-          tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe -noColor -class Dsh.Tests.NativeGuardTests -failSkips
+          matrix='[]'
+          add_build() {
+            matrix=$(jq -c --arg os "$1" --arg rid "$2" --arg flavor "$3" --arg archive "$4" --arg native "$5" \
+              '. + [{os:$os, rid:$rid, flavor:$flavor, archive:$archive, "native-cc":$native}]' <<<"$matrix")
+          }
+          [ "${STATES[windows]}" = true ] && { add_build windows-latest win-x64 jit dsharp-win-x64.zip cl; add_build windows-latest win-x64 aot dsharp-win-x64-aot.zip cl; }
+          [ "${STATES[linux]}" = true ] && { add_build ubuntu-latest linux-x64 jit dsharp-linux-x64.tar.gz clang; add_build ubuntu-latest linux-x64 aot dsharp-linux-x64-aot.tar.gz clang; }
+          [ "${STATES[macos]}" = true ] && add_build macos-latest osx-arm64 jit dsharp-osx-arm64.tar.gz clang
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
     name: 构建 ${{ matrix.flavor }} / ${{ matrix.rid }}
-    needs: [prepare, test]
+    needs: [prepare, gate]
+    if: ${{ needs.gate.outputs.matrix != '[]' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            rid: win-x64
-            flavor: jit
-            archive: dsharp-win-x64.zip
-            native-cc: cl
-          - os: windows-latest
-            rid: win-x64
-            flavor: aot
-            archive: dsharp-win-x64-aot.zip
-            native-cc: cl
-          - os: ubuntu-latest
-            rid: linux-x64
-            flavor: jit
-            archive: dsharp-linux-x64.tar.gz
-            native-cc: clang
-          - os: ubuntu-latest
-            rid: linux-x64
-            flavor: aot
-            archive: dsharp-linux-x64-aot.tar.gz
-            native-cc: clang
-          - os: macos-latest
-            rid: osx-arm64
-            flavor: jit
-            archive: dsharp-osx-arm64.tar.gz
-            native-cc: clang
+        include: ${{ fromJSON(needs.gate.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -284,7 +226,7 @@ jobs:
             -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none \
             --nologo -v m
           # GUI 启动器一并发布并叠加进主产物。
-          dotnet publish DshGuiHost/DshGuiHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
+          dotnet publish Dsh.GuiHost/Dsh.GuiHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
             -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none --nologo -v m
           # The Web entry keeps its runtime closure in a separate optional asset.
           dotnet publish Dsh.WebHost/Dsh.WebHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
@@ -296,9 +238,9 @@ jobs:
           pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
             -WebPublishDir "$WEB_PUB" \
             -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish" \
-            -GuiPublishDir "DshGuiHost/bin/Release/net10.0/$RID/publish"
+            -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
           test -d "$PUB"
           test -d "$GUI_PUB"
           cp -R "$GUI_PUB"/. "$PUB"/
@@ -422,7 +364,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'WebHost archive extraction failed' }
             ./scripts/smoke-web-host.ps1 -WebPublishDir $verify `
               -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/$env:RID/publish" `
-              -GuiPublishDir "DshGuiHost/bin/Release/net10.0/$env:RID/publish"
+              -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/$env:RID/publish"
           } finally { Remove-Item $verify -Recurse -Force }
 
       - uses: actions/upload-artifact@v4
@@ -441,14 +383,15 @@ jobs:
 
   release:
     name: 创建/更新 Release
-    needs: [prepare, test, build]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    needs: [prepare, gate, build]
+    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && needs.gate.outputs.matrix != '[]' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v4

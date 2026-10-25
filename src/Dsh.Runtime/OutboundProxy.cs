@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Dsh.Runtime;
@@ -493,8 +496,154 @@ public sealed partial class OutboundProxy : IWebProxy, ICredentials, IDisposable
         }
     }
 
-    /** 把 URL 里的用户名密码替换为 ***, 供日志与错误信息使用(非法 URL 同样处理)。 */
-    public static string Redact(string url) => UserInfoPattern().Replace(url, RedactedUserInfo);
+    /** Removes URL user-info, authentication headers and known raw or encoded credentials from diagnostics. */
+    public static string Redact(string text, params ReadOnlySpan<string?> secrets)
+    {
+        text = RedactAuthorizationHeaders(text);
+        foreach (var secret in secrets)
+        {
+            if (string.IsNullOrEmpty(secret))
+                continue;
+            text = RedactSecret(text, secret);
+            if (!secret.Contains('@'))
+                continue;
+            foreach (Match match in UserInfoPattern().Matches(secret))
+            {
+                text = RedactUserInfoSecrets(text, match.Value[..^1]);
+            }
+        }
+        return UserInfoPattern().Replace(text, RedactedUserInfo);
+    }
+
+    /// <summary>Redacts credentials in configured URL contexts while retaining useful endpoint diagnostics.</summary>
+    public static string RedactUrlCredentials(string text, params ReadOnlySpan<string?> urls)
+    {
+        text = RedactAuthorizationHeaders(text);
+        foreach (var url in urls)
+        {
+            if (string.IsNullOrEmpty(url))
+                continue;
+            var address = url.Contains("://", StringComparison.Ordinal) ? url : $"{DefaultScheme}://{url}";
+            if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) || uri.Host.Length == 0)
+            {
+                text = Redact(text, url);
+                continue;
+            }
+            if (uri.Query.Length != 0 || uri.Fragment.Length != 0)
+            {
+                text = RedactSecret(text, url);
+                text = RedactSecret(text, uri.AbsoluteUri);
+            }
+            text = RedactUserInfoSecrets(text, uri.UserInfo);
+        }
+        return UserInfoPattern().Replace(text, RedactedUserInfo);
+    }
+
+    /** Editable secret fields show a redacted value: keep the saved secret unless the user changed the text. */
+    public static string? ResolveEdited(string displayed, string? saved)
+        => saved is { Length: > 0 } && displayed == RedactUrlCredentials(saved, saved)
+            ? saved
+            : string.IsNullOrWhiteSpace(displayed) ? null : displayed.Trim();
+
+    private static string RedactUserInfoSecrets(string text, string userInfo)
+    {
+        var separator = userInfo.IndexOf(':');
+        if (separator < 0)
+            return RedactSecret(RedactSecret(text, userInfo), Uri.UnescapeDataString(userInfo));
+        var username = userInfo[..separator];
+        var password = userInfo[(separator + 1)..];
+        text = RedactSecret(RedactSecret(text, username), Uri.UnescapeDataString(username));
+        return RedactSecret(RedactSecret(text, password), Uri.UnescapeDataString(password));
+    }
+
+    private static string RedactSecret(string text, string secret)
+    {
+        if (secret.Length == 0)
+            return text;
+        if (secret.Contains('\''))
+            text = text.Replace(secret.Replace("'", "'\\''", StringComparison.Ordinal), "***", StringComparison.Ordinal);
+        var uriEncoded = Uri.EscapeDataString(secret);
+        if (!string.Equals(uriEncoded, secret, StringComparison.Ordinal))
+            text = text.Replace(uriEncoded, "***", StringComparison.OrdinalIgnoreCase);
+        var encoded = EncodeJsonSecret(secret, JavaScriptEncoder.Default);
+        if (!string.Equals(encoded, secret, StringComparison.Ordinal))
+            text = RedactJsonSecret(text, encoded);
+        var relaxed = EncodeJsonSecret(secret, JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+        if (!string.Equals(relaxed, secret, StringComparison.Ordinal) && !string.Equals(relaxed, encoded, StringComparison.Ordinal))
+            text = RedactJsonSecret(text, relaxed);
+        return text.Replace(secret, "***", StringComparison.Ordinal);
+    }
+
+    private static string RedactJsonSecret(string text, string encoded)
+    {
+        var nested = EncodeJsonSecret(encoded, JavaScriptEncoder.Default);
+        if (!string.Equals(nested, encoded, StringComparison.Ordinal))
+            text = text.Replace(nested, "***", StringComparison.Ordinal);
+        var relaxed = EncodeJsonSecret(encoded, JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+        if (!string.Equals(relaxed, nested, StringComparison.Ordinal) && !string.Equals(relaxed, encoded, StringComparison.Ordinal))
+            text = text.Replace(relaxed, "***", StringComparison.Ordinal);
+        return text.Replace(encoded, "***", StringComparison.Ordinal);
+    }
+
+    private static string EncodeJsonSecret(string secret, JavaScriptEncoder encoder)
+    {
+        foreach (var character in secret)
+            if (encoder.WillEncode(character))
+                return JsonEncodedText.Encode(secret, encoder).ToString();
+        return secret;
+    }
+
+    private static string RedactAuthorizationHeaders(string text)
+    {
+        var match = AuthorizationHeaderPattern().Match(text);
+        if (!match.Success)
+            return text;
+        var result = new StringBuilder(text.Length);
+        var copied = 0;
+        do
+        {
+            var valueStart = match.Index + match.Length;
+            result.Append(text.AsSpan(copied, valueStart - copied));
+            var quoteIndex = valueStart;
+            while (quoteIndex < text.Length && text[quoteIndex] == '\\')
+                quoteIndex++;
+            var end = text.IndexOfAny(['\r', '\n'], valueStart);
+            if (end < 0)
+                end = text.Length;
+            var escapeDepth = quoteIndex - valueStart;
+            var quoteWidth = quoteIndex < end && text[quoteIndex] is '"' or '\'' ? 1
+                : escapeDepth > 0 && quoteIndex + 5 <= end
+                    && (text.AsSpan(quoteIndex, 5).Equals("u0022", StringComparison.OrdinalIgnoreCase)
+                        || text.AsSpan(quoteIndex, 5).Equals("u0027", StringComparison.OrdinalIgnoreCase)) ? 5 : 0;
+            if (quoteWidth != 0)
+            {
+                var delimiterWidth = escapeDepth + quoteWidth;
+                result.Append(text.AsSpan(valueStart, delimiterWidth));
+                result.Append("***");
+                for (var index = quoteIndex + quoteWidth; index + quoteWidth <= end; index++)
+                {
+                    if (!text.AsSpan(index, quoteWidth).Equals(text.AsSpan(quoteIndex, quoteWidth), StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var slashes = 0;
+                    for (var previous = index - 1; previous > quoteIndex && text[previous] == '\\'; previous--)
+                        slashes++;
+                    // JSON nesting doubles backslash runs, so only the opening escape depth closes the value.
+                    var escapePeriod = 2 * (escapeDepth + (quoteWidth == 1 ? 1 : 0));
+                    if (slashes % escapePeriod != escapeDepth)
+                        continue;
+                    result.Append(text.AsSpan(index - escapeDepth, delimiterWidth));
+                    end = index + quoteWidth;
+                    break;
+                }
+            }
+            else
+                result.Append("***");
+            copied = end;
+            match = AuthorizationHeaderPattern().Match(text, copied);
+        } while (match.Success);
+        result.Append(text.AsSpan(copied));
+        return result.ToString();
+    }
 
     public ICredentials? Credentials
     {
@@ -575,6 +724,9 @@ public sealed partial class OutboundProxy : IWebProxy, ICredentials, IDisposable
         return route.Bypass.Any(entry => entry == MatchAll || host == entry || host.EndsWith($".{entry}", StringComparison.Ordinal));
     }
 
-    [GeneratedRegex("""(?<=^|://)[^/@\s]*@""")]
+    [GeneratedRegex("""(?:(?<=^|://)[^/@\s]*@|(?<![\w/])[^\s/@"':]+:[^\s/@"']+@)""")]
     private static partial Regex UserInfoPattern();
+
+    [GeneratedRegex("""(?im)(?:\\+u002[27]|\\*["']|\b)(?:Proxy-)?Authorization(?:\\*["']|\\+u002[27])?\s*[:=][ \t]*""")]
+    private static partial Regex AuthorizationHeaderPattern();
 }

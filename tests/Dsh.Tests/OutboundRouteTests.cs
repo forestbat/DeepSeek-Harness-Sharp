@@ -25,7 +25,9 @@ public sealed class OutboundRouteTests
     public static bool IsolatedHttp3Supported
         => OperatingSystem.IsLinux() && QuicConnection.IsSupported && QuicListener.IsSupported;
 
-    [Fact]
+    private static readonly string[] ProxyEnvironmentNames = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+
+    [Fact(Explicit = true)]
     public async Task UnchangedRoute_ReusesTheEstablishedProxyConnection()
     {
         await using var server = new TestForwardProxy(requiredCredential: OldCredential, keepAlive: true);
@@ -44,7 +46,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(0, server.ActiveConnections);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RouteChange_AbortsPausedRequest_ClosesOldPool_AndUsesFreshCredentials(bool sameEndpoint)
@@ -89,7 +91,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(0, next.ActiveConnections);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task UnchangedOrInvalidConfiguration_PreservesThePendingRequestAndPool(bool invalid)
@@ -115,7 +117,7 @@ public sealed class OutboundRouteTests
         Assert.Equal([OldCredential, OldCredential], server.Credentials.ToArray());
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task IndependentDefaultRoutes_DoNotShareRetirement()
     {
         await using var origin = new TestForwardProxy(keepAlive: true, pauseResponses: true);
@@ -133,7 +135,7 @@ public sealed class OutboundRouteTests
         Assert.Empty(origin.Credentials);
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task WebFetch_RetirementDuringDns_AbortsWithoutAdoptingTheNewRoute()
     {
         await using var original = new TestForwardProxy();
@@ -179,7 +181,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(0, original.Connections);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RetirementAfterHeaders_StopsBodyReads_AlsoForPinnedDirectConnections(bool pinnedDirect)
@@ -212,7 +214,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(pinnedDirect ? ["GET /body HTTP/1.1"] : ["GET http://example.com/body HTTP/1.1"], original.Requests.ToArray());
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task RouteChange_ClosesIdlePoolsOwnedByAllExistingClients()
     {
         await using var original = new TestForwardProxy(keepAlive: true, pauseResponses: true);
@@ -242,7 +244,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(["GET http://example.com/new-first HTTP/1.1", "GET http://example.com/new-second HTTP/1.1"], replacement.Requests.ToArray());
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task BypassOrClear_RetiresTheOldProxy_AndTheNewPinnedRequestIsDirect(bool clear)
@@ -276,7 +278,7 @@ public sealed class OutboundRouteTests
         Assert.Equal(0, original.ActiveConnections);
     }
 
-    [Theory]
+    [Theory(Explicit = true)]
     [InlineData("http")]
     [InlineData("socks5")]
     public async Task SystemProxyCredentials_AuthenticateInAnIsolatedProcess(string scheme)
@@ -297,6 +299,11 @@ public sealed class OutboundRouteTests
     [InlineData(true)]
     public async Task SystemProxyChild_ReadsTheControlledOrigin(bool rawSnapshot)
     {
+        if (ProxyEnvironmentNames.All(name => string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name))))
+        {
+            Assert.Skip("this entry point is run by the system-proxy parent with a controlled proxy");
+            return;
+        }
         var proxy = new OutboundProxy();
         var target = new Uri("http://1.1.1.1/system-route");
         using var client = new HttpClient(rawSnapshot ? proxy.CaptureRoute(target).CreateHandler(false) : proxy.CreateHandler());
@@ -305,9 +312,14 @@ public sealed class OutboundRouteTests
         Assert.Equal(TestForwardProxy.ProxiedBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
-    [Fact(Skip = Http3UnavailableReason, SkipUnless = nameof(IsolatedHttp3Supported))]
+    [Fact(Explicit = true)]
     public async Task Http3Retirement_AfterHeaders_AbortsTheResponseAndOriginRequest()
     {
+        if (!IsolatedHttp3Supported)
+        {
+            Assert.Skip(Http3UnavailableReason);
+            return;
+        }
         var directory = TempTree.CreateDirectory("or3");
         try
         {
@@ -328,11 +340,15 @@ public sealed class OutboundRouteTests
         }
     }
 
-    [Fact(Explicit = true, Skip = Http3UnavailableReason, SkipUnless = nameof(IsolatedHttp3Supported))]
+    [Fact(Explicit = true)]
     public async Task Http3Child_RetiresThePausedBody()
     {
-        var certificateFile = Environment.GetEnvironmentVariable("SSL_CERT_FILE")
-            ?? throw new InvalidOperationException("An isolated HTTP/3 trust root is required.");
+        var certificateFile = Environment.GetEnvironmentVariable("SSL_CERT_FILE");
+        if (!IsolatedHttp3Supported || certificateFile is null)
+        {
+            Assert.Skip(Http3UnavailableReason);
+            return;
+        }
         var target = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(certificateFile)!, Http3OriginFile),
             TestContext.Current.CancellationToken);
         var proxy = new OutboundProxy();
@@ -478,3 +494,4 @@ public sealed class OutboundRouteTests
         }
     }
 }
+

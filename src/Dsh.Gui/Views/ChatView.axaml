@@ -140,9 +140,8 @@
         </StackPanel>
         <Button.Flyout>
           <MenuFlyout Placement="BottomEdgeAlignedRight">
-            <MenuItem Header="标准模式（每次审批弹窗）" Command="{Binding SetModeCommand}" CommandParameter="standard" />
+            <MenuItem Header="标准模式" Command="{Binding SetModeCommand}" CommandParameter="standard" />
             <MenuItem Header="计划模式（/plan）" Command="{Binding SetModeCommand}" CommandParameter="plan" />
-            <MenuItem Header="Full access（自动放行，黑名单仍生效）" Command="{Binding SetModeCommand}" CommandParameter="full" />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
@@ -359,7 +358,7 @@
                  PlaceholderText="{Binding Composer.Placeholder}"
                  Text="{Binding Composer.Input}" />
 
-        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
+        <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="0,8,0,0">
           <Button Classes="Chip" ToolTip.Tip="附件与引用">
             <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
             <Button.Flyout>
@@ -387,16 +386,7 @@
               </Flyout>
             </Button.Flyout>
           </Button>
-          <Button Grid.Column="2" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="权限">
-            <TextBlock Text="{Binding Composer.PermissionLabel}" />
-            <Button.Flyout>
-              <MenuFlyout Placement="TopEdgeAlignedLeft">
-                <MenuItem Header="Ask（每次审批）" Command="{Binding SetPermissionCommand}" CommandParameter="ask" />
-                <MenuItem Header="Full access（自动放行）" Command="{Binding SetPermissionCommand}" CommandParameter="full" />
-              </MenuFlyout>
-            </Button.Flyout>
-          </Button>
-          <Button Grid.Column="3" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="模型">
+          <Button Grid.Column="2" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="模型">
             <TextBlock Text="{Binding Composer.ModelLabel}" TextTrimming="CharacterEllipsis" MaxWidth="220" />
             <Button.Flyout>
               <Flyout Placement="Top" Opened="OnModelFlyoutOpened">
@@ -420,7 +410,7 @@
               </Flyout>
             </Button.Flyout>
           </Button>
-          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="推理强度">
+          <Button Grid.Column="3" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="推理强度">
             <TextBlock Text="{Binding Composer.ReasoningLabel}" />
             <Button.Flyout>
               <Flyout Placement="Top" Opened="OnReasoningFlyoutOpened">
@@ -440,7 +430,7 @@
               </Flyout>
             </Button.Flyout>
           </Button>
-          <Button Grid.Column="5" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="会话操作">
+          <Button Grid.Column="4" Classes="Chip" Margin="6,0,0,0" ToolTip.Tip="会话操作">
             <TextBlock Text="会话操作" />
             <Button.Flyout>
               <MenuFlyout Placement="TopEdgeAlignedLeft">
@@ -450,16 +440,16 @@
               </MenuFlyout>
             </Button.Flyout>
           </Button>
-          <TextBlock Grid.Column="6" Text="Enter 发送 · Shift+Enter 换行 · / 命令 · @ 引用" Classes="Tertiary"
+          <TextBlock Grid.Column="5" Text="Enter 发送 · Shift+Enter 换行 · / 命令 · @ 引用" Classes="Tertiary"
                      VerticalAlignment="Center" Margin="10,0,0,0" />
-          <Button Grid.Column="7" Classes="Send" Command="{Binding SubmitCommand}"
+          <Button Grid.Column="6" Classes="Send" Command="{Binding SubmitCommand}"
                   IsVisible="{Binding !IsBusy}"
                   IsEnabled="{Binding Composer.CanSubmit}"
                   ToolTip.Tip="发送 (Enter)">
             <Path Classes="Icon" Width="16" Height="16" Stroke="{DynamicResource Brush.Text.OnAccent}"
                   Data="{StaticResource Icon.Send}" />
           </Button>
-          <Button Grid.Column="7" Classes="Send" Command="{Binding CancelTaskCommand}"
+          <Button Grid.Column="6" Classes="Send" Command="{Binding CancelTaskCommand}"
                   IsVisible="{Binding IsBusy}"
                   ToolTip.Tip="停止">
             <Path Classes="Icon" Width="14" Height="14" Stroke="{DynamicResource Brush.Text.OnAccent}"

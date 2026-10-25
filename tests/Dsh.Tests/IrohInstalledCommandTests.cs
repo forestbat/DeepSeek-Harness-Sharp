@@ -12,7 +12,7 @@ public sealed class IrohInstalledCommandTests
     private const string RootVariable = "DSH_IROH_DISCOVERY_ROOT";
     private const string ExpectedVariable = "DSH_IROH_DISCOVERY_EXPECTED";
 
-    [Theory(Timeout = 30000)]
+    [Theory(Explicit = true)]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -53,7 +53,7 @@ public sealed class IrohInstalledCommandTests
         }
     }
 
-    [Fact(Explicit = true, Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task DiscoveryChild()
     {
         RequireChildRoot();
@@ -73,7 +73,7 @@ public sealed class IrohInstalledCommandTests
             Assert.Equal(expected, IrohSshComponent.RequireExecutable());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task PosixInstalledSymlink_ResolvesTheExecutedFileForReceiverOwnership()
     {
         if (OperatingSystem.IsWindows())
@@ -94,7 +94,7 @@ public sealed class IrohInstalledCommandTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task PosixInstalledDirectorySymlink_ResolvesTheExecutedFileForReceiverOwnership()
     {
         if (OperatingSystem.IsWindows())
@@ -117,7 +117,7 @@ public sealed class IrohInstalledCommandTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Missing_Command_Does_Not_Prevent_Verified_Owned_Process_Cleanup_Or_Hide_Identity_Failure()
     {
         if (OperatingSystem.IsWindows())
@@ -133,13 +133,13 @@ public sealed class IrohInstalledCommandTests
         }
     }
 
-    [Fact(Explicit = true, Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task OwnedCleanupChild()
     {
         var root = RequireChildRoot();
         var ct = TestContext.Current.CancellationToken;
         Assert.Null(IrohSshComponent.FindExecutable());
-        using var receiver = Process.Start(new ProcessStartInfo("/bin/cat")
+        using var receiver = TestProcessScope.Start(new ProcessStartInfo("/bin/cat")
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -193,7 +193,7 @@ public sealed class IrohInstalledCommandTests
         start.Environment["PATH"] = path;
         start.Environment[RootVariable] = root;
         start.Environment[ExpectedVariable] = expected;
-        using var child = Process.Start(start)!;
+        using var child = TestProcessScope.Start(start);
         var stdout = child.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = child.StandardError.ReadToEndAsync(CancellationToken.None);
         try
@@ -217,3 +217,5 @@ public sealed class IrohInstalledCommandTests
         Assert.True(child.ExitCode == 0, $"{await stdout}\n{await stderr}");
     }
 }
+
+

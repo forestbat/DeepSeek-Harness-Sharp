@@ -53,7 +53,7 @@ public sealed class ToonLlmExperimentTests
         foreach (var prompt in prompts)
         {
             agent.Followup(MessageFactory.CreateUserText(prompt));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(180), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         }
 
         var events = agent.Session.SnapshotEvents();

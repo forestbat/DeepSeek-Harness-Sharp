@@ -5,7 +5,6 @@ using Dsh.ScriptHost;
 
 namespace Dsh.Tests;
 
-[Collection(SerialProcessCollection.Name)]
 public sealed class PtyConsoleResizeTests
 {
     internal const string ProbeArgument = "--console-resize-probe";

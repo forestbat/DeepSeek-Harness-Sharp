@@ -54,14 +54,14 @@ internal sealed class HarnessHostFixture : IAsyncDisposable
         var ptyDaemon = new PtyDaemon(new PtyHost(), socketPath, portFile);
         await ptyDaemon.StartAsync(cancellationToken);
         var endpoint = new HostPtyDaemon(socketPath, portFile, _ => Task.CompletedTask);
-        var fixture = new HarnessHostFixture(root, ptyDaemon, endpoint, await GuiTestEnvironment.CreateAsync(), decorateBackend);
+        var fixture = new HarnessHostFixture(root, ptyDaemon, endpoint, await GuiTestEnvironment.CreateIsolatedAsync(), decorateBackend);
         await fixture.StartHostAsync(cancellationToken);
         return fixture;
     }
 
     public async Task<RemoteHostClient> ConnectAsync(string clientName, CancellationToken cancellationToken)
     {
-        var stream = await RemoteHostListener.ConnectAsync(Root, cancellationToken);
+        var stream = await RemoteHostConnector.ConnectAsync(Root, cancellationToken);
         var client = await RemoteHostClient.ConnectAsync(stream, null, clientName, cancellationToken);
         _clients.Add(client);
         return client;
@@ -90,7 +90,7 @@ internal sealed class HarnessHostFixture : IAsyncDisposable
         foreach (var client in _clients)
             await client.DisposeAsync();
         await StopHostAsync();
-        Environment.Dispose();
+        await Environment.DisposeAsync();
         await _ptyDaemon.DisposeAsync();
         TempTree.Delete(Root);
     }
@@ -123,3 +123,6 @@ internal sealed class HarnessHostFixture : IAsyncDisposable
         (_serving, _listener, _backend) = (null, null, null);
     }
 }
+
+
+

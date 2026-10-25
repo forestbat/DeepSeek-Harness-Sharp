@@ -21,12 +21,13 @@
       <TextBlock Classes="Title" Text="{Binding Title}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1" MinWidth="140" ItemsSource="{Binding MachineNames}" SelectedItem="{Binding Machine, Mode=TwoWay}"
                 ToolTip.Tip="机器" />
-      <TextBox Grid.Column="2" Classes="Mono" Text="{Binding Path, Mode=TwoWay}" PlaceholderText="路径（~ 为该机器上的家目录）">
+      <TextBox Grid.Column="2" Classes="Mono" Text="{Binding Path, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+               IsReadOnly="{Binding IsPathReadOnly}" PlaceholderText="路径（~ 为该机器上的家目录）">
         <TextBox.KeyBindings>
-          <KeyBinding Gesture="Enter" Command="{Binding OpenCommand}" />
+          <KeyBinding Gesture="Enter" Command="{Binding PickAndOpenCommand}" />
         </TextBox.KeyBindings>
       </TextBox>
-      <Button Grid.Column="3" Classes="Primary" Content="打开" Command="{Binding OpenCommand}" />
+      <Button Grid.Column="3" Classes="Primary" Content="打开" Command="{Binding PickAndOpenCommand}" IsEnabled="{Binding !IsOpening}" />
     </Grid>
     <TextBlock Grid.Row="1" Classes="Tertiary" Margin="12" Text="{Binding Status}" TextWrapping="Wrap"
                IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

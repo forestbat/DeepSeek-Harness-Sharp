@@ -66,34 +66,24 @@ public sealed class HarnessSettings
     private string? _savedDocument;
     private string? _savedPath;
 
-    private const string MinimalSettingsTemplate = """
-        global_default_model: deepseek-official/deepseek-v4-flash
-        compaction_model: deepseek-official/deepseek-v4-flash
-        plugins:
-          "@deepseek-ai/dsh-memory": false
-          "@deepseek-ai/dsh-checkpoints": false
-          "@deepseek-ai/dsh-toon": false
-        """;
-
     public static string LoadTemplate(string? baseDirectory = null)
     {
         var templatePath = Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "Profiles", "Templates", "settings.yaml");
-        return File.Exists(templatePath) ? File.ReadAllText(templatePath) : MinimalSettingsTemplate;
+        if (!File.Exists(templatePath))
+            throw new FileNotFoundException("找不到随包发布的 settings.yaml 模板; 安装不完整, 请重新安装或修复安装。", templatePath);
+        return File.ReadAllText(templatePath);
     }
 
     public static HarnessSettings Load(HarnessHome home)
     {
         Directory.CreateDirectory(home.Root);
         using var transaction = new SettingsWriteLock(home.SettingsFile);
-        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath, initialize: true);
+        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
     }
 
-    private static HarnessSettings LoadSnapshot(string path, string canonicalPath, bool initialize)
+    private static HarnessSettings LoadSnapshot(string path, string canonicalPath)
     {
-        var exists = File.Exists(path);
-        var text = exists ? ReadSettingsTextShared(path) : LoadTemplate();
-        if (!exists && initialize)
-            WriteAtomic(path, text);
+        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
         var settings = Parse(text);
         settings.Plugins = PluginSettingsSection.ParseDocument(text);
         settings._savedDocument = text;
@@ -112,7 +102,7 @@ public sealed class HarnessSettings
     public static bool Update(HarnessHome home, Func<HarnessSettings, bool> update)
     {
         using var transaction = new SettingsWriteLock(home.SettingsFile);
-        var settings = LoadSnapshot(home.SettingsFile, transaction.CanonicalPath, initialize: false);
+        var settings = LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
         if (!update(settings))
             return false;
         Directory.CreateDirectory(home.Root);
@@ -143,8 +133,8 @@ public sealed class HarnessSettings
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .WithQuotingNecessaryStrings()
             .Build();
-        var text = serializer.Serialize(this);
         var existing = File.Exists(path) ? ReadSettingsTextShared(path) : _savedPath == canonicalPath ? _savedDocument : null;
+        var text = serializer.Serialize(this);
         if (existing is null)
         {
             WriteAtomic(path, text);

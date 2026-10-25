@@ -15,9 +15,9 @@ internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime ru
         var execution = commands is null ? null : await commands.Execute(runtime.Require(sessionId), line).ConfigureAwait(false);
         return execution?.Result switch
         {
-            CommandResult.Success result => new(true, result.Text, result.FollowupPrompt),
-            CommandResult.Error result => new(true, result.Text, result.FollowupPrompt),
-            _ => new(false, null, null),
+            CommandResult.Success result => new(true, result.Text, result.FollowupPrompt, true),
+            CommandResult.Error result => new(true, result.Text, result.FollowupPrompt, false),
+            _ => new(false, null, null, false),
         };
     }
 

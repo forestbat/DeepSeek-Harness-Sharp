@@ -9,7 +9,7 @@ namespace Dsh.Tests;
 
 public sealed class FleetBootstrapTests
 {
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task SilentPeerBeforeInitialSnapshots_SettlesDisconnectedAfterHeartbeatTimeout(bool reconnect)
@@ -35,12 +35,12 @@ public sealed class FleetBootstrapTests
                 HeartbeatTimeout = TimeSpan.FromMilliseconds(250),
             });
             connection.Start();
-            await connection.WaitSettledAsync(lifetime.Token).WaitAsync(TimeSpan.FromSeconds(10), lifetime.Token);
+            await connection.WaitSettledAsync(lifetime.Token).WaitAsync(TimeSpan.FromSeconds(5), lifetime.Token);
             Assert.Equal(MachineConnectionState.Offline, connection.State);
             Assert.NotNull(connection.Info);
             if (reconnect)
             {
-                using var retry = await listener.AcceptAsync(lifetime.Token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), lifetime.Token);
+                using var retry = await listener.AcceptAsync(lifetime.Token).AsTask().WaitAsync(TimeSpan.FromSeconds(5), lifetime.Token);
             }
         }
         finally
@@ -67,9 +67,9 @@ public sealed class FleetBootstrapTests
         {
             string[] capabilities = [HostProtocol.PendingBroadcastCapability, HostProtocol.SessionRegistryCapability];
             if (message.Method == HostProtocol.MethodHello)
-                return JsonSerializer.SerializeToElement(new HostHelloResponse(true, HostProtocol.Version, RemoteHostServer.ReleaseVersion, null, capabilities), HostProtocolJsonContext.Default.HostHelloResponse);
+                return JsonSerializer.SerializeToElement(new HostHelloResponse(true, HostProtocol.Version, HostProtocol.ReleaseVersion, null, capabilities), HostProtocolJsonContext.Default.HostHelloResponse);
             if (message.Method == HostProtocol.MethodInfo)
-                return JsonSerializer.SerializeToElement(new HostInfo(HostProtocol.Version, RemoteHostServer.ReleaseVersion, "linux", root, capabilities), HostProtocolJsonContext.Default.HostInfo);
+                return JsonSerializer.SerializeToElement(new HostInfo(HostProtocol.Version, HostProtocol.ReleaseVersion, "linux", root, capabilities), HostProtocolJsonContext.Default.HostInfo);
             if (message.Method == HostProtocol.MethodPing)
             {
                 await Task.Delay(Timeout.Infinite, requestCancellation);
@@ -82,3 +82,4 @@ public sealed class FleetBootstrapTests
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 }
+

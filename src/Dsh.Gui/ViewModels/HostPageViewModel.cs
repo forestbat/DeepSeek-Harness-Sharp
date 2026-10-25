@@ -16,20 +16,29 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
 {
     private readonly FleetWorkspace _fleet;
     private readonly string _capability;
-    private readonly Func<IRemoteHost, string, string, RemotePathStyle, Task<OperationViewModel>> _build;
+    private readonly Func<RemoteHostClient, string, string, RemotePathStyle, Task<OperationViewModel>> _build;
+    private readonly Func<Task<string?>>? _folderPicker;
+    private readonly Action<string, string>? _pathSelected;
     private CancellationTokenSource? _run;
     private MachineConnection? _connection;
 
     /** build receives the connected client, machine, path and the connection's already-known path style. */
     public HostPageViewModel(
-        FleetWorkspace fleet, string title, string capability, string machine, string path, Func<IRemoteHost, string, string, RemotePathStyle, Task<OperationViewModel>> build)
+        FleetWorkspace fleet,
+        string title,
+        string capability,
+        string machine,
+        string path,
+        Func<RemoteHostClient, string, string, RemotePathStyle, Task<OperationViewModel>> build,
+        Func<Task<string?>>? folderPicker = null,
+        Action<string, string>? pathSelected = null)
     {
-        (_fleet, _capability, _build, Title) = (fleet, capability, build, title);
+        (_fleet, _capability, _build, Title, _folderPicker, _pathSelected) = (fleet, capability, build, title, folderPicker, pathSelected);
         _machine = machine;
         _path = path;
         RefreshMachineNames();
         _fleet.Changed += OnFleetChanged;
-        Open();
+        _ = OpenAsync();
     }
 
     public string Title { get; }
@@ -42,6 +51,8 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _path;
 
+    public bool IsPathReadOnly => _folderPicker is not null;
+
     [ObservableProperty]
     private OperationViewModel? _content;
 
@@ -49,15 +60,38 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _status;
 
+    [ObservableProperty]
+    private bool _isOpening;
+
     /** Opens the chosen machine and path, dropping the current content. */
     [RelayCommand]
-    private void Open()
+    private async Task OpenAsync()
     {
+        if (IsOpening)
+            return;
         _run?.Cancel();
         _run?.Dispose();
         _run = new CancellationTokenSource();
         _connection = _fleet.Find(Machine);
-        _ = RunAsync(_connection, Machine, Path.Trim(), _run.Token);
+        IsOpening = true;
+        await RunAsync(_connection, Machine, Path.Trim(), _run.Token);
+    }
+
+    /** The visible Open button: Git picks a repository folder instead of asking for a typed path. */
+    [RelayCommand]
+    private async Task PickAndOpenAsync()
+    {
+        if (_folderPicker is null)
+        {
+            await OpenAsync();
+            return;
+        }
+        var path = await _folderPicker();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+        Path = path;
+        _pathSelected?.Invoke(Machine, path);
+        await OpenAsync();
     }
 
     public void Dispose()
@@ -75,20 +109,32 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
         if (connection is null)
         {
             Status = $"没有名为 {machine} 的机器";
+            IsOpening = false;
             return;
         }
         if (path.Length == 0)
         {
-            Status = "请输入路径后打开";
+            Status = _folderPicker is null ? "请输入路径后打开" : "点击“打开”选择 Git 仓库目录";
+            IsOpening = false;
             return;
         }
         try
         {
+            connection.Start();
             while (!cancellationToken.IsCancellationRequested)
                 await ServeLinkAsync(connection, machine, path, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+        }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                Status = $"打开失败: {error.Message}";
+        }
+        finally
+        {
+            IsOpening = false;
         }
     }
 
@@ -97,7 +143,15 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
     {
         Content = null;
         Status = $"等待 {machine} 连接…";
-        var lease = await connection.WaitConnectedAsync(cancellationToken);
+        HostLease lease;
+        try
+        {
+            lease = await connection.WaitConnectedAsync(cancellationToken);
+        }
+        finally
+        {
+            IsOpening = false;
+        }
         if (lease.Client.Supports(_capability))
         {
             var style = RemotePaths.StyleFor(connection.Info!.Platform);
@@ -122,7 +176,7 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
     {
         RefreshMachineNames();
         if (!ReferenceEquals(_fleet.Find(Machine), _connection))
-            Open();
+            _ = OpenAsync();
     }
 
     private void RefreshMachineNames()

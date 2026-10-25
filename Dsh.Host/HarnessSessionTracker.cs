@@ -35,7 +35,7 @@ internal sealed class HarnessSessionTracker : IDisposable
         var header = agent.Session.Header;
         var events = agent.Session.SnapshotEvents();
         _tracked[agent.Id.Value] = 0;
-        _registry.Register(new RemoteHostSession(
+        _registry.Register(new RemoteSessionSummary(
             agent.Id.Value,
             HostSessionKinds.Harness,
             HostAgentKinds.Dsharp,
@@ -88,3 +88,4 @@ internal sealed class HarnessSessionTracker : IDisposable
         _tracked.Clear();
     }
 }
+

@@ -96,7 +96,7 @@ public static class SessionPresentation
     }
 
     /** Attention is backed by real unanswered requests, never terminal screen text. */
-    public static bool NeedsAttention(RemoteHostSession session)
+    public static bool NeedsAttention(RemoteSessionSummary session)
         => session.PendingCount > 0;
 
     private static string Abbreviate(string kind)

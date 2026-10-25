@@ -77,7 +77,7 @@ internal static class RealHostProcesses
             WorkingDirectory = root,
         };
         info.Environment[HomeVariable] = root;
-        var process = Process.Start(info) ?? throw new InvalidOperationException("failed to start dsharp host serve");
+        var process = TestProcessScope.Start(info);
         process.OutputDataReceived += (_, args) =>
         {
             if (args.Data is { } line)
@@ -152,8 +152,7 @@ internal static class RealHostProcesses
     /** The output lines of a process listing command such as ps or netstat. */
     internal static List<string> ProcessListing(string fileName, params string[] arguments)
     {
-        using var process = Process.Start(new ProcessStartInfo(fileName, arguments) { UseShellExecute = false, RedirectStandardOutput = true })
-            ?? throw new InvalidOperationException($"failed to start {fileName}");
+        using var process = TestProcessScope.Start(new ProcessStartInfo(fileName, arguments) { UseShellExecute = false, RedirectStandardOutput = true });
         var lines = process.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
         process.WaitForExit();
         return lines;
@@ -201,7 +200,7 @@ internal static class RealHostProcesses
 internal static class FleetCliProcess
 {
     /** Remote commands may deploy or start a host first. */
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     public sealed record Result(int ExitCode, string Output, string Error);
 
@@ -216,7 +215,7 @@ internal static class FleetCliProcess
             WorkingDirectory = home,
         };
         info.Environment[HarnessHome.HomeEnv] = home;
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("failed to start dsharp");
+        using var process = TestProcessScope.Start(info);
         process.StandardInput.Close();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(Timeout);

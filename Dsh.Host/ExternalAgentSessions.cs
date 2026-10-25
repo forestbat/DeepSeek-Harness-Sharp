@@ -67,7 +67,7 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
 
     public bool IsAcp(string sessionId) => Registry.Get(sessionId)?.Kind == HostSessionKinds.Acp;
 
-    public async Task<RemoteHostSession> StartAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> StartAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
     {
         var directory = await PrepareDirectoryAsync(request.ProjectPath, request.Worktree, cancellationToken).ConfigureAwait(false);
         var adapter = AdapterFor(request);
@@ -80,7 +80,7 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
         };
         var launch = new HostAgentLaunch(command.Executable, command.Arguments, request.Environment);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var registration = new RemoteHostSession($"acp-{Guid.NewGuid():N}",
+        var registration = new RemoteSessionSummary($"acp-{Guid.NewGuid():N}",
             mode == RemoteAgentModes.Acp ? HostSessionKinds.Acp : HostSessionKinds.External,
             adapter.Kind, directory, request.Title ?? adapter.DisplayName, HostSessionStatuses.Idle, now, now, 0, null);
         return mode == RemoteAgentModes.Acp
@@ -111,7 +111,7 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
      * Terminal-mode agents start again with their adapter's "continue the latest session" arguments in the same directory and come back
      * as a new session (the PTY daemon names PTYs); the exited record stays as it was.
      */
-    public async Task<RemoteHostSession> ResumeAsync(string sessionId, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> ResumeAsync(string sessionId, CancellationToken cancellationToken)
     {
         var record = Registry.Get(sessionId) ?? throw new InvalidOperationException($"unknown agent session: {sessionId}");
         if (record.Status != HostSessionStatuses.Exited)
@@ -125,7 +125,7 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
     }
 
 
-    private async Task<RemoteHostSession> StartTerminalAsync(RemoteHostSession record, HostAgentLaunch launch, int? columns, int? rows, CancellationToken cancellationToken)
+    private async Task<RemoteSessionSummary> StartTerminalAsync(RemoteSessionSummary record, HostAgentLaunch launch, int? columns, int? rows, CancellationToken cancellationToken)
     {
         var executable = AgentExecutableLocator.Resolve(launch.Executable)
             ?? throw new FileNotFoundException($"agent executable not found on PATH: {launch.Executable}", launch.Executable);
@@ -135,7 +135,7 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
     }
 
     /** Registered only after the agent accepted the session, so a failed start leaves nothing behind. */
-    private async Task<RemoteHostSession> StartAcpAsync(RemoteHostSession record, HostAgentLaunch launch, string? initialPrompt, CancellationToken cancellationToken)
+    private async Task<RemoteSessionSummary> StartAcpAsync(RemoteSessionSummary record, HostAgentLaunch launch, string? initialPrompt, CancellationToken cancellationToken)
     {
         var command = new AgentCommand(launch.Executable, launch.Arguments);
         var session = await AcpAgentSession.StartAsync(record, command, launch.Environment, launch.AcpSessionId, _ctx, _services, cancellationToken).ConfigureAwait(false);
@@ -203,3 +203,4 @@ internal sealed class ExternalAgentSessions : IAsyncDisposable
         }
     }
 }
+

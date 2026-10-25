@@ -63,6 +63,7 @@ public class PluginSchedulerTests
         var provider = ctx.Scheduler.Find("provider-1")!;
         await provider.DeactivateAsync();
         await ctx.Scheduler.SettleAsync();
+        Assert.Equal(1, applies);
         Assert.Equal(ActivationState.Pending, consumer.State);
         Assert.Null(consumer.Ctx.Get("svc"));
 
@@ -106,7 +107,11 @@ public class PluginSchedulerTests
         try
         {
             // A user Apply callback may be slow; publishing another activation cannot wait while holding the scheduler's registry lock.
-            Assert.Equal(ActivationState.Active, (await independent.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).State);
+            var activation = await independent.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await activation.WaitAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Equal(ActivationState.Active, activation.State);
+            // 无依赖插件必须与仍在 Apply 的插件并行完成, 而不是被它串行化。
+            Assert.Equal(ActivationState.Activating, ctx.Scheduler.Find("provider")!.State);
         }
         finally
         {

@@ -16,10 +16,10 @@ public sealed class FleetLocalForwardEgressTests
 {
     private const string Target = "http://example.com/";
     private const string Credential = "synthetic-forward-user:synthetic-forward-secret";
-    private static readonly TimeSpan SignalTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SignalTimeout = TimeSpan.FromSeconds(5);
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory(Timeout = 90000)]
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task OccupiedPort_FailsWithoutChangingPortOrKillingTheIncumbent_AndFreshOperationCanSucceed(bool candidateHandoffRace)
@@ -111,7 +111,7 @@ public sealed class FleetLocalForwardEgressTests
         AssertPortCanRebind(freshPort);
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("ForkAfterAuthentication=yes")]
     [InlineData("ClearAllForwardings=yes")]
     [InlineData("ForkAfterAuthentication=yes", "ClearAllForwardings=yes")]
@@ -148,7 +148,7 @@ public sealed class FleetLocalForwardEgressTests
         AssertPortCanRebind(port);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task ExplicitDisposal_WithObstructedOwnedSecret_CanRetryRemovalAndReapAllResources()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -229,7 +229,7 @@ public sealed class FleetLocalForwardEgressTests
         }
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task CancellingPendingAuthentication_ReapsOwnedSshAndAskpass_WithoutOpeningProxy()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -262,7 +262,7 @@ public sealed class FleetLocalForwardEgressTests
         Assert.Equal(0, forwarding.Connections);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task CancellingOnePendingAuthentication_PreservesTheOtherConsumersSharedStartup()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -300,7 +300,7 @@ public sealed class FleetLocalForwardEgressTests
         AssertPortCanRebind(port);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task ConcurrentConsumers_ShareOneSsh_AndCancellationOnlyReleasesItsOwnSocket()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -359,7 +359,7 @@ public sealed class FleetLocalForwardEgressTests
         Assert.Equal([$"GET {Target}cancelled-consumer HTTP/1.1", $"GET {Target}surviving-consumer HTTP/1.1"], forwarding.Requests.ToArray());
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand", false)]
     [InlineData("proxyCommand", true)]
     [InlineData("localForward", false)]
@@ -425,7 +425,7 @@ public sealed class FleetLocalForwardEgressTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact]
     public async Task BorrowedRouteLeases_SwitchClearAndRepeatedDisposal_RetireOnlyTheOwnedGeneration()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -513,7 +513,7 @@ public sealed class FleetLocalForwardEgressTests
         }
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory]
     [InlineData("proxyCommand", "http")]
     [InlineData("proxyCommand", "socks5")]
     [InlineData("localForward", "http")]
@@ -550,7 +550,7 @@ public sealed class FleetLocalForwardEgressTests
         Assert.Equal(1, forwarding.Connections);
     }
 
-    [Theory(Explicit = true, Timeout = 90000)]
+    [Theory(Explicit = true, Timeout = 5000)]
     [InlineData("proxyCommand")]
     [InlineData("localForward")]
     public async Task PublicHttpsRedirect_ToPrivateDestination_IsBlockedBeforeAnotherProxyRequest(string mode)
@@ -579,7 +579,7 @@ public sealed class FleetLocalForwardEgressTests
             $"CONNECT {(address.Family == 6 ? $"[{address.Address}]" : address.Address)}:443 HTTP/1.1"));
     }
 
-    [Fact(Explicit = true, Timeout = 90000)]
+    [Fact(Explicit = true, Timeout = 5000)]
     public async Task LocalForward_ProductionWebFetchExampleDomain_UsesValidatedTlsAndOnlyLoopbackListener()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -625,6 +625,7 @@ public sealed class FleetLocalForwardEgressTests
     internal static void AssertPortCanRebind(int port)
     {
         using var rebound = new TcpListener(IPAddress.Loopback, port);
+        rebound.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         rebound.Start();
         Assert.Equal(new IPEndPoint(IPAddress.Loopback, port), rebound.LocalEndpoint);
     }

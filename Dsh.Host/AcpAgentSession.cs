@@ -57,7 +57,7 @@ internal sealed class AcpAgentSession : IAsyncDisposable
      * whose history replay is not recorded again because the transcript already holds it).
      */
     public static async Task<AcpAgentSession> StartAsync(
-        RemoteHostSession registration,
+        RemoteSessionSummary registration,
         AgentCommand command,
         IReadOnlyDictionary<string, string>? environment,
         string? resumeId,
@@ -70,7 +70,7 @@ internal sealed class AcpAgentSession : IAsyncDisposable
         try
         {
             var client = process.Client;
-            var info = await client.InitializeAsync(new AcpImplementationInfo("dsharp-host", RemoteHostServer.ReleaseVersion), cancellationToken).WaitAsync(HandshakeTimeout, cancellationToken).ConfigureAwait(false);
+            var info = await client.InitializeAsync(new AcpImplementationInfo("dsharp-host", HostProtocol.ReleaseVersion), cancellationToken).WaitAsync(HandshakeTimeout, cancellationToken).ConfigureAwait(false);
             var opened = resumeId is null
                 ? client.NewSessionAsync(workingDirectory, cancellationToken)
                 : info.CanResumeSession ? client.ResumeSessionAsync(resumeId, workingDirectory, cancellationToken)
@@ -177,3 +177,5 @@ internal sealed class AcpAgentSession : IAsyncDisposable
         _lifetime.Dispose();
     }
 }
+
+

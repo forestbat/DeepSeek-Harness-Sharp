@@ -43,11 +43,15 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
     /** Attaches to an existing PTY (an external agent's or a terminal session's; the session id is the PTY id). */
     public static RemotePtyConnection Attach(MachineConnection machine, string ptyId) => new(machine, ptyId, ownsPty: false);
 
-    /** Starts a new PTY on the machine and attaches to it; disposing the connection stops it. */
+    /**
+     * Starts an owned PTY.
+     * The caller can cancel connection acquisition; once acquired, the link lifetime owns the create response so cancellation cannot lose a newly created PTY before its owner receives it.
+     */
     public static async Task<RemotePtyConnection> StartAsync(MachineConnection machine, RemotePtyStartRequest request, CancellationToken cancellationToken)
     {
         var lease = await machine.WaitConnectedAsync(cancellationToken);
-        var ptyId = await lease.Client.Pty.StartPtyAsync(request, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var ptyId = await lease.Client.Pty.StartPtyAsync(request, lease.Lifetime);
         return new RemotePtyConnection(machine, ptyId, ownsPty: true);
     }
 

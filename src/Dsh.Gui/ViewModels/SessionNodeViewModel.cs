@@ -49,4 +49,12 @@ public sealed partial class SessionNodeViewModel : ObservableObject
 
     public bool HasMatchSnippet => MatchSnippet.Length > 0;
 
+    /** 只在重命名时给侧栏模板一个非空 Content, 否则每行都会实例化一个隐藏 TextBox。 */
+    public SessionNodeViewModel? RenameEditor => IsRenaming ? this : null;
+
+    partial void OnIsRenamingChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(RenameEditor));
+    }
 }

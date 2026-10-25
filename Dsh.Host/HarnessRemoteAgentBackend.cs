@@ -12,12 +12,12 @@ internal sealed class HarnessRemoteAgentBackend(
     public Task<IReadOnlyList<RemoteAgentCatalogEntry>> AgentCatalogAsync(CancellationToken cancellationToken)
         => ExternalAgentSessions.CatalogAsync(cancellationToken);
 
-    public async Task<RemoteHostSession> StartAgentAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> StartAgentAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
     {
         if (request.AgentKind != HostAgentKinds.Dsharp)
             return await agents.StartAsync(request, cancellationToken).ConfigureAwait(false);
         var directory = await ExternalAgentSessions.PrepareDirectoryAsync(request.ProjectPath, request.Worktree, cancellationToken).ConfigureAwait(false);
-        var created = await session.CreateSessionAsync(directory, request.Selection, request.Provider, cancellationToken).ConfigureAwait(false);
+        var created = await session.CreateSessionAsync(directory, cancellationToken).ConfigureAwait(false);
         if (request.InitialPrompt is { } prompt)
             await session.SendMessageAsync(created.Id, prompt, [], cancellationToken).ConfigureAwait(false);
         return runtime.Sessions.Get(created.Id) ?? throw new InvalidOperationException($"session {created.Id} was not registered");
@@ -58,11 +58,11 @@ internal sealed class HarnessRemoteAgentBackend(
         }
     }
 
-    public async Task<RemoteHostSession> ResumeAgentAsync(string sessionId, CancellationToken cancellationToken)
+    public async Task<RemoteSessionSummary> ResumeAgentAsync(string sessionId, CancellationToken cancellationToken)
     {
         if (KindOf(sessionId) != HostSessionKinds.Harness)
             return await agents.ResumeAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        await session.ResumeSessionAsync(sessionId, null, null, cancellationToken).ConfigureAwait(false);
+        await session.ResumeSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
         return runtime.Sessions.Get(sessionId) ?? throw new InvalidOperationException($"session {sessionId} was not registered");
     }
 

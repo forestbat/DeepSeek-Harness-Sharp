@@ -52,11 +52,9 @@ public static class GuiRunner
         Func<string, CancellationToken, Task>? startLocalHost)
     {
         var fleet = FleetWorkspace.ForContext(app.Ctx, app.Home, startLocalHost);
-        var model = new HarnessModelChoice(
-            new Dsh.RemoteHost.RemoteModelSelection(app.Provider, app.Model, app.ReasoningEffort), null);
         try
         {
-            return await HostChatSession.OpenAsync(fleet, cwd, resumeSessionId, model);
+            return await HostChatSession.OpenAsync(fleet, cwd, resumeSessionId);
         }
         catch
         {

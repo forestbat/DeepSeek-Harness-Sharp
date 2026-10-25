@@ -14,6 +14,7 @@ namespace Dsh.Tests;
  * Hub mode of the web bridge over the shared real host/PTY fixture: two harness homes stand in for two machines, plus an unreachable SSH machine whose spec carries secrets.
  * Covers the machine list endpoint (login, states, no secrets), choosing the target machine of a WebSocket, and refusing unknown or offline machines.
  */
+[Collection(SerialProcessCollection.Name)]
 public sealed class WebBridgeHubTests
 {
     internal const string SecondMachine = "second";
@@ -27,7 +28,7 @@ public sealed class WebBridgeHubTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 120000)]
+    [Fact]
     public async Task Machines_RequireLogin_AndListEveryMachineWithoutSecrets()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -40,13 +41,13 @@ public sealed class WebBridgeHubTests
 
         Assert.Equal([MachineSpec.LocalName, SecondMachine, OfflineMachine], listed.Select(machine => machine.GetProperty("Machine").GetString()));
         Assert.Equal([MachineKinds.Local, MachineKinds.Local, MachineKinds.Ssh], listed.Select(machine => machine.GetProperty("Kind").GetString()));
-        Assert.All(listed.Take(2), machine => Assert.Equal(RemoteHostServer.ReleaseVersion, machine.GetProperty("HostVersion").GetString()));
+        Assert.All(listed.Take(2), machine => Assert.Equal(HostProtocol.ReleaseVersion, machine.GetProperty("HostVersion").GetString()));
         Assert.Equal($"dev@127.0.0.1:{hub.ClosedPort}", listed[2].GetProperty("Target").GetString());
         foreach (var secret in (string[])[.. SecretValues, "\"Password\"", "\"KeyPath\"", "\"Proxy\"", "\"SshOptions\""])
             Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact]
     public async Task WebSocket_ReachesTheNamedMachine_AndRunsATerminalThere()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -73,7 +74,7 @@ public sealed class WebBridgeHubTests
         Assert.DoesNotContain(onLocal.EnumerateArray(), session => session.GetProperty("SessionId").GetString() == ptyId);
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact]
     public async Task UnknownMachine_IsRefused_AndOfflineMachineHasRedactedAuthoritativeView()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -107,7 +108,7 @@ public sealed class WebBridgeHubTests
         var screen = new StringBuilder();
         var seen = new List<string>();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
             while (!screen.ToString().Contains(expected, StringComparison.Ordinal))
@@ -176,7 +177,7 @@ public sealed class WebBridgeHubTests
         }
 
         public Task<string> WaitForMachinesAsync(Func<Dictionary<string, string>, bool> condition)
-            => Access.WaitForMachinesAsync(condition, TimeSpan.FromSeconds(30), Ct);
+            => Access.WaitForMachinesAsync(condition, TimeSpan.FromSeconds(5), Ct);
 
         /** Release the real host/PTY resources even when bridge shutdown fails. */
         public async ValueTask DisposeAsync()
@@ -215,3 +216,4 @@ public sealed class WebBridgeHubTests
         }
     }
 }
+

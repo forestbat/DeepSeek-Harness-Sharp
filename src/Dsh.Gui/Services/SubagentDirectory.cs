@@ -11,6 +11,8 @@ public sealed class SubagentDirectory(HostChatSession chat)
 
     public async Task<IReadOnlyList<RemoteSubagentInfo>> DescendantsAsync(SessionId root)
     {
+        if (!chat.IsHarness)
+            return [];
         var entries = await (await chat.ClientAsync()).SessionEditing.ListSubagentsAsync(root.Value);
         // Keep the existing tree presentation: creation-ordered siblings, depth-first preorder.
         var byParent = entries.Where(entry => entry.Parent is not null)
@@ -42,8 +44,7 @@ public sealed class SubagentDirectory(HostChatSession chat)
     public async Task<IReadOnlyList<SessionEvent>> LoadEventsAsync(SessionId id)
     {
         var snapshot = await (await chat.ClientAsync()).GetSessionSnapshotAsync(id.Value);
-        var events = snapshot.Events.Select(item => DshJson.Deserialize<SessionEvent>(item.EventJson))
-            .OfType<SessionEvent>().ToList();
+        var events = snapshot.Events.ToList();
         _events[id] = events;
         return events;
     }

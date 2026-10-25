@@ -81,7 +81,7 @@ jobs:
             --nologo -v m
           )
           dotnet publish DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj "${PUBLISH_ARGS[@]}"
-          dotnet publish DshGuiHost/DshGuiHost.csproj "${PUBLISH_ARGS[@]}"
+          dotnet publish Dsh.GuiHost/Dsh.GuiHost.csproj "${PUBLISH_ARGS[@]}"
           dotnet publish Dsh.WebHost/Dsh.WebHost.csproj "${PUBLISH_ARGS[@]}"
 
       - name: Assert NativeAOT output and smoke test the product's three entries
@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           RID='${{ inputs.rid }}'
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
           WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
           for OUTPUT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
             if find "$OUTPUT" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
@@ -158,7 +158,7 @@ jobs:
           set -euo pipefail
           RID='${{ inputs.rid }}'
           PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="DshGuiHost/bin/Release/net10.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
           WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
           for ROOT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
             test -d "$ROOT"

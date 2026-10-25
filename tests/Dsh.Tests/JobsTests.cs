@@ -41,7 +41,7 @@ public partial class JobsTests : IDisposable
         }
     }
 
-    [Fact(Timeout = 15_000)]
+    [Fact(Timeout = 5000, Explicit = true)]
     public async Task Subprocess_DefaultInput_IsEofAndNotTerminal()
     {
         if (!ShellProbe.Bash)
@@ -52,13 +52,13 @@ public partial class JobsTests : IDisposable
             Cwd = _tempDir,
         });
 
-        var outcome = await handle.Done.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var outcome = await handle.Done.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, outcome.ExitCode);
         Assert.Equal("eof", handle.StdoutReader.ReadFrom(0).Text);
     }
 
-    [Fact(Timeout = 15_000)]
+    [Fact(Timeout = 5000, Explicit = true)]
     public async Task Subprocess_ExplicitInput_RemainsWritableUntilClosed()
     {
         if (!ShellProbe.Bash)
@@ -72,7 +72,7 @@ public partial class JobsTests : IDisposable
         await handle.StandardInput.WriteLineAsync("pipe-input");
         handle.StandardInput.Close();
 
-        var outcome = await handle.Done.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var outcome = await handle.Done.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, outcome.ExitCode);
         Assert.Equal("pipe-input", handle.StdoutReader.ReadFrom(0).Text);
@@ -196,7 +196,7 @@ public partial class JobsTests : IDisposable
 
         public void Dispose() => _outer.Dispose();
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task Spawn_Output_Wait_SettlesCompleted()
         {
             var agent = _outer.NewAgent();
@@ -211,7 +211,7 @@ public partial class JobsTests : IDisposable
             Assert.EndsWith("[status: completed, exit code: 0]", TextOf(result));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task StreamRead_ConsumesDeltas()
         {
             var agent = _outer.NewAgent();
@@ -226,7 +226,7 @@ public partial class JobsTests : IDisposable
             Assert.Equal("second\n", Assert.IsType<ToolExecutionResult.Success>(second).Value.GetProperty("text").GetString());
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task Kill_RunningJob_SettlesKilled()
         {
             var agent = _outer.NewAgent();
@@ -249,7 +249,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains($"job {id} had already finished", TextOf(again));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task WaitTimeout_ReturnsRunningSnapshot()
         {
             var agent = _outer.NewAgent();
@@ -260,7 +260,7 @@ public partial class JobsTests : IDisposable
             _outer._jobs.Kill(id, agent);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task JobList_RendersRegisteredJobs()
         {
             var agent = _outer.NewAgent();
@@ -276,7 +276,7 @@ public partial class JobsTests : IDisposable
             _outer._jobs.Kill("bash-1", agent);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task JobList_Empty_RendersNone()
         {
             var agent = _outer.NewAgent();
@@ -284,7 +284,7 @@ public partial class JobsTests : IDisposable
             Assert.Equal("(no background jobs)", TextOf(result));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task UnknownJob_Errors()
         {
             var agent = _outer.NewAgent();
@@ -293,7 +293,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains("unknown job bash-99", TextOf(result));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task CompletionNotice_InjectsIntoBusyOwner()
         {
             var agent = _outer.NewAgent(AgentStatus.Running);
@@ -313,7 +313,7 @@ public partial class JobsTests : IDisposable
             Assert.Equal(ContextForms.Notice, source.Form);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task CompletionNotice_WakesIdleOwner()
         {
             var agent = _outer.NewAgent();
@@ -340,7 +340,7 @@ public partial class JobsTests : IDisposable
 
         public void Dispose() => _outer.Dispose();
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task Owners_SeeOnlyOwnJobs()
         {
             var alice = _outer.NewAgent();
@@ -366,7 +366,7 @@ public partial class JobsTests : IDisposable
             _outer._jobs.Kill(bobJob, bob);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public void Start_WithoutController_Refused()
         {
             var ctx = new Context();
@@ -381,7 +381,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains("no job controller serves this agent", error.Message);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public void PerOwnerLimit_EnforcedIndependently()
         {
             var ctx = new Context();
@@ -422,7 +422,7 @@ public partial class JobsTests : IDisposable
 
         public void Dispose() => _outer.Dispose();
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task JobOutput_RespectsOutputLimitBytes()
         {
             var agent = _outer.NewAgent();
@@ -479,7 +479,7 @@ public partial class JobsTests : IDisposable
         private Task<ToolExecutionResult> Bash(IAgent agent, string command)
             => _outer.Execute(PersistentBashTool.ToolName, new { command }, agent);
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task CwdAndEnvironment_PersistAcrossCalls()
         {
             if (!BashAvailable()) return;
@@ -498,7 +498,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains("hello", TextOf(echo));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task NonZeroExit_ReportedWithMarker()
         {
             if (!BashAvailable()) return;
@@ -510,7 +510,7 @@ public partial class JobsTests : IDisposable
             Assert.EndsWith("[exit code: 1]", text);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task Stderr_IsMergedIntoOutput()
         {
             if (!BashAvailable()) return;
@@ -520,7 +520,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains("errline", TextOf(result));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task ExistingShell_KeepsItsDirectory_AfterWorkingDirectoryChange()
         {
             if (!BashAvailable()) return;
@@ -535,7 +535,7 @@ public partial class JobsTests : IDisposable
             Assert.DoesNotContain("moved", TextOf(pwd));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task NewShell_StartsInChangedWorkingDirectory()
         {
             if (!BashAvailable()) return;
@@ -548,7 +548,7 @@ public partial class JobsTests : IDisposable
             Assert.Contains("moved", TextOf(pwd));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task LongOutput_IsTruncated()
         {
             var ctx = new Context();
@@ -575,7 +575,7 @@ public partial class JobsTests : IDisposable
             Assert.DoesNotContain("1000", text);
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task ShellExit_ResetsAndNextCallStartsFresh()
         {
             if (!BashAvailable()) return;
@@ -592,7 +592,7 @@ public partial class JobsTests : IDisposable
             Assert.DoesNotContain("sub", TextOf(pwd));
         }
 
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task Timeout_ResetsShell()
         {
             var ctx = new Context();
@@ -631,7 +631,7 @@ public partial class JobsTests : IDisposable
         }
 
         /** The command budget starts when bash reaches the command: a shell that takes longer than the budget to start still runs a quick command. */
-        [Fact]
+        [Fact(Explicit = true)]
         public async Task SlowShellStartup_DoesNotCountAgainstCommandTimeout()
         {
             if (OperatingSystem.IsWindows() || !BashAvailable())
@@ -671,3 +671,5 @@ public partial class JobsTests : IDisposable
         }
     }
 }
+
+

@@ -197,20 +197,22 @@ public static class HarnessEntrypoint
             // stdio-over-SSH: 桥接到常驻 daemon; 没有就 detached 起一个。断开只断这条桥, 会话留在远端(脱钩/重连)。
             await HostAutostart.EnsureRunningAsync(home, token);
             using var duplex = Dsh.Transport.TransportConnection.FromStandardIo();
-            await Dsh.RemoteHost.RemoteHostListener.BridgeAsync(duplex, home.Root, CancellationToken.None);
+            await HostBridge.RunAsync(duplex, home.Root, CancellationToken.None);
             return 0;
         }
 
         using var instance = HostAutostart.TryAcquireInstance(home);
         if (instance is null)
         {
-            using var connection = await Dsh.RemoteHost.RemoteHostListener.ConnectAsync(home.Root, CancellationToken.None);
+            using var connection = await Dsh.RemoteHost.RemoteHostConnector.ConnectAsync(home.Root, CancellationToken.None);
             return 0;
         }
 
         using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
         await using var backend = await HarnessRemoteHostBackend.CreateAsync(app);
-        var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
+        var factory = app.Ctx.Get<Dsh.RemoteHost.RemoteHostServerFactory>(Dsh.RemoteHost.RemoteHostServerFactory.ServiceName, false)
+            ?? throw new InvalidOperationException("remote-host-server 插件未加载，无法启动 host");
+        var server = factory.Create(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
         await Console.Out.WriteLineAsync($"dsharp host serving on {Dsh.RemoteHost.RemoteHostEndpoint.SocketPath(home.Root)}");
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
@@ -405,4 +407,3 @@ public static class HarnessEntrypoint
     private static Task StartLocalHostAsync(string harnessHome, CancellationToken cancellationToken)
         => HostAutostart.EnsureRunningAsync(HarnessHome.Resolve(harnessHome), token: null, cancellationToken);
 }
-

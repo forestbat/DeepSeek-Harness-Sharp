@@ -16,8 +16,8 @@ done
 
 if [ -z "$target" ]; then
   for candidate in \
-    "$repo_root/DshGuiHost/bin/Release/net10.0/dsh-gui" \
-    "$repo_root/DshGuiHost/bin/Debug/net10.0/dsh-gui" \
+    "$repo_root/Dsh.GuiHost/bin/Release/net10.0/dsh-gui" \
+    "$repo_root/Dsh.GuiHost/bin/Debug/net10.0/dsh-gui" \
     "$repo_root/artifacts020/gui/dsh-gui"; do
     if [ -x "$candidate" ]; then
       target="$candidate"
@@ -27,7 +27,7 @@ if [ -z "$target" ]; then
 fi
 
 if [ -z "$target" ] || [ ! -x "$target" ]; then
-  echo "找不到可执行的 dsh-gui; 先构建 DshGuiHost 或用 --target 指定路径" >&2
+  echo "找不到可执行的 dsh-gui; 先构建 Dsh.GuiHost 或用 --target 指定路径" >&2
   exit 1
 fi
 

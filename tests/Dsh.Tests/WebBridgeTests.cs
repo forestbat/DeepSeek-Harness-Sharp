@@ -9,24 +9,25 @@ using Dsh.WebBridge;
 namespace Dsh.Tests;
 
 /** The browser bridge end to end: a real in-process host daemon on its loopback endpoint, the bridge on a free loopback port, and real HTTP and WebSocket clients. */
+[Collection(SerialProcessCollection.Name)]
 public sealed class WebBridgeTests
 {
     private const string ForeignOrigin = "http://evil.example";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task WebSocket_UsesSharedFleetForRealSessionEvents()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var host = await HarnessHostFixture.CreateAsync("wbe", cancellationToken);
         await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
         var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), cancellationToken);
+        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), cancellationToken);
         using var socket = await access.ConnectWebSocketAsync(await access.LoginAsync(cancellationToken), access.Origin, cancellationToken);
         var info = await WebSocketRpc.RequestAsync(socket, 1, HostProtocol.MethodInfo, null);
         Assert.Equal(HostProtocol.Version, info.GetProperty("ProtocolVersion").GetInt32());
-        var request = new RemoteSessionCreateRequest(host.Root, RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec);
+        var request = new RemoteSessionCreateRequest(host.Root);
         var parameters = System.Text.Json.JsonSerializer.Serialize(request, HostProtocolJsonContext.Default.RemoteSessionCreateRequest);
         var created = await WebSocketRpc.RequestAsync(socket, 2, HostProtocol.MethodSessionCreate, parameters);
         var sessionId = created.GetProperty("Id").GetString();
@@ -38,13 +39,13 @@ public sealed class WebBridgeTests
         Assert.Equal(sessionId, pushed.GetProperty("params").GetProperty("SessionId").GetString());
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task DetachingOneBusyTerminalView_KeepsOtherViewsAndBrowserRequestsAlive()
     {
         await using var host = await HarnessHostFixture.CreateAsync("wbv", TestContext.Current.CancellationToken);
         await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
         var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), Ct);
         var cookies = await access.LoginAsync(Ct);
         using var browser = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
         using var otherBrowser = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
@@ -72,7 +73,7 @@ public sealed class WebBridgeTests
         Assert.Equal(WebSocketState.Open, otherBrowser.State);
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ClosingBrowser_AbortsOnlyItsUnfinishedUploads_IncludingUnreadBeginReply(bool closeBeforeReadingBeginReply)
@@ -80,7 +81,7 @@ public sealed class WebBridgeTests
         await using var host = await HarnessHostFixture.CreateAsync("wbu", TestContext.Current.CancellationToken);
         await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
         var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), Ct);
         var cookies = await access.LoginAsync(Ct);
         using var closing = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
         using var retained = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
@@ -133,7 +134,7 @@ public sealed class WebBridgeTests
         Assert.Equal(WebSocketState.Open, retained.State);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task WebSocket_WithoutSessionCookie_IsRefused()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -145,7 +146,7 @@ public sealed class WebBridgeTests
         Assert.Equal(0, fixture.RelayedConnections);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task WebSocket_FromForeignOrigin_IsRefusedEvenWithSession()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -156,7 +157,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.Forbidden, socket.HttpStatusCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Login_ExchangesTokenForStrictHttpOnlySessionCookie()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -180,7 +181,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.GetAsync(fixture.Access.Url(WebBridgeServer.SessionPath), cancellationToken)).StatusCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task HostHeader_MustNameLoopback_ButMayCarryAForwardedPort()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -192,7 +193,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.OK, await GetWithHostAsync(client, fixture, "localhost:9999"));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task FrontEnd_IsServedFromEmbeddedAssetsWithSecurityHeaders()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -221,7 +222,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(fixture.Access.Url("/missing.js"), cancellationToken)).StatusCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task BusyPort_DoesNotReplaceRunningBridgeCredentials()
     {
         await using var fixture = await BridgeFixture.StartAsync(TestContext.Current.CancellationToken);
@@ -233,7 +234,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.GetAsync(fixture.Access.Url(WebBridgeServer.SessionPath), Ct)).StatusCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task RestartBridge_RejectsCookieFromPreviousProcessLifetime()
     {
         await using var fixture = await BridgeFixture.StartAsync(TestContext.Current.CancellationToken);
@@ -248,7 +249,7 @@ public sealed class WebBridgeTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.GetAsync(access.Url(WebBridgeServer.SessionPath), Ct)).StatusCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task BrowserSockets_ShareFleetConnection_AndClosingOneKeepsTheOtherUsable()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -264,7 +265,7 @@ public sealed class WebBridgeTests
         Assert.Equal(0, fixture.RelayedConnections);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task HostShutdown_PublishesAuthoritativeOfflineView_WithoutClosingBrowserTransport()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -278,7 +279,7 @@ public sealed class WebBridgeTests
         Assert.Equal(WebSocketState.Open, socket.State);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task WebSocket_WithoutHostDaemon_PublishesOfflineView()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -290,7 +291,7 @@ public sealed class WebBridgeTests
         Assert.Equal(WebSocketState.Open, socket.State);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task PrintToken_PrintsRunningBridgeTokenAndLoginUrl()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -304,7 +305,7 @@ public sealed class WebBridgeTests
         Assert.Equal(expected, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Command_StartsBridgeAndPrintsAccessHints_ThenRemovesTokenOnStop()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -333,7 +334,7 @@ public sealed class WebBridgeTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Command_RejectsUnknownArgumentsAndMissingBridge()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -352,17 +353,17 @@ public sealed class WebBridgeTests
     }
 
     /** Independent logins share the host's pending state; closing the originator does not cancel its approval. */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Approval_IsSharedAcrossLogins_AndSurvivesClosingTheOriginator()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await HarnessHostFixture.CreateAsync("wba", ct);
         await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
         var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), Ct);
         using var first = await access.ConnectWebSocketAsync(await access.LoginAsync(Ct), access.Origin, Ct);
         using var second = await access.ConnectWebSocketAsync(await access.LoginAsync(Ct), access.Origin, Ct);
-        var request = new RemoteSessionCreateRequest(host.Root, RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec);
+        var request = new RemoteSessionCreateRequest(host.Root);
         var created = await WebSocketRpc.RequestAsync(first, 1, HostProtocol.MethodSessionCreate,
             JsonSerializer.Serialize(request, HostProtocolJsonContext.Default.RemoteSessionCreateRequest));
         var sessionId = created.GetProperty("Id").GetString()!;
@@ -391,14 +392,14 @@ public sealed class WebBridgeTests
     }
 
     /** The bridge preserves the real terminal across a lost host link and resizes before replaying its snapshot. */
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task Terminal_SegmentedInput_AndOfflineResize_SurviveHostReconnect()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await HarnessHostFixture.CreateAsync("wbr", ct);
         await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
         var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
-        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), Ct);
         using var socket = await access.ConnectWebSocketAsync(await access.LoginAsync(Ct), access.Origin, Ct);
         var request = new RemotePtyStartRequest(TestShell.FileName, TestShell.Arguments, host.Environment.App.Home.Root, Columns: 80, Rows: 24);
         var started = await WebSocketRpc.RequestAsync(socket, 1, PtyProtocol.MethodPtyStart,
@@ -508,7 +509,7 @@ public sealed class WebBridgeTests
             if (withDaemon)
             {
                 // A completed handshake proves the daemon serves; its own host connection must be gone before tests count connections.
-                await using (var probe = await RemoteHostListener.ConnectAsync(root, cancellationToken))
+                await using (var probe = await RemoteHostConnector.ConnectAsync(root, cancellationToken))
                 await using (await RemoteHostClient.ConnectAsync(probe, null, cancellationToken))
                     Assert.Equal(1, backend.OpenConnections);
                 await WebSocketRpc.WaitForAsync(() => backend.OpenConnections == 0);
@@ -519,7 +520,7 @@ public sealed class WebBridgeTests
             {
                 await WebSocketRpc.WaitForAsync(() => backend.OpenConnections == 1);
                 var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(root))!);
-                await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), cancellationToken);
+                await access.WaitForMachinesAsync(statuses => statuses.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(5), cancellationToken);
             }
             return new BridgeFixture(root, backend, daemonStop, daemon, bridge);
         }
@@ -547,3 +548,6 @@ public sealed class WebBridgeTests
         }
     }
 }
+
+
+

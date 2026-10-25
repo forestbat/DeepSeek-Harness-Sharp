@@ -7,11 +7,11 @@ using Dsh.RemoteHost;
 namespace Dsh.Gui.ViewModels;
 
 /**
- * 一台机器上某个根目录(通常是会话的项目路径)的文件浏览与轻量编辑, 全部经 IRemoteFiles 的 host.file.* / host.fs.* 完成。
+ * 一台机器上某个根目录(通常是会话的项目路径)的文件浏览与轻量编辑, 全部经 RemoteFilesClient 的 host.file.* / host.fs.* 完成。
  * 用法: new FilesViewModel(files, rootPath, style) 后 await LoadAsync(); 本地文件选择由视图负责, 选好的本地路径交给 UploadAsync / DownloadAsync。
  * 远端路径按远端平台的分隔符拼接(RemotePaths), 不借用本机 OS 的 Path。
  */
-public sealed partial class FilesViewModel(IRemoteFiles files, string rootPath, RemotePathStyle style) : OperationViewModel
+public sealed partial class FilesViewModel(RemoteFilesClient files, string rootPath, RemotePathStyle style) : OperationViewModel
 {
     /** 超过这个大小的文件不进编辑器, 只显示信息并提供下载。 */
     public const long MaxEditableBytes = 2 * 1024 * 1024;
@@ -200,3 +200,4 @@ public sealed partial class FilesViewModel(IRemoteFiles files, string rootPath, 
         return name;
     }
 }
+

@@ -6,13 +6,12 @@
     <ProjectReference Include="..\Dsh.AgentAdapters\Dsh.AgentAdapters.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
-    <ProjectReference Include="..\Dsh.Fleet.Client\Dsh.Fleet.Client.csproj" />
-    <ProjectReference Include="..\Dsh.Fleet.Client.Iroh\Dsh.Fleet.Client.Iroh.csproj" />
+    <ProjectReference Include="..\Dsh.Fleet\Dsh.Fleet.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\Dsh.Notifications\Dsh.Notifications.csproj" />
     <ProjectReference Include="..\Dsh.Pty\Dsh.Pty.csproj" />
-    <ProjectReference Include="..\Dsh.RemoteHost\Dsh.RemoteHost.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
   </ItemGroup>
 
@@ -26,6 +25,10 @@
 
   <ItemGroup Condition="Exists('Assets\icon.png')">
     <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Services\TerminalShell.cs" />
   </ItemGroup>
 
   <PropertyGroup>

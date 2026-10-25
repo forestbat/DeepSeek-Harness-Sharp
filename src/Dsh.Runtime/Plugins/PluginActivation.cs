@@ -9,8 +9,27 @@ public sealed class PluginActivation
     private readonly Lock _inputSync = new();
     private readonly Lock _activationSync = new();
     private readonly Lock _stateSync = new();
+    private CancellationTokenSource _activationCancellation = new();
     private TaskCompletionSource _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Dictionary<string, PluginActivation> _dependencyOwners = new(StringComparer.Ordinal);
+
+    private bool ActivationCanceled
+    {
+        get
+        {
+            lock (_stateSync)
+                return _activationCancellation.IsCancellationRequested;
+        }
+    }
+
+    private CancellationToken ActivationToken
+    {
+        get
+        {
+            lock (_stateSync)
+                return _activationCancellation.Token;
+        }
+    }
 
     public string Name { get; }
     public IReadOnlyList<string> Inject { get; }
@@ -57,7 +76,7 @@ public sealed class PluginActivation
 
     private PluginActivation(string name)
     {
-        _definition = PluginDefinition.From(static (_, _) => null, name);
+        _definition = PluginDefinition.From(static (_, _, _) => Task.FromResult<object?>(null), name);
         Name = name;
         Inject = [];
         InjectTypes = [];
@@ -90,7 +109,8 @@ public sealed class PluginActivation
 
     public void AssertActive()
     {
-        if (State is ActivationState.Failed or ActivationState.Disposed)
+        // 效应/服务只允许在 Activating/Active 期间登记; 取消后的旧 activation 不得再发布服务。
+        if (State is not (ActivationState.Activating or ActivationState.Active) || ActivationCanceled)
             throw new RuntimeException(RuntimeException.InactiveEffect, "cannot create effect on inactive context");
     }
 
@@ -144,13 +164,18 @@ public sealed class PluginActivation
 
     internal void StartActivation()
     {
+        lock (_stateSync)
+        {
+            _activationCancellation.Dispose();
+            _activationCancellation = new CancellationTokenSource();
+        }
         SendInput(new PluginActivationInput(PluginActivationInputKind.Activate));
-        SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted, Error: Apply().Error));
+        _ = ActivateAsync();
     }
 
     internal void RequestRebuild()
     {
-        PendingUnload = false;
+        // PendingUnload 的复位放到状态转移内(HandleStale), 避免在输入串行化之外与卸载请求互相覆盖。
         SendInput(new PluginActivationInput(PluginActivationInputKind.DependencyChanged));
     }
 
@@ -160,7 +185,8 @@ public sealed class PluginActivation
 
     /** 调度器反查用:声明的名字边 + 激活时捕获的类型边(已落成服务名)。 */
     internal bool DependsOn(string serviceName)
-        => Inject.Contains(serviceName, StringComparer.Ordinal) || _dependencyOwners.ContainsKey(serviceName);
+        => Inject.Contains(serviceName, StringComparer.Ordinal)
+            || Volatile.Read(ref _dependencyOwners).ContainsKey(serviceName);
 
     /** 依赖可用性:注入项存在且当前可注入(供激活资格判定)。 */
     internal bool DependenciesAvailable(IReadOnlyDictionary<string, PluginActivation> providers)
@@ -181,7 +207,7 @@ public sealed class PluginActivation
     /** 依赖提供者是否已变更(供 Active 插件的重建 (i) 判定)。 */
     internal bool DependencyProvidersChanged(IReadOnlyDictionary<string, PluginActivation> providers)
     {
-        foreach (var (name, owner) in _dependencyOwners)
+        foreach (var (name, owner) in Volatile.Read(ref _dependencyOwners))
         {
             if (!providers.TryGetValue(name, out var current) || !ReferenceEquals(current, owner))
                 return true;
@@ -206,7 +232,8 @@ public sealed class PluginActivation
             if (resolved is not null && providers.TryGetValue(resolved, out var owner))
                 snapshot[resolved] = owner;
         }
-        _dependencyOwners = snapshot;
+        // 捕获发生在激活线程, 失效判定发生在调度泵线程: 引用必须以 release/acquire 语义发布, 否则泵可能读到上一个提供者。
+        Volatile.Write(ref _dependencyOwners, snapshot);
     }
 
     /** 状态转移表(替代 LogicBlocks, D7): 只决定"下一个状态", 副作用统一走 LifecycleEntered/StartDisposal。 */
@@ -218,6 +245,15 @@ public sealed class PluginActivation
                 LifecycleEntered(ActivationState.Activating);
                 break;
             case PluginActivationInputKind.ActivateCompleted when State == ActivationState.Activating:
+                if (PendingUnload)
+                {
+                    // 激活期间收到卸载: 先撤掉本次 Apply 登记的效应, 再走正常处置路径落到 Disposed;
+                    // 不能先发布 Active, 否则 UnloadAsync 会看到已收敛而漏掉 effects。
+                    Error = input.Error ?? Error;
+                    StartDisposal();
+                    LifecycleEntered(ActivationState.Deactivating);
+                    break;
+                }
                 LifecycleEntered(input.Error is null ? ActivationState.Active : ActivationState.Failed);
                 break;
             case PluginActivationInputKind.DependencyChanged or PluginActivationInputKind.ConfigChanged:
@@ -225,6 +261,11 @@ public sealed class PluginActivation
                 break;
             case PluginActivationInputKind.Retry when State == ActivationState.Failed:
                 RetryPending();
+                break;
+            case PluginActivationInputKind.Deactivate when State == ActivationState.Activating:
+                // 卸载是终态意图: 后续 Deactivate(Unload=false) 不能把它降级成重建。
+                PendingUnload |= input.Unload;
+                _activationCancellation.Cancel();
                 break;
             case PluginActivationInputKind.Deactivate:
                 HandleDeactivate(input.Unload);
@@ -289,16 +330,20 @@ public sealed class PluginActivation
 
     internal void LifecycleEntered(ActivationState state)
     {
+        // 依赖归属必须在 Active 可见之前落定: 调度泵会在其他线程看到 Active 后立刻判定失效,
+        // 若此时还是上一代提供者, 刚激活的插件会被误判为 stale 而重建。
+        if (state == ActivationState.Active)
+            Ctx.Root.Scheduler.CaptureDependencies(this);
         PublishState(state);
         switch (state)
         {
             case ActivationState.Active:
                 Ctx.LoggerFor().Info("activated");
-                Ctx.Root.Scheduler.OnActivationStateChanged(this, state);
+                Ctx.Root.Scheduler.OnActivationStateChanged();
                 break;
             case ActivationState.Disposed:
                 Ctx.LoggerFor().Info("deactivated");
-                Ctx.Root.Scheduler.OnActivationStateChanged(this, state);
+                Ctx.Root.Scheduler.OnActivationStateChanged();
                 break;
         }
     }
@@ -333,23 +378,39 @@ public sealed class PluginActivation
         return PendingUnload;
     }
 
-    private ApplyOutcome Apply()
+    private async Task ActivateAsync()
     {
+        var cancellationToken = ActivationToken;
+        await Task.Yield();
         PluginApplyScope.Enter(Name);
         try
         {
-            var result = _definition.Apply(Ctx, Config);
+            var result = await _definition.Apply(Ctx, Config, cancellationToken).ConfigureAwait(false);
+            // Apply 返回的释放器也属于本次 activation 的效应: 先登记, 取消/卸载时才能一并撤销。
             if (result is not null)
                 Effects.Add(EffectScope.Normalize(result, $"apply({Name})"));
-            return default;
+            if (ActivationCanceled)
+            {
+                Error = "activation canceled";
+                await Effects.DisposeAllAsync(disposeError => Ctx.Logger.Error("%s", disposeError)).ConfigureAwait(false);
+                SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted, Error: "activation canceled"));
+                return;
+            }
+            SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted));
+        }
+        catch (OperationCanceledException) when (ActivationCanceled)
+        {
+            Error = "activation canceled";
+            await Effects.DisposeAllAsync(disposeError => Ctx.Logger.Error("%s", disposeError)).ConfigureAwait(false);
+            SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted, Error: "activation canceled"));
         }
         catch (Exception error)
         {
             Error = DeepestMessage(error);
             Ctx.Logger.Error("%s", error);
             // 失败前已登记的效应(服务、订阅、注册)当场撤销, 否则重试会撞上自己上一次留下的注册。
-            Effects.DisposeAllAsync(disposeError => Ctx.Logger.Error("%s", disposeError)).GetAwaiter().GetResult();
-            return new ApplyOutcome(Error);
+            await Effects.DisposeAllAsync(disposeError => Ctx.Logger.Error("%s", disposeError)).ConfigureAwait(false);
+            SendInput(new PluginActivationInput(PluginActivationInputKind.ActivateCompleted, Error: Error));
         }
         finally
         {
@@ -364,7 +425,6 @@ public sealed class PluginActivation
         return error.Message;
     }
 
-    private readonly record struct ApplyOutcome(string? Error);
 }
 
 /** 插件状态机输入(替代 LogicBlocks 输入结构, D7)。 */

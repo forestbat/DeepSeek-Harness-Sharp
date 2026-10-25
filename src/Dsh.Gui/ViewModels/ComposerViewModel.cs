@@ -18,9 +18,6 @@ public sealed partial class ComposerViewModel : ObservableObject
     private bool _canSubmit;
 
     [ObservableProperty]
-    private string _permissionLabel = "Ask（每次审批）";
-
-    [ObservableProperty]
     private string _modelLabel = "";
 
     [ObservableProperty]
@@ -28,9 +25,6 @@ public sealed partial class ComposerViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isAttachmentMenuOpen;
-
-    [ObservableProperty]
-    private bool _isPermissionMenuOpen;
 
     [ObservableProperty]
     private bool _isModelMenuOpen;
@@ -41,7 +35,6 @@ public sealed partial class ComposerViewModel : ObservableObject
     public void CloseMenus()
     {
         IsAttachmentMenuOpen = false;
-        IsPermissionMenuOpen = false;
         IsModelMenuOpen = false;
         IsRefreshMenuOpen = false;
     }

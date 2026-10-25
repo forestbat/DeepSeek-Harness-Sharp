@@ -38,11 +38,10 @@ public enum SessionMode
 {
     Standard,
     Plan,
-    FullAccess,
 }
 
 /** 主窗口状态: 会话目录、会话流、轨迹、输入胶囊、页面切换与统一决策入口。 */
-public sealed partial class MainViewModel : ObservableObject, IDisposable
+public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 {
     public const int TracePreviewChars = 160;
     private const int ContentSearchDebounceMs = 300;
@@ -68,6 +67,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private MessageViewModel? _openAssistant;
     private MessageViewModel? _openReasoning;
     private bool _disposed;
+    private Task? _disposal;
     private bool _updatingSuggestions;
     private bool _commandSuggestionsLoaded;
 
@@ -80,7 +80,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Subagents = new SubagentPanelViewModel(chat);
         Subagents.Changed += PopulateSubagentCards;
         Subagents.Failed += SetStatus;
-        _settings = new SettingsFacade(_ctx, app.Home);
+        _settings = new SettingsFacade(_ctx, app.Home, chat.Fleet);
         _catalog = new SessionCatalog(_ctx, chat.Fleet);
         Gui = new GuiSettings(app.Home);
         var snapshot = Gui.Load();
@@ -89,8 +89,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _onlyWithSessions = snapshot.ShowOnlyWithSessions;
         _isSidebarVisible = snapshot.SidebarVisible;
         Preferences = new SettingsViewModel(
-            _ctx, app.Home, CurrentRemoteModel, chat.RunAsync, Gui, _settings,
-            async () => (await chat.ClientAsync()).Models,
+            _ctx, app.Home, chat.RunAsync, Gui, _settings,
             async () => (await chat.ClientAsync()).Plugins);
         Preferences.Models.CollectionChanged += (_, _) => RefreshFilteredModels();
         Preferences.ReasoningEfforts.CollectionChanged += (_, _) => HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
@@ -114,14 +113,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private WorkspaceViewModel CreateWorkspace(FleetWorkspace fleet)
     {
-        var workspace = new WorkspaceViewModel(fleet, () => CurrentRemoteModel(), ShowToast);
+        var workspace = new WorkspaceViewModel(
+            fleet,
+            ShowToast,
+            Gui,
+            Home,
+            () => (_chat.Machine, _chat.Id.Value),
+            () => new WorkspacePageContext(_chat.Machine, CurrentWorkspace));
         workspace.NavigationRequested += destination => Page = destination switch
         {
             WorkspaceDestination.Session => AppPage.FleetSession,
             WorkspaceDestination.Page => AppPage.WorkspacePage,
             _ => AppPage.Dashboard,
         };
-        workspace.LocalChatRequested += id => _ = OpenHostChatAsync(id);
+        workspace.ChatRequested += (machine, id) => _ = OpenChatAsync(machine, id);
         workspace.DecisionRequested += decision => DecisionRequested?.Invoke(decision) ?? Task.FromResult<object?>(null);
         return workspace;
     }
@@ -289,11 +294,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public string ModeLabel => Mode switch
     {
         SessionMode.Plan => "计划模式",
-        SessionMode.FullAccess => "Full access",
         _ => "标准模式",
     };
 
     public string PresetLabel => PresetDefinitions.FirstOrDefault(definition => definition.Id == Preset).Label ?? Preset;
+
+    public bool HasCommand(string name) => _chat.Commands.Any(command => string.Equals(command.Name, name, StringComparison.Ordinal));
+
+    public Task RefreshCommandsAsync() => _chat.RefreshCommandsAsync();
+
+    /** 只有这三页走懒加载的 ContentControl; 其他页面由各自的 Host 承载, ContentControl 必须隐藏, 否则会把枚举名画成 "Chat"/"WorkspacePage" 文本。 */
+    public bool IsLazyPage => Page is AppPage.Dashboard or AppPage.Settings or AppPage.Market;
 
     public IReadOnlyList<SettingsNavItemViewModel> SettingsSections => Preferences.Sections;
 
@@ -307,6 +318,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         IsChatPage = value == AppPage.Chat;
         IsSettingsPage = value == AppPage.Settings;
         IsMarketPage = value == AppPage.Market;
+        if (value != AppPage.Settings)
+            Preferences.DeactivateNetwork();
+        if (value is not (AppPage.Settings or AppPage.WorkspacePage))
+            Workspace.Machines.DeactivateNetwork();
+        OnPropertyChanged(nameof(IsLazyPage));
     }
 
     partial void OnTabChanged(ChatTab value) => IsTraceTab = value == ChatTab.Trace;
@@ -453,21 +469,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    /** 打开本地终端(进程内 PTY): 与远端终端共用同一套 TerminalViewModel。 */
+    /** 在当前会话/选中会话的机器上打开终端: 本地与远端共用同一套 TerminalViewModel。 */
     [RelayCommand]
-    private void OpenLocalTerminal() => _ = OpenLocalTerminalAsync();
+    private void OpenTerminal() => _ = OpenTerminalAsync();
 
-    private async Task OpenLocalTerminalAsync()
+    private async Task OpenTerminalAsync()
     {
-        var terminal = new TerminalViewModel("本地终端");
+        var machine = Workspace.ActiveSession?.Machine ?? _chat.Machine;
+        var connection = _chat.Fleet.Find(machine);
+        if (connection is null)
+        {
+            ShowToast("终端启动失败", $"找不到机器 {machine}", true);
+            return;
+        }
+        var title = machine == MachineSpec.LocalName ? "本地终端" : $"{machine} · 终端";
+        var cwd = Workspace.ActiveSession?.Card.ProjectPath ?? _chat.Header.Cwd ?? Home.Root;
+        var terminal = new TerminalViewModel(title);
         TerminalRequested?.Invoke(terminal);
         try
         {
-            await terminal.StartOnMachineAsync(_chat.Fleet.Find(MachineSpec.LocalName)!, Home.Root);
+            await terminal.StartOnMachineAsync(connection, cwd, title);
         }
         catch (Exception error)
         {
-            ShowToast("本地终端启动失败", error.Message, true);
+            ShowToast("终端启动失败", error.Message, true);
         }
     }
 
@@ -599,6 +624,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /** 抽出文本里可读的本地图片路径挂为附件、从文本移除, 返回剩余文本(通常是用户指令)。 */
     private async Task<string> ExtractImagePathsAsync(string text)
     {
+        if (_chat.Machine != MachineSpec.LocalName)
+        {
+            var client = await _chat.ClientAsync();
+            var style = RemotePaths.StyleFor(_chat.Fleet.Find(_chat.Machine)?.Info?.Platform ?? "");
+            var (remoteText, images) = await PromptImages.ExtractRemoteAsync(
+                client.Files, _chat.Header.Cwd ?? "", style, text, CancellationToken.None);
+            foreach (var image in images)
+            {
+                AttachImage(
+                    image.Name ?? "image",
+                    Convert.FromBase64String(image.Base64),
+                    image.Width,
+                    image.Height,
+                    image.MediaType);
+            }
+            return remoteText;
+        }
         var remaining = text;
         var cwd = _chat.Header.Cwd ?? Environment.CurrentDirectory;
         foreach (Match match in PromptImages.PathPattern().Matches(text))
@@ -626,20 +668,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 var bytes = await File.ReadAllBytesAsync(path);
                 AttachImage(Path.GetFileName(path), bytes, 0, 0, mediaType);
                 remaining = remaining.Replace(match.Value, " ", StringComparison.Ordinal);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-            }
-        }
-        // 被引用的文本文件里出现的图片路径, 其图片字节也一并附带(而不只是把路径文本发过去)。
-        foreach (var referenced in TextFileImageReferences.Scan(text, cwd))
-        {
-            var mediaType = ImageAttachments.MediaTypeForExtension(Path.GetExtension(referenced));
-            if (mediaType is null)
-                continue;
-            try
-            {
-                AttachImage(Path.GetFileName(referenced), await File.ReadAllBytesAsync(referenced), 0, 0, mediaType);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
             {
@@ -770,7 +798,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             await using var stream = File.Create(path);
             await using var writer = new StreamWriter(stream);
             foreach (var sessionEvent in events)
-                await writer.WriteLineAsync(sessionEvent.EventJson);
+                await writer.WriteLineAsync(DshJson.Serialize(sessionEvent));
             await writer.FlushAsync();
             StatusText = $"已导出 {events.Count} 条事件: {path}";
             CopyRequested?.Invoke(path);
@@ -893,32 +921,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void SetMode(string mode)
     {
-        switch (mode)
+        if (mode == "plan")
         {
-            case "plan":
-                _ = TogglePlanModeAsync();
-                return;
-            case "full":
-                _ = ApplyApprovalPolicyAsync(ApprovalPolicy.Auto, SessionMode.FullAccess, "Full access：需要审批的工具自动放行（黑名单仍然生效）");
-                return;
-            default:
-                _ = ApplyApprovalPolicyAsync(ApprovalPolicy.Ask, SessionMode.Standard, "标准模式：需要审批时弹窗确认");
-                return;
+            _ = TogglePlanModeAsync();
+            return;
         }
-    }
 
-    [RelayCommand]
-    private void SetPermission(string permission)
-    {
-        switch (permission)
+        if (Mode == SessionMode.Plan)
         {
-            case "full":
-                SetMode("full");
-                return;
-            default:
-                SetMode("standard");
-                return;
+            _ = TogglePlanModeAsync();
+            return;
         }
+
+        Mode = SessionMode.Standard;
+        StatusText = "标准模式";
     }
 
     [RelayCommand]
@@ -963,9 +979,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SetPreset(string id)
     {
-        var output = await _chat.RunAsync($"/preset {id}");
-        StatusText = output;
-        RefreshPreset();
+        var previous = Preset;
+        Preset = id;
+        try
+        {
+            var result = await _chat.ExecuteAsync($"/preset {id}");
+            StatusText = result.Text ?? "";
+            if (!result.Success)
+                Preset = previous;
+        }
+        catch
+        {
+            Preset = previous;
+            throw;
+        }
     }
 
     [RelayCommand]
@@ -973,9 +1000,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (string.IsNullOrWhiteSpace(model))
             return;
-        StatusText = await _chat.RunAsync($"/model {model}");
-        RefreshModelLabels();
-        Preferences.RefreshReasoningEfforts();
+        var previousModel = Composer.ModelLabel;
+        var previousSubtitle = SessionSubtitle;
+        // 先改标签再等 Host: 点击到界面反馈之间没有网络往返, 失败时回滚。
+        Composer.ModelLabel = model;
+        SessionSubtitle = model;
+        try
+        {
+            var result = await _chat.ExecuteAsync($"/model {model}");
+            StatusText = result.Text ?? "";
+            if (result.Success)
+                Preferences.RefreshReasoningEfforts();
+            else
+            {
+                Composer.ModelLabel = previousModel;
+                SessionSubtitle = previousSubtitle;
+            }
+        }
+        catch
+        {
+            Composer.ModelLabel = previousModel;
+            SessionSubtitle = previousSubtitle;
+            throw;
+        }
     }
 
     [RelayCommand]
@@ -983,8 +1030,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (string.IsNullOrWhiteSpace(effort))
             return;
-        StatusText = await _chat.RunAsync($"/reasoning {effort}");
-        RefreshModelLabels();
+        var previous = Composer.ReasoningLabel;
+        Composer.ReasoningLabel = effort;
+        try
+        {
+            var result = await _chat.ExecuteAsync($"/reasoning {effort}");
+            StatusText = result.Text ?? "";
+            if (!result.Success)
+                Composer.ReasoningLabel = previous;
+        }
+        catch
+        {
+            Composer.ReasoningLabel = previous;
+            throw;
+        }
     }
 
     [RelayCommand]
@@ -1015,11 +1074,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Suggestions.Clear();
     }
 
-    public void Dispose()
+    public ValueTask DisposeAsync() => new(_disposal ??= DisposeCoreAsync());
+
+    private async Task DisposeCoreAsync()
     {
-        if (_disposed)
-            return;
         _disposed = true;
+        Preferences.BeginNetworkShutdown();
+        Workspace.Machines.BeginNetworkShutdown();
         foreach (var dialog in _pendingDialogs.Values)
             dialog?.CancelCommand.Execute(null);
         _pendingDialogs.Clear();
@@ -1037,7 +1098,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             unsubscribe();
         _unsubscribers.Clear();
         _chat.Dispose();
-        _ = Workspace.DisposeAsync().AsTask();
+        try
+        {
+            await Preferences.WaitForNetworkOperationsAsync();
+        }
+        finally
+        {
+            await Workspace.DisposeAsync();
+        }
     }
 
     /** 文件选择由视图提供(Avalonia 对话框需要 TopLevel), 未接视图时返回空。 */
@@ -1073,27 +1141,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
 
-    /** 远端会话用的客户端模型选择与 provider 规格: 采用本体当前 provider/model(请求头优先, 见 RefreshModelLabels), 规格取自本地 settings.yaml。 */
-    private HarnessModelChoice CurrentRemoteModel()
-    {
-        var config = _chat.Events.Select(item => item.Data).OfType<RequestHeaderPayload>().LastOrDefault()?.Header.Config;
-        var provider = config?.Provider ?? _chat.Selection?.Provider;
-        var model = config?.Model ?? _chat.Selection?.Model;
-        if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model))
-            return new HarnessModelChoice(null, null);
-        var effort = config?.ReasoningEffort?.Value ?? _chat.Selection?.ReasoningEffort;
-        return new HarnessModelChoice(new RemoteModelSelection(provider, model, effort), FindRemoteProviderSpec(provider));
-    }
-
-    /** provider 规格来自本地 HarnessSettings.Providers(与设置页同一数据源); 本地没有该 provider 时返回 null, 远端退回自身配置。 */
-    private RemoteProviderSpec? FindRemoteProviderSpec(string provider)
-    {
-        var entry = HarnessSettings.Load(Home).Providers
-            .FirstOrDefault(candidate => string.Equals(candidate.Key, provider, StringComparison.OrdinalIgnoreCase));
-        return entry.Value is { } settings
-            ? new RemoteProviderSpec(entry.Key, settings.Type, settings.Options?.BaseUrl, settings.Options?.ApiKey, settings.Options?.ApiKeyEnv)
-            : null;
-    }
+    private LlmCallConfig? CurrentRequestHeader()
+        => _chat.Events.Select(item => item.Data).OfType<RequestHeaderPayload>().LastOrDefault()?.Header.Config;
 
     private IReadOnlyList<SessionNodeViewModel> AllSessions()
         => [.. Workspaces.SelectMany(workspace => workspace.Sessions).Concat(FileSystemNodes.SelectMany(node => node.Sessions))];
@@ -1214,7 +1263,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed)
             return;
-        var current = _chat.Fleet.Find(MachineSpec.LocalName)?.Sessions.FirstOrDefault(item => item.SessionId == _chat.Id.Value);
+        var current = _chat.Fleet.Find(_chat.Machine)?.Sessions.FirstOrDefault(item => item.SessionId == _chat.Id.Value);
         if (current is not null)
             SessionTitle = current.Title ?? _chat.Id.Value;
         RefreshSessions();
@@ -1226,7 +1275,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /** Host broadcasts are authoritative: another client's answer closes this client's outstanding dialog. */
     public void RefreshPendingDialogs()
     {
-        var pending = _chat.Fleet.Client.Pending().Where(item => item.Machine == MachineSpec.LocalName).ToList();
+        var pending = _chat.Fleet.Client.Pending().Where(item => item.Machine == _chat.Machine).ToList();
         var present = pending.Select(item => item.RequestId).ToHashSet(StringComparer.Ordinal);
         foreach (var id in _pendingDialogs.Keys.Where(id => !present.Contains(id)).ToList())
         {
@@ -1301,12 +1350,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private Task SwitchToAsync(SessionNodeViewModel node) => OpenHostChatAsync(node.SessionId.Value);
 
-    private async Task OpenHostChatAsync(string id)
+    private async Task OpenHostChatAsync(string id) => await OpenChatAsync(MachineSpec.LocalName, id);
+
+    private async Task OpenChatAsync(string machine, string id)
     {
         try
         {
-            if (_chat.Id.Value != id)
-                await _chat.SwitchAsync(id, CurrentRemoteModel());
+            var kind = Workspace.Dashboard.Find(machine, id)?.Kind ?? HostSessionKinds.Harness;
+            if (_chat.Machine != machine || _chat.Id.Value != id || _chat.Kind != kind)
+                await _chat.SwitchToAsync(machine, id, kind);
             Page = AppPage.Chat;
         }
         catch (Exception error)
@@ -1335,13 +1387,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var cwd = Gui.Load().DefaultWorkspace
             ?? _chat.Header.Cwd
             ?? Environment.CurrentDirectory;
+        Page = AppPage.Chat;
         try
         {
-            var model = CurrentRemoteModel();
-            var created = await (await _chat.ClientAsync()).CreateSessionAsync(cwd, model.Selection, model.Provider);
-            await _chat.SwitchAsync(created.Id, model);
+            var created = await (await _chat.ClientAsync()).CreateSessionAsync(cwd);
+            await _chat.SwitchAsync(created.Id);
             RefreshSessions();
-            Page = AppPage.Chat;
         }
         catch (Exception error)
         {
@@ -1355,15 +1406,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var enabled = output.Contains("on", StringComparison.OrdinalIgnoreCase);
         Mode = enabled ? SessionMode.Plan : SessionMode.Standard;
         StatusText = output;
-    }
-
-    private async Task ApplyApprovalPolicyAsync(ApprovalPolicy policy, SessionMode mode, string status)
-    {
-        await (await _chat.ClientAsync()).SessionEditing.SetSessionApprovalPolicyAsync(_chat.Id.Value, policy.ToString());
-        await _chat.ReloadAsync();
-        Mode = mode;
-        RefreshPermissionLabel();
-        StatusText = status;
     }
 
     private void ShowSession()
@@ -1383,7 +1425,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ApplyEvents(_chat.Events);
         RefreshMode();
         RefreshPreset();
-        RefreshPermissionLabel();
+        RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
@@ -1444,26 +1486,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void RefreshPermissionLabel()
-    {
-        var policy = _chat.Events.Select(item => item.Data).OfType<ApprovalPolicyPayload>().LastOrDefault()?.Policy
-            ?? (Enum.TryParse<ApprovalPolicy>(_chat.ApprovalPolicy, out var hostPolicy) ? hostPolicy : ApprovalPolicy.Ask);
-        Composer.PermissionLabel = policy switch
-        {
-            ApprovalPolicy.Never => "Never（自动拒绝）",
-            ApprovalPolicy.Auto => "Full access",
-            _ => "Ask（每次审批）",
-        };
-        RefreshModelLabels();
-    }
-
     private void RefreshModelLabels()
     {
-        var model = CurrentRemoteModel().Selection;
-        var label = $"{model?.Provider}/{model?.Model}";
+        var config = CurrentRequestHeader();
+        var label = $"{config?.Provider}/{config?.Model}";
         Composer.ModelLabel = label;
         SessionSubtitle = label;
-        Composer.ReasoningLabel = model?.ReasoningEffort ?? "推理";
+        Composer.ReasoningLabel = config?.ReasoningEffort?.Value ?? "推理";
         RefreshFilteredModels();
     }
 
@@ -1534,9 +1563,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 break;
             case ApprovalGrantedPayload granted:
                 AddTrace(sessionEvent.Seq, TraceKind.Approval, $"本会话不再询问 {granted.ToolName}");
-                break;
-            case ApprovalPolicyPayload:
-                RefreshPermissionLabel();
                 break;
             case DeliverablesPresentedPayload presented:
                 Deliverables.Observe(sessionEvent);
@@ -1617,7 +1643,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private string AssistantRole()
-        => CurrentRemoteModel().Selection?.Model ?? "助手";
+        => CurrentRequestHeader()?.Model ?? "助手";
 
     private void ApplyToolCall(long seq, ToolCallPayload call)
     {

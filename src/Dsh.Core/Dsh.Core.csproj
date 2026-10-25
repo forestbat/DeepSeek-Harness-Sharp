@@ -1,11 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.GitInspect\Dsh.GitInspect.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\Dsh.Notifications\Dsh.Notifications.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,3 +22,4 @@
   </PropertyGroup>
 
 </Project>
+

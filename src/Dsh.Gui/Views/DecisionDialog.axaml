@@ -68,8 +68,7 @@
                     <DataTemplate x:DataType="vm:DecisionOptionViewModel">
                       <Button Classes="Chip"
                               Classes.selected="{Binding IsSelected}"
-                              Command="{Binding $parent[ItemsControl].((vm:DecisionQuestionViewModel)DataContext).SelectCommand}"
-                              CommandParameter="{Binding}"
+                              Command="{Binding SelectCommand}"
                               Margin="0,0,0,6"
                               HorizontalAlignment="Stretch"
                               HorizontalContentAlignment="Left"

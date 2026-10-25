@@ -29,7 +29,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task MainWindow_RendersEveryPage() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();
@@ -44,6 +44,11 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Capture(window, "headless-chat");
             Assert.True(viewModel.IsChatPage);
             Assert.True(window.GetVisualDescendants().OfType<ChatView>().Single().IsVisible);
+            Assert.Empty(window.GetVisualDescendants().OfType<DashboardView>());
+            var inputBox = window.GetVisualDescendants().OfType<ChatView>().Single().FindControl<TextBox>("InputBox");
+            Assert.NotNull(inputBox);
+            Assert.True(inputBox.IsVisible);
+            Assert.True(inputBox.Bounds.Height > 0, $"input box should have a height, got {inputBox.Bounds}");
 
             viewModel.ShowSettingsCommand.Execute(null);
             await GuiTestEnvironment.WaitForAsync(viewModel.Preferences.Plugins,
@@ -54,11 +59,13 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Assert.True(settings.IsVisible);
             Assert.NotEmpty(settings.GetVisualDescendants());
             Assert.NotEmpty(viewModel.Preferences.Plugins);
+            Assert.Empty(window.GetVisualDescendants().OfType<DashboardView>());
 
             viewModel.ShowMarketCommand.Execute(null);
             Dispatcher.UIThread.RunJobs();
             Capture(window, "headless-market");
             Assert.True(window.GetVisualDescendants().OfType<MarketPageView>().Single().IsVisible);
+            Assert.Empty(window.GetVisualDescendants().OfType<SettingsPageView>());
 
             viewModel.ShowChatCommand.Execute(null);
             viewModel.ShowTraceCommand.Execute(null);
@@ -75,7 +82,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task CollapsedSidebar_ShiftsChatHeaderRight() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();
@@ -100,7 +107,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task DecisionDialog_RendersAndResolvesApproval() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var decision = DecisionViewModel.ForApproval(new ApprovalRequest(
                 environment.Agent,
                 "bash",
@@ -125,7 +132,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task DecisionDialog_RendersQuestion_AndSubmitsSelection() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
                 [
                     new AskUserQuestionItem(
@@ -155,7 +162,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task ThemeSwitch_AppliesLightVariantToTheWholeApp() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();
@@ -182,7 +189,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task SettingsGraphics_ListsAdaptersAndSaves() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();
@@ -227,7 +234,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task MessageList_RendersThousandMessages() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();
@@ -263,12 +270,18 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task PresetChip_Click_Item_SwitchesPreset() => await HeadlessGui.RunAsync(async () =>
     {
         // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的窗口测试。
-        var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        await using var environmentScope = environment;
         var window = new MainWindow(environment.App, await environment.OpenChatAsync());
         var viewModel = window.ViewModel!;
         window.Show();
         viewModel.ShowChatCommand.Execute(null);
+        for (var attempt = 0; attempt < 50 && !viewModel.HasCommand("preset"); attempt++)
+        {
+            await viewModel.RefreshCommandsAsync();
+            await Task.Delay(100);
+        }
+        Assert.True(viewModel.HasCommand("preset"), "preset command was not registered");
         Dispatcher.UIThread.RunJobs();
         try
         {
@@ -305,7 +318,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task FontSizeSlider_PreviewsLive_WithoutPersisting() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var window = new MainWindow(environment.App, await environment.OpenChatAsync());
         var viewModel = window.ViewModel!;
         window.Show();
@@ -359,7 +372,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     {
         // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的 MainWindow 测试。
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         SubagentTestData.AddChild(store, environment.Agent.Id, "headless-sub", createdAt: 1, withToolCall: true);
         var window = new MainWindow(environment.App, await environment.OpenChatAsync());
@@ -401,7 +414,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
     public async Task DiffCard_RendersCollapsedAndExpanded() => await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
             var viewModel = window.ViewModel!;
             window.Show();

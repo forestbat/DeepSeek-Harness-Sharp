@@ -51,7 +51,7 @@ public sealed class GitPanelTests : IDisposable
         _repo.Write("assets/logo.png", "\0changed");
         var summary = await new GitInspector(_repo.Root).DiffSummaryAsync(GitDiffTarget.Uncommitted, cancellationToken: Ct);
 
-        var lines = await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct);
+        var lines = await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct);
 
         Assert.Equal(GitPanel.Format(summary, "未提交改动"), lines);
         Assert.Equal(["未提交改动", "assets/logo.png (binary)", "src/a.cs 2+ 0-", "src/b.cs 3+ 1-"], lines);
@@ -66,7 +66,7 @@ public sealed class GitPanelTests : IDisposable
         _repo.Git("mv", "old.txt", path);
         var summary = await new GitInspector(_repo.Root).DiffSummaryAsync(GitDiffTarget.Uncommitted, cancellationToken: Ct);
 
-        var lines = await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct);
+        var lines = await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct);
 
         Assert.Equal(new GitFileStat(path, "old.txt", GitChangeKind.Renamed, 0, 0), Assert.Single(summary.Files));
         Assert.Equal(GitPanel.Format(summary, "未提交改动"), lines);
@@ -79,7 +79,7 @@ public sealed class GitPanelTests : IDisposable
         _repo.Commit(Enumerable.Range(0, GitPanel.MaxRows + 3).Select(index => ($"file{index:D2}.cs", "line\n")).ToArray());
         var summary = await new GitInspector(_repo.Root).DiffSummaryAsync(GitDiffTarget.OfCommit("HEAD"), cancellationToken: Ct);
 
-        var lines = await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct);
+        var lines = await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct);
 
         Assert.Equal(GitPanel.Format(summary, "上次提交"), lines);
         Assert.Equal(1 + GitPanel.MaxRows + 1, lines.Count);
@@ -90,14 +90,15 @@ public sealed class GitPanelTests : IDisposable
     [Fact]
     public async Task Refresh_HandlesUnbornRepositoryAndStagedFirstCommit()
     {
-        Assert.Equal(["(无变更)"], await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct));
+        Assert.Equal(["(无变更)"], await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct));
         _repo.Write("first.txt", "first\n");
         _repo.Git("add", "first.txt");
 
-        Assert.Equal(["未提交改动", "first.txt 1+ 0-"], await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct));
+        Assert.Equal(["未提交改动", "first.txt 1+ 0-"], await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct));
         _repo.Commit();
-        Assert.Equal(["上次提交", "first.txt 1+ 0-"], await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct));
+        Assert.Equal(["上次提交", "first.txt 1+ 0-"], await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct));
         _repo.Commit();
-        Assert.Equal(["(无变更)"], await ChatWindow.LoadGitLinesAsync(_repo.Root, Ct));
+        Assert.Equal(["(无变更)"], await ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, Ct));
     }
 }
+

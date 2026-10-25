@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Runtime;
@@ -13,7 +13,7 @@ namespace Dsh.Tests;
 
 public class SubagentTests
 {
-    private static readonly TimeSpan RunCompletionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RunCompletionTimeout = TimeSpan.FromSeconds(5);
     private const string ToolSubagentPackage = "@deepseek-ai/dsh-tool-subagent";
     private const string AlternateDefaultRoute = "alt-provider/alt-fast";
 

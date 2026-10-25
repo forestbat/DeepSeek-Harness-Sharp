@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Dsh.Gui.Services;
 using Dsh.Gui.Terminal;
 using Dsh.Fleet;
 using Dsh.Pty;
@@ -31,12 +32,38 @@ public sealed partial class TerminalViewModel : ObservableObject, IAsyncDisposab
     private string _screenTitle = "";
 
     /** 本地机器也经常驻 host/PTY daemon 启动, 与 SSH 终端共享会话登记和断线存活语义。 */
-    public async Task StartOnMachineAsync(MachineConnection machine, string workingDirectory, CancellationToken cancellationToken = default)
+    public async Task StartOnMachineAsync(
+        MachineConnection machine,
+        string workingDirectory,
+        string? title = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = machine.Machine.IsLocal
+            ? LocalRequest(workingDirectory)
+            : RemoteRequest(machine, workingDirectory, title ?? $"{machine.Machine.Name} · 终端");
+        var connection = await RemotePtyConnection.StartAsync(machine, request, cancellationToken);
+        AttachRemote(connection, machine.Machine.IsLocal ? $"本地 · {request.FileName}" : $"{machine.Machine.Name} · 终端");
+    }
+
+    private static RemotePtyStartRequest LocalRequest(string workingDirectory)
     {
         var shell = PtyShell.Resolve();
-        var connection = await RemotePtyConnection.StartAsync(machine, new RemotePtyStartRequest(
-            shell, PtyShell.Arguments(shell), workingDirectory, Columns: InitialSize.Columns, Rows: InitialSize.Rows), cancellationToken);
-        AttachRemote(connection, $"本地 · {shell}");
+        return new RemotePtyStartRequest(
+            shell,
+            PtyShell.Arguments(shell),
+            workingDirectory,
+            Columns: InitialSize.Columns,
+            Rows: InitialSize.Rows);
+    }
+
+    private static RemotePtyStartRequest RemoteRequest(MachineConnection machine, string workingDirectory, string title)
+    {
+        var windows = machine.Info?.Platform == "windows";
+        return new RemotePtyStartRequest(
+            windows ? "cmd.exe" : "/bin/sh",
+            windows ? [] : ["-c", "exec \"${SHELL:-/bin/sh}\" -l"],
+            Cwd: workingDirectory,
+            Title: title);
     }
 
     /** Remote terminal: a PTY on a fleet machine, attached through the machine's connection; the view model disposes the connection. */

@@ -198,15 +198,8 @@ public sealed class VtScreen
         output.Append(_insertMode ? "\u001b[4h" : "\u001b[4l");
         output.Append(BracketedPaste ? "\u001b[?2004h" : "\u001b[?2004l");
         output.Append(FocusReporting ? "\u001b[?1004h" : "\u001b[?1004l");
-        output.Append(SgrMouse ? "\u001b[?1006h" : "\u001b[?1006l");
-        if (MouseTracking != TerminalMouseTracking.None)
-            output.Append("\u001b[?").Append(MouseTracking switch
-            {
-                TerminalMouseTracking.X10 => 9,
-                TerminalMouseTracking.Normal => 1000,
-                TerminalMouseTracking.ButtonEvent => 1002,
-                _ => 1003,
-            }).Append('h');
+        // 鼠标上报由持有用户终端的客户端(proxy / GPU 窗口)自己声明。这里回放 ?1006l / ?1003h 会在 proxy 刚打开
+        // ?1000h?1002h?1006h 之后把编码重置回 X10, 坐标 >95 的原始字节随后被 UTF-8 解码成 U+FFFD, 泄漏进输入行。
         output.Append("\u001b[").Append(CursorShape switch
         {
             TerminalCursorShape.Block => 2,

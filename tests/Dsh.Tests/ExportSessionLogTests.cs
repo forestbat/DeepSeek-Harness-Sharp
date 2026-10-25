@@ -11,7 +11,7 @@ public sealed class ExportSessionLogTests
     [Fact]
     public async Task ExportSessionLog_WritesEveryEventAsJsonLine() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         session.Append(new RequestHeaderPayload(
             new EpochHeader(new LlmCallConfig("test", "test-model")),
@@ -27,7 +27,7 @@ public sealed class ExportSessionLogTests
         await environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(session);
         using var stored = persistence.Open(environment.Agent.Id, SessionAccess.Read);
         var expected = stored.Read();
-        using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
 
         await viewModel.ExportSessionLogCommand.ExecuteAsync(null);
 

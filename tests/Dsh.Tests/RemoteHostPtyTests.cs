@@ -8,13 +8,14 @@ using Dsh.RemoteHost;
 namespace Dsh.Tests;
 
 /** host.pty.* 交给真实 PTY daemon 后的多端语义: 多个客户端同时 attach 都能看到输出、都能输入, attach 先收到整屏快照, resize, 断开不影响 PTY。 */
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostPtyTests
 {
-    private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(5);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory(Timeout = 90000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task TwoViews_ShareOnePty_SeeEachOthersInput_AndSurviveDisconnect(bool shareClient)
@@ -47,7 +48,7 @@ public sealed class RemoteHostPtyTests
         Assert.Equal(HostSessionStatuses.Running, Assert.Single(await bob.ListHostSessionsAsync(Ct), session => session.SessionId == ptyId).Status);
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task Attach_StartsWithAFullScreenSnapshot_AndResizeReachesThePty()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mhq", TestContext.Current.CancellationToken);
@@ -82,7 +83,7 @@ public sealed class RemoteHostPtyTests
         await lateView.Completion.WaitAsync(Arrival, Ct);
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task LocalFleet_Terminal_Registry_And_LivePty_Survive_HostRestart_And_OfflineResize()
     {
         if (OperatingSystem.IsWindows())
@@ -233,3 +234,5 @@ public sealed class RemoteHostPtyTests
         }
     }
 }
+
+

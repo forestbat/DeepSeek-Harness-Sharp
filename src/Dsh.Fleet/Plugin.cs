@@ -1,6 +1,5 @@
 using Dsh.Boot;
 using Dsh.Core;
-using Dsh.Fleet.Iroh;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
@@ -17,7 +16,7 @@ public sealed class Plugin : IDshPlugin
     {
         var root = ctx.GetProp("dshHomePath") as string
             ?? throw new InvalidOperationException("the fleet plugin requires a harness home");
-        var service = new FleetService(new HarnessHome(root), ctx, new IrohSshTransport());
+        var service = new FleetService(new HarnessHome(root), ctx);
         ctx.Provide(FleetService.ServiceName, service);
         ctx.Provide(IOutboundRouteController.ServiceName, service.OutboundRoute);
         return service;

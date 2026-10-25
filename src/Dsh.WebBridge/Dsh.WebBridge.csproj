@@ -10,9 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
-    <ProjectReference Include="..\Dsh.RemoteHost\Dsh.RemoteHost.csproj" />
-    <ProjectReference Include="..\Dsh.Fleet.Client\Dsh.Fleet.Client.csproj" />
-    <ProjectReference Include="..\Dsh.Fleet.Client.Iroh\Dsh.Fleet.Client.Iroh.csproj" />
+    <ProjectReference Include="..\Dsh.Fleet\Dsh.Fleet.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />

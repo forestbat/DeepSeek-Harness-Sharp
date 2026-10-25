@@ -30,6 +30,8 @@ public sealed partial class MainWindow : Window
     private TrayIcon? _tray;
     private bool _forceQuit;
     private bool _shutdownRequested;
+    private bool _preparingClose;
+    private bool _closePrepared;
     private ClosePromptDialog? _closePrompt;
 
     /** XAML 编译器要求存在无参构造, 实际启动路径走下面的带参构造。 */
@@ -48,6 +50,8 @@ public sealed partial class MainWindow : Window
         ViewModel.TerminalRequested += ShowTerminal;
         ViewModel.FilePicker = PickAsync;
         ViewModel.Preferences.PluginFilePicker = PickPluginLibraryAsync;
+        ViewModel.Workspace.Machines.IrohFilePicker = PickIrohExecutableAsync;
+        ViewModel.Workspace.FolderPicker = async () => (await PickAsync(false, true)).FirstOrDefault();
         ViewModel.Preferences.Applied += ApplyAppearance;
         ViewModel.Preferences.Preview += ApplyPreview;
         AddHandler(KeyDownEvent, OnWorkspaceKeyDown, RoutingStrategies.Bubble);
@@ -81,11 +85,12 @@ public sealed partial class MainWindow : Window
     {
         var window = new SessionWindow(session);
         _sessionWindows[session] = window;
-        window.Closed += async (_, _) =>
+        window.Closed += (_, _) =>
         {
             _sessionWindows.Remove(session);
             if (ViewModel is { } viewModel)
-                await viewModel.Workspace.SessionWindowClosedAsync(session);
+                // The workspace retains this retirement and joins it before replacing or disposing the fleet.
+                _ = viewModel.Workspace.SessionWindowClosedAsync(session);
         };
         window.Show(this);
     }
@@ -125,6 +130,31 @@ public sealed partial class MainWindow : Window
             HideToTray();
             return;
         }
+        if (!_closePrepared)
+        {
+            e.Cancel = true;
+            if (_preparingClose)
+                return;
+            _preparingClose = true;
+            IsEnabled = false;
+            try
+            {
+                if (ViewModel is { } viewModel)
+                    await viewModel.DisposeAsync();
+                _closePrepared = true;
+                Dispatcher.UIThread.Post(Close);
+            }
+            catch (Exception error)
+            {
+                ViewModel?.SetStatus($"退出清理失败: {Dsh.Runtime.OutboundProxy.Redact(error.Message)}");
+                IsEnabled = true;
+            }
+            finally
+            {
+                _preparingClose = false;
+            }
+            return;
+        }
         ViewModel?.PersistWindowBounds(Width, Height, Position.X, Position.Y, WindowState == WindowState.Maximized);
         _forceQuit = true;
         base.OnClosing(e);
@@ -139,7 +169,6 @@ public sealed partial class MainWindow : Window
             viewModel.TerminalRequested -= ShowTerminal;
             viewModel.Preferences.Applied -= ApplyAppearance;
             viewModel.Preferences.Preview -= ApplyPreview;
-            viewModel.Dispose();
         }
         // 已登记的图标由 Avalonia 在 dispatcher 关闭时统一 Dispose; 先摘除可避免 12.1.2 那种非幂等 Dispose 被调两次。
         if (_tray is { } tray && Application.Current is { } trayApp && TrayIcon.GetIcons(trayApp) is { } icons)
@@ -256,7 +285,7 @@ public sealed partial class MainWindow : Window
     private void Quit()
     {
         _forceQuit = true;
-        ShutdownApplication();
+        Close();
     }
 
     /**
@@ -434,6 +463,19 @@ public sealed partial class MainWindow : Window
             AllowMultiple = false,
             Title = "选择插件",
             FileTypeFilter = [PluginLibraries, FilePickerFileTypes.All],
+        });
+        return files.Select(file => file.TryGetLocalPath()).FirstOrDefault(path => path is not null);
+    }
+
+    private async Task<string?> PickIrohExecutableAsync()
+    {
+        if (StorageProvider is not { } storage)
+            return null;
+        var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            AllowMultiple = false,
+            Title = "选择 iroh-ssh",
+            FileTypeFilter = [FilePickerFileTypes.All],
         });
         return files.Select(file => file.TryGetLocalPath()).FirstOrDefault(path => path is not null);
     }

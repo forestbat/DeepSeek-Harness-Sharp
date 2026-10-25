@@ -2,25 +2,28 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Channels;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Fleet;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Web;
 
 namespace Dsh.Tests;
 
 /**
- * 本机出口代理(settings.yaml 的 network.outbound_proxy)端到端验证: 经真实组合根装配, 走真实 web_fetch 工具、/proxy 命令、自检与设置写回。
- * TestForwardProxy 是测试专用的本地代理替身: 只记录收到的请求并回固定响应, 不向外转发; 公网 IP 目标避免单元测试依赖 DNS。
+ * Local outbound proxy coverage uses the actual composition root, web_fetch, commands and settings persistence.
+ * Controlled loopback responses verify transport diagnostics, not real external business success.
  */
 public sealed class OutboundProxyTests
 {
@@ -100,55 +103,222 @@ public sealed class OutboundProxyTests
     public async Task Probe_ReportsReachableProxy()
     {
         await using var proxy = new TestForwardProxy();
+        List<string> stages = [];
 
         var result = await OutboundProxyProbe.RunAsync(
             new OutboundProxySettings { Url = $"http://127.0.0.1:{proxy.Port}", ProbeUrl = FetchTarget },
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
 
         Assert.True(result.Reachable, result.Message);
-        Assert.StartsWith("本机出口代理可用", result.Message);
+        Assert.Equal(OutboundProxyProbe.HttpTargetStage, result.Stage);
+        Assert.Equal(200, result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.ProxyConnectStage, OutboundProxyProbe.HttpTargetStage], stages);
+        Assert.Equal([$"GET {FetchTarget} HTTP/1.1"], proxy.Requests);
     }
 
     [Fact]
     public async Task Probe_ReportsUnreachableProxyLayer_WithoutPassword()
     {
         var port = FreePort();
+        List<string> stages = [];
 
         var result = await OutboundProxyProbe.RunAsync(
             new OutboundProxySettings { Url = $"socks5://alice:{EscapedPassword}@127.0.0.1:{port}", ProbeUrl = FetchTarget },
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
 
         Assert.False(result.Reachable);
-        Assert.StartsWith("本机出口代理不通: 无法连接代理", result.Message);
+        Assert.Equal(OutboundProxyProbe.ProxyConnectStage, result.Stage);
+        Assert.Null(result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.ProxyConnectStage], stages);
         Assert.Contains($"socks5://***@127.0.0.1:{port}", result.Message);
         Assert.DoesNotContain(EscapedPassword, result.Message);
         Assert.DoesNotContain(Password, result.Message);
     }
 
-    [Fact]
-    public async Task Probe_ReportsProxyAuthenticationFailure()
+    [Theory]
+    [InlineData("http://example.test/")]
+    [InlineData("https://example.test/")]
+    public async Task Probe_ReportsProxyAuthenticationFailure(string probeUrl)
     {
         await using var proxy = new TestForwardProxy(requiredCredential: $"alice:{Password}");
+        List<string> stages = [];
 
         var result = await OutboundProxyProbe.RunAsync(
-            new OutboundProxySettings { Url = $"http://alice:wrong@127.0.0.1:{proxy.Port}", ProbeUrl = "https://example.test/" },
-            TestContext.Current.CancellationToken);
+            new OutboundProxySettings { Url = $"http://alice:wrong@127.0.0.1:{proxy.Port}", ProbeUrl = probeUrl },
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
 
         Assert.False(result.Reachable);
-        Assert.Equal($"本机出口代理不通: 代理 http://***@127.0.0.1:{proxy.Port} 要求认证或用户名密码错误(HTTP 407)", result.Message);
+        Assert.Equal(OutboundProxyProbe.ProxyAuthStage, result.Stage);
+        Assert.Equal(407, result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.ProxyConnectStage, OutboundProxyProbe.HttpTargetStage, OutboundProxyProbe.ProxyAuthStage], stages);
+        Assert.DoesNotContain("alice", result.Message);
+        Assert.DoesNotContain("wrong", result.Message);
     }
 
     [Fact]
     public async Task Probe_RejectsUnsupportedScheme_WithRedactedReason()
     {
+        List<string> stages = [];
         var result = await OutboundProxyProbe.RunAsync(
             new OutboundProxySettings { Url = $"ftp://alice:{EscapedPassword}@127.0.0.1:21" },
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
 
         Assert.False(result.Reachable);
-        Assert.Contains("配置无效", result.Message);
+        Assert.Equal(OutboundProxyProbe.ConfigurationStage, result.Stage);
+        Assert.Null(result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage], stages);
         Assert.Contains("ftp://***@127.0.0.1:21", result.Message);
         Assert.DoesNotContain(EscapedPassword, result.Message);
+        Assert.DoesNotContain(Password, result.Message);
+        Assert.DoesNotContain("alice", result.Message);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, false)]
+    [InlineData(HttpStatusCode.Forbidden, false)]
+    [InlineData(HttpStatusCode.NotFound, false)]
+    [InlineData(HttpStatusCode.NotFound, true)]
+    public async Task Probe_DirectTargetStatus_IsReachability_NotBusinessSuccess(HttpStatusCode statusCode, bool configuredProxy)
+    {
+        await using var target = new TestForwardProxy(statusCode: statusCode);
+        await using var unusedProxy = new TestForwardProxy();
+        List<string> stages = [];
+
+        var result = await OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings
+            {
+                Url = configuredProxy ? $"http://127.0.0.1:{unusedProxy.Port}" : null,
+                ProbeUrl = $"http://127.0.0.1:{target.Port}/target",
+            },
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
+
+        Assert.True(result.Reachable, result.Message);
+        Assert.Equal(OutboundProxyProbe.HttpTargetStage, result.Stage);
+        Assert.Equal((int)statusCode, result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.HttpTargetStage], stages);
+        Assert.Equal(["GET /target HTTP/1.1"], target.Requests);
+        Assert.Equal(0, unusedProxy.Connections);
+    }
+
+    [Theory]
+    [InlineData("ftp://example.test/")]
+    [InlineData("not-a-url")]
+    public async Task Probe_InvalidTarget_StopsAtConfiguration(string probeUrl)
+    {
+        await using var proxy = new TestForwardProxy();
+        List<string> stages = [];
+
+        var result = await OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings { Url = $"http://127.0.0.1:{proxy.Port}", ProbeUrl = probeUrl },
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
+
+        Assert.False(result.Reachable);
+        Assert.Equal(OutboundProxyProbe.ConfigurationStage, result.Stage);
+        Assert.Null(result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage], stages);
+        Assert.Equal(0, proxy.Connections);
+    }
+
+    [Theory]
+    [InlineData(OutboundProxyProbe.ConfigurationStage)]
+    [InlineData(OutboundProxyProbe.ProxyConnectStage)]
+    [InlineData(OutboundProxyProbe.HttpTargetStage)]
+    [InlineData(OutboundProxyProbe.ProxyAuthStage)]
+    public async Task Probe_UserCancellationAtPhaseBoundary_StillThrows(string cancelStage)
+    {
+        await using var proxy = new TestForwardProxy(requiredCredential: $"alice:{Password}");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        List<string> stages = [];
+
+        var pending = OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings { Url = $"http://127.0.0.1:{proxy.Port}", ProbeUrl = FetchTarget },
+            cancellation.Token, stageChanged: stage =>
+            {
+                stages.Add(stage);
+                if (stage == cancelStage)
+                    cancellation.Cancel();
+            });
+
+        Assert.Equal(OutboundProxyProbe.ConfigurationStage, stages[0]);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Equal(cancelStage, stages[^1]);
+        Assert.Empty(proxy.Requests);
+    }
+
+    [Fact]
+    public async Task Probe_ConnectTunnelRejection_IsNotATargetHttpResponse()
+    {
+        await using var proxy = new TestForwardProxy();
+        List<string> stages = [];
+
+        var result = await OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings
+            {
+                Url = $"http://127.0.0.1:{proxy.Port}",
+                ProbeUrl = $"https://alice:{EscapedPassword}@example.test/",
+            },
+            TestContext.Current.CancellationToken, stageChanged: stages.Add);
+
+        Assert.False(result.Reachable);
+        Assert.Equal(OutboundProxyProbe.HttpTargetStage, result.Stage);
+        Assert.Equal(403, result.HttpStatus);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.ProxyConnectStage, OutboundProxyProbe.HttpTargetStage], stages);
+        Assert.Equal(["CONNECT example.test:443 HTTP/1.1"], proxy.Requests);
+        Assert.DoesNotContain(Password, result.Message);
+        Assert.DoesNotContain(EscapedPassword, result.Message);
+        Assert.DoesNotContain("alice", result.Message);
+    }
+
+    [Fact]
+    public async Task Probe_TargetCredentials_AreNotDisclosedOnReachableResponse()
+    {
+        await using var target = new TestForwardProxy();
+        var probeUrl = $"http://alice:{EscapedPassword}@127.0.0.1:{target.Port}/target";
+
+        var result = await OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings { ProbeUrl = probeUrl },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Reachable, result.Message);
+        Assert.Equal(OutboundProxyProbe.HttpTargetStage, result.Stage);
+        Assert.Equal(200, result.HttpStatus);
+        Assert.Equal(["GET /target HTTP/1.1"], target.Requests);
+        Assert.DoesNotContain(probeUrl, result.Message);
+        Assert.DoesNotContain(Password, result.Message);
+        Assert.DoesNotContain(EscapedPassword, result.Message);
+        Assert.DoesNotContain("alice", result.Message);
+    }
+
+    [Fact]
+    public async Task Probe_UserCancellationDuringHttpRequest_StillThrows()
+    {
+        await using var proxy = new TestForwardProxy(pauseResponses: true);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        List<string> stages = [];
+        var pending = OutboundProxyProbe.RunAsync(
+            new OutboundProxySettings { Url = $"http://127.0.0.1:{proxy.Port}", ProbeUrl = FetchTarget },
+            cancellation.Token, stageChanged: stages.Add);
+        Assert.Equal(OutboundProxyProbe.ConfigurationStage, stages[0]);
+        Assert.Equal($"GET {FetchTarget} HTTP/1.1", await proxy.WaitForRequestAsync(TestContext.Current.CancellationToken));
+
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.Equal([OutboundProxyProbe.ConfigurationStage, OutboundProxyProbe.ProxyConnectStage, OutboundProxyProbe.HttpTargetStage], stages);
+        Assert.Single(proxy.Requests);
+    }
+
+    [Fact]
+    public void Probe_OldWireSchema_PreservesMissingStructuredFields()
+    {
+        var result = JsonSerializer.Deserialize(
+            """{"reachable":true,"message":"legacy transport response"}""",
+            NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeResult);
+
+        Assert.True(result.Reachable);
+        Assert.Null(result.Stage);
+        Assert.Null(result.HttpStatus);
+        Assert.Null(result.HostHome);
     }
 
     [Fact]
@@ -167,7 +337,7 @@ public sealed class OutboundProxyTests
         var reload = await harness.CommandAsync("/proxy reload");
 
         Assert.IsType<CommandResult.Success>(test);
-        Assert.Contains("本机出口代理可用", ((CommandResult.Success)test).Text);
+        Assert.Equal([$"GET {FetchTarget} HTTP/1.1"], proxy.Requests);
         Assert.IsType<CommandResult.Success>(reload);
         Assert.Equal(new Uri($"http://127.0.0.1:{proxy.Port}"), OutboundProxy.FromContext(harness.App.Ctx).Address);
     }
@@ -263,6 +433,191 @@ public sealed class OutboundProxyTests
     [InlineData("socks5://host:1080/path@x", "socks5://host:1080/path@x")]
     public void Redact_HidesUserInfoOnly(string url, string expected)
         => Assert.Equal(expected, OutboundProxy.Redact(url));
+
+    [Theory]
+    [InlineData("Authorization", "Bearer")]
+    [InlineData("Proxy-Authorization", "Basic")]
+    [InlineData("authorization", "Bearer")]
+    public void Redact_HidesAuthenticationHeaderValues(string header, string scheme)
+    {
+        var credential = Convert.ToBase64String(Encoding.UTF8.GetBytes($"probe-user:{Password}"));
+
+        var result = OutboundProxy.Redact($"{header}: {scheme} {credential}\r\nnext: safe");
+
+        Assert.DoesNotContain(credential, result);
+        Assert.Contains("next: safe", result);
+    }
+
+    [Fact]
+    public void Redact_HidesKnownRawAndEncodedSecrets_AndUrlCredentials()
+    {
+        const string username = "probe-user";
+        var proxyUrl = $"http://{username}:{EscapedPassword}@example.test:8080";
+        var standaloneSecret = "probe-token:/+";
+        var text = $"url={proxyUrl}; encoded-url={Uri.EscapeDataString(proxyUrl)}; user={username}; password={Password}; encoded-password={EscapedPassword}; token={standaloneSecret}; encoded-token={Uri.EscapeDataString(standaloneSecret)}; safe detail";
+
+        var result = OutboundProxy.Redact(text, proxyUrl, standaloneSecret);
+
+        Assert.DoesNotContain(proxyUrl, result);
+        Assert.DoesNotContain(Uri.EscapeDataString(proxyUrl), result);
+        Assert.DoesNotContain(username, result);
+        Assert.DoesNotContain(Password, result);
+        Assert.DoesNotContain(EscapedPassword, result);
+        Assert.DoesNotContain(standaloneSecret, result);
+        Assert.DoesNotContain(Uri.EscapeDataString(standaloneSecret), result);
+        Assert.Contains("safe detail", result);
+    }
+
+    [Theory]
+    [InlineData("Authorization", "Bearer")]
+    [InlineData("proxy-authorization", "Basic")]
+    public void Redact_HidesQuotedAndEscapedAuthenticationHeaders(string header, string scheme)
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var credential = $"synthetic-{Guid.NewGuid():N}:user@value\\\"";
+        var json = $"{{\"{header}\":\"{scheme} {JsonEncodedText.Encode(credential)}\",\"safe\":\"retained\"}}";
+        foreach (var encoder in new[] { JavaScriptEncoder.Default, JavaScriptEncoder.UnsafeRelaxedJsonEscaping })
+        {
+            var diagnostic = json;
+            for (var depth = 0; depth < 3; depth++)
+            {
+                var result = OutboundProxy.Redact(diagnostic);
+                Assert.DoesNotContain(credential[..credential.IndexOf(':')], result);
+                Assert.Contains("retained", result);
+                diagnostic = JsonEncodedText.Encode(diagnostic, encoder).ToString();
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("Authorization")]
+    [InlineData("Proxy-Authorization")]
+    public void Redact_ClearsAssignmentHeadersBeforeKnownSecretsOrUserInfo(string header)
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var credential = $"synthetic-{Guid.NewGuid():N}";
+        var result = OutboundProxy.Redact($"{header}=Basic {header}:{credential}@example.test\r\nsafe: retained", header);
+
+        Assert.DoesNotContain(credential, result);
+        Assert.Contains("safe: retained", result);
+    }
+
+    [Fact]
+    public void Redact_HidesJsonEncodedKnownSecrets_InNestedRpcDiagnostics()
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var secret = $"synthetic-{Guid.NewGuid():N}:\"\\\n中";
+        var representations = new HashSet<string>(StringComparer.Ordinal) { secret, Uri.EscapeDataString(secret) };
+        foreach (var encoder in new[] { JavaScriptEncoder.Default, JavaScriptEncoder.UnsafeRelaxedJsonEscaping })
+        {
+            var encoded = JsonEncodedText.Encode(secret, encoder).ToString();
+            representations.Add(encoded);
+            representations.Add(JsonEncodedText.Encode(encoded, JavaScriptEncoder.Default).ToString());
+            representations.Add(JsonEncodedText.Encode(encoded, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString());
+        }
+        var diagnostic = $"RPC error message: {string.Join(" | ", representations)}; safe detail";
+
+        var result = OutboundProxy.Redact(diagnostic, secret);
+
+        foreach (var representation in representations)
+            Assert.DoesNotContain(representation, result);
+        Assert.Contains("safe detail", result);
+    }
+
+    [Fact]
+    public void Redact_FullyMasksKnownUrlShapedPasswordsAndProxyCommands()
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var password = $"https://password-{Guid.NewGuid():N}.example.test/value";
+        var proxyCommand = $"ssh -i 'synthetic-{Guid.NewGuid():N}' proxy-command.example.test -W %h:%p";
+        var diagnostic = $"password={password}; proxy={proxyCommand}; quoted={proxyCommand.Replace("'", "'\\''", StringComparison.Ordinal)}; safe detail";
+
+        var result = OutboundProxy.Redact(diagnostic, password, proxyCommand);
+
+        Assert.DoesNotContain(password, result);
+        Assert.DoesNotContain("proxy-command.example.test", result);
+        Assert.Contains("safe detail", result);
+    }
+
+    [Fact]
+    public void RedactUrlCredentials_RetainsEndpointAndHidesRawAndEncodedCredentials()
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var username = $"synthetic-user-{Guid.NewGuid():N}:suffix";
+        var password = $"synthetic-password-{Guid.NewGuid():N}:\"\\\n中";
+        var url = $"ftp://{Uri.EscapeDataString(username)}:{Uri.EscapeDataString(password)}@proxy.example.test:21";
+        var diagnostic = $"{url}; encoded-url={Uri.EscapeDataString(url)}; user={username}; password={password}; json-password={JsonEncodedText.Encode(password)}; safe detail";
+
+        var result = OutboundProxy.RedactUrlCredentials(diagnostic, url);
+
+        Assert.Contains("ftp://***@proxy.example.test:21", result);
+        Assert.DoesNotContain(username, result);
+        Assert.DoesNotContain(password, result);
+        Assert.DoesNotContain(Uri.EscapeDataString(username), result);
+        Assert.DoesNotContain(Uri.EscapeDataString(password), result);
+        Assert.DoesNotContain(JsonEncodedText.Encode(password).ToString(), result);
+        Assert.Contains("safe detail", result);
+    }
+
+    [Theory]
+    [InlineData("https://proxy.example.test/?token=")]
+    [InlineData("https://proxy.example.test/#")]
+    [InlineData("malformed proxy ")]
+    public void RedactUrlCredentials_MasksSensitiveOrMalformedUrlContexts(string prefix)
+    {
+        // These randomized credentials are synthetic test data, not real credentials.
+        var url = $"{prefix}synthetic-{Guid.NewGuid():N}";
+
+        var result = OutboundProxy.RedactUrlCredentials($"{url}; encoded={Uri.EscapeDataString(url)}; safe detail", url);
+
+        Assert.DoesNotContain(url, result);
+        Assert.DoesNotContain(Uri.EscapeDataString(url), result);
+        Assert.Contains("safe detail", result);
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Doctor_RealSshMisconfiguredInstallation_RedactsRepairCommands()
+    {
+        FleetSshEndToEndTests.RequireEnvironment();
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("This real SSH regression requires the POSIX SSH fixture.");
+            return;
+        }
+        var cancellation = TestContext.Current.CancellationToken;
+        await using var ssh = await TestSshServer.StartAsync(cancellation);
+        // These randomized credentials are synthetic test data, not real credentials.
+        var password = $"synthetic-{Guid.NewGuid():N}";
+        var home = Path.Combine(ssh.Home, "doctor-home");
+        var run = Path.Combine(home, "run");
+        Directory.CreateDirectory(run);
+        File.SetUnixFileMode(run, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        var bin = Path.Combine(ssh.Home, ".dsharp", System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier);
+        Directory.CreateDirectory(bin);
+        // A real non-Host executable represents an invalid configured installation without emulating SSH or RPC replies.
+        File.CreateSymbolicLink(Path.Combine(bin, "dsharp"), OperatingSystem.IsMacOS() ? "/usr/bin/false" : "/bin/false");
+        var direct = ssh.Machine($"doctor-{password}", home);
+        var trusted = await FleetDoctor.CheckSshAsync(direct, new SshTransport(direct), cancellation);
+        Assert.True(trusted.Outcome == DoctorOutcome.Ok, trusted.Detail);
+        var proxyCommand = $"ssh -F /dev/null -p {direct.Port} -i {RemoteShell.Quote(direct.KeyPath!)} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile={RemoteShell.Quote(Path.Combine(ssh.Root, "known_hosts"))} -W %h:%p {RemoteShell.Quote($"{direct.User}@{direct.Host}")} # {password}";
+        var machine = direct with { Password = password, Proxy = proxyCommand };
+
+        var checks = await FleetDoctor.CheckAsync(machine, FleetConnectionTests.TestOptions, cancellation);
+
+        Assert.Equal(DoctorOutcome.Ok, Assert.Single(checks, check => check.Name == "ssh").Outcome);
+        Assert.Equal(DoctorOutcome.Failed, Assert.Single(checks, check => check.Name == "permissions").Outcome);
+        Assert.Equal(DoctorOutcome.Failed, Assert.Single(checks, check => check.Name == "connection").Outcome);
+        foreach (var check in checks)
+        {
+            Assert.DoesNotContain(password, check.Detail);
+            if (check.Fix is not { } fix)
+                continue;
+            Assert.DoesNotContain(password, fix);
+        }
+        Assert.Contains("chmod", Assert.Single(checks, check => check.Name == "permissions").Fix);
+        Assert.Contains("host serve", Assert.Single(checks, check => check.Name == "connection").Fix);
+    }
 
     [Theory]
     [InlineData("http://localhost/", true)]
@@ -393,46 +748,8 @@ public sealed class OutboundProxyTests
     }
 }
 
-/** 设置页「网络」分页: 草稿自检走同一自检服务, 保存写回 settings.yaml 并立即作用于本进程。 */
-[Collection(GuiSerialCollection.CollectionName)]
-public sealed class OutboundProxyGuiTests
-{
-    [Fact]
-    public async Task NetworkSection_ChecksDraftAndSavesLive() => await HeadlessGui.RunAsync(async () =>
-    {
-        await using var proxy = new TestForwardProxy();
-        using var environment = GuiTestEnvironment.CreateBlocking();
-        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
-        var preferences = window.ViewModel!.Preferences;
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-        try
-        {
-            window.ViewModel.ShowSettingsCommand.Execute(null);
-            var network = preferences.Sections.First(section => section.Section == SettingsSection.Network);
-            network.SelectCommand!.Execute(network);
-            preferences.OutboundProxyUrl = $"http://127.0.0.1:{proxy.Port}";
-            preferences.OutboundProxyProbeUrl = "http://example.test/";
-            await preferences.CheckProxyCommand.ExecuteAsync(null);
-            preferences.SaveNetworkCommand.Execute(null);
-            Dispatcher.UIThread.RunJobs();
 
-            Assert.True(preferences.IsNetworkSection);
-            Assert.StartsWith("本机出口代理可用", preferences.ProxyCheckResult);
-            Assert.Equal(new Uri($"http://127.0.0.1:{proxy.Port}"), OutboundProxy.FromContext(environment.App.Ctx).Address);
-            Assert.Equal($"http://127.0.0.1:{proxy.Port}", HarnessSettings.Load(environment.App.Home).Network?.OutboundProxy?.Url);
-            var page = window.GetVisualDescendants().OfType<SettingsPageView>().Single();
-            Assert.Contains(page.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(), block => block.Text == "本机出口代理");
-        }
-        finally
-        {
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-        }
-    });
-}
-
-/** An actual TCP proxy with optional authentication, forwarding, persistent connections and response barriers. */
+/** An actual loopback TCP proxy with controlled responses or optional real forwarding, not external business smoke. */
 internal sealed class TestForwardProxy : IAsyncDisposable
 {
     private const byte SocksVersion = 5;
@@ -452,6 +769,8 @@ internal sealed class TestForwardProxy : IAsyncDisposable
     private readonly bool _keepAlive;
     private readonly bool _pauseResponses;
     private readonly bool _pauseBody;
+    private readonly HttpStatusCode _statusCode;
+    private readonly bool _observePeerCloseWhilePaused;
     private readonly ConcurrentDictionary<TcpClient, byte> _clients = new();
     private readonly ConcurrentBag<Task> _serving = [];
     private readonly Channel<string> _received = Channel.CreateUnbounded<string>();
@@ -459,17 +778,22 @@ internal sealed class TestForwardProxy : IAsyncDisposable
     private readonly SemaphoreSlim _responses = new(0);
     private readonly Task _accepting;
     private int _connections;
+    private int _authenticationChallenges;
 
     public const string ProxiedBody = "via-test-proxy";
 
-    public TestForwardProxy(bool socks = false, string? requiredCredential = null, bool forward = false, bool keepAlive = false, bool pauseResponses = false, bool pauseBody = false)
+    public TestForwardProxy(bool socks = false, string? requiredCredential = null, bool forward = false, bool keepAlive = false, bool pauseResponses = false, bool pauseBody = false, HttpStatusCode statusCode = HttpStatusCode.OK, bool observePeerCloseWhilePaused = false)
     {
+        if (observePeerCloseWhilePaused && (socks || forward || keepAlive))
+            throw new ArgumentException("Peer-close observation is limited to controlled nonpersistent HTTP responses.", nameof(observePeerCloseWhilePaused));
         _socks = socks;
         _requiredCredential = requiredCredential;
         _forward = forward;
         _keepAlive = keepAlive;
         _pauseResponses = pauseResponses;
         _pauseBody = pauseBody;
+        _statusCode = statusCode;
+        _observePeerCloseWhilePaused = observePeerCloseWhilePaused;
         _listener.Start();
         _accepting = AcceptAsync();
     }
@@ -477,6 +801,8 @@ internal sealed class TestForwardProxy : IAsyncDisposable
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
     public int Connections => Volatile.Read(ref _connections);
+
+    public int AuthenticationChallenges => Volatile.Read(ref _authenticationChallenges);
 
     public int ActiveConnections => _clients.Count;
 
@@ -491,6 +817,8 @@ internal sealed class TestForwardProxy : IAsyncDisposable
     public void RequireCredential(string credential) => Volatile.Write(ref _requiredCredential, credential);
 
     public ConcurrentQueue<string> Requests { get; } = new();
+
+    public ConcurrentQueue<string> HttpAttempts { get; } = new();
 
     public ConcurrentQueue<string> Credentials { get; } = new();
 
@@ -554,9 +882,11 @@ internal sealed class TestForwardProxy : IAsyncDisposable
         while (await ReadHeadAsync(stream) is { } head)
         {
             var lines = head.Split("\r\n");
+            HttpAttempts.Enqueue(lines[0]);
             var requiredCredential = Volatile.Read(ref _requiredCredential);
             if (requiredCredential is not null && BasicCredential(lines) != requiredCredential)
             {
+                Interlocked.Increment(ref _authenticationChallenges);
                 await WriteAsync(stream, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"test\"\r\nContent-Length: 0\r\n\r\n");
                 continue;
             }
@@ -567,7 +897,15 @@ internal sealed class TestForwardProxy : IAsyncDisposable
                 Headers.Enqueue(line);
             _received.Writer.TryWrite(lines[0]);
             if (_pauseResponses)
-                await _responses.WaitAsync(_stop.Token);
+            {
+                if (_observePeerCloseWhilePaused && lines[0].StartsWith("GET ", StringComparison.Ordinal))
+                {
+                    if (!await WaitForResponseOrPeerCloseAsync(stream))
+                        return;
+                }
+                else
+                    await _responses.WaitAsync(_stop.Token);
+            }
             if (_forward)
             {
                 var parts = lines[0].Split(' ');
@@ -589,6 +927,50 @@ internal sealed class TestForwardProxy : IAsyncDisposable
             if (!_keepAlive || lines[0].StartsWith("CONNECT ", StringComparison.Ordinal))
                 return;
         }
+    }
+
+    /** The opt-in controlled HTTP barrier observes EOF without retaining a cancelled client's socket. */
+    private async Task<bool> WaitForResponseOrPeerCloseAsync(NetworkStream stream)
+    {
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        var response = _responses.WaitAsync(waiting.Token);
+        var peerClosed = stream.ReadAsync(new byte[1], waiting.Token).AsTask();
+        var responseReady = false;
+        try
+        {
+            if (await Task.WhenAny(response, peerClosed) == peerClosed)
+            {
+                if (await peerClosed != 0)
+                    throw new IOException("Unexpected request data while the controlled HTTP response is paused.");
+            }
+            else
+            {
+                await response;
+                responseReady = true;
+            }
+        }
+        finally
+        {
+            await waiting.CancelAsync();
+            try
+            {
+                await Task.WhenAll(response, peerClosed);
+            }
+            catch (OperationCanceledException) when (waiting.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                if (!peerClosed.IsCanceled || _stop.IsCancellationRequested)
+                    responseReady = false;
+                // Return a concurrently acquired permit when EOF or failure prevents a response.
+                if (!responseReady && response.IsCompletedSuccessfully)
+                    _responses.Release();
+            }
+        }
+        if (peerClosed.IsCompletedSuccessfully && peerClosed.Result != 0)
+            throw new IOException("Unexpected request data while the controlled HTTP response is paused.");
+        return responseReady;
     }
 
     private async Task ServeSocksAsync(NetworkStream stream)
@@ -669,7 +1051,7 @@ internal sealed class TestForwardProxy : IAsyncDisposable
 
     private async Task WriteBodyAsync(NetworkStream stream)
     {
-        var head = $"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {ProxiedBody.Length}\r\nConnection: {(_keepAlive ? "keep-alive" : "close")}\r\n\r\n";
+        var head = $"HTTP/1.1 {(int)_statusCode} {_statusCode}\r\nContent-Type: text/plain\r\nContent-Length: {ProxiedBody.Length}\r\nConnection: {(_keepAlive ? "keep-alive" : "close")}\r\n\r\n";
         if (!_pauseBody)
         {
             await WriteAsync(stream, $"{head}{ProxiedBody}");

@@ -215,7 +215,7 @@ public sealed class VtScreenRenderStateTests
         var source = Fed("shell\e[2;3H\e[32m\e7\e[3;4H", width: 12, height: 5);
         if (alternate)
             source.Feed("\e[?1049h\e[1;1H12345678901X\e[5;1HabcdefghijkZ");
-        source.Feed("\e[2;4r\e[3;5H\e[31;44m\e7\e[3;7H\e[?1h\e[?2004h\e[?1004h\e[?1002h\e[?1006h\e[6 q");
+        source.Feed("\e[2;4r\e[3;5H\e[31;44m\e7\e[3;7H\e[?1h\e[?2004h\e[?1004h\e[6 q");
         var restored = new VtScreen(source.Width, source.Height);
         restored.Feed("\e[?1049h\e[2;3r\e[?25l\e["); // reconnect may interrupt a CSI
         restored.Feed(Encoding.UTF8.GetBytes(source.Snapshot()));
@@ -245,6 +245,20 @@ public sealed class VtScreenRenderStateTests
         restored.Feed("Z");
         AssertScreensEqual(source, restored);
         Assert.Equal('Z', restored.Row(1)[0].Character);
+    }
+
+    [Fact]
+    public void Snapshot_Does_Not_Replay_Mouse_Reporting()
+    {
+        var screen = Fed("\e[?1002h\e[?1006h", width: 10, height: 3);
+        Assert.Equal(TerminalMouseTracking.ButtonEvent, screen.MouseTracking);
+        Assert.True(screen.SgrMouse);
+
+        var snapshot = screen.Snapshot();
+
+        Assert.DoesNotContain("\u001b[?1006", snapshot);
+        Assert.DoesNotContain("\u001b[?1002", snapshot);
+        Assert.DoesNotContain("\u001b[?1003", snapshot);
     }
 
     private static void AssertScreensEqual(VtScreen expected, VtScreen actual)

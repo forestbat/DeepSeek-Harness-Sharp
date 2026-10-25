@@ -9,12 +9,12 @@ using Dsh.RemoteHost;
 namespace Dsh.Gui.ViewModels;
 
 /**
- * 一台机器上某个项目的只读 git 视图, 经 IRemoteGit 的 host.git.* 完成(未跟踪文件经 IRemoteFiles 读内容)。
+ * 一台机器上某个项目的只读 git 视图, 经 RemoteGitClient 的 host.git.* 完成(未跟踪文件经 RemoteFilesClient 读内容)。
  * 用法: new GitViewModel(git, files, projectPath, style) 后 await RefreshAsync(); 选中文件或提交即在 DiffCards 里给出 diff。
  * 只做查看与 worktree 管理, 不做 stage/commit/push 等写操作。
  * 新建 worktree 后与 worktree 行上的"新建会话"都经 NewSessionRequested 交给集成方去走新建会话流程。
  */
-public sealed partial class GitViewModel(IRemoteGit git, IRemoteFiles files, string projectPath, RemotePathStyle style) : OperationViewModel
+public sealed partial class GitViewModel(RemoteGitClient git, RemoteFilesClient files, string projectPath, RemotePathStyle style) : OperationViewModel
 {
     public const int LogCount = 50;
 
@@ -253,3 +253,4 @@ public sealed partial class GitViewModel(IRemoteGit git, IRemoteFiles files, str
             target.Add(item);
     }
 }
+

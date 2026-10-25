@@ -134,13 +134,6 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
       <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-              Command="{Binding OpenLocalTerminalCommand}">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <Path Classes="Icon" Data="{StaticResource Icon.Terminal}" />
-          <TextBlock Text="终端" VerticalAlignment="Center" />
-        </StackPanel>
-      </Button>
-      <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
               Command="{Binding ShowMarketCommand}">
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Path Classes="Icon" Data="{StaticResource Icon.Plugin}" />
@@ -158,70 +151,49 @@
 
     <Grid>
       <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="6,0,8,0" IsVisible="{Binding IsSolutionView}">
-        <ItemsControl ItemsSource="{Binding Workspaces}">
+        <StackPanel Spacing="4">
+        <TextBlock Text="最近会话" Classes="Tertiary" Margin="6,4,0,0" />
+        <ItemsControl ItemsSource="{Binding Workspace.Dashboard.RecentCards}">
           <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:WorkspaceGroupViewModel">
-              <StackPanel Margin="0,2,0,4">
-                <Button Classes="Ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                        Command="{Binding ToggleCommand}" Padding="6,4">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Folder}" />
-                    <TextBlock Text="{Binding Name}" Classes="Secondary" VerticalAlignment="Center" />
+            <DataTemplate x:DataType="vm:SessionCardViewModel">
+              <Grid ColumnDefinitions="*,Auto">
+                <Button Classes="SessionItem" Classes.selected="{Binding IsCurrent}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,5"
+                        IsVisible="{Binding !IsRenaming}"
+                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).Workspace.Dashboard.OpenCommand}"
+                        CommandParameter="{Binding}">
+                  <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
+                               TextTrimming="CharacterEllipsis">
+                      <Run Text="{Binding Machine}" />
+                      <Run Text=" · " />
+                      <Run Text="{Binding ProjectName}" />
+                    </TextBlock>
                   </StackPanel>
                 </Button>
-                <ItemsControl ItemsSource="{Binding Sessions}" IsVisible="{Binding IsExpanded}" Margin="10,0,0,0">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:SessionNodeViewModel">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <Button Classes="SessionItem" Classes.selected="{Binding IsSelected}"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,5"
-                                IsVisible="{Binding !IsRenaming}"
-                                Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSessionCommand}"
-                                CommandParameter="{Binding}">
-                          <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel VerticalAlignment="Center">
-                              <TextBlock Text="{Binding Title}" Classes="Body" FontSize="{DynamicResource FontSize.List}"
-                                         TextTrimming="CharacterEllipsis" />
-                              <TextBlock Text="{Binding MatchSnippet}" Classes="Tertiary" FontSize="{DynamicResource FontSize.Status}"
-                                         TextTrimming="CharacterEllipsis" IsVisible="{Binding HasMatchSnippet}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0" VerticalAlignment="Center">
-                              <TextBlock Text="● 运行中" FontSize="{DynamicResource FontSize.Status}"
-                                         Foreground="{DynamicResource Brush.Status.Success}" IsVisible="{Binding IsRunning}" />
-                              <TextBlock Text="{Binding RelativeTime}" Classes="Tertiary" />
-                            </StackPanel>
-                          </Grid>
-                        </Button>
-                        <TextBox Grid.Column="0" Grid.ColumnSpan="2" Classes="Search" IsVisible="{Binding IsRenaming}"
-                                 Text="{Binding RenameDraft}"
-                                 KeyDown="OnRenameKeyDown" LostFocus="OnRenameLostFocus" />
-                        <Button Grid.Column="1" Classes="Icon" Width="24" Height="24" ToolTip.Tip="更多"
-                                VerticalAlignment="Center" IsVisible="{Binding !IsRenaming}">
-                          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Menu}" />
-                          <Button.Flyout>
-                            <MenuFlyout Placement="BottomEdgeAlignedRight">
-                              <MenuItem Header="打开"
-                                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).OpenSessionCommand}"
-                                        CommandParameter="{Binding}" />
-                              <MenuItem Header="重命名"
-                                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).BeginRenameCommand}"
-                                        CommandParameter="{Binding}" />
-                              <MenuItem Header="导出日志"
-                                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ExportSessionLogCommand}" />
-                              <MenuItem Header="删除"
-                                        Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).DeleteSessionCommand}"
-                                        CommandParameter="{Binding}" />
-                            </MenuFlyout>
-                          </Button.Flyout>
-                        </Button>
-                      </Grid>
+                <ContentControl Grid.Column="0" Grid.ColumnSpan="2" Content="{Binding RenameEditor}">
+                  <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SessionCardViewModel">
+                      <TextBox Classes="Search" Text="{Binding RenameDraft}"
+                               AttachedToVisualTree="OnCardRenameAttached"
+                               KeyDown="OnCardRenameKeyDown" LostFocus="OnCardRenameLostFocus" />
                     </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </StackPanel>
+                  </ContentControl.ContentTemplate>
+                </ContentControl>
+                <Button Grid.Column="1" Classes="Icon" Width="24" Height="24" ToolTip.Tip="更多"
+                        VerticalAlignment="Center" IsVisible="{Binding !IsRenaming}"
+                        Click="OnRecentSessionMenuClick">
+                  <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Menu}" />
+                </Button>
+              </Grid>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <Button Classes="Ghost" Margin="6,4,0,0" HorizontalAlignment="Left" Padding="6,2"
+                Command="{Binding ShowDashboardCommand}" Content="在工作台查看全部会话" />
+        </StackPanel>
       </ScrollViewer>
 
       <TreeView x:Name="FileTree" ItemsSource="{Binding FileSystemNodes}" IsVisible="{Binding IsFileSystemView}"

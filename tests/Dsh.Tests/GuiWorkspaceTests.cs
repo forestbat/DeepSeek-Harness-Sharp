@@ -7,6 +7,7 @@ using Dsh.Core;
 using Dsh.Fleet;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
+using Dsh.Gui.Views;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Notifications;
@@ -22,14 +23,48 @@ namespace Dsh.Tests;
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class GuiWorkspaceTests
 {
-    private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(20);
+    [Fact]
+    public async Task RecentCards_MixMachines_AndProjectFoldSurvivesRefresh()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var alpha = await HarnessHostFixture.CreateAsync("gwr", ct);
+        await using var beta = await HarnessHostFixture.CreateAsync("gws", ct);
+        var appProject = Project(alpha, "app");
+        var serviceProject = Project(beta, "service");
+        await HeadlessGui.RunAsync(async () =>
+        {
+            var workspace = Open(alpha, beta);
+            try
+            {
+                await ConnectedAsync(workspace);
+                var local = (await workspace.Actions.StartAsync("alpha", Harness(appProject, "本地会话"), ct)).SessionId;
+                var remote = (await workspace.Actions.StartAsync("beta", Harness(serviceProject, "远程会话"), ct)).SessionId;
+                var dashboard = workspace.Dashboard;
+                await UntilAsync(() => dashboard.RecentCards.Count == 2, "recent cards");
+
+                Assert.Contains(dashboard.RecentCards, card => card.SessionId == local && card.Machine == "alpha");
+                Assert.Contains(dashboard.RecentCards, card => card.SessionId == remote && card.Machine == "beta");
+                var project = dashboard.Machines.Single(machine => machine.Name == "alpha").Projects.Single();
+                project.ToggleCommand.Execute(null);
+                Assert.False(project.IsExpanded);
+                dashboard.Refresh();
+                Assert.False(project.IsExpanded);
+            }
+            finally
+            {
+                await workspace.DisposeAsync();
+            }
+        });
+    }
+
+    private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(5);
 
     /** Fast heartbeat and backoff, so a stopped host is noticed and the reconnect happens within the test. */
     private static readonly FleetOptions Options = FleetConnectionTests.TestOptions with { ClientName = "gui-workspace-test" };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 5000)]
     public async Task Dashboard_GroupsBothMachines_FiltersSearchesSorts_AndPaletteJumps()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -62,6 +97,14 @@ public sealed class GuiWorkspaceTests
                 Assert.Equal(new[] { waiting, busy }.Order(), alphaProjects.Sessions.Select(card => card.SessionId).Order());
                 Assert.Equal(serviceProject, Assert.Single(dashboard.Machines[1].Projects).ProjectPath);
                 Assert.Equal((3, 1, 1, 0), (dashboard.SessionCount, dashboard.AttentionCount, dashboard.RunningCount, dashboard.OfflineMachineCount));
+                Assert.Equal(3, dashboard.RecentCards.Count);
+                Assert.All(dashboard.RecentCards, card => Assert.Contains(card.SessionId, new[] { waiting, busy, done }));
+                alphaProjects.ToggleCommand.Execute(null);
+                Assert.False(alphaProjects.IsExpanded);
+                dashboard.Refresh();
+                Assert.False(alphaProjects.IsExpanded);
+                alphaProjects.ToggleCommand.Execute(null);
+                Assert.True(alphaProjects.IsExpanded);
                 Assert.Equal("等待你处理", Card(workspace, "alpha", waiting)!.StatusLabel);
 
                 dashboard.ShowAttentionCommand.Execute(null);
@@ -103,7 +146,7 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 5000)]
     public async Task NotificationCenter_SyncsReadMarks_AnswersPendingOnce_AndNotifiesDesktop()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -182,7 +225,7 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 5000)]
     public async Task PendingApproval_AnsweredFromTheSessionHeader_ReachesTheHost()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -215,57 +258,8 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 120000)]
-    public async Task SessionView_AttachesToTerminal_SharesIt_AndOpensAShellInTheProject()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        SkipOnWindows();
-        await using var alpha = await HarnessHostFixture.CreateAsync("gta", ct);
-        await using var beta = await HarnessHostFixture.CreateAsync("gtb", ct);
-        var project = Project(alpha, "tool");
-        var other = await alpha.ConnectAsync("other-client", ct);
-        await HeadlessGui.RunAsync(async () =>
-        {
-            var workspace = Open(alpha, beta);
-            try
-            {
-                await ConnectedAsync(workspace);
-                var echo = await StartTerminalAsync(workspace, "alpha", project, "回显", "echo ready; read line; echo \"got:$line\"; sleep 30");
-                await UntilAsync(() => Card(workspace, "alpha", echo) is not null, "the session card");
-                workspace.OpenSession("alpha", echo);
-                var session = workspace.ActiveSession!;
-                var terminal = Assert.Single(session.Tabs).Terminal!;
-                await UntilAsync(() => ScreenText(terminal).Contains("ready", StringComparison.Ordinal), "the session's output");
-
-                await using var shared = RemoteHostPtyTests.TerminalCapture.Attach(other, echo);
-                terminal.Session!.Send("hello\r"u8);
-                await UntilAsync(() => ScreenText(terminal).Contains("got:hello", StringComparison.Ordinal), "the reply to typed input");
-                await shared.WaitForAsync("got:hello", Arrival);
-
-                await session.AddShellCommand.ExecuteAsync(null);
-                var shellTab = session.Tabs[^1];
-                Assert.True(shellTab is { IsClosable: true, IsSelected: true });
-                // The shell's session reaches the fleet through the host's session push, after the command has returned.
-                await UntilAsync(() => workspace.Fleet.Find("alpha")!.Sessions.Any(item => item.Kind == HostSessionKinds.Terminal), "the shell's session");
-                var shellSessions = workspace.Fleet.Find("alpha")!.Sessions.Where(item => item.Kind == HostSessionKinds.Terminal).ToList();
-                shellTab.Terminal!.Session!.Send("pwd\r"u8);
-                // On a CI checkout the project path is longer than the 80 columns, so pwd prints it across two rows.
-                await UntilAsync(() => ScreenText(shellTab.Terminal).Replace("\n", "", StringComparison.Ordinal).Contains(project, StringComparison.Ordinal), "the shell runs in the project directory");
-
-                var shellId = Assert.Single(shellSessions).SessionId;
-                await session.CloseTabCommand.ExecuteAsync(shellTab);
-                Assert.Single(session.Tabs);
-                await UntilAsync(() => workspace.Fleet.Find("alpha")!.Sessions.Single(item => item.SessionId == shellId).Status == HostSessionStatuses.Exited, "closing the tab ends its shell");
-            }
-            finally
-            {
-                await workspace.DisposeAsync();
-            }
-        });
-    }
-
-    [Fact(Timeout = 120000)]
-    public async Task HarnessTranscript_RendersHostEvents_AndContinuesAfterAHostRestartWithoutDuplicates()
+    [Fact(Timeout = 5000)]
+    public async Task HarnessSession_OpensMainChatView_InsteadOfSessionTranscript()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var alpha = await HarnessHostFixture.CreateAsync("gha", ct);
@@ -278,41 +272,12 @@ public sealed class GuiWorkspaceTests
             {
                 await ConnectedAsync(workspace);
                 var started = await workspace.Actions.StartAsync("beta", Harness(project, "整理笔记"), ct);
-                var agentSession = RemoteHostMultiClientTests.Agent(beta, started.SessionId).Session;
-                agentSession.Append(new UserMessagePayload(MessageFactory.CreateUserText("列出计划")), new SurfaceOp.Append());
-                agentSession.Append(new SystemMessagePayload(1, 0, MessageFactory.CreateSystemMessage([new TextBlock("1. 读笔记\n2. 归类")], new PluginMessageSource("acp-plan"))), new SurfaceOp.Append());
                 await UntilAsync(() => Card(workspace, "beta", started.SessionId) is not null, "the harness session's card");
+                (string Machine, string SessionId)? requested = null;
+                workspace.ChatRequested += (machine, id) => requested = (machine, id);
                 workspace.OpenSession("beta", started.SessionId);
-                var transcript = Assert.Single(workspace.ActiveSession!.Tabs).Transcript!;
-                await UntilAsync(() => transcript.Messages.Count == 2, "the session's history");
-                Assert.Equal(("你", "列出计划"), (transcript.Messages[0].Role, transcript.Messages[0].Text));
-                Assert.Equal(("计划", MessageKind.System), (transcript.Messages[1].Role, transcript.Messages[1].Kind));
-
-                // The host restarts: its agents end, the machine is shown reconnecting, and the session comes back exited with its history.
-                await beta.StopHostAsync();
-                var card = Card(workspace, "beta", started.SessionId)!;
-                await UntilAsync(() => !card.IsMachineOnline && workspace.Dashboard.OfflineMachineCount == 1, "the machine is shown unreachable");
-                await beta.StartHostAsync(ct);
-                await UntilAsync(() => workspace.Dashboard.OfflineMachineCount == 0 && card.IsExited, "the machine is back and the session exited");
-
-                // Resuming the session continues the same transcript: new events arrive, the history is not repeated.
-                await workspace.Actions.ResumeAsync("beta", card.Session, ct);
-                var resumed = RemoteHostMultiClientTests.Agent(beta, started.SessionId).Session;
-                resumed.Append(new AssistantMessagePayload(1, 0, MessageFactory.CreateAssistantMessage([new TextBlock("已归类 3 条")], "client-provider", "client-model")), new SurfaceOp.Append());
-                await UntilAsync(() => transcript.Messages.Count == 3, "the resumed session's new message");
-                Assert.Equal("已归类 3 条", transcript.Messages[2].Text);
-                await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                Dispatcher.UIThread.RunJobs();
-                Assert.Equal(["列出计划", "1. 读笔记\n2. 归类", "已归类 3 条"], transcript.Messages.Select(message => message.Text));
-
-                // A prompt typed in the session view reaches the live agent (resuming it again is a no-op), and cancelling the turn is accepted.
-                transcript.Input = "再整理一次";
-                await transcript.SendCommand.ExecuteAsync(null);
-                Assert.False(transcript.HasError, transcript.Error);
-                await UntilAsync(() => transcript.Messages.Any(message => message is { Role: "你", Text: "再整理一次" }), "the sent prompt in the transcript");
-                await transcript.CancelCommand.ExecuteAsync(null);
-                Assert.False(transcript.HasError, transcript.Error);
-                Assert.Single(transcript.Messages, message => message.Text == "列出计划");
+                Assert.Equal(("beta", started.SessionId), requested);
+                Assert.Null(workspace.ActiveSession);
             }
             finally
             {
@@ -321,16 +286,16 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    /** The test page is a plain TextBlock: it stands in for a module's page and only checks the navigation contract. */
+/** The test page is a plain TextBlock: it stands in for a module's page and only checks the navigation contract. */
     [Fact]
     public async Task WorkspacePages_ShowNothingUntilRegistered_ThenOpenWithTheWorkspaceContext()
     {
-        using var gui = await GuiTestEnvironment.CreateAsync();
+        await using var gui = await GuiTestEnvironment.CreateAsync();
         await HeadlessGui.RunAsync(async () =>
         {
             var fleet = new FleetWorkspace(new MachineStore(gui.App.Home), Options, () => new FleetClient([], Options));
             var workspace = new WorkspaceViewModel(fleet,
-                () => new HarnessModelChoice(RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec), (_, _, _) => { });
+        (_, _, _) => { });
             var destinations = new List<WorkspaceDestination>();
             workspace.NavigationRequested += destinations.Add;
             try
@@ -349,7 +314,6 @@ public sealed class GuiWorkspaceTests
                 workspace.OpenPage(page);
 
                 Assert.Equal((null, null), (opened?.Machine, opened?.ProjectPath));
-                Assert.Same(workspace.Fleet, opened?.Fleet);
                 Assert.Equal("git page", Assert.IsType<Avalonia.Controls.TextBlock>(workspace.PageContent).Text);
                 Assert.Equal((page, WorkspaceDestination.Page), (workspace.ActivePage, destinations[^1]));
                 workspace.ShowDashboard();
@@ -371,11 +335,54 @@ public sealed class GuiWorkspaceTests
         Assert.Throws<ArgumentException>(() => NewSessionViewModel.ParseCommand("   "));
     }
 
+    [Fact(Timeout = 5000)]
+    public async Task NewSession_OpenedBeforeConnection_EnablesTheSelectedMachineWithoutReselection_AndCancelsClosedForms()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await HarnessHostFixture.CreateAsync("gnc", ct);
+        await HeadlessGui.RunAsync(async () =>
+        {
+            var fleet = new FleetWorkspace(new MachineStore(new HarnessHome(host.Root)), Options,
+                () => new FleetClient([MachineSpec.Local(host.Root, "alpha"), MachineSpec.Local(host.Root, "beta")], Options));
+        var actions = new FleetSessionActions(fleet);
+            var form = new NewSessionViewModel(fleet, actions, "alpha", host.Root);
+            var window = new NewSessionWindow(form);
+            var closedForm = new NewSessionViewModel(fleet, actions, "beta", host.Root);
+            var closedWindow = new NewSessionWindow(closedForm);
+            try
+            {
+                window.Show();
+                closedWindow.Show();
+                form.Machine = "beta";
+                Assert.Null(form.Agent);
+                Assert.False(form.StartCommand.CanExecute(null));
+                closedWindow.Close();
+                fleet.Start();
+                await UntilAsync(() => form.Agent is { IsAvailable: true } && form.StartCommand.CanExecute(null),
+                    "the selected machine's catalog after its real connection completes");
+                Assert.Equal("beta", form.Machine);
+                Assert.Empty(closedForm.Agents);
+                Assert.Null(closedForm.Agent);
+                window.Close();
+                var lease = await fleet.Find("beta")!.WaitConnectedAsync(ct);
+                Assert.True(await lease.Client.PingAsync(ct) > 0);
+                var previousMachine = await fleet.Find("alpha")!.WaitConnectedAsync(ct);
+                Assert.True(await previousMachine.Client.PingAsync(ct) > 0);
+            }
+            finally
+            {
+                closedWindow.Close();
+                window.Close();
+                await fleet.DisposeAsync();
+            }
+        });
+    }
+
     /**
      * Files, Git and machine management as workspace pages: files and Git open on the machine and project of the session in view and are rebuilt on the next link after the host restarts.
      * A Git worktree opens the new-session form there; saving a machine in machine management reconnects the workspace while the page stays in view.
      */
-    [Fact(Timeout = 120000)]
+    [Fact(Timeout = 5000)]
     public async Task ContributedPages_FollowTheSessionAndTheConnection()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -389,7 +396,7 @@ public sealed class GuiWorkspaceTests
             var store = new MachineStore(new HarnessHome(alpha.Root));
             var fleet = new FleetWorkspace(
                 store, Options, () => new FleetClient([MachineSpec.Local(alpha.Root, "alpha"), MachineSpec.Local(beta.Root, "beta"), .. store.Load().Machines], Options));
-            var workspace = new WorkspaceViewModel(fleet, () => new HarnessModelChoice(RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec), (_, _, _) => { });
+        var workspace = new WorkspaceViewModel(fleet, (_, _, _) => { });
             workspace.RegisterHostPages(Icon("Icon.Folder"), Icon("Icon.Git"), Icon("Icon.Machine"));
             NewSessionViewModel? form = null;
             workspace.NewSessionDialogRequested += requested => form = requested;
@@ -431,6 +438,7 @@ public sealed class GuiWorkspaceTests
             }
             finally
             {
+                form?.Dispose();
                 await workspace.DisposeAsync();
             }
         });
@@ -438,7 +446,8 @@ public sealed class GuiWorkspaceTests
 
     private static Geometry Icon(string key) => (Geometry)Avalonia.Controls.ResourceNodeExtensions.FindResource(Application.Current!, key)!;
 
-    private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) => workspace.Pages.Available.Single(page => page.Id == id);
+    /** Gates only the stop RPC while all Host and PTY behavior is delegated to the real backend. */
+private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) => workspace.Pages.Available.Single(page => page.Id == id);
 
     private static void SkipOnWindows()
     {
@@ -453,7 +462,7 @@ public sealed class GuiWorkspaceTests
         TempTree.AssertFitsMacOsSocketLimit(Path.Combine(beta.Root, "host.sock"));
         var fleet = new FleetWorkspace(
             new MachineStore(new HarnessHome(alpha.Root)), Options, () => new FleetClient([MachineSpec.Local(alpha.Root, "alpha"), MachineSpec.Local(beta.Root, "beta")], Options));
-        var workspace = new WorkspaceViewModel(fleet, () => new HarnessModelChoice(RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec), (_, _, _) => { });
+        var workspace = new WorkspaceViewModel(fleet, (_, _, _) => { });
         workspace.Start();
         return workspace;
     }

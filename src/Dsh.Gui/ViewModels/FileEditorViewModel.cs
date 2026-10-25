@@ -24,7 +24,7 @@ public enum FileEditorMode
  * 打开时先 stat 再读内容, 记下(大小, 修改时间)作为基线; 保存前再 stat 一次, 与基线不同说明远端在打开后被改过, 先挂起确认再覆盖。
  * 保存走分块上传, host 写同目录临时文件后原子替换; 上传返回的新 stat 成为下一次保存的基线。
  */
-public sealed partial class FileEditorViewModel(IRemoteFiles files, string path, RemotePathStyle style, long maxEditableBytes) : OperationViewModel
+public sealed partial class FileEditorViewModel(RemoteFilesClient files, string path, RemotePathStyle style, long maxEditableBytes) : OperationViewModel
 {
     private TextFileContent? _content;
     private RemoteFileStat? _baseline;
@@ -154,3 +154,4 @@ public sealed partial class FileEditorViewModel(IRemoteFiles files, string path,
         TextReloaded?.Invoke();
     }
 }
+

@@ -309,7 +309,7 @@ public sealed class SubagentConversationViewModel : ObservableObject, IDisposabl
     {
         try
         {
-            await foreach (var item in chat.Fleet.Find(MachineSpec.LocalName)!.SubscribeAsync(SessionId.Value, fromSeq, _lifetime.Token))
+            await foreach (var item in chat.Fleet.Find(chat.Machine)!.SubscribeAsync(SessionId.Value, fromSeq, _lifetime.Token))
             {
                 if (item.Reset)
                 {
@@ -321,10 +321,10 @@ public sealed class SubagentConversationViewModel : ObservableObject, IDisposabl
                         Messages.Clear();
                         _transcript = new SubagentTranscript();
                         _renderedSeq = 0;
-                        ApplyBatch(snapshot.Events.Select(value => DshJson.Deserialize<SessionEvent>(value.EventJson)).OfType<SessionEvent>().ToList());
+                        ApplyBatch([.. snapshot.Events]);
                     });
                 }
-                else if (DshJson.Deserialize<SessionEvent>(item.EventJson) is { } sessionEvent)
+                else if (item.Event is { } sessionEvent)
                     Dispatcher.UIThread.Post(() => ApplyBatch([sessionEvent]));
             }
         }

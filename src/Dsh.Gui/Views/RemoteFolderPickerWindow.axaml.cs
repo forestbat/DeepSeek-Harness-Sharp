@@ -12,7 +12,7 @@ public sealed partial class RemoteFolderPickerWindow : Window
     /** XAML 编译器要求存在无参构造, 实际启动路径走下面的带参构造。 */
     public RemoteFolderPickerWindow() => InitializeComponent();
 
-    public RemoteFolderPickerWindow(IRemoteFiles files, string? initial) : this()
+    public RemoteFolderPickerWindow(RemoteFilesClient files, string? initial) : this()
     {
         _initial = initial;
         ViewModel = new RemoteFolderPickerViewModel(files);
@@ -30,3 +30,4 @@ public sealed partial class RemoteFolderPickerWindow : Window
             _ = viewModel.NavigateAsync(_initial);
     }
 }
+

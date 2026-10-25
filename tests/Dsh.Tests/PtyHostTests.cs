@@ -3,11 +3,12 @@ using Dsh.Pty;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public class PtyHostTests
 {
     private const int FailureExitCode = 7;
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(0)]
     [InlineData(FailureExitCode)]
     public async Task ProcessCompletion_PublishesTheActualExitStatus(int exitCode)
@@ -23,7 +24,7 @@ public class PtyHostTests
         Assert.Equal(exitCode, session.ExitCode);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Host_Starts_Lists_Reads_And_Stops()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -49,7 +50,7 @@ public class PtyHostTests
         Assert.DoesNotContain(host.List(), entry => entry.Id == session.Id);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Resize_UpdatesPtyWindowSize()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -81,7 +82,7 @@ public class PtyHostTests
         await host.StopAsync(session.Id.ToString());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Write_And_Read_RoundTrips()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -102,7 +103,7 @@ public class PtyHostTests
         await host.StopAsync(session.Id.ToString());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Windows_ConPty_Starts_And_Reads()
     {
         if (!OperatingSystem.IsWindows())
@@ -113,7 +114,7 @@ public class PtyHostTests
             FileName = "cmd.exe",
             Arguments = ["/c", "echo direct-conpty-ready"],
         });
-        using var directCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var directCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var received = await ReadUntil(direct.Stream, "direct-conpty-ready", directCancellation.Token);
         Assert.Contains("direct-conpty-ready", received);
         await direct.StopAsync();
@@ -130,7 +131,7 @@ public class PtyHostTests
         var backend = typeof(PtySession).GetField("_conPty", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(session);
         Assert.NotNull(backend);
 
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var buffer = new byte[4096];
         var read = await session.ReadAsync(buffer, cancellation.Token);
         Assert.True(read > 0);
@@ -139,14 +140,14 @@ public class PtyHostTests
         Assert.True(await host.StopAsync(session.Id.ToString()));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Windows_ConPty_Parallel_Starts_Keep_Input_And_Output_Isolated()
     {
         if (!OperatingSystem.IsWindows())
             return;
 
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cancellation.CancelAfter(TimeSpan.FromSeconds(15));
+        cancellation.CancelAfter(TimeSpan.FromSeconds(5));
         using var startBarrier = new Barrier(2);
         await Task.WhenAll(Enumerable.Range(0, 2).Select(index => Task.Run(async () =>
         {

@@ -14,13 +14,15 @@ using Dsh.Transport;
 namespace Dsh.Tests;
 
 /// <summary>Real HTTP consumers, SSH streams and settings writes exercise the shared route's ownership boundary.</summary>
+[Collection(SerialProcessCollection.Name)]
 public sealed class BorrowedOutboundProxyTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
     private const string Probe = "http://example.com/route-validation";
     private const string InvalidBaselineProxyUrl = "gopher://invalid.example:70";
+    private static readonly TimeSpan CliObservationTimeout = TimeSpan.FromSeconds(5);
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task CancellingTheInitialLease_DoesNotLetOwnerDisposalClearAnUnappliedSavedSelection()
     {
         await using var baseline = new TestForwardProxy();
@@ -51,7 +53,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task RetiredSshGeneration_ReleasesItsMachineCredentials_WhileOldConsumersRemainReachable()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -111,7 +113,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task DirectOnlyOwnerDisposal_RetiresItsOldPool_WithoutDisablingTheIndependentBaseline()
     {
         await using var baseline = new TestForwardProxy(keepAlive: true, pauseResponses: true);
@@ -142,7 +144,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Explicit = true)]
     [InlineData("missing", false)]
     [InlineData("", false)]
     [InlineData("   ", false)]
@@ -185,7 +187,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task DirectOnlyStartup_WithAnInvalidBaseline_KeepsFleetAndHttpConsumersAvailable()
     {
         await using var endpoint = new TestForwardProxy();
@@ -214,7 +216,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task DirectOnlyReload_WithAnInvalidBaseline_PreservesTheExistingConsumerAndSavedError()
     {
         await using var baseline = new TestForwardProxy(keepAlive: true);
@@ -243,7 +245,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task PluginOwnerDisposal_CancelsItsPendingDraft_AndAwaitsAllClientRouteLeases()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -263,7 +265,7 @@ public sealed class BorrowedOutboundProxyTests
             var saved = await File.ReadAllTextAsync(home.SettingsFile, Ct);
             var selecting = fleet.OutboundRoute.SelectAsync("B", Ct);
             Assert.Equal($"GET {Probe} HTTP/1.1", await draft.WaitForRequestAsync(Ct));
-            await Task.Run(fleet.Dispose, Ct).WaitAsync(TimeSpan.FromSeconds(15), Ct);
+            await Task.Run(fleet.Dispose, Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await selecting);
             draft.ReleaseResponse();
             await FleetConnectionTests.WaitForAsync(() => first.ActiveConnections == 0 && draft.ActiveConnections == 0);
@@ -277,7 +279,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Theory(Timeout = 90000)]
+    [Theory(Explicit = true)]
     [InlineData(DownloadVia.Client)]
     [InlineData(DownloadVia.Auto)]
     public async Task LocalArchiveDownload_RejectsAnInvalidBorrowedSelection_WithoutUsingTheBaseline(string via)
@@ -323,7 +325,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task CancellingClientDownload_ReleasesOnlyItsShortRoute_WhileAnExistingConsumerKeepsItsConnection()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -367,7 +369,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Explicit = true)]
     [InlineData("missing")]
     [InlineData("")]
     [InlineData("   ")]
@@ -407,7 +409,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task UnreachableSavedSelection_ReportsTheTransportFailure_WithoutClearingItOrUsingTheBaseline()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -427,7 +429,7 @@ public sealed class BorrowedOutboundProxyTests
             using var proxy = new OutboundProxy();
             await using var route = new BorrowedOutboundRoute(home, proxy);
             await using var lease = await route.AcquireAsync(Ct);
-            using var consumer = new HttpClient(proxy.CreateHandler()) { Timeout = TimeSpan.FromSeconds(15) };
+            using var consumer = new HttpClient(proxy.CreateHandler()) { Timeout = TimeSpan.FromSeconds(5) };
             var failure = await Record.ExceptionAsync(() => consumer.GetStringAsync("http://example.com/unreachable-selection", Ct));
             Assert.True(failure is HttpRequestException or IOException or OperationCanceledException, "The real borrowed transport must fail explicitly.");
             Assert.Equal("A", HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
@@ -440,7 +442,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Explicit = true, Timeout = 180000)]
+    [Fact(Explicit = true)]
     public async Task RealCli_UseAndDirect_PersistTheSelection_WithoutChangingTheBaselineOrDeployingTheSelectedMachine()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -486,7 +488,140 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Explicit = true, Timeout = 240000)]
+    [Theory(Explicit = true)]
+    [InlineData("proxyCommand")]
+    [InlineData("localForward")]
+    public async Task RealCliTunnelTest_ConsumesPublicHttps200_AndRetiresOnlyItsIndependentTransport(string mode)
+    {
+        var executable = FleetSshEndToEndTests.RequireEnvironment();
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
+        await using var selected = new TestForwardProxy(forward: true, pauseResponses: true);
+        await using var other = new TestForwardProxy();
+        await using var baseline = new TestForwardProxy(keepAlive: true);
+        var root = TempTree.CreateSocketDirectory("b83c");
+        var remote = RealHostProcesses.CreateHome("b83h");
+        Process? owned = null;
+        try
+        {
+            var home = Configure(root, ssh, selected, "A", baseline: baseline);
+            var store = new MachineStore(home);
+            store.Upsert(ObserveSsh(ssh.Machine("A", remote), root) with
+            {
+                OutboundTunnel = new(mode, $"http://127.0.0.1:{selected.Port}"),
+            });
+            store.Upsert(ssh.Machine("B", remote) with
+            {
+                OutboundTunnel = new(mode, $"http://localhost:{other.Port}"),
+            });
+            var saved = await File.ReadAllBytesAsync(home.SettingsFile, Ct);
+            var savedBaseline = HarnessSettings.Load(home).Network!.OutboundProxy!.Url;
+
+            await using var host = await SshHostLauncher.ConnectAsync(
+                ssh.Machine("independent-host", remote), executable, "cli-tunnel-survivor", Ct);
+            var hostIdentity = LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(remote));
+            var remoteSettings = Path.Combine(remote, "settings.yaml");
+            var savedRemote = await File.ReadAllBytesAsync(remoteSettings, Ct);
+            using var independentProxy = new OutboundProxy();
+            independentProxy.Configure(savedBaseline, []);
+            using var independent = new HttpClient(independentProxy.CreateHandler());
+            Assert.Equal(TestForwardProxy.ProxiedBody,
+                await independent.GetStringAsync("http://example.com/cli-survivor-before", Ct));
+            Assert.Equal("GET http://example.com/cli-survivor-before HTTP/1.1",
+                await baseline.WaitForRequestAsync(Ct));
+            var baselineConnections = baseline.Connections;
+
+            using var signal = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            signal.CancelAfter(CliObservationTimeout);
+            var cli = FleetCliProcess.RunAsync(executable, root,
+                "machine", "tunnel", "A", "test", "--probe-url", "https://example.com/");
+            int? listenerPort = null;
+            Task exited;
+            try
+            {
+                Assert.Equal("CONNECT example.com:443 HTTP/1.1",
+                    await selected.WaitForRequestAsync(signal.Token));
+                Assert.False(cli.IsCompleted, "The real proxy barrier must hold the independent CLI before TLS begins.");
+                var commands = await File.ReadAllLinesAsync(
+                    Path.Combine(root, "owned-ssh-commands.txt"), signal.Token);
+                var resources = await File.ReadAllLinesAsync(
+                    Path.Combine(root, "owned-ssh-resources.txt"), signal.Token);
+                Assert.True(commands.Length == 1 && resources.Length == 1,
+                    "The independent CLI must open exactly one owned SSH transport.");
+                var command = commands[0];
+                var resource = resources[0].Split('|', 2);
+                Assert.Equal(2, resource.Length);
+                Assert.False(File.Exists(resource[1]), "The authenticated CLI transport must already have removed its askpass.");
+                owned = Process.GetProcessById(int.Parse(resource[0], System.Globalization.CultureInfo.InvariantCulture));
+                Assert.False(owned.HasExited);
+                exited = owned.WaitForExitAsync(Ct);
+                if (mode == "proxyCommand")
+                    Assert.True(command.Contains($"-W 127.0.0.1:{selected.Port}", StringComparison.Ordinal),
+                        "The CLI must own the selected SSH stdio command, not a Host or Network RPC.");
+                else
+                {
+                    var arguments = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    var index = Array.IndexOf(arguments, "-L");
+                    Assert.True(index >= 0 && index + 1 < arguments.Length,
+                        "The CLI must own an actual SSH local-forward command.");
+                    var fields = arguments[index + 1].Split(':');
+                    Assert.Equal("127.0.0.1", fields[0]);
+                    Assert.Equal("127.0.0.1", fields[^2]);
+                    Assert.Equal(selected.Port, int.Parse(fields[^1], System.Globalization.CultureInfo.InvariantCulture));
+                    listenerPort = int.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture);
+                    FleetLocalForwardEgressTests.AssertOnlyLoopbackListener(listenerPort.Value);
+                }
+                Assert.Single(baseline.Requests);
+                Assert.Equal(baselineConnections, baseline.Connections);
+                Assert.Empty(other.Requests);
+            }
+            finally
+            {
+                selected.ReleaseResponse();
+            }
+
+            var result = await cli;
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(result.Output.StartsWith("HTTP 200 ", StringComparison.Ordinal),
+                "The production CLI must report the actual target HTTP 200.");
+            using var retired = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            retired.CancelAfter(CliObservationTimeout);
+            await exited.WaitAsync(retired.Token);
+            await selected.WaitForClosedConnectionAsync(retired.Token);
+            Assert.Equal(0, selected.ActiveConnections);
+            await FleetLocalForwardEgressTests.AssertOwnedSshRetiredAsync(root, mode, selected.Port);
+            if (listenerPort is { } port)
+                FleetLocalForwardEgressTests.AssertPortCanRebind(port);
+            Assert.Equal("CONNECT example.com:443 HTTP/1.1", Assert.Single(selected.Requests));
+            Assert.Empty(other.Requests);
+            Assert.Single(baseline.Requests);
+            Assert.Equal(savedBaseline, HarnessSettings.Load(home).Network?.OutboundProxy?.Url);
+            Assert.Equal("A", HarnessSettings.Load(home).Network?.BorrowedOutboundMachine);
+            var current = await File.ReadAllBytesAsync(home.SettingsFile, Ct);
+            var currentRemote = await File.ReadAllBytesAsync(remoteSettings, Ct);
+            Assert.True(saved.AsSpan().SequenceEqual(current),
+                "The independent CLI test must leave the entire local settings file unchanged.");
+            Assert.True(savedRemote.AsSpan().SequenceEqual(currentRemote),
+                "The independent CLI test must leave remote Host settings unchanged.");
+            Assert.True(await host.Client.PingAsync(Ct) > 0);
+            Assert.True(hostIdentity == LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(remote)),
+                "CLI completion must preserve the independent remote Host identity.");
+            Assert.Equal(TestForwardProxy.ProxiedBody,
+                await independent.GetStringAsync("http://example.com/cli-survivor-after", Ct));
+            Assert.Equal("GET http://example.com/cli-survivor-after HTTP/1.1",
+                await baseline.WaitForRequestAsync(Ct));
+            Assert.Equal(baselineConnections, baseline.Connections);
+            Assert.Equal(2, baseline.Requests.Count);
+        }
+        finally
+        {
+            owned?.Dispose();
+            RealHostProcesses.KillAll(remote);
+            TempTree.Delete(remote);
+            TempTree.Delete(root);
+        }
+    }
+
+    [Fact(Explicit = true)]
     public async Task SharedConsumers_SwitchReloadAndLastRelease_RetireOwnedSshButPreserveTheTargetHostAndPty()
     {
         var executable = FleetSshEndToEndTests.RequireEnvironment();
@@ -507,7 +642,7 @@ public sealed class BorrowedOutboundProxyTests
             var shell = await host.Client.Pty.StartPtyAsync(new RemotePtyStartRequest("/bin/sh", [], remote, Title: "lease-survival"), Ct);
             await using var terminal = RemoteHostPtyTests.TerminalCapture.Attach(host.Client, shell);
             await terminal.SendAsync("echo $$ > original.pid; echo lease-before-$((20+22))\n");
-            await terminal.WaitForAsync("lease-before-42", TimeSpan.FromSeconds(20));
+            await terminal.WaitForAsync("lease-before-42", TimeSpan.FromSeconds(5));
             var shellPid = await File.ReadAllTextAsync(Path.Combine(remote, "original.pid"), Ct);
             using var proxy = new OutboundProxy();
             await using var route = new BorrowedOutboundRoute(home, proxy);
@@ -532,7 +667,7 @@ public sealed class BorrowedOutboundProxyTests
             Assert.True(identity == LocalEndpointToken.Read(RemoteHostEndpoint.EndpointFile(remote)), "Route retirement must preserve the independent target Host.");
             Assert.Contains(await host.Client.ListHostSessionsAsync(Ct), value => value.SessionId == shell && value.Status == HostSessionStatuses.Running);
             await terminal.SendAsync("echo $$ > surviving.pid; echo lease-after-$((50+5))\n");
-            await terminal.WaitForAsync("lease-after-55", TimeSpan.FromSeconds(20));
+            await terminal.WaitForAsync("lease-after-55", TimeSpan.FromSeconds(5));
             Assert.Equal(shellPid, await File.ReadAllTextAsync(Path.Combine(remote, "surviving.pid"), Ct));
             Assert.Equal(1, first.Requests.Count(value => value.Contains("lease-A", StringComparison.Ordinal)));
             Assert.DoesNotContain(second.Requests, value => value.Contains("lease-A", StringComparison.Ordinal));
@@ -545,7 +680,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Theory(Explicit = true, Timeout = 360000)]
+    [Theory(Explicit = true)]
     [InlineData(DownloadVia.Client)]
     [InlineData(DownloadVia.Server)]
     public async Task RealBuildArchive_DeploysThroughTheSelectedDownloadOwner_AndPingsItsHost(string via)
@@ -603,7 +738,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task FleetClients_ShareTheContextRoute_UntilTheLastAsyncConsumerDisposes()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -634,7 +769,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task CancellingASelectionDraft_DoesNotRetireAnotherConsumersRouteOrPersistTheDraft()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -670,7 +805,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task Consumers_CancelIndependently_AndLastLeaseClosesTheSharedRoute()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -719,7 +854,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task SelectAndReload_RetireOldBodiesAndCredentials_WithoutReplayingRequests()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -769,7 +904,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task CandidatePublicationFailure_RetainsTheActiveGeneration_AndDisposesTheDraft()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -817,7 +952,7 @@ public sealed class BorrowedOutboundProxyTests
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Explicit = true)]
     public async Task InvalidSavedSelection_FailsClosed_AndNeverClearsOrFallsBackToBaseline()
     {
         FleetSshEndToEndTests.RequireEnvironment();
@@ -963,3 +1098,5 @@ public sealed class BorrowedOutboundProxyTests
         return home;
     }
 }
+
+

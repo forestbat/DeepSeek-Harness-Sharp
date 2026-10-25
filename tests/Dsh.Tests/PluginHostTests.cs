@@ -9,6 +9,7 @@ using Dsh.Plugins;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public sealed class PluginHostTests
 {
     [Fact]
@@ -38,7 +39,7 @@ public sealed class PluginHostTests
         Assert.Equal(ActivationState.Active, activation.State);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task DisabledWebBridgePlugin_CannotResolveOrRunWebEntry()
     {
         var root = TempTree.CreateSocketDirectory("wpo");
@@ -64,7 +65,7 @@ public sealed class PluginHostTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task FleetPlugin_DeactivationClosesOwnedLinksButKeepsHostSessions()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -81,7 +82,7 @@ public sealed class PluginHostTests
         var client = service.CreateClient(FleetConnectionTests.TestOptions);
         client.Start();
         var lease = await Assert.Single(client.Machines).WaitConnectedAsync(ct);
-        var session = await lease.Client.CreateSessionAsync(server.Root, RemoteHostMultiClientTests.Selection, RemoteHostMultiClientTests.Spec, ct);
+        var session = await lease.Client.CreateSessionAsync(server.Root, ct);
         try
         {
             await activation.DeactivateAsync();
@@ -99,7 +100,7 @@ public sealed class PluginHostTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task WebBridgePlugin_DeactivationStopsServerAndRemovesCredentials()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -256,6 +257,7 @@ public sealed record ThirdPartyNotification(string Text) : INotification
     public static string EventName => "third-party/notification";
 }
 
+[Collection(SerialProcessCollection.Name)]
 public sealed class TestPlugin : IDshPlugin
 {
     public static bool Applied { get; set; }
@@ -278,3 +280,5 @@ public sealed class TestPlugin : IDshPlugin
         }
     }
 }
+
+

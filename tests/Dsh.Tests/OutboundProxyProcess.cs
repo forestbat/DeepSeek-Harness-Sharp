@@ -5,8 +5,8 @@ namespace Dsh.Tests;
 /** Runs an exact non-model test selector with process-local proxy and trust inputs. */
 internal static class OutboundProxyProcess
 {
-    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(90);
-    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(5);
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
 
     internal readonly record struct Result(int ExitCode, string StandardOutput, string StandardError);
@@ -14,7 +14,7 @@ internal static class OutboundProxyProcess
     internal static async Task<Result> RunAsync(string method, string? proxyUrl, CancellationToken signal,
         string? certificateFile = null)
     {
-        using var child = Process.Start(CreateStart(method, proxyUrl, certificateFile))!;
+        using var child = TestProcessScope.Start(CreateStart(method, proxyUrl, certificateFile));
         var stdout = child.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = child.StandardError.ReadToEndAsync(CancellationToken.None);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(signal);

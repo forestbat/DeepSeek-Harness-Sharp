@@ -28,30 +28,44 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
 
     public IDisposable RegisterProvider(ISubagentProvider provider)
     {
-        if (!_providers.TryAdd(provider.Name, provider))
+        lock (_sync)
         {
-            throw new SubagentException(
-                $"subagent provider \"{provider.Name}\" is already registered", SubagentErrorCodes.DuplicateProvider);
+            if (!_providers.TryAdd(provider.Name, provider))
+            {
+                throw new SubagentException(
+                    $"subagent provider \"{provider.Name}\" is already registered", SubagentErrorCodes.DuplicateProvider);
+            }
+            _providerNames.Add(provider.Name);
         }
-        _providerNames.Add(provider.Name);
         Ctx.Emit(new SubagentProviderAddedNotification(provider));
         return new DisposeAction(() =>
         {
-            if (!_providers.Remove(provider.Name))
-                return;
-            _providerNames.Remove(provider.Name);
+            lock (_sync)
+            {
+                if (!_providers.Remove(provider.Name))
+                    return;
+                _providerNames.Remove(provider.Name);
+            }
             Ctx.Emit(new SubagentProviderRemovedNotification(provider.Name));
         });
     }
 
-    public ISubagentProvider? GetProvider(string name) => _providers.GetValueOrDefault(name);
+    public ISubagentProvider? GetProvider(string name)
+    {
+        lock (_sync)
+            return _providers.GetValueOrDefault(name);
+    }
 
     public SubagentProviderInfo? GetProviderInfo(string name)
         => GetProvider(name) is { } provider
             ? new SubagentProviderInfo(provider.Capabilities, provider.InheritsParentContext)
             : null;
 
-    public IReadOnlyList<string> List() => _providerNames.ToList();
+    public IReadOnlyList<string> List()
+    {
+        lock (_sync)
+            return _providerNames.ToList();
+    }
 
     public IAgent? GetLive(SessionId id)
     {

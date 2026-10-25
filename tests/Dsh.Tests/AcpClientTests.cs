@@ -179,7 +179,7 @@ public sealed class AcpClientTests
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task SocketServer_OversizedLine_GetsErrorAndDisconnects_AndKeepsServing()
     {
         const int oversizedLineChars = 2 * 1024 * 1024;

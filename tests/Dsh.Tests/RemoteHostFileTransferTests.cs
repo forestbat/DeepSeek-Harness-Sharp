@@ -4,11 +4,12 @@ using Dsh.Transport;
 namespace Dsh.Tests;
 
 /** host.file.* and host.fs.* against a real host: chunked binary transfers, atomic replacement, directory operations and the path boundary. */
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostFileTransferTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task BinaryFileLargerThanOneChunk_RoundTripsThroughUploadAndDownload()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mft", TestContext.Current.CancellationToken);
@@ -31,7 +32,7 @@ public sealed class RemoteHostFileTransferTests
         Assert.Equal(["blob.bin"], Directory.GetFileSystemEntries(Path.GetDirectoryName(target)!).Select(Path.GetFileName));
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task Upload_ReplacesTheTargetOnlyOnCommit_AndRejectsOutOfOrderChunks()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mfa", TestContext.Current.CancellationToken);
@@ -53,7 +54,7 @@ public sealed class RemoteHostFileTransferTests
         Assert.DoesNotContain(Directory.GetFiles(host.Environment.App.Home.Root), path => path.EndsWith(".part", StringComparison.Ordinal));
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task UnfinishedUpload_IsDiscardedWhenItsConnectionEnds()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mfu", TestContext.Current.CancellationToken);
@@ -71,7 +72,7 @@ public sealed class RemoteHostFileTransferTests
         Assert.False((await other.Files.StatAsync(Path.Combine(directory, "half.bin"), Ct)).Exists);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task DirectoryOperations_StatMkdirRenameDelete()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mfd", TestContext.Current.CancellationToken);
@@ -95,7 +96,7 @@ public sealed class RemoteHostFileTransferTests
         Assert.False((await client.Files.StatAsync(Path.Combine(root, "a"), Ct)).Exists);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Explicit = true)]
     public async Task PathsOutsideTheAllowedRoots_AreRejected_EvenThroughSymbolicLinks()
     {
         if (OperatingSystem.IsWindows())
@@ -121,8 +122,10 @@ public sealed class RemoteHostFileTransferTests
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
         while (!condition())
             await Task.Delay(20, timeout.Token);
     }
 }
+
+

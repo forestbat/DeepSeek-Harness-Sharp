@@ -72,7 +72,7 @@ public sealed partial class DashboardMachineViewModel(string name) : ObservableO
 }
 
 /** The sessions of one project directory on one machine, shown side by side. */
-public sealed class DashboardProjectViewModel(string machine, string? projectPath)
+public sealed partial class DashboardProjectViewModel(string machine, string? projectPath) : ObservableObject
 {
     public string Machine { get; } = machine;
 
@@ -83,4 +83,10 @@ public sealed class DashboardProjectViewModel(string machine, string? projectPat
     public string PathLabel => ProjectPath ?? "";
 
     public ObservableCollection<SessionCardViewModel> Sessions { get; } = [];
+
+    [ObservableProperty]
+    private bool _isExpanded = true;
+
+    [RelayCommand]
+    private void Toggle() => IsExpanded = !IsExpanded;
 }

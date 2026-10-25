@@ -11,7 +11,6 @@ namespace Dsh.Tests;
 /** Real CLI consumers of the kernel terminal, using the same production PTY fixture as other TUI E2E. */
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("macos")]
-[Collection(SerialProcessCollection.Name)]
 public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
 {
     [Theory]
@@ -48,7 +47,7 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
         scenario.WaitFor(() => ReadCompletedAssistantReply(terminal.Home) is { } reply
                 && !prompt.Contains(reply, StringComparison.OrdinalIgnoreCase)
                 && scenario.ContainsVisible(reply, ignoreCase: true),
-            TimeSpan.FromSeconds(120), "The real assistant answer did not complete in the visible TUI.");
+            TimeSpan.FromSeconds(5), "The real assistant answer did not complete in the visible TUI.");
         scenario.ExitAndAssertRestored(output, "real model turn");
     }
 
@@ -87,7 +86,7 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
         public void WaitForRawInput()
         {
             WaitFor(() => _screen.IsAlternateScreen && _mode == 0 && _hasRenderedFrame,
-                TimeSpan.FromSeconds(90), "The built real CLI did not render its input after taking ownership of the terminal.");
+                TimeSpan.FromSeconds(5), "The built real CLI did not render its input after taking ownership of the terminal.");
             Assert.Equal(7, ModeBits(File.ReadAllText(Path.Combine(terminal.Home, "termios-before"))));
             Assert.True(_rawSeen, "The real CLI never entered raw mode.");
             Assert.Equal(0, _mode);
@@ -181,7 +180,7 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
                 RedirectStandardError = true,
             };
             info.Environment["LC_ALL"] = "C";
-            using var process = Process.Start(info) ?? throw new InvalidOperationException("stty did not start.");
+            using var process = TestProcessScope.Start(info) ?? throw new InvalidOperationException("stty did not start.");
             var state = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
             Assert.Equal(0, process.ExitCode);

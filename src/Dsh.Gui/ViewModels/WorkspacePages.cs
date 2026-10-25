@@ -1,11 +1,10 @@
 using System.Collections.ObjectModel;
 using Avalonia.Media;
-using Dsh.Gui.Services;
 
 namespace Dsh.Gui.ViewModels;
 
-/** What a contributed page opens with: the fleet, and the machine and project of the session in view (null on the dashboard). */
-public sealed record WorkspacePageContext(FleetWorkspace Fleet, string? Machine, string? ProjectPath);
+/** What a contributed page opens with: the machine and project of the session in view (null on the dashboard). */
+public sealed record WorkspacePageContext(string? Machine, string? ProjectPath);
 
 /**
  * A page another module contributes to the workspace navigation, such as files, Git or machine management.

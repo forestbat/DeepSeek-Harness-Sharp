@@ -33,7 +33,7 @@ internal sealed class AcpTranscript : IAsyncDisposable
     }
 
     /** Only running ACP processes own a writable Session; stopped histories are read directly from persistence. */
-    public static async Task<AcpTranscript> OpenAsync(Context ctx, RemoteHost.RemoteHostSession record)
+    public static async Task<AcpTranscript> OpenAsync(Context ctx, RemoteHost.RemoteSessionSummary record)
     {
         var store = ctx.Get<SessionStore>(SessionStore.ServiceName) ?? throw new InvalidOperationException("session store is not registered");
         var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)
@@ -192,3 +192,4 @@ internal sealed class AcpTranscript : IAsyncDisposable
             : "";
 
 }
+

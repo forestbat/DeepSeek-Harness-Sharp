@@ -166,6 +166,7 @@ public class EventBusTests
             pluginCtx.On<PingNotification>(_ => seen++);
             return null;
         }, "evt-owner"));
+        await activation.WaitAsync();
         ctx.Emit(new PingNotification(1));
         Assert.Equal(1, seen);
 

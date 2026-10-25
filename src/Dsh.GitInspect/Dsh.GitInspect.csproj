@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!--
-    Project git inspection for any directory: status, patch-free diff summary, per-file diff, log and worktree management.
-    Shared capability library without a plugin entry; it runs the real git executable and parses machine-readable output only.
-  -->
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
+
   <ItemGroup>
     <InternalsVisibleTo Include="Dsh.Tests" />
+
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -15,3 +16,4 @@
   </PropertyGroup>
 
 </Project>
+

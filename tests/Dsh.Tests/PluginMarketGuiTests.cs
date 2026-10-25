@@ -27,7 +27,7 @@ public sealed class PluginMarketGuiTests
     public async Task Market_PermissionToggles_And_TuiCommand_ShareSettings() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var window = await OpenMarketAsync(environment);
         try
         {
@@ -81,7 +81,7 @@ public sealed class PluginMarketGuiTests
     public async Task Market_RemoveButton_UnloadsPlugin_AndBrowseFillsPath() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var window = await OpenMarketAsync(environment);
         try
         {

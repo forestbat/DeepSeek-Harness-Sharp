@@ -43,7 +43,7 @@ public sealed class RealLlmTurnSmokeTests
                 new AgentOptions(providerId, modelId)), TestContext.Current.CancellationToken);
             var agent = (AgentLoopAgent)handle.Agent;
             agent.Followup(MessageFactory.CreateUserText("只回复两个字:收到"));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             var events = agent.Session.SnapshotEvents();
             var assistant = events
                 .Select(sessionEvent => sessionEvent.Data)
@@ -109,7 +109,7 @@ public sealed class RealLlmTurnSmokeTests
             while (!agent.Session.SnapshotEvents().Any(sessionEvent => sessionEvent.Data is AssistantMessagePayload)
                 && DateTime.UtcNow < deadline)
                 await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             var events = agent.Session.SnapshotEvents();
             Assert.Single(events, sessionEvent => sessionEvent.Data is ScheduleChangePayload { Change.Operation: ScheduleOperation.Dispatch });
             Assert.Single(events, sessionEvent => sessionEvent.Data is UserMessagePayload { Message.Source: PluginMessageSource { Plugin: ScheduleService.MessagePlugin } });
@@ -121,7 +121,7 @@ public sealed class RealLlmTurnSmokeTests
             app = await HarnessComposer.Compose(options);
             agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
             var resumed = (await agents.Resume(new ResumeAgentOptions(sessionId, agentOptions), TestContext.Current.CancellationToken)).Agent;
-            await resumed.WhenIdle().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await resumed.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             Assert.Empty(ScheduleLedger.Of(resumed.Session).Active);
             Assert.Single(resumed.Session.SnapshotEvents(), sessionEvent =>
                 sessionEvent.Data is ScheduleChangePayload { Change.Operation: ScheduleOperation.Dispatch });

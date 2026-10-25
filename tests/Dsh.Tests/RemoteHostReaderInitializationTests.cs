@@ -9,11 +9,12 @@ using Dsh.Transport;
 
 namespace Dsh.Tests;
 
+[Collection(SerialProcessCollection.Name)]
 public sealed class RemoteHostReaderInitializationTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task StopDuringInitializationReleasesRealReaderAndPreservesAnotherView(bool pty)
@@ -34,7 +35,7 @@ public sealed class RemoteHostReaderInitializationTests
             RemoteHostMultiClientTests.Agent(host, resource).Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("history")), new SurfaceOp.Append());
         }
 
-        await using var transport = await RemoteHostListener.ConnectAsync(host.Root, Ct);
+        await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         await using var peer = new JsonRpcPeer(transport);
         var received = Channel.CreateUnbounded<JsonRpcMessage>();
         peer.NotificationReceived += message => received.Writer.TryWrite(message);
@@ -44,7 +45,7 @@ public sealed class RemoteHostReaderInitializationTests
             Parameters(pty, resource, "cancelled-view"), Ct);
         try
         {
-            await gate.Ready.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await gate.Ready.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
             // The second view reads the same real resource while the first is still initializing.
             await peer.RequestAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
                 Parameters(pty, resource, "surviving-view"), Ct);
@@ -59,7 +60,7 @@ public sealed class RemoteHostReaderInitializationTests
             {
                 // Cancellation may reject the outstanding subscribe, but initialization errors must never be ACKed early.
             }
-            await gate.ReaderReleased.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await gate.ReaderReleased.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
             const string marker = "reader-survives-42";
             if (pty)
@@ -75,7 +76,7 @@ public sealed class RemoteHostReaderInitializationTests
                 RemoteHostMultiClientTests.Agent(host, resource).Session.Append(new UserMessagePayload(MessageFactory.CreateUserText(marker)), new SurfaceOp.Append());
             }
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-            deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            deadline.CancelAfter(TimeSpan.FromSeconds(5));
             var output = new StringBuilder();
             await foreach (var message in received.Reader.ReadAllAsync(deadline.Token))
             {
@@ -90,8 +91,8 @@ public sealed class RemoteHostReaderInitializationTests
                 {
                     var frame = JsonSerializer.Deserialize(events, HostProtocolJsonContext.Default.RemoteEventFrame)!;
                     Assert.NotEqual("cancelled-view", frame.SubscriptionId);
-                    if (frame.SubscriptionId == "surviving-view")
-                        output.Append(frame.Event.EventJson);
+                    if (frame.SubscriptionId == "surviving-view" && frame.Event.Event is { } sessionEvent)
+                        output.Append(DshJson.Serialize(sessionEvent));
                 }
                 if (output.ToString().Contains(marker, StringComparison.Ordinal))
                     return;
@@ -104,13 +105,13 @@ public sealed class RemoteHostReaderInitializationTests
         }
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task UnknownResourceFailsTheInitializingRpc(bool pty)
     {
         await using var host = await HarnessHostFixture.CreateAsync("rm", TestContext.Current.CancellationToken);
-        await using var transport = await RemoteHostListener.ConnectAsync(host.Root, Ct);
+        await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         await using var peer = new JsonRpcPeer(transport);
         peer.Start();
         await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync(
@@ -118,7 +119,7 @@ public sealed class RemoteHostReaderInitializationTests
             Parameters(pty, "missing-resource", "missing-view"), Ct));
     }
 
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task PipelinedStopDoesNotReviveReadersAndAllowsReaderIdReuse(bool pty)
@@ -135,7 +136,7 @@ public sealed class RemoteHostReaderInitializationTests
         }
         else
             resource = (await client.CreateSessionAsync(host.Environment.App.Home.Root, cancellationToken: Ct)).Id;
-        await using var transport = await RemoteHostListener.ConnectAsync(host.Root, Ct);
+        await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         await using var peer = new JsonRpcPeer(transport);
         var received = Channel.CreateUnbounded<JsonRpcMessage>();
         peer.NotificationReceived += message => received.Writer.TryWrite(message);
@@ -151,19 +152,19 @@ public sealed class RemoteHostReaderInitializationTests
             stops.Add(peer.RequestAsync(stop,
                 JsonSerializer.SerializeToElement(new RemoteSubscriptionRef(reader), HostProtocolJsonContext.Default.RemoteSubscriptionRef), Ct));
         }
-        await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(5), Ct);
         foreach (var start in starts)
         {
             try
             {
-                await start.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+                await start.WaitAsync(TimeSpan.FromSeconds(5), Ct);
             }
             catch (JsonRpcException)
             {
                 // A stop received before acquisition finishes rejects that subscribe, not the connection.
             }
         }
-        await tracked!.ReadersReleasedAsync().WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await tracked!.ReadersReleasedAsync().WaitAsync(TimeSpan.FromSeconds(5), Ct);
         // A completed or unknown stop must not poison a later owner of the same reader ID.
         await peer.RequestAsync(stop,
             JsonSerializer.SerializeToElement(new RemoteSubscriptionRef("surviving-view"), HostProtocolJsonContext.Default.RemoteSubscriptionRef), Ct);
@@ -182,7 +183,7 @@ public sealed class RemoteHostReaderInitializationTests
             RemoteHostMultiClientTests.Agent(host, resource).Session.Append(new UserMessagePayload(MessageFactory.CreateUserText(marker)), new SurfaceOp.Append());
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
         Dictionary<string, StringBuilder> output = new(StringComparer.Ordinal);
         HashSet<string> completed = [];
         await foreach (var message in received.Reader.ReadAllAsync(deadline.Token))
@@ -199,7 +200,7 @@ public sealed class RemoteHostReaderInitializationTests
             {
                 var frame = JsonSerializer.Deserialize(events, HostProtocolJsonContext.Default.RemoteEventFrame)!;
                 reader = frame.SubscriptionId;
-                text = frame.Event.EventJson;
+                text = frame.Event.Event is { } sessionEvent ? DshJson.Serialize(sessionEvent) : "";
             }
             else
                 continue;
@@ -216,13 +217,13 @@ public sealed class RemoteHostReaderInitializationTests
         Assert.Fail("Both current owners must receive the real resource output.");
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 5000)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task InvalidReaderRequestFailsOnlyItsRpc(bool pty)
     {
         await using var host = await HarnessHostFixture.CreateAsync("rv", TestContext.Current.CancellationToken);
-        await using var transport = await RemoteHostListener.ConnectAsync(host.Root, Ct);
+        await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         await using var peer = new JsonRpcPeer(transport);
         peer.Start();
         var error = await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync(
@@ -261,12 +262,11 @@ public sealed class RemoteHostReaderInitializationTests
         public HostNotificationCenter? Notifications => backend.Notifications;
         public IRemoteSessionEditingBackend? SessionEditing => backend.SessionEditing;
         public IRemotePluginsBackend? Plugins => backend.Plugins;
-        public IRemoteModelsBackend? Models => backend.Models;
         public IRemoteNetworkBackend? Network => backend.Network;
         public Task<HostInfo> InfoAsync(CancellationToken ct) => backend.InfoAsync(ct);
-        public Task<IReadOnlyList<RemoteSessionInfo>> ListSessionsAsync(CancellationToken ct) => backend.Session.ListSessionsAsync(ct);
-        public Task<RemoteSessionInfo> CreateSessionAsync(string cwd, RemoteModelSelection? selection, RemoteProviderSpec? provider, CancellationToken ct) => backend.Session.CreateSessionAsync(cwd, selection, provider, ct);
-        public Task<RemoteSessionInfo> ResumeSessionAsync(string id, RemoteModelSelection? selection, RemoteProviderSpec? provider, CancellationToken ct) => backend.Session.ResumeSessionAsync(id, selection, provider, ct);
+        public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken ct) => backend.Session.ListSessionsAsync(ct);
+        public Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken ct) => backend.Session.CreateSessionAsync(cwd, ct);
+        public Task<RemoteSessionSummary> ResumeSessionAsync(string id, CancellationToken ct) => backend.Session.ResumeSessionAsync(id, ct);
         public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string id, CancellationToken ct) => backend.Session.GetSessionSnapshotAsync(id, ct);
         public Task SendMessageAsync(string id, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken ct) => backend.Session.SendMessageAsync(id, text, images, ct);
         public Task InterruptAsync(string id, CancellationToken ct) => backend.Session.InterruptAsync(id, ct);
@@ -275,7 +275,7 @@ public sealed class RemoteHostReaderInitializationTests
         public Task WritePtyAsync(string id, byte[] data, CancellationToken ct) => backend.Pty!.WritePtyAsync(id, data, ct);
         public Task ResizePtyAsync(string id, int columns, int rows, CancellationToken ct) => backend.Pty!.ResizePtyAsync(id, columns, rows, ct);
         public Task StopPtyAsync(string id, CancellationToken ct) => backend.Pty!.StopPtyAsync(id, ct);
-        public async Task<RemoteHostStream<RemoteEventInfo>> SubscribeAsync(string id, long from, CancellationToken ct)
+        public async Task<RemoteHostStream<RemoteSessionEvent>> SubscribeAsync(string id, long from, CancellationToken ct)
             => await DelayAsync(await backend.Session.SubscribeAsync(id, from, ct), false, ct);
         public async Task<RemoteHostStream<RemotePtyOutput>> AttachPtyAsync(string id, CancellationToken ct)
             => await DelayAsync(await backend.Pty!.AttachPtyAsync(id, ct), true, ct);
@@ -341,3 +341,9 @@ public sealed class RemoteHostReaderInitializationTests
         }
     }
 }
+
+
+
+
+
+

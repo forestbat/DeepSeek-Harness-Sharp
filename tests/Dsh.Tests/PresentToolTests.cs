@@ -10,6 +10,7 @@ using Dsh.Runtime.Events;
 namespace Dsh.Tests;
 
 /** present 工具与交付物清单: 真实插件组合 + 真实 JSONL 持久化, 测试只组装文件与参数并断言会话事件。 */
+[Collection(GuiSerialCollection.CollectionName)]
 public sealed class PresentToolTests
 {
     private const string ToolName = "present";
@@ -17,7 +18,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_ExistingFile_RecordsAbsolutePathAndRendersIt()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         var expected = await CreateFile(session, "report.docx");
         session.Append(new TurnStartPayload(1));
@@ -34,7 +35,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_MissingFile_FailsWithoutRecording()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         session.Append(new TurnStartPayload(1));
 
@@ -48,7 +49,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_Directory_FailsWithoutRecording()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, "out"));
         session.Append(new TurnStartPayload(1));
@@ -63,7 +64,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_OutsideOpenTurn_Fails()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         await CreateFile(environment.Agent.Session, "notes.md");
 
         var result = await Present(environment, File("notes.md"));
@@ -75,7 +76,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_TooManyFiles_FailsWithoutRecording()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         var schema = environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!.Schemas().Single(tool => tool.Name == ToolName);
         Assert.Contains($"at most {PresentTool.MaxFiles} per call", schema.Parameters["properties"]!["files"]!["description"]!.GetValue<string>());
@@ -97,7 +98,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_BlockedByPostHook_RecordsNothing()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         await CreateFile(session, "slides.pptx");
         session.Append(new TurnStartPayload(1));
@@ -115,7 +116,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_SamePathTwice_KeepsOneEntryWithLatestDescription()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         var report = await CreateFile(session, "report.docx");
         var data = await CreateFile(session, "data.xlsx");
@@ -132,7 +133,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_FollowSessionTruncation()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         var first = await CreateFile(session, "first.docx");
         await CreateFile(session, "second.docx");
@@ -149,7 +150,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_SurviveRestartAndResume_AndListThroughCommand()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
         var session = environment.Agent.Session;
         var sessionId = session.Id;
         var expected = await CreateFile(session, "budget.xlsx");
@@ -157,7 +158,7 @@ public sealed class PresentToolTests
         await Present(environment, File("budget.xlsx", "预算表"));
         await environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(session);
 
-        using var restarted = await environment.RestartAsync();
+        await using var restarted = await environment.RestartAsync();
         var agents = restarted.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var handle = await agents.Resume(
             new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")),
@@ -173,7 +174,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_InheritedByFork()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
         var expected = await CreateFile(session, "plan.docx");
         session.Append(new TurnStartPayload(1));
@@ -193,7 +194,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task DeliverablesCommand_UnknownIndex_ReportsError()
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var commands = environment.App.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
 
         var listed = await commands.Execute(environment.Agent, "/deliverables", TestContext.Current.CancellationToken);

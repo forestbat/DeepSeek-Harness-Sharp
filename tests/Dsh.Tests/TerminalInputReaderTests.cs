@@ -6,8 +6,8 @@ namespace Dsh.Tests;
 /** Unix 输入源的唤醒管道: Wake 之后 Read 必须及时返回, 不能卡在排空管道上。 */
 public class TerminalInputReaderTests
 {
-    private const int ReadTimeoutMilliseconds = 30_000;
-    private static readonly TimeSpan HangDeadline = TimeSpan.FromSeconds(10);
+    private const int ReadTimeoutMilliseconds = 5000;
+    private static readonly TimeSpan HangDeadline = TimeSpan.FromSeconds(5);
 
     [Fact]
     public void WakePipe_IsNonBlocking()

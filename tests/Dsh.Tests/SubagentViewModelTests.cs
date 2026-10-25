@@ -13,7 +13,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task Refresh_ListsPersistentDescendants_WithDepthAndLabel() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         var first = SubagentTestData.AddChild(store, parent, "alpha", createdAt: 1);
@@ -36,7 +36,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task Refresh_OverlappingCallers_AwaitPublishedNodesAndEvents() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var child = SubagentTestData.AddChild(store, environment.Agent.Id, "research", createdAt: 1, withToolCall: true);
         using var panel = new SubagentPanelViewModel(await environment.OpenChatAsync());
@@ -68,7 +68,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task StartAndEnd_FlipLiveStateAndBadge() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         SubagentTestData.AddChild(store, parent, "beta", createdAt: 2);
@@ -107,7 +107,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task Open_RendersChildTranscript_AndCloseHides() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         SubagentTestData.AddChild(store, parent, "alpha", createdAt: 1, withToolCall: true);
@@ -134,7 +134,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task PreviousNext_NavigatesSiblings() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         SubagentTestData.AddChild(store, parent, "a", createdAt: 1);
@@ -166,7 +166,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task View_NeverWritesToChildSession() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         var child = SubagentTestData.AddChild(store, parent, "alpha", createdAt: 1, withToolCall: true);
@@ -188,7 +188,7 @@ public sealed class SubagentViewModelTests
     public async Task LiveChildEvents_AppendToOpenView() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Id;
         var child = SubagentTestData.AddChild(store, parent, "alpha", createdAt: 1);
@@ -196,8 +196,7 @@ public sealed class SubagentViewModelTests
         await store.Flush(child);
         store.Release(child.Id);
         var chat = await environment.OpenChatAsync();
-        await (await chat.ClientAsync()).ResumeSessionAsync(child.Id.Value,
-            new RemoteModelSelection("test", "test-model"), null, TestContext.Current.CancellationToken);
+        await (await chat.ClientAsync()).ResumeSessionAsync(child.Id.Value, TestContext.Current.CancellationToken);
         var live = (AgentLoopAgent)environment.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Get(child.Id)!;
         await live.WhenIdle();
         child = live.Session;
@@ -217,7 +216,7 @@ public sealed class SubagentViewModelTests
     [Fact]
     public async Task SubagentToolCall_RendersExpandableCard_WithInlineStream() => await HeadlessGui.RunAsync(async () =>
     {
-        using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync();
         var store = environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         var parent = environment.Agent.Session;
         var child = SubagentTestData.AddChild(store, parent.Id, "research", createdAt: 1, withToolCall: true);
@@ -232,7 +231,7 @@ public sealed class SubagentViewModelTests
             [callSeq]);
         parent.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
 
-        using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
         await viewModel.Subagents.RefreshAsync();
 
         var card = Assert.Single(viewModel.Messages, message => message.IsSubagentTool);
@@ -251,8 +250,7 @@ public sealed class SubagentViewModelTests
         // The refresh owner must still reload live child events after the initial card snapshot.
         store.Release(child.Id);
         var chat = await environment.OpenChatAsync();
-        await (await chat.ClientAsync()).ResumeSessionAsync(child.Id.Value,
-            new RemoteModelSelection("test", "test-model"), null, TestContext.Current.CancellationToken);
+        await (await chat.ClientAsync()).ResumeSessionAsync(child.Id.Value, TestContext.Current.CancellationToken);
         var live = (AgentLoopAgent)environment.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Get(child.Id)!;
         await live.WhenIdle();
         var callId = ToolCallId.Create("call-inline-live");

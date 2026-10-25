@@ -145,7 +145,7 @@ public sealed class GitInspectTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
 
         var summary = await inspector.DiffSummaryAsync(GitDiffTarget.Uncommitted, cancellationToken: ct);
-        var lines = await Dsh.Tui.ChatWindow.LoadGitLinesAsync(_repo.Root, ct);
+        var lines = await Dsh.Tui.ChatWindow.LoadGitLinesAsync(new GitService(), _repo.Root, ct);
 
         Assert.Equal(2, summary.Files.Count);
         Assert.All(summary.Files, file => Assert.Equal((1, 1), (file.Added, file.Deleted)));
@@ -375,10 +375,11 @@ internal sealed class GitTestRepository : IDisposable
         };
         foreach (var argument in arguments)
             info.ArgumentList.Add(argument);
-        using var process = Process.Start(info)!;
+        using var process = TestProcessScope.Start(info)!;
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, output, error);
     }
 }
+

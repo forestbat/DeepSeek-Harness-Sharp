@@ -9,7 +9,6 @@ namespace Dsh.Tests;
  *   3) 报文后继续打字必须正常(解析不能吞掉用户输入);
  *   4) 报文驱动的拖动必须真的作用于 TUI(右栏分隔线左移), 而不只是"没乱码"。
  */
-[Collection(SerialProcessCollection.Name)]
 public class MouseReportPtyTests
 {
     [Fact]
@@ -18,7 +17,7 @@ public class MouseReportPtyTests
         using var harness = await PtyTuiHarness.StartAsync();
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        await harness.WaitForAsync("快捷键", TimeSpan.FromSeconds(150));
+        await harness.WaitForAsync("快捷键", TimeSpan.FromSeconds(5));
         Assert.Equal(">", await WaitForInputAsync(harness, ">"));
 
         // ① 夹具起的只是 proxy; 常驻 daemon 会话以本夹具 home 为家(见 PtyTuiHarness.StopResidentSessions)。
@@ -86,9 +85,14 @@ public class MouseReportPtyTests
         await SendX10(harness, 32, before - 6, row);
         await Task.Delay(60, cancellationToken);
         await SendX10(harness, 3, before - 6, row);
-        await Task.Delay(350, cancellationToken);
-
+        var dragDeadline = DateTime.UtcNow.AddSeconds(5);
         var after = DividerColumn(harness.ReadScreen());
+        while (after > before - 3 && DateTime.UtcNow < dragDeadline)
+        {
+            await Task.Delay(50, cancellationToken);
+            after = DividerColumn(harness.ReadScreen());
+        }
+
         Assert.True(after >= 0 && after <= before - 3, $"分隔线应从 {before} 左移至少 3 列, 实际 {after}");
 
         // ⑤ attach 之后改终端尺寸也必须被上报: 常驻 TUI 只在尺寸变化时重排。

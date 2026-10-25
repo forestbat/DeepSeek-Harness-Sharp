@@ -1,4 +1,4 @@
-﻿using System.Formats.Tar;
+using System.Formats.Tar;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -7,10 +7,12 @@ using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Dsh.Boot;
 using Dsh.Fleet;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
+using Dsh.Pty;
 using Dsh.RemoteHost;
 
 namespace Dsh.Tests;
@@ -21,6 +23,7 @@ namespace Dsh.Tests;
  * - UI 结构用例不需要服务器, 常规运行。
  * - 真实 SSH 连接用例需要 <repo>/artifacts020/ssh-verify.json(本地, 不进版本库), 缺失即跳过。
  */
+[Collection(GuiSerialCollection.CollectionName)]
 public sealed class GuiRemoteWorkspaceTests
 {
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
@@ -28,16 +31,16 @@ public sealed class GuiRemoteWorkspaceTests
 
     private static IReadOnlyList<MachineSpec> SampleWorkspaces() =>
     [
-        MachineSpec.Ssh("实验室 GPU", "gpu-box.internal", 22, "dev", SshAuth.Password) with { RemotePath = "~/dsh-deploy" },
+        MachineSpec.Ssh("实验室 GPU", "gpu-box.internal", 22, "dev", SshAuth.Password) with { RemotePath = "~/dsh-deploy", Password = "fixture-password" },
         MachineSpec.Ssh("构建机", "build-box.internal", 22, "builder", SshAuth.Key) with { KeyPath = "~/.ssh/id_ed25519" },
     ];
 
-    /** 工作区菜单只管本地新会话的默认目录(最近工作区 + 打开新工作区…); 机器在工作台里统一显示; 设置页“远程”页签是机器管理, 保存后工作台按新清单重连。 */
+    /** 工作区菜单只管本地新会话的默认目录(最近工作区 + 打开新工作区…); 机器在工作台里统一显示; “机器”页是机器管理, 保存后工作台按新清单重连。 */
     [Fact]
     public async Task WorkspaceMenu_AndSettings_RemoteSurface() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = await GuiTestEnvironment.CreateAsync();
-        using var environmentScope = environment;
+        await using var environmentScope = environment;
         new MachineStore(environment.App.Home).Save(FleetConfig.Empty with { Machines = SampleWorkspaces() });
 
         var window = new MainWindow(environment.App, await environment.OpenChatAsync());
@@ -64,13 +67,9 @@ public sealed class GuiRemoteWorkspaceTests
         // 保存的 SSH 机器出现在工作台的机器分组里(这里不可达, 只验证分组存在)。
         Assert.All(SampleWorkspaces(), machine => Assert.Contains(viewModel.Workspace.Dashboard.Machines, group => group.Name == machine.Name));
 
-        // 设置页“远程”页签承载机器管理: 列出隐式本机与保存的机器, 编辑后保存进 settings.yaml。
-        viewModel.ShowSettingsCommand.Execute(null);
+        // “机器”页承载机器管理: 列出隐式本机与保存的机器, 编辑后保存进 settings.yaml。
+        viewModel.Workspace.OpenPage(viewModel.Workspace.Pages.Available.Single(page => page.Id == WorkspacePages.Machines));
         Dispatcher.UIThread.RunJobs();
-        var remoteSection = viewModel.Preferences.Sections.First(section => section.Section == SettingsSection.Remote);
-        remoteSection.SelectCommand!.Execute(remoteSection);
-        Dispatcher.UIThread.RunJobs();
-        Assert.True(viewModel.Preferences.IsRemoteSection);
         var machines = viewModel.Workspace.Machines;
         Assert.Equal([MachineSpec.LocalName, .. SampleWorkspaces().Select(machine => machine.Name)], machines.Machines.Select(row => row.Name));
         var machinesView = Assert.Single(window.GetVisualDescendants().OfType<MachinesView>(), view => view.IsEffectivelyVisible);
@@ -94,8 +93,6 @@ public sealed class GuiRemoteWorkspaceTests
         Assert.Contains(new MachineStore(environment.App.Home).Load().Machines, workspace => workspace.Name == "改名后的工作区");
         await GuiTestEnvironment.WaitForAsync(viewModel.Workspace.Fleet,
             () => viewModel.Workspace.Fleet.Find("改名后的工作区") is not null);
-        Assert.True(viewModel.Preferences.IsRemoteSection);
-
         window.Close();
         Dispatcher.UIThread.RunJobs();
     });
@@ -114,7 +111,7 @@ public sealed class GuiRemoteWorkspaceTests
         await HeadlessGui.RunAsync(async () =>
         {
             var environment = await GuiTestEnvironment.CreateAsync();
-            using var environmentScope = environment;
+            await using var environmentScope = environment;
             new MachineStore(environment.App.Home).Save(FleetConfig.Empty with { Machines = [spec.ToMachine()] });
 
             var window = new MainWindow(environment.App, await environment.OpenChatAsync());
@@ -124,7 +121,7 @@ public sealed class GuiRemoteWorkspaceTests
 
             var machine = viewModel.Workspace.Fleet.Find(spec.Name)!;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            timeout.CancelAfter(TimeSpan.FromMinutes(3));
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
             var lease = await machine.WaitConnectedAsync(timeout.Token);
             Dispatcher.UIThread.RunJobs();
             Assert.Contains(viewModel.Workspace.Dashboard.Machines, group => group.Name == spec.Name && group.IsConnected);
@@ -172,7 +169,7 @@ public sealed class GuiRemoteWorkspaceTests
             Assert.Contains("/.dsharp/", result.CommandPath.Replace('\\', '/'));
 
             await using var connection = await SshHostLauncher.ConnectAsync(workspace, result.CommandPath, GuiSettings.RemoteClientName, TestContext.Current.CancellationToken);
-            Assert.Equal(RemoteHostServer.ReleaseVersion, (await connection.Client.InfoAsync(TestContext.Current.CancellationToken)).HostVersion);
+            Assert.Equal(HostProtocol.ReleaseVersion, (await connection.Client.InfoAsync(TestContext.Current.CancellationToken)).HostVersion);
         }
         finally
         {
@@ -180,7 +177,8 @@ public sealed class GuiRemoteWorkspaceTests
         }
     }
 
-    private static Spec? LoadSpec()
+/** Holds the real create response after the daemon has created the PTY; all backend behavior stays real. */
+private static Spec? LoadSpec()
     {
         var file = Path.Combine(Path.GetDirectoryName(ScreenshotDirectory)!, "ssh-verify.json");
         if (!File.Exists(file))

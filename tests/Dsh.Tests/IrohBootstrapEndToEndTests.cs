@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 
 public sealed class IrohBootstrapEndToEndTests
 {
-    [Theory(Timeout = 180000)]
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RejectedIrohHostKey_PreservesSshConfiguration_AndPreexistingReceiver(bool preexistingReceiver)
@@ -22,7 +22,7 @@ public sealed class IrohBootstrapEndToEndTests
         {
             Assert.Equal("ordinary-ssh", await transport.RunAsync("printf '%s' ordinary-ssh", ct));
             if (preexistingReceiver)
-                await transport.RunAsync($"{RemoteShell.Prelude(original)}{RemoteShell.Quote(executable)} remote enable --ssh-port {original.Port}", ct);
+                await transport.RunAsync($"{RemoteShell.Prelude(original)}{RemoteShell.Quote(executable)} iroh-remote enable --ssh-port {original.Port}", ct);
             var previous = await IrohReceiver.InfoAsync(new HarnessHome(root), ct);
             var wrongKey = Path.Combine(server.Root, "untrusted_key");
             await TestSshServer.RunAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", wrongKey], ct);

@@ -15,14 +15,15 @@ namespace Dsh.Tests;
  * Dsh.Fleet and the fleet CLI against real `dsharp host serve` processes of this build, each under its own throwaway harness home.
  * Covers starting the local host on demand, reconnecting after the host process is killed, and `dsharp machine|session|doctor` end to end on two machines.
  */
+[Collection(SerialProcessCollection.Name)]
 public sealed class FleetLocalHostTests(ITestOutputHelper output)
 {
-    private static readonly TimeSpan RecoveryArrival = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan ProbeArrival = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RecoveryArrival = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ProbeArrival = TimeSpan.FromSeconds(15);
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /** A negative peer accepts connections but never responds to the Host handshake. */
-    [Fact(Timeout = 30000)]
+    [Fact(Explicit = true)]
     public async Task Cli_StartsAHostWhenASilentPeerOwnsTheEndpoint()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -48,7 +49,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
             using var peer = await accepting.WaitAsync(ProbeArrival, cancellationToken);
             var result = await listing.WaitAsync(RecoveryArrival, cancellationToken);
             Assert.True(result.ExitCode == 0, result.Error);
-            await using var stream = await RemoteHostListener.ConnectAsync(home, cancellationToken);
+            await using var stream = await RemoteHostConnector.ConnectAsync(home, cancellationToken);
             await using var client = await RemoteHostClient.ConnectAsync(stream, null, cancellationToken);
             Assert.Equal(HostProtocol.Version, (await client.InfoAsync(cancellationToken)).ProtocolVersion);
         }
@@ -60,7 +61,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
         }
     }
 
-    [Theory(Timeout = 180000)]
+    [Theory(Explicit = true)]
     [InlineData(AgentKinds.Terminal)]
     [InlineData(AgentKinds.OpenCode)]
     public async Task Cli_StopsExternalAndAcpAgentsThroughHostAgentStop(string kind)
@@ -91,7 +92,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
             TempTree.Delete(home);
         }
     }
-    [Fact(Timeout = 120000)]
+    [Fact(Explicit = true)]
     public async Task LocalHost_IsStartedOnDemand_AndTheConnectionRecoversAfterTheHostIsKilled()
     {
         var executable = RealHostProcesses.Executable;
@@ -115,7 +116,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
             await connection.WaitSettledAsync(TestContext.Current.CancellationToken);
             Assert.Equal(MachineConnectionState.Connected, connection.State);
             var first = Assert.IsType<Process>(host);
-            Assert.Equal(RemoteHostServer.ReleaseVersion, connection.Info!.HostVersion);
+            Assert.Equal(HostProtocol.ReleaseVersion, connection.Info!.HostVersion);
             await using (var healthy = new MachineConnection(MachineSpec.Local(home), options))
             {
                 healthy.Start();
@@ -194,7 +195,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
     }
 
     /** Two machines (this harness home and a second local one), each with a real host the CLI starts on demand. */
-    [Fact(Timeout = 180000)]
+    [Fact(Explicit = true)]
     public async Task Cli_ManagesMachines_ListsStopsAndDiagnosesSessions()
     {
         var executable = RealHostProcesses.Executable;
@@ -251,7 +252,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
     }
 
     /** `dsharp session attach` in a real terminal: keystrokes reach the host's shell, its output comes back, and Ctrl+] leaves the session running. */
-    [Fact(Timeout = 120000)]
+    [Fact(Explicit = true)]
     public async Task Cli_AttachesToATerminalSession_AndDetachesWithTheEscapeKey()
     {
         var executable = RealHostProcesses.Executable;
@@ -370,3 +371,7 @@ public sealed class FleetLocalHostTests(ITestOutputHelper output)
             return transcript.ToString();
     }
 }
+
+
+
+

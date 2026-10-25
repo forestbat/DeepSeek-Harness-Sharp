@@ -38,12 +38,6 @@
         </StackPanel>
       </StackPanel>
       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-        <Button Classes="Chip" Command="{Binding AddShellCommand}" ToolTip.Tip="在项目目录打开一个终端">
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.Terminal}" />
-            <TextBlock Text="终端" />
-          </StackPanel>
-        </Button>
         <Button Classes="Chip" Command="{Binding StopCommand}" IsVisible="{Binding Card.CanStop}" ToolTip.Tip="停止会话">
           <StackPanel Orientation="Horizontal" Spacing="4">
             <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.Stop}" />
@@ -104,9 +98,6 @@
       <ItemsControl.ItemTemplate>
         <DataTemplate x:DataType="vm:SessionTabViewModel">
           <Panel IsVisible="{Binding IsSelected}">
-            <Panel IsVisible="{Binding IsTranscript}">
-              <views:SessionTranscriptView DataContext="{Binding Transcript}" />
-            </Panel>
             <Panel IsVisible="{Binding IsTerminal}" Margin="16,8,16,12">
               <views:TerminalPaneView DataContext="{Binding Terminal}" />
             </Panel>

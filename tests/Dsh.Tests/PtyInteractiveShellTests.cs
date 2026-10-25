@@ -8,10 +8,9 @@ namespace Dsh.Tests;
  * Unix 交互 shell 的控制终端语义: 子进程必须是新会话首进程且把 pty 从端设为控制终端, 否则 bash 报
  * "no job control in this shell"、readline 不工作——shell 窗格与 agent 终端工具都依赖这一点。
  */
-[Collection(SerialProcessCollection.Name)]
 public sealed class PtyInteractiveShellTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Interactive_Shell_Reports_Job_Control_And_Executes_Command()
     {
         if (OperatingSystem.IsWindows())
@@ -59,7 +58,7 @@ public sealed class PtyInteractiveShellTests
             }, TestContext.Current.CancellationToken);
 
             await session.WriteAsync("echo probe-$(echo ok)\n"u8.ToArray(), TestContext.Current.CancellationToken);
-            var text = await WaitForAsync(output, "probe-ok", TimeSpan.FromSeconds(20));
+            var text = await WaitForAsync(output, "probe-ok", TimeSpan.FromSeconds(5));
             Assert.Contains("probe-ok", text);
             Assert.DoesNotContain("no job control", text);
 

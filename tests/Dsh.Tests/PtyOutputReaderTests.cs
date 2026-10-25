@@ -10,7 +10,7 @@ public sealed class PtyOutputReaderTests
     private const int SmallBuffer = 4;
 
     /** The tail of a chunk larger than the buffer must arrive without any further output from the program. */
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 5000)]
     public async Task Tail_Of_A_Large_Chunk_Is_Read_Without_Waiting_For_More_Output()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -27,7 +27,7 @@ public sealed class PtyOutputReaderTests
     }
 
     /** A completed channel still yields its buffered tail; 0 is returned only after the last byte. */
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 5000)]
     public async Task Completed_Channel_Drains_The_Tail_Before_Reporting_End()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -43,7 +43,7 @@ public sealed class PtyOutputReaderTests
         Assert.Equal(0, await reader.ReadAsync(buffer, cancellationToken));
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 5000)]
     public async Task Empty_Buffer_Returns_Without_Waiting_For_Output()
     {
         var channel = Channel.CreateUnbounded<byte[]>();
@@ -52,7 +52,7 @@ public sealed class PtyOutputReaderTests
         Assert.Equal(0, await reader.ReadAsync(Memory<byte>.Empty, TestContext.Current.CancellationToken));
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 5000)]
     public async Task Drain_Discards_The_Unread_Tail_And_Queued_Output()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

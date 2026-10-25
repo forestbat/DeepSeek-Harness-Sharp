@@ -20,9 +20,9 @@
     <Project Path="src/Dsh.Core/Dsh.Core.csproj" />
     <Project Path="src/Dsh.Deliverables/Dsh.Deliverables.csproj" />
     <Project Path="src/Dsh.E2b/Dsh.E2b.csproj" />
+    <Project Path="src/Dsh.Fleet.Iroh/Dsh.Fleet.Iroh.csproj" />
     <Project Path="src/Dsh.Fleet/Dsh.Fleet.csproj" />
     <Project Path="src/Dsh.Fleet.Client/Dsh.Fleet.Client.csproj" />
-    <Project Path="src/Dsh.Fleet.Client.Iroh/Dsh.Fleet.Client.Iroh.csproj" />
     <Project Path="src/Dsh.GitInspect/Dsh.GitInspect.csproj" />
     <Project Path="src/Dsh.Goal/Dsh.Goal.csproj" />
     <Project Path="src/Dsh.Gui/Dsh.Gui.csproj" />
@@ -52,7 +52,8 @@
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
     <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
-    <Project Path="src/Dsh.RemoteHost/Dsh.RemoteHost.csproj" />
+    <Project Path="src/Dsh.RemoteHost.Client/Dsh.RemoteHost.Client.csproj" />
+    <Project Path="src/Dsh.RemoteHost.Server/Dsh.RemoteHost.Server.csproj" />
     <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
     <Project Path="src/Dsh.Schedule/Dsh.Schedule.csproj" />
     <Project Path="src/Dsh.ScriptHost/Dsh.ScriptHost.csproj" />
@@ -83,7 +84,7 @@
     <Project Path="templates/managed-plugin/DshPluginTemplate.csproj" />
   </Folder>
   <Project Path="DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj" />
-  <Project Path="DshGuiHost/DshGuiHost.csproj" />
+  <Project Path="Dsh.GuiHost/Dsh.GuiHost.csproj" />
   <Project Path="Dsh.Host/Dsh.Host.csproj" />
   <Project Path="Dsh.WebHost/Dsh.WebHost.csproj" />
 </Solution>

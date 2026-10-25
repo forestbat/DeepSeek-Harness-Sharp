@@ -6,7 +6,7 @@ namespace Dsh.Tests;
 
 public sealed class TerminalSessionTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 5000)]
     public async Task Resizes_And_Input_Are_Sent_In_Order_While_The_First_Resize_Is_Pending()
     {
         var connection = new OrderedConnection();

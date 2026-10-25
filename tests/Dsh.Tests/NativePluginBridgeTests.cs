@@ -18,7 +18,7 @@ public sealed class NativePluginBridgeTests
         var tools = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin();
 
-        var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null)!;
+        var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         Assert.NotNull(tools.Get("native_echo"));
         var result = await tools.Execute(new ToolExecutionInput
@@ -56,34 +56,34 @@ public sealed class NativePluginBridgeTests
 
     /** 原生 ABI 的配置通道: 宿主把 plugins.<包名> 段编成 JSON, 激活前交给插件(旧插件不取即无感)。 */
     [Fact]
-    public void Activation_Passes_Plugin_Settings_As_Json()
+    public async Task Activation_Passes_Plugin_Settings_As_Json()
     {
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         _ = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin();
 
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, new Dictionary<string, object?>(StringComparer.Ordinal)
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["timeoutMs"] = 2500L,
             ["enabled"] = true,
             ["label"] = "hi \"there\"",
             ["tags"] = new List<object?> { "a", 2L },
-        })!;
+        }, TestContext.Current.CancellationToken))!;
 
         Assert.Equal("""{"timeoutMs":2500,"enabled":true,"label":"hi \"there\"","tags":["a",2]}""", plugin.ConfigJson);
     }
 
     /** 没有配置段时交空串(插件按默认值走), 而不是 "null" 或 "{}"。 */
     [Fact]
-    public void Activation_Without_Settings_Passes_Empty_Config()
+    public async Task Activation_Without_Settings_Passes_Empty_Config()
     {
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         _ = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin();
 
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null)!;
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         Assert.Equal("", plugin.ConfigJson);
     }
@@ -94,7 +94,7 @@ public sealed class NativePluginBridgeTests
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         var tools = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin();
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null)!;
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null, TestContext.Current.CancellationToken))!;
         Assert.NotNull(tools.Get("native_echo"));
 
         Assert.True(plugin.RemoveRegisteredTool());
@@ -118,7 +118,7 @@ public sealed class NativePluginBridgeTests
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         var tools = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin { Faulting = true };
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null)!;
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         var result = await tools.Execute(new ToolExecutionInput
         {
@@ -143,7 +143,7 @@ public sealed class NativePluginBridgeTests
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         var tools = new ToolRuntime(ctx);
         var plugin = new FakeNativePlugin { ReturnsInvalidJson = true };
-        using var registration = (IDisposable)NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null)!;
+        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(plugin).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         var result = await tools.Execute(new ToolExecutionInput
         {

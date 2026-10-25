@@ -51,7 +51,7 @@ public sealed class RealLlmImageSmokeTests
             var agent = (AgentLoopAgent)handle.Agent;
             agent.Followup(MessageFactory.CreateUserMessage(
                 [new TextBlock("这张图的四个象限从左到右、从上到下依次是什么颜色? 只按顺序列出四个颜色词。"), new ImageBlock(reference)]));
-            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            await agent.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             var text = string.Join(
                 " ",
