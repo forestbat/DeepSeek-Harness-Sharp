@@ -49,7 +49,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private const int ContentSearchLimit = 50;
     private const int MinContentQueryLength = 2;
 
-    private const string PresetEventType = "preset/mode";
     private const int MaxToasts = 4;
 
     private readonly Context _ctx;
@@ -274,11 +273,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private SessionMode _mode = SessionMode.Standard;
 
-    [ObservableProperty]
-    private string _preset = "standard";
-
-    [ObservableProperty]
-    private IReadOnlyList<PresetListItem> _presetItems = BuildPresetItems("standard");
 
     [ObservableProperty]
     private bool _isDashboardPage;
@@ -326,11 +320,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _ => "标准模式",
     };
 
-    public string PresetLabel => PresetDefinitions.FirstOrDefault(definition => definition.Id == Preset).Label ?? Preset;
-
-    public bool HasCommand(string name) => _chat.Commands.Any(command => string.Equals(command.Name, name, StringComparison.Ordinal));
-
-    public Task RefreshCommandsAsync() => _chat.RefreshCommandsAsync();
 
     /** 只有这三页走懒加载的 ContentControl; 其他页面由各自的 Host 承载, ContentControl 必须隐藏, 否则会把枚举名画成 "Chat"/"WorkspacePage" 文本。 */
     public bool IsLazyPage => Page is AppPage.Dashboard or AppPage.Settings or AppPage.Market;
@@ -435,18 +424,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnModeChanged(SessionMode value) => OnPropertyChanged(nameof(ModeLabel));
 
-    partial void OnPresetChanged(string value)
-    {
-        OnPropertyChanged(nameof(PresetLabel));
-        PresetItems = BuildPresetItems(value);
-    }
-
-    /** preset 四项固定, 标签口径与 Dsh.Presets 的 InteractionPreset 对齐; 未知 id 原样显示。 */
-    private static readonly (string Id, string Label)[] PresetDefinitions =
-        [("standard", "标准"), ("minimal", "极简"), ("ptc", "PTC"), ("creative", "创造")];
-
-    private static IReadOnlyList<PresetListItem> BuildPresetItems(string current)
-        => [.. PresetDefinitions.Select(definition => new PresetListItem(definition.Id, definition.Label, definition.Id == current))];
 
     partial void OnSelectedSessionChanged(SessionNodeViewModel? value)
     {
@@ -1033,24 +1010,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    [RelayCommand]
-    private async Task SetPreset(string id)
-    {
-        var previous = Preset;
-        Preset = id;
-        try
-        {
-            var result = await _chat.ExecuteAsync($"/preset {id}");
-            StatusText = result.Text ?? "";
-            if (!result.Success)
-                Preset = previous;
-        }
-        catch
-        {
-            Preset = previous;
-            throw;
-        }
-    }
 
     [RelayCommand]
     private async Task SwitchModelAsync(string? model)
@@ -1509,7 +1468,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         IsBusy = false;
         ApplyEvents(_chat.Events, replay: true);
         RefreshMode();
-        RefreshPreset();
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
@@ -1520,18 +1478,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void RefreshMode()
         => Mode = PlanActive(_chat.Events) ? SessionMode.Plan : SessionMode.Standard;
 
-    /** preset 状态持久在会话事件 `preset/mode` 里; payload 类型在 Dsh.Presets 程序集, GUI 只能按事件 Type + 泛化属性读取。 */
-    private void RefreshPreset()
-    {
-        var preset = "standard";
-        foreach (var sessionEvent in _chat.Events)
-        {
-            if (sessionEvent.Type != PresetEventType)
-                continue;
-            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
-        }
-        Preset = preset;
-    }
 
     /** 计划模式状态持久在会话事件 `plan/mode` 里; 这里只读它, 不复制 PlanMode 插件的判定逻辑。 */
     private static bool PlanActive(IReadOnlyList<SessionEvent> events)
@@ -1549,8 +1495,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private static bool? ReadBoolProperty(SessionEventPayload payload, string name)
         => ReadProperty<bool>(payload, name);
 
-    private static string? ReadStringProperty(SessionEventPayload payload, string name)
-        => ReadProperty<string>(payload, name);
 
     /** payload 经 DshJson(camelCase) 序列化后键名会变形, 故按忽略大小写匹配。 */
     private static T? ReadProperty<T>(SessionEventPayload payload, string name)
@@ -1601,8 +1545,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyEvent(SessionEvent sessionEvent, bool replay)
     {
-        if (sessionEvent.Type == PresetEventType)
-            RefreshPreset();
         if (sessionEvent.Data is TurnStartPayload or TurnEndPayload)
             foreach (var node in AllSessions().Where(node => node.SessionId == _chat.Id))
                 node.IsRunning = sessionEvent.Data is TurnStartPayload;

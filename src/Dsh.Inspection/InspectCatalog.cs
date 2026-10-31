@@ -9,8 +9,7 @@ using Dsh.Runtime.Composition;
 
 namespace Dsh.Inspection;
 
-/** 创造模式的只读运行时数据源:服务、事件、配置、工具四类,全部来自公开可解析的运行时状态。
- *  事件类别尚未接通: EventTable 已公开只读快照(Context.EventSubscriptions), 留待以后应用。 */
+/** Public read-only service, configuration and tool inspection, with event inspection explicitly unavailable. */
 public static class InspectCatalog
 {
     public const string Service = "service";
@@ -128,7 +127,7 @@ public static class InspectCatalog
             };
         }
         throw new InvalidOperationException(
-            $"unknown inspectable config key \"{name}\"; use cordis_inspect_list with category \"config\" to see available keys");
+            $"unknown inspectable config key \"{name}\"; use creative_inspect_list with category \"config\" to see available keys");
     }
 
     /** schema 里的全部配置路径(顶层文档 + 各插件参数)。 */

@@ -45,7 +45,6 @@ public sealed class ToolRuntime : Service
         public AnonymousEntries<ToolRestriction> Restrictions { get; } = new();
         public AnonymousEntries<Func<ToolExecution, string?>> Guards { get; } = new();
         public Lock RegistrationGate { get; } = new();
-        public ToolPresentationMode? Mode { get; set; }
 
         public ToolLayer(ScopeKey? scope)
         {
@@ -61,13 +60,9 @@ public sealed class ToolRuntime : Service
     }
 
     private readonly ScopedLayers<ToolLayer> _layers;
-    private readonly ToolPresentationMode _defaultMode;
-    private readonly Dictionary<string, string> _reservedNames = [];
-    private readonly Lock _reservedSync = new();
 
-    public ToolRuntime(Context ctx, ToolPresentationMode defaultMode = ToolPresentationMode.Native) : base(ctx, ServiceName)
+    public ToolRuntime(Context ctx) : base(ctx, ServiceName)
     {
-        _defaultMode = defaultMode;
         _layers = new ScopedLayers<ToolLayer>(scope => new ToolLayer(scope), () => ctx.Emit(new ToolChangeNotification()));
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
@@ -76,20 +71,15 @@ public sealed class ToolRuntime : Service
 
     public IDisposable Register(ToolDefinition definition) => Register(definition, null);
 
-    /** 按 scope(如 agent.ScopeKey)注册: 该工具仅对 scope 及其子 scope 可见, 用于 preset 独占工具。 */
+    /** Registers a tool for a scope and its descendants. */
     public IDisposable Register(ToolDefinition definition, ScopeKey? scope)
     {
-        if (IsReservedName(definition.Name))
-        {
-            throw new InvalidOperationException(
-                $"tool name \"{definition.Name}\" is reserved for the presentation transport and cannot be registered or shadowed");
-        }
         if (definition.TimeoutMs is <= 0)
             throw new ArgumentException($"tool \"{definition.Name}\" timeoutMs must be a positive finite number");
         if (!IsSimpleIdentifier(definition.Name))
         {
             Ctx.LoggerFor("tools").Warn(
-                $"tool \"{definition.Name}\" is not a C# identifier; in PTC mode it is only callable as tools.call(\"{definition.Name}\", args)");
+                $"tool \"{definition.Name}\" is not a C# identifier; programs can call it as tools.call(\"{definition.Name}\", args)");
         }
         var owner = PluginApplyScope.CurrentPlugin;
         var registeredName = definition.Name;
@@ -162,9 +152,6 @@ public sealed class ToolRuntime : Service
     {
         if (filter.Allow is null && filter.Deny is null)
             throw new InvalidOperationException("tools.restrict({}) is a no-op: pass allow and/or deny (an empty filter is almost always a materialized-empty-config bug)");
-        var reserved = (filter.Allow ?? []).Concat(filter.Deny ?? []).FirstOrDefault(IsReservedName);
-        if (reserved is not null)
-            throw new InvalidOperationException($"tools.restrict() cannot name reserved tool \"{reserved}\"; restrict end-capability tools instead");
         var known = View(scope).RestrictableNames;
         var unknown = (filter.Allow ?? []).Concat(filter.Deny ?? []).Where(name => !known.Contains(name)).ToList();
         if (unknown.Count > 0)
@@ -183,40 +170,6 @@ public sealed class ToolRuntime : Service
             layer => layer.Guards.Remove(guard),
             notify: false);
 
-    public IDisposable PresentAs(ToolPresentationMode mode)
-        => PresentAs(mode, DshScope.ScopeOf(Ctx)
-            ?? throw new InvalidOperationException("tools.presentAs() requires a scoped context (agent.ctx): a context-global presentation is the mode config field on the tools row"));
-
-    public IDisposable PresentAs(ToolPresentationMode mode, ScopeKey scope)
-        => _layers.Effect(Ctx, scope,
-            layer =>
-            {
-                if (layer.Mode is not null)
-                {
-                    throw new InvalidOperationException(
-                        $"tools.presentAs(\"{mode}\") conflicts with \"{layer.Mode}\" already declared for this scope; one composition selects one presentation");
-                }
-                layer.Mode = mode;
-            },
-            layer => layer.Mode = null);
-
-    /** 声明一个保留工具名(如呈现模式的传输工具): 幂等, 同一名字以不同理由重复声明即失败。 */
-    public void ReserveName(string name, string reason)
-    {
-        lock (_reservedSync)
-        {
-            if (_reservedNames.TryGetValue(name, out var existing))
-            {
-                if (existing != reason)
-                    throw new InvalidOperationException($"tool name \"{name}\" is already reserved: {existing}");
-                return;
-            }
-            _reservedNames[name] = reason;
-        }
-        if (_layers.Global.Tools.Entries.Any(entry => entry.Key == name))
-            throw new InvalidOperationException($"tool name \"{name}\" is already registered and cannot be reserved");
-    }
-
     private string? GuardReason(ToolExecution exec)
     {
         var globalReason = _layers.Global.Guards.Values.Select(guard => guard(exec)).FirstOrDefault(reason => reason is not null);
@@ -231,30 +184,6 @@ public sealed class ToolRuntime : Service
                 return reason;
         }
         return null;
-    }
-
-    private ToolPresentationMode ModeFor(ScopeKey? scope)
-    {
-        var layers = _layers.ChainLayers(scope);
-        for (var index = layers.Count - 1; index >= 0; index--)
-        {
-            if (layers[index].Mode is { } mode)
-                return mode;
-        }
-        return _defaultMode;
-    }
-
-    private string? TransportToolName()
-        => Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false)?.TransportToolName;
-
-    private bool IsReservedName(string name)
-    {
-        lock (_reservedSync)
-        {
-            if (_reservedNames.ContainsKey(name))
-                return true;
-        }
-        return TransportToolName() == name;
     }
 
     private ToolView View(ScopeKey? scope)
@@ -290,57 +219,24 @@ public sealed class ToolRuntime : Service
                 visible[name] = entry.Definition;
             }
         }
-        if (ModeFor(scope) != ToolPresentationMode.Native
-            && Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false) is { IsAvailable: true } presentation)
-        {
-            var transport = presentation.TransportDefinition;
-            knownNames.Add(presentation.TransportToolName);
-            visible[transport.Name] = transport;
-        }
         return new ToolView(visible, knownNames, restrictableNames);
     }
 
     public ToolDefinition? Get(string name, ScopeKey? scope = null)
         => View(scope).Visible.TryGetValue(name, out var definition) ? definition : null;
 
-    private ToolDefinition? ResolveExecution(string name, ScopeKey? scope, bool nested)
-    {
-        var tool = Get(name, scope);
-        if (tool is null)
-            return null;
-        if (!nested && ModeFor(scope) == ToolPresentationMode.Ptc && name != TransportToolName())
-            return null;
-        return tool;
-    }
-
     public IReadOnlyList<ToolSchema> Schemas(ScopeKey? scope = null)
         => View(scope).Visible.Values
             .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
             .ToList();
 
-    /** 当前 scope 的呈现模式, 供提示词段与呈现接缝判定。 */
-    public ToolPresentationMode PresentationMode(ScopeKey? scope = null) => ModeFor(scope);
-
     private ToolProviderResult WireSchemas(ScopeKey? scope)
     {
         var view = View(scope);
-        var mode = ModeFor(scope);
-        var native = view.Visible.Values
+        var schemas = view.Visible.Values
             .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
             .ToList();
-        if (mode == ToolPresentationMode.Native)
-            return new ToolProviderResult(native, [.. view.KnownNames]);
-        var presentation = Ctx.Get<IToolPresentation>(IToolPresentation.ServiceName, false);
-        if (presentation is not { IsAvailable: true })
-        {
-            throw new InvalidOperationException(
-                $"tool presentation mode \"{mode}\" requires the presentation runtime, which is not available in this deployment");
-        }
-        var transport = presentation.TransportDefinition;
-        var transportSchema = new ToolSchema(transport.Name, transport.Description, transport.Parameters);
-        return mode == ToolPresentationMode.Ptc
-            ? new ToolProviderResult([transportSchema], [presentation.TransportToolName])
-            : new ToolProviderResult([.. native, transportSchema], [.. view.KnownNames, presentation.TransportToolName]);
+        return new ToolProviderResult(schemas, [.. view.KnownNames]);
     }
 
     private static PreToolDecision NormalizePreDecision(object? value)
@@ -419,7 +315,7 @@ public sealed class ToolRuntime : Service
 
     public ToolExecutionModeKind ExecutionModeKind(ToolExecutionInput exec)
     {
-        var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null);
+        var tool = Get(exec.Name, exec.Agent?.ScopeKey);
         if (tool?.IsConcurrencySafe is null)
             return ToolExecutionModeKind.Exclusive;
         try
@@ -461,7 +357,7 @@ public sealed class ToolRuntime : Service
         }
     }
 
-    private (ToolRunContext Context, ScheduledToolPreparation? Early) CreateExecution(ToolExecutionInput input)
+    private ToolRunContext CreateExecution(ToolExecutionInput input)
     {
         var runContext = new ToolRunContext
         {
@@ -474,27 +370,13 @@ public sealed class ToolRuntime : Service
             Signal = input.Signal,
         };
         var visible = Get(input.Name, input.Agent?.ScopeKey);
-        var collapsed = visible is not null && ResolveExecution(input.Name, input.Agent?.ScopeKey, input.Parent is not null) is null;
-        runContext.CapturedFinalizer = collapsed && !input.Signal.IsCancellationRequested
-            ? null
-            : visible?.FinalizeContent;
-        if (collapsed)
-        {
-            if (input.Signal.IsCancellationRequested)
-                return (runContext, new ScheduledToolPreparation.FinalResult(runContext, AbortedBeforeDispatchResult()));
-            var transportName = TransportToolName() ?? "transport";
-            return (runContext, new ScheduledToolPreparation.FinalResult(runContext, ErrorResult(new ToolNotFoundException(
-                input.Name,
-                $"tool \"{input.Name}\" is not callable directly in this presentation mode; call it from inside a \"{transportName}\" program instead"))));
-        }
-        return (runContext, null);
+        runContext.CapturedFinalizer = visible?.FinalizeContent;
+        return runContext;
     }
 
     public async Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
     {
-        var (exec, early) = CreateExecution(input);
-        if (early is not null)
-            return early;
+        var exec = CreateExecution(input);
         if (exec.Signal.IsCancellationRequested)
             return new ScheduledToolPreparation.FinalResult(exec, AbortedBeforeDispatchResult());
         try
@@ -535,7 +417,7 @@ public sealed class ToolRuntime : Service
     {
         if (gate is PreToolDecision.Deny || exec.Agent is not { } agent)
             return gate;
-        var tool = ResolveExecution(exec.Name, agent.ScopeKey, exec.Parent is not null);
+        var tool = Get(exec.Name, agent.ScopeKey);
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
@@ -568,7 +450,7 @@ public sealed class ToolRuntime : Service
             return AbortedBeforeDispatchResult();
         try
         {
-            var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null)
+            var tool = Get(exec.Name, exec.Agent?.ScopeKey)
                 ?? throw new ToolNotFoundException(exec.Name);
             exec.BodyInvoked = true;
             var arguments = exec.Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
@@ -672,7 +554,7 @@ public sealed class ToolRuntime : Service
                     {
                         if (result.IsError)
                             throw new JsonException("tools/post-execute cannot replace the value of a failed result");
-                        var tool = ResolveExecution(exec.Name, exec.Agent?.ScopeKey, exec.Parent is not null)
+                        var tool = Get(exec.Name, exec.Agent?.ScopeKey)
                             ?? throw new ToolNotFoundException(exec.Name);
                         var replaced = CreateSuccessResult(exec, tool, value);
                         return replaced with { AdditionalContexts = additionalContexts };

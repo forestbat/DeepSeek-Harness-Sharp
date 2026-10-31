@@ -71,6 +71,8 @@
     <ProjectReference Include="..\..\src\Dsh.Llm.OpenAi\Dsh.Llm.OpenAi.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Llm.DeepSeek\Dsh.Llm.DeepSeek.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.CSharpRepl\Dsh.CSharpRepl.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Csx\Dsh.Csx.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Toon\Dsh.Toon.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Compaction\Dsh.Compaction.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Interaction\Dsh.Interaction.csproj" />
@@ -94,7 +96,6 @@
     <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.Presets\Dsh.Presets.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Ptc\Dsh.Ptc.csproj" />
     <ProjectReference Include="..\..\src\Dsh.ScriptHost\Dsh.ScriptHost.csproj" />

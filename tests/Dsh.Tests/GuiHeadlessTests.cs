@@ -363,53 +363,6 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
         });
 
-    /** 模拟点击 preset 浮层里的项: 验证 XAML Click 处理器到 /preset 命令管道的整条接线。 */
-    [Fact]
-    public async Task PresetChip_Click_Item_SwitchesPreset() => await HeadlessGui.RunAsync(async () =>
-    {
-        // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的窗口测试。
-        var environment = await GuiTestEnvironment.CreateIsolatedAsync();
-        await using var environmentScope = environment;
-        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
-        var viewModel = window.ViewModel!;
-        window.Show();
-        viewModel.ShowChatCommand.Execute(null);
-        for (var attempt = 0; attempt < 50 && !viewModel.HasCommand("preset"); attempt++)
-        {
-            await viewModel.RefreshCommandsAsync();
-            await Task.Delay(100);
-        }
-        Assert.True(viewModel.HasCommand("preset"), "preset command was not registered");
-        Dispatcher.UIThread.RunJobs();
-        try
-        {
-            Assert.Equal("标准", viewModel.PresetLabel);
-            var chip = window.GetVisualDescendants().OfType<Button>()
-                .First(button => button.IsEffectivelyVisible && button.Flyout is Flyout { Content: ItemsControl });
-            var flyout = (Flyout)chip.Flyout!;
-            flyout.ShowAt(chip);
-            Dispatcher.UIThread.RunJobs();
-
-            var item = ((ItemsControl)flyout.Content!).GetVisualDescendants().OfType<Button>()
-                .First(button => button.DataContext is PresetListItem { Id: "minimal" });
-            item.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            await viewModel.SetPresetCommand.ExecutionTask!;
-
-            await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.PresetLabel == "极简");
-
-            Assert.Equal("极简", viewModel.PresetLabel);
-            Assert.Contains(environment.Agent.Session.SnapshotEvents(), sessionEvent => sessionEvent.Type == "preset/mode");
-            var tools = environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-            var names = tools.Schemas(environment.Agent.ScopeKey).Select(schema => schema.Name).ToList();
-            Assert.NotEmpty(names);
-            Assert.All(names, name => Assert.Contains(name, ShellToolDialects.ByToolName.Keys));
-        }
-        finally
-        {
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-        }
-    });
 
     /** 拖动字号滑块实时预览(不落盘): FontSizeText 跟随 + App 资源更新 + 磁盘值不变。 */
     [Fact]

@@ -9,7 +9,7 @@ namespace Dsh.Ptc;
 /** run_code 程序内的子派发: 走注册表完整分段调度器, 结果只回程序 Promise, 审计另落会话事件。 */
 internal sealed class PtcSubDispatch(ToolRuntime tools, ToolRunContext runContext)
 {
-    private const string Source = "ptc-mode";
+    private const string Source = "ptc";
 
     public async Task<PtcToolReply> DispatchAsync(PtcToolCall call, CancellationToken signal)
     {

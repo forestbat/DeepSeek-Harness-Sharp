@@ -32,7 +32,6 @@ public sealed partial class ChatView : UserControl
     private RoutedEventArgs? _scrollInput;
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
-    private Flyout? _presetFlyout;
     private Flyout? _subagentFlyout;
 
     public ChatView()
@@ -336,25 +335,11 @@ public sealed partial class ChatView : UserControl
         await execution;
     }
 
-    private void OnPresetFlyoutOpened(object? sender, EventArgs e)
-    {
-        _presetFlyout = sender as Flyout;
-    }
-
-    /** 命令先同步执行再关浮层, 同 OnModelItemClick。 */
-    private async void OnPresetItemClick(object? sender, RoutedEventArgs e)
-    {
-        var execution = sender is Button { DataContext: PresetListItem item } && _viewModel is { } viewModel
-            ? ExecuteViewCommandAsync(viewModel, viewModel.SetPresetCommand, item.Id)
-            : Task.CompletedTask;
-        _presetFlyout?.Hide();
-        await execution;
-    }
 
     private void OnSubagentFlyoutOpened(object? sender, EventArgs e)
         => _subagentFlyout = sender as Flyout;
 
-    /** 命令先同步执行再关浮层, 同 OnPresetItemClick: 浮层关闭后按钮脱离逻辑树, Command 绑定会求值为 null。 */
+    // Execute before hiding the flyout because detached buttons lose their command bindings.
     private async void OnSubagentItemClick(object? sender, RoutedEventArgs e)
     {
         var execution = sender is Button { DataContext: SubagentNodeViewModel node } && _viewModel is { } viewModel

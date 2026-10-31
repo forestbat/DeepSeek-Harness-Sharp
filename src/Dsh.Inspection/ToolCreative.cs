@@ -6,11 +6,11 @@ using Dsh.Runtime;
 
 namespace Dsh.Inspection;
 
-/** cordis_inspect_list / cordis_inspect_query:创造模式的运行时只读检查工具(保留上游工具名以对齐生态)。 */
-public static class ToolCordis
+/** Plugin-development guidance and read-only runtime inspection tools. */
+public static class ToolCreative
 {
-    public const string ListToolName = "cordis_inspect_list";
-    public const string QueryToolName = "cordis_inspect_query";
+    public const string ListToolName = "creative_inspect_list";
+    public const string QueryToolName = "creative_inspect_query";
 
     private static readonly JsonSerializerOptions Pretty = new() { WriteIndented = true };
 
@@ -20,15 +20,37 @@ public static class ToolCordis
         + "schemas visible to this agent; each config item is prefixed [set]/[default]/[unknown] and uses path keys " 
         + "like logging.keep_days or plugins.\"@deepseek-ai/dsh-toon\".input). Read-only; the event category is " 
         + "not wired yet. Call "
-        + "cordis_inspect_query with a category and a name from the result for details.";
+        + "creative_inspect_query with a category and a name from the result for details.";
 
     private const string QueryDescription =
-        "Read one inspectable item selected by category and name, both taken from cordis_inspect_list. Read-only: it "
+        "Read one inspectable item selected by category and name, both taken from creative_inspect_list. Read-only: it "
         + "never modifies runtime state and cannot invoke services or tools. For config, name is a path key: it " 
         + "returns the settings.yaml value, or the schema default when unset.";
 
-    internal static IReadOnlyList<ToolDefinition> Definitions(Context ctx)
-        => [ListDefinition(ctx), QueryDefinition(ctx)];
+    private const string SectionText = """
+        Use creative_inspect_list and creative_inspect_query for read-only inspection of services, settings, and scope-visible tools; event inspection is unavailable.
+        Apply the same development workflow to custom user plugins and preinstalled Dsh.* plugins.
+        Build and validate in fresh subprocesses with separate output and intermediate directories, for example dotnet build <project> --artifacts-path <isolated-build-root>, never over binaries held by an existing daemon or GUI.
+        Launch the isolated built executable directly with a fresh DSH_HOME, clear inherited DSH_HARNESS_HOME, DSH_PTY_CHILD and DSH_PTY_SESSION_ID, and keep storage.root, storage.run and any .storage-root marker from redirecting into existing state.
+        Do not attach a development instance to an existing daemon, GUI, endpoint or session.
+        Before choosing process handling, actively call ask_user_question unless the user has already authorized that choice for this task.
+        Offer an isolated new instance, a restart of an explicitly identified owned instance, and automatic isolated runs or automatic restarts of that specified owned instance for the rest of this task.
+        Reuse the selected authorization without repeated workflow questions only within its stated scope; it does not bypass tool approvals, restrictions or cancellation.
+        After an answer, perform the authorized work through available execution tools such as bash or pwsh and owned terminal_open/terminal_send sessions, not through inspection tools.
+        For an authorized owned-terminal restart, use terminal_close, wait for its process tree to exit, then open a replacement and launch the isolated executable.
+        Never broadly kill processes, restart another instance without explicit authority, or treat a dismissed question as authorization.
+        If question or execution tools are unavailable, report the missing capability and request the decision in chat rather than claiming a process was started or restarted.
+        """;
+
+    internal static IDisposable Register(Context ctx)
+    {
+        var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+        var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
+        return new DisposableBundle(
+            tools.Register(ListDefinition(ctx)),
+            tools.Register(QueryDefinition(ctx)),
+            prompt.Section(PromptSection.Literal("tool:creative", SectionText)));
+    }
 
     private static ToolDefinition ListDefinition(Context ctx) => new()
     {
@@ -99,9 +121,9 @@ public static class ToolCordis
                 "category": {
                   "type": "string",
                   "enum": ["service", "event", "config", "tool"],
-                  "description": "Exact category returned by cordis_inspect_list."
+                  "description": "Exact category returned by creative_inspect_list."
                 },
-                "name": { "type": "string", "description": "Exact item name returned by cordis_inspect_list." }
+                "name": { "type": "string", "description": "Exact item name returned by creative_inspect_list." }
               }
             }
             """)!.AsObject(),

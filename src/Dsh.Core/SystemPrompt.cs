@@ -56,7 +56,6 @@ public static class PromptSpine
         "agent-instructions",
         "plan:policy",
         "memory:policy",
-        "tools:ptc-only",
         "tool:bash",
         "tool:pwsh",
         "tool:read",
@@ -78,7 +77,8 @@ public static class PromptSpine
         "tool:memory_save",
         "tool:workflow",
         "tool:ralph",
-        "creative:guidance",
+        "tool:creative",
+        "tool:plugin_manager",
         "tools:sdk",
     ];
 

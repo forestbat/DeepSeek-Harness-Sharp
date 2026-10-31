@@ -84,6 +84,15 @@ sandbox:
 
 # 插件开关:false 关闭;permissions(read/write/network)是保留键
 plugins:
+  # Debug-only preference for batching independent tool calls in run_code.
+  "@deepseek-ai/dsh-ptc":
+    debug_batching: false
+  # Optional .csx execution requires an installed dotnet-script frontend.
+  "@deepseek-ai/dsh-csx":
+    executable: dotnet-script
+  # Optional C# stdin evaluation requires an installed CSharpRepl frontend.
+  "@deepseek-ai/dsh-csharprepl":
+    executable: csharprepl
   # 项目记忆；参数 file/backend/capture/mongo
   "@deepseek-ai/dsh-memory": false
   # TOON 编码；参数 output/input
@@ -656,6 +665,10 @@ plugins:
 #   maxPoints:
 #   保留天数
 #   keepDays:
+# @deepseek-ai/dsh-csharprepl:
+#   executable: "csharprepl"
+# @deepseek-ai/dsh-csx:
+#   executable: "dotnet-script"
 # 目标模式
 # @deepseek-ai/dsh-goal:
 #   默认最大轮数
@@ -750,6 +763,8 @@ plugins:
 # @deepseek-ai/dsh-plan-mode:
 #   计划模式提示词段
 #   section:
+# @deepseek-ai/dsh-ptc:
+#   debug_batching: false
 # 技能加载
 # @deepseek-ai/dsh-skill:
 #   技能提供方名称

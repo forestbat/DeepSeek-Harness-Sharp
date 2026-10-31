@@ -87,6 +87,17 @@ jobs:
             bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
+      - name: Install real C# frontends for standalone tool tests
+        if: inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $PWD '.artifacts/csharp-frontends'
+          dotnet tool install dotnet-script --version 2.0.1 --tool-path $tools --allow-roll-forward
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet tool install csharprepl --version 0.9.2 --tool-path $tools --allow-roll-forward
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tools >> $env:GITHUB_PATH
+
       - name: Check C toolchain (Clang/LLVM and MSVC on Windows)
         shell: bash
         run: |
