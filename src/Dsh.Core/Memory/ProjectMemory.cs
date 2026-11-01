@@ -39,6 +39,7 @@ public sealed class ProjectMemory
     private readonly IMemoryStore _store;
     private readonly string _sidecarDir;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool? _enabled;
 
     public ProjectMemory(IMemoryStore store, string sidecarDir)
     {
@@ -48,7 +49,26 @@ public sealed class ProjectMemory
 
     public string Description => _store.Description;
 
+    public bool IsEnabled => _enabled ??= !File.Exists(DisabledMarker);
+
     public static string SidecarDirFor(string projectRoot) => Path.Combine(projectRoot, SidecarDirName);
+
+    private string DisabledMarker => Path.Combine(_sidecarDir, "disabled");
+
+    public async Task SetEnabledAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        if (enabled)
+        {
+            if (File.Exists(DisabledMarker))
+                File.Delete(DisabledMarker);
+        }
+        else
+        {
+            Directory.CreateDirectory(_sidecarDir);
+            await File.WriteAllTextAsync(DisabledMarker, "", cancellationToken);
+        }
+        _enabled = enabled;
+    }
 
     private string SessionsDir => Path.Combine(_sidecarDir, "sessions");
 
