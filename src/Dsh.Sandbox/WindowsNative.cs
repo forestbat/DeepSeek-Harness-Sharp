@@ -107,6 +107,8 @@ internal static class WindowsNative
     [DllImport("ntdll.dll")]
     internal static extern int NtSetSecurityObject(SafeFileHandle handle, uint information, nint descriptor);
     [DllImport("ntdll.dll")]
+    internal static extern int RtlGetLastNtStatus();
+    [DllImport("ntdll.dll")]
     internal static extern uint RtlNtStatusToDosError(int status);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint characters, uint flags);

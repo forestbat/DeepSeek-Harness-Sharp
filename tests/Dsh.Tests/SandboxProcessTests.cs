@@ -41,7 +41,7 @@ public sealed class SandboxProcessTests : IDisposable
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
         var exitCode = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
-        Assert.True(exitCode == 0, $"Sandbox exited with {exitCode}: {await error}");
+        Assert.True(exitCode == 0, $"Sandbox PID {sandbox.Id} exited with {exitCode}: {await error}");
         Assert.Equal("native-pipe\n", await output);
         Assert.Equal("diagnostic\n", await error);
         Assert.False(sandbox.WasMemoryLimitExceeded);
@@ -295,9 +295,9 @@ public sealed class SandboxProcessTests : IDisposable
         }, TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(0, await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken));
+        var exit = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        Assert.True(exit == 0, $"Sandbox PID {sandbox.Id} exited with {exit}: {await error}");
         Assert.Equal("protected\n", await output);
-        await error;
         Assert.Equal("unchanged", File.ReadAllText(target));
         Assert.Equal("allowed", File.ReadAllText(allowed));
         Assert.False(sandbox.WasMemoryLimitExceeded);
@@ -342,9 +342,9 @@ public sealed class SandboxProcessTests : IDisposable
         }, TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(0, await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken));
+        var exit = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        Assert.True(exit == 0, $"Sandbox PID {sandbox.Id} exited with {exit}: {await error}");
         Assert.Equal("protected\n", await output);
-        await error;
         Assert.Equal("unchanged", File.ReadAllText(target));
         Assert.Equal("runtime", File.ReadAllText(Path.Combine(readOnly, "runtime.txt")));
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")));
@@ -368,6 +368,7 @@ public sealed class SandboxProcessTests : IDisposable
             AllowNetwork = allowNetwork
         }, TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
         await sandbox.StandardInput.DisposeAsync();
         if (allowNetwork)
         {
@@ -382,7 +383,8 @@ public sealed class SandboxProcessTests : IDisposable
         }
         else
         {
-            Assert.NotEqual(0, exit);
+            const int firstSignaledExit = 128;
+            Assert.True(exit > 0 && exit < firstSignaledExit, $"Native network payload PID {sandbox.Id} exited with {exit}: {await error}");
             Assert.Equal(string.Empty, await output);
         }
     }

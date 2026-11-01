@@ -308,7 +308,8 @@ internal sealed class WindowsSandbox : ISandboxLifetime
     private static Win32Exception NativeError(string operation)
     {
         var error = Marshal.GetLastPInvokeError();
-        return new Win32Exception(error, $"Cannot {operation} (Win32 error {error}).");
+        var status = WindowsNative.RtlGetLastNtStatus();
+        return new Win32Exception(error, $"Cannot {operation} (Win32 error {error}, last NTSTATUS 0x{status:x8}).");
     }
     private static void Check(bool success, string operation) { if (!success) throw NativeError(operation); }
     private static void CheckHandle(SafeFileHandle handle, string operation) { if (handle.IsInvalid) throw NativeError(operation); }
