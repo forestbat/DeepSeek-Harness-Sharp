@@ -327,6 +327,34 @@ public sealed class SandboxProcessTests : IDisposable
 
     [Fact]
     [Trait("Category", "SandboxNative")]
+    public async Task MacPinnedRuntimeTree_WithWritableWorkspace_PreservesReadonlyData()
+    {
+        if (!OperatingSystem.IsMacOS())
+            Assert.Skip("This consumer requires native macOS readonly runtime-tree pinning.");
+        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
+        var writable = Path.Combine(working, "candidate.txt");
+        var readOnly = Path.Combine(_root, "readonly.txt");
+        await File.WriteAllTextAsync(writable, "before", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(readOnly, "protected", TestContext.Current.CancellationToken);
+        await using var sandbox = await SandboxedProcess.StartAsync(Options(working) with
+        {
+            Executable = "/usr/bin/perl",
+            RuntimePaths = [AppContext.BaseDirectory, System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()],
+            ReadOnlyPaths = [readOnly], WritablePaths = [working],
+            Arguments = ["-e", """open(my $denied, '>>', $ARGV[0]) and die "readonly escaped"; open(my $allowed, '>', $ARGV[1]) or die "workspace denied"; print $allowed "written"; close($allowed) or die "close failed";""",
+                "--", readOnly, writable]
+        }, TestContext.Current.CancellationToken);
+        var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var exit = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        Assert.True(exit == 0, $"Sandbox PID {sandbox.Id} exited with {exit}: {await error}");
+        _ = await output;
+        Assert.Equal("written", await File.ReadAllTextAsync(writable, TestContext.Current.CancellationToken));
+        Assert.Equal("protected", await File.ReadAllTextAsync(readOnly, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "SandboxNative")]
     public async Task MacNativeIo_DeniesReplacementAncestorRenameHardlinkAndReadOnlySubtreeWrites()
     {
         if (!OperatingSystem.IsMacOS() || !File.Exists("/usr/bin/perl"))

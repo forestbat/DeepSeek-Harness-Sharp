@@ -57,7 +57,7 @@ try {
     }
     $childIds = @([regex]::Matches($test.Output + $test.ErrorOutput, 'Windows readonly control PID ([0-9]+)') | ForEach-Object { [int] $_.Groups[1].Value } | Sort-Object -Unique)
     Write-Output "NATIVE_OBSERVER_CONSUMER_EXIT=$($test.ExitCode) OWNED_CHILD_COUNT=$($childIds.Count)"
-    if ($childIds.Count -eq 0) { throw 'No failing owned child PID was reported; the trace cannot establish this failure.' }
+    if ($childIds.Count -ne 1) { throw 'Exactly one failing owned child PID is required to establish this failure.' }
     $export = Invoke-BoundedPrivateCommand $procmon @('/AcceptEula', '/Quiet', '/OpenLog', $pml, '/SaveAs1', $xml) 60
     if ($export.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $xml)) { throw 'Exporting the owned native resource capture failed.' }
     $redactions = @{
@@ -84,7 +84,7 @@ try {
             $resource = $resource -replace 'S-1-15-2(?:-[0-9]+)+', '[container-sid]'
             $access = [regex]::Match([string] $fields['detail'], 'Desired Access: ([^,]+)').Groups[1].Value
             $status = [regex]::Match([string] $fields['detail'], 'Exit Status: ([^,]+)').Groups[1].Value
-            $frames = @($node.SelectNodes('//*[local-name()="frame"]') | Select-Object -First 8 | ForEach-Object {
+            $frames = @($node.SelectNodes('//*[local-name()="frame"]') | Select-Object -Last 12 | ForEach-Object {
                 $pathNode = $_.SelectSingleNode('./*[local-name()="path"]')
                 $locationNode = $_.SelectSingleNode('./*[local-name()="location"]')
                 $module = if ($pathNode) { [IO.Path]::GetFileName($pathNode.InnerText) } else { '' }
@@ -93,6 +93,7 @@ try {
             })
             $events.Enqueue([ordered]@{ childPid = [int] $fields['pid']; operation = $fields['operation']; resource = $resource; result = $fields['result']; desiredAccess = $access; exitStatus = $status; moduleFrames = $frames })
             if ($events.Count -gt 256) { $null = $events.Dequeue() }
+            if ($fields['operation'] -eq 'Process Exit') { break }
         }
     }
     finally { $reader.Dispose() }

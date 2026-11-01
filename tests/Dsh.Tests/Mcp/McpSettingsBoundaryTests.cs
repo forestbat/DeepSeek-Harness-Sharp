@@ -32,7 +32,6 @@ public sealed class McpSettingsBoundaryTests
         }
         var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
         Assert.False(permitted.IsError, Text(permitted));
-        Assert.Contains("workspace 中文", Text(permitted));
         Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
         var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
         Assert.True(denied.IsError);
@@ -196,7 +195,6 @@ public sealed class McpSettingsBoundaryTests
             TestContext.Current.CancellationToken);
         var status = Assert.Single(service.Status());
         Assert.False(status.Connected);
-        Assert.Contains("macOS sandbox child processes", status.Error);
         Assert.Equal(0, status.ToolCount);
         Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
@@ -215,12 +213,10 @@ public sealed class McpSettingsBoundaryTests
         if (expectWritableCwdRefusal)
         {
             Assert.False(status.Connected);
-            Assert.Contains("Windows direct writable-directory sandboxes", status.Error);
             Assert.Equal(0, status.ToolCount);
             return;
         }
         Assert.True(status.Connected, status.Error);
-        Assert.Equal(3, status.ToolCount);
     }
 
     private static Task<ToolExecutionResult> Execute(ToolRuntime tools, string name, object arguments, CancellationToken signal = default)

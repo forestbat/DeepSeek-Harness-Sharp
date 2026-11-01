@@ -126,7 +126,10 @@ internal static class UnixPathPin
             : 0x1000000 | 0x100 | 0x4 | (directory ? 0x100000 : 0);
         var descriptor = parent < 0 ? open(name, flags) : openat(parent, name, flags);
         if (descriptor < 0)
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot pin a sandbox path without following links.");
+        {
+            var error = Marshal.GetLastPInvokeError();
+            throw new Win32Exception(error, $"Cannot pin a sandbox path without following links (errno {error}, directory {directory}).");
+        }
         var handle = new SafeFileHandle(descriptor, ownsHandle: true);
         try
         {

@@ -9,11 +9,18 @@ internal static class TempTree
 {
     private const int MaxDeleteAttempts = 10;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
+    public static string RepositoryRoot { get; } = FindRepositoryRoot();
 
     /** 项目内临时目录根: 与 ChatWindow* 等测试同一处, 便于统一清理与忽略(.gitignore /artifacts020)。 */
-    private static readonly string Root = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes"));
+    private static readonly string Root = Path.Combine(RepositoryRoot, "artifacts020", "test-homes");
 
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.slnx")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new InvalidOperationException("Test artifacts require a repository checkout containing DeepSeek-Harness-Sharp.slnx.");
+    }
     public static string CreateDirectory(string prefix)
     {
         var directory = Path.Combine(Root, $"{prefix}-{Guid.NewGuid():N}");
@@ -21,7 +28,6 @@ internal static class TempTree
         return directory;
     }
 
-    private static readonly string RepositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
 
     /** 浅目录根(仓库内 .daemon-tests): AF_UNIX 路径上限很小(macOS 104, Linux 108), test-homes 的深路径放不下套接字。 */
     private static readonly string SocketRoot = Path.Combine(RepositoryRoot, ".daemon-tests");

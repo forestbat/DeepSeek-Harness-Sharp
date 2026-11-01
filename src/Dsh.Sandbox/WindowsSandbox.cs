@@ -9,6 +9,7 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsSandbox : ISandboxLifetime
 {
+    private const uint DetachedProcess = 0x00000008;
     private readonly SafeFileHandle _process, _job, _completionPort;
     private readonly WindowsAclLease _acl;
     private readonly string _profile;
@@ -77,7 +78,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             try
             {
                 Check(WindowsNative.CreateProcess(WindowsNative.PathForNative(policy.Executable), command, 0, 0, true,
-                    0x00000004 | 0x00000400 | 0x00080000 | 0x08000000, environment, WindowsNative.PathForNative(policy.WorkingDirectory), ref startup, out information), "create the suspended AppContainer process");
+                    0x00000004 | 0x00000400 | 0x00080000 | DetachedProcess, environment, WindowsNative.PathForNative(policy.WorkingDirectory), ref startup, out information), "create the suspended AppContainer process");
             }
             finally { Marshal.FreeHGlobal(environment); }
             process = new SafeFileHandle(information.Process, ownsHandle: true);

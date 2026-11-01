@@ -30,8 +30,6 @@ internal sealed class MacSandbox : ISandboxLifetime
 
     public static MacSandbox Start(SandboxPolicy policy)
     {
-        if (policy.AllowChildProcesses)
-            throw new PlatformNotSupportedException("macOS sandbox child processes cannot currently be owned without escape races: XNU does not mediate setsid/setpgid with Seatbelt. Run a single executable or use a separately provisioned kernel-owned execution domain; no process-group approximation is used.");
         const string launcher = "/usr/bin/sandbox-exec";
         const string environmentHelper = "/usr/bin/env";
         if (!File.Exists(launcher) || !File.Exists(environmentHelper))

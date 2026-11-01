@@ -414,7 +414,7 @@ plugins:
 | Windows | 使用 AppContainer 文件/网络边界与 Job Object 资源、进程树约束。当前明确拒绝直接可写目录授权，不能声称普通用户可可靠回收恶意创建的受保护 ACL 后代；文件写入应走宿主能力中介。AppContainer 的 localhost/loopback 限制意味着允许网络也不保证能连接本机模型、代理或 MCP 服务；不会自动添加 loopback exemption 来放宽边界。 |
 | macOS | 需要系统 `sandbox-exec`，支持不派生子进程的单 worker。内存采用 RSS 观察并在测量超预算后终止，不是内核硬上限；不能保证没有瞬时超额。需要派生子进程的不透明执行路径因无法提供无逃逸竞态的后代所有权而失败关闭，不能把整个 macOS 功能笼统标为不可用。 |
 
-Windows 进程创建失败会报告实际 Win32 错误码；在 AppContainer 与 Job 约束建立完成前，载荷保持挂起。
+Windows 进程创建失败会报告实际 Win32 错误码；载荷不附着控制台，三条标准流仅继承明确列出的管道，AppContainer 与 Job 约束在恢复执行前建立。
 AppContainer 的应用数据目录由 Windows 按当前容器身份重定向，用作容器自有临时区；这不授予宿主工作目录写权限，也不意味着继承完整宿主环境。
 
 macOS 的 dyld 共享缓存引导需要读取根目录对象；该权限仅针对 `/` 目录本身，不是递归读取根目录下文件内容的授权。
