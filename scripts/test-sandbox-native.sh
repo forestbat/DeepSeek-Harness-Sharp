@@ -36,6 +36,31 @@ if [ "${1:-}" = --delegated ]; then
   mkdir "$delegation/runner"
   printf '%s\n' "$$" > "$delegation/runner/cgroup.procs"
   printf '+memory +pids\n' > "$delegation/cgroup.subtree_control"
+  report_linux_native_resources() {
+    local result=$? counter procs pid key value count=0
+    trap - EXIT
+    set +e
+    printf 'NATIVE_RESOURCE_SUMMARY exit=%s\n' "$result"
+    for counter in memory.current memory.peak memory.max memory.swap.max memory.events memory.events.local; do
+      printf 'DELEGATION_%s\n' "$counter"
+      cat "$delegation/$counter"
+    done
+    shopt -s globstar nullglob
+    for procs in "$delegation"/**/cgroup.procs; do
+      while IFS= read -r pid; do
+        if [ "$count" -ge 64 ]; then break 2; fi
+        if [[ "$pid" =~ ^[0-9]+$ ]] && [ -r "/proc/$pid/status" ]; then
+          printf 'OWNED_PROCESS pid=%s\n' "$pid"
+          while IFS=: read -r key value; do
+            case "$key" in Name|PPid|VmRSS|VmSwap) printf '%s:%s\n' "$key" "$value" ;; esac
+          done < "/proc/$pid/status"
+          count=$((count + 1))
+        fi
+      done < "$procs"
+    done
+    exit "$result"
+  }
+  trap report_linux_native_resources EXIT
   probe="$delegation/prerequisite-probe"
   mkdir "$probe"
   for control in memory.max memory.swap.max memory.oom.group pids.max cgroup.kill; do

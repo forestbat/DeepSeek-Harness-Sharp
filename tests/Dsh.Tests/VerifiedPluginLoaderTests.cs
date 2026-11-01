@@ -114,6 +114,14 @@ public sealed class VerifiedPluginLoaderTests
 
     private sealed class Fixture : IDisposable
     {
+        private static readonly Lazy<MetadataReference[]> PlatformReferences = new(() =>
+        {
+            var trusted = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
+            return trusted.Concat([typeof(IDshPlugin).Assembly.Location, typeof(Dsh.Runtime.Context).Assembly.Location])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path)).ToArray();
+        });
+
         private readonly string _suffix = Guid.NewGuid().ToString("N");
         private readonly List<(PluginHost Host, PluginLoadResult Result)> _loaded = [];
         private readonly List<SharedAssemblyPool> _pools = [];
@@ -205,10 +213,8 @@ public sealed class VerifiedPluginLoaderTests
 
         private static void Compile(string name, string source, string destination, params string[] dependencies)
         {
-            var trusted = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
-            var references = trusted.Concat([typeof(IDshPlugin).Assembly.Location, typeof(Dsh.Runtime.Context).Assembly.Location])
-                .Concat(dependencies).Distinct(StringComparer.OrdinalIgnoreCase)
-                .Select(path => MetadataReference.CreateFromFile(path));
+            MetadataReference[] references = dependencies.Length == 0 ? PlatformReferences.Value
+                : [.. PlatformReferences.Value, .. dependencies.Select(path => MetadataReference.CreateFromFile(path))];
             var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)], references,
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true));
             using var output = File.Create(destination);
