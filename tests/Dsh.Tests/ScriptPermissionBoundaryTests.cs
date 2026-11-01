@@ -253,6 +253,7 @@ public sealed class ScriptPermissionBoundaryTests
     [Fact(Timeout = 60000)]
     public async Task ExistingOffTerminal_CannotAcceptModelInputAfterLiveToggle()
     {
+        const string originalContent = "off-mode-original";
         using var fixture = new Fixture(false, false, false, false, TestContext.Current.CancellationToken);
         using var agent = fixture.CreateAgent();
         var terminals = new TerminalSessionService(fixture.Context);
@@ -264,12 +265,12 @@ public sealed class ScriptPermissionBoundaryTests
         var opened = await terminals.Spawn(agent, new TerminalSpawnRequest("shell", null, fixture.Workspace), TestContext.Current.CancellationToken);
         try
         {
-            var initial = terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest("echo off>script-output", true, TestContext.Current.CancellationToken));
+            var initial = terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest($"echo {originalContent}>script-output", true, TestContext.Current.CancellationToken));
             await initial.Done.WaitAsync(TimeSpan.FromSeconds(35), TestContext.Current.CancellationToken);
-            Assert.Equal("off", (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
+            Assert.Equal(originalContent, (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
             fixture.SetEnabled(true);
-            Assert.Throws<InvalidOperationException>(() => terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest("printf unsafe > script-output", true)));
-            Assert.Equal("off", (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
+            Assert.Throws<InvalidOperationException>(() => terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest("echo unsafe>script-output", true)));
+            Assert.Equal(originalContent, (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
         }
         finally
         {
