@@ -20,7 +20,8 @@ public sealed record ApprovalRequest(
     string ToolName,
     ToolCallId CallId,
     string? Reason = null,
-    string? Arguments = null);
+    string? Arguments = null,
+    bool AllowByRule = false);
 
 public interface IApprovalService
 {
@@ -73,6 +74,16 @@ public sealed class ToolRuntime : Service
 
     /** Registers a tool for a scope and its descendants. */
     public IDisposable Register(ToolDefinition definition, ScopeKey? scope)
+        => RegisterCore(definition, scope, PluginApplyScope.CurrentPlugin);
+
+    /** Trusted supervisor ownership metadata; this does not grant OS authority. */
+    public IDisposable RegisterForPlugin(string package, ToolDefinition definition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(package);
+        return RegisterCore(definition, null, package);
+    }
+
+    private IDisposable RegisterCore(ToolDefinition definition, ScopeKey? scope, string? owner)
     {
         if (definition.TimeoutMs is <= 0)
             throw new ArgumentException($"tool \"{definition.Name}\" timeoutMs must be a positive finite number");
@@ -81,7 +92,6 @@ public sealed class ToolRuntime : Service
             Ctx.LoggerFor("tools").Warn(
                 $"tool \"{definition.Name}\" is not a C# identifier; programs can call it as tools.call(\"{definition.Name}\", args)");
         }
-        var owner = PluginApplyScope.CurrentPlugin;
         var registeredName = definition.Name;
         var registrationId = Guid.NewGuid();
         return _layers.Effect(Ctx, scope,
@@ -419,6 +429,9 @@ public sealed class ToolRuntime : Service
             return gate;
         var tool = Get(exec.Name, agent.ScopeKey);
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
+        // The actual settings writer requests its own complete diff decision, not a second root-only decision.
+        if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
+            targets = targets.Where(path => !settings.Owns(path)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
         return new PreToolDecision.Ask(gate is PreToolDecision.Ask { Reason: { } earlier } ? $"{reason}; {earlier}" : reason);
@@ -468,8 +481,12 @@ public sealed class ToolRuntime : Service
 
     public async Task<ScheduledToolDispatch> DispatchScheduledExecution(ToolRunContext exec)
     {
+        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
+            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
         try
         {
+            exec.ExternalProcessProtectionRequired = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true;
+            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
             var result = await Ctx.Events.Waterfall(
                 carrier, new ToolExecuteNotification(exec),
@@ -493,8 +510,11 @@ public sealed class ToolRuntime : Service
 
     public async Task<ToolExecutionResult> FinalizeScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
+        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
+            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
         try
         {
+            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
             var postResult = await PostExecute(exec, result);
             return FinishScheduledExecution(
                 exec,
@@ -580,6 +600,15 @@ public sealed class ToolRuntime : Service
     private ToolExecutionResult CreateSuccessResult(ToolRunContext exec, ToolDefinition tool, object? candidate)
     {
         var value = SnapshotValue(tool.Name, candidate);
+        if (exec.LastSettingsMutation is { } settings && value.ValueKind == JsonValueKind.Object)
+        {
+            var document = JsonNode.Parse(value.GetRawText())!.AsObject();
+            if (document.ContainsKey("before"))
+                document["before"] = settings.Before;
+            if (document.ContainsKey("after"))
+                document["after"] = settings.After;
+            value = JsonDocument.Parse(document.ToJsonString()).RootElement;
+        }
         var violations = JsonSchemaValidator.Validate(tool.Output.Schema, value, "value");
         if (violations.Count > 0)
             throw new ToolOutputException(tool.Name, violations);
@@ -604,6 +633,13 @@ public sealed class ToolRuntime : Service
                 throw new ToolOutputException(tool.Name, [$"output.presentationMeta failed: {error.Message}"]);
             }
         }
+        if (exec.LastSettingsMutation is { } mutation)
+            meta = JsonDocument.Parse(new JsonObject
+            {
+                ["card"] = "diff",
+                ["title"] = $"settings {mutation.Outcome}: {mutation.Path}",
+                ["diffs"] = new JsonArray(new JsonObject { ["path"] = mutation.Path, ["oldText"] = mutation.Before, ["newText"] = mutation.After }),
+            }.ToJsonString()).RootElement;
         return new ToolExecutionResult.Success
         {
             IsError = false,

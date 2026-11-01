@@ -21,6 +21,8 @@ public sealed class EditorLauncher(IEditorCatalog catalog, EditorOptions? option
     }
     public async ValueTask<EditorResult> LaunchAsync(EditorRequest request, CancellationToken cancellationToken = default)
     {
+        if (SettingsMutationScope.Current?.Context.ExternalProcessProtectionRequired == true)
+            throw new NotSupportedException("Model-triggered editor launches and executable probes require an OS-confined backend while sandbox.enabled is ON. Manual editor actions remain available.");
         try
         {
             cancellationToken.ThrowIfCancellationRequested();

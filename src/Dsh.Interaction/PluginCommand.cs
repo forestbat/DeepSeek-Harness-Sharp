@@ -60,8 +60,7 @@ public static class PluginCommand
                     case "enable" when tokens.Length > 1:
                         return RunAsync(manager.EnableAsync(tokens[1]));
                     case BanWrite or EnableWrite when tokens.Length > 1:
-                        return Task.FromResult<CommandResult>(new CommandResult.Success(
-                            manager.SetPermission(tokens[1], PluginPermission.Write, allowed: tokens[0] == EnableWrite)));
+                        return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Write, allowed: tokens[0] == EnableWrite));
                     default:
                         return Task.FromResult<CommandResult>(
                             new CommandResult.Error($"usage: /plugins list | doctor | add <pkg|path> | {PackageOps}"));
@@ -93,8 +92,8 @@ public static class PluginCommand
                 new CommandDescriptor("remove", "Uninstall a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("disable", "Disable a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("enable", "Enable a plugin", ArgumentSchemas: [package]),
-                new CommandDescriptor(BanWrite, "Deny a plugin write access (permissions.write: false)", ArgumentSchemas: [package]),
-                new CommandDescriptor(EnableWrite, "Allow a plugin write access (permissions.write: true)", ArgumentSchemas: [package]),
+                new CommandDescriptor(BanWrite, "Deny writes in the isolation profile (requires sandbox)", ArgumentSchemas: [package]),
+                new CommandDescriptor(EnableWrite, "Allow writes in the isolation profile", ArgumentSchemas: [package]),
             ];
         }
     }

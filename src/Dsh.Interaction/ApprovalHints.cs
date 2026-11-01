@@ -65,6 +65,32 @@ public static class ApprovalHints
             ? $"智能体请求执行工具 {request.ToolName}"
             : $"智能体请求执行工具 {request.ToolName} · {Trim(request.Reason, MaxImpactReasonChars)}";
 
+    public static string SettingsDiff(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "";
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("settingsMutation", out var marker) || marker.ValueKind != JsonValueKind.True)
+                return "";
+            if (!root.TryGetProperty("before", out var oldValue) || oldValue.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("after", out var newValue) || newValue.ValueKind != JsonValueKind.String)
+                return "";
+            return SettingsDiff(oldValue.GetString() ?? "", newValue.GetString() ?? "");
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
+    }
+
+    public static string SettingsDiff(string before, string after)
+        => string.Join('\n', DiffCardExtractor.DiffLines(before, after).Select(line =>
+            $"{(line.Kind == DiffLineKind.Add ? "+" : line.Kind == DiffLineKind.Delete ? "-" : " ")} {line.Text}"));
+
     private static string? TryRead(JsonElement element, string key)
     {
         foreach (var property in element.EnumerateObject())

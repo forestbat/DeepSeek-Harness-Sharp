@@ -220,7 +220,7 @@ public sealed class MemoryCommandTests
             return Task.FromResult("enabled");
         }
 
-        public string SetPermission(string package, PluginPermission permission, bool allowed) => "";
+        public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default) => Task.FromResult("");
     }
 
     private sealed class FakeAgent : IAgent

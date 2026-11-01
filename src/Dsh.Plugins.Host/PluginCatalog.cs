@@ -71,16 +71,28 @@ public sealed class PluginCatalog
         public PluginDefinition ToDefinition()
         {
             var probe = Create();
+            var isolated = probe is IDshIsolatedPlugin;
+            var configType = isolated ? null : probe.ConfigType;
             return new PluginDefinition
             {
                 Name = Descriptor.Package,
-                Inject = probe.Inject,
-                InjectTypes = probe.InjectTypes,
-                ConfigType = probe.ConfigType,
-                Apply = async (ctx, config, cancellationToken) =>
-                    await Create().ApplyAsync(ctx, BindConfig(probe.ConfigType, config, ctx), cancellationToken)
-                        .ConfigureAwait(false),
+                Inject = isolated ? ["tools", IPluginHostFactory.ServiceName] : probe.Inject,
+                InjectTypes = isolated ? [] : probe.InjectTypes,
+                ConfigType = configType,
+                Apply = (ctx, config, cancellationToken) => ActivateAsync(Create(), ctx, config, configType, cancellationToken),
             };
+        }
+
+        private async Task<object?> ActivateAsync(IDshPlugin plugin, Context ctx, object? config,
+            Type? configType, CancellationToken cancellationToken)
+        {
+            if (plugin is IDshIsolatedPlugin isolated)
+            {
+                var factory = ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
+                    ?? throw new InvalidOperationException("The plugin capability host is unavailable.");
+                return await factory.ActivateAsync(Descriptor.Package, isolated, ctx, config, cancellationToken).ConfigureAwait(false);
+            }
+            return await plugin.ApplyAsync(ctx, BindConfig(configType, config, ctx), cancellationToken).ConfigureAwait(false);
         }
 
         private static object? BindConfig(Type? configType, object? config, Context ctx)

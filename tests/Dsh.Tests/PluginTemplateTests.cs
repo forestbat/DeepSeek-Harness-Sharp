@@ -1,85 +1,174 @@
+using System.Text;
+using System.Text.Json;
+using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
 
-/** 插件模板工程随解决方案构建; 本测试装载其产物并激活, 锁住模板注释所描述的行为(清单生成、包名、Inject、提示词段)。 */
 [Collection(SettingsTemplateTests.RegistryCollection)]
 public sealed class PluginTemplateTests
 {
     [Fact]
-    public async Task TemplatePlugin_LoadsAndActivates()
+    public async Task TemplatePlugin_LoadsAndActivatesThroughCapabilityFactory()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AGENTS.md")))
-            root = root.Parent;
-        var pluginPath = Path.Combine(
-            root?.FullName ?? AppContext.BaseDirectory,
-            "templates", "managed-plugin", "bin", "Debug", "net10.0", "plugin", "DshPluginTemplate.dll");
-        if (!File.Exists(pluginPath))
-            Assert.Skip($"模板插件尚未构建: {pluginPath}");
-
+        var pluginPath = TemplatePath();
+        var directory = TempTree.CreateDirectory("template-capabilities");
         var host = new PluginHost();
         var loaded = host.TryLoad(pluginPath);
         try
         {
-            Assert.Contains(DshPluginSettingsRegistry.All(), provider => provider.Package == "@example/dsh-plugin-template");
             Assert.Contains("@example/dsh-plugin-template", loaded.Packages);
-
-            var ctx = new Context();
-            _ = new SystemPrompt(ctx, new SystemPromptConfig());
+            var ctx = CreateContext(directory, out var tools);
             var definition = host.Catalog.CreateDefinition("@example/dsh-plugin-template");
             var activation = await ctx.Scheduler.AddAsync(definition);
-
-            Assert.Equal(ActivationState.Active, activation.State);
-            var prompt = ctx.Get<SystemPrompt>()!;
-            var assembly = await prompt.Assemble(new AssembleContext());
-            Assert.Contains(assembly.Sections, section => section.Name == "template:hello");
+            try
+            {
+                Assert.Equal(ActivationState.Active, activation.State);
+                Assert.NotNull(tools.Get("template_read_file"));
+                Assert.NotNull(tools.Get("template_write_file"));
+                Assert.NotNull(tools.Get("template_http"));
+            }
+            finally
+            {
+                await activation.DeactivateAsync();
+            }
+            Assert.Null(tools.Get("template_read_file"));
+            Assert.Null(tools.Get("template_write_file"));
+            Assert.Null(tools.Get("template_http"));
         }
         finally
         {
             loaded.Context?.Unload();
+            TempTree.Delete(directory);
         }
-        Assert.DoesNotContain(DshPluginSettingsRegistry.All(), provider => provider.Package == "@example/dsh-plugin-template");
-        Assert.Null(Dsh.Boot.SettingsTemplate.Verify(Dsh.Boot.SettingsTemplate.DefaultPath));
+        Assert.Null(SettingsTemplate.Verify(SettingsTemplate.DefaultPath));
     }
 
-    /** 模板声明了 ConfigType: 参数段被绑定成 TemplateConfig, 拼错字段在激活期 WARN。 */
     [Fact]
-    public async Task TemplatePlugin_BindsTypedConfigAndWarnsUnknownField()
+    public async Task TemplatePlugin_FileToolsUseRealCommonHostOperations()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AGENTS.md")))
-            root = root.Parent;
-        var pluginPath = Path.Combine(
-            root?.FullName ?? AppContext.BaseDirectory,
-            "templates", "managed-plugin", "bin", "Debug", "net10.0", "plugin", "DshPluginTemplate.dll");
-        if (!File.Exists(pluginPath))
-            Assert.Skip($"模板插件尚未构建: {pluginPath}");
-
+        var pluginPath = TemplatePath();
+        var directory = TempTree.CreateDirectory("template-file-operations");
         var host = new PluginHost();
         var loaded = host.TryLoad(pluginPath);
         try
         {
-            var ctx = new Context();
-            _ = new SystemPrompt(ctx, new SystemPromptConfig());
+            var ctx = CreateContext(directory, out var tools);
             var definition = host.Catalog.CreateDefinition("@example/dsh-plugin-template");
-            var activation = await ctx.Scheduler.AddAsync(definition,
-                new Dictionary<string, object?> { ["message"] = "custom greeting", ["mesage"] = "typo" });
+            var activation = await ctx.Scheduler.AddAsync(definition);
+            try
+            {
+                Assert.Equal(ActivationState.Active, activation.State);
+                var path = Path.Combine(directory, "payload.txt");
+                var data = Convert.ToBase64String(Encoding.UTF8.GetBytes("capability payload"));
+                var write = await tools.Execute(new ToolExecutionInput
+                {
+                    CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                    Name = "template_write_file",
+                    Arguments = JsonSerializer.SerializeToElement(new { path, data }),
+                    Agent = null,
+                    Signal = TestContext.Current.CancellationToken,
+                });
+                Assert.False(write.IsError);
+                Assert.Equal("capability payload", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
 
-            Assert.Equal(ActivationState.Active, activation.State);
-            var prompt = ctx.Get<SystemPrompt>()!;
-            var assembly = await prompt.Assemble(new AssembleContext());
-            Assert.Contains(assembly.Sections, section => section.Name == "template:hello" && section.Text.Contains("custom greeting"));
-            Assert.Contains(ctx.Logger.Buffer, message =>
-                message.Type == LoggerType.Warn && message.Text.Contains("unknown config field 'mesage'"));
+                var read = await tools.Execute(new ToolExecutionInput
+                {
+                    CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                    Name = "template_read_file",
+                    Arguments = JsonSerializer.SerializeToElement(new { path }),
+                    Agent = null,
+                    Signal = TestContext.Current.CancellationToken,
+                });
+                Assert.False(read.IsError);
+                Assert.Contains(data, string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
+            }
+            finally
+            {
+                await activation.DeactivateAsync();
+            }
         }
         finally
         {
             loaded.Context?.Unload();
+            TempTree.Delete(directory);
         }
-        Assert.DoesNotContain(DshPluginSettingsRegistry.All(), provider => provider.Package == "@example/dsh-plugin-template");
-        Assert.Null(Dsh.Boot.SettingsTemplate.Verify(Dsh.Boot.SettingsTemplate.DefaultPath));
+    }
+
+    [Fact]
+    public async Task TemplatePlugin_HttpToolUsesRealHostNetworkOperation()
+    {
+        var pluginPath = TemplatePath();
+        var directory = TempTree.CreateDirectory("template-http-operation");
+        var host = new PluginHost();
+        var loaded = host.TryLoad(pluginPath);
+        try
+        {
+            await using var server = await PluginSdkHttpServer.StartAsync();
+            var ctx = CreateContext(directory, out var tools);
+            var definition = host.Catalog.CreateDefinition("@example/dsh-plugin-template");
+            var activation = await ctx.Scheduler.AddAsync(definition);
+            try
+            {
+                Assert.Equal(ActivationState.Active, activation.State);
+                var body = Encoding.UTF8.GetBytes("managed request");
+                var response = await tools.Execute(new ToolExecutionInput
+                {
+                    CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                    Name = "template_http",
+                    Arguments = JsonSerializer.SerializeToElement(new
+                    {
+                        url = server.Url,
+                        method = "POST",
+                        headers = new Dictionary<string, string> { ["X-Plugin"] = "sdk" },
+                        body = Convert.ToBase64String(body),
+                    }),
+                    Agent = null,
+                    Signal = TestContext.Current.CancellationToken,
+                });
+                Assert.False(response.IsError);
+                using var document = JsonDocument.Parse(string.Concat(response.Content.OfType<TextBlock>().Select(block => block.Text)));
+                Assert.Equal(201, document.RootElement.GetProperty("status").GetInt32());
+                Assert.Equal(server.ResponseBody, Convert.FromBase64String(document.RootElement.GetProperty("body").GetString()!));
+                Assert.Equal(body, server.RequestBody);
+                Assert.Equal("sdk", server.RequestHeader);
+                Assert.Equal(1, server.Requests);
+            }
+            finally
+            {
+                await activation.DeactivateAsync();
+            }
+        }
+        finally
+        {
+            loaded.Context?.Unload();
+            TempTree.Delete(directory);
+        }
+    }
+
+    private static Context CreateContext(string directory, out ToolRuntime tools)
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        tools = new ToolRuntime(ctx);
+        var factory = new PluginCapabilityFactory(ctx, new HarnessHome(directory), new HarnessSettings());
+        ctx.Provide(IPluginHostFactory.ServiceName, factory);
+        return ctx;
+    }
+
+    private static string TemplatePath()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "AGENTS.md")))
+            root = root.Parent;
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var path = Path.Combine(root?.FullName ?? AppContext.BaseDirectory,
+            "templates", "managed-plugin", "bin", configuration, "net10.0", "plugin", "DshPluginTemplate.dll");
+        if (!File.Exists(path))
+            Assert.Skip("the managed capability template has not been built");
+        return path;
     }
 }

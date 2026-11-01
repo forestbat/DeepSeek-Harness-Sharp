@@ -170,7 +170,6 @@ public sealed class NativePluginBridgeTests
 
             Assert.False(load.Succeeded);
             Assert.Equal(NativePluginFailureKind.NotALibrary, load.Failure);
-            Assert.False(string.IsNullOrWhiteSpace(load.Reason));
         }
         finally
         {

@@ -6,6 +6,8 @@ using System.Reflection;
 
 namespace Dsh.Boot;
 
+public sealed record PluginCatalogInspection(IReadOnlyList<PluginDescriptor> Descriptors, IReadOnlyList<PluginSkip> Skipped);
+
 public static class ConfigBoot
 {
     private const string NativeBridgeType = "Dsh.Plugins.Native.Host.NativePluginBridge";
@@ -35,11 +37,6 @@ public static class ConfigBoot
         var pluginsDirectory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
         var nativeBridge = ResolveNativeBridge();
-        var discovery = pluginHost.Scan(pluginsDirectory, nativeBridge);
-        foreach (var skip in discovery.Skipped)
-            ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
-        foreach (var notice in pluginHost.SharedPool.DrainNotices())
-            ctx.LoggerFor("loader").Warn("%s", notice);
         ctx.SetOwn("pluginCatalog", pluginHost.Catalog);
 
         // 零配置不兜底:没配 provider/model 就留空,启动照常,首次发起 LLM 请求时才报错。
@@ -60,13 +57,38 @@ public static class ConfigBoot
 
         try
         {
+            _ = new SettingsMutationBoundary(ctx, home);
+            PluginHostAuthority? authority = null;
+            if (settings.Sandbox?.Enabled == true)
+            {
+                authority = new PluginHostAuthority(ctx, home);
+                app.Track(authority);
+            }
+            var capabilities = new PluginCapabilityFactory(ctx, home, settings);
+            ctx.Provide(IPluginHostFactory.ServiceName, capabilities);
+            app.Track(capabilities);
+            _ = new ExternalProcessBoundary(ctx, home, settings);
+            PluginSandboxCatalog? sandbox = null;
+            if (authority is not null)
+            {
+                sandbox = new PluginSandboxCatalog(home, pluginHost, settings, pluginsDirectory, nativeBridge,
+                    authority, new PluginSandboxSupervisor(ctx, home, settings, capabilities));
+                app.Track(sandbox);
+            }
+            var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
+            using var discoveryOwnership = new PluginDiscoveryOwnership(pluginHost, discovery);
+            foreach (var skip in discovery.Skipped)
+                ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
+            foreach (var notice in pluginHost.SharedPool.DrainNotices())
+                ctx.LoggerFor("loader").Warn("%s", notice);
             var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
             ctx.LoggerFor("boot").Info("composition ready: %d plugin(s), home %s", composition.Activations.Count, home.Root);
             // 原生插件的所有权交给 manager:它在 /plugins remove、故障卸载与最终 Dispose 时统一 Deactivate + Free。
             var manager = new HarnessPluginManager(
-                pluginHost, composition, home, settings, discovery.Managed, discovery.Native, discovery.Skipped, nativeBridge, pluginsDirectory);
+                pluginHost, composition, home, settings, discovery.Managed, discovery.Native, discovery.Skipped, nativeBridge, pluginsDirectory, sandbox);
             app.Track(manager);
+            discoveryOwnership.Transfer();
             ctx.Provide("pluginManager", manager);
         }
         catch
@@ -75,6 +97,32 @@ public static class ConfigBoot
             throw;
         }
         return app;
+    }
+
+    public static async Task<PluginCatalogInspection> InspectPluginsAsync(HarnessOptions options)
+    {
+        options.Home.Ensure();
+        var settings = HarnessSettings.Load(options.Home);
+        var home = HarnessStorage.ApplyStorageRoot(options.Home, settings);
+        var context = new Context();
+        context.SetOwn("dshHomePath", home.Root);
+        context.SetOwn("harnessOptions", options with { Home = home });
+        context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
+        _ = new SettingsMutationBoundary(context, home);
+        using var authority = settings.Sandbox?.Enabled == true ? new PluginHostAuthority(context, home) : null;
+        using var capabilities = new PluginCapabilityFactory(context, home, settings);
+        context.Provide(IPluginHostFactory.ServiceName, capabilities);
+        _ = new ExternalProcessBoundary(context, home, settings);
+        var host = new PluginHost();
+        host.RegisterCompiledIn();
+        var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
+        host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
+        var bridge = ResolveNativeBridge();
+        using var sandbox = authority is null ? null : new PluginSandboxCatalog(home, host, settings, directory, bridge,
+            authority, new PluginSandboxSupervisor(context, home, settings, capabilities));
+        var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
+        try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
+        finally { PluginSandboxCatalog.ReleaseLoaded(host, discovered); }
     }
 
     /** Invalid baselines retain their existing startup policy; a saved borrowed selection always starts fail-closed. */
@@ -145,6 +193,17 @@ public static class ConfigBoot
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    private sealed class PluginDiscoveryOwnership(PluginHost host, PluginScanResult discovery) : IDisposable
+    {
+        private bool _transferred;
+        internal void Transfer() => _transferred = true;
+        public void Dispose()
+        {
+            if (!_transferred)
+                PluginSandboxCatalog.ReleaseLoaded(host, discovery);
         }
     }
 

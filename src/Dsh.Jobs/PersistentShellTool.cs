@@ -41,6 +41,7 @@ internal static class PersistentShellTool
     private sealed class PersistentShell : IDisposable
     {
         public required SubprocessHandle Handle { get; init; }
+        public required (bool Enabled, bool Read, bool Write, bool Network) Policy { get; init; }
         public long Cursor { get; set; }
 
         public void Dispose() => Handle.Dispose();
@@ -102,7 +103,7 @@ internal static class PersistentShellTool
         PersistentShellDialect Dialect,
         PersistentShellSettings Settings,
         ShellRegistry Shells,
-        Func<IAgent, PersistentShell> GetShell)
+        Func<IAgent, Task<PersistentShell>> GetShell)
     {
         public string ResetMessage => $"The persistent {Dialect.ShellLabel} shell was reset; the next {Dialect.ShellLabel} call starts from the workspace with a fresh current directory and environment.";
 
@@ -123,25 +124,28 @@ internal static class PersistentShellTool
         var shells = new ShellRegistry();
         var effect = ctx.Effect(() => (Action)(() => shells.Dispose()), $"{dialect.PackageLabel} shell cleanup");
 
-        PersistentShell GetOrCreateShell(IAgent owner)
+        async Task<PersistentShell> GetOrCreateShell(IAgent owner)
         {
+            var policy = ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.ScriptPolicy ?? default;
             var existing = shells.Get(owner);
-            if (existing is not null && !existing.Handle.Done.IsCompleted)
+            if (existing is not null && !existing.Handle.Done.IsCompleted && existing.Policy == policy)
                 return existing;
             if (existing is not null)
                 shells.Reset(owner);
             var argv = dialect.StartArgv(CancellationToken.None);
             var cwd = owner.Session.WorkingDirectory ?? Environment.CurrentDirectory;
-            var handle = subprocess.Spawn(new SubprocessSpawnSpec
+            var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
             {
                 Argv = argv,
                 Cwd = cwd,
                 Env = ShellEnvironment.NonInteractiveOverrides,
+                ModelExecution = true,
+                ExecutionKind = SubprocessExecutionKind.Script,
                 Stdout = new SubprocessCollect(Math.Max(MinStdoutCaptureBytes, settings.MaxOutputChars * StdoutBytesPerChar), null),
                 Stderr = new SubprocessCollect(StderrCaptureBytes, null),
                 KeepStandardInputOpen = true,
             });
-            var shell = new PersistentShell { Handle = handle, Cursor = 0 };
+            var shell = new PersistentShell { Handle = handle, Policy = policy, Cursor = 0 };
             shells.Set(owner, shell);
             owner.Ctx.Effect(() => (Action)(() => shells.Reset(owner)), $"{dialect.PackageLabel} owner cache cleanup");
             return shell;
@@ -151,7 +155,7 @@ internal static class PersistentShellTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = dialect.ToolName,
-            Description = settings.Description,
+            Description = settings.Description + IExternalProcessPolicy.SettingsProtectionNotice,
             Parameters = new JsonObject
             {
                 ["type"] = "object",
@@ -198,7 +202,7 @@ internal static class PersistentShellTool
 
     private static async Task<string> ExecuteCommand(CommandContext context, IAgent owner, string command, CancellationToken upstream)
     {
-        var shell = context.GetShell(owner);
+        var shell = await context.GetShell(owner);
         var marker = MakeMarkers(context.Dialect.ShellLabel);
         var wrapped = context.Dialect.WrapCommand(command, marker);
         var budget = TimeSpan.FromMilliseconds(context.Settings.TimeoutMs);

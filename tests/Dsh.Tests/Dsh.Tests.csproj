@@ -10,6 +10,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DshBuildFaultProbe>true</DshBuildFaultProbe>
     <IsPackable>false</IsPackable>
+    <StartupObject>Dsh.Tests.TestProcessEntryPoint</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +26,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="xunit.v3" Version="4.0.2" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,8 +40,9 @@
       声明的 [DshPlugin] 一并聚合进编译目录, 直接引用会让夹具的 test/local 与测试自带的 TestPlugin 撞包。
       因此产物文件用下面的 None 显式复制。
     -->
-    <ProjectReference Include="..\Dsh.ManagedPluginSample\Dsh.ManagedPluginSample.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\..\templates\managed-plugin\DshPluginTemplate.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Dsh.ManagedPluginSample\Dsh.ManagedPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
+    <ProjectReference Include="..\Dsh.IsolatedPluginSample\Dsh.IsolatedPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
+    <ProjectReference Include="..\..\templates\managed-plugin\DshPluginTemplate.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!-- 让 /plugins add 走与真实插件相同的 dll + deps 闭包路径。 -->
     <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.dll"
           Link="Dsh.ManagedPluginSample.dll"
@@ -48,14 +51,15 @@
           Link="Dsh.ManagedPluginSample.deps.json"
           CopyToOutputDirectory="PreserveNewest" />
     <!-- MCP 资源用例连接的真实 stdio server 进程: 测试经 dotnet 宿主启动这份 dll, 不引用它的类型。 -->
-    <ProjectReference Include="..\Dsh.McpResourceServerSample\Dsh.McpResourceServerSample.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Dsh.McpResourceServerSample\Dsh.McpResourceServerSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!--
       发布版 settings.yaml 模板: 内容文件不会穿过传递项目引用(Dsh.Boot 是经 Dsh.Host 间接引用的),
       而 SettingsTemplateTests 校验的正是"随包发布的这份", 所以显式复制, 避免它悄悄缺失。
     -->
     <None Include="..\..\src\Dsh.Boot\Profiles\Templates\settings.yaml"
           Link="Profiles\Templates\settings.yaml"
-          CopyToOutputDirectory="PreserveNewest" />
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="ScheduleUpstreamFixtures.json" LogicalName="Dsh.Tests.ScheduleUpstreamFixtures.json" />
     <None Update="NetworkGuiDriver.java" CopyToOutputDirectory="PreserveNewest" />
     <!-- Search API responses captured from the real GitHub and Stack Exchange APIs; the engine tests replay them through a local handler. -->
@@ -83,6 +87,8 @@
     <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Plugins.Native.Host\Dsh.Plugins.Native.Host.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Plugins.Protocol\Dsh.Plugins.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Sandbox\Dsh.Sandbox.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Jobs\Dsh.Jobs.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PtyTerminal\Dsh.PtyTerminal.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj" />
@@ -137,6 +143,33 @@
     <Copy SourceFiles="@(_McpResourceServerRuntime)"
           DestinationFiles="@(_McpResourceServerRuntime->'$(TargetDir)mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Keep adversarial fixture code outside the host image and copy its actual deployment closure. -->
+  <Target Name="CopyIsolatedPluginRuntime" AfterTargets="Build">
+    <ItemGroup>
+      <_IsolatedPluginRuntime Include="$(MSBuildProjectDirectory)/../Dsh.IsolatedPluginSample/bin/$(Configuration)/$(TargetFramework)/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_IsolatedPluginRuntime)"
+          DestinationFiles="@(_IsolatedPluginRuntime->'$(TargetDir)isolated-plugin/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Build-only fixture copies must also participate in the self-contained publish manifest. -->
+  <Target Name="PublishSandboxFixtureRuntimes" BeforeTargets="ComputeFilesToPublish"
+          DependsOnTargets="CopyMcpResourceServerRuntime;CopyIsolatedPluginRuntime">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_McpResourceServerRuntime)">
+        <RelativePath>mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_IsolatedPluginRuntime)">
+        <RelativePath>isolated-plugin/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
   </Target>
 
   <!-- A standalone startup hook must not load the test assembly's plugin-registration module initializers into dsharp. -->

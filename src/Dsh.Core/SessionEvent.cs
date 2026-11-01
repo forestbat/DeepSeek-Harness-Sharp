@@ -39,6 +39,7 @@ public static class SessionEventCodec
         Register<ToolCallPayload>(SessionEventTypes.ToolCall);
         Register<ToolResultPayload>(SessionEventTypes.ToolResult);
         Register<FileChangedPayload>(SessionEventTypes.FileChanged, ignorable: true);
+        Register<SettingsMutationAuditPayload>(SettingsMutationAuditPayload.EventType);
         Register<RequestHeaderPayload>(SessionEventTypes.RequestHeader);
         Register<SystemMessagePayload>(SessionEventTypes.SystemMessage);
         Register<RequestContextPayload>(SessionEventTypes.RequestContext);

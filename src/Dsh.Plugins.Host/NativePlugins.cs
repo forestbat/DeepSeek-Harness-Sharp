@@ -53,6 +53,8 @@ public interface INativePluginHost
 
     /** 撤销一个已登记工具;句柄不存在返回 false。 */
     bool UnregisterTool(int handle);
+
+    string CallHost(string operation, string argumentsJson);
 }
 
 /** 原生插件句柄:包名、生命周期、故障状态与工具调用。 */
@@ -84,6 +86,7 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
     private readonly NativePluginLoadContext _context;
     private INativePluginHost? _host;
     private GCHandle _self;
+    private NativeHostCallBuffer? _hostResults;
 
     static NativePluginLibrary() => DshNativeHostApi.Calls = Dispatcher;
 
@@ -114,14 +117,12 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
         nint library;
         try
         {
-            DshNativeGuard.Install();
-            if (!NativeLibrary.TryLoad(fullPath, out library))
-                return NativePluginLoad.Fail(NativePluginFailureKind.NotALibrary,
-                    $"不是可加载的原生共享库(非 NativeLib=Shared 产物或依赖缺失): {fullPath}");
+            library = NativePluginImages.Load(fullPath);
         }
         catch (Exception error)
         {
-            return NativePluginLoad.Fail(NativePluginFailureKind.NotALibrary,
+            return NativePluginLoad.Fail(error is InvalidOperationException
+                    ? NativePluginFailureKind.LoadFault : NativePluginFailureKind.NotALibrary,
                 $"原生库装载抛异常: {error.Message}");
         }
         try
@@ -129,19 +130,17 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
             var status = DshPluginApiBinding.TryHandshake(library, out var api);
             if (status != DshNativeHandshake.Ok)
             {
-                NativeLibrary.Free(library);
                 return NativePluginLoad.Fail(Map(status), Describe(status, fullPath));
             }
             var binding = new DshPluginApiBinding(api);
             var package = NativeUtf8.Read(api.Package);
             var schemaJson = ReadSettingsSchema(library);
-            var context = new NativePluginLoadContext(library, binding, fullPath, package, schemaJson);
+            var context = new NativePluginLoadContext(binding, fullPath, package, schemaJson);
             NativePluginSchema.Register(package, schemaJson);
             return NativePluginLoad.Ok(new NativePluginLibrary(context));
         }
         catch (Exception error)
         {
-            NativeLibrary.Free(library);
             return NativePluginLoad.Fail(NativePluginFailureKind.LoadFault,
                 $"原生插件握手抛异常: {error.Message}");
         }
@@ -189,24 +188,42 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
 
     public void Activate(INativePluginHost host)
     {
+        if (_host is not null)
+            throw new InvalidOperationException($"native plugin \"{Package}\" is already active");
+        _hostResults = new NativeHostCallBuffer();
         _host = host;
         _self = GCHandle.Alloc(this);
-        if (_context.Activate(GCHandle.ToIntPtr(_self)) != DshNativePluginAbi.Ok)
+        try
+        {
+            if (_context.Activate(GCHandle.ToIntPtr(_self)) != DshNativePluginAbi.Ok)
+                throw new InvalidOperationException($"native plugin \"{Package}\" refused activation");
+            _context.MarkActive();
+        }
+        catch
         {
             _self.Free();
+            _hostResults.Dispose();
+            _hostResults = null;
             _host = null;
-            throw new InvalidOperationException($"native plugin \"{Package}\" refused activation");
+            throw;
         }
-        _context.MarkActive();
     }
 
     public void Deactivate()
     {
         if (_host is null)
             return;
-        _context.Deactivate(GCHandle.ToIntPtr(_self));
-        _self.Free();
-        _host = null;
+        try
+        {
+            _context.Deactivate(GCHandle.ToIntPtr(_self));
+        }
+        finally
+        {
+            _hostResults?.Dispose();
+            _hostResults = null;
+            _self.Free();
+            _host = null;
+        }
     }
 
     public void RecordFault(string reason)
@@ -250,6 +267,14 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
             if (plugin?._host is null)
                 return DshNativePluginAbi.Error;
             return plugin._host.UnregisterTool(handle) ? DshNativePluginAbi.Ok : DshNativePluginAbi.Error;
+        }
+
+        public int HostCall(nint context, string operation, string argumentsJson, nint output, int capacity)
+        {
+            var plugin = FromHandle(context);
+            if (plugin?._host is null || plugin._hostResults is null)
+                return DshNativePluginAbi.Error;
+            return plugin._hostResults.Invoke(operation, argumentsJson, (byte*)output, capacity, plugin._host.CallHost);
         }
 
         /** 宿主回调抛出的异常不能穿过原生边界:记到该插件的日志后由蹦床返回错误码。 */

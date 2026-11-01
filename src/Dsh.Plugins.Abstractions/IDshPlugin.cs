@@ -49,6 +49,6 @@ public interface IPluginManager
 
     Task<string> EnableAsync(string package);
 
-    /** Writes plugins."<package>".permissions.<permission> back to settings.yaml and returns a status line. */
-    string SetPermission(string package, PluginPermission permission, bool allowed);
+    /** Commits a permission profile and awaits retirement/recovery of any obsolete isolated domain. */
+    Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default);
 }

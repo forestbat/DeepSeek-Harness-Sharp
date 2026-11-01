@@ -48,12 +48,14 @@
     <Project Path="src/Dsh.Plugins.Host/Dsh.Plugins.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj" />
+    <Project Path="src/Dsh.Plugins.Protocol/Dsh.Plugins.Protocol.csproj" />
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
     <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
     <Project Path="src/Dsh.RemoteHost.Client/Dsh.RemoteHost.Client.csproj" />
     <Project Path="src/Dsh.RemoteHost.Server/Dsh.RemoteHost.Server.csproj" />
     <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
+    <Project Path="src/Dsh.Sandbox/Dsh.Sandbox.csproj" />
     <Project Path="src/Dsh.Schedule/Dsh.Schedule.csproj" />
     <Project Path="src/Dsh.ScriptHost/Dsh.ScriptHost.csproj" />
     <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />
@@ -76,6 +78,7 @@
     <Project Path="tests/Dsh.GuiViewsHarness/Dsh.GuiViewsHarness.csproj" />
     <Project Path="tests/Dsh.IocAotSmoke/Dsh.IocAotSmoke.csproj" />
     <Project Path="tests/Dsh.ManagedPluginSample/Dsh.ManagedPluginSample.csproj" />
+    <Project Path="tests/Dsh.IsolatedPluginSample/Dsh.IsolatedPluginSample.csproj" />
     <Project Path="tests/Dsh.McpResourceServerSample/Dsh.McpResourceServerSample.csproj" />
     <Project Path="tests/Dsh.Tests/Dsh.Tests.csproj" />
   </Folder>

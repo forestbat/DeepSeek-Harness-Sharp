@@ -37,6 +37,12 @@ public static class DshNativePluginRuntime
     /** 生成器在 Activate 时挂接:作者用 Config 取自己在 settings.yaml 里的参数(JSON 文本)。 */
     public static Func<string>? ConfigSource { get; set; }
 
+    /// <summary>Installed only for an active plugin by the generated ABI exports.</summary>
+    public static Func<string, string, string>? HostCaller { get; set; }
+
+    public static string CallHost(string operation, string argumentsJson)
+        => (HostCaller ?? throw new InvalidOperationException("the native plugin is not active"))(operation, argumentsJson);
+
     public static void Log(int level, string message) => LogSink?.Invoke(level, message);
 
     /** 该插件在 settings.yaml 里的参数(JSON 文本);未激活或宿主不支持时为空串。 */
@@ -46,7 +52,7 @@ public static class DshNativePluginRuntime
     public static int RegisterTool(string name, string description, string parametersJson, Func<string, string?> invoke)
         => ToolRegistry?.RegisterTool(name, description, parametersJson, invoke) ?? 0;
 
-    /** 运行期撤销一个工具;宿主不支持(旧 ABI)或句柄无效时返回 false。 */
+    /** Removes a registered tool; an invalid handle returns false. */
     public static bool UnregisterTool(int handle)
         => ToolRegistry?.UnregisterTool(handle) == DshNativePluginAbi.Ok;
 }

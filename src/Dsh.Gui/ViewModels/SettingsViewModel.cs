@@ -225,6 +225,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _blacklistText = "";
 
     [ObservableProperty]
+    private string _whitelistText = "";
+
+    [ObservableProperty]
     private bool _gpuEnabled = true;
 
     [ObservableProperty]
@@ -490,8 +493,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         var rules = BlacklistText
             .Replace("\r\n", "\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        _facade.UpdateSafety(AutoApprove, rules);
-        Status = $"安全策略已保存（{rules.Length} 条黑名单）";
+        var allowed = WhitelistText
+            .Replace("\r\n", "\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        _facade.UpdateSafety(AutoApprove, rules, allowed);
+        Status = $"安全策略已保存（{rules.Length} 条黑名单，{allowed.Length} 条白名单）";
     }
 
     [RelayCommand]
@@ -934,6 +940,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         SelectedProvider = Providers.FirstOrDefault();
         AutoApprove = settings.Safety?.AutoApprove ?? false;
         BlacklistText = string.Join(Environment.NewLine, settings.Safety?.Blacklist ?? []);
+        WhitelistText = string.Join(Environment.NewLine, settings.Safety?.Whitelist ?? []);
         CompactionAuto = settings.Compaction?.Auto ?? true;
         McpServers.Clear();
         foreach (var (name, server) in settings.McpServers.OrderBy(entry => entry.Key, StringComparer.Ordinal))

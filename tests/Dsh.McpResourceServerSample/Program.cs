@@ -113,6 +113,30 @@ public static class Program
                 };
             }
         }
+        if (args.Contains("--file-tools"))
+        {
+            options.ToolCollection =
+            [
+                McpServerTool.Create((string path, string content) =>
+                {
+                    File.WriteAllText(path, content);
+                    return File.ReadAllText(path);
+                }, new McpServerToolCreateOptions { Name = "write_file" }),
+                McpServerTool.Create((string path) =>
+                {
+                    File.AppendAllText(path, "once\n");
+                    Environment.Exit(23);
+                    return "unreachable";
+                }, new McpServerToolCreateOptions { Name = "mutate_then_exit" }),
+                McpServerTool.Create(async (string path, CancellationToken cancellationToken) =>
+                {
+                    await File.WriteAllTextAsync(path, "ready", cancellationToken);
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    return "unreachable";
+                }, new McpServerToolCreateOptions { Name = "wait_file" }),
+            ];
+            options.ResourceCollection = null;
+        }
         await using var server = McpServer.Create(new StdioServerTransport("resource-sample"), options);
         var running = server.RunAsync();
         await Console.Error.WriteLineAsync("MCP_RESOURCE_SAMPLE_READY");

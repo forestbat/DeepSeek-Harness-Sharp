@@ -1,6 +1,13 @@
 using Dsh.Boot;
 using Dsh.Host;
 using Dsh.WebBridge;
+using Dsh.ScriptHost;
+
+global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
+if (args.Contains(PluginSandboxWorker.HostArgument))
+    return await PluginSandboxWorker.RunAsync(args);
+if (args.Contains(PtcScriptHost.HostArgument))
+    return await PtcScriptHost.RunAsync(args);
 
 // Detached Host and PTY daemon children reuse this executable and the shared command handler.
 if (args.Contains("host") || args is ["tui", "daemon"])

@@ -1,11 +1,25 @@
 # 托管插件模板与作者指南
 
-一个可被宿主发现的插件只需要三件事：一个实现 `IDshPlugin` 的类，csproj 里 import 生成器 props，编译产物（主 dll + deps.json + 私有依赖）放进宿主 `plugins/<目录名>/` 下。
+一个可被宿主发现的插件需要一个实现 `IDshPlugin` 的类、csproj 中的生成器 props import，以及放在宿主 `plugins/<目录名>/` 下的编译产物（主 dll + deps.json + 私有依赖）。本模板实现其能力化子接口 `IDshIsolatedPlugin`，不接收宿主 `Context`。
 目录名不参与识别：加载后一律以清单内的包名为准，目录名只做发现入口。手工摆放时建议按包名把 `/` 换成 `__`（如 `@scope__one`）便于人读；而 `/plugins add` 装出来的目录名是 dll 文件名（如 `MyPlugin`）——两种命名都能被正常发现。
 
-本目录即模板工程：`DshPluginTemplate.csproj` + `Plugin.cs`，每个文件的注释就是规则原文（做什么 + 为什么），可直接作为创造模式搭插件骨架的上下文。
+本目录是可直接复制的能力插件工程：`DshPluginTemplate.csproj` + `Plugin.cs`。模板注册读文件、写文件和 HTTP 三个真实转发工具，不直接访问文件系统或网络；宿主决定每次操作是否获准。
 
-原生（AOT）插件不走这条路：它产出每 RID 一份的共享库、契约是 C ABI、能力面只有工具与日志，写法与坑见 `templates/native-plugin/README.md`。
+原生（AOT）插件使用相同操作定义，通过 C ABI v2 调用宿主；写法见 `templates/native-plugin/README.md`。
+
+## 显式能力接口
+
+`IDshIsolatedPlugin.InitializeAsync(IPluginHost host, JsonElement configuration, CancellationToken cancellationToken)` 返回 `IAsyncDisposable` 生命周期；卸载时必须释放工具注册和插件自己的后台工作。不要实现假的 `Apply(Context, ...)` 代理。`Inject` 默认空，`configuration` 是本插件的 JSON 配置。
+
+- `host.RegisterTool(new PluginToolDefinition(name, description, parameters, execute))` 返回可释放的注册；`execute` 获得 JSON 参数及真实取消令牌。
+- `await host.CallAsync(PluginHostOperations.ReadFile, arguments, cancellationToken)`：`{path, offset?, count?}` 返回 `{data, length, eof}`；`data` 为 base64。宿主限制单片大小。
+- `PluginHostOperations.WriteFile`：`{path, data, append?}` 返回 `{bytesWritten}`；`data` 为 base64。对 settings 的写入也必须经过宿主审批 gate，不能直接写配置文件绕开审批。
+- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` 返回 `{status, headers, body}`；请求和响应 `body` 都为 base64。宿主应用网络权限、代理配置及响应大小限额。
+- `host.Log(level, message)` 发送宿主日志；不要污染 worker 的协议标准输出。
+
+`Dsh.Plugins.Protocol` 只依赖 BCL。能力不是完整服务表：不能取得父进程 `Context`、agent、服务对象或凭据，也不能把透明 RPC 当作进程内 API。启用沙箱时不可信代码在受限 worker 中初始化；未启用 OS 隔离的进程内执行不提供安全隔离保证。
+
+以下的 `Apply`、类型化注入、服务和共享依赖示例仅面向显式完全信任的传统 `IDshPlugin`，不是受限插件接口；不要为了复用这些 API 而恢复 Context 代理。
 
 ## 编译期诊断
 

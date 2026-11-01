@@ -13,11 +13,14 @@ public sealed class SharedAssemblyPool
     private readonly List<string> _notices = [];
     private SharedLoadContext _context;
     private bool _unloaded;
+    private readonly Lock _sync = new();
+    private readonly Dictionary<string, VerifiedPluginBundle.ManagedFile> _verified = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, VerifiedPluginBundle.NativeFile> _verifiedNative = new(StringComparer.Ordinal);
 
     public SharedAssemblyPool(string directory)
     {
         _directory = directory;
-        _context = new SharedLoadContext(directory);
+        _context = new SharedLoadContext(this, directory);
     }
 
     /** 供宿主把"提升到池""版本冲突"等事件接入日志。 */
@@ -31,14 +34,16 @@ public sealed class SharedAssemblyPool
     /** 解析共享依赖:已在池中则做主版本一致性检查;不在则从 .shared 目录或插件自带副本(提升)装载。 */
     public Assembly? ResolveOrLoad(AssemblyName name, Func<string?> privatePath)
     {
+        lock (_sync)
+            return ResolveOrLoadCore(name, privatePath);
+    }
+
+    private Assembly? ResolveOrLoadCore(AssemblyName name, Func<string?> privatePath)
+    {
         if (name.Name is null)
             return null;
-        if (_unloaded)
-        {
-            _context = new SharedLoadContext(_directory);
-            _unloaded = false;
-        }
-        if (_byName.TryGetValue(name.Name, out var existing))
+        var existing = PluginLoadContext.ResolveHostAssembly(name) ?? _byName.GetValueOrDefault(name.Name);
+        if (existing is not null)
         {
             if (name.Version is not null
                 && existing.GetName().Version is { } have
@@ -47,7 +52,15 @@ public sealed class SharedAssemblyPool
                 throw new InvalidOperationException(
                     $"shared assembly {name.Name}: requested version {name.Version}, but the pool already has {have}; side-by-side loading is refused because split type identity is harder to debug than a load failure");
             }
+            _byName.TryAdd(name.Name, existing);
             return existing;
+        }
+        if (_verified.TryGetValue(name.Name, out var verified))
+            return LoadVerified(name.Name, verified);
+        if (_unloaded)
+        {
+            _context = new SharedLoadContext(this, _directory);
+            _unloaded = false;
         }
         var pooled = Path.Combine(_directory, name.Name + ".dll");
         var source = File.Exists(pooled) ? pooled : privatePath();
@@ -63,7 +76,84 @@ public sealed class SharedAssemblyPool
         return assembly;
     }
 
+    /** The entire shared closure is checked before any plugin code is loaded. */
+    internal void PrepareVerified(VerifiedPluginBundle bundle)
+    {
+        lock (_sync)
+        {
+            var closure = bundle.SharedClosure();
+            var native = new Dictionary<string, VerifiedPluginBundle.NativeFile>(StringComparer.Ordinal);
+            foreach (var import in closure.SelectMany(file => file.NativeImports).Distinct(StringComparer.Ordinal))
+            {
+                if (bundle.ResolveNativeFile(import) is not { } file)
+                    continue;
+                if (_verifiedNative.TryGetValue(import, out var previous) && previous.Digest != file.Digest)
+                    throw new FileLoadException("A shared native dependency conflicts with the verified code bundle.");
+                native.Add(import, file);
+            }
+            foreach (var file in closure)
+            {
+                var name = file.Name;
+                if (PluginLoadContext.ResolveVerifiedHostAssembly(new AssemblyName(name)) is not null)
+                    continue;
+                var cached = _context.Assemblies.FirstOrDefault(assembly =>
+                    string.Equals(assembly.GetName().Name, name, StringComparison.OrdinalIgnoreCase));
+                if (_verified.TryGetValue(name, out var previous))
+                {
+                    if (!string.Equals(previous.Digest, file.Digest, StringComparison.OrdinalIgnoreCase))
+                        throw new FileLoadException("A shared assembly conflicts with the verified code bundle.");
+                }
+                else if (cached is not null || _byName.ContainsKey(name)
+                    || AssemblyLoadContext.Default.Assemblies.Any(assembly =>
+                        string.Equals(assembly.GetName().Name, name, StringComparison.OrdinalIgnoreCase)))
+                    throw new FileLoadException("An unverified cached assembly cannot satisfy a verified shared dependency.");
+            }
+            foreach (var file in closure)
+            {
+                var name = file.Name;
+                if (_verified.TryGetValue(name, out var previous))
+                    bundle.UseShared(name, previous);
+                else
+                    _verified.Add(name, file);
+            }
+            foreach (var (name, file) in native)
+                _verifiedNative.TryAdd(name, file);
+            AddReferencesCore(bundle.SharedDependencies);
+        }
+    }
+
+    internal Assembly ResolveVerified(AssemblyName name, VerifiedPluginBundle bundle)
+    {
+        lock (_sync)
+        {
+            if (name.Name is null || bundle.Find(name.Name) is not { } expected
+                || !_verified.TryGetValue(name.Name, out var file) || file.Digest != expected.Digest)
+                throw new FileLoadException("The shared dependency has no verified code identity.");
+            return LoadVerified(name.Name, file);
+        }
+    }
+
+    private Assembly LoadVerified(string name, VerifiedPluginBundle.ManagedFile file)
+    {
+        if (_byName.TryGetValue(name, out var assembly))
+            return assembly;
+        if (_unloaded)
+        {
+            _context = new SharedLoadContext(this, _directory);
+            _unloaded = false;
+        }
+        assembly = file.Load(_context);
+        _byName.Add(name, assembly);
+        return assembly;
+    }
+
     public void AddReferences(IEnumerable<string> names)
+    {
+        lock (_sync)
+            AddReferencesCore(names);
+    }
+
+    private void AddReferencesCore(IEnumerable<string> names)
     {
         foreach (var name in names)
             _references[name] = _references.GetValueOrDefault(name) + 1;
@@ -71,6 +161,12 @@ public sealed class SharedAssemblyPool
 
     /** 插件卸载时归还引用;全零即回收池上下文,回收失败由调用方按 leaked 语义上报。 */
     public void Release(IEnumerable<string> names)
+    {
+        lock (_sync)
+            ReleaseCore(names);
+    }
+
+    private void ReleaseCore(IEnumerable<string> names)
     {
         foreach (var name in names)
         {
@@ -81,34 +177,49 @@ public sealed class SharedAssemblyPool
             else
                 _references[name] = count - 1;
         }
-        if (_references.Count == 0 && _byName.Count > 0)
+        if (_references.Count == 0 && (_byName.Count > 0 || _verified.Count > 0))
         {
             _byName.Clear();
+            _verified.Clear();
+            _verifiedNative.Clear();
             _context.Unload();
             _unloaded = true;
         }
     }
 
-    /** 池内程序集的解析:先 .shared 目录,再绑定宿主镜像。 */
-    private sealed class SharedLoadContext(string directory) : AssemblyLoadContext("dsh-shared", isCollectible: true)
+    /** Host identities precede private shared dependencies, including transitive references. */
+    private sealed class SharedLoadContext(SharedAssemblyPool owner, string directory) : AssemblyLoadContext("dsh-shared", isCollectible: true)
     {
         protected override Assembly? Load(AssemblyName assemblyName)
         {
+            lock (owner._sync)
+            {
+                if (owner._verified.Count > 0)
+                {
+                    if (PluginLoadContext.ResolveVerifiedHostAssembly(assemblyName) is { } verifiedHost)
+                        return verifiedHost;
+                    if (assemblyName.Name is { } name && owner._verified.TryGetValue(name, out var file))
+                        return owner.LoadVerified(name, file);
+                    throw new FileNotFoundException("A transitive shared dependency is absent from the verified code bundle.");
+                }
+            }
+            if (PluginLoadContext.ResolveHostAssembly(assemblyName) is { } host)
+                return host;
             if (assemblyName.Name is not null)
             {
                 var candidate = Path.Combine(directory, assemblyName.Name + ".dll");
                 if (File.Exists(candidate))
                     return LoadFromAssemblyPath(candidate);
             }
-            try
-            {
-                _ = Default.LoadFromAssemblyName(assemblyName);
-                return null;
-            }
-            catch (Exception)
-            {
-                return null;
-            }
+            return null;
+        }
+
+        protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
+        {
+            lock (owner._sync)
+                if (owner._verifiedNative.TryGetValue(unmanagedDllName, out var file))
+                    return LoadUnmanagedDllFromPath(file.Path);
+            return IntPtr.Zero;
         }
     }
 }

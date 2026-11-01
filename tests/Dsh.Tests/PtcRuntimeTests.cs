@@ -1,6 +1,4 @@
-﻿#pragma warning disable CA2255
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
@@ -12,19 +10,28 @@ using Dsh.ScriptHost;
 
 namespace Dsh.Tests;
 
-/** 测试宿主同时提供脚本宿主与独立原生 probe 入口;真实子进程复用当前 apphost/dotnet 入口,不启动 harness。 */
-internal static class PtcHostShim
+/** Dispatches owned child modes before the official xUnit runners. */
+internal static class TestProcessEntryPoint
 {
-    [ModuleInitializer]
-    internal static void Initialize()
+    public static int Main(string[] args)
     {
-        var args = Environment.GetCommandLineArgs();
+        global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
+        if (args.Any(argument => argument == PluginSandboxWorker.HostArgument))
+            return PluginSandboxWorker.RunAsync(args).GetAwaiter().GetResult();
+        if (OperatingSystem.IsWindows() && args.Any(argument => argument == WindowsSandboxAuthorityTests.ProbeArgument))
+            return WindowsSandboxAuthorityTests.RunProbe(Environment.GetCommandLineArgs());
+        if (args.Any(argument => argument == ExternalProcessBoundaryTests.ProbeArgument))
+            return ExternalProcessBoundaryTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
-            Environment.Exit(PtyConsoleResizeTests.RunProbe(args));
+            return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == UnixPtyDescriptorOwnershipTests.SpawnFailureProbeArgument))
-            Environment.Exit(UnixPtyDescriptorOwnershipTests.RunSpawnFailureProbe());
+            return UnixPtyDescriptorOwnershipTests.RunSpawnFailureProbe();
         if (args.Any(argument => argument == PtcScriptHost.HostArgument))
-            Environment.Exit(PtcScriptHost.RunAsync(args.Skip(1).ToArray()).GetAwaiter().GetResult());
+            return PtcScriptHost.RunAsync(args).GetAwaiter().GetResult();
+        return args.Any(argument => argument is "--server" or "--internal-msbuild-node")
+            ? global::Xunit.MicrosoftTestingPlatform.TestPlatformTestFramework.RunAsync(args,
+                global::Dsh.Tests.SelfRegisteredExtensions.AddSelfRegisteredExtensions).GetAwaiter().GetResult()
+            : global::Xunit.Runner.InProc.SystemConsole.ConsoleRunner.Run(args).GetAwaiter().GetResult();
     }
 }
 

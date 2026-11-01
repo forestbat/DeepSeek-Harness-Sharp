@@ -19,8 +19,12 @@ public static class NativePluginBridge
             var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
                 ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the tools service");
             var logger = ctx.LoggerFor("native-plugin");
-            plugin.Configure(SettingsJson.Write(config));
-            var host = new Host(plugin, tools, logger);
+            plugin.Configure(PluginConfigurationJson.Write(config));
+            var capabilities = new Lazy<IPluginHost>(() =>
+                (ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
+                    ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the plugin capability service"))
+                .Create(plugin.Package, ctx));
+            var host = new Host(plugin, tools, logger, capabilities);
             try
             {
                 plugin.Activate(host);
@@ -45,7 +49,7 @@ public static class NativePluginBridge
                 ? text.GetString() ?? ""
                 : value.GetRawText();
 
-    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger) : INativePluginHost, IDisposable
+    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<IPluginHost> capabilities) : INativePluginHost, IDisposable
     {
         private readonly Dictionary<int, IDisposable> _registrations = [];
         private readonly Lock _sync = new();
@@ -93,6 +97,14 @@ public static class NativePluginBridge
             });
             lock (_sync)
                 _registrations[handle] = registration;
+        }
+
+        public string CallHost(string operation, string argumentsJson)
+        {
+            lock (_sync)
+                ObjectDisposedException.ThrowIf(_disposed, this);
+            using var document = JsonDocument.Parse(argumentsJson);
+            return capabilities.Value.CallAsync(operation, document.RootElement).AsTask().GetAwaiter().GetResult().GetRawText();
         }
 
         public bool UnregisterTool(int handle)

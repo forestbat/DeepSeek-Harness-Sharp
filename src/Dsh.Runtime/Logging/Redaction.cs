@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Dsh.Runtime.Logging;
 
-internal static partial class Redaction
+public static partial class Redaction
 {
     [GeneratedRegex(@"\bsk-[A-Za-z0-9_\-]{4,}", RegexOptions.None)]
     private static partial Regex ApiKeyPattern();

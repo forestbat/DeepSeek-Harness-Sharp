@@ -107,10 +107,28 @@ public sealed class PluginPermissionTests
 
         await RunAsync(environment, $"/plugins remove {Todo}");
         var removed = HarnessSettings.Load(home).Plugins[Todo];
+        Assert.False(removed.Enabled);
         Assert.Null(removed.Permissions);
         Assert.Empty(removed.Parameters);
-        Assert.Contains($"\"{Todo}\": false", await File.ReadAllTextAsync(SettingsPath(home), TestContext.Current.CancellationToken));
         AssertCommentsKept(home);
+    }
+
+    [Fact]
+    public async Task ExplicitHostRole_RejectsNarrowProfileWithoutChangingSettingsOrActivation()
+    {
+        var yaml = SettingsWithComments.Replace($"\"{Todo}\": true", $"\"{Todo}\":\n    execution: host\n    hostArtifact: image");
+        await using var environment = await GuiTestEnvironment.CreateAsync(yaml);
+        var before = File.ReadAllText(environment.App.Home.SettingsFile);
+        var manager = environment.App.Ctx.Get<IPluginManager>("pluginManager")!;
+        var activation = environment.App.Composition!.Find(Todo);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            manager.SetPermissionAsync(Todo, PluginPermission.Write, false, TestContext.Current.CancellationToken));
+
+        Assert.Contains("capability SDK", error.Message);
+        Assert.Equal(before, File.ReadAllText(environment.App.Home.SettingsFile));
+        Assert.Same(activation, environment.App.Composition.Find(Todo));
+        Assert.Equal(ActivationState.Active, activation!.State);
     }
 
     [Fact]

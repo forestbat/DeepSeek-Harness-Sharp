@@ -33,6 +33,8 @@ public static class SessionEventRelations
         Register<ToolResultPayload>(
             SessionEventTypes.ToolResult,
             payload => [new SessionEventRelation.RefersTo(ToolCall(payload.Message.ToolSource.CallId), SessionEventEdgeKind.ResultOf)]);
+        Register<SettingsMutationAuditPayload>(SettingsMutationAuditPayload.EventType,
+            payload => [new SessionEventRelation.RefersTo(ToolCall(payload.CallId), SessionEventEdgeKind.ResultOf)]);
     }
 
     /** 工具调用的配对 id: 工具结果、审批询问等按它指回 tool/call。 */

@@ -1,8 +1,11 @@
+using System.Text;
+using Dsh.Boot;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Plugins.Native;
 using Dsh.Plugins.Native.Host;
 using Dsh.Runtime;
 
@@ -12,6 +15,7 @@ namespace Dsh.Tests;
  * 原生 ABI 端到端回归: 宿主装载 NativeAOT 发布的 Dsh.NativePluginSample, 经真实的生成胶水调用工具。
  * 样例需先发布: dotnet publish tests/Dsh.NativePluginSample -c Release; 未发布或非 Linux 时跳过。
  */
+[Collection(SerialProcessCollection.Name)]
 public sealed class NativePluginAbiTests
 {
     private const string EchoTool = "native_echo";
@@ -27,6 +31,7 @@ public sealed class NativePluginAbiTests
         var tools = new ToolRuntime(ctx);
         var load = NativePluginLibrary.TryLoad(PublishedSamplePath());
         Assert.True(load.Succeeded, load.Reason);
+        using var native = load.Plugin!;
         using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(load.Plugin!).Apply(ctx, null, TestContext.Current.CancellationToken))!;
 
         var message = $"大消息-{new string('x', LargeMessageLength)}";
@@ -58,6 +63,217 @@ public sealed class NativePluginAbiTests
         Assert.Equal(NativePluginState.Active, load.Plugin.State);
         Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("invoke_tool failed"));
         Assert.NotNull(tools.Get(EchoTool));
+    }
+
+    [Fact]
+    public async Task PublishedSample_ConfigurationAndToolLifecycleSurviveReactivation()
+    {
+        var sample = PublishedSamplePath();
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        var load = NativePluginLibrary.TryLoad(sample);
+        Assert.True(load.Succeeded, load.Reason);
+        using var native = load.Plugin!;
+        var configuration = new Dictionary<string, object?> { ["label"] = "config 中文", ["enabled"] = true };
+        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+            .Apply(ctx, configuration, TestContext.Current.CancellationToken))!)
+        {
+            var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
+            using var configured = JsonDocument.Parse(response.GetProperty("config").GetString()!);
+            Assert.Equal("config 中文", configured.RootElement.GetProperty("label").GetString());
+            Assert.True(configured.RootElement.GetProperty("enabled").GetBoolean());
+        }
+        Assert.Null(tools.Get("native_config"));
+        Assert.Null(tools.Get("native_http"));
+        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+            .Apply(ctx, null, TestContext.Current.CancellationToken))!)
+        {
+            var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
+            Assert.Equal("", response.GetProperty("config").GetString());
+        }
+        Assert.Null(tools.Get("native_config"));
+    }
+
+    [Fact]
+    public async Task PublishedSample_DisposalPreservesHostExceptionsAndAllowsReload()
+    {
+        var sample = PublishedSamplePath();
+        for (var activation = 0; activation < 2; activation++)
+        {
+            var ctx = new Context();
+            _ = new SystemPrompt(ctx, new SystemPromptConfig());
+            var tools = new ToolRuntime(ctx);
+            var load = NativePluginLibrary.TryLoad(sample);
+            Assert.True(load.Succeeded, load.Reason);
+            using (var native = load.Plugin!)
+            using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+                .Apply(ctx, null, TestContext.Current.CancellationToken))!)
+            {
+                var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
+                Assert.Equal("", response.GetProperty("config").GetString());
+            }
+            Assert.Null(tools.Get("native_config"));
+            Assert.Throws<NullReferenceException>(() => LengthOf(null));
+        }
+    }
+
+    [Fact]
+    public void PublishedSample_ChangedResidentPathRequiresAnotherProcess()
+    {
+        var sample = PublishedSamplePath();
+        var root = TempTree.CreateDirectory("native-resident-image");
+        try
+        {
+            var path = Path.Combine(root, Path.GetFileName(sample));
+            File.Copy(sample, path);
+            var loaded = NativePluginLibrary.TryLoad(path);
+            Assert.True(loaded.Succeeded, loaded.Reason);
+            loaded.Plugin!.Dispose();
+            var replacement = Path.Combine(root, "replacement.so");
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "libdsh_fault_probe.so"), replacement);
+            File.Move(replacement, path, overwrite: true);
+            var changed = NativePluginLibrary.TryLoad(path);
+            Assert.False(changed.Succeeded);
+            Assert.Equal(NativePluginFailureKind.LoadFault, changed.Failure);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Theory]
+    [Trait("Category", "SandboxNative")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PublishedSample_IsolatedWorkerUsesBrokerPermissionsAndNeverRunsInMain(bool write)
+    {
+        var sample = PublishedSamplePath();
+        using var fixture = new PluginSandboxIntegrationTests.Fixture(settings =>
+            settings.Plugins["sample.native-echo"] = new PluginSetting
+            {
+                Execution = PluginExecution.Sandbox,
+                TrustDomain = "native-sdk-fixture",
+                Permissions = new PluginPermissions { Read = true, Write = write, Network = false },
+            }, deployFixture: false);
+        var directory = Path.Combine(fixture.Plugins, "native-sdk");
+        Directory.CreateDirectory(directory);
+        File.Copy(sample, Path.Combine(directory, Path.GetFileName(sample)));
+        var input = Path.Combine(fixture.Root, "native-input");
+        await File.WriteAllTextAsync(input, "native 输入", TestContext.Current.CancellationToken);
+        await fixture.StartAsync(expectFixtureActive: false);
+        var config = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_config", new { })).Value;
+        var workerNamespace = config.GetProperty("pidNamespace").GetString();
+        Assert.StartsWith("pid:[", workerNamespace);
+        Assert.NotEqual(new FileInfo("/proc/self/ns/pid").LinkTarget, workerNamespace);
+        var read = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_read_file", new { path = input })).Value;
+        Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes("native 输入")), read.GetProperty("data").GetString());
+        var output = Path.Combine(fixture.Root, "native-output");
+        var result = await fixture.ExecuteTool("native_write_file", new { path = output, data = Convert.ToBase64String(Encoding.UTF8.GetBytes("native 输出")) });
+        Assert.Equal(!write, result.IsError);
+        Assert.Equal(write, File.Exists(output));
+        if (write)
+            Assert.Equal("native 输出", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task PublishedSample_FileHostCallsUseCommonBrokerAndPropagateFailure()
+    {
+        var sample = PublishedSamplePath();
+        var root = TempTree.CreateDirectory("native-common-files");
+        try
+        {
+            var ctx = CreateCapabilityContext(root, out var tools);
+            var load = NativePluginLibrary.TryLoad(sample);
+            Assert.True(load.Succeeded, load.Reason);
+            using var native = load.Plugin!;
+            using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+                .Apply(ctx, null, TestContext.Current.CancellationToken))!;
+            var path = Path.Combine(root, "payload.txt");
+            var data = Convert.ToBase64String(Encoding.UTF8.GetBytes("native payload"));
+            var written = await ExecuteJson(tools, "native_write_file", JsonSerializer.SerializeToElement(new { path, data, append = true }));
+            Assert.Equal(14, written.GetProperty("bytesWritten").GetInt32());
+            Assert.Equal("native payload", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            var read = await ExecuteJson(tools, "native_read_file", JsonSerializer.SerializeToElement(new { path }));
+            Assert.Equal(data, read.GetProperty("data").GetString());
+            Assert.True(read.GetProperty("eof").GetBoolean());
+
+            var failed = await tools.Execute(new ToolExecutionInput
+            {
+                CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                Name = "native_read_file",
+                Arguments = JsonSerializer.SerializeToElement(new { path = Path.Combine(root, "missing.txt") }),
+                Agent = null,
+                Signal = TestContext.Current.CancellationToken,
+            });
+            Assert.True(failed.IsError);
+            Assert.Equal(NativePluginState.Active, native.State);
+            Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("host operation 'files.read' failed"));
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task PublishedSample_HttpHostCallSendsOneRequestAcrossBothBufferRetries()
+    {
+        var sample = PublishedSamplePath();
+        var root = TempTree.CreateDirectory("native-common-http");
+        try
+        {
+            await using var server = await PluginSdkHttpServer.StartAsync();
+            var ctx = CreateCapabilityContext(root, out var tools);
+            var load = NativePluginLibrary.TryLoad(sample);
+            Assert.True(load.Succeeded, load.Reason);
+            using var native = load.Plugin!;
+            using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+                .Apply(ctx, null, TestContext.Current.CancellationToken))!;
+            var body = Encoding.UTF8.GetBytes("native request");
+            var response = await ExecuteJson(tools, "native_http", JsonSerializer.SerializeToElement(new
+            {
+                url = server.Url,
+                method = "POST",
+                headers = new Dictionary<string, string> { ["X-Plugin"] = "sdk" },
+                body = Convert.ToBase64String(body),
+            }));
+            Assert.Equal(201, response.GetProperty("status").GetInt32());
+            Assert.Equal(server.ResponseBody, Convert.FromBase64String(response.GetProperty("body").GetString()!));
+            Assert.Equal(body, server.RequestBody);
+            Assert.Equal("sdk", server.RequestHeader);
+            Assert.Equal(1, server.Requests);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    private static Context CreateCapabilityContext(string root, out ToolRuntime tools)
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        tools = new ToolRuntime(ctx);
+        ctx.Provide(IPluginHostFactory.ServiceName,
+            new PluginCapabilityFactory(ctx, new HarnessHome(root), new HarnessSettings()));
+        return ctx;
+    }
+
+    private static async Task<JsonElement> ExecuteJson(ToolRuntime tools, string name, JsonElement arguments)
+    {
+        var result = await tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+            Name = name,
+            Arguments = arguments,
+            Agent = null,
+            Signal = TestContext.Current.CancellationToken,
+        });
+        Assert.False(result.IsError);
+        using var document = JsonDocument.Parse(string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+        return document.RootElement.Clone();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

@@ -9,4 +9,8 @@
     <RootNamespace>Dsh.Plugins.Native</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Plugins.Protocol\Dsh.Plugins.Protocol.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 
 namespace Dsh.Tests;
 
@@ -36,6 +37,45 @@ public sealed class SettingsTemplateTests
         var saved = File.ReadAllText(path);
         Assert.Contains(sentinel, saved);
         Assert.DoesNotContain("# 映射(见子项)", saved);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    [InlineData("template")]
+    public void PublicSchemaExports_WithholdSensitiveDefaults_ButKeepEditableKeys(string format)
+    {
+        var original = Assert.IsAssignableFrom<ISettingsSchemaProvider>(SettingsSchemaCatalog.Document());
+        var schema = new SensitiveSchema(original);
+        DshPluginSettingsRegistry.Register(schema);
+        try
+        {
+            var output = format == "template" ? SettingsSchemaCatalog.RenderTemplateBlock() : SettingsSchemaCatalog.Render(format);
+            Assert.DoesNotContain(SensitiveSchema.PrivateDefault, output);
+            Assert.DoesNotContain(SensitiveSchema.ConnectionDefault, output);
+            Assert.Contains("api_key", output);
+            Assert.Contains("connection_string", output);
+            Assert.Contains("ordinary-visible-default", output);
+        }
+        finally
+        {
+            DshPluginSettingsRegistry.Register(original);
+        }
+    }
+
+    /** Synthetic invalid credentials exercise public export privacy without using any real account or endpoint. */
+    private sealed class SensitiveSchema(ISettingsSchemaProvider original) : ISettingsSchemaProvider
+    {
+        public const string PrivateDefault = "test-only-invalid-credential";
+        public const string ConnectionDefault = "test-only-private-connection-value";
+        public string Package => original.Package;
+        public bool IsPlugin => original.IsPlugin;
+        public IReadOnlyList<PluginSettingSpec> Settings { get; } =
+        [
+            new("api_key", PluginSettingKind.Text, $"\"{PrivateDefault}\""),
+            new("connection_string", PluginSettingKind.Text, $"\"{ConnectionDefault}\""),
+            new("label", PluginSettingKind.Text, "\"ordinary-visible-default\""),
+        ];
     }
 
     private static void AssertTemplate(string path)

@@ -18,7 +18,7 @@ public sealed record ChoicePrompt(
 
     public static ChoicePrompt ForApproval(string toolName, string? arguments, string? reason, string? requestId = null, bool allowOnce = true, bool allowForSession = true, bool reject = true)
         => new($"Approve tool {toolName}",
-            string.Join("\n", new[] { reason, ApprovalHints.PrimaryArgument(toolName, arguments), ApprovalHints.Impact(toolName, arguments), arguments }.Where(value => !string.IsNullOrWhiteSpace(value))),
+            string.Join("\n", new[] { reason, ApprovalHints.PrimaryArgument(toolName, arguments), ApprovalHints.Impact(toolName, arguments), ApprovalHints.SettingsDiff(arguments) is { Length: > 0 } diff ? diff : arguments }.Where(value => !string.IsNullOrWhiteSpace(value))),
             [new("Allow once", allowOnce ? "Allow only this invocation (y)" : "One-time allowance is unavailable for this request", "once", Disabled: !allowOnce),
              new("Always", allowForSession ? "Allow this tool in the current session only (a)" : "Session-scoped allowance is unavailable for this request", "session", Disabled: !allowForSession),
              new("Reject", reject ? "Deny this invocation (n)" : "One-time rejection is unavailable for this request", "reject", Disabled: !reject),

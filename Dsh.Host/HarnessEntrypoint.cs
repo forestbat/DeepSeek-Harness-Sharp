@@ -10,6 +10,9 @@ public static class HarnessEntrypoint
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
+        if (args.Contains(PluginSandboxWorker.HostArgument))
+            return await PluginSandboxWorker.RunAsync(args);
         if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
         // The web process alone owns ASP.NET. Forward before parsing so this assembly knows no web options or WebBridge types.
@@ -97,16 +100,15 @@ public static class HarnessEntrypoint
         if (dumpConfig)
         {
             var settings = HarnessSettings.Load(harnessHome);
-            var host = new PluginHost();
-            host.RegisterCompiledIn();
-            var discovery = host.Scan(Path.Combine(AppContext.BaseDirectory, "plugins"), nativeBridge: null);
+            var discovery = await ConfigBoot.InspectPluginsAsync(
+                new HarnessOptions(harnessHome, Directory.GetCurrentDirectory(), IsTui: false));
             var lines = new List<string>
             {
                 $"dsh-home: {harnessHome.Root}",
                 $"provider: {settings.ResolveDefaultModel()?.Provider ?? "(not configured)"}",
                 $"model: {settings.ResolveDefaultModel()?.Model ?? "(not configured)"}",
             };
-            lines.AddRange(host.Catalog.Descriptors
+            lines.AddRange(discovery.Descriptors
                 .OrderBy(descriptor => descriptor.Package, StringComparer.Ordinal)
                 .Select(descriptor => $"plugin: {descriptor.Package} ({descriptor.Form}, "
                     + $"enabled={(settings.Plugins.TryGetValue(descriptor.Package, out var setting) ? setting.Enabled : true)})"));

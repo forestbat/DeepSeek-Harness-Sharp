@@ -1022,7 +1022,6 @@ public sealed class ChatPane : ITuiPane
             return;
         PendingApproval = null;
         CloseChoicePrompt();
-        AppendRaw($"  approval: {outcome}\n");
         pending.TrySetResult(outcome);
     }
 

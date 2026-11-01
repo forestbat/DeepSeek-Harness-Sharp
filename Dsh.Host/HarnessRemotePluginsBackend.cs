@@ -23,6 +23,6 @@ internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager
     {
         if (!Enum.TryParse<PluginPermission>(permission, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
             throw new ArgumentException($"unknown plugin permission: {permission}", nameof(permission));
-        return Task.FromResult(manager.SetPermission(package, parsed, allowed));
+        return manager.SetPermissionAsync(package, parsed, allowed, cancellationToken);
     }
 }

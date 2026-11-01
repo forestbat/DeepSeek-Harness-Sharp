@@ -4,6 +4,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Boot;
 using static Dsh.Inspection.Plugin;
 
 namespace Dsh.Tests;
@@ -24,18 +25,6 @@ public sealed class PluginManagerToolTests
         Assert.Empty(harness.Manager.Calls);
     }
 
-    [Fact]
-    public async Task Write_WithoutApprovalChannel_IsDenied()
-    {
-        using var harness = new Harness();
-        await harness.ComposeAsync();
-        var agent = InspectionTestAgent.Open(harness.Ctx);
-
-        var result = await harness.Execute("""{"action":"disable","target":"sample-plugin"}""", agent, TestContext.Current.CancellationToken);
-
-        Assert.IsType<ToolExecutionResult.Failure>(result);
-        Assert.Empty(harness.Manager.Calls);
-    }
 
     [Fact]
     public async Task List_WithApprovalChannel_ReturnsPlugins()
@@ -52,29 +41,10 @@ public sealed class PluginManagerToolTests
         Assert.Contains("describe:sample-plugin", harness.Manager.Calls);
     }
 
-    [Fact]
-    public async Task Write_WithApprovalChannel_Executes()
-    {
-        using var harness = new Harness();
-        await harness.ComposeAsync();
-        using var answerer = ApprovalAnswerers.AutoApprove(harness.Ctx);
-        var agent = InspectionTestAgent.Open(harness.Ctx);
-
-        Assert.IsType<ToolExecutionResult.Success>(
-            await harness.Execute("""{"action":"disable","target":"sample-plugin"}""", agent, TestContext.Current.CancellationToken));
-
-        Assert.Contains("disable:sample-plugin", harness.Manager.Calls);
-        Assert.Equal(ApprovalOutcome.AllowedOnce,
-            Assert.Single(agent.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalDecidedPayload>()).Outcome);
-    }
 
     [Theory]
     [InlineData("list")]
     [InlineData("describe")]
-    [InlineData("enable")]
-    [InlineData("disable")]
-    [InlineData("add")]
-    [InlineData("remove")]
     public async Task RejectedApproval_DoesNotInvokePluginManager(string action)
     {
         using var harness = new Harness();
@@ -112,7 +82,7 @@ public sealed class PluginManagerToolTests
         try
         {
             var pending = harness.Execute(
-                """{"action":"disable","target":"sample-plugin"}""", agent, cancellation.Token);
+                """{"action":"list"}""", agent, cancellation.Token);
             await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
 
             cancellation.Cancel();
@@ -163,7 +133,7 @@ public sealed class PluginManagerToolTests
         await inspection.DeactivateAsync();
 
         var rejected = Assert.IsType<ToolExecutionResult.Failure>(
-            await harness.Execute("""{"action":"disable","target":"sample-plugin"}""", agent, TestContext.Current.CancellationToken));
+            await harness.Execute("""{"action":"list"}""", agent, TestContext.Current.CancellationToken));
         Assert.Contains("rejected", rejected.Error.Message);
         Assert.Empty(harness.Manager.Calls);
 
@@ -173,6 +143,98 @@ public sealed class PluginManagerToolTests
             await harness.Execute("""{"action":"list"}""", agent, TestContext.Current.CancellationToken));
         Assert.Equal(ToolErrorCodes.UnknownTool, missing.Error.Info?.Code);
         Assert.Single(agent.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+    }
+
+    [Theory]
+    [InlineData("enable", false)]
+    [InlineData("enable", true)]
+    [InlineData("disable", false)]
+    [InlineData("disable", true)]
+    [InlineData("remove", false)]
+    [InlineData("remove", true)]
+    public async Task RealManagerMutation_UsesOneSettingsDiffDecision_AndOnlyApprovedChangesAffectActivation(string action, bool allowed)
+    {
+        var root = TempTree.CreateDirectory("plugin-settings-boundary");
+        try
+        {
+            var home = HarnessHome.Resolve(Path.Combine(root, "home"));
+            Directory.CreateDirectory(home.Root);
+            var initiallyEnabled = action != "enable";
+            var original = $"plugins:\n  \"@deepseek-ai/dsh-tool-todo\": {initiallyEnabled.ToString().ToLowerInvariant()}\n  \"@deepseek-ai/dsh-plugin-manager\": true\nsafety:\n  autoApprove: false\n";
+            await File.WriteAllTextAsync(home.SettingsFile, original, TestContext.Current.CancellationToken);
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: Path.Combine(root, "plugins")));
+            using var answerer = allowed ? ApprovalAnswerers.AutoApprove(app.Ctx) : ApprovalAnswerers.DenyAll(app.Ctx);
+            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+            var session = Session.Create(id, null, new SessionHeader { Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false });
+            using var agent = new AgentLoopAgent(app.Ctx, id, new AgentOptions(), session, _ => 0);
+            session.Append(new TurnStartPayload(1));
+            var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+            var result = await Task.Run(() => tools.Execute(new ToolExecutionInput
+            {
+                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Name = "plugin_manager",
+                Arguments = JsonSerializer.SerializeToElement(new { action, target = "@deepseek-ai/dsh-tool-todo" }),
+                Agent = agent, Signal = TestContext.Current.CancellationToken,
+            }));
+
+            Assert.Equal(!allowed, result.IsError);
+            var asked = Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+            Assert.NotEmpty(ApprovalHints.SettingsDiff(asked.Arguments));
+            Assert.Equal(allowed ? "committed" : "rejected", Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>()).Outcome);
+            Assert.Equal(allowed ? !initiallyEnabled : initiallyEnabled, tools.Get("todo_write") is not null);
+            if (!allowed)
+                Assert.Equal(original, await File.ReadAllTextAsync(home.SettingsFile, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Fact]
+    public async Task RejectedInstall_LeavesDeploymentAndRealActivationUntouched()
+    {
+        var root = TempTree.CreateDirectory("plugin-install-boundary");
+        try
+        {
+            var home = HarnessHome.Resolve(Path.Combine(root, "home"));
+            var plugins = Path.Combine(root, "plugins");
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: plugins));
+            var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
+            await manager.RemoveAsync("test/local");
+            var before = await File.ReadAllTextAsync(home.SettingsFile, TestContext.Current.CancellationToken);
+            using var answerer = ApprovalAnswerers.DenyAll(app.Ctx);
+            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+            var session = Session.Create(id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
+            });
+            using var agent = new AgentLoopAgent(app.Ctx, id, new AgentOptions(), session, _ => 0);
+            session.Append(new TurnStartPayload(1));
+            var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+            var source = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");
+            Assert.True(File.Exists(source));
+
+            var result = await Task.Run(() => tools.Execute(new ToolExecutionInput
+            {
+                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")),
+                Name = "plugin_manager",
+                Arguments = JsonSerializer.SerializeToElement(new { action = "add", target = source }),
+                Agent = agent,
+                Signal = TestContext.Current.CancellationToken,
+            }));
+
+            Assert.True(result.IsError);
+            Assert.Equal(before, await File.ReadAllTextAsync(home.SettingsFile, TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(Path.Combine(plugins, "Dsh.ManagedPluginSample")));
+            Assert.Null(app.Composition!.Find("test/local"));
+            Assert.Equal("rejected", Assert.Single(session.SnapshotEvents().Select(item => item.Data)
+                .OfType<SettingsMutationAuditPayload>()).Outcome);
+            Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
     }
 
     private sealed class Harness : IDisposable

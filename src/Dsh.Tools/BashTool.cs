@@ -100,7 +100,7 @@ public static class BashTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = dialect.ToolName,
-            Description = dialect.Description,
+            Description = dialect.Description + IExternalProcessPolicy.SettingsProtectionNotice,
             Parameters = ToolSchemas.ObjectSchema(parameters, "command"),
             Output = new ToolOutputDefinition(OutputSchema, (_, value) => Render(value, dialect.ToolName)),
             Execute = (args, exec) => Execute(args, exec, subprocess, config, dialect),
@@ -163,11 +163,13 @@ public static class BashTool
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeoutSignal.Token);
         timeoutSignal.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
         var launch = dialect.Launch(command, args, envs);
-        var handle = subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = launch.Argv,
             Cwd = workdir,
             Env = launch.Env,
+            ModelExecution = true,
+            ExecutionKind = SubprocessExecutionKind.Script,
             Stdout = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Stderr = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Signal = fused.Token,

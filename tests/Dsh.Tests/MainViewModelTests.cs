@@ -392,12 +392,13 @@ public sealed class MainViewModelTests
         await using var environment = await GuiTestEnvironment.CreateAsync();
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
 
-        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"]);
+        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"], ["tool:write"]);
 
         var reloaded = viewModel.Settings.Load();
         var safety = Assert.IsType<SafetySettings>(reloaded.Safety);
         Assert.True(safety.AutoApprove);
         Assert.Contains("bash: rm -rf /*", safety.Blacklist);
+        Assert.Equal(["tool:write"], safety.Whitelist);
         Assert.True(File.Exists(viewModel.Settings.SettingsPath));
     });
 

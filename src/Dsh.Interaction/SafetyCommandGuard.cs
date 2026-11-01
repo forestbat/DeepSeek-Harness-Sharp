@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dsh.Runtime;
+using Dsh.Runtime.Events;
 using Dsh.Boot;
 using Dsh.Core;
 
@@ -13,31 +14,42 @@ public static class SafetyCommandGuard
 {
     private const string ToolPrefix = "tool:";
 
-    public static IDisposable Register(Context ctx, SafetySettings? safety)
+    public static IDisposable Register(Context ctx, Func<SafetySettings?> readSafety)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-        if (safety?.Blacklist is not { Count: > 0 })
-            return new NoopDisposable();
-        var rules = safety.Blacklist.OrderBy(rule => rule.Length).Select(SafetyRule.Parse).ToList();
-        return tools.Guard(exec =>
-        {
-            var command = ExtractCommand(exec);
-            var segments = command is null ? [] : ShellCommandSegments.Split(command, ShellToolDialects.ByToolName[exec.Name]);
-            var matched = rules.FirstOrDefault(rule => rule.Matches(exec.Name, segments));
-            return matched is null ? null : $"blocked by safety.blacklist rule \"{matched.Text}\"";
-        });
+        return tools.Guard(exec => MatchingRule(readSafety()?.Blacklist, exec.Name, exec.Arguments) is { } rule
+            ? $"blocked by safety.blacklist rule \"{rule}\"" : null);
     }
 
-    private static string? ExtractCommand(ToolExecution exec)
+    /** Whitelist and blacklist deliberately share the current tool/command grammar. */
+    public static string? MatchingRule(IReadOnlyList<string>? rules, string toolName, JsonElement arguments)
     {
-        if (!ShellToolDialects.ByToolName.ContainsKey(exec.Name))
+        if (rules is null || rules.Count == 0)
             return null;
-        if (exec.Arguments.ValueKind != JsonValueKind.Object)
-            return null;
-        if (exec.Arguments.TryGetProperty("command", out var command) && command.ValueKind == JsonValueKind.String)
-            return command.GetString();
-        return null;
+        var command = ShellToolDialects.ByToolName.TryGetValue(toolName, out var dialect)
+            && arguments.ValueKind == JsonValueKind.Object
+            && arguments.TryGetProperty("command", out var value)
+            && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        var segments = command is null ? [] : ShellCommandSegments.Split(command, dialect);
+        return rules.OrderBy(rule => rule.Length).Select(SafetyRule.Parse)
+            .FirstOrDefault(rule => rule.Matches(toolName, segments))?.Text;
     }
+
+    public static IDisposable RegisterApprovals(Context ctx, Func<SafetySettings?> readSafety)
+    {
+        var remove = ctx.OnWaterfall<ApprovalRequestNotification>((notification, next) =>
+        {
+            var request = notification.Request;
+            using var arguments = JsonDocument.Parse(request.Arguments ?? "{}");
+            var safety = readSafety();
+            return MatchingRule(safety?.Blacklist, request.ToolName, arguments.RootElement) is null
+                && (safety?.AutoApprove == true || MatchingRule(safety?.Whitelist, request.ToolName, arguments.RootElement) is not null)
+                ? ValueTask.FromResult<object?>(ApprovalOutcome.AllowedOnce)
+                : next();
+        }, new EventOptions { Global = true });
+        return new DisposeAction(() => remove());
+    }
+
 
     /**
      * "tool:<name>" blocks a tool by name.
@@ -63,10 +75,4 @@ public static class SafetyCommandGuard
                 : ShellToolDialects.ByToolName.TryGetValue(toolName, out var dialect) && dialect == Dialect && Pattern.Matches(segments);
     }
 
-    private sealed class NoopDisposable : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
 }

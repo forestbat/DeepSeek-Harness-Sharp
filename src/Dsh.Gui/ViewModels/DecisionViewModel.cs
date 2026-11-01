@@ -53,6 +53,8 @@ public sealed partial class DecisionViewModel : ObservableObject
     public bool HasImpact => Impact.Length > 0;
     public bool CanSubmit => !IsClosed && Questions.Count > 0 && Questions.All(question => question.IsAnswered);
     public string Arguments { get; private init; } = "";
+    public string SettingsDiff => ApprovalHints.SettingsDiff(Arguments);
+    public bool HasSettingsDiff => SettingsDiff.Length > 0;
 
     public static DecisionViewModel ForApproval(ApprovalRequest request, string? requestId = null)
         => new(DecisionKind.Approval, requestId)

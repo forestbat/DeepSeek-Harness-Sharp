@@ -128,6 +128,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends openssh-server openssh-sftp-server
           sudo mkdir -p /run/sshd
 
+      - name: Install real Linux sandbox prerequisites
+        if: inputs.suite == 'quick' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential meson ninja-build pkg-config libcap-dev libcap2-bin libselinux1-dev python3 ca-certificates curl xz-utils apparmor
+          bash scripts/setup-sandbox-bubblewrap-ci.sh
+
       - name: Build tests (Debug, plugin fixtures and fault probe)
         run: >
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
@@ -188,6 +197,27 @@ jobs:
           echo "::error::The standalone PTY daemon from the current build did not publish an endpoint"
           cat "$HOME_DIR/daemon.log"
           exit 1
+      - name: Publish a private self-contained Windows native sandbox test host
+        if: inputs.suite == 'quick' && runner.os == 'Windows' && inputs.quick-cohort != 'fleet-iroh'
+        shell: bash
+        run: >
+          dotnet publish tests/Dsh.Tests/Dsh.Tests.csproj -c Debug -r win-x64
+          --self-contained true --nologo -o .artifacts/sandbox-native-publish
+          -p:DshNativeCompiler=${{ inputs.native-cc }}
+
+      - name: Check supported native sandbox backends and actual plugin workers (no skips)
+        if: inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh'
+        shell: bash
+        run: bash scripts/test-sandbox-native.sh
+
+      - name: Remove the exact CI-only bubblewrap namespace profile
+        if: always() && inputs.suite == 'quick' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=.artifacts/sandbox-bubblewrap-ci/bwrap.apparmor
+          if [ -f "$profile" ]; then sudo apparmor_parser --remove "$profile"; fi
+
       - name: Check real Unix TUI raw input and exit restoration
         if: inputs.suite == 'raw' && runner.os != 'Windows'
         shell: bash
@@ -206,7 +236,7 @@ jobs:
             -class Dsh.Tests.TuiRawModeEndToEndTests \
             -trait- "Category=LlmSmoke" -failSkips
 
-      - name: Run quick tests (excluding GpuStress / OnlyGpu / LlmSmoke / RenderBench)
+      - name: Run quick tests (excluding GPU, model, render, and dedicated native sandbox categories)
         if: inputs.suite == 'quick'
         shell: bash
         run: |
@@ -214,6 +244,7 @@ jobs:
           # GpuStress needs real GPU stress testing; OnlyGpu needs GPU/desktop rendering.
           # RenderBench needs desktop rendering; LlmSmoke needs external model access and credentials.
           # Hosted runners have no GPU; run GPU measurements on a GPU host without trait filtering.
+          # SandboxNative runs above against each supported backend with -failSkips.
           EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
@@ -223,6 +254,7 @@ jobs:
             -trait- "Category=OnlyGpu"
             -trait- "Category=LlmSmoke"
             -trait- "Category=RenderBench"
+            -trait- "Category=SandboxNative"
             -class- Dsh.Tests.TuiRawModeEndToEndTests)
           # The native eight-round raw regression runs in its own Unix suite.
           # macOS PTY reads block their calling thread and can starve the parallel test thread pool.
@@ -233,7 +265,7 @@ jobs:
           fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             # MCP resource tests run in each of the three required regression suites.
-            ARGS+=(-parallel none
+            ARGS+=(-parallelMode none
               -reporter verbose
               -class- Dsh.Tests.Mcp.McpResourceToolsTests
               -method- Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay)
@@ -304,7 +336,7 @@ jobs:
             -class Dsh.Tests.SettingsTemplateTests
             -class Dsh.Tests.ExportSessionLogTests)
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=(-parallel none)
+            ARGS+=(-parallelMode none)
           fi
           "$EXE" "${ARGS[@]}"
 

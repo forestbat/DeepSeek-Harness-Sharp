@@ -24,23 +24,23 @@ public sealed class HotPlugTests
             Assert.Contains("removed", removed);
             Assert.Null(tools.Get("todo_write"));
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tool-todo"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": false", ReadSettings(home));
+            Assert.False(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var added = await manager.AddAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("activated", added);
             Assert.NotNull(tools.Get("todo_write"));
             Assert.Equal(ActivationState.Active, app.Composition.Find("@deepseek-ai/dsh-tool-todo")!.State);
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": true", ReadSettings(home));
+            Assert.True(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var disabled = await manager.DisableAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("disabled", disabled);
             Assert.Null(app.Composition.Find("@deepseek-ai/dsh-tool-todo"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": false", ReadSettings(home));
+            Assert.False(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var enabled = await manager.EnableAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("activated", enabled);
             Assert.NotNull(tools.Get("todo_write"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": true", ReadSettings(home));
+            Assert.True(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
         }
         finally
         {

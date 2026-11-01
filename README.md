@@ -46,8 +46,32 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
-3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，就可以自动加载并启用该插件。插件编写示例可见 `tests/Dsh.NativePluginSample`。
+3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。受限托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
 4. dsharp日志默认位置为`<home>/logs/dsh-YYYYMMDD.log`，可以在 `settings.yaml`→`logging:` 中配置它们(TUI 下强制关闭)。
+
+### Settings mutation approvals
+
+Settings review is limited to 4 MiB per UTF-8 before/after document; an oversized proposal fails closed and its content is withheld from the audit instead of silently truncated.
+
+Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
+The approval shows the canonical target and the real before/after diff with credentials redacted; the session records the originating tool call, root call, decision, and commit outcome.
+The writer releases the settings lock while waiting for approval, then reacquires it and rejects a stale proposal rather than overwriting a concurrent human edit.
+Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
+Missing session, reviewer, or approval service fails closed.
+
+```yaml
+safety:
+  autoApprove: false
+  blacklist: ["bash:rm -rf /*"]
+  whitelist: ["tool:write"]
+```
+
+`whitelist` automatically approves matching requests using exactly the existing blacklist tool/command grammar: `tool:<name>` and `<shell-tool>:<command-pattern>`.
+Blacklist denial always wins, including when `autoApprove` is true; the session's `never` approval policy still rejects requests.
+These patterns are not a path/arguments/intent permission engine, and shell command matching is not an OS isolation boundary.
+Use the GUI safety page to edit both lists; TUI and GUI share the same authoritative approval result.
+
+The trusted settings diff gate is always enabled, independently of `sandbox.enabled`. It is not a promise to intercept arbitrary BCL/native writes by fully trusted in-process code. With the sandbox off, shell commands, PTC, C# frontends and MCP retain their previous execution behavior; opaque code can still write directly with the host user's authority. Enable the OS boundary below when that compatibility trade-off is unacceptable.
 
 ## 不同于原版 DSH 的功能
 
@@ -270,7 +294,7 @@ storage:
 
 ### 插件与扩展
 
-支持 C# JIT 编译和 AOT 编译两种插件，使用 `/plugins` 命令管理，将符合规范的插件放入 `<安装目录>/plugins/` 也可以自动加载。
+支持托管 JIT 插件与原生 NativeAOT 共享库插件，使用 `/plugins` 命令管理，也可以按 `plugins/<目录>/` 布局部署到安装目录。是否能加载、在哪个进程执行，以及可用的能力，由明确配置与实际平台后端决定；放入目录不等于授予宿主权限。
 
 交互能力通过现有插件独立启用，不再选择四种互斥预设，也不再提供 `/preset` 命令。
 
@@ -282,7 +306,7 @@ storage:
 | `@deepseek-ai/dsh-tool-creative` | `creative_inspect_list`、`creative_inspect_query` 只读检查服务、配置和工具 | 事件检查仍不可用 |
 | `@deepseek-ai/dsh-plugin-manager` | `plugin_manager` 管理插件 | 保留既有审批门禁，不由检查插件自动启用 |
 
-通过 C# SDK 发起的工具子调用仍遵循当前 scope、审批与审计；`run_code` 本身不是 C# 安全沙箱，也不限制用户项目采用的外部工具链。
+通过 PTC 工具 SDK 发起的子调用仍遵循当前 scope、审批与审计；它与下面面向插件的 `IPluginHost` 能力 SDK 是不同接口。`sandbox.enabled: false` 时，`run_code` 不是 C# 安全沙箱；开启时，PTC 与外部 C# 前端的实际执行还须满足 OS 边界，不能满足就明确失败，不回退到未隔离执行。
 SDK 返回的 JSON 根节点可以直接组合进新的 `JsonObject` 或 `JsonArray`；工具返回的图片会作为模型上下文单独交付。
 
 PTC 的临时调试开关默认关闭，启用后会提示模型优先将独立、非交互的工具操作归并到一次 C# `run_code`，而不是分别发起原生调用（包括并行调用）。
@@ -316,6 +340,8 @@ plugins:
 `run_csx` 接收 `script` 文件路径与可选的 `arguments` 数组，`run_csharp_repl` 接收 `code` 和 `description`；两者支持 `workdir`、`timeoutMs`，均不提供 `run_code` 的工具 SDK。
 Windows 的 `run_csx` 在可写的 `workdir` 内创建临时 `.dsh-csx-*` 目录，通过真实 `#load` 执行未经改写的原文件，并在原脚本执行前初始化 UTF-8 脚本输出；引导目录随执行结束清理，编译缓存由原生前端管理。
 CSharpRepl 工具保留 OS 退出码和完整托管退出码，避免 Unix 截断错误码后将异常当作成功；普通 stderr 输出不会被误判为失败。
+开启沙箱时，dotnet-script 的原生 `dotnet restore` 也受脚本网络权限约束；依赖尚未满足时，`network: false` 会在恢复阶段明确失败，而不是借用宿主私有缓存或凭据绕过限制。
+需要在线恢复依赖时，应审查后显式允许脚本网络访问；前端安装、依赖恢复与脚本文件写权限是独立条件。
 
 Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：独立子进程、构建输出与中间目录，以及不共享现有实例状态的运行时 home。
 模型默认通过 `ask_user_question` 询问进程处理方式，可选择隔离新实例、重启明确授权的自有实例，或为当前任务预授权自动处理；原有工具审批仍然生效。
@@ -324,6 +350,89 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 不提供退役预设包的配置或历史兼容；升级前请自行从 `plugins` 配置中删除 `@deepseek-ai/dsh-presets`。
 含旧预设事件且未标记为可忽略的会话，仍按通用未知事件规则拒绝读取。
 会话起始模板（`.agent-presets`）和计划模式不受影响。
+
+#### 插件执行角色与沙箱
+
+`sandbox.enabled` 默认是 `false`，用于保留现有插件、shell、PTC、C# 前端与 MCP 的运行方式；此时配置的插件权限不是任意 BCL/原生调用的 OS 限制。可信工具与 typed settings API 对实际配置差异的审批始终启用，不随沙箱开关关闭。
+
+需要 OS 保护时，在自己的 `settings.yaml` 中明确开启，并分别设置插件能力和脚本权限：
+
+```yaml
+sandbox:
+  enabled: true
+scripts:
+  permissions:
+    read: true
+    write: false
+    network: false
+plugins:
+  "@example/report":
+    enabled: true
+    execution: sandbox
+    permissions:
+      read: true
+      write: false
+      network: false
+```
+
+未明确授权宿主执行的新插件使用隔离角色；托管插件必须实现 `IDshIsolatedPlugin`，原生插件必须使用当前能力 ABI。不支持的完整 `Context` 契约不会被伪装成 RPC，也不会静默退回主进程。权限值未指定时为允许，因此要按需要显式收紧 `read`、`write`、`network`。
+
+隔离 worker 不直接取得业务目录、宿主凭据或网络访问。托管与原生插件通过同一组 broker 操作 `files.read`、`files.write`、`http.send` 请求能力；仍受会话审批、权限和大小限制约束，写当前 settings 还必须进入真实 diff 审批。受限接口不会向插件暴露 `Context`、`IAgent` 或宿主服务对象。
+
+完整 `IDshPlugin`/`Context` 组合插件只能作为完全信任的宿主角色运行。例如，自己编译并实际链接进当前宿主镜像的组合插件，可使用与其他镜像插件完全相同的显式字段：
+
+```yaml
+plugins:
+  "@example/workspace-host":
+    execution: host
+    hostArtifact: image
+    permissions:
+      read: true
+      write: true
+      network: true
+```
+
+`image` 仅表示实际链接进当前宿主镜像的代码身份，不表示包名前缀、预置来源、安装目录或同名插件自动受信任。模板为现有完整 `Context` 默认包逐项列出这类授权，同时保留 memory、TOON、checkpoints 的默认关闭状态。用户自编的镜像插件也用相同规则，不存在按来源给予权限的例外。
+
+**已经编译进主进程镜像的所有代码与模块初始化器都是宿主可信计算基（TCB）的一部分。** 即使某个镜像内类型实现能力 SDK，也不能声称它在主进程执行过的模块初始化器被事后 OS 隔离。不可信代码应作为独立文件部署的 SDK 托管插件或原生工件加载，而不是编译进宿主镜像。
+
+文件形态的完整 `Context` 插件需要 `execution: host` 和 `hostArtifact: "sha256:<64hex>"`。该标识必须覆盖实际部署工件的完整文件闭包，而不是仅主 DLL；`sha256sum plugin.dll` 的结果不是此授权标识。依赖或工件内容变化后必须重新确认授权，同包名的新代码不能继承旧代码的宿主授权。宿主角色必须保留全权限，不能用 `ban_*` 或 `permissions.write: false` 宣称撤销同地址空间 BCL/原生访问；需要窄权限就迁移到能力 SDK。
+
+获取文件授权标识时，可先用 `/plugins add` 或重启触发隔离发现；需要完整 `Context` 而缺少授权的工件会被拒绝，诊断给出此次真实代码闭包的 `execution: host`、`hostArtifact: sha256:...` 与全权限要求。先核对来源和整个部署闭包，再由用户明确写入这些字段并重试；不要把错误消息当成自动批准。没有独立的 hash CLI，也不要用单文件哈希替代。
+
+升级不会自动覆盖已有 settings，也不会仅凭预置包名补授宿主权限。开启沙箱前，请对照当前模板审查并迁移所需的显式角色；拒绝审批不应安装、激活或修改权限。权限变化、禁用、卸载或故障恢复会停止旧信任域并重新建立仍启用的成员，不重放失败或取消的调用。
+
+`sandbox.enabled` 与宿主启动时的值不同会要求重启；热切换不会追溯隔离已经加载到主进程的代码。
+
+#### 信任域、资源与平台边界
+
+默认每包独立信任域；只有明确设置相同 `trustDomain` 且权限配置相同的隔离插件才复用 worker。同域代码共享地址空间、内存预算与故障后果，是相互信任的代码，不是插件间隔离。不同域或不同权限配置不共享 worker。当前每个 worker 的内存预算为 512 MiB，最多同时 8 个 worker；这不是整个应用或单个工具的独立内存保证。一个域越界或崩溃会使域内成员共同失效，错误明确返回用户与模型。
+
+| 平台 | 必需条件与实际边界 |
+|---|---|
+| Linux | 需要支持全部强制保护参数的 bubblewrap（已验证 0.13.1）、可用的用户/网络等 namespace，以及已委派且可写的 cgroup v2 子树：启用 memory/pids、`memory.swap.max` 和 `cgroup.kill`，宿主运行在委派下的叶节点。仅安装 bubblewrap 或存在 systemd 不足以说明委派可用；缺失时失败关闭，不自动下载或退回普通进程。内存限制由 cgroup 执行。 |
+| Windows | 使用 AppContainer 文件/网络边界与 Job Object 资源、进程树约束。当前明确拒绝直接可写目录授权，不能声称普通用户可可靠回收恶意创建的受保护 ACL 后代；文件写入应走宿主能力中介。AppContainer 的 localhost/loopback 限制意味着允许网络也不保证能连接本机模型、代理或 MCP 服务；不会自动添加 loopback exemption 来放宽边界。 |
+| macOS | 需要系统 `sandbox-exec`，支持不派生子进程的单 worker。内存采用 RSS 观察并在测量超预算后终止，不是内核硬上限；不能保证没有瞬时超额。需要派生子进程的不透明执行路径因无法提供无逃逸竞态的后代所有权而失败关闭，不能把整个 macOS 功能笼统标为不可用。 |
+
+沙箱开启时，shell、PTC、C# 前端及可归属的本机 MCP stdio 进程也必须使用真实 OS 后端保护当前 settings，任意代码的直接写入会被拒绝，应改走审批工具或能力接口。后端缺失、目录授权不兼容、macOS 需要派生子进程、远程/不可归属 MCP 等不能兑现边界的路径都会报错，不静默回退。关闭沙箱可恢复原兼容行为，但也明确放弃这些不透明执行路径的 OS 保护；它不是绕过可信 settings diff 审批的开关。
+
+`scripts.permissions.read/write/network` 独立约束 shell、持久 shell、PTC、dotnet-script 与 CSharpRepl，不从执行器插件的权限推导，未指定的值为允许。
+开启沙箱时，读写授权针对工作目录的宿主数据，运行时代码只读输入和独占临时目录另外授权；禁止写入仍允许在私有临时目录计算。
+Linux 的 `read: false, write: false` 使用空的 guest 工作目录，不暴露原工作目录；`read: false, write: true` 无法兑现只写目录语义，明确拒绝。
+权限变化会在后续执行前生效，持久 shell 会退役旧权限进程；关闭沙箱时这些脚本权限不改变原有不透明执行行为。
+模型可调用的原生 PTY、编辑器启动与间接 Git 进程若不能建立同等边界，也会明确拒绝；手工界面入口不因此变成模型可绕过的通道。
+
+#### 能力 SDK 与原生 ABI 迁移
+
+托管模板 `templates/managed-plugin` 使用 `IDshIsolatedPlugin.InitializeAsync(IPluginHost, JsonElement, CancellationToken)`，通过 `RegisterTool` 注册工具、`CallAsync` 调用能力、`Log` 输出日志。操作常量集中在薄契约项目 `Dsh.Plugins.Protocol` 的 `PluginHostOperations`，插件依赖宿主提供的同一契约身份，不打包第二份宿主契约程序集。
+
+- `files.read`：参数 `{path, offset?, count?}`，返回 `{data, length, eof}`，`data` 为 base64。
+- `files.write`：参数 `{path, data, append?}`，`data` 为 base64，返回 `{bytesWritten}`。
+- `http.send`：参数 `{url, method?, headers?, body?}`，`body` 为 base64，返回 `{status, headers, body}`。
+
+原生 ABI 已升级为 **v2**，旧二进制需要用当前生成器与模板重新构建，不提供 v1 兼容 shim。`NativePluginContext.CallHost` / `DshNativePluginRuntime.CallHost` 使用相同操作和 JSON 语义；生成的两段式 UTF-8 `HostCall` 回调负责取回结果，缓冲重取不会再次执行写入副作用。隔离角色拿到的是 broker 能力，不是完整宿主对象；需要完整 `Context` 的旧插件应明确选择并审查全信任宿主角色，或实际迁移接口，不能只修改一个配置字段就宣称完成隔离。
+
+原生插件的逻辑停用会注销工具、释放本次激活的回调与缓冲，但原生镜像在所属进程中保持驻留。[NativeAOT 不支持通过 `dlclose` / `FreeLibrary` 卸载共享库](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/libraries)；重复加载同一路径、相同内容会复用镜像，同一路径内容改变则要求新 worker 或重启宿主。隔离角色通过退役所属 worker 回收原生镜像；在宿主进程运行时，不宣称逻辑卸载能够回收该镜像。
 
 <details>
 <summary>插件配置</summary>

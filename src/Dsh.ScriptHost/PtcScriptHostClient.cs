@@ -68,12 +68,14 @@ public sealed class PtcScriptHostClient
         var command = ResolveHostCommand();
         if (command is null)
             return new PtcRunOutcome(false, PtcFailureKinds.SandboxUnavailable, "the harness executable path is unavailable", null, null, "");
-        using var handle = _subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await _subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = [command.Value.FileName, .. command.Value.Arguments],
             Cwd = _cwd,
             KeepStandardInputOpen = true,
             Signal = signal,
+            ModelExecution = true,
+            ExecutionKind = SubprocessExecutionKind.Script,
             Stdout = new SubprocessCollect(_outputLimitBytes + FrameSlackBytes, null),
             Stderr = new SubprocessCollect(MaxStderrBytes, null),
         });

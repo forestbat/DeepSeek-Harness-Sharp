@@ -58,7 +58,7 @@ public sealed partial class DshPluginCatalogGenerator
             builder.AppendLine();
             builder.AppendLine("namespace Dsh.Plugins.Generated");
             builder.AppendLine("{");
-            builder.AppendLine($"    public static class {className}");
+            builder.AppendLine($"    {(selfRegister ? "internal" : "public")} static class {className}");
             builder.AppendLine("    {");
             builder.AppendLine("        public static global::System.Collections.Generic.IReadOnlyList<global::Dsh.Plugins.DshPluginRegistration> Registrations()");
             builder.AppendLine("            => new global::Dsh.Plugins.DshPluginRegistration[]");
@@ -79,9 +79,13 @@ public sealed partial class DshPluginCatalogGenerator
             if (selfRegister)
             {
                 builder.AppendLine();
+                builder.AppendLine("        private static int _registered;");
+                builder.AppendLine();
                 builder.AppendLine("        [global::System.Runtime.CompilerServices.ModuleInitializer]");
                 builder.AppendLine("        internal static void RegisterAll()");
                 builder.AppendLine("        {");
+                builder.AppendLine("            if (global::System.Threading.Interlocked.Exchange(ref _registered, 1) != 0)");
+                builder.AppendLine("                return;");
                 foreach (var bootstrap in bootstraps.OrderBy(name => name, StringComparer.Ordinal))
                     builder.AppendLine($"            {bootstrap}.Register();");
                 foreach (var schema in (schemas ?? []).OrderBy(name => name, StringComparer.Ordinal))
