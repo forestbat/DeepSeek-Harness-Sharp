@@ -40,6 +40,7 @@ internal sealed class ShellPane : ITuiPane
         _backing = backing;
         LayerPtyId = layerPtyId;
         _screen = new VtScreen(Math.Max(1, width), Math.Max(1, height));
+        _screen.Reply += reply => EnqueueWrite(System.Text.Encoding.UTF8.GetBytes(reply));
         Id = id;
         StatusText = layerPtyId is { Length: > 0 }
             ? $"[pty {layerPtyId}] 层 - {window.KeyBindings.Keys(TuiAction.Overview)} 总览 - {window.KeyBindings.Keys(TuiAction.PrevSession, TuiAction.NextSession)} 切该 pty 的会话 - {window.KeyBindings.Keys(TuiAction.Detach)} 离开 DSH"

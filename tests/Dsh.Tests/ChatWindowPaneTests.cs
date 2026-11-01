@@ -564,7 +564,7 @@ public sealed class ChatWindowPaneTests : IDisposable
             var paneId = 2;
             chat.AddPane(new ShellPane(chat, paneId, new RemoteTerminalBacking(remote), 80, 24), SplitOrientation.Vertical);
             chat.DrainUi();
-            await WaitForPaneTextAsync(chat, paneId, HasPrompt);
+            Assert.True(HasPrompt(await WaitForPaneTextAsync(chat, paneId, HasPrompt)), "The shell did not render its prompt before input.");
 
             // 只在"进程真的执行"时才出现的输出(输入回显里不含最终值)。
             var (input, expected) = OperatingSystem.IsWindows()
@@ -622,11 +622,12 @@ public sealed class ChatWindowPaneTests : IDisposable
     [Fact]
     public async Task Overview_Enter_Host_Shell_Pty_Opens_Terminal_Pane()
     {
+        const string expected = "STAGE1-42";
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
         chat.DaemonPtyAccess = FakeDaemonAccess.None;
         var shell = PtyShell.Resolve();
         if (!PtyShell.Exists(shell))
-            return;
+            Assert.Skip("The interactive shell executable is unavailable.");
         var session = await PtyHost.Default.StartAsync(new PtyStartInfo
         {
             FileName = shell,
@@ -652,10 +653,13 @@ public sealed class ChatWindowPaneTests : IDisposable
             var panes = await DispatchAsync(chat, chat.SnapshotPanesAsync());
             Assert.DoesNotContain(panes, entry => entry.PtyId == session.Id.Value);
 
-            // 键入直达这个真 shell: 输出里回显出命令即证明往返已通。
-            await WaitForPaneTextAsync(chat, paneId, HasPrompt);
-            chat.ApplyPaneInput("text", paneId, "echo STAGE1-MARK\r");
-            Assert.Contains("STAGE1-MARK", await WaitForPaneTextAsync(chat, paneId, text => text.Contains("STAGE1-MARK")));
+            // A computed marker confirms that the shell executed the submitted command.
+            Assert.True(HasPrompt(await WaitForPaneTextAsync(chat, paneId, HasPrompt)), "The shell did not render its prompt before input.");
+            var input = Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase)
+                ? "cmd /v:on /c \"set /a m=6*7 & echo STAGE1-!m!\"\r"
+                : "echo STAGE1-$((6*7))\r";
+            chat.ApplyPaneInput("text", paneId, input);
+            Assert.Contains(expected, await WaitForPaneTextAsync(chat, paneId, text => text.Contains(expected)));
         }
         finally
         {
@@ -759,8 +763,11 @@ public sealed class ChatWindowPaneTests : IDisposable
         return text;
     }
 
-    /** A shell reads typed input only after it has drawn its prompt: pwsh dropped keys typed earlier (CI: STAGE1-MARK never echoed). */
-    private static bool HasPrompt(string paneText) => paneText.Trim().Length > 0;
+    private static bool HasPrompt(string paneText)
+    {
+        var text = paneText.AsSpan().TrimEnd();
+        return !text.IsEmpty && text[^1] is '>' or '$' or '#' or '%';
+    }
 
     /**
      * Ctrl+X ,/. 是"在当前 pty 的会话列表里切换"(pty 是 session 的上一层容器, 一个 pty 可挂多个会话):

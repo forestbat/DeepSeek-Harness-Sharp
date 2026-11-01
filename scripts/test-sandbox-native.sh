@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+: "${RUNNER_OS:?}"
 
 # This CI-only launcher delegates one transient service, never the host cgroup root.
 if [ "${RUNNER_OS:-}" = Linux ] && [ "${1:-}" != --delegated ]; then
@@ -14,7 +15,7 @@ if [ "${RUNNER_OS:-}" = Linux ] && [ "${1:-}" != --delegated ]; then
     --property=MemorySwapMax=0 --property=TasksMax=1024 \
     --working-directory="$PWD" "${environment[@]}" \
     --setenv=RUNNER_OS=Linux --setenv="DSH_SANDBOX_CI_UNIT=$unit" \
-    /bin/bash "$PWD/scripts/test-sandbox-native.sh" --delegated
+    /bin/bash "$PWD/scripts/test-sandbox-native.sh" --delegated "$@"
 fi
 
 if [ "${1:-}" = --delegated ]; then
@@ -85,6 +86,13 @@ if [ "${1:-}" = --delegated ]; then
   done
   test -x /usr/bin/python3
   test -x /usr/bin/perl
+fi
+
+if [ "${1:-}" = --run ]; then
+  shift
+  test "$#" -gt 0
+  "$@"
+  exit
 fi
 
 exe="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"

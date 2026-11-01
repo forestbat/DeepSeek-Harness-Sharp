@@ -44,6 +44,8 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
    dsharp (tui) attach <pty-id>  # 接回仍在运行的后台会话(`pty-id` 标识 daemon 管理的进程)，加入--gpu参数则在独立 GPU 窗口恢复
    ```
 
+   TUI 终端窗格会将光标位置、终端状态和设备属性查询的应答写回所属 PTY，供交互式 shell 完成终端初始化。
+
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
 3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。受限托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
