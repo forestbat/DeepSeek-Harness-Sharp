@@ -305,6 +305,28 @@ public sealed class SandboxProcessTests : IDisposable
 
     [Fact]
     [Trait("Category", "SandboxNative")]
+    public async Task MacImageReplacement_RetainsTheOwnedPid_WhileNativeForkRemainsDenied()
+    {
+        if (!OperatingSystem.IsMacOS())
+            Assert.Skip("This consumer requires native macOS exec and fork enforcement.");
+        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
+        await using var sandbox = await SandboxedProcess.StartAsync(Options(working) with
+        {
+            Executable = "/usr/bin/perl",
+            RuntimePaths = ["/bin/bash"],
+            Arguments = ["-e", """defined(fork()) and die "fork escaped"; exec @ARGV or die "exec failed: $!";""",
+                "--", "/bin/bash", "-c", "printf '%s\\nfork-denied\\n' \"$$\""]
+        }, TestContext.Current.CancellationToken);
+        var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var exit = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        Assert.True(exit == 0, $"Sandbox PID {sandbox.Id} exited with {exit}: {await error}");
+        Assert.Equal($"{sandbox.Id}\nfork-denied\n", await output);
+        Assert.False(sandbox.WasMemoryLimitExceeded);
+    }
+
+    [Fact]
+    [Trait("Category", "SandboxNative")]
     public async Task MacNativeIo_DeniesReplacementAncestorRenameHardlinkAndReadOnlySubtreeWrites()
     {
         if (!OperatingSystem.IsMacOS() || !File.Exists("/usr/bin/perl"))
@@ -408,7 +430,8 @@ public sealed class SandboxProcessTests : IDisposable
     };
 
     private static SandboxProcessOptions PythonOptions(string workingDirectory) => Options(workingDirectory) with { Executable = "/usr/bin/python3" };
-    private static string[] UnixRuntimePaths() => new[] { "/lib", "/lib64", "/usr/lib" }.Where(Directory.Exists).ToArray();
+    private static string[] UnixRuntimePaths() => new[] { "/lib", "/lib64", "/usr/lib" }.Where(Directory.Exists)
+        .Concat(OperatingSystem.IsMacOS() ? ["/bin/bash"] : []).ToArray();
     private static void RequireLinuxPython()
     {
         if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/python3"))

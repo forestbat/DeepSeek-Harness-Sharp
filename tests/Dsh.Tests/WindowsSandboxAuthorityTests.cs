@@ -51,7 +51,8 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         }, TestContext.Current.CancellationToken))
         {
             var output = new StreamReader(control.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(0, await control.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken));
+            var code = await control.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+            Assert.True(code == 0, $"Windows readonly control PID {control.Id} exited with {code}.");
             Assert.Equal("readonly-control", (await output).Trim());
         }
         Assert.Equal(directoryAcl, ReadDacl(working));

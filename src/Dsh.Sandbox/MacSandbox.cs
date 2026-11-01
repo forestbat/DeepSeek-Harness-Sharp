@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 
 namespace Dsh.Sandbox;
 
 /// <summary>Seatbelt enforces filesystem/network policy; memory is measured and supervised, not a kernel hard cap.</summary>
+[SupportedOSPlatform("macos")]
 internal sealed class MacSandbox : ISandboxLifetime
 {
     private readonly UnixChildProcess _child;
@@ -43,6 +45,14 @@ internal sealed class MacSandbox : ISandboxLifetime
         foreach (var read in policy.Readable)
         {
             profile.Append("(allow file-read* file-map-executable ").Append(Filter(read)).Append(")\n");
+            // Image replacement stays in the owned PID and requires an explicit non-credential-changing file grant.
+            if (!read.IsDirectory && read.Source != policy.Executable)
+            {
+                var mode = File.GetUnixFileMode(read.Source);
+                if ((mode & (UnixFileMode.SetUser | UnixFileMode.SetGroup)) == 0
+                    && (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0)
+                    profile.Append("(allow process-exec (literal ").Append(Quote(read.Source)).Append("))\n");
+            }
             if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, read.Source)))
                 profile.Append("(deny file-write* ").Append(Filter(read)).Append(")\n");
         }
