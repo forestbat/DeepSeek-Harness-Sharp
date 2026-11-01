@@ -28,6 +28,8 @@ public sealed record SubprocessSpawnSpec
     public CancellationToken Signal { get; init; }
     public bool ModelExecution { get; init; }
     public SubprocessExecutionKind ExecutionKind { get; init; }
+    /** Host-owned configured MCP identity; broker requests never populate this field. */
+    public string? McpLifecycleOwner { get; init; }
     public bool ProtocolOutput { get; init; }
     public IReadOnlyList<string> AdditionalWritablePaths { get; init; } = [];
     public IReadOnlyList<string> AdditionalReadOnlyPaths { get; init; } = [];
@@ -386,6 +388,8 @@ public sealed class SubprocessService : Service, IDisposable
             throw new ArgumentException("subprocess: argv must be non-empty");
         spec.Signal.ThrowIfCancellationRequested();
         var policy = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false);
+        if (policy is not null)
+            await policy.DemandAsync(spec).ConfigureAwait(false);
         if (policy?.Enabled != true)
             return SpawnDirect(spec);
         IReadOnlyDictionary<string, string>? executableEnvironment = null;

@@ -22,6 +22,8 @@ internal static class TestProcessEntryPoint
             return WindowsSandboxAuthorityTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == ExternalProcessBoundaryTests.ProbeArgument))
             return ExternalProcessBoundaryTests.RunProbe(Environment.GetCommandLineArgs());
+        if (args.Any(argument => argument == PolicyProcessIsolation.Argument))
+            return PolicyProcessIsolation.Run(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
             return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == UnixPtyDescriptorOwnershipTests.SpawnFailureProbeArgument))

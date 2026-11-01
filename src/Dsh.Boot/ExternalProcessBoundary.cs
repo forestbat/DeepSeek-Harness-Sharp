@@ -13,8 +13,7 @@ public sealed class ExternalProcessBoundary : IExternalProcessPolicy
 {
     private readonly string _settingsPath;
     private readonly Context _context;
-    private readonly HarnessHome _home;
-    private readonly HarnessSettings _settings;
+    private readonly Func<HarnessSettings> _read;
     private readonly bool _startupEnabled;
     private const long MemoryLimitBytes = 1024L * 1024 * 1024;
 
@@ -22,8 +21,7 @@ public sealed class ExternalProcessBoundary : IExternalProcessPolicy
     {
         ArgumentNullException.ThrowIfNull(settings);
         _context = context;
-        _home = home;
-        _settings = settings;
+        _read = HarnessSettings.CreatePolicyReader(home, settings);
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)
             ?? throw new InvalidOperationException("External execution requires the settings mutation boundary first.");
         if (!gate.Owns(home.SettingsFile))
@@ -37,7 +35,7 @@ public sealed class ExternalProcessBoundary : IExternalProcessPolicy
     {
         get
         {
-            var active = File.Exists(_home.SettingsFile) ? HarnessSettings.LoadForReview(_home) : _settings;
+            var active = _read();
             if ((active.Sandbox?.Enabled == true) != _startupEnabled)
                 throw new InvalidOperationException("Changing sandbox.enabled requires restarting the host; live plugin trust and process confinement cannot be partially switched.");
             return active;
@@ -46,16 +44,77 @@ public sealed class ExternalProcessBoundary : IExternalProcessPolicy
 
     public bool Enabled => ActiveSettings.Sandbox?.Enabled == true;
 
-    public (bool Enabled, bool Read, bool Write, bool Network) ScriptPolicy
+    public string Revision
     {
         get
         {
             var active = ActiveSettings;
-            if (active.Sandbox?.Enabled != true)
-                return (false, true, true, true);
-            var permissions = active.Scripts?.Permissions;
-            return (true, permissions?.Read ?? true, permissions?.Write ?? true, permissions?.Network ?? true);
+            return $"{active.Sandbox?.Enabled == true}:{SafetyBoundary.Revision(active.Safety ?? new SafetySettings())}";
         }
+    }
+
+    public string InvocationRevision
+    {
+        get
+        {
+            var run = SettingsMutationScope.Current?.Context;
+            var active = ActiveSettings;
+            var rules = active.Safety ?? new SafetySettings();
+            return $"{active.Sandbox?.Enabled == true}:{SafetyBoundary.Revision(rules)}:"
+                + string.Join(";", OpaquePermissionPolicy.DeniedWrites(rules, run,
+                    run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory));
+        }
+    }
+
+    public void DemandUnconfined(string surface)
+    {
+        var rules = ActiveSettings.Safety ?? new SafetySettings();
+        OpaquePermissionPolicy.DemandUnconfined(rules, surface, explicitHostGrant:
+            SettingsMutationScope.Current?.Context.SafetyApprovalRevision == SafetyBoundary.AuthorizationRevision(rules, "safety"));
+    }
+
+    public void DemandConfiguredMcp(string surface, string lifecycleOwner, CancellationToken signal)
+    {
+        var revision = Revision;
+        var safety = _context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+            ?? throw new InvalidOperationException("Configured MCP initialization requires the host safety boundary.");
+        safety.AuthorizeConfiguredMcp(lifecycleOwner, signal);
+        OpaquePermissionPolicy.DemandUnconfined(ActiveSettings.Safety ?? new SafetySettings(), surface, explicitHostGrant: true);
+        signal.ThrowIfCancellationRequested();
+        if (Revision != revision)
+            throw new UnauthorizedAccessException("The MCP policy changed during initialization; reconnect under a fresh configuration.");
+    }
+
+    public async Task DemandAsync(SubprocessSpawnSpec spec)
+    {
+        var active = ActiveSettings;
+        var run = SettingsMutationScope.Current?.Context;
+        var script = spec.ExecutionKind == SubprocessExecutionKind.Script;
+        PermissionRules rules = script ? active.Scripts?.Permissions ?? new ScriptPermissions() : active.Safety ?? new SafetySettings();
+        var revision = ExecutionRevision(active, script);
+        var safety = _context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+            ?? throw new InvalidOperationException("Opaque execution requires the host safety boundary.");
+        if (run is null && spec.ExecutionKind == SubprocessExecutionKind.Mcp && spec.McpLifecycleOwner is { } owner)
+            safety.AuthorizeConfiguredMcp(owner, spec.Signal);
+        else
+            await safety.AuthorizeOperationAsync(run, spec.Signal, run is null ? spec.ExecutionKind.ToString() : null,
+                scriptPermissions: script).ConfigureAwait(false);
+        spec.Signal.ThrowIfCancellationRequested();
+        active = ActiveSettings;
+        if (ExecutionRevision(active, script) != revision)
+            throw new UnauthorizedAccessException("The execution policy changed during approval; no process was started. Authorize a new invocation.");
+        rules = script ? active.Scripts?.Permissions ?? new ScriptPermissions() : active.Safety ?? new SafetySettings();
+        var denied = OpaquePermissionPolicy.DeniedWrites(rules, run, spec.Cwd);
+        if (active.Sandbox?.Enabled != true && (denied.Count != 0
+            || script && active.Scripts?.Permissions is { } permissions && (!permissions.Read || !permissions.Write || !permissions.Network)))
+            throw new NotSupportedException("The requested opaque restrictions need sandbox.enabled ON; sandbox-off execution cannot enforce them.");
+    }
+
+    private static string ExecutionRevision(HarnessSettings active, bool script)
+    {
+        var rules = script ? active.Scripts?.Permissions ?? new ScriptPermissions() : (PermissionRules?)active.Safety ?? new SafetySettings();
+        var permissions = script ? active.Scripts?.Permissions : null;
+        return $"{active.Sandbox?.Enabled == true}:{SafetyBoundary.Revision(rules)}:{permissions?.Read ?? true}:{permissions?.Write ?? true}:{permissions?.Network ?? true}";
     }
 
     public SandboxProcessOptions CreateOptions(SubprocessSpawnSpec spec, string executable, string temporaryDirectory)
@@ -114,7 +173,9 @@ public sealed class ExternalProcessBoundary : IExternalProcessPolicy
             ReadOnlyPaths = [.. readOnlyPaths,
                 .. authority.ReadOnlyPaths(writablePaths)],
             WritablePaths = writablePaths,
-            DeniedWritePaths = [_settingsPath],
+            DeniedWritePaths = [_settingsPath, .. OpaquePermissionPolicy.DeniedWrites(
+                script ? permissions ?? new ScriptPermissions() : active.Safety ?? new SafetySettings(),
+                SettingsMutationScope.Current?.Context, spec.Cwd)],
             AllowNetwork = permissions?.Network ?? true,
             AllowChildProcesses = true,
             Environment = environment,

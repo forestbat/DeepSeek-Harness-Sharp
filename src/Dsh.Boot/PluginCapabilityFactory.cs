@@ -24,10 +24,13 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     private const int MaximumEncodedChunkCharacters = ((MaximumChunkBytes + 2) / 3) * 4;
     private const int CopyBufferBytes = 16 * 1024;
     private static readonly JsonElement EmptyConfiguration = CreateEmptyConfiguration();
+    private readonly Func<HarnessSettings> _read = HarnessSettings.CreatePolicyReader(home, settings);
     private readonly HttpClient _http = new(context.GetProp(OutboundProxy.PropName) is OutboundProxy proxy
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
+    private ISafetyBoundary Safety => context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName)
+        ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
     public IPluginHost Create(string package, Context pluginContext) => new LocalHost(this, package, pluginContext);
 
     public async Task<IDisposable?> ActivateAsync(string package, IDshIsolatedPlugin plugin, Context pluginContext,
@@ -61,7 +64,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         {
             PluginHostOperations.ReadFile => ReadFileAsync(package, arguments, execution, ceiling, cancellationToken),
             PluginHostOperations.WriteFile => WriteFileAsync(package, arguments, execution, ceiling, cancellationToken),
-            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, ceiling, cancellationToken),
+            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, execution, ceiling, cancellationToken),
             _ => throw new RuntimeException("PLUGIN_HOST_OPERATION_UNKNOWN", "The plugin requested an unsupported host operation."),
         };
 
@@ -69,7 +72,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
 
     private AccessGrant Require(string package, PluginPermission permission, PluginPermissions? ceiling)
     {
-        var active = File.Exists(home.SettingsFile) ? HarnessSettings.LoadForReview(home) : settings;
+        var active = _read();
         var configured = active.Plugins.GetValueOrDefault(package)?.Permissions ?? PluginPermissions.AllAllowed;
         if (!configured.Allows(permission) || ceiling is not null && !ceiling.Allows(permission))
             throw new RuntimeException("PLUGIN_PERMISSION_DENIED", $"The plugin's {PluginPermissions.KeyOf(permission)} permission is denied.");
@@ -98,8 +101,10 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MaximumChunkBytes);
+        var authorize = await Safety.AuthorizeFileAsync(execution, path, "read", cancellationToken, package).ConfigureAwait(false);
         await using var file = PinnedFileAccess.Open(path, PinnedFileMode.Read, target =>
         {
+            authorize(target);
             if (!target.IsDirectory && target.Identity is not null)
                 Require(package, PluginPermission.Read, ceiling);
         }, grant.AllowNetwork);
@@ -126,15 +131,18 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         var path = ResolvePath(arguments, execution, grant.AllowNetwork);
         SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: true);
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
+        var authorize = await Safety.AuthorizeFileAsync(execution, path, "write", cancellationToken, package,
+            settingsReview: execution is not null && gate?.Owns(path) == true).ConfigureAwait(false);
         var settingsFile = gate?.Owns(path) == true || SettingsFilePath.SameFile(path, home.SettingsFile);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
         if (settingsFile)
-            await WriteSettingsAsync(package, path, data, append, execution, ceiling, gate, cancellationToken).ConfigureAwait(false);
+            await WriteSettingsAsync(package, path, data, append, execution, ceiling, gate, authorize, cancellationToken).ConfigureAwait(false);
         else
         {
             await WriteBytesAsync(path, data, append, target =>
             {
+                authorize(target);
                 if (!target.IsDirectory)
                     Require(package, PluginPermission.Write, ceiling);
                 if (gate?.Owns(target) == true)
@@ -149,22 +157,33 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     }
 
     private async Task WriteSettingsAsync(string package, string path, byte[] data, bool append, ToolRunContext? execution,
-        PluginPermissions? ceiling, ISettingsMutationGate? gate, CancellationToken cancellationToken)
+        PluginPermissions? ceiling, ISettingsMutationGate? gate, Action<PinnedFileTarget> authorize, CancellationToken cancellationToken)
     {
         if (gate is null || execution is null)
             throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval boundary.");
         var target = gate.SettingsPath;
-        var before = File.Exists(target)
-            ? await SettingsMutationLimits.ReadTextAsync(target, cancellationToken).ConfigureAwait(false) : "";
+        var before = "";
+        if (File.Exists(target))
+        {
+            var read = await Safety.AuthorizeFileAsync(execution, target, "read", cancellationToken, package,
+                settingsReview: true).ConfigureAwait(false);
+            await using var snapshot = PinnedFileAccess.Open(target, PinnedFileMode.Read, read,
+                Require(package, PluginPermission.Write, ceiling).AllowNetwork);
+            before = await SettingsMutationLimits.ReadTextAsync(snapshot.Stream, cancellationToken).ConfigureAwait(false);
+        }
         var text = Encoding.UTF8.GetString(data);
         var after = append ? $"{before}{text}" : text;
         if (!SettingsMutationLimits.CanReview(after))
             throw new RuntimeException("SETTINGS_CONTENT_TOO_LARGE", "The settings change exceeds the broker's bounded review capacity.");
+        var authorizeCanonical = path == target ? authorize
+            : await Safety.AuthorizeFileAsync(execution, target, "write", cancellationToken, package,
+                settingsReview: true).ConfigureAwait(false);
         await gate.CommitAsync(new SettingsMutationRequest(path, before, after, execution), signal =>
         {
             var grant = Require(package, PluginPermission.Write, ceiling);
             return WriteBytesAsync(target, Encoding.UTF8.GetBytes(after), append: false, actual =>
             {
+                authorizeCanonical(actual);
                 if (!actual.IsDirectory && !gate.Owns(actual))
                     throw new RuntimeException("SETTINGS_TARGET_CHANGED", "The settings target changed before publication.");
             }, grant.AllowNetwork, signal);
@@ -182,15 +201,17 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     }
 
     private async ValueTask<JsonElement> SendHttpAsync(string package, JsonElement arguments,
-        PluginPermissions? ceiling, CancellationToken cancellationToken)
+        ToolRunContext? execution, PluginPermissions? ceiling, CancellationToken cancellationToken)
     {
         Require(package, PluginPermission.Network, ceiling);
+        await Safety.AuthorizeOperationAsync(execution, cancellationToken, package).ConfigureAwait(false);
         var url = arguments.GetProperty("url").GetString() ?? throw new ArgumentException("The HTTP operation requires a URL.");
         var method = arguments.TryGetProperty("method", out var requested) ? requested.GetString() : null;
         using var request = new HttpRequestMessage(new HttpMethod(method ?? "GET"), url);
         if (arguments.TryGetProperty("body", out _))
             request.Content = new ByteArrayContent(DecodeBody(arguments, "body"));
         AddHeaders(request, arguments);
+        Require(package, PluginPermission.Network, ceiling);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         var body = await ReadResponseAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var headers = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);

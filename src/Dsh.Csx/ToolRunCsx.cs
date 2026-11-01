@@ -35,6 +35,7 @@ public sealed class ToolRunCsx
         return tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            UsesScriptPermissions = true,
             Description = "Execute an existing C# .csx script with the installed dotnet-script frontend in a fresh process. "
                 + "Use C# script statements, declarations, #load and #r directives, not a run_code method body. "
                 + "Script arguments are available through Args, and #load paths retain their normal script-file semantics. "

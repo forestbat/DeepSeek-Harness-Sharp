@@ -71,21 +71,18 @@ public sealed class ScriptPermissionBoundaryTests
     [Theory(Timeout = 60000)]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task SandboxOff_PreservesOpaqueLegacyFileAndNetworkExecution(bool networkSetting)
+    public async Task SandboxOff_RejectsUnenforceableScriptGrantsBeforeExecuting(bool networkSetting)
     {
-        using var fixture = new Fixture(false, false, false, networkSetting, TestContext.Current.CancellationToken);
-        var files = await fixture.RunProgram(FileProgram());
-        Assert.True(files.Ok, files.Message);
-        Assert.True(Assert.IsType<JsonObject>(files.Value)["read"]!.GetValue<bool>());
-        Assert.True(Assert.IsType<JsonObject>(files.Value)["write"]!.GetValue<bool>());
-        Assert.Equal("script output 中文", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var result = await fixture.RunProgram(NetworkProgram(((IPEndPoint)listener.LocalEndpoint).Port));
+        using (var denied = new Fixture(false, false, false, networkSetting, TestContext.Current.CancellationToken))
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() => denied.RunProgram(FileProgram()));
+            Assert.False(File.Exists(denied.Output));
+            Assert.Equal("host input 中文", await File.ReadAllTextAsync(denied.Input, TestContext.Current.CancellationToken));
+        }
+        using var allowed = new Fixture(false, true, true, true, TestContext.Current.CancellationToken);
+        var result = await allowed.RunProgram(FileProgram());
         Assert.True(result.Ok, result.Message);
-        Assert.True(Assert.IsType<JsonObject>(result.Value)["connected"]!.GetValue<bool>());
-        using var accepted = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
-        Assert.True(accepted.Connected);
+        Assert.Equal("script output 中文", await File.ReadAllTextAsync(allowed.Output, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
@@ -136,23 +133,20 @@ public sealed class ScriptPermissionBoundaryTests
     [Trait("Category", "SandboxNative")]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RealShellTool_UsesScriptGrantsNotToolGrants(bool write)
+    public async Task RealShellTool_UsesSafetyAndDoesNotInheritScriptGrants(bool write)
     {
         RequireLinux();
         using var fixture = new Fixture(true, true, write, false, TestContext.Current.CancellationToken);
         using var registration = BashTool.Register(fixture.Context, new BashToolConfig { Cwd = fixture.Workspace });
         var result = await fixture.Execute("bash", new { command = "printf shell > script-output", workdir = fixture.Workspace });
         var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
-        if (write)
-            Assert.Equal(0, value.GetProperty("exitCode").GetInt32());
-        else
-            Assert.NotEqual(0, value.GetProperty("exitCode").GetInt32());
-        Assert.Equal(write, File.Exists(fixture.Output));
+        Assert.Equal(0, value.GetProperty("exitCode").GetInt32());
+        Assert.Equal("shell", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task PersistentShell_PermissionChangesRetirePreviouslyWritableProcess()
+    public async Task PersistentShell_NewSafetyProfileRetiresPreviouslyWritableProcess()
     {
         RequireLinux();
         using var fixture = new Fixture(true, true, true, false, TestContext.Current.CancellationToken);
@@ -162,7 +156,12 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.False(first.IsError, TextOf(first));
         Assert.Contains("policy-initial", TextOf(first));
         Assert.Equal("first", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
-        fixture.SetWrite(false);
+        HarnessSettings.Update(fixture.Home, settings =>
+        {
+            settings.Safety!.Blacklist["protect-output"] = new PermissionMatcher
+                { Tool = ["bash_persistent"], Path = fixture.Output, Intent = "write" };
+            return true;
+        });
         var second = await fixture.Execute("bash_persistent", new { command = "printf second > script-output; printf 'previous=%s\\n' \"${boundary_previous_process-unset}\"; printf policy-current" }, agent);
         Assert.False(second.IsError, TextOf(second));
         Assert.Contains("policy-current", TextOf(second));
@@ -305,7 +304,7 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.True(reloaded.Plugins["permission-probe"].Permissions!.Read);
         Assert.True(reloaded.Plugins["permission-probe"].Permissions!.Write);
         Assert.True(reloaded.Safety!.AutoApprove);
-        Assert.Contains("*", reloaded.Safety.Whitelist);
+        Assert.Contains("allow-all", reloaded.Safety.Whitelist.Keys);
     }
 
     [Fact(Timeout = 60000)]
@@ -472,7 +471,7 @@ public sealed class ScriptPermissionBoundaryTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task PersistentShell_OffIgnoresPermissionEditsWithoutLosingLegacyState()
+    public async Task PersistentShell_IndependentScriptGrantChangesDoNotRetireCommandState()
     {
         if (!OperatingSystem.IsLinux())
             Assert.Skip("The positive legacy control uses the installed Linux bash executable.");
@@ -548,12 +547,13 @@ public sealed class ScriptPermissionBoundaryTests
                   enabled: {{enabled.ToString().ToLowerInvariant()}}
                 scripts:
                   permissions:
+                    autoApprove: true
                     read: {{read.ToString().ToLowerInvariant()}}
                     write: {{write.ToString().ToLowerInvariant()}}
                     network: {{network.ToString().ToLowerInvariant()}}
                 safety:
                   autoApprove: true
-                  whitelist: ["*"]
+                  whitelist: { allow-all: {} }
                 plugins:
                   permission-probe:
                     permissions:

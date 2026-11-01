@@ -41,7 +41,7 @@ internal static class PersistentShellTool
     private sealed class PersistentShell : IDisposable
     {
         public required SubprocessHandle Handle { get; init; }
-        public required (bool Enabled, bool Read, bool Write, bool Network) Policy { get; init; }
+        public required string Policy { get; init; }
         public long Cursor { get; set; }
 
         public void Dispose() => Handle.Dispose();
@@ -126,7 +126,7 @@ internal static class PersistentShellTool
 
         async Task<PersistentShell> GetOrCreateShell(IAgent owner)
         {
-            var policy = ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.ScriptPolicy ?? default;
+            var policy = ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.InvocationRevision ?? "";
             var existing = shells.Get(owner);
             if (existing is not null && !existing.Handle.Done.IsCompleted && existing.Policy == policy)
                 return existing;
@@ -140,7 +140,7 @@ internal static class PersistentShellTool
                 Cwd = cwd,
                 Env = ShellEnvironment.NonInteractiveOverrides,
                 ModelExecution = true,
-                ExecutionKind = SubprocessExecutionKind.Script,
+                ExecutionKind = SubprocessExecutionKind.Tool,
                 Stdout = new SubprocessCollect(Math.Max(MinStdoutCaptureBytes, settings.MaxOutputChars * StdoutBytesPerChar), null),
                 Stderr = new SubprocessCollect(StderrCaptureBytes, null),
                 KeepStandardInputOpen = true,

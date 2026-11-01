@@ -23,6 +23,7 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
             Cwd = cwd,
             ModelExecution = true,
             ExecutionKind = SubprocessExecutionKind.Mcp,
+            McpLifecycleOwner = config.Name,
             ProtocolOutput = true,
             KeepStandardInputOpen = true,
             Stderr = new SubprocessCollect(64 * 1024, null),

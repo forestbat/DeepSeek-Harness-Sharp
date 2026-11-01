@@ -742,24 +742,26 @@ plugins:
 #   default_model:
 # LLM 提供方
 # providers:
-#   适配器类型:openai-compatible | openai-responses | anthropic | deepseek
-#   type:
-#   适配器选项
-#   options:
-#     接口地址
-#     baseUrl:
-#     API key(明文)
-#     apiKey:
-#     API key 环境变量
-#     apiKeyEnv:
-#   模型覆盖(显示名/系统提示等)
-#   models:
-#     显示名
-#     name:
-#     是否支持工具调用
-#     tool_call:
-#     系统提示覆盖
-#     system_prompt_update:
+#   <id>:
+#     适配器类型:openai-compatible | openai-responses | anthropic | deepseek
+#     type:
+#     适配器选项
+#     options:
+#       接口地址
+#       baseUrl:
+#       API key(明文)
+#       apiKey:
+#       API key 环境变量
+#       apiKeyEnv:
+#     模型覆盖(显示名/系统提示等)
+#     models:
+#       <id>:
+#         显示名
+#         name:
+#         是否支持工具调用
+#         tool_call:
+#         系统提示覆盖
+#         system_prompt_update:
 # 技能目录
 # skills:
 #   本地目录列表
@@ -770,16 +772,17 @@ plugins:
 # rules: []
 # MCP 服务器
 # mcp:
-#   stdio | streamable-http | sse
-#   transport:
-#   stdio 启动命令
-#   command: []
-#   额外参数
-#   args: []
-#   HTTP 端点(transport: streamable-http 或 sse 时使用)
-#   url:
-#   是否启用
-#   enabled: true
+#   <id>:
+#     stdio | streamable-http | sse
+#     transport:
+#     stdio 启动命令
+#     command: []
+#     额外参数
+#     args: []
+#     HTTP 端点(transport: streamable-http 或 sse 时使用)
+#     url:
+#     是否启用
+#     enabled: true
 # A2A 服务
 # a2a:
 #   是否启用
@@ -802,12 +805,13 @@ plugins:
 #   skill_tags: []
 #   远端 A2A 服务
 #   remotes:
-#     远端 URL
-#     url:
-#     鉴权 token
-#     token:
-#     额外请求头
-#     headers: {}
+#     <id>:
+#       远端 URL
+#       url:
+#       鉴权 token
+#       token:
+#       额外请求头
+#       headers: {}
 # 自动压缩
 # compaction:
 #   上下文超限时自动压缩
@@ -816,12 +820,23 @@ plugins:
 #   prune: true
 # 安全设置
 # safety:
-#   自动批准所有工具调用
+#   Default decision when no rule matches: false requests approval, true allows.
 #   autoApprove:
-#   拒绝的工具/命令模式
-#   blacklist: []
-#   自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
-#   whitelist: []
+#   Stable rule IDs map to typed matchers; dimensions AND, rules OR, deny wins.
+#   blacklist:
+#     <id>:
+#       tool: []
+#       dialect:
+#       path:
+#       intent:
+#       args: {}
+#   whitelist:
+#     <id>:
+#       tool: []
+#       dialect:
+#       path:
+#       intent:
+#       args: {}
 # 日志
 # logging:
 #   最低级别:trace | debug | info | warn | error | off
@@ -897,23 +912,39 @@ plugins:
 #     read: true
 #     write: true
 #     network: true
+#     autoApprove:
+#     blacklist:
+#       <id>:
+#         tool: []
+#         dialect:
+#         path:
+#         intent:
+#         args: {}
+#     whitelist:
+#       <id>:
+#         tool: []
+#         dialect:
+#         path:
+#         intent:
+#         args: {}
 # 插件开关
 # plugins:
-#   是否启用
-#   enabled: true
-#   插件参数
-#   parameters: {}
-#   权限(read/write/network)
-#   permissions:
-#     允许读取
-#     read: true
-#     允许写入
-#     write: true
-#     允许网络
-#     network: true
-#   execution:
-#   trustDomain:
-#   hostArtifact:
+#   <id>:
+#     是否启用
+#     enabled: true
+#     插件参数
+#     parameters: {}
+#     权限(read/write/network)
+#     permissions:
+#       允许读取
+#       read: true
+#       允许写入
+#       write: true
+#       允许网络
+#       network: true
+#     execution:
+#     trustDomain:
+#     hostArtifact:
 #
 # 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
 # 账号服务
@@ -984,12 +1015,13 @@ plugins:
 #     providers: []
 #     各提供方存储位置
 #     discovery:
-#       用户配置目录
-#       roots: {}
-#       历史存储子目录
-#       store_paths: []
-#       设置文件名
-#       settings_file:
+#       <id>:
+#         用户配置目录
+#         roots: {}
+#         历史存储子目录
+#         store_paths: []
+#         设置文件名
+#         settings_file:
 #     是否读取时间线
 #     timeline:
 #     时间线条目上限
@@ -1138,6 +1170,18 @@ plugins:
 #   modelPolicies: []
 #   自动裁剪
 #   auto:
+#   thresholdRatio:
+#   retainRatio:
+#   retainTokens:
+#   保留的尾部"轮数": 数的是当前表面上最后 N 条真实用户消息(UserMessageSource), 不是请求数也不是 turn/start 次数
+#   tailTurns:
+#   summarizationProvider:
+#   summarizationModel:
+#   maxTokens:
+#   compactionRetries:
+#   maxOverflowRetries:
+#   摘要不可用(失败/比原文更大)时改为丢弃旧历史并保留的轮数上限(同样按表面上的用户消息数);
+#   degradedRetainTurns:
 #   触发字符数
 #   thresholdChars:
 #   头部保留字符数
@@ -1242,11 +1286,12 @@ storage:
 
 # 安全设置
 safety:
-  # 自动批准所有工具调用
+  # Default tool notification/approval; explicit deny always wins.
   autoApprove: false
-  # 拒绝的工具/命令模式
-  blacklist: []
-  # 自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
-  # 仅支持现有 tool:<name> 与 shell-tool:<command-pattern>；不是 path/args/intent matcher
-  # 活动 settings.yaml 的修改包含真实脱敏 diff、审批结果与提交审计
-  whitelist: []
+  # ID -> matcher: tool (scalar/list), dialect, path, intent, args (string map).
+  # Path * stays in one segment; ** crosses segments; args.path is forbidden.
+  # Example: deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
+  blacklist: {}
+  # Example: source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
+  # Matching allows do not override explicit session deny or settings diff review.
+  whitelist: {}

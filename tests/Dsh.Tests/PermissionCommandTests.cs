@@ -9,7 +9,7 @@ using Dsh.Tools;
 
 namespace Dsh.Tests;
 
-public sealed class SafetyCommandGuardTests
+public sealed class PermissionCommandTests
 {
     [Theory]
     [InlineData("rm -rf /*")]
@@ -73,23 +73,12 @@ public sealed class SafetyCommandGuardTests
         Assert.False(pattern.Matches(ShellCommandSegments.Split("echo shutdown-notes.txt", ShellDialect.Posix)));
     }
 
-    [Theory]
-    [InlineData("tool:write", "write", "{}")]
-    [InlineData("bash:rm -rf /*", "bash_persistent", "{\"command\":\"sudo rm -r -f /*\"}")]
-    [InlineData("wsl:rm -rf /*", "bash", "{\"command\":\"true && rm -fr /*\"}")]
-    [InlineData("pwsh:Remove-Item -Recurse canary", "pwsh_persistent", """{"command":"remove-item -recurse 'canary'"}""")]
-    public void SharedSafetyListEvaluator_UsesCurrentToolAndCommandGrammar(string rule, string tool, string arguments)
-    {
-        using var document = JsonDocument.Parse(arguments);
-        Assert.Equal(rule, SafetyCommandGuard.MatchingRule([rule], tool, document.RootElement));
-    }
 
     public sealed class Bash : IDisposable
     {
         private readonly Context _ctx = new();
         private readonly ToolRuntime _tools;
         private readonly string _directory = TempTree.CreateDirectory("safety");
-        private readonly IDisposable _guard;
 
         public Bash()
         {
@@ -97,15 +86,15 @@ public sealed class SafetyCommandGuardTests
             _tools = new ToolRuntime(_ctx);
             _ = new SubprocessService(_ctx);
             BashTool.Register(_ctx);
-            var safety = new SafetySettings { Blacklist = [$"bash: touch {Canary}"] };
-            _guard = SafetyCommandGuard.Register(_ctx, () => safety);
+            var safety = new SafetySettings { AutoApprove = true, Blacklist = new()
+                { ["deny-touch"] = new() { Dialect = "posix", Args = new() { ["command"] = $"touch {Canary}" } } } };
+            _ = new SafetyBoundary(_ctx, () => new HarnessSettings { Safety = safety });
         }
 
         private string Canary => Path.Combine(_directory, "canary");
 
         public void Dispose()
         {
-            _guard.Dispose();
             TempTree.Delete(_directory);
         }
 
@@ -169,14 +158,15 @@ public sealed class SafetyCommandGuardTests
 
         /** The guard answers before any shell starts, so these cases need neither bash nor pwsh. */
         [Theory]
-        [InlineData("bash: touch canary", "bash_persistent", "touch canary")]
-        [InlineData("wsl: touch canary", "bash", "true && touch canary")]
-        [InlineData("pwsh: Remove-Item canary", "pwsh_persistent", "remove-item canary")]
-        [InlineData("powershell: Remove-Item canary", "pwsh", "Get-Date; Remove-Item canary")]
-        public async Task ShellRule_BlocksEveryToolOfTheSameDialect(string rule, string tool, string command)
+        [InlineData("posix", "bash_persistent", "touch canary", "touch canary")]
+        [InlineData("posix", "bash", "touch canary", "true && touch canary")]
+        [InlineData("powershell", "pwsh_persistent", "Remove-Item canary", "remove-item canary")]
+        [InlineData("powershell", "pwsh", "Remove-Item canary", "Get-Date; Remove-Item canary")]
+        public async Task ShellRule_BlocksEveryToolOfTheSameDialect(string dialect, string tool, string pattern, string command)
         {
-            var safety = new SafetySettings { Blacklist = [rule] };
-            using var guard = SafetyCommandGuard.Register(_ctx, () => safety);
+            var safety = new SafetySettings { Blacklist = new()
+                { ["deny-command"] = new() { Dialect = dialect, Args = new() { ["command"] = pattern } } } };
+            _ = new SafetyBoundary(_ctx, () => new HarnessSettings { Safety = safety });
 
             var result = await _tools.Execute(new ToolExecutionInput
             {
@@ -187,7 +177,7 @@ public sealed class SafetyCommandGuardTests
             });
 
             Assert.True(result.IsError);
-            Assert.Contains("blocked by safety.blacklist", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("blacklist", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
         }
     }
 }

@@ -1,3 +1,5 @@
+using Dsh.Interaction;
+using Dsh.Runtime.Events;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -16,6 +18,68 @@ public sealed class ExternalProcessBoundaryTests
 {
     internal const string ProbeArgument = "--external-settings-probe";
     private const string Original = "global_default_model: unchanged\n";
+
+    [Theory(Timeout = 60000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OpaqueApproval_RechecksChangedFileAndStructuralPermissionsBeforeStarting(bool structuralRestriction)
+    {
+        using var fixture = new Fixture();
+        var home = new HarnessHome(Path.GetDirectoryName(fixture.SettingsPath)!);
+        HarnessSettings.Update(home, settings =>
+        {
+            settings.Scripts = new ScriptsSettings { Permissions = new ScriptPermissions { AutoApprove = false } };
+            return true;
+        });
+        _ = new SystemPrompt(fixture.Context, new SystemPromptConfig());
+        _ = new LlmRuntime(fixture.Context);
+        _ = ApprovalService.Register(fixture.Context);
+        var tools = new ToolRuntime(fixture.Context);
+        var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+        var session = Session.Create(id, null, new SessionHeader
+        { Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = fixture.Root, CreatedAt = 0, IsSeeded = false });
+        using var agent = new AgentLoopAgent(fixture.Context, id, new AgentOptions(), session, _ => 0);
+        session.Append(new TurnStartPayload(1));
+        using var registration = tools.Register(new ToolDefinition
+        {
+            Name = "opaque_approval_probe", Description = "Start the real owned process after its independent script approval.",
+            Parameters = new JsonObject { ["type"] = "object" },
+            Output = new ToolOutputDefinition(new JsonObject { ["type"] = "object" }, (_, value) => [new TextBlock(value.GetRawText())]),
+            Execute = async (_, run) =>
+            {
+                using var child = await fixture.Processes.SpawnAsync(fixture.Spec("mark", run.Signal)
+                    with { ExecutionKind = SubprocessExecutionKind.Script });
+                var outcome = await child.Done.WaitAsync(run.Signal);
+                return new JsonObject { ["exitCode"] = outcome.ExitCode };
+            },
+        });
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unsubscribe = fixture.Context.OnWaterfall<ApprovalRequestNotification>((_, _) =>
+        { asked.TrySetResult(); return new(answer.Task); }, new EventOptions { Global = true });
+        try
+        {
+            var pending = tools.Execute(new ToolExecutionInput
+            {
+                Name = "opaque_approval_probe", CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Agent = agent,
+                Arguments = JsonSerializer.SerializeToElement(new { }), Signal = TestContext.Current.CancellationToken,
+            });
+            await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
+            HarnessSettings.Update(home, settings =>
+            {
+                if (structuralRestriction) settings.Scripts!.Permissions!.Write = false;
+                else settings.Scripts!.Permissions!.Blacklist["new-file-deny"] = new() { Path = fixture.SettingsPath, Intent = "write" };
+                return true;
+            });
+            var expected = await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
+            answer.SetResult(ApprovalOutcome.AllowedOnce);
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.False(File.Exists(Path.Combine(fixture.Root, "spawn-marker")));
+            Assert.Equal(expected, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
+            Assert.True(result.IsError);
+        }
+        finally { answer.TrySetResult(ApprovalOutcome.Cancelled); unsubscribe(); }
+    }
 
     [Theory(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
@@ -90,6 +154,60 @@ public sealed class ExternalProcessBoundaryTests
             Assert.Equal("denied", value.GetProperty("output").GetString());
         }
         Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
+    }
+
+    [Theory(Timeout = 60000)]
+    [Trait("Category", "SandboxNative")]
+    [InlineData("overwrite")]
+    [InlineData("append")]
+    [InlineData("replace")]
+    [InlineData("hardlink")]
+    public async Task ConcreteSafetyDeny_StopsActualOpaqueWritesButNotUnrelatedWorkspaceOutput(string operation)
+    {
+        using var fixture = ProtectedFixture();
+        var target = Path.Combine(fixture.Root, "protected-rule-target");
+        await File.WriteAllTextAsync(target, "rule-protected original", TestContext.Current.CancellationToken);
+        var home = new HarnessHome(Path.GetDirectoryName(fixture.SettingsPath)!);
+        HarnessSettings.Update(home, settings =>
+        {
+            settings.Safety!.Blacklist["protect-real-file"] = new() { Path = target, Intent = "write" };
+            return true;
+        });
+        var spec = fixture.Spec(operation, TestContext.Current.CancellationToken) with { Argv = ProbeCommand(operation, target) };
+        if (OperatingSystem.IsWindows())
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnAsync(spec));
+            Assert.False(File.Exists(Path.Combine(fixture.Root, "workspace-output")));
+        }
+        else
+        {
+            using var process = await fixture.Processes.SpawnAsync(spec);
+            Assert.Equal(0, (await process.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode);
+            Assert.Equal("denied", process.StdoutReader.ReadFrom(0).Text.Trim());
+            Assert.Equal("workspace 中文", await File.ReadAllTextAsync(Path.Combine(fixture.Root, "workspace-output"), TestContext.Current.CancellationToken));
+        }
+        Assert.Equal("rule-protected original", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+    }
+
+    [Theory(Timeout = 60000)]
+    [InlineData("read", "concrete")]
+    [InlineData("write", "**/glob")]
+    public async Task OpaqueUnexpressibleRules_FailBeforeTheChildCanMutate(string intent, string pattern)
+    {
+        using var fixture = new Fixture();
+        var target = Path.Combine(fixture.Root, "concrete");
+        await File.WriteAllTextAsync(target, "unchanged", TestContext.Current.CancellationToken);
+        var home = new HarnessHome(Path.GetDirectoryName(fixture.SettingsPath)!);
+        HarnessSettings.Update(home, settings =>
+        {
+            settings.Safety!.Blacklist["unsupported-file-policy"] = new() { Path = Path.Combine(fixture.Root, pattern), Intent = intent };
+            return true;
+        });
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnAsync(
+            fixture.Spec("overwrite", TestContext.Current.CancellationToken) with { Argv = ProbeCommand("overwrite", target) }));
+        Assert.Contains("unsupported-file-policy", exception.Message);
+        Assert.Equal("unchanged", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "workspace-output")));
     }
 
     [Fact(Timeout = 60000)]
@@ -339,6 +457,10 @@ public sealed class ExternalProcessBoundaryTests
         {
             switch (operation)
             {
+                case "mark":
+                    File.WriteAllText("spawn-marker", "started");
+                    File.AppendAllText(settings, "unapproved child write");
+                    break;
                 case "overwrite": File.WriteAllText(settings, "bad"); break;
                 case "append": File.AppendAllText(settings, "bad"); break;
                 case "replace":
@@ -398,7 +520,8 @@ public sealed class ExternalProcessBoundaryTests
             var home = new HarnessHome(Path.Combine(Root, "config"));
             Directory.CreateDirectory(home.Root);
             SettingsPath = home.SettingsFile;
-            InitialSettings = sandboxEnabled ? Original + "sandbox:\n  enabled: true\n" : Original;
+            InitialSettings = Original + "safety:\n  autoApprove: true\nscripts:\n  permissions:\n    autoApprove: true\n"
+                + (sandboxEnabled ? "sandbox:\n  enabled: true\n" : "");
             File.WriteAllText(SettingsPath, InitialSettings);
             Processes = new SubprocessService(Context);
             if (installBoundary)

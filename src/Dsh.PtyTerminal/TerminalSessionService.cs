@@ -243,6 +243,8 @@ public sealed class TerminalSessionService : Service
 
     private void DemandProtectedModelTerminal()
     {
+        if (SettingsMutationScope.Current is not null)
+            Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.DemandUnconfined("Model PTY creation and input");
         if (Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true)
             throw new NotSupportedException("Model PTY creation and input require an OS-confined PTY backend; existing unprotected terminals cannot enforce scripts.permissions or active settings protection while sandbox.enabled is ON. Use a confined one-shot script instead.");
     }

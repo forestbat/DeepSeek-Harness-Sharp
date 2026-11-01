@@ -32,6 +32,8 @@ public static class ReadTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
             Description = "Read a UTF-8 text file and return line-numbered content.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>
@@ -95,13 +97,13 @@ public static class ReadTool
         return (int)value;
     }
 
-    private static Task<object?> Execute(JsonElement args, ToolRunContext exec, ReadToolCaps caps)
+    private static async Task<object?> Execute(JsonElement args, ToolRunContext exec, ReadToolCaps caps)
     {
         var (filePath, offset, limit) = ParseArgs(args, caps.Limit);
         var target = WorkspacePath.ResolveExistingFile(exec, filePath);
-        var content = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var content = await SafetyFileAccess.ReadTextAsync(target, exec).ConfigureAwait(false);
         var window = BuildWindow(content, offset, limit, caps, target);
-        return Task.FromResult<object?>(new ReadResultValue(target, offset, window.Lines, window.TotalLines));
+        return new ReadResultValue(target, offset, window.Lines, window.TotalLines);
     }
 
     private static IReadOnlyList<ContentBlock> Render(JsonElement args, JsonElement value, ReadToolCaps caps)

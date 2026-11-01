@@ -215,6 +215,7 @@ public sealed class PluginSandboxCatalog : IDisposable
     private async Task<PluginSandboxLoadResult> LoadHostAsync(string path, PluginForm form, PluginSandboxInspection inspection,
         HarnessSettings active, CancellationToken signal)
     {
+        OpaquePermissionPolicy.DemandUnconfined(active.Safety ?? new SafetySettings(), "In-process managed/native host plugin", explicitHostGrant: true);
         var identity = await PluginHostAuthority.IdentifyAsync(path, signal).ConfigureAwait(false);
         foreach (var metadata in inspection.Packages)
         {
@@ -228,6 +229,7 @@ public sealed class PluginSandboxCatalog : IDisposable
         var managed = new List<ManagedPlugin>();
         var native = new List<INativePlugin>();
         var loaded = new List<string>();
+        SettingsPolicyActivation.RegisterFullHost(_home);
         var skipped = new List<PluginSkip>();
         if (form == PluginForm.ManagedAssembly && RuntimeFeature.IsDynamicCodeSupported)
         {

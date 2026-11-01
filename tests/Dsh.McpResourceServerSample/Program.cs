@@ -26,6 +26,9 @@ public static class Program
 
     public static async Task Main(string[] args)
     {
+        var startupMarker = Array.IndexOf(args, "--startup-marker");
+        if (startupMarker >= 0)
+            File.WriteAllText(args[startupMarker + 1], "started");
         var options = new McpServerOptions
         {
             ServerInfo = new Implementation { Name = "resource-sample", Version = "1.0" },

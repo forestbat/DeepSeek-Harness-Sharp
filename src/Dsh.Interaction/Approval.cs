@@ -50,7 +50,7 @@ public sealed record ApprovalPolicyPayload(ApprovalPolicy Policy, string? Source
 
 public sealed record ApprovalConfig(ApprovalPolicy Policy = ApprovalPolicy.Ask);
 
-public sealed class ApprovalService : Service, IApprovalService
+public sealed class ApprovalService : Service, IApprovalService, IApprovalConstraints
 {
     public const string ServiceName = "approval";
 
@@ -104,6 +104,7 @@ public sealed class ApprovalService : Service, IApprovalService
     }
 
     public ApprovalPolicy EffectivePolicy(Session session) => OverrideOf(session) ?? _config.Policy;
+    public bool IsDenied(IAgent agent) => EffectivePolicy(agent.Session) == ApprovalPolicy.Never;
 
     public void SetPolicy(IAgent agent, ApprovalPolicy policy)
     {

@@ -265,6 +265,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         var path = Path.GetFullPath(spec);
         if (!File.Exists(path))
             return $"plugin file not found: {path}";
+        if (_sandbox is null)
+            _composition.Root.Get<Dsh.Core.IExternalProcessPolicy>(Dsh.Core.IExternalProcessPolicy.ServiceName, false)
+                ?.DemandUnconfined("Sandbox-off plugin inspection/loading");
         var packages = _sandbox is not null
             ? await _sandbox.InspectPackagesAsync(path)
             : InspectLegacyPackages(path);

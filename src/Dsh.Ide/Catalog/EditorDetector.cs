@@ -90,6 +90,7 @@ public sealed class EditorDetector(
     }
     private static string? DiscoverExecutable(EditorDiscoveryCommand discovery, EditorDescriptor editor)
     {
+        SettingsMutationScope.Current?.Context.ExternalProcessPolicy?.DemandUnconfined("Model executable discovery process");
         if (SettingsMutationScope.Current?.Context.ExternalProcessProtectionRequired == true)
             throw new NotSupportedException("Model-triggered executable discovery has no OS-confined backend while sandbox.enabled is ON.");
         var executable = FindOnPath(EditorDiscoveryPaths.Render(discovery.Command, editor));

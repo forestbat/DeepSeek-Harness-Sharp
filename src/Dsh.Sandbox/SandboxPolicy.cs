@@ -298,6 +298,12 @@ internal sealed record SandboxPolicy(
         using var handle = WindowsNative.CreateFile(path, 0x80, 7, 0, 3, 0x02200000, 0);
         if (handle.IsInvalid)
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot open a canonical sandbox path.");
+        return WindowsPathOf(handle);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    internal static string WindowsPathOf(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
+    {
         var buffer = new StringBuilder(512);
         var length = WindowsNative.GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
         if (length >= buffer.Capacity && length < 32768)
@@ -308,8 +314,10 @@ internal sealed record SandboxPolicy(
         if (length == 0 || length >= buffer.Capacity)
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot normalize a Windows sandbox path.");
         var normalized = buffer.ToString();
-        if (!normalized.StartsWith("\\\\?\\", StringComparison.Ordinal) || normalized.Length < 7 || normalized[5] != ':')
-            throw new NotSupportedException("A Windows sandbox grant did not resolve to a local drive path.");
+        if (normalized.StartsWith(@"\\?\UNC\", StringComparison.Ordinal))
+            return Path.TrimEndingDirectorySeparator(@"\\" + normalized[8..]);
+        if (!normalized.StartsWith(@"\\?\", StringComparison.Ordinal) || normalized.Length < 7 || normalized[5] != ':')
+            throw new NotSupportedException("A Windows pin did not resolve to a filesystem path.");
         return Path.TrimEndingDirectorySeparator(normalized[4..]);
     }
 

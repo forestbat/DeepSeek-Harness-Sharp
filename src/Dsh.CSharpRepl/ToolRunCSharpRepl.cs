@@ -28,6 +28,7 @@ public static class ToolRunCSharpRepl
         return tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            UsesScriptPermissions = true,
             Description = "Evaluate C# using the independently installed CSharpRepl frontend and return stdout, stderr and the final expression. "
                 + "Submit one complete multiline C# script; declarations and state are shared within that program, not between calls. "
                 + "The process receives the program through redirected stdin followed by EOF, without an interactive prompt. "

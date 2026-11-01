@@ -92,6 +92,8 @@ public static class McpToolBridge
         ToolRunContext exec,
         Func<bool>? ownsProcess)
     {
+        if (ownsProcess?.Invoke() != true)
+            exec.ExternalProcessPolicy?.DemandUnconfined("Unowned or remote MCP tool invocation");
         if (exec.ExternalProcessProtectionRequired && ownsProcess?.Invoke() != true)
             throw new HarnessException(
                 "Unowned MCP tools cannot enforce active settings protection. Use an owned local stdio server instead.",

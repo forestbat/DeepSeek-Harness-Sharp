@@ -41,6 +41,7 @@ public sealed class ToolRunCode
     private ToolDefinition BuildRunCodeDefinition(bool debugBatching) => new()
     {
         Name = ToolName,
+        UsesScriptPermissions = true,
         Description = (debugBatching ? $"{Description}\n{PtcSdkRenderer.BatchingInstructions}" : Description)
             + IExternalProcessPolicy.SettingsProtectionNotice,
         Parameters = BuildParameters(),

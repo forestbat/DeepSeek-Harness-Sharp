@@ -58,6 +58,7 @@ public static class ConfigBoot
         try
         {
             _ = new SettingsMutationBoundary(ctx, home);
+            app.Track(new SettingsPolicyActivation(ctx, home, settings));
             PluginHostAuthority? authority = null;
             if (settings.Sandbox?.Enabled == true)
             {
@@ -67,7 +68,12 @@ public static class ConfigBoot
             var capabilities = new PluginCapabilityFactory(ctx, home, settings);
             ctx.Provide(IPluginHostFactory.ServiceName, capabilities);
             app.Track(capabilities);
-            _ = new ExternalProcessBoundary(ctx, home, settings);
+            var external = new ExternalProcessBoundary(ctx, home, settings);
+            pluginHost.DemandDirectExecution = _ =>
+            {
+                external.DemandUnconfined("In-process managed/native plugin");
+                SettingsPolicyActivation.RegisterFullHost(home);
+            };
             PluginSandboxCatalog? sandbox = null;
             if (authority is not null)
             {
@@ -109,11 +115,17 @@ public static class ConfigBoot
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
         _ = new SettingsMutationBoundary(context, home);
+        using var policyActivation = new SettingsPolicyActivation(context, home, settings);
         using var authority = settings.Sandbox?.Enabled == true ? new PluginHostAuthority(context, home) : null;
         using var capabilities = new PluginCapabilityFactory(context, home, settings);
         context.Provide(IPluginHostFactory.ServiceName, capabilities);
-        _ = new ExternalProcessBoundary(context, home, settings);
+        var external = new ExternalProcessBoundary(context, home, settings);
         var host = new PluginHost();
+        host.DemandDirectExecution = _ =>
+        {
+            external.DemandUnconfined("In-process plugin inspection");
+            SettingsPolicyActivation.RegisterFullHost(home);
+        };
         host.RegisterCompiledIn();
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));

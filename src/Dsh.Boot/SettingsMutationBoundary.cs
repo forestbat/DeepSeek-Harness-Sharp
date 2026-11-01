@@ -4,8 +4,15 @@ using Dsh.Runtime;
 namespace Dsh.Boot;
 
 /** Registered before plugin composition, so removing the interaction plugin never removes settings enforcement. */
-public sealed class SettingsMutationBoundary(Context context, HarnessHome home) : Service(context, ISettingsMutationGate.ServiceName), ISettingsMutationGate
+public sealed class SettingsMutationBoundary : Service, ISettingsMutationGate
 {
+    private readonly HarnessHome home;
+    public SettingsMutationBoundary(Context context, HarnessHome home) : base(context, ISettingsMutationGate.ServiceName)
+    {
+        this.home = home;
+        if (context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is null)
+            _ = new SafetyBoundary(context, HarnessSettings.CreatePolicyReader(home));
+    }
     private ISettingsMutationGate? _reviewer;
     public string SettingsPath => Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
     public bool Owns(string path) => SettingsFilePath.SameFile(path, home.SettingsFile);

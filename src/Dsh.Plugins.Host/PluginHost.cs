@@ -34,6 +34,8 @@ public sealed class PluginHost
 
     /** 共享程序集池:由宿主在扫描前挂接,根目录为插件目录下的 .shared。 */
     public SharedAssemblyPool? SharedPool { get; set; }
+    /** Trusted host policy runs before loading any managed module or native image. */
+    public Action<string>? DemandDirectExecution { get; set; }
 
     /** 镜像内插件:由生成目录在模块初始化时自注册。 */
     public void RegisterCompiledIn()
@@ -50,6 +52,7 @@ public sealed class PluginHost
     private PluginLoadResult TryLoadCore(string path, VerifiedPluginBundle? bundle)
     {
         var fullPath = Path.GetFullPath(path);
+        DemandDirectExecution?.Invoke(fullPath);
         if (bundle is not null && SharedPool is null)
             throw new InvalidOperationException("Verified host plugins require a shared assembly pool.");
         var context = bundle is null ? new PluginLoadContext(fullPath) : new PluginLoadContext(bundle, SharedPool!);
@@ -249,6 +252,7 @@ public sealed class PluginHost
         bool flatLayout,
         out NativePluginLoad load)
     {
+        DemandDirectExecution?.Invoke(file);
         load = NativePluginLibrary.TryLoad(file);
         if (!load.Succeeded)
             return false;
@@ -276,6 +280,7 @@ public sealed class PluginHost
     /** /plugins add 的原生装载:登记到目录并返回插件句柄;失败给出结构化原因。 */
     public NativePluginLoad LoadNativePlugin(string file, Func<INativePlugin, IDshPlugin> bridge)
     {
+        DemandDirectExecution?.Invoke(file);
         var load = NativePluginLibrary.TryLoad(file);
         if (!load.Succeeded)
             return load;

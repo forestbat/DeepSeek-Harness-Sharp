@@ -228,6 +228,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _whitelistText = "";
 
     [ObservableProperty]
+    private string _safetyActivationStatus = "Permission policy is active.";
+
+    [ObservableProperty]
     private bool _gpuEnabled = true;
 
     [ObservableProperty]
@@ -490,14 +493,17 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void SaveSafety()
     {
-        var rules = BlacklistText
-            .Replace("\r\n", "\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var allowed = WhitelistText
-            .Replace("\r\n", "\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        _facade.UpdateSafety(AutoApprove, rules, allowed);
-        Status = $"安全策略已保存（{rules.Length} 条黑名单，{allowed.Length} 条白名单）";
+        try
+        {
+            var rules = RuleMapYaml.Parse(BlacklistText);
+            var allowed = RuleMapYaml.Parse(WhitelistText);
+            _facade.UpdateSafety(AutoApprove, rules, allowed);
+            Status = $"Permission rules saved ({rules.Count} deny, {allowed.Count} allow).";
+        }
+        catch (Exception error)
+        {
+            Status = $"Permission rules were not saved: {error.Message}";
+        }
     }
 
     [RelayCommand]
@@ -939,8 +945,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         ProviderChoices = ProviderChoiceViewModel.Build(ProviderCatalog.LoadCached(_home));
         SelectedProvider = Providers.FirstOrDefault();
         AutoApprove = settings.Safety?.AutoApprove ?? false;
-        BlacklistText = string.Join(Environment.NewLine, settings.Safety?.Blacklist ?? []);
-        WhitelistText = string.Join(Environment.NewLine, settings.Safety?.Whitelist ?? []);
+        BlacklistText = RuleMapYaml.Format(settings.Safety?.Blacklist ?? []);
+        WhitelistText = RuleMapYaml.Format(settings.Safety?.Whitelist ?? []);
+        SafetyActivationStatus = (_ctx.GetProp("safetyPolicyActivation") as SettingsPolicyActivation)?.Status is { Rejected: true } rejected
+            ? rejected.Reason! : "Permission policy is active.";
         CompactionAuto = settings.Compaction?.Auto ?? true;
         McpServers.Clear();
         foreach (var (name, server) in settings.McpServers.OrderBy(entry => entry.Key, StringComparer.Ordinal))

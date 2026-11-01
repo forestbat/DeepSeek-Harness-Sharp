@@ -72,6 +72,8 @@ public sealed partial class ChatWindow : IDisposable
     private readonly Func<bool> _skillChangeSubscription;
     private readonly Func<bool> _subagentStartSubscription;
     private readonly Func<bool> _subagentEndSubscription;
+    private readonly Func<bool> _safetyPolicySubscription;
+    private string? _safetyPolicyError;
 
     public ChatWindow(Context ctx, AgentLoopAgent agent, HarnessHome home, ISessionPersistence? persistence = null, TuiSettings? settings = null)
     {
@@ -156,6 +158,13 @@ public sealed partial class ChatWindow : IDisposable
         {
             LoadSkillCandidates();
         }, new EventOptions { Global = true });
+        _safetyPolicyError = (ctx.GetProp("safetyPolicyActivation") as SettingsPolicyActivation)?.Status is { Rejected: true } rejected
+            ? rejected.Reason : null;
+        _safetyPolicySubscription = ctx.On<SafetyPolicyStateChanged>(notification => QueueAction(() =>
+        {
+            _safetyPolicyError = notification.Status.Rejected ? notification.Status.Reason : null;
+            RenderVersion++;
+        }), new EventOptions { Global = true });
 
         _subagentStartSubscription = ctx.On<SubagentStartNotification>(notification =>
         {
@@ -947,6 +956,7 @@ public sealed partial class ChatWindow : IDisposable
         _skillChangeSubscription.Invoke();
         _subagentStartSubscription.Invoke();
         _subagentEndSubscription.Invoke();
+        _safetyPolicySubscription.Invoke();
     }
 
     internal void QueueAction(Action action)
@@ -2862,7 +2872,7 @@ public sealed partial class ChatWindow : IDisposable
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
-        var text = FocusedPane.StatusText;
+        var text = _safetyPolicyError ?? FocusedPane.StatusText;
         // pty 层占整屏, 不存在"第 N/M 个窗格"的说法(那一层不是会话里的窗格)。
         if (_panes.Count > 1 && _ptyLayer is null)
         {

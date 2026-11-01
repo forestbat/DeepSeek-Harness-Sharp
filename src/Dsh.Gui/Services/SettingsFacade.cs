@@ -29,14 +29,15 @@ public sealed class SettingsFacade(Context ctx, HarnessHome home, FleetWorkspace
         return settings;
     }
 
-    public void UpdateSafety(bool autoApprove, IReadOnlyList<string> blacklist, IReadOnlyList<string> whitelist)
+    public void UpdateSafety(bool autoApprove, IReadOnlyDictionary<string, PermissionMatcher> blacklist,
+        IReadOnlyDictionary<string, PermissionMatcher> whitelist)
     {
         var settings = Load();
         settings.Safety = new SafetySettings
         {
             AutoApprove = autoApprove,
-            Blacklist = [.. blacklist],
-            Whitelist = [.. whitelist],
+            Blacklist = new(blacklist),
+            Whitelist = new(whitelist),
         };
         settings.Save(home);
         Changed?.Invoke();

@@ -19,6 +19,10 @@ public sealed class ToolDefinition
     public Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? FinalizeContent { get; init; }
     public long? TimeoutMs { get; init; }
     public Func<JsonElement, bool>? IsConcurrencySafe { get; init; }
+    /** Trusted host file tools defer default notification to their actual mediated operations. */
+    public bool MediatesFileAccess { get; init; }
+    public Func<JsonElement, string>? FileIntent { get; init; }
+    public bool UsesScriptPermissions { get; init; }
 
     /**
      * Absolute paths a call writes, including the directory a newly started process runs in.
@@ -110,6 +114,14 @@ public sealed class ToolRunContext : ToolExecution
     public bool BodyInvoked { get; internal set; }
 
     public bool ExternalProcessProtectionRequired { get; internal set; }
+    public IExternalProcessPolicy? ExternalProcessPolicy { get; internal set; }
+    public string? SafetyApprovalRevision { get; set; }
+    public string? InitialFileIntent { get; internal set; }
+    public bool UsesScriptPermissions { get; internal set; }
+    public string? OwnerPackage { get; internal set; }
+    private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
+    public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
+    public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
 
     public SettingsMutationAuditPayload? LastSettingsMutation { get; private set; }
 

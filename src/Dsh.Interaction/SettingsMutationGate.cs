@@ -32,16 +32,27 @@ public sealed class SettingsMutationGate(Context context, HarnessHome home) : IS
                 throw new InvalidOperationException("Settings mutations require an active model session.");
             var approval = context.Get<IApprovalService>("approval", false)
                 ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
-            var safety = HarnessSettings.LoadForReview(home).Safety;
-            if (SafetyCommandGuard.MatchingRule(safety?.Blacklist, run.Name, run.Arguments) is { } denied)
+            var boundary = context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+                ?? throw new InvalidOperationException("Settings mutations require the host safety boundary.");
+            _ = await boundary.AuthorizeFileAsync(run, target, "write", linked.Token,
+                settingsReview: true).ConfigureAwait(false);
+            var safety = HarnessSettings.LoadForReview(home).Safety ?? new SafetySettings();
+            var actualTarget = Dsh.Transport.PinnedFileAccess.Canonicalize(target);
+            var input = new PermissionInput(run.Name, run.Arguments,
+                run.Agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, actualTarget, "write",
+                IsFileAlias: candidate => SettingsFilePath.SameFile(actualTarget, candidate),
+                ComparePathComponent: (index, pattern, value) => Dsh.Transport.PinnedFileAccess.ComparePathComponent(actualTarget, index, pattern, value),
+                PathIsCanonical: true);
+            var matched = PermissionEngine.Decide(safety, input, static path => Dsh.Transport.PinnedFileAccess.Canonicalize(path));
+            if (matched.Decision == "deny")
             {
                 outcome = "rejected";
-                throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{denied}\".");
+                throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule '{matched.Match!.RuleId}'.");
             }
             var arguments = new JsonObject { ["settingsMutation"] = true, ["path"] = target, ["before"] = before, ["after"] = after };
             var decision = await approval.Request(new(run.Agent, run.Name, run.CallId,
                 "Change the active settings file. Review the complete redacted before/after diff; this affects all sessions.", arguments.ToJsonString(),
-                AllowByRule: safety?.AutoApprove == true || SafetyCommandGuard.MatchingRule(safety?.Whitelist, run.Name, run.Arguments) is not null), linked.Token).ConfigureAwait(false);
+                AllowByRule: matched.Decision == "allow"), linked.Token).ConfigureAwait(false);
             if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
             {
                 outcome = decision == ApprovalOutcome.Cancelled ? "cancelled" : "rejected";
@@ -49,12 +60,14 @@ public sealed class SettingsMutationGate(Context context, HarnessHome home) : IS
                     throw new OperationCanceledException("Settings mutation was cancelled.", linked.Token);
                 throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
             }
-            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, signal =>
+            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async signal =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
                 signal.ThrowIfCancellationRequested();
-                return commit(signal);
+                _ = await boundary.AuthorizeFileAsync(run, target, "write", signal,
+                    settingsReview: true).ConfigureAwait(false);
+                await commit(signal).ConfigureAwait(false);
             }, linked.Token).ConfigureAwait(false);
             outcome = "committed";
         }

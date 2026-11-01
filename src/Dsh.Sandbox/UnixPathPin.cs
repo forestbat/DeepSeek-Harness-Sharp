@@ -45,6 +45,17 @@ internal static class UnixPathPin
         finally { if (added) directory.DangerousRelease(); }
     }
 
+    internal static SafeFileHandle OpenQueryDirectory(SafeFileHandle directory)
+    {
+        var added = false;
+        try
+        {
+            directory.DangerousAddRef(ref added);
+            return OpenDescriptor(checked((int)directory.DangerousGetHandle()), ".", directory: true, enumerate: true);
+        }
+        finally { if (added) directory.DangerousRelease(); }
+    }
+
     public static string PathOf(SafeFileHandle handle)
     {
         var added = false;

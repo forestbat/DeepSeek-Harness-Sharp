@@ -154,7 +154,9 @@ public sealed class PluginTemplateTests
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         tools = new ToolRuntime(ctx);
-        var factory = new PluginCapabilityFactory(ctx, new HarnessHome(directory), new HarnessSettings());
+        var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
+        _ = new SafetyBoundary(ctx, () => settings);
+        var factory = new PluginCapabilityFactory(ctx, new HarnessHome(directory), settings);
         ctx.Provide(IPluginHostFactory.ServiceName, factory);
         return ctx;
     }

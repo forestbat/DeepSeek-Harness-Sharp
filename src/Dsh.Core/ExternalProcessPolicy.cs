@@ -12,10 +12,14 @@ public interface IExternalProcessPolicy
         + "When sandbox.enabled is ON, direct settings writes, aliases and replacement are denied by the OS; "
         + "scripts.permissions independently controls script workspace read/write and network access. "
         + "On Linux, read=false/write=false gives an empty private guest directory at the requested cwd path, not the host workspace; runtime inputs and private scratch remain technical grants. "
-        + "When OFF, opaque process OS denials are not enforced; mediated settings approvals still apply.";
+        + "When OFF, rules needing opaque filesystem enforcement fail before execution; mediated approvals remain active.";
 
     bool Enabled { get; }
-    (bool Enabled, bool Read, bool Write, bool Network) ScriptPolicy { get; }
+    string Revision { get; }
+    string InvocationRevision { get; }
+    Task DemandAsync(SubprocessSpawnSpec spec);
+    void DemandUnconfined(string surface);
+    void DemandConfiguredMcp(string surface, string lifecycleOwner, CancellationToken signal);
 
     SandboxProcessOptions CreateOptions(SubprocessSpawnSpec spec, string executable, string temporaryDirectory);
 }

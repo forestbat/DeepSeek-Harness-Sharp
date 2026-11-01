@@ -58,6 +58,8 @@ public static class ReadImageTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
             Description = $"Read a local image file ({AcceptedFormats}) and return the image itself to the model. Images whose long edge exceeds {resolved.MaxLongEdge}px are downscaled automatically; the result states the original size and the coordinate multiplier.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>
@@ -120,7 +122,7 @@ public static class ReadImageTool
         var length = new FileInfo(target).Length;
         if (length > caps.MaxSourceBytes)
             throw new HarnessException($"cannot read \"{target}\": the file is {length} bytes, which exceeds the {caps.MaxSourceBytes}-byte read_image limit; downscale the image and read the smaller copy", "FS_TOO_LARGE");
-        var source = await File.ReadAllBytesAsync(target, exec.Signal);
+        var source = await SafetyFileAccess.ReadBytesAsync(target, exec, caps.MaxSourceBytes).ConfigureAwait(false);
         var normalized = await Task.Run(() => Normalize(source, target, caps), exec.Signal);
         var reference = store.Put(normalized.Bytes, normalized.MediaType, normalized.Size.Width, normalized.Size.Height, Path.GetFileName(target));
         return new ReadImageValue(target, reference, normalized.Original);

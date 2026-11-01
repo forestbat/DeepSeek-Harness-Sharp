@@ -29,7 +29,9 @@ public sealed class HarnessSettingsSaveTests
         safety:
           autoApprove: false
           blacklist:
-          - rm -rf
+            deny-delete:
+              dialect: posix
+              args: { command: "rm -rf" }
 
         a2a:
           enabled: true
@@ -78,7 +80,7 @@ public sealed class HarnessSettingsSaveTests
             Assert.DoesNotContain("autoApprove: false", text);
             var reloaded = HarnessSettings.Load(home);
             Assert.True(reloaded.Safety!.AutoApprove);
-            Assert.Equal(["rm -rf"], reloaded.Safety.Blacklist);
+            Assert.Equal("rm -rf", reloaded.Safety.Blacklist["deny-delete"].Args["command"]);
             Assert.Equal(4100, reloaded.A2a!.Port);
             Assert.Equal("alpha-key", reloaded.Providers["alpha"].Options!.ApiKey);
         }

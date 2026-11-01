@@ -66,6 +66,31 @@ public readonly record struct NativeFileIdentity(ulong Device, ulong Inode, uint
         };
     }
 
+    internal static unsafe NativeFileIdentity GetRelative(SafeFileHandle directory, string name)
+    {
+        var buffer = stackalloc byte[512];
+        new Span<byte>(buffer, 512).Clear();
+        if (OperatingSystem.IsLinux())
+        {
+            if (statx(directory, name, 0x100, 0x7ff, buffer) != 0)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot inspect a pinned directory entry.");
+            if ((*(uint*)buffer & 0x105) != 0x105)
+                throw new NotSupportedException("The filesystem does not report reliable entry identities.");
+            return new NativeFileIdentity(((ulong)*(uint*)(buffer + 136) << 32) | *(uint*)(buffer + 140), *(ulong*)(buffer + 32), *(uint*)(buffer + 16))
+            {
+                IsRegular = (*(ushort*)(buffer + 28) & FileTypeMask) == RegularFile,
+            };
+        }
+        if (!OperatingSystem.IsMacOS())
+            throw new PlatformNotSupportedException("Relative Unix identities require Linux or macOS.");
+        if ((RuntimeInformation.ProcessArchitecture == Architecture.X64 ? fstatatInode64(directory, name, buffer, 0x20) : fstatat(directory, name, buffer, 0x20)) != 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot inspect a pinned directory entry.");
+        return new NativeFileIdentity(*(uint*)buffer, *(ulong*)(buffer + 8), *(ushort*)(buffer + 6))
+        {
+            IsRegular = (*(ushort*)(buffer + 4) & FileTypeMask) == RegularFile,
+        };
+    }
+
     internal static unsafe int UnixTypeAt(SafeFileHandle directory, string name)
     {
         var buffer = stackalloc byte[512];

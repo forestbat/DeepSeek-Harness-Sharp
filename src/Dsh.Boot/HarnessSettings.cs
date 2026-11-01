@@ -77,6 +77,49 @@ public sealed class HarnessSettings
         return File.ReadAllText(templatePath);
     }
 
+    [YamlIgnore]
+    internal string SnapshotDocument => _savedDocument ?? throw new InvalidOperationException("Settings do not have a source snapshot.");
+
+    internal static HarnessSettings ParseSnapshot(string text, string canonicalPath)
+    {
+        var settings = Parse(text);
+        settings.Plugins = PluginSettingsSection.ParseDocument(text);
+        settings._savedDocument = text;
+        settings._savedPath = canonicalPath;
+        return settings;
+    }
+
+    /** Read current bytes every time; retain only one private parsed snapshot, never a public mutable Load DTO. */
+    internal static Func<HarnessSettings> CreatePolicyReader(HarnessHome home, HarnessSettings? fallback = null)
+    {
+        var sync = new Lock();
+        string? previous = null;
+        string? previousPath = null;
+        HarnessSettings? cached = null;
+        return () =>
+        {
+            if (!File.Exists(home.SettingsFile)) return fallback ?? new HarnessSettings();
+            var canonical = Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
+            if (PublicationPath.Value == canonical)
+                return Read(canonical, ReadSettingsTextShared(canonical, bounded: true));
+            using var transaction = new SettingsWriteLock(canonical);
+            return Read(transaction.CanonicalPath, ReadSettingsTextShared(transaction.CanonicalPath, bounded: true));
+        };
+
+        HarnessSettings Read(string canonical, string text)
+        {
+            lock (sync)
+            {
+                if (cached is not null && previousPath == canonical && previous == text) return cached;
+                var parsed = ParseSnapshot(text, canonical);
+                cached = SettingsPolicyActivation.AcceptSnapshot(canonical, text, parsed);
+                previousPath = canonical;
+                previous = text;
+                return cached;
+            }
+        }
+    }
+
     public static HarnessSettings Load(HarnessHome home)
     {
         Directory.CreateDirectory(home.Root);
@@ -96,21 +139,22 @@ public sealed class HarnessSettings
     private static HarnessSettings LoadSnapshot(string path, string canonicalPath, bool forReview = false)
     {
         var text = File.Exists(path) ? ReadSettingsTextShared(path, forReview) : LoadTemplate();
-        var settings = Parse(text);
-        settings.Plugins = PluginSettingsSection.ParseDocument(text);
-        settings._savedDocument = text;
-        settings._savedPath = canonicalPath;
-        return settings;
+        var settings = ParseSnapshot(text, canonicalPath);
+        return SettingsPolicyActivation.AcceptSnapshot(canonicalPath, text, settings);
     }
 
     private static HarnessSettings Parse(string text)
     {
-        ScriptsSettings.ValidateDocument(text);
-        return new StaticDeserializerBuilder(new DshYamlStaticContext())
+        RuleMapYaml.ValidateDocument(text);
+        var settings = new StaticDeserializerBuilder(new DshYamlStaticContext())
+            .WithTypeConverter(new RuleToolsYamlConverter())
             .WithAttemptingUnquotedStringTypeDeserialization()
             .IgnoreUnmatchedProperties()
             .Build()
             .Deserialize<HarnessSettings>(text);
+        settings.Safety?.Validate();
+        settings.Scripts?.Permissions?.Validate();
+        return settings;
     }
 
     /** Human updates stay transactional; tool updates release the lock while awaiting a decision. */
@@ -147,6 +191,7 @@ public sealed class HarnessSettings
     private string PrepareSnapshot(string existing, string canonicalPath)
     {
         var serializer = new StaticSerializerBuilder(new DshYamlStaticContext())
+            .WithTypeConverter(new RuleToolsYamlConverter())
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .WithQuotingNecessaryStrings()
             .Build();
@@ -212,7 +257,10 @@ public sealed class HarnessSettings
         string after;
         using (var transaction = new SettingsWriteLock(canonical))
         {
-            before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+            before = File.Exists(canonical)
+                ? activeScope is null ? ReadSettingsTextShared(canonical)
+                    : SettingsMutationScope.ReadTextAsync(canonical, activeScope.Context, settingsReview: true).GetAwaiter().GetResult()
+                : "";
             string? proposed;
             PreparationPath.Value = canonical;
             try
@@ -225,7 +273,7 @@ public sealed class HarnessSettings
             }
             if (proposed is null)
                 return false;
-            _ = Parse(proposed);
+            SettingsPolicyActivation.ValidateCandidate(canonical, ParseSnapshot(proposed, canonical));
             after = proposed;
             if (SettingsMutationScope.Current is null)
             {
@@ -243,10 +291,12 @@ public sealed class HarnessSettings
 
         void Publish()
         {
+            using var publication = SettingsPolicyActivation.BeginPublication(canonical, after);
             Directory.CreateDirectory(Path.GetDirectoryName(canonical)!);
             if (backup && before != after && before.Length > 0)
                 WriteAtomic($"{canonical}.bak", before);
             WriteAtomic(canonical, after);
+            publication.Commit();
         }
     }
 
@@ -260,6 +310,7 @@ public sealed class HarnessSettings
             if (current != before)
                 throw new InvalidOperationException("Settings changed while approval was pending; read the current settings and propose again.");
             _ = Parse(after);
+            using var publication = SettingsPolicyActivation.BeginPublication(transaction.CanonicalPath, after);
             PublicationPath.Value = transaction.CanonicalPath;
             try
             {
@@ -267,6 +318,7 @@ public sealed class HarnessSettings
                 commit(signal).GetAwaiter().GetResult();
                 if (!File.Exists(path) || ReadSettingsTextShared(path, bounded: true) != after)
                     throw new IOException("The settings commit did not publish the approved document.");
+                publication.Commit();
             }
             finally
             {
@@ -421,17 +473,8 @@ public sealed class CompactionSettings
     public bool Prune { get; set; } = true;
 }
 
-public sealed class SafetySettings
-{
-    [YamlMember(Alias = "autoApprove")]
-    public bool AutoApprove { get; set; }
-
-    [YamlMember(Alias = "blacklist")]
-    public List<string> Blacklist { get; set; } = [];
-
-    [YamlMember(Alias = "whitelist")]
-    public List<string> Whitelist { get; set; } = [];
-}
+/** Rule IDs map to typed matchers, not legacy command strings. */
+public sealed class SafetySettings : PermissionRules;
 
 /** Plugin sandbox switch; per-plugin grants live under plugins."<package>".permissions. */
 public sealed class SandboxSettings

@@ -61,19 +61,93 @@ The writer releases the settings lock while waiting for approval, then reacquire
 Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
 Missing session, reviewer, or approval service fails closed.
 
+### Permission rules
+
 ```yaml
 safety:
   autoApprove: false
-  blacklist: ["bash:rm -rf /*"]
-  whitelist: ["tool:write"]
+  blacklist:
+    deny-delete:
+      dialect: posix
+      args: { command: "rm -rf /*" }
+    protect-secrets:
+      path: "**/.env"
+      intent: read
+  whitelist:
+    allow-source-read:
+      tool: [read, read_image, glob, grep]
+      path: "src/**"
+      intent: read
+scripts:
+  permissions:
+    read: true
+    write: false
+    network: false
+    autoApprove: false
+    blacklist: {}
+    whitelist:
+      allow-example: { tool: run_code, args: { code: "Console.WriteLine(*)*" } }
 ```
 
-`whitelist` automatically approves matching requests using exactly the existing blacklist tool/command grammar: `tool:<name>` and `<shell-tool>:<command-pattern>`.
-Blacklist denial always wins, including when `autoApprove` is true; the session's `never` approval policy still rejects requests.
-These patterns are not a path/arguments/intent permission engine, and shell command matching is not an OS isolation boundary.
-Use the GUI safety page to edit both lists; TUI and GUI share the same authoritative approval result.
+`blacklist` and `whitelist` are mappings from stable rule IDs to typed matchers, not lists of `tool:pattern` strings.
+A matcher supports `tool` (one name or a nonempty list), `dialect` (`posix` or `powershell`), `path`, `intent` (`read`, `write`, or `any`), and `args` (string argument patterns).
+Dimensions within one matcher are AND; separate rules are OR; a matching blacklist always wins over whitelist and `autoApprove`.
+With no matching rule, `autoApprove: false` requires notification/approval and `true` allows the operation.
+A whitelist bypasses the ordinary safety notification, not an explicit session `never` policy, root approval, or the mandatory settings diff review.
+The settings diff gate can approve a whitelisted proposal automatically, but still constructs and records the real redacted diff.
 
-The trusted settings diff gate is always enabled, independently of `sandbox.enabled`. It is not a promise to intercept arbitrary BCL/native writes by fully trusted in-process code. With the sandbox off, shell commands, PTC, C# frontends and MCP retain their previous execution behavior; opaque code can still write directly with the host user's authority. Enable the OS boundary below when that compatibility trade-off is unacceptable.
+Path `*` matches within one segment and `**` crosses segments.
+Relative patterns use the invocation working directory; comparisons use the actual pinned parent of each component, including mount transitions, not a whole-OS case default.
+Literal components use native name lookup and file identity, preserving case-sensitive Windows directories and Unicode filename aliases without inventing a universal case fold.
+Within-component wildcard matches that need case folding query that pinned directory; unknown native semantics or non-ASCII equivalence the backend cannot express fail explicitly before file data access.
+On Linux, that case query currently requires an ext2/ext3/ext4 directory with a readable FS_IOC_GETFLAGS result.
+Other filesystems, including XFS, fail explicitly when this query is required; a successful generic flags ioctl is not evidence of case-sensitive name lookup.
+A multiply-linked regular file with an otherwise relevant glob blacklist also fails explicitly when the backend cannot establish its other alias names; it is not reported as a proven rule match.
+On Unix, a backslash in a filename remains an ordinary character.
+`args.path` and `args.file_path` are rejected: use the single `path` dimension.
+Other argument patterns match strings; `args.command` with a shell dialect reuses the existing token/wrapper parser, unordered options and short-option clusters.
+Command matching is not an OS security boundary.
+
+Tool admission evaluates known denials before approval.
+Trusted filesystem tools and plugin SDK file brokers re-evaluate the current policy for the actual canonical target and real read/write intent at pinned I/O and commit boundaries.
+Directory search/listing checks each exposed target, not only the search root.
+Path-specific approval covers only that path and intent, not later writes or another target in the same call.
+Policy changes invalidate previous approval; a changed policy during a pinned operation fails before commit when renewed approval is required.
+Rejection or cancellation before actual I/O starts prevents the write; settings and replacement writes also recheck before their atomic publication point.
+An already-started ordinary append is a direct authorized write, not a rollback transaction; its final flush does not retroactively undo bytes already written.
+Existing settings identity, hardlink and concurrent-human-edit protections remain in force.
+An approved settings mutation requested through a hardlink alias publishes to the canonical settings location, using authorization pinned to that actual location rather than the alias parent.
+
+Shell tools (including persistent shells), MCP and ordinary plugin operations use `safety`.
+Actual C# scripts, `run_code`, `csx` and C# REPL use the independent `scripts.permissions` rule maps.
+The script `read`/`write`/`network` booleans remain separate OS restrictions; a rule allow cannot grant a structurally denied capability.
+
+Opaque subprocesses have no per-open host callback.
+The existing OS profile can enforce concrete existing-file write denials; unsupported glob, read/intent, missing-target or directory restrictions fail explicitly before execution rather than pretending argument matching protects I/O.
+Sandbox-off opaque execution rejects restrictions that require an OS boundary.
+Persistent shells are retired when the effective policy/profile changes; owned MCP handles become unusable and require explicit reload after a policy revision.
+An operator-configured owned MCP connection separately authorizes initialization/discovery, with its real server name in lifecycle audit and no invented session/call IDs; it grants no approval to later model tool calls.
+Remote or unowned MCP transports fail when the required mediation/profile cannot be provided.
+The actual startup image, including every explicitly linked module and its initializers, is the existing host trusted computing base (TCB), regardless of package name, directory or author.
+Its mediated file operations still enforce safety at the real target; ordinary ConfigBoot startup can activate path/intent rules.
+Runtime-loaded full-context/native artifacts require the existing exact-artifact full-host grant where applicable, or an unconfined compatible policy.
+File-scoped deny rules, and effective file-scoped whitelists with autoApprove: false, cannot be combined with an external artifact that extends the TCB with arbitrary in-process BCL/native access.
+An explicit full-host grant authorizes lifecycle initialization without a fabricated session; model tool invocations still go through admission and settings approval.
+Once an external full-host artifact executes, that process-lifetime authority fact survives Context/Home disposal; enabling incompatible file policies requires restarting without that artifact.
+GUI saves, typed settings transactions and final settings diff commits reject incompatible policies before writing anything.
+An externally edited incompatible document stays on disk but is explicitly not activated: the runtime retains its previous immutable accepted snapshot and reports the rejection in the GUI safety status/toast, TUI status and diagnostic log.
+Editing a returned settings DTO cannot mutate the accepted snapshot; a supported repair is merged against the real disk document so unrelated human edits are not silently overwritten.
+With autoApprove: true, a file whitelist grants nothing additional and does not by itself require per-file authority.
+
+Each safety decision records rule ID/kind, `autoApprove`, `allow`/`deny`/`notify`, tool, dialect, matched field/pattern, normalized path, real intent, session/call IDs when present, and timestamp.
+Approval/commit outcome is recorded separately from the policy decision.
+Session decisions use the normal ignorable-metadata event codec and persistence; lifecycle decisions are recorded in the diagnostic log without invented session/call IDs.
+
+The GUI safety page edits real YAML matcher maps.
+There is no TUI safety editor: edit `settings.yaml` and use the existing authoritative TUI/GUI approval surfaces.
+Human settings commands and GUI saves remain explicit human operations.
+
+
 
 ## 不同于原版 DSH 的功能
 

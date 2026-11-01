@@ -34,6 +34,11 @@ public static class SettingsMutationLimits
     public static async Task<string> ReadTextAsync(string path, CancellationToken signal)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        return await ReadTextAsync(stream, signal).ConfigureAwait(false);
+    }
+
+    public static async Task<string> ReadTextAsync(Stream stream, CancellationToken signal)
+    {
         var length = stream.Length;
         if (length > MaxDocumentBytes)
             throw new InvalidOperationException("The settings document exceeds the 4 MiB review limit.");
@@ -57,12 +62,15 @@ public sealed class SettingsMutationScope : IDisposable
     public ToolRunContext Context { get; }
     public ISettingsMutationGate? Gate { get; }
     private IRuntimeCodeIntegrity? CodeIntegrity { get; }
+    public ISafetyBoundary? Safety { get; }
 
-    public SettingsMutationScope(ToolRunContext context, ISettingsMutationGate? gate, IRuntimeCodeIntegrity? codeIntegrity = null)
+    public SettingsMutationScope(ToolRunContext context, ISettingsMutationGate? gate, IRuntimeCodeIntegrity? codeIntegrity = null,
+        ISafetyBoundary? safety = null)
     {
         Context = context;
         Gate = gate;
         CodeIntegrity = codeIntegrity;
+        Safety = safety;
         _previous = Active.Value;
         Active.Value = this;
     }
@@ -71,30 +79,46 @@ public sealed class SettingsMutationScope : IDisposable
         => (Gate ?? throw new InvalidOperationException("Settings mutations require the active settings approval service."))
             .CommitAsync(new(path, before, after, Context), commit, Context.Signal);
 
-    public static Task<string> ReadTextAsync(string path, ToolRunContext context)
-        => Current?.Gate?.Owns(path) == true
-            ? SettingsMutationLimits.ReadTextAsync(path, context.Signal)
-            : File.ReadAllTextAsync(path, new UTF8Encoding(false, false), context.Signal);
+    public static async Task<string> ReadTextAsync(string path, ToolRunContext context, bool settingsReview = false)
+    {
+        var settings = Current?.Gate?.Owns(path) == true;
+        await using var file = await SafetyFileAccess.OpenReadAsync(path, context,
+            settingsReview: settings && (settingsReview || context.InitialFileIntent == "write")).ConfigureAwait(false);
+        if (settings)
+        {
+            return await SettingsMutationLimits.ReadTextAsync(file.Stream, context.Signal).ConfigureAwait(false);
+        }
+        using var reader = new StreamReader(file.Stream, new UTF8Encoding(false, false));
+        return await reader.ReadToEndAsync(context.Signal).ConfigureAwait(false);
+    }
 
     public static async Task WriteTextAsync(string path, string before, string after, ToolRunContext context,
         PinnedFileMode mode = PinnedFileMode.Replace)
     {
         var gate = Current?.Gate;
+        var authorizeSafety = await SafetyFileAccess.AuthorizeAsync(path, "write", context, context.Signal,
+            settingsReview: gate?.Owns(path) == true).ConfigureAwait(false);
         if (gate is not null && gate.Owns(path))
         {
+            var canonical = gate.SettingsPath;
+            var authorizeCanonical = path == canonical ? authorizeSafety
+                : await SafetyFileAccess.AuthorizeAsync(canonical, "write", context, context.Signal,
+                    settingsReview: true).ConfigureAwait(false);
             await gate.CommitAsync(new(path, before, after, context), async signal =>
             {
-                await WriteTextFileAsync(gate.SettingsPath, after, PinnedFileMode.Replace, target =>
+                await WriteTextFileAsync(canonical, after, PinnedFileMode.Replace, target =>
                 {
+                    authorizeCanonical(target);
                     if (!target.IsDirectory && !gate.Owns(target))
                         throw new IOException("The settings target changed before publication.");
                 }, signal).ConfigureAwait(false);
-                context.RecordFileChange(gate.SettingsPath);
+                context.RecordFileChange(canonical);
             }, context.Signal).ConfigureAwait(false);
             return;
         }
         await WriteTextFileAsync(path, after, mode, target =>
         {
+            authorizeSafety(target);
             if (gate?.Owns(target) == true)
                 throw new IOException("The file target changed to active settings; propose the settings diff explicitly.");
             if (context.ExternalProcessProtectionRequired)

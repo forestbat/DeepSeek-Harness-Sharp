@@ -5,7 +5,8 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Transport;
 
-public readonly record struct PinnedFileTarget(string Path, NativeFileIdentity? Identity, NativeFileIdentity ParentIdentity, bool IsDirectory = false);
+public readonly record struct PinnedFileTarget(string Path, NativeFileIdentity? Identity, NativeFileIdentity ParentIdentity,
+    bool IsDirectory = false, Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)>? CompareComponent = null);
 
 public enum PinnedFileMode { Read, Replace, Overwrite, Append, CreateNew }
 
@@ -26,6 +27,8 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
     private readonly string _parentPath;
     private readonly string? _temporary;
     private readonly NativeFileIdentity _parentIdentity;
+    private readonly Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)> _compareComponent;
+    private NativeFileIdentity? _targetIdentity;
     private bool _completed;
     private bool _disposed;
     private bool _ownsTemporary;
@@ -35,6 +38,7 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
     {
         _authorize = authorize;
         _mode = mode;
+        _compareComponent = CompareComponent;
         var canonical = Canonicalize(path, allowNetwork);
         _leaf = Path.GetFileName(canonical);
         if (string.IsNullOrEmpty(_leaf))
@@ -77,6 +81,71 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
         return new PinnedFileAccess(path, mode, authorize, allowNetwork);
     }
 
+    private PinnedFileAccess(string path, Action<PinnedFileTarget> authorize)
+    {
+        _authorize = authorize;
+        _mode = PinnedFileMode.Read;
+        _compareComponent = CompareComponent;
+        _leaf = "";
+        _parentPath = Canonicalize(path);
+        try
+        {
+            PinDirectories(_parentPath);
+            _parentIdentity = NativeFileIdentity.Get(_directories[^1]);
+        }
+        catch { Dispose(); throw; }
+    }
+
+    public static void DemandDirectory(string path, Action<PinnedFileTarget> authorize)
+    {
+        using var pin = new PinnedFileAccess(path, authorize);
+        var actual = DirectoryPath(pin._directories[^1]);
+        authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
+    }
+
+    /** Enumerate a fixed directory object; a concurrent rename never returns an unauthorized snapshot. */
+    public static async Task<IReadOnlyList<(string Path, bool IsDirectory)>> ReadDirectoryAsync(string path,
+        Action<PinnedFileTarget> authorize, Func<string, Task<Action<PinnedFileTarget>>> authorizeEntry)
+    {
+        using var pin = new PinnedFileAccess(path, authorize);
+        var actual = DirectoryPath(pin._directories[^1]);
+        authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
+        var entries = new List<(string, bool)>();
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(actual))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) == 0)
+                    entries.Add((entry, (attributes & FileAttributes.Directory) != 0));
+            }
+        }
+        else
+        {
+            foreach (var entry in UnixPathPin.Entries(pin._directories[^1]))
+                if (entry.Directory || entry.Regular)
+                    entries.Add((Path.Combine(actual, entry.Name), entry.Directory));
+            DemandUnmovedDirectory();
+        }
+        foreach (var (entry, directory) in entries)
+        {
+            var permit = await authorizeEntry(entry).ConfigureAwait(false);
+            DemandUnmovedDirectory();
+            var identity = pin.ChildIdentity(pin._directories.Count - 1, Path.GetFileName(entry));
+            permit(pin.Describe(entry, identity, pin._parentIdentity, directory));
+        }
+        DemandUnmovedDirectory();
+        authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
+        DemandUnmovedDirectory();
+        return entries;
+
+        void DemandUnmovedDirectory()
+        {
+            if (DirectoryPath(pin._directories[^1]) != actual)
+                throw new IOException("The directory moved during authorized enumeration.");
+        }
+    }
+
     public async Task CompleteAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -99,7 +168,7 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
     private void PinDirectories(string parent)
     {
         var root = Path.GetPathRoot(parent)!;
-        _authorize(new PinnedFileTarget(root, null, default, IsDirectory: true));
+        _authorize(Describe(root, null, default, directory: true));
         if (OperatingSystem.IsWindows())
             _directories.Add(OpenWindowsDirectory(root));
         else
@@ -108,14 +177,14 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
         foreach (var part in parent[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
         {
             var previous = _directories[^1];
-            var physical = OperatingSystem.IsWindows() ? current : UnixPathPin.PathOf(previous);
+            var physical = DirectoryPath(previous);
             current = Path.Combine(physical, part);
-            _authorize(new PinnedFileTarget(current, null, NativeFileIdentity.Get(previous), IsDirectory: true));
+            _authorize(Describe(current, null, NativeFileIdentity.Get(previous), directory: true));
             if (_directories.Count >= MaximumDirectoryDepth)
                 throw new IOException("The file mutation exceeds the 128-directory traversal limit.");
             var opened = OperatingSystem.IsWindows() ? PinWindowsChild(current) : PinUnixChild(previous, part);
             _directories.Add(opened);
-            _authorize(new PinnedFileTarget(current, NativeFileIdentity.Get(opened), NativeFileIdentity.Get(previous), IsDirectory: true));
+            _authorize(Describe(current, NativeFileIdentity.Get(opened), NativeFileIdentity.Get(previous), directory: true));
         }
     }
 
@@ -162,7 +231,8 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
             var identity = NativeFileIdentity.Get(handle);
             if (!identity.IsRegular)
                 throw new IOException("File mutations require an ordinary regular file.");
-            _authorize(Target(identity));
+            var actual = OperatingSystem.IsWindows() ? SandboxPolicy.WindowsPathOf(handle) : UnixPathPin.PathOf(handle);
+            _authorize(Describe(actual, identity, _parentIdentity));
             return new FileStream(handle, _mode == PinnedFileMode.Read ? FileAccess.Read : FileAccess.Write, BufferBytes, isAsync: false);
         }
         catch
@@ -196,8 +266,102 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
 
     private PinnedFileTarget Target(NativeFileIdentity? identity)
     {
-        var parent = OperatingSystem.IsWindows() ? _parentPath : UnixPathPin.PathOf(_directories[^1]);
-        return new PinnedFileTarget(Path.Combine(parent, _leaf), identity, _parentIdentity);
+        var parent = DirectoryPath(_directories[^1]);
+        return Describe(Path.Combine(parent, _leaf), identity, _parentIdentity);
+    }
+
+    private PinnedFileTarget Describe(string path, NativeFileIdentity? identity, NativeFileIdentity parent, bool directory = false)
+    {
+        _targetIdentity = identity;
+        return new(path, identity, parent, directory, _compareComponent);
+    }
+
+    private static string DirectoryPath(SafeFileHandle directory)
+        => OperatingSystem.IsWindows() ? SandboxPolicy.WindowsPathOf(directory) : UnixPathPin.PathOf(directory);
+
+    private NativeFileIdentity ChildIdentity(int index, string name)
+        => OperatingSystem.IsWindows()
+            ? NativeFileIdentity.Get(Path.Combine(DirectoryPath(_directories[index]), name))
+            : NativeFileIdentity.GetRelative(_directories[index], name);
+
+    private (bool LiteralMatch, bool CaseSensitive) CompareComponent(int index, string pattern, string value)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (index < 0)
+        {
+            if (pattern == value) return (true, true);
+            var left = NativeFileIdentity.Get(Path.GetFullPath(pattern));
+            var right = NativeFileIdentity.Get(Path.GetFullPath(value));
+            return (SameObject(left, right), true);
+        }
+        if ((uint)index >= (uint)_directories.Count)
+            throw new NotSupportedException("The actual path component has no pinned parent semantics.");
+        if (pattern.IndexOfAny(['*', '?']) >= 0)
+            return (false, NativeDirectoryCase.IsSensitive(_directories[index]));
+        if (pattern == value) return (true, true);
+        var actual = index + 1 < _directories.Count ? NativeFileIdentity.Get(_directories[index + 1])
+            : _targetIdentity ?? TryChildIdentity(index, value);
+        var candidate = TryChildIdentity(index, pattern);
+        if (actual is not null || candidate is not null)
+            return (actual is { } a && candidate is { } b && SameObject(a, b), true);
+        if (pattern.Any(static character => character > 127) || value.Any(static character => character > 127))
+            throw new NotSupportedException("Filesystem equivalence for two missing non-ASCII names is not available before creation.");
+        if (!string.Equals(pattern, value, StringComparison.OrdinalIgnoreCase)) return (false, true);
+        return (!NativeDirectoryCase.IsSensitive(_directories[index]), true);
+    }
+
+    private NativeFileIdentity? TryChildIdentity(int index, string name)
+    {
+        try { return ChildIdentity(index, name); }
+        catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3) { return null; }
+    }
+
+    private static bool SameObject(NativeFileIdentity left, NativeFileIdentity right)
+        => left.Device == right.Device && left.Inode == right.Inode;
+
+    /** Preliminary lookup is metadata only; the actual operation rechecks against its own live pins. */
+    public static (bool LiteralMatch, bool CaseSensitive) ComparePathComponent(string path, int index, string pattern, string value)
+    {
+        if (index < 0)
+        {
+            if (pattern == value) return (true, true);
+            return (SameObject(NativeFileIdentity.Get(Path.GetFullPath(pattern)), NativeFileIdentity.Get(Path.GetFullPath(value))), true);
+        }
+        var root = Path.GetPathRoot(path)!;
+        var end = root.Length;
+        for (var component = 0; component < index; component++)
+        {
+            var separator = path.IndexOf(Path.DirectorySeparatorChar, end);
+            if (separator < 0) throw new IOException("The preliminary path lost a component.");
+            end = separator + 1;
+        }
+        var parent = index == 0 ? root : path[..(end - 1)];
+        try
+        {
+            using var pin = new PinnedFileAccess(parent, static _ => { });
+            pin._targetIdentity = null;
+            return pin.CompareComponent(pin._directories.Count - 1, pattern, value);
+        }
+        catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3)
+        {
+            if (pattern.IndexOfAny(['*', '?']) < 0 && pattern.All(static character => character < 128)
+                && value.All(static character => character < 128)
+                && !string.Equals(pattern, value, StringComparison.OrdinalIgnoreCase)) return (false, true);
+            throw new NotSupportedException("The missing parent directory has no actual case semantics to query before creation.", error);
+        }
+    }
+
+    /** Case/normalization aliases must be the same ordinary directory, never a replacement symlink. */
+    public static bool SameDirectoryPath(string left, string right)
+    {
+        if (left == right) return true;
+        try
+        {
+            using var a = OperatingSystem.IsWindows() ? OpenWindowsDirectory(left) : UnixPathPin.Open(left, directory: true);
+            using var b = OperatingSystem.IsWindows() ? OpenWindowsDirectory(right) : UnixPathPin.Open(right, directory: true);
+            return SameObject(NativeFileIdentity.Get(a), NativeFileIdentity.Get(b));
+        }
+        catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3 or 20 or 40) { return false; }
     }
 
     private void AuthorizeReplacement()
@@ -211,7 +375,8 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
             var identity = NativeFileIdentity.Get(existing);
             if (!identity.IsRegular || OperatingSystem.IsWindows() && (File.GetAttributes(Path.Combine(_parentPath, _leaf)) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("File mutations require an ordinary regular file.");
-            _authorize(Target(identity));
+            var actual = OperatingSystem.IsWindows() ? SandboxPolicy.WindowsPathOf(existing) : UnixPathPin.PathOf(existing);
+            _authorize(Describe(actual, identity, _parentIdentity));
         }
         catch (Win32Exception error) when (error.NativeErrorCode == MissingPath || OperatingSystem.IsWindows() && error.NativeErrorCode == 3)
         {
@@ -290,10 +455,26 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
                 throw new UnauthorizedAccessException("Network file paths are not permitted.");
             var resolved = ResolveFirstLink(full);
             if (resolved is null)
-                return OperatingSystem.IsWindows() ? full.ToUpperInvariant() : full;
+                return ExistingSpelling(full);
             full = resolved;
         }
         throw new IOException("The file path exceeds the bounded symbolic-link resolution limit.");
+    }
+
+    private static string ExistingSpelling(string full)
+    {
+        var existing = full;
+        while (!Directory.Exists(existing) && !File.Exists(existing))
+        {
+            existing = Path.GetDirectoryName(existing)
+                ?? throw new IOException("The filesystem root cannot be resolved.");
+        }
+        using var handle = OperatingSystem.IsWindows()
+            ? WindowsNative.CreateFile(existing, 0x80, 7, 0, 3, 0x02200000, 0)
+            : UnixPathPin.Open(existing, directory: Directory.Exists(existing));
+        if (handle.IsInvalid) throw NativeError("Cannot inspect the existing path spelling.");
+        var actual = OperatingSystem.IsWindows() ? SandboxPolicy.WindowsPathOf(handle) : UnixPathPin.PathOf(handle);
+        return existing.Length == full.Length ? actual : Path.Join(actual.AsSpan(), full.AsSpan(existing.Length));
     }
 
     private static string? ResolveFirstLink(string full)

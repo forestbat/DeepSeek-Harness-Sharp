@@ -169,7 +169,7 @@ public static class BashTool
             Cwd = workdir,
             Env = launch.Env,
             ModelExecution = true,
-            ExecutionKind = SubprocessExecutionKind.Script,
+            ExecutionKind = SubprocessExecutionKind.Tool,
             Stdout = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Stderr = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Signal = fused.Token,

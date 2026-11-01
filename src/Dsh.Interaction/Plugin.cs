@@ -44,7 +44,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ?? throw new InvalidOperationException("harnessOptions is required for the interaction plugin");
         var catalog = ctx.GetProp("pluginCatalog") as PluginCatalog
             ?? throw new InvalidOperationException("pluginCatalog is required for the interaction plugin");
-        SafetySettings? ReadSafety() => HarnessSettings.LoadForReview(options.Home).Safety;
         var settingsBoundary = ctx.Get<SettingsMutationBoundary>(ISettingsMutationGate.ServiceName, false)
             ?? new SettingsMutationBoundary(ctx, options.Home);
         return new DisposableBundle(
@@ -55,9 +54,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ProviderCommand.Register(ctx, options.Home),
             ProxyCommand.Register(ctx, options.Home),
             MemoryCommand.Register(ctx),
-            PluginCommand.Register(ctx, catalog),
-            SafetyCommandGuard.Register(ctx, ReadSafety),
-            SafetyCommandGuard.RegisterApprovals(ctx, ReadSafety));
+            PluginCommand.Register(ctx, catalog));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)

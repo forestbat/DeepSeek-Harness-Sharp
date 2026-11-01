@@ -28,6 +28,12 @@ public interface IApprovalService
     Task<ApprovalOutcome> Request(ApprovalRequest request, CancellationToken signal);
 }
 
+/** Explicit user denials remain authoritative even when a rule bypasses notification. */
+public interface IApprovalConstraints
+{
+    bool IsDenied(IAgent agent);
+}
+
 public sealed record ToolView(
     IReadOnlyDictionary<string, ToolDefinition> Visible,
     IReadOnlySet<string> KnownNames,
@@ -116,6 +122,10 @@ public sealed class ToolRuntime : Service
                             FinalizeContent = definition.FinalizeContent,
                             TimeoutMs = definition.TimeoutMs,
                             IsConcurrencySafe = definition.IsConcurrencySafe,
+                            MediatesFileAccess = definition.MediatesFileAccess,
+                            FileIntent = definition.FileIntent,
+                            UsesScriptPermissions = definition.UsesScriptPermissions,
+                            WriteTargets = definition.WriteTargets,
                         }, owner, registrationId);
                     layer.Tools.Insert(registeredName, entry);
                 }
@@ -381,7 +391,22 @@ public sealed class ToolRuntime : Service
         };
         var visible = Get(input.Name, input.Agent?.ScopeKey);
         runContext.CapturedFinalizer = visible?.FinalizeContent;
+        runContext.InitialFileIntent = visible?.FileIntent?.Invoke(input.Arguments);
+        runContext.UsesScriptPermissions = visible?.UsesScriptPermissions == true;
+        runContext.ExternalProcessPolicy = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false);
+        runContext.OwnerPackage = OwnerOf(input.Name, input.Agent?.ScopeKey);
         return runContext;
+    }
+
+    private string? OwnerOf(string name, ScopeKey? scope)
+    {
+        var owner = _layers.Global.Tools.Entries.FirstOrDefault(entry => entry.Key == name).Value?.Owner;
+        foreach (var layer in _layers.ChainLayers(scope))
+        {
+            var entry = layer.Tools.Entries.FirstOrDefault(candidate => candidate.Key == name);
+            if (entry.Value is not null) owner = entry.Value.Owner;
+        }
+        return owner;
     }
 
     public async Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
@@ -392,6 +417,11 @@ public sealed class ToolRuntime : Service
         try
         {
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
+            // Known denials precede every other approval hook, including root escalation.
+            if (GuardReason(exec) is { } blocked)
+                throw new UnauthorizedAccessException(blocked);
+            if (Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+                await safety.AdmitAsync(exec, Get(exec.Name, exec.Agent?.ScopeKey)?.MediatesFileAccess == true).ConfigureAwait(false);
             var gate = WriteRootGate(exec, NormalizePreDecision(await Ctx.Events.Waterfall(
                 carrier, new ToolPreExecuteNotification(exec),
                 () => new ValueTask<object?>(new PreToolDecision.Allow()))));
@@ -421,6 +451,14 @@ public sealed class ToolRuntime : Service
             return new ScheduledToolPreparation.FinalResult(exec, ErrorResult(error));
         }
     }
+    private static void DemandGitExecution()
+    {
+        var policy = SettingsMutationScope.Current?.Context.ExternalProcessPolicy;
+        policy?.DemandUnconfined("Direct git execution including repository-configured helpers");
+        if (policy?.Enabled == true)
+            throw new NotSupportedException("Direct git inspection has no OS-confined process backend; use a confined tool subprocess.");
+    }
+
 
     /** Writes outside the session's write permission root need approval, whatever the session's current directory is. */
     private PreToolDecision WriteRootGate(ToolRunContext exec, PreToolDecision gate)
@@ -482,11 +520,12 @@ public sealed class ToolRuntime : Service
     public async Task<ScheduledToolDispatch> DispatchScheduledExecution(ToolRunContext exec)
     {
         using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
+            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false),
+            Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false));
         try
         {
             exec.ExternalProcessProtectionRequired = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true;
-            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
+            using var gitScope = exec.ExternalProcessPolicy is null ? null : new Dsh.GitInspect.GitExecutionScope(DemandGitExecution);
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
             var result = await Ctx.Events.Waterfall(
                 carrier, new ToolExecuteNotification(exec),
@@ -511,10 +550,11 @@ public sealed class ToolRuntime : Service
     public async Task<ToolExecutionResult> FinalizeScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
         using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
+            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false),
+            Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false));
         try
         {
-            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
+            using var gitScope = exec.ExternalProcessPolicy is null ? null : new Dsh.GitInspect.GitExecutionScope(DemandGitExecution);
             var postResult = await PostExecute(exec, result);
             return FinishScheduledExecution(
                 exec,
