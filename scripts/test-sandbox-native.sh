@@ -87,28 +87,6 @@ temporary="$PWD/.artifacts/sandbox-ci-tmp"
 if [ "$RUNNER_OS" = Windows ]; then temporary="$(cygpath -w "$temporary")"; fi
 export TMPDIR="$temporary" TMP="$temporary" TEMP="$temporary"
 
-if [ "$RUNNER_OS" = macOS ]; then
-  macos_native_start="$temporary/macos-native-start.$$"
-  touch "$macos_native_start"
-  collect_macos_native_failure() {
-    status="$1"
-    trap - EXIT
-    set +e
-    if [ "$status" -ne 0 ]; then
-      for report in "$HOME/Library/Logs/DiagnosticReports"/{sandbox-exec,env,sh,bash,perl,nc,Dsh.Tests,dotnet,dsharp}*.ips; do
-        if [ -f "$report" ] && [ "$report" -nt "$macos_native_start" ]; then
-          jq -c 'select(has("procName")) | {procName,pid,parentPid,exception,termination,asi,faultingThread,frames: [.threads[.faultingThread // 0].frames[]? | {symbol,imageIndex}]}' "$report"
-        fi
-      done
-      sudo /usr/bin/log show --last 2m --style compact --info --debug \
-        --predicate 'eventMessage CONTAINS "Sandbox: env(" OR eventMessage CONTAINS "Sandbox: sh(" OR eventMessage CONTAINS "Sandbox: perl(" OR eventMessage CONTAINS "Sandbox: nc(" OR eventMessage CONTAINS "Sandbox: Dsh.Tests(" OR eventMessage CONTAINS "Sandbox: dotnet(" OR eventMessage CONTAINS "Sandbox: dsharp("'
-    fi
-    rm -f "$macos_native_start"
-    exit "$status"
-  }
-  trap 'collect_macos_native_failure "$?"' EXIT
-fi
-
 case "${RUNNER_OS:?}" in
   Linux)
     "$exe" "${common[@]}" -class Dsh.Tests.SandboxProcessTests \

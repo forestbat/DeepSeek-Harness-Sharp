@@ -318,6 +318,7 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
     private static SafeFileHandle OpenWindows(string path, bool write, bool create, bool directory, bool exclusive = false, bool read = false)
     {
         const uint readAttributes = 0x80;
+        const uint directoryList = 1;
         const uint genericWrite = 0x40000000;
         const uint shareReadWrite = 3;
         const uint shareRead = 1;
@@ -328,7 +329,8 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
         const uint createNew = 1;
         const uint openReparsePoint = 0x00200000;
         const uint backupSemantics = 0x02000000;
-        var handle = CreateFile(path, readAttributes | (write ? genericWrite : 0) | (read ? genericRead : 0), directory ? shareReadWrite : read ? shareAll : shareRead, 0,
+        // Directory data access makes the no-delete-sharing pin effective; metadata-only handles do not.
+        var handle = CreateFile(path, readAttributes | (directory ? directoryList : 0) | (write ? genericWrite : 0) | (read ? genericRead : 0), directory ? shareReadWrite : read ? shareAll : shareRead, 0,
             exclusive ? createNew : create ? openAlways : openExisting, openReparsePoint | (directory ? backupSemantics : 0), 0);
         if (!handle.IsInvalid)
             return handle;
