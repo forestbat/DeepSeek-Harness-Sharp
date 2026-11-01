@@ -13,7 +13,7 @@ public static class WriteTool
 {
     public const string ToolName = "write";
 
-    private const string SectionText = "Use the write tool to create files or completely replace file contents. Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it) and prefer edit for targeted changes.";
+    private const string SectionText = "Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.";
 
     public static IDisposable Register(Context ctx)
     {

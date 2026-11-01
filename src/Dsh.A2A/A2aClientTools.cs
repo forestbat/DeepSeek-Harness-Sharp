@@ -40,7 +40,7 @@ public sealed class A2aClientTools(IReadOnlyDictionary<string, A2aRemoteSettings
         var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)
             ?? throw new InvalidOperationException("the a2a client tools require the system prompt service");
         return new DisposableBundle(
-            prompt.Section(PromptSection.Literal("tool:a2a", SectionText)),
+            prompt.Section(PromptSection.Literal("tool:a2a", SectionText, ToolNames: [Card, Send, Get, List, Cancel])),
             tools.Register(CardTool()),
             tools.Register(SendTool()),
             tools.Register(GetTool()),
