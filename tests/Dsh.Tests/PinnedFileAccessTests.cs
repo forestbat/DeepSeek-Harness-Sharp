@@ -52,7 +52,7 @@ public sealed class PinnedFileAccessTests
     {
         using var files = new FileFixture();
         var attempted = false;
-        await using var access = PinnedFileAccess.Open(files.Target, mode, target =>
+        await using (var access = PinnedFileAccess.Open(files.Target, mode, target =>
         {
             if (target.IsDirectory || attempted)
                 return;
@@ -64,9 +64,11 @@ public sealed class PinnedFileAccessTests
                 Directory.Move(files.Parent, files.Relocated);
                 Directory.CreateSymbolicLink(files.Parent, files.Protected);
             }
-        });
-        await access.Stream.WriteAsync("after"u8.ToArray(), Ct);
-        await access.CompleteAsync(Ct);
+        }))
+        {
+            await access.Stream.WriteAsync("after"u8.ToArray(), Ct);
+            await access.CompleteAsync(Ct);
+        }
         Assert.True(attempted);
         var actual = OperatingSystem.IsWindows() ? files.Target : Path.Combine(files.Relocated, "value.txt");
         Assert.Equal("after", File.ReadAllText(actual));
