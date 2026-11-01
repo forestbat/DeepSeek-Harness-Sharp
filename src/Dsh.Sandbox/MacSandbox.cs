@@ -36,6 +36,8 @@ internal sealed class MacSandbox : ISandboxLifetime
             throw new PlatformNotSupportedException("macOS sandboxing requires sandbox-exec and the system env executable; no unrestricted fallback or automatic installation is used.");
         var profile = new StringBuilder("(version 1)\n(deny default)\n(allow process-exec (literal \"/usr/bin/env\") (literal ").Append(Quote(policy.Executable)).Append("))\n");
         profile.Append("(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.logger\"))\n");
+        // dyld's shared-cache bootstrap opens the root directory before the target executable starts.
+        profile.Append("(allow file-read-data (require-all (literal \"/\") (vnode-type DIRECTORY)))\n");
         profile.Append("(allow file-read-metadata)\n(allow file-read* file-map-executable (literal \"/usr/bin/env\") (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\") (subpath \"/System/Library\") (subpath \"/usr/lib\"))\n");
         profile.Append("(allow file-write-data (literal \"/dev/null\"))\n");
         foreach (var read in policy.Readable)

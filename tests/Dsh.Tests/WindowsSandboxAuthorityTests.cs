@@ -220,6 +220,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             using var identity = WindowsIdentity.GetCurrent();
             var user = identity.User ?? throw new InvalidOperationException("The consumer has no Windows user SID.");
             var appContainer = AppContainerSid(identity);
+            VerifyPrivateProfileScratch();
             var hostile = $"D:P(D;;RCWDWO;;;OW)(A;;FA;;;{user.Value})(A;;FA;;;{appContainer})";
             if (!Native.ConvertStringSecurityDescriptorToSecurityDescriptor(hostile, 1, out var descriptor, out _))
                 throw new Win32Exception(Marshal.GetLastPInvokeError());
@@ -277,6 +278,19 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             return new SecurityIdentifier(sid).Value;
         }
         finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void VerifyPrivateProfileScratch()
+    {
+        var directory = Environment.GetEnvironmentVariable("LOCALAPPDATA")
+            ?? throw new InvalidOperationException("The AppContainer has no redirected private data directory.");
+        using var stream = new FileStream(Path.Combine(directory, $"dsh-private-{Guid.NewGuid():N}.tmp"),
+            FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 1, FileOptions.DeleteOnClose);
+        stream.WriteByte((byte)'p');
+        stream.Position = 0;
+        if (stream.ReadByte() != (byte)'p')
+            throw new IOException("The native AppContainer private scratch round trip failed.");
     }
 
     private static SandboxProcessOptions ProbeOptions(string working, string existing, string mode)

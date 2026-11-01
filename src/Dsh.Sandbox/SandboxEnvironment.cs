@@ -24,6 +24,8 @@ internal static class SandboxEnvironment
             var windows = System.Environment.GetFolderPath(System.Environment.SpecialFolder.Windows);
             values["SystemRoot"] = windows;
             values["WINDIR"] = windows;
+            // Windows needs this source folder to redirect the AppContainer's private profile during process creation.
+            values["LOCALAPPDATA"] = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
         }
         else
         {
