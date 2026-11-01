@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Dsh.Interaction;
 
 namespace Dsh.Gui.Views;
@@ -38,8 +39,11 @@ public sealed class DiffView : UserControl
 
     private readonly StackPanel _root = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
     private readonly StackPanel _lines = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
-    private readonly TextBlock _chevron = new() { FontSize = CaptionFontSize, VerticalAlignment = VerticalAlignment.Center };
+    private TextBlock? _chevron;
     private readonly FontFamily _monoFont = FontFamily.Parse(MonoFontFallback);
+    private DiffCard? _renderedCard;
+    private DiffCard? _pendingCard;
+    private bool _rebuildPosted;
 
     public DiffView()
     {
@@ -68,13 +72,41 @@ public sealed class DiffView : UserControl
     {
         base.OnPropertyChanged(change);
         if (change.Property == CardProperty)
-            Rebuild(change.NewValue as DiffCard);
+            QueueRebuild(change.NewValue as DiffCard);
         else if (change.Property == IsCardExpandedProperty)
             ApplyExpanded();
     }
 
+    private void QueueRebuild(DiffCard? card)
+    {
+        _pendingCard = card;
+        if (!_rebuildPosted && !ReferenceEquals(_renderedCard, card))
+        {
+            _root.Children.Clear();
+            _lines.Children.Clear();
+            if (card is not null)
+            {
+                _root.Children.Add(BuildHeader(card));
+                _root.Children.Add(_lines);
+                ApplyExpanded();
+            }
+        }
+        if (_rebuildPosted)
+            return;
+        _rebuildPosted = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _rebuildPosted = false;
+            var pending = _pendingCard;
+            if (ReferenceEquals(_renderedCard, pending))
+                return;
+            Rebuild(pending);
+        }, DispatcherPriority.Background);
+    }
+
     private void Rebuild(DiffCard? card)
     {
+        _renderedCard = card;
         _root.Children.Clear();
         _lines.Children.Clear();
         if (card is null)
@@ -90,13 +122,15 @@ public sealed class DiffView : UserControl
     /** 卡片内 chevron: 折叠只隐藏 diff 行, 标题栏与计数始终可见。 */
     private void ApplyExpanded()
     {
-        _chevron.Text = IsCardExpanded ? "▾" : "▸";
+        if (_chevron is not null)
+            _chevron.Text = IsCardExpanded ? "▾" : "▸";
         _lines.IsVisible = IsCardExpanded;
     }
 
     private Control BuildHeader(DiffCard card)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 4) };
+        _chevron = new TextBlock { FontSize = CaptionFontSize, VerticalAlignment = VerticalAlignment.Center };
         var toggle = new Button
         {
             Content = _chevron,

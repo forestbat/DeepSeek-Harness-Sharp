@@ -13,11 +13,13 @@ public sealed class SessionCatalog(Context ctx, FleetWorkspace fleet)
     /** 空 cwd 会话的占位分组名。 */
     public const string UnspecifiedWorkspace = "未指定目录";
 
+    /** 磁盘扫描结果; null 表示尚未扫描。见 DiskSnapshots 的说明。 */
+    private IReadOnlyList<SessionPersistenceSnapshot>? _disk;
+
     public IReadOnlyList<SessionNodeViewModel> Load()
     {
         var nodes = new Dictionary<string, SessionNodeViewModel>(StringComparer.Ordinal);
-        var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, strict: false);
-        foreach (var snapshot in persistence?.List() ?? [])
+        foreach (var snapshot in DiskSnapshots())
         {
             if (snapshot.Header.IsSubagent)
                 continue;
@@ -45,6 +47,25 @@ public sealed class SessionCatalog(Context ctx, FleetWorkspace fleet)
 
         return [.. nodes.Values.OrderByDescending(node => node.CreatedAt)];
     }
+
+    /**
+     * 磁盘上的历史会话, 扫描一次后缓存。
+     *
+     * 它只用来补齐 Fleet 里没有的会话 —— Fleet 是 Host 写会话的权威来源, 同一个 id 会被 Load 里的循环覆盖。
+     * 而一次全量扫描要读每个日志的 zstd 首行(实测侧栏每刷新一次 ~95ms, 全部落在 UI 线程上),
+     * 所以不能每轮刷新都重扫。会话被删除时由调用方 InvalidateDiskCache 丢弃缓存。
+     */
+    private IReadOnlyList<SessionPersistenceSnapshot> DiskSnapshots()
+    {
+        if (_disk is { } cached)
+            return cached;
+        var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, strict: false);
+        // 服务尚未注册时不缓存: 空结果一旦缓存, 之后即使服务就绪也永远看不到历史会话。
+        return persistence is null ? [] : _disk = persistence.List();
+    }
+
+    /** 丢弃磁盘缓存, 下次 Load 重新扫描。会话被删除时调用。 */
+    public void InvalidateDiskCache() => _disk = null;
 
 
     private static SessionNodeViewModel Create(SessionHeader header)

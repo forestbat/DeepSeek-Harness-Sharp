@@ -65,6 +65,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private readonly HostChatSession _chat;
     private long _renderedSeq;
+    private bool _renderedAny;
+    private bool _resyncRequested;
     private MessageViewModel? _openAssistant;
     private MessageViewModel? _openReasoning;
 
@@ -83,6 +85,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private EditorOpenWithViewModel? _editorPicker;
     private bool _updatingSuggestions;
     private bool _commandSuggestionsLoaded;
+    private CancellationTokenSource? _suggestionCancellation;
 
     /** Local chat lifecycle and all session mutations belong to the persistent Host. */
     public MainViewModel(HarnessApp app, HostChatSession chat)
@@ -466,7 +469,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             node.IsSelected = false;
         Workspaces.Clear();
         FileSystemNodes.Clear();
-        var nodes = FilteredCatalog();
+        // 目录只取一次: 过滤后用于侧栏分组, 全量用于最近工作区。
+        var catalog = _catalog.Load();
+        var nodes = FilteredCatalog(catalog);
         foreach (var group in GroupByWorkspace(nodes))
             Workspaces.Add(group);
         foreach (var node in BuildFileTree(nodes))
@@ -475,15 +480,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         foreach (var node in Sort(nodes).Take(20))
             RecentSessions.Add(node);
         SelectedSession = FindSession(_chat.Id);
-        RebuildRecentWorkspaces();
+        // 全量目录已在上方取到, 这里不再第二次扫描。
+        RebuildRecentWorkspaces(catalog);
         UpdateCurrentWorkspace();
     }
 
     /** 最近工作区 = 已有会话的 distinct 完整路径, 按最近创建倒序; 选中只改默认目录。 */
-    private void RebuildRecentWorkspaces()
+    private void RebuildRecentWorkspaces(IReadOnlyList<SessionNodeViewModel> catalog)
     {
         RecentWorkspaces.Clear();
-        var paths = _catalog.Load()
+        var paths = catalog
             .Where(node => node.WorkspacePath != SessionCatalog.UnspecifiedWorkspace)
             .GroupBy(node => node.WorkspacePath, StringComparer.Ordinal)
             .OrderByDescending(group => group.Max(node => node.CreatedAt))
@@ -812,7 +818,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         node.Title = title;
         if (node.SessionId == _chat.Id)
         {
-            await _chat.ReloadAsync();
+            await _chat.ReloadAsync(forceReset: false);
             SessionTitle = title;
         }
         StatusText = $"已重命名为「{title}」";
@@ -837,6 +843,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         await (await _chat.ClientAsync()).SessionEditing.DeleteSessionAsync(node.SessionId.Value);
+        // 磁盘上已经没有这条会话, 缓存的目录快照必须失效, 否则它会在侧栏里留下幽灵条目。
+        _catalog.InvalidateDiskCache();
         StatusText = "会话已删除";
         RefreshSessions();
     }
@@ -1136,6 +1144,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         _disposed = true;
+        _suggestionCancellation?.Cancel();
+        _suggestionCancellation?.Dispose();
+        _suggestionCancellation = null;
         await _editorTerminalHost.DisposeAsync();
         await _editorClientBinding.DisposeAsync();
         Preferences.BeginNetworkShutdown();
@@ -1209,9 +1220,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private SessionNodeViewModel? FindSession(SessionId id)
         => AllSessions().FirstOrDefault(node => node.SessionId == id);
 
-    private IReadOnlyList<SessionNodeViewModel> FilteredCatalog()
+    private IReadOnlyList<SessionNodeViewModel> FilteredCatalog(IReadOnlyList<SessionNodeViewModel> catalog)
     {
-        var nodes = _catalog.Load();
+        var nodes = catalog;
         var search = SearchText.Trim();
         if (search.Length > 0)
             nodes = [.. nodes.Where(node => IsTitleHit(node, search) || _contentMatches.ContainsKey(node.SessionId.Value))];
@@ -1494,6 +1505,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         UpdateCurrentWorkspace();
         _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         _renderedSeq = 0;
+        _renderedAny = false;
         // 上一个进程可能留下未闭合的 compaction/start: 重放它会把界面卡在"正在压缩",
         // 而那次压缩早已随进程退出。
         _compactionBusy = false;
@@ -1594,8 +1606,40 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (sessionEvent.Seq < _renderedSeq)
                 continue;
+            if (_renderedAny && sessionEvent.Seq > _renderedSeq)
+            {
+                RequestResync(sessionEvent.Seq);
+                return;
+            }
+            _renderedAny = true;
             _renderedSeq = sessionEvent.Seq + 1;
             ApplyEvent(sessionEvent, replay);
+        }
+    }
+
+    private void RequestResync(long receivedSeq)
+    {
+        if (_resyncRequested || _disposed)
+            return;
+        _resyncRequested = true;
+        _ctx.LoggerFor("gui").Warn($"session event gap: expected seq {_renderedSeq}, received {receivedSeq}; reloading snapshot");
+        _ = ResyncAsync();
+    }
+
+    private async Task ResyncAsync()
+    {
+        try
+        {
+            await _chat.ReloadAsync(forceReset: true);
+        }
+        catch (Exception error)
+        {
+            if (!_disposed)
+                StatusText = $"会话重同步失败: {error.Message}";
+        }
+        finally
+        {
+            _resyncRequested = false;
         }
     }
 
@@ -1930,15 +1974,66 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (_updatingSuggestions || _disposed)
             return;
+        _suggestionCancellation?.Cancel();
+        _suggestionCancellation?.Dispose();
+        _suggestionCancellation = null;
         var input = Composer.Input;
-        var suggestions = BuildSuggestions(input, Composer.CaretIndex);
+        var caret = Composer.CaretIndex;
+        if (IsImagePath(input) || input.StartsWith('/') || !MentionResolver.TryGetActiveToken(input, caret, out var start, out var end))
+        {
+            ApplySuggestions(BuildSuggestions(input, caret));
+            return;
+        }
+        var cancellation = new CancellationTokenSource();
+        _suggestionCancellation = cancellation;
+        _ = RefreshMentionSuggestionsAsync(input, caret, start, end, cancellation.Token);
+    }
+
+    private async Task RefreshMentionSuggestionsAsync(
+        string input,
+        int caret,
+        int start,
+        int end,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(60, cancellationToken);
+            var sessions = CurrentMentionSessions();
+            var cwd = _chat.Header.Cwd ?? Environment.CurrentDirectory;
+            var candidates = await MentionResolver.ResolveCandidatesAsync(
+                input[(start + 1)..end], cwd, sessions, cancellationToken);
+            if (cancellationToken.IsCancellationRequested || _disposed
+                || !string.Equals(Composer.Input, input, StringComparison.Ordinal)
+                || Composer.CaretIndex != caret)
+                return;
+            ApplySuggestions([.. candidates.Select(candidate => new SuggestionViewModel("mention", $"@{candidate}", "", candidate))]);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            if (!_disposed)
+                _ctx.LoggerFor("gui").Warn($"failed to resolve mention suggestions: {error.Message}");
+        }
+    }
+
+    private void ApplySuggestions(IReadOnlyList<SuggestionViewModel> suggestions)
+    {
         _updatingSuggestions = true;
-        Suggestions.Clear();
-        foreach (var suggestion in suggestions)
-            Suggestions.Add(suggestion);
-        SuggestionIndex = 0;
-        IsSuggestionOpen = Suggestions.Count > 0;
-        _updatingSuggestions = false;
+        try
+        {
+            Suggestions.Clear();
+            foreach (var suggestion in suggestions)
+                Suggestions.Add(suggestion);
+            SuggestionIndex = 0;
+            IsSuggestionOpen = Suggestions.Count > 0;
+        }
+        finally
+        {
+            _updatingSuggestions = false;
+        }
     }
 
     /** 文本里是否含"图片路径"片段(用于: 有图路径时不弹命令/引用补全)。 */

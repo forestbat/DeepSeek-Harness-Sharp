@@ -559,6 +559,8 @@ public sealed class MainViewModelTests
 
         viewModel.Composer.Input = $"@{environment.Agent.Id.Value[..6]}";
         viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}"));
 
         Assert.True(viewModel.IsSuggestionOpen);
         Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}");
@@ -574,6 +576,8 @@ public sealed class MainViewModelTests
 
         viewModel.Composer.Input = "@notes";
         viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
 
         Assert.True(viewModel.IsSuggestionOpen);
         Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
@@ -595,6 +599,8 @@ public sealed class MainViewModelTests
 
         viewModel.Composer.Input = "@notes 请修改这个文件";
         viewModel.Composer.CaretIndex = "@notes".Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
 
         var candidate = Assert.Single(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
         viewModel.ConfirmSuggestionCommand.Execute(candidate);

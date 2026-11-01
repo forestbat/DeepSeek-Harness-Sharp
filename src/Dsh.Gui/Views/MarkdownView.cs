@@ -5,6 +5,7 @@ using Avalonia.Controls.Documents;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
 
 namespace Dsh.Gui.Views;
 
@@ -14,6 +15,7 @@ public sealed class MarkdownView : UserControl
         AvaloniaProperty.Register<MarkdownView, string>(nameof(Text), "");
 
     private const int CollapseThresholdLines = 12;
+    private const int RebuildSyncThreshold = 256;
     private const int CollapsedLineCount = 8;
     private const int MaxListLevel = 4;
     private const double BlockSpacing = 6;
@@ -46,6 +48,8 @@ public sealed class MarkdownView : UserControl
     private readonly StackPanel _root = new() { Orientation = Orientation.Vertical, Spacing = BlockSpacing };
     private readonly Dictionary<int, bool> _expandedCodeBlocks = [];
     private string _renderedText = "";
+    private string _themeSignature = "";
+    private bool _rebuildPosted;
     private double _fontScale = 1;
     private IBrush _primaryBrush = Brushes.Black;
     private IBrush _secondaryBrush = Brushes.Gray;
@@ -72,7 +76,13 @@ public sealed class MarkdownView : UserControl
     {
         base.OnPropertyChanged(change);
         if (change.Property == TextProperty)
-            Rebuild(force: false);
+        {
+            var next = change.NewValue as string ?? "";
+            if (_renderedText.Length == 0 || Math.Abs(next.Length - _renderedText.Length) >= RebuildSyncThreshold)
+                Rebuild(force: false);
+            else
+                QueueRebuild();
+        }
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -80,8 +90,8 @@ public sealed class MarkdownView : UserControl
         base.OnAttachedToVisualTree(e);
         if (Application.Current is { } app)
             app.ResourcesChanged += OnAppResourcesChanged;
-        ApplyTheme();
-        Rebuild(force: true);
+        var themeChanged = ApplyTheme();
+        Rebuild(force: themeChanged);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -104,13 +114,18 @@ public sealed class MarkdownView : UserControl
         Rebuild(force: true);
     }
 
-    private void ApplyTheme()
+    private bool ApplyTheme()
     {
         _primaryBrush = ResolveBrush("Brush.Text.Primary", IsDark ? Brushes.White : Brushes.Black);
         _secondaryBrush = ResolveBrush("Brush.Text.Secondary", IsDark ? Brushes.Silver : Brushes.DimGray);
         _codeBackground = ResolveBrush("Brush.Bg.Inset", TranslucentGray);
         _monoFont = LookupResource("Font.Mono") as FontFamily ?? FontFamily.Parse(MonoFontFallback);
         _fontScale = ResolveFontSize("FontSize.Body", BodyFontSize) / BodyFontSize;
+        var signature = $"{_primaryBrush}|{_secondaryBrush}|{_codeBackground}|{_monoFont}|{_fontScale}";
+        if (string.Equals(signature, _themeSignature, StringComparison.Ordinal))
+            return false;
+        _themeSignature = signature;
+        return true;
     }
 
     private double BodySize => BodyFontSize * _fontScale;
@@ -126,6 +141,18 @@ public sealed class MarkdownView : UserControl
     private IBrush ResolveBrush(string key, IBrush fallback) => LookupResource(key) as IBrush ?? fallback;
 
     private object? LookupResource(string key) => this.TryFindResource(key, out var value) ? value : null;
+
+    private void QueueRebuild()
+    {
+        if (_rebuildPosted)
+            return;
+        _rebuildPosted = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _rebuildPosted = false;
+            Rebuild(force: false);
+        }, DispatcherPriority.Background);
+    }
 
     private void Rebuild(bool force)
     {

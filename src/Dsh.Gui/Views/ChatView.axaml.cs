@@ -16,13 +16,15 @@ public sealed partial class ChatView : UserControl
 {
     private const double StickyTolerance = 24;
     private const double AnchorTolerance = 0.5;
-    private const int MaxAnchorPasses = 8;
+    private const int MaxAnchorPasses = 4;
     private const RoutingStrategies ScrollInputRoutes = RoutingStrategies.Tunnel | RoutingStrategies.Bubble;
 
     private MainViewModel? _viewModel;
     private ComposerViewModel? _composer;
     private bool _syncingCaret;
     private bool _sticky = true;
+    private bool _scrollEndPosted;
+    private long _scrollGeneration;
     private ListBox? _anchorList;
     private ScrollViewer? _anchorScroll;
     private object? _anchorData;
@@ -48,7 +50,6 @@ public sealed partial class ChatView : UserControl
         MessageList.AddHandler(InputElement.PointerReleasedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
-        LayoutUpdated += OnLayoutUpdated;
         MessageList.PropertyChanged += (_, change) =>
         {
             if (change.Property != ListBox.ScrollProperty)
@@ -72,7 +73,7 @@ public sealed partial class ChatView : UserControl
         if (_viewModel is null)
             return;
         _viewModel.ScrollRequested += ScrollToMessage;
-        _viewModel.MessagesChanged += ScrollToEnd;
+        _viewModel.MessagesChanged += QueueScrollToEnd;
         _composer = _viewModel.Composer;
         _composer.PropertyChanged += OnComposerPropertyChanged;
         SyncCaretFromView();
@@ -87,7 +88,7 @@ public sealed partial class ChatView : UserControl
         if (_viewModel is null)
             return;
         _viewModel.ScrollRequested -= ScrollToMessage;
-        _viewModel.MessagesChanged -= ScrollToEnd;
+        _viewModel.MessagesChanged -= QueueScrollToEnd;
         _viewModel = null;
     }
 
@@ -175,6 +176,8 @@ public sealed partial class ChatView : UserControl
         if (!layoutChanged || !_sticky)
             _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
         // 折叠引起的高度变化不能触发触底跟随, 否则用户刚操作的消息会被甩出视口。
+        if (!layoutChanged)
+            _scrollGeneration++;
         if (layoutChanged && _sticky && !ReferenceEquals(_anchorList, MessageList))
             scroll.ScrollToEnd();
     }
@@ -215,6 +218,8 @@ public sealed partial class ChatView : UserControl
         var item = control.FindAncestorOfType<ListBoxItem>() ?? control;
         if (scroll is null || item.TranslatePoint(default, scroll) is not { } top)
             return;
+        if (_anchorList is null)
+            LayoutUpdated += OnLayoutUpdated;
         _anchorList = list;
         _anchorScroll = scroll;
         _anchorData = item.DataContext;
@@ -286,6 +291,8 @@ public sealed partial class ChatView : UserControl
 
     private void ClearAnchor()
     {
+        if (_anchorList is not null)
+            LayoutUpdated -= OnLayoutUpdated;
         _anchorList = null;
         _anchorScroll = null;
         _anchorData = null;
@@ -304,13 +311,16 @@ public sealed partial class ChatView : UserControl
         Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(message));
     }
 
-    private void ScrollToEnd()
+    private void QueueScrollToEnd()
     {
-        if (!_sticky || _viewModel?.Messages.Count is not > 0)
+        if (_scrollEndPosted || !_sticky || _viewModel?.Messages.Count is not > 0)
             return;
+        _scrollEndPosted = true;
+        var generation = _scrollGeneration;
         Dispatcher.UIThread.Post(() =>
         {
-            if (_sticky && _viewModel?.Messages.Count is > 0)
+            _scrollEndPosted = false;
+            if (generation == _scrollGeneration && _sticky && _viewModel?.Messages.Count is > 0)
                 (MessageList.Scroll as ScrollViewer)?.ScrollToEnd();
         });
     }
