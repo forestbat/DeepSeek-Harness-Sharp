@@ -39,7 +39,8 @@ public static class SandboxedProcess
         using var policy = SandboxPolicy.Create(options);
         ISandboxLifetime lifetime = OperatingSystem.IsLinux() ? LinuxSandbox.Start(policy)
             : OperatingSystem.IsWindows() ? WindowsSandbox.Start(policy)
-            : MacSandbox.Start(policy);
+            : OperatingSystem.IsMacOS() ? MacSandbox.Start(policy)
+            : throw new PlatformNotSupportedException("No sandbox backend exists for this operating system.");
         var process = new SandboxProcess(lifetime, cancellationToken);
         if (!cancellationToken.IsCancellationRequested)
             return process;

@@ -39,6 +39,8 @@ internal sealed class MacSandbox : ISandboxLifetime
         // dyld's shared-cache bootstrap opens the root directory before the target executable starts.
         profile.Append("(allow file-read-data (require-all (literal \"/\") (vnode-type DIRECTORY)))\n");
         profile.Append("(allow file-read-metadata)\n(allow file-read* file-map-executable (literal \"/usr/bin/env\") (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\") (subpath \"/System/Library\") (subpath \"/usr/lib\"))\n");
+        // The .NET globalization shim loads macOS system ICU data.
+        profile.Append("(allow file-read-data (subpath \"/usr/share/icu\"))\n");
         profile.Append("(allow file-write-data (literal \"/dev/null\"))\n");
         foreach (var read in policy.Readable)
         {
