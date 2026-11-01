@@ -48,7 +48,10 @@ public sealed class Plugin(string packageName) : IDshPlugin
         {
             IncludeHarnessIdentity = BoolOf(dict, "includeHarnessIdentity") ?? new SystemPromptConfig().IncludeHarnessIdentity,
             IncludeRuntimeContext = BoolOf(dict, "includeRuntimeContext") ?? new SystemPromptConfig().IncludeRuntimeContext,
-            Persona = dict?.GetValueOrDefault("persona") as string ?? "",
+            IncludeEnvironment = BoolOf(dict, "includeEnvironment") ?? true,
+            Persona = dict?.GetValueOrDefault("persona") is string { Length: > 0 } persona
+                ? persona
+                : BuiltInPersona.Text,
         };
     }
 

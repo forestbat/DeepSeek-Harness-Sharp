@@ -310,8 +310,8 @@ public sealed class WorkingDirectoryTests : IDisposable
         var sub = await Cd("sub");
         var after = await systemPrompt.Assemble(new AssembleContext(Agent: _agent));
 
-        Assert.Equal("", before.Contexts.Single(context => context.Name == "working-directory").Text);
-        var text = after.Contexts.Single(context => context.Name == "working-directory").Text;
+        Assert.DoesNotContain(before.Sections, section => section.Name == SystemPrompt.RuntimeContextSection);
+        var text = after.Sections.Single(section => section.Name == SystemPrompt.RuntimeContextSection).Text;
         Assert.Contains(sub, text);
         Assert.Contains(_root, text);
     }
