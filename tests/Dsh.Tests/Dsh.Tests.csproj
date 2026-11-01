@@ -50,7 +50,7 @@
     <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.deps.json"
           Link="Dsh.ManagedPluginSample.deps.json"
           CopyToOutputDirectory="PreserveNewest" />
-    <!-- MCP 资源用例连接的真实 stdio server 进程: 测试经 dotnet 宿主启动这份 dll, 不引用它的类型。 -->
+    <!-- MCP resource tests launch the copied sample apphost without referencing its types. -->
     <ProjectReference Include="..\Dsh.McpResourceServerSample\Dsh.McpResourceServerSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!--
       发布版 settings.yaml 模板: 内容文件不会穿过传递项目引用(Dsh.Boot 是经 Dsh.Host 间接引用的),

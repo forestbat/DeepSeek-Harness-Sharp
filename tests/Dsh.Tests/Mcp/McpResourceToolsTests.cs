@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
@@ -16,7 +15,7 @@ public sealed class McpResourceServerFixture : IAsyncLifetime
     public const string ResourceServer = "res";
     public const string PlainServer = "plain";
 
-    private const string SampleDll = "Dsh.McpResourceServerSample.dll";
+    private const string SampleName = "Dsh.McpResourceServerSample";
     private const string NoResourcesFlag = "--no-resources";
 
     public Context Ctx { get; } = new();
@@ -31,13 +30,12 @@ public sealed class McpResourceServerFixture : IAsyncLifetime
 
     public McpService Service { get; private set; } = null!;
 
-    /** Launches the sample through the dotnet host that runs this test process, so no apphost or PATH lookup is involved. */
+    /** Launches the copied sample apphost without assuming a shared-runtime directory layout. */
     public static McpServerConfig ServerConfig(string name, bool withResources = true, params string[] arguments)
     {
-        var dotnetRoot = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", ".."));
-        var muxer = Path.Combine(dotnetRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-        var dll = Path.Combine(AppContext.BaseDirectory, "mcp-resource-server", SampleDll);
-        return new McpServerConfig(name, "stdio", muxer, withResources ? [dll, .. arguments] : [dll, NoResourcesFlag, .. arguments]);
+        var executable = Path.Combine(AppContext.BaseDirectory, "mcp-resource-server",
+            OperatingSystem.IsWindows() ? $"{SampleName}.exe" : SampleName);
+        return new McpServerConfig(name, "stdio", executable, withResources ? arguments : [NoResourcesFlag, .. arguments]);
     }
 
     public static async Task ConnectAsync(McpService service, params McpServerConfig[] servers)

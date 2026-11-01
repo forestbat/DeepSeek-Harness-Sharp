@@ -485,8 +485,9 @@ public sealed class PluginSandboxIntegrationTests
             Session.Append(new TurnStartPayload(1));
             if (expectFixtureActive)
             {
-                Assert.Equal(ActivationState.Active, App.Composition!.Find(Alpha)?.State);
-                Assert.Equal(ActivationState.Active, App.Composition.Find(Beta)?.State);
+                var failures = string.Join("; ", Manager.LoadFailures.Select(failure => failure.Reason));
+                Assert.True(App.Composition!.Find(Alpha)?.State == ActivationState.Active, failures);
+                Assert.True(App.Composition.Find(Beta)?.State == ActivationState.Active, failures);
             }
         }
 

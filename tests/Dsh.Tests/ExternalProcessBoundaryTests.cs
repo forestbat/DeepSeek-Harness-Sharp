@@ -129,7 +129,7 @@ public sealed class ExternalProcessBoundaryTests
         using var fixture = new Fixture();
         var argv = OperatingSystem.IsWindows()
             ? new[] { "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $x=[Console]::ReadLine(); [Console]::Write($x + '|' + $env:BOUNDARY_VALUE); [Console]::Error.Write('real-stderr'); exit 7" }
+                "$utf8=[Text.UTF8Encoding]::new($false); [Console]::InputEncoding=$utf8; [Console]::OutputEncoding=$utf8; $x=[Console]::ReadLine(); [Console]::Write($x + '|' + $env:BOUNDARY_VALUE); [Console]::Error.Write('real-stderr'); exit 7" }
             : new[] { "/bin/sh", "-c", "IFS= read -r x; printf '%s|%s' \"$x\" \"$BOUNDARY_VALUE\"; printf real-stderr >&2; exit 7" };
         using var handle = await fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
         {

@@ -206,15 +206,9 @@ jobs:
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
       - name: Check supported native sandbox backends and actual plugin workers (no skips)
-        id: native_sandbox
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh'
         shell: bash
         run: bash scripts/test-sandbox-native.sh
-
-      - name: Observe the exact failing Windows native consumer without changing authority
-        if: failure() && runner.os == 'Windows' && steps.native_sandbox.conclusion == 'failure'
-        shell: pwsh
-        run: ./scripts/diagnose-sandbox-windows.ps1
 
       - name: Remove the exact CI-only bubblewrap namespace profile
         if: always() && inputs.suite == 'quick' && runner.os == 'Linux'

@@ -95,13 +95,13 @@ if [ "$RUNNER_OS" = macOS ]; then
     trap - EXIT
     set +e
     if [ "$status" -ne 0 ]; then
-      for report in "$HOME/Library/Logs/DiagnosticReports"/{sandbox-exec,env,sh,bash,perl,nc}*.ips; do
+      for report in "$HOME/Library/Logs/DiagnosticReports"/{sandbox-exec,env,sh,bash,perl,nc,Dsh.Tests,dotnet,dsharp}*.ips; do
         if [ -f "$report" ] && [ "$report" -nt "$macos_native_start" ]; then
           jq -c 'select(has("procName")) | {procName,pid,parentPid,exception,termination,asi,faultingThread,frames: [.threads[.faultingThread // 0].frames[]? | {symbol,imageIndex}]}' "$report"
         fi
       done
       sudo /usr/bin/log show --last 2m --style compact --info --debug \
-        --predicate 'eventMessage CONTAINS "Sandbox: env(" OR eventMessage CONTAINS "Sandbox: sh(" OR eventMessage CONTAINS "Sandbox: perl(" OR eventMessage CONTAINS "Sandbox: nc("'
+        --predicate 'eventMessage CONTAINS "Sandbox: env(" OR eventMessage CONTAINS "Sandbox: sh(" OR eventMessage CONTAINS "Sandbox: perl(" OR eventMessage CONTAINS "Sandbox: nc(" OR eventMessage CONTAINS "Sandbox: Dsh.Tests(" OR eventMessage CONTAINS "Sandbox: dotnet(" OR eventMessage CONTAINS "Sandbox: dsharp("'
     fi
     rm -f "$macos_native_start"
     exit "$status"
