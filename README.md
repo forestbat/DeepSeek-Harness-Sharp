@@ -414,6 +414,8 @@ plugins:
 | Windows | 使用 AppContainer 文件/网络边界与 Job Object 资源、进程树约束。当前明确拒绝直接可写目录授权，不能声称普通用户可可靠回收恶意创建的受保护 ACL 后代；文件写入应走宿主能力中介。AppContainer 的 localhost/loopback 限制意味着允许网络也不保证能连接本机模型、代理或 MCP 服务；不会自动添加 loopback exemption 来放宽边界。 |
 | macOS | 需要系统 `sandbox-exec`，支持不派生子进程的单 worker。内存采用 RSS 观察并在测量超预算后终止，不是内核硬上限；不能保证没有瞬时超额。需要派生子进程的不透明执行路径因无法提供无逃逸竞态的后代所有权而失败关闭，不能把整个 macOS 功能笼统标为不可用。 |
 
+Windows 进程创建失败会报告实际 Win32 错误码；在 AppContainer 与 Job 约束建立完成前，载荷保持挂起。
+
 沙箱开启时，shell、PTC、C# 前端及可归属的本机 MCP stdio 进程也必须使用真实 OS 后端保护当前 settings，任意代码的直接写入会被拒绝，应改走审批工具或能力接口。后端缺失、目录授权不兼容、macOS 需要派生子进程、远程/不可归属 MCP 等不能兑现边界的路径都会报错，不静默回退。关闭沙箱可恢复原兼容行为，但也明确放弃这些不透明执行路径的 OS 保护；它不是绕过可信 settings diff 审批的开关。
 
 `scripts.permissions.read/write/network` 独立约束 shell、持久 shell、PTC、dotnet-script 与 CSharpRepl，不从执行器插件的权限推导，未指定的值为允许。

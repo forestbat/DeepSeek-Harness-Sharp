@@ -44,7 +44,7 @@ public static class OwnerOnlyFiles
             throw new ArgumentException("A relative file creation requires one ordinary filename.", nameof(name));
         const int writeOnly = 1;
         var flags = OperatingSystem.IsMacOS() ? 0x1000000 | 0x200 | 0x800 | 0x100 : 0x80000 | 0x40 | 0x80 | 0x20000;
-        var descriptor = openat(directory.DangerousGetHandle().ToInt32(), name, flags | writeOnly, (uint)OwnerReadWrite);
+        var descriptor = Dsh.Sandbox.UnixFileInterop.OpenAt(directory.DangerousGetHandle().ToInt32(), name, flags | writeOnly, (uint)OwnerReadWrite);
         if (descriptor < 0)
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create a pinned owner-only file.");
         var handle = new SafeFileHandle(descriptor, ownsHandle: true);
@@ -107,6 +107,4 @@ public static class OwnerOnlyFiles
         return new FileInfo(path).Create(FileMode.CreateNew, FileSystemRights.FullControl, FileShare.None, WriteBufferSize, FileOptions.None, security);
     }
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int openat(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int flags, uint mode);
 }

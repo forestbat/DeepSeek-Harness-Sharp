@@ -68,7 +68,7 @@ internal static class UnixPathPin
             if (OperatingSystem.IsMacOS())
             {
                 var buffer = new byte[1024];
-                if (fcntl(descriptor, 50, buffer) != 0)
+                if (UnixFileInterop.Fcntl(descriptor, 50, buffer) != 0)
                     throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot resolve a pinned filesystem object.");
                 var length = Array.IndexOf(buffer, (byte)0);
                 if (length < 0)
@@ -147,7 +147,6 @@ internal static class UnixPathPin
     [DllImport("libc", SetLastError = true)] private static extern int open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
     [DllImport("libc", SetLastError = true)] private static extern int openat(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
     [DllImport("libc", SetLastError = true)] private static extern nint readlink([MarshalAs(UnmanagedType.LPUTF8Str)] string path, byte[] buffer, nuint size);
-    [DllImport("libc", SetLastError = true)] private static extern int fcntl(int descriptor, int command, byte[] buffer);
     [DllImport("libc", SetLastError = true)] private static extern int dup(int descriptor);
     [DllImport("libc", SetLastError = true)] private static extern nint fdopendir(int descriptor);
     [DllImport("libc", SetLastError = true)] private static extern nint readdir(nint directory);

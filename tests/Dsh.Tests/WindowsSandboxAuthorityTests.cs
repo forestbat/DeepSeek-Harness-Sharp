@@ -117,29 +117,42 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         SetHostAcl(inaccessible);
         var original = ReadDacl(witness);
         using var recovery = OpenAuthority(inaccessible);
-        using var identity = WindowsIdentity.GetCurrent();
+        using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.Duplicate | TokenAccessLevels.Impersonate);
         var user = identity.User ?? throw new InvalidOperationException("The test process has no Windows user SID.");
+        // The token's default object owner need not be its user, especially on an elevated CI host.
+        var ownership = new FileSecurity();
+        ownership.SetOwner(user);
+        new FileInfo(inaccessible).SetAccessControl(ownership);
+        // Backup/restore privileges can bypass the DACL when opening with FILE_FLAG_BACKUP_SEMANTICS.
+        const uint disableMaxPrivilege = 1;
+        if (!Native.CreateRestrictedToken(identity.AccessToken, disableMaxPrivilege, 0, 0, 0, 0, 0, 0, out var ordinaryAuthority))
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot remove privilege overrides from the runtime authority fixture.");
+        using var authority = ordinaryAuthority;
         var hostile = $"D:P(D;;RCWDWO;;;OW)(A;;FA;;;{user.Value})";
         ApplyDacl(inaccessible, hostile);
         try
         {
-            using (var denied = Native.CreateFile(inaccessible, 0xe0000, 7, 0, 3, 0x02200000, 0))
+            await WindowsIdentity.RunImpersonatedAsync(authority, async () =>
             {
-                Assert.True(denied.IsInvalid);
-                Assert.Equal(5, Marshal.GetLastPInvokeError());
-            }
-            var marker = Path.Combine(_root, "unsupported-runtime-started.txt");
-            var options = CommandOptions(_root) with
-            {
-                RuntimePaths = [witness, inaccessible],
-                Arguments = ["/D", "/Q", "/C", $"echo started>\"{marker}\""],
-            };
-            var failure = await Assert.ThrowsAsync<Win32Exception>(() => SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken));
-            Assert.Equal(5, failure.NativeErrorCode);
-            Assert.False(File.Exists(marker));
-            Assert.Equal(original, ReadDacl(witness));
-            Assert.Equal("witness", File.ReadAllText(witness));
-            AssertHostAuthority(witness);
+                using (var denied = Native.CreateFile(inaccessible, 0xe0000, 7, 0, 3, 0x02200000, 0))
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    Assert.True(denied.IsInvalid, "The privilege-stripped owner unexpectedly retained runtime ACL authority.");
+                    Assert.Equal(5, error);
+                }
+                var marker = Path.Combine(_root, "unsupported-runtime-started.txt");
+                var options = CommandOptions(_root) with
+                {
+                    RuntimePaths = [witness, inaccessible],
+                    Arguments = ["/D", "/Q", "/C", $"echo started>\"{marker}\""],
+                };
+                var failure = await Assert.ThrowsAsync<Win32Exception>(() => SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken));
+                Assert.Equal(5, failure.NativeErrorCode);
+                Assert.False(File.Exists(marker));
+                Assert.Equal(original, ReadDacl(witness));
+                Assert.Equal("witness", File.ReadAllText(witness));
+                AssertHostAuthority(witness);
+            });
         }
         finally
         {
@@ -373,6 +386,8 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         internal static extern uint SetSecurityInfo(SafeFileHandle handle, int type, uint information, nint owner, nint group, nint dacl, nint sacl);
         [DllImport("advapi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetTokenInformation(SafeAccessTokenHandle token, int information, nint buffer, uint size, out uint required);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateRestrictedToken(SafeAccessTokenHandle existing, uint flags, uint disabledCount, nint disabled, uint deletedCount, nint deleted, uint restrictedCount, nint restricted, out SafeAccessTokenHandle token);
         [DllImport("kernel32.dll")]
         internal static extern nint LocalFree(nint pointer);
     }

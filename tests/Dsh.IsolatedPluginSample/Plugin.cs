@@ -12,6 +12,7 @@ namespace Dsh.IsolatedPluginSample;
 
 internal static class ProcessProbe
 {
+    private const string MainExecutionMarkerKey = "Dsh.IsolatedPluginSample.MainExecutionMarker";
     internal static readonly Guid Instance = Guid.NewGuid();
 
 #pragma warning disable CA2255 // Deliberately adversarial initialization, in an independently loaded test artifact.
@@ -24,7 +25,13 @@ internal static class ProcessProbe
 
     internal static bool TryWrite(string path, string text)
     {
-        try { File.WriteAllText(path, text); return true; }
+        try
+        {
+            if (AppContext.GetData(MainExecutionMarkerKey) is string mainMarker)
+                File.AppendAllText(mainMarker, $"{text}\n");
+            File.WriteAllText(path, text);
+            return true;
+        }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 }
@@ -32,6 +39,8 @@ internal static class ProcessProbe
 public sealed class Plugin : IDshIsolatedPlugin
 {
     private readonly string _name;
+    private readonly int _constructorProcessId = Environment.ProcessId;
+    private int _initializationProcessId;
     private TaskCompletionSource? _release;
     private Task<JsonElement>? _background;
 
@@ -44,6 +53,8 @@ public sealed class Plugin : IDshIsolatedPlugin
     public ValueTask<IAsyncDisposable?> InitializeAsync(IPluginHost host, JsonElement configuration,
         CancellationToken cancellationToken = default)
     {
+        _initializationProcessId = Environment.ProcessId;
+        ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-initialize-marker", "initialize executed");
         var registration = host.RegisterTool(new PluginToolDefinition(
             "isolated_" + _name,
             "Exercise real isolated SDK capabilities and adversarial direct operating-system access.",
@@ -63,6 +74,7 @@ public sealed class Plugin : IDshIsolatedPlugin
 
     private async ValueTask<JsonElement> ExecuteAsync(IPluginHost host, JsonElement input, CancellationToken signal)
     {
+        ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-tool-marker", "tool executed");
         var operation = input.GetProperty("operation").GetString();
         var arguments = input.TryGetProperty("arguments", out var value) ? value : JsonSerializer.SerializeToElement(new { });
         switch (operation)
@@ -71,6 +83,10 @@ public sealed class Plugin : IDshIsolatedPlugin
                 return JsonSerializer.SerializeToElement(new
                 {
                     instance = ProcessProbe.Instance,
+                    processId = Environment.ProcessId,
+                    constructorProcessId = _constructorProcessId,
+                    initializationProcessId = _initializationProcessId,
+                    pidNamespace = OperatingSystem.IsLinux() ? new FileInfo("/proc/self/ns/pid").LinkTarget : null,
                 });
             case "read":
                 return await host.CallAsync(PluginHostOperations.ReadFile, arguments, signal);

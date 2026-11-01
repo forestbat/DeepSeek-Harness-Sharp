@@ -305,7 +305,11 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         return text.Append('\\', slashes * 2).Append('"').ToString();
     }
 
-    private static Win32Exception NativeError(string operation) => new(Marshal.GetLastPInvokeError(), $"Cannot {operation}.");
+    private static Win32Exception NativeError(string operation)
+    {
+        var error = Marshal.GetLastPInvokeError();
+        return new Win32Exception(error, $"Cannot {operation} (Win32 error {error}).");
+    }
     private static void Check(bool success, string operation) { if (!success) throw NativeError(operation); }
     private static void CheckHandle(SafeFileHandle handle, string operation) { if (handle.IsInvalid) throw NativeError(operation); }
 

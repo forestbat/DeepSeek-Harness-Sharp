@@ -188,7 +188,7 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
 
     private SafeFileHandle OpenUnix(string name, int flags, uint mode)
     {
-        var descriptor = openat(_directories[^1].DangerousGetHandle().ToInt32(), name, flags, mode);
+        var descriptor = UnixFileInterop.OpenAt(_directories[^1].DangerousGetHandle().ToInt32(), name, flags, mode);
         if (descriptor < 0)
             throw NativeError("Cannot open the pinned file target.");
         return new SafeFileHandle(descriptor, ownsHandle: true);
@@ -346,8 +346,6 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
     private static int UnixCloseOnExec => OperatingSystem.IsMacOS() ? 0x1000000 : 0x80000;
     private static int UnixNonBlock => OperatingSystem.IsMacOS() ? 4 : 0x800;
 
-    [DllImport("libc", SetLastError = true)]
-    private static extern int openat(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int flags, uint mode);
     [DllImport("libc", SetLastError = true)]
     private static extern int mkdirat(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint mode);
     [DllImport("libc", SetLastError = true)]

@@ -33,6 +33,8 @@ public sealed class PluginSandboxIntegrationTests
         fixture.AssertNoMainExecution();
 
         await fixture.StartAsync();
+        await fixture.Identity("alpha");
+        await fixture.Identity("beta");
         fixture.AssertNoMainExecution();
 
         var protectedFile = Path.Combine(fixture.Root, "main-owned.txt");
@@ -57,6 +59,21 @@ public sealed class PluginSandboxIntegrationTests
         });
         Assert.Equal(201, brokerHttp.GetProperty("status").GetInt32());
         Assert.Equal(1, server.Requests);
+        fixture.AssertNoMainExecution();
+    }
+
+    [Fact]
+    public async Task SandboxActivation_AfterLegacyMainExecution_NeverRunsCurrentCodeInMain()
+    {
+        using (var legacy = new Fixture(settings => settings.Sandbox = new SandboxSettings { Enabled = false }))
+        {
+            await legacy.StartAsync();
+            await legacy.Identity("alpha");
+        }
+        using var isolated = new Fixture();
+        await isolated.StartAsync();
+        await isolated.Identity("alpha");
+        isolated.AssertNoMainExecution();
     }
 
 
@@ -74,6 +91,8 @@ public sealed class PluginSandboxIntegrationTests
             };
         });
         await fixture.StartAsync();
+        await fixture.Identity("alpha");
+        await fixture.Identity("beta");
         var source = Path.Combine(fixture.Root, "source.txt");
         var destination = Path.Combine(fixture.Root, "destination.txt");
         await File.WriteAllTextAsync(source, "broker source", TestContext.Current.CancellationToken);
@@ -326,6 +345,7 @@ public sealed class PluginSandboxIntegrationTests
             Assert.Null(fixture.App.Composition!.Find(Alpha));
             Assert.Null(fixture.App.Composition.Find(Beta));
         }
+        fixture.AssertNoMainExecution();
     }
 
     [Fact]
@@ -386,6 +406,10 @@ public sealed class PluginSandboxIntegrationTests
 
     internal sealed class Fixture : IDisposable
     {
+        private const string MainExecutionMarkerKey = "Dsh.IsolatedPluginSample.MainExecutionMarker";
+        private readonly object? _previousMainExecutionMarker = AppContext.GetData(MainExecutionMarkerKey);
+        private readonly string _mainExecutionMarker;
+        private readonly bool _sandbox;
         private static readonly HashSet<string> EnabledImagePackages =
         [
             "@deepseek-ai/dsh-core", "@deepseek-ai/dsh-interaction", "@deepseek-ai/dsh-plugin-manager",
@@ -406,6 +430,7 @@ public sealed class PluginSandboxIntegrationTests
         public Fixture(Action<HarnessSettings>? configure = null, bool deployFixture = true)
         {
             _deadline.CancelAfter(TimeSpan.FromMinutes(3));
+            _mainExecutionMarker = Path.Combine(Root, "main-execution-marker");
             Home = HarnessHome.Resolve(Path.Combine(Root, "home"));
             Home.Ensure();
             Plugins = Path.Combine(Root, "plugins");
@@ -441,9 +466,11 @@ public sealed class PluginSandboxIntegrationTests
                     Execution = PluginExecution.Sandbox, TrustDomain = "fixture-shared-domain", Permissions = PluginPermissions.AllAllowed,
                 };
             configure?.Invoke(settings);
+            _sandbox = settings.Sandbox?.Enabled == true;
             settings.Save(Home);
             settings.SavePlugins(Home);
             Options = new HarnessOptions(Home, Cwd: Root, PluginsDirectory: Plugins);
+            AppContext.SetData(MainExecutionMarkerKey, _mainExecutionMarker);
         }
 
         public async Task StartAsync(bool expectFixtureActive = true)
@@ -477,7 +504,24 @@ public sealed class PluginSandboxIntegrationTests
         public async Task<JsonElement> Success(string package, string operation, object? arguments = null)
             => Assert.IsType<ToolExecutionResult.Success>(await Execute(package, operation, arguments)).Value;
 
-        public Task<JsonElement> Identity(string package) => Success(package, "identity");
+        public async Task<JsonElement> Identity(string package)
+        {
+            var identity = await Success(package, "identity");
+            var processId = identity.GetProperty("processId").GetInt32();
+            Assert.Equal(processId, identity.GetProperty("constructorProcessId").GetInt32());
+            Assert.Equal(processId, identity.GetProperty("initializationProcessId").GetInt32());
+            if (OperatingSystem.IsLinux())
+            {
+                var workerNamespace = identity.GetProperty("pidNamespace").GetString();
+                Assert.StartsWith("pid:[", workerNamespace);
+                Assert.Equal(!_sandbox, new FileInfo("/proc/self/ns/pid").LinkTarget == workerNamespace);
+            }
+            else
+                Assert.Equal(!_sandbox, Environment.ProcessId == processId);
+            if (!_sandbox)
+                Assert.True(File.Exists(_mainExecutionMarker));
+            return identity;
+        }
 
         public async Task<Guid> Instance(string package)
         {
@@ -496,14 +540,22 @@ public sealed class PluginSandboxIntegrationTests
 
         private IEnumerable<string> Markers()
         {
-            yield return Artifact + ".module-marker";
-            yield return Artifact + ".alpha-constructor-marker";
-            yield return Artifact + ".beta-constructor-marker";
+            yield return _mainExecutionMarker;
+            foreach (var artifact in Directory.EnumerateFiles(Root, "Dsh.IsolatedPluginSample.dll", SearchOption.AllDirectories))
+            {
+                yield return artifact + ".module-marker";
+                foreach (var package in new[] { "alpha", "beta" })
+                {
+                    yield return artifact + $".{package}-constructor-marker";
+                    yield return artifact + $".{package}-initialize-marker";
+                    yield return artifact + $".{package}-tool-marker";
+                }
+            }
         }
 
         public void AssertNoMainExecution()
         {
-            Assert.DoesNotContain(AppDomain.CurrentDomain.GetAssemblies(), assembly => assembly.GetName().Name == "Dsh.IsolatedPluginSample");
+            // The process-local probe also detects execution through an image cached by an earlier sandbox-OFF fixture.
             foreach (var marker in Markers())
                 Assert.False(File.Exists(marker));
         }
@@ -518,6 +570,7 @@ public sealed class PluginSandboxIntegrationTests
             finally
             {
                 _deadline.Dispose();
+                AppContext.SetData(MainExecutionMarkerKey, _previousMainExecutionMarker);
                 TempTree.Delete(Root);
             }
         }

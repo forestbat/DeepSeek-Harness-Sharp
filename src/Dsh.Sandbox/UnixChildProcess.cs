@@ -207,7 +207,7 @@ internal sealed class UnixChildProcess : IAsyncDisposable
             {
                 source.DangerousAddRef(ref added);
                 // Stage sources above every dup2 destination so file actions cannot overwrite a later source.
-                var duplicate = fcntl(checked((int)source.DangerousGetHandle()), 1030, checked(3 + count));
+                var duplicate = UnixFileInterop.Fcntl(checked((int)source.DangerousGetHandle()), 1030, checked(3 + count));
                 if (duplicate < 0)
                     throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot duplicate an owned sandbox descriptor.");
                 Handles.Add(new SafeFileHandle(duplicate, ownsHandle: true));
@@ -238,7 +238,7 @@ internal sealed class UnixChildProcess : IAsyncDisposable
             {
                 if (pipe(descriptors) != 0)
                     throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create sandbox stdio pipe.");
-                if (fcntl(descriptors[0], 2, 1) < 0 || fcntl(descriptors[1], 2, 1) < 0)
+                if (UnixFileInterop.Fcntl(descriptors[0], 2, 1) < 0 || UnixFileInterop.Fcntl(descriptors[1], 2, 1) < 0)
                 {
                     var error = Marshal.GetLastPInvokeError();
                     close(descriptors[0]);
@@ -281,7 +281,6 @@ internal sealed class UnixChildProcess : IAsyncDisposable
     [DllImport("libc")] private static extern int posix_spawnattr_setflags(nint attributes, short flags);
     [DllImport("libc", SetLastError = true)] private static extern unsafe int pipe2(int* descriptors, int flags);
     [DllImport("libc", SetLastError = true)] private static extern unsafe int pipe(int* descriptors);
-    [DllImport("libc", SetLastError = true)] private static extern int fcntl(int descriptor, int command, int flags);
     [DllImport("libc", SetLastError = true)] private static extern int waitpid(int pid, out int status, int options);
     [DllImport("libc", SetLastError = true)] private static extern int kill(int pid, int signal);
     [DllImport("libc")] private static extern int close(int descriptor);
