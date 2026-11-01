@@ -90,8 +90,7 @@ public sealed class AgentLoop : Service, IAgentFactory
         var session = Session.FromRestore(options.SessionId, events, handle.Header, handle.InheritedEventCount);
         var sessions = Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         // 与 Create 一致: 会话进入 store 后由 agent 生命周期持有, 不能在这里就解绑, 否则事件不再转发/落盘。
-        sessions.Enter(session, owner);
-        sessions.Announce(session);
+        sessions.Enter(session);
         var agent = new AgentLoopAgent(owner, session.Id, options.AgentOptions ?? new AgentOptions(), session, LastTurnOf);
         options.Setup?.Invoke(agent.Ctx);
         Ctx.Emit(new AgentSessionStartNotification(agent, "resume"));

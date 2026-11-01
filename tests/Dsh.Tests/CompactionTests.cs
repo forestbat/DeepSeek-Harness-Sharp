@@ -218,15 +218,24 @@ public class CompactionTests
         await agent.WhenIdle();
 
         var measured = harness.Meter.Measure(agent.Session);
-        Assert.InRange(measured.TotalTokens, 400_000, 401_000);
+        // 缓存命中不得二次计入: TotalTokens 必须落在 provider 报的 input+output 附近, 而不是再加上增量。
+        Assert.True(
+            measured.TotalTokens is >= 400_000 and <= 401_000,
+            $"measured {measured.TotalTokens} (baseline {measured.Baseline.Tokens}, surface {measured.SurfaceTokens})");
         Assert.DoesNotContain(agent.Session.SnapshotEvents(), sessionEvent => sessionEvent.Type == CompactionEventTypes.Start);
         Assert.Equal(0, harness.Adapter.CompactionCalls);
     }
 
+    /**
+     * 压力触发: 超过阈值后在下个回合边界压缩一次, 然后回到阈值以下。
+     * 窗口 360 是刻意的: 触发检查时约 311 token ≥ 阈值 288, 压后约 263 < 288, 恰好一次就够。
+     * 窗口再小(例如 280)会导致压完仍高于阈值, 引擎按 CompactionRetries 再压一次 ——
+     * 那不是本用例要验证的路由。
+     */
     [Fact]
     public async Task PressureTrigger_CompactsAtNextTurnBoundary()
     {
-        using var harness = new Harness(contextWindow: 280, turnText: new string('x', 200));
+        using var harness = new Harness(contextWindow: 360, turnText: new string('x', 200));
         var agent = await harness.CreateAgent("compaction-pressure");
         agent.Followup(MessageFactory.CreateUserText(new string('u', 600)));
         await agent.WhenIdle();

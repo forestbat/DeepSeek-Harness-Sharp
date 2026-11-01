@@ -756,6 +756,109 @@ public class SubagentTests
         Assert.DoesNotContain("keyless", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
     }
 
+    /**
+     * 后台子代理的第一条语义: 父回合的取消信号不再传导到子代理, 它会跑完并给出 Completed。
+     * 这正是"用户一按停, 跑到一半的子代理成果全丢"那个缺陷的反面。
+     */
+    [Fact]
+    public async Task BackgroundSubagent_IgnoresTheParentSignalAndFinishes()
+    {
+        using var fixture = new SubagentFixture(
+        [
+            _ => TextAnswer("background finished anyway"),
+        ]);
+        var parent = await fixture.CreateParent("session-parent-background");
+        using var parentSignal = new CancellationTokenSource();
+        var run = await fixture.Subagents.StartAsync("spawn", new SubagentStartRequest
+        {
+            Label = "long task",
+            Prompt = [new TextBlock("keep working")],
+            Parent = parent,
+            Signal = parentSignal.Token,
+            Background = true,
+        });
+        // 驱动器在构造时就已把 prompt 排进子代理; 这里只确认它确实是活的 agent。
+        Assert.IsType<AgentLoopAgent>(run.LocalAgent);
+
+        // 父回合按停: 前台子代理会被连带取消, 后台子代理不该受影响。
+        await parentSignal.CancelAsync();
+
+        var result = await run.Result.WaitAsync(RunCompletionTimeout, TestContext.Current.CancellationToken);
+        Assert.Equal(SubagentStopReason.Completed, result.StopReason);
+        Assert.Equal(
+            "background finished anyway",
+            string.Concat(result.Output.OfType<TextBlock>().Select(block => block.Text)));
+        await run.DisposeAsync();
+    }
+
+    /**
+     * 后台子代理的第二条语义: 跑完要把结果投回父会话并唤醒它。
+     * 没人叫醒父会话的话, 后台跑完等于白跑。
+     */
+    [Fact]
+    public async Task BackgroundSubagent_WakesTheParentWithItsResult()
+    {
+        using var fixture = new SubagentFixture(
+        [
+            _ => ToolCallAnswer("call-bg-2", "subagent", """{"description":"report task","prompt":"produce a report","run_in_background":true}"""),
+            _ => TextAnswer("the background report"),
+            _ => TextAnswer("parent done"),
+            _ => TextAnswer("parent continued after the notice"),
+        ]);
+        var parent = await fixture.CreateParent("session-parent-wake");
+
+        parent.Followup(MessageFactory.CreateUserText("start"));
+        await parent.WhenIdle();
+
+        var notice = await WaitForBackgroundNotice(parent);
+        var text = string.Concat(notice.Content.OfType<TextBlock>().Select(block => block.Text));
+        Assert.Contains("the background report", text, StringComparison.Ordinal);
+
+        // 通知会被当作下一回合的输入: 父会话因此从"已停"恢复成"继续干活"。
+        await parent.WhenIdle().WaitAsync(RunCompletionTimeout, TestContext.Current.CancellationToken);
+        var userTexts = parent.Session.SnapshotEvents()
+            .Select(sessionEvent => sessionEvent.Data)
+            .OfType<UserMessagePayload>()
+            .Select(payload => string.Concat(payload.Message.Content.OfType<TextBlock>().Select(block => block.Text)))
+            .ToList();
+        Assert.Contains(userTexts, text => text.Contains("the background report", StringComparison.Ordinal));
+    }
+
+
+    /** 清箱时后台结果通知必须留下: 它往往在按停之后才到, 或在按停之前刚排进队列。 */
+    [Fact]
+    public void Cancel_KeepsBackgroundResultNoticesButDropsPendingPrompts()
+    {
+        var ctx = new Context();
+        var session = Session.Create(SessionId.Create(Guid.NewGuid().ToString()));
+        var inbox = new Inbox(session, new InboxNotifications());
+        inbox.Append(InboxTargets.NextTurn, BackgroundResultNotice.Create("background done"));
+        inbox.Append(InboxTargets.NextTurn, MessageFactory.CreateUserText("a pending user prompt"));
+
+        inbox.Clear(BackgroundResultNotice.IsNotice);
+
+        var kept = Assert.Single(inbox.NextTurn);
+        Assert.True(BackgroundResultNotice.IsNotice(kept));
+    }
+
+    /** 等父会话收到后台结果通知; 通知可能还被唤醒路径领走, 所以也接受已经进入回合的形态。 */
+    private static async Task<UserMessage> WaitForBackgroundNotice(AgentLoopAgent agent)
+    {
+        var deadline = DateTimeOffset.UtcNow + RunCompletionTimeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (agent.Inbox.NextTurn.Concat(agent.Inbox.NextStep).FirstOrDefault(BackgroundResultNotice.IsNotice) is { } queued)
+                return queued;
+            if (agent.Session.SnapshotEvents()
+                    .Select(sessionEvent => sessionEvent.Data)
+                    .OfType<UserMessagePayload>()
+                    .LastOrDefault(payload => BackgroundResultNotice.IsNotice(payload.Message)) is { } claimed)
+                return claimed.Message;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+        throw new TimeoutException("the background subagent never posted its result to the parent");
+    }
+
     private sealed class WeakProvider : ISubagentProvider
     {
         public string Name => "weak";

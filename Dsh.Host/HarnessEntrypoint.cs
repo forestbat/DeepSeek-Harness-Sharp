@@ -175,7 +175,7 @@ public static class HarnessEntrypoint
                     return 1;
                 }
             case "headless":
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)));
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId);
             case "storage":
                 return await RunStorageCommandAsync(harnessHome, positional.Skip(1).ToList());
             case "config":
