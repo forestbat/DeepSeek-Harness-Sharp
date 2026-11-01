@@ -4,6 +4,8 @@ namespace Dsh.Tests.Runtime;
 
 public class PluginSchedulerTests
 {
+    private static readonly TimeSpan RetirementTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public async Task Scheduler_ActivatesInDependencyOrderRegardlessOfRegistrationOrder()
     {
@@ -38,6 +40,103 @@ public class PluginSchedulerTests
 
         Assert.Equal(["provider", "middle", "consumer"], order);
         Assert.All(ctx.Scheduler.Snapshot(), activation => Assert.Equal(ActivationState.Active, activation.State));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Registration_During_Provider_Unload_Waits_For_Replacement(bool typed)
+    {
+        var ctx = new Context();
+        var disposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var applied = new List<string?>();
+        var provider = ctx.Plugin(PluginDefinition.From((c, _) =>
+        {
+            c.Provide("svc", "one");
+            return null;
+        }, "provider-1"));
+        ctx.Plugin(PluginDefinition.From((_, _) => (Action)(() =>
+        {
+            disposing.TrySetResult();
+            releaseDisposal.Task.GetAwaiter().GetResult();
+        }), "cleanup-blocker", ["svc"]));
+        await ctx.Scheduler.SettleAsync();
+
+        var unloading = Task.Run(provider.DeactivateAsync);
+        try
+        {
+            await disposing.Task.WaitAsync(RetirementTimeout);
+            var consumer = ctx.Plugin(PluginDefinition.From((c, _) =>
+            {
+                applied.Add(typed ? c.Get<string>() : c.Get("svc") as string);
+                return null;
+            }, "late-consumer", inject: typed ? [] : ["svc"], injectTypes: typed ? [typeof(string)] : []));
+            Assert.Equal(ActivationState.Pending, consumer.State);
+            releaseDisposal.TrySetResult();
+            await unloading.WaitAsync(RetirementTimeout);
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+            Assert.Equal(ActivationState.Pending, consumer.State);
+            Assert.Empty(applied);
+
+            ctx.Plugin(PluginDefinition.From((c, _) =>
+            {
+                c.Provide("svc", "two");
+                return null;
+            }, "provider-2"));
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+            Assert.Equal(ActivationState.Active, consumer.State);
+            Assert.Equal(["two"], applied);
+        }
+        finally
+        {
+            releaseDisposal.TrySetResult();
+            await unloading.WaitAsync(RetirementTimeout);
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+        }
+    }
+
+    [Fact]
+    public async Task Registration_Rechecks_Provider_Retirement_After_Service_Check()
+    {
+        var ctx = new Context();
+        var retireOnCheck = false;
+        var applied = new List<string?>();
+        PluginActivation? provider = null;
+        provider = ctx.Plugin(PluginDefinition.From((c, _) =>
+        {
+            c.Provide("svc", "one", check: () =>
+            {
+                if (retireOnCheck)
+                {
+                    retireOnCheck = false;
+                    provider!.DeactivateAsync().WaitAsync(RetirementTimeout).GetAwaiter().GetResult();
+                }
+                return true;
+            });
+            return null;
+        }, "provider-1"));
+        await ctx.Scheduler.SettleAsync();
+        retireOnCheck = true;
+
+        var consumer = ctx.Plugin(PluginDefinition.From((c, _) =>
+        {
+            applied.Add(c.Get("svc") as string);
+            return null;
+        }, "consumer", ["svc"]));
+        Assert.Equal(ActivationState.Disposed, provider.State);
+        Assert.Equal(ActivationState.Pending, consumer.State);
+        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+        Assert.Empty(applied);
+
+        ctx.Plugin(PluginDefinition.From((c, _) =>
+        {
+            c.Provide("svc", "two");
+            return null;
+        }, "provider-2"));
+        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+        Assert.Equal(ActivationState.Active, consumer.State);
+        Assert.Equal(["two"], applied);
     }
 
     [Fact]
