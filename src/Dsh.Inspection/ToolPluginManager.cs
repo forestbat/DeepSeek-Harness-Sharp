@@ -23,7 +23,21 @@ public static class ToolPluginManager
         + "session permission mode. Changes persist in settings.yaml and affect every session. Call action \"list\" "
         + "first to obtain exact package names.";
 
-    internal static IDisposable ApprovalGate(Context ctx)
+    internal static IDisposable Register(Context ctx)
+    {
+        var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+        var prompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
+        return new DisposableBundle(
+            tools.Register(Definition(ctx)),
+            ApprovalGate(ctx),
+            prompt.Section(PromptSection.Literal(
+                "tool:plugin_manager",
+                "Use plugin_manager to list, describe, enable, disable, add, or remove loaded plugins. "
+                + "Every call requires approval through the existing approval policy; denied operations do nothing. "
+                + "Changes persist across sessions.")));
+    }
+
+    private static IDisposable ApprovalGate(Context ctx)
     {
         var gate = ctx.OnWaterfall<ToolPreExecuteNotification>(
             (notification, next) => string.Equals(notification.Run.Name, ToolName, StringComparison.Ordinal)
@@ -33,7 +47,7 @@ public static class ToolPluginManager
         return new ActionDisposable(() => gate());
     }
 
-    internal static ToolDefinition Definition(Context ctx) => new()
+    private static ToolDefinition Definition(Context ctx) => new()
     {
         Name = ToolName,
         Description = Description,

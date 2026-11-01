@@ -106,9 +106,8 @@ public sealed class EditorDurableFileChangesTests
         ToolExecutionResult result;
         if (throughPtc)
         {
-            using var presentation = fixture.Tools.PresentAs(ToolPresentationMode.Ptc, fixture.Agent.ScopeKey);
             var literal = JsonSerializer.Serialize(inner.ToJsonString());
-            result = await fixture.Execute(PtcTransport.RunCodeName, new JsonObject
+            result = await fixture.Execute(ToolRunCode.ToolName, new JsonObject
             {
                 ["code"] = $"return await tools.call(\"toon\", JsonNode.Parse({literal})!.AsObject());",
                 ["description"] = "Persist a nested file mutation",
@@ -177,9 +176,9 @@ public sealed class EditorDurableFileChangesTests
             _ = new CommandsService(_ctx);
             _store = new SessionStore(_ctx);
             _subprocess = new SubprocessService(_ctx);
-            _ = new PtcTransport(_ctx, Root);
             _registrations =
             [
+                ToolRunCode.Register(_ctx, Root, debugBatching: false),
                 new Dsh.Persistence.Plugin("@deepseek-ai/dsh-persistence").Apply(_ctx, null),
                 new Dsh.Toon.Plugin().Apply(_ctx, null),
                 WriteTool.Register(_ctx),

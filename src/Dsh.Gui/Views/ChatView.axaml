@@ -14,37 +14,15 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto"
+    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
           Classes="chatHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
         <TextBlock Text="{Binding SessionSubtitle}" Classes="Tertiary" />
       </StackPanel>
 
-      <Button Grid.Column="1" Classes="Chip" VerticalAlignment="Center" ToolTip.Tip="交互 preset">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
-          <TextBlock Text="{Binding PresetLabel}" />
-          <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
-        </StackPanel>
-        <Button.Flyout>
-          <Flyout Placement="BottomEdgeAlignedRight" Opened="OnPresetFlyoutOpened">
-            <ItemsControl ItemsSource="{Binding PresetItems}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:PresetListItem">
-                  <Button Classes="Ghost" Classes.selected="{Binding IsCurrent}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                          Click="OnPresetItemClick">
-                    <TextBlock Text="{Binding Label}" />
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </Flyout>
-        </Button.Flyout>
-      </Button>
 
-      <Button Grid.Column="2" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
+      <Button Grid.Column="1" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Trace}" />
           <TextBlock Text="子代理" />
@@ -86,7 +64,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="3" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
+      <Button Grid.Column="2" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
           <TextBlock Text="交付物" />
@@ -132,7 +110,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="4" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
+      <Button Grid.Column="3" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
           <TextBlock Text="{Binding ModeLabel}" />
@@ -146,7 +124,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="5" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
+      <Button Grid.Column="4" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Download}" />
           <TextBlock Text="Session log" />

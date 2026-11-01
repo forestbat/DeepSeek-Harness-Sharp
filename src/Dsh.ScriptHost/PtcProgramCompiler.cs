@@ -71,16 +71,15 @@ public static class PtcProgramCompiler
             builder.Append("        var envelope = JsonNode.Parse(await __PtcBridge.Call(name, args))!;\n");
             builder.Append("        if (!envelope[\"ok\"]!.GetValue<bool>())\n");
             builder.Append("            throw new ToolCallError(name, envelope[\"message\"]?.GetValue<string>() ?? \"tool call failed\");\n");
-            builder.Append("        return envelope[\"value\"];\n    }\n");
+            builder.Append("        var value = envelope[\"value\"];\n");
+            builder.Append("        envelope.AsObject().Remove(\"value\");\n");
+            builder.Append("        return value;\n    }\n");
         }
 
         private static void AppendBinding(StringBuilder builder, string name)
         {
-            builder.Append("    public static async Task<JsonNode?> ").Append(name).Append("(JsonObject args)\n    {\n");
-            builder.Append("        var envelope = JsonNode.Parse(await __PtcBridge.Call(\"").Append(name).Append("\", args))!;\n");
-            builder.Append("        if (!envelope[\"ok\"]!.GetValue<bool>())\n");
-            builder.Append("            throw new ToolCallError(\"").Append(name).Append("\", envelope[\"message\"]?.GetValue<string>() ?? \"tool call failed\");\n");
-            builder.Append("        return envelope[\"value\"];\n    }\n");
+            builder.Append("    public static Task<JsonNode?> ").Append(name).Append("(JsonObject args)\n");
+            builder.Append("        => call(\"").Append(name).Append("\", args);\n");
         }
 
         private const string Header = """

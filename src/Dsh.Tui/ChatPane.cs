@@ -936,10 +936,9 @@ public sealed class ChatPane : ITuiPane
         var hint = $"Enter 发送 - / 命令 - @ 引用 - Tab 下一个参数 - {_window.KeyBindings.Leader(TuiAction.SessionMenu)} 会话";
         CellText.Draw(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
         var (currentProvider, currentModel) = CurrentModel(Agent);
-        var preset = CurrentPreset(Agent);
         var profile = CurrentReasoningEffort(Agent) is { } effort
-            ? $"{preset} - {currentProvider} - {currentModel} - {effort.Value}"
-            : $"{preset} - {currentProvider} - {currentModel}";
+            ? $"{currentProvider} - {currentModel} - {effort.Value}"
+            : $"{currentProvider} - {currentModel}";
         var profileWidth = TerminalTextWidth.Of(profile);
         if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
             CellText.Draw(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
@@ -1194,38 +1193,6 @@ public sealed class ChatPane : ITuiPane
     private static ReasoningEffortId? CurrentReasoningEffort(IAgent agent)
         => agent.Session.RequestHeader()?.Config.ReasoningEffort ?? agent.Options.ReasoningEffort;
 
-    /** 会话 preset 持久在 `preset/mode` 事件里; Dsh.Tui 不引用 Dsh.Presets, 属性名按约定泛化读取。 */
-    private static string CurrentPreset(IAgent agent)
-    {
-        var preset = "standard";
-        foreach (var sessionEvent in agent.Session.SnapshotEvents())
-        {
-            if (sessionEvent.Type != "preset/mode")
-                continue;
-            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
-        }
-        return preset;
-    }
-
-    private static string? ReadStringProperty(SessionEventPayload payload, string name)
-    {
-        try
-        {
-            var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options);
-            if (node is not JsonObject json)
-                return null;
-            foreach (var (key, value) in json)
-            {
-                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
-                    return value.GetValue<string>();
-            }
-            return null;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
 
     /** 输入行为空时 Home/End 直达记录头/尾(有内容时留给输入光标)。 */
     private void JumpToTranscriptHead()

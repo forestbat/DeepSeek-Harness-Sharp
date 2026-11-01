@@ -164,10 +164,3 @@ public sealed class ToolOutputException : HarnessException
 }
 
 public sealed record ToolRestriction(IReadOnlyList<string>? Allow = null, IReadOnlyList<string>? Deny = null);
-
-public enum ToolPresentationMode
-{
-    Native,
-    Ptc,
-    Both,
-}

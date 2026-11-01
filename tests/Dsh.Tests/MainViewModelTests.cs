@@ -7,7 +7,6 @@ using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Presets;
 
 namespace Dsh.Tests;
 
@@ -420,21 +419,6 @@ public sealed class MainViewModelTests
         Assert.True(node.IsLive);
     });
 
-    [Fact]
-    public async Task PresetLabel_FollowsPresetModeEvent() => await HeadlessGui.RunAsync(async () =>
-    {
-        var environment = await GuiTestEnvironment.CreateAsync();
-        await using var environmentScope = environment;
-        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
-        Assert.Equal("标准", viewModel.PresetLabel);
-        Assert.Single(viewModel.PresetItems, item => item.Id == "standard" && item.IsCurrent);
-
-        environment.Agent.Session.Append(new PresetModePayload("minimal"));
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.PresetLabel == "极简");
-
-        Assert.Equal("极简", viewModel.PresetLabel);
-        Assert.Single(viewModel.PresetItems, item => item.Id == "minimal" && item.IsCurrent);
-    });
 
     /** 内容命中: 标题/workspace 不匹配时靠 FTS 命中, 并带出摘要; 关闭搜索后复位。 */
     [Fact]
