@@ -19,20 +19,14 @@ public sealed class McpSettingsBoundaryTests
 {
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task OwnedStdio_PreservesToolOutputOrRefusesUnsupportedWritableCwd_ButNeverMutatesSettings()
+    public async Task OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings()
     {
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var output = Path.Combine(fixture.Root, "mcp-output");
-        await Connect(service, expectWritableCwdRefusal: OperatingSystem.IsWindows());
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.False(File.Exists(output));
-            Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-            return;
-        }
+        await Connect(service);
         var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
         Assert.False(permitted.IsError, Text(permitted));
         Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
@@ -43,42 +37,31 @@ public sealed class McpSettingsBoundaryTests
 
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task OwnedStdio_CrashDoesNotReplay_OrRefusesUnsupportedWritableCwdBeforeMutation()
+    public async Task OwnedStdio_CrashDoesNotReplay()
     {
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var ledger = Path.Combine(fixture.Root, "mcp-once");
-        await Connect(service, expectWritableCwdRefusal: OperatingSystem.IsWindows());
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.False(File.Exists(ledger));
-            Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-            return;
-        }
+        await Connect(service);
         var result = await Execute(tools, "mutate_then_exit", new { path = ledger }, TestContext.Current.CancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         Assert.True(result.IsError);
         Assert.Equal("once\n", await File.ReadAllTextAsync(ledger, TestContext.Current.CancellationToken));
+        Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task OwnedStdio_CancellationDoesNotRestart_OrRefusesUnsupportedWritableCwdBeforeStarting()
+    public async Task OwnedStdio_CancellationDoesNotRestart()
     {
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var marker = Path.Combine(fixture.Root, "mcp-ready");
-        await Connect(service, expectWritableCwdRefusal: OperatingSystem.IsWindows());
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.False(File.Exists(marker));
-            Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-            return;
-        }
+        await Connect(service);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var running = Execute(tools, "wait_file", new { path = marker }, cancellation.Token);
         using var readiness = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -97,6 +80,7 @@ public sealed class McpSettingsBoundaryTests
             .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Assert.True(subsequent.IsError);
         Assert.False(File.Exists(after));
+        Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
@@ -200,16 +184,10 @@ public sealed class McpSettingsBoundaryTests
         return new ToolRuntime(fixture.Context);
     }
 
-    private static async Task Connect(McpService service, bool expectWritableCwdRefusal = false)
+    private static async Task Connect(McpService service)
     {
         await service.ConnectAsync([McpResourceServerFixture.ServerConfig("owned", false, "--file-tools")], TestContext.Current.CancellationToken);
         var status = Assert.Single(service.Status());
-        if (expectWritableCwdRefusal)
-        {
-            Assert.False(status.Connected);
-            Assert.Equal(0, status.ToolCount);
-            return;
-        }
         Assert.True(status.Connected, status.Error);
     }
 

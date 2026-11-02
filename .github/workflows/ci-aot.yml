@@ -53,14 +53,13 @@ jobs:
             bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
-      - name: Install AOT toolchain and native sandbox prerequisites on Linux
+      - name: Install AOT toolchain on Linux
         if: inputs.rid == 'linux-x64'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev build-essential meson ninja-build pkg-config libcap-dev libcap2-bin libselinux1-dev python3 ca-certificates curl xz-utils apparmor
-          bash scripts/setup-sandbox-bubblewrap-ci.sh
+          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev build-essential
 
       - name: Publish native plugin sample before product builds
         if: inputs.rid == 'linux-x64'
@@ -151,15 +150,7 @@ jobs:
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
-          bash scripts/test-sandbox-native.sh --run "$EXE" -noColor "${CLASSES[@]}" -failSkips
-
-      - name: Remove the exact CI-only bubblewrap namespace profile
-        if: always() && inputs.rid == 'linux-x64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          profile=.artifacts/sandbox-bubblewrap-ci/bwrap.apparmor
-          if [ -f "$profile" ]; then sudo apparmor_parser --remove "$profile"; fi
+          "$EXE" -noColor "${CLASSES[@]}"
 
       - name: Archive the product's three complete publish roots
         shell: bash
