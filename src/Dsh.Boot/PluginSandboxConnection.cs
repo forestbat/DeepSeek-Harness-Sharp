@@ -48,14 +48,17 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     {
         var connection = new PluginSandboxConnection(owner, domain);
         Task<SandboxProcess>? launching = null;
+        using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connection._lifetime.Token);
+        var stage = "launch-options";
         try
         {
-            using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connection._lifetime.Token);
             startup.CancelAfter(PluginSandboxLaunch.StartupBudget);
             var code = domain.Runtime.Append(domain.Directory).ToArray();
             var options = PluginSandboxLaunch.Options(code);
+            stage = "native-launch";
             launching = Task.Run(() => SandboxedProcess.StartAsync(options, connection._lifetime.Token), CancellationToken.None);
             connection._process = await launching.WaitAsync(startup.Token).ConfigureAwait(false);
+            stage = "protocol-setup";
             var stream = new StandardIoDuplexStream(connection._process.StandardOutput,
                 connection._process.StandardInput, ownsStreams: true);
             connection._peer = new JsonRpcPeer(stream, PluginSandboxMethods.MaximumFrameBytes)
@@ -67,6 +70,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
             connection._stderr = connection.DrainStderrAsync();
             connection._peer.Start();
             _ = connection.ObserveExitAsync();
+            stage = "ready-request";
             var ready = await connection.RequestAsync(PluginSandboxMethods.Ready, new PluginSandboxAck(),
                 PluginSandboxJsonContext.Default.PluginSandboxAck, startup.Token).ConfigureAwait(false);
             var value = ready?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxReady);
@@ -76,12 +80,16 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         }
         catch (Exception error)
         {
+            // Snapshot before Abort changes the lifetime token; include no paths or worker-supplied text.
+            var cancellationDiagnostic = error is OperationCanceledException
+                ? $"The isolated worker startup was cancelled (stage={stage}; launch-status={launching?.Status.ToString() ?? "not-scheduled"}; process-created={connection._process is not null}; startup-cancelled={startup.IsCancellationRequested}; caller-cancelled={cancellationToken.IsCancellationRequested}; lifetime-cancelled={connection._lifetime.IsCancellationRequested})."
+                : null;
             connection.Abort();
             if (connection._process is null && launching is not null)
                 _ = ReapLateLaunchAsync(launching);
             await connection.DisposeAsync().ConfigureAwait(false);
-            if (error is OperationCanceledException)
-                throw;
+            if (error is OperationCanceledException cancelled)
+                throw new OperationCanceledException(cancellationDiagnostic, cancelled, cancelled.CancellationToken);
             throw new IOException($"The isolated worker could not start: {connection._startupDiagnostic ?? error.Message}", error);
         }
     }
