@@ -34,9 +34,11 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             protectedDirectoryInfo.SetAccessControl(protectedAcl);
         }
         var denied = Path.Combine(protectedDirectory, "settings.yaml");
-        File.WriteAllText(input, "readable");
+        const string readable = "readable\r\nsecond-readable-line\r\nlast-readable-line\r\n";
+        File.WriteAllText(input, readable);
         File.WriteAllText(secret, "host-only");
-        File.WriteAllText(denied, "unchanged");
+        var settingsBytes = "unchanged"u8.ToArray();
+        File.WriteAllBytes(denied, settingsBytes);
         var originalParentAcl = ReadDacl(_root);
         var originalProtectedDirectoryAcl = ReadDacl(protectedDirectory);
         var originalSecretAcl = ReadDacl(secret);
@@ -45,14 +47,31 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         var originalDeniedAcl = ReadDacl(denied);
         var deniedRelative = Path.GetRelativePath(working, denied);
         var renameAncestor = protectedParent ? """(ren "config" "moved-config") >nul 2>&1 && exit /b 96""" : "";
+        // Named TYPE performs a directory search before reading; a single-file grant does not grant parent enumeration.
+        // Read every fixture line through one native redirected handle and require EOF after the final line.
         // Send shell syntax through stdin instead of encoding it as a CRT command-line argument.
         var commands = $$"""
             echo stage=read 1>&2
-            set /p directRead=<"..\readable.txt"
-            if "%directRead%"=="readable" (echo direct-open-ok 1>&2) else (echo direct-open-failed-status=%errorlevel% 1>&2)
-            type "..\readable.txt" || exit /b 90
-            (type "..\not-granted.txt" >nul 2>&1) && exit /b 91
-            (set /p secretRead=<"..\not-granted.txt") 2>nul && exit /b 99
+            set "firstRead="
+            set "secondRead="
+            set "lastRead="
+            set "extraRead="
+            (
+            set /p firstRead=
+            set /p secondRead=
+            set /p lastRead=
+            set /p extraRead=
+            ) <"..\readable.txt"
+            if not errorlevel 1 exit /b 90
+            if not "%firstRead%"=="readable" exit /b 90
+            if not "%secondRead%"=="second-readable-line" exit /b 90
+            if not "%lastRead%"=="last-readable-line" exit /b 90
+            if defined extraRead exit /b 90
+            echo read-complete:%firstRead%/%secondRead%/%lastRead%
+            (dir /b ".." >nul 2>&1) && exit /b 91
+            set "secretRead="
+            (set /p secretRead=<"..\not-granted.txt") 2>nul
+            if defined secretRead exit /b 99
             (echo forbidden>>"..\readable.txt") 2>nul && exit /b 93
             echo stage=write 1>&2
             (echo forbidden>>"{{deniedRelative}}") 2>nul && exit /b 92
@@ -89,19 +108,20 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             var diagnostic = System.Text.RegularExpressions.Regex.Replace(stderr, """(?:[A-Za-z]:[\\/]|/)[^\s"'<>]+""", "<path>");
             var failure = $"The real Windows path consumer exited with {code} (0x{unchecked((uint)code):x8}); stdoutLength={stdout.Length}; stderr={diagnostic[..Math.Min(diagnostic.Length, 2048)]}";
             Assert.True(code == 0, failure);
-            Assert.True(stdout.Contains("readable", StringComparison.Ordinal), failure);
+            Assert.True(stdout.Contains("read-complete:readable/second-readable-line/last-readable-line", StringComparison.Ordinal), failure);
             Assert.True(stderr.Contains("diagnostic", StringComparison.Ordinal), failure);
         }
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")).Trim());
-        Assert.Equal("unchanged", File.ReadAllText(denied));
-        Assert.Equal("readable", File.ReadAllText(input));
+        Assert.Equal(settingsBytes, File.ReadAllBytes(denied));
+        Assert.Equal(readable, File.ReadAllText(input));
         Assert.Equal("host-only", File.ReadAllText(secret));
-        Assert.Equal(originalParentAcl, ReadDacl(_root));
-        Assert.Equal(originalProtectedDirectoryAcl, ReadDacl(protectedDirectory));
-        Assert.Equal(originalSecretAcl, ReadDacl(secret));
-        Assert.Equal(originalDirectoryAcl, ReadDacl(working));
-        Assert.Equal(originalInputAcl, ReadDacl(input));
-        Assert.Equal(originalDeniedAcl, ReadDacl(denied));
+        AssertDaclRestored(originalParentAcl, _root);
+        AssertDaclRestored(originalProtectedDirectoryAcl, protectedDirectory);
+        AssertDaclRestored(originalSecretAcl, secret);
+        AssertDaclRestored(originalDirectoryAcl, working);
+        AssertDaclRestored(originalInputAcl, input);
+        AssertDaclRestored(originalDeniedAcl, denied);
+        AssertInheritanceRestored(working, denied, protectedParent);
         File.WriteAllText(denied, "host-write-after-disposal");
         Assert.Equal("host-write-after-disposal", File.ReadAllText(denied));
     }
@@ -119,7 +139,8 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
         var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
         var settings = Path.Combine(working, "settings.yaml");
-        await File.WriteAllTextAsync(settings, "unchanged", TestContext.Current.CancellationToken);
+        var settingsBytes = "unchanged"u8.ToArray();
+        await File.WriteAllBytesAsync(settings, settingsBytes, TestContext.Current.CancellationToken);
         var file = new FileInfo(settings);
         var acl = file.GetAccessControl(AccessControlSections.Access);
         acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(ambientSid), FileSystemRights.WriteData, AccessControlType.Allow));
@@ -140,9 +161,10 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             }, TestContext.Current.CancellationToken);
         });
 
-        Assert.Equal("unchanged", await File.ReadAllTextAsync(settings, TestContext.Current.CancellationToken));
-        Assert.Equal(originalDirectoryAcl, ReadDacl(working));
-        Assert.Equal(originalSettingsAcl, ReadDacl(settings));
+        Assert.Equal(settingsBytes, await File.ReadAllBytesAsync(settings, TestContext.Current.CancellationToken));
+        AssertDaclRestored(originalDirectoryAcl, working);
+        AssertDaclRestored(originalSettingsAcl, settings);
+        AssertInheritanceRestored(working, settings, protectedChild: false);
     }
 
     [Fact]
@@ -170,6 +192,54 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         });
 
         Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+    }
+
+    private static void AssertDaclRestored(string expected, string path)
+    {
+        var before = new RawSecurityDescriptor(expected);
+        var after = new RawSecurityDescriptor(ReadDacl(path));
+        // SetSecurityInfo converts legacy ACLs to automatic inheritance without changing their ACE semantics.
+        // Permit only that one-way metadata transition; retain every ACE, its order and flags, and all other control bits.
+        // https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces
+        if ((before.ControlFlags & ControlFlags.DiscretionaryAclAutoInherited) == 0)
+            after.SetFlags(after.ControlFlags & ~ControlFlags.DiscretionaryAclAutoInherited);
+        Assert.Equal(before.ControlFlags, after.ControlFlags);
+        Assert.Equal(before.GetSddlForm(AccessControlSections.Access), after.GetSddlForm(AccessControlSections.Access));
+    }
+
+    private static void AssertInheritanceRestored(string parent, string child, bool protectedChild)
+    {
+        var marker = new SecurityIdentifier("S-1-5-21-0-0-0-314159");
+        var rule = new FileSystemAccessRule(marker, FileSystemRights.ReadAttributes,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow);
+        var directory = new DirectoryInfo(parent);
+        var originalParent = ReadDacl(parent);
+        var originalChild = ReadDacl(child);
+        var acl = directory.GetAccessControl(AccessControlSections.Access);
+        var created = Path.Combine(parent, "host-created-after-disposal.txt");
+        acl.AddAccessRule(rule);
+        directory.SetAccessControl(acl);
+        try
+        {
+            var inherited = new FileInfo(child).GetAccessControl(AccessControlSections.Access)
+                .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>().Any(access => marker.Equals(access.IdentityReference)
+                    && access.IsInherited && access.FileSystemRights == rule.FileSystemRights);
+            Assert.Equal(!protectedChild, inherited);
+            File.WriteAllText(created, "host-created");
+            Assert.Contains(new FileInfo(created).GetAccessControl(AccessControlSections.Access)
+                .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>(), access => marker.Equals(access.IdentityReference)
+                    && access.IsInherited && access.FileSystemRights == rule.FileSystemRights);
+        }
+        finally
+        {
+            acl.RemoveAccessRuleSpecific(rule);
+            directory.SetAccessControl(acl);
+            File.Delete(created);
+        }
+        AssertDaclRestored(originalParent, parent);
+        AssertDaclRestored(originalChild, child);
     }
 
     private static string ReadDacl(string path) => Directory.Exists(path)
