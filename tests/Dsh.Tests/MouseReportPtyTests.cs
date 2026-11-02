@@ -1,6 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
-using Dsh.Boot;
 
 namespace Dsh.Tests;
 
@@ -99,7 +97,7 @@ public class MouseReportPtyTests
 
         // The default TUI proxy must forward its real client viewport, not an explicit daemon resize substituted by the test.
         harness.Session.Resize(rows: 24, columns: 80);
-        Assert.True(await WaitForSessionSizeAsync(harness, tui.Id, columns: 80, rows: 24), "会话没有跟随客户端尺寸变化");
+        Assert.True(await WaitForSessionSizeAsync(tui.Id, columns: 80, rows: 24), "会话没有跟随客户端尺寸变化");
         await harness.WriteTextAsync("r");
         await WaitForInputAsync(harness, ">测试r");
 
@@ -156,7 +154,7 @@ public class MouseReportPtyTests
     }
 
     /** Wait for the resized resident session without replacing its active input attachment. */
-    private static async Task<bool> WaitForSessionSizeAsync(PtyTuiHarness harness, string sessionId, int columns, int rows)
+    private static async Task<bool> WaitForSessionSizeAsync(string sessionId, int columns, int rows)
     {
         PtyDaemonSessionDto? session = null;
         for (var attempt = 0; attempt < 100; attempt++)
@@ -167,42 +165,6 @@ public class MouseReportPtyTests
             if (session is { IsAttached: true } && session.Columns == columns && session.Rows == rows)
                 return true;
             await Task.Delay(100, TestContext.Current.CancellationToken);
-        }
-
-        // Temporary CI111 investigation; preserve only bounded neutral fields before the fixture removes its private logs.
-        var output = TestContext.Current.TestOutputHelper;
-        output?.WriteLine($"pty-size resident={session?.Columns ?? 0}x{session?.Rows ?? 0} attached={session?.IsAttached ?? false}");
-        if (OperatingSystem.IsWindows())
-        {
-            try
-            {
-                var home = new HarnessHome(harness.Home);
-                var logs = HarnessStorage.Paths(home, HarnessSettings.Load(home)).LogsPath;
-                var emitted = 0;
-                if (Directory.Exists(logs))
-                {
-                    foreach (var file in Directory.EnumerateFiles(logs, "dsh-*.log"))
-                    {
-                        if (emitted >= 19)
-                            break;
-                        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                        using var reader = new StreamReader(stream);
-                        while (emitted < 19 && await reader.ReadLineAsync(TestContext.Current.CancellationToken) is { } line)
-                        {
-                            var diagnostic = Regex.Match(line, @"pty-size (?:sample=\d+ read=\d+x\d+ changes=\d+ target=\d+x\d+ sent=\d+ ack=\d+ failed=\d+ error=[A-Za-z]+ code=-?\d+ redirected=(?:True|False)|initial=\d+x\d+ redirected=(?:True|False)|initial-target=\d+x\d+ sent=1 ack=[01](?: error=[A-Za-z]+ code=-?\d+)?)$");
-                            if (!diagnostic.Success)
-                                continue;
-                            output?.WriteLine(diagnostic.Value);
-                            emitted++;
-                        }
-                    }
-                }
-                output?.WriteLine($"pty-size captured={emitted}");
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                output?.WriteLine($"pty-size diagnostic-error={error.GetType().Name} code={error.HResult}");
-            }
         }
 
         return false;

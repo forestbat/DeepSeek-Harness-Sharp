@@ -60,17 +60,13 @@ public static class PtyDaemonClient
      * Windows 上再套一层鼠标报文过滤: ConPTY 的输入侧会把 X10 报文拆成"裸载荷字符", 到了会话里与用户输入不可区分。
      * Unix 没有这层, 报文原件直通会话由 TUI 还原成鼠标事件(拖动分隔线仍可用), 不做过滤。
      */
-    public static Task AttachConsoleAsync(string id, Stream output, CancellationToken cancellationToken = default)
-        => AttachConsoleAsync(id, output, cancellationToken, null);
-
-    // Temporary CI111 investigation; remove this internal diagnostic overload after the Windows resize cause is captured.
-    internal static async Task AttachConsoleAsync(string id, Stream output, CancellationToken cancellationToken, Action<string>? resizeDiagnostic)
+    public static async Task AttachConsoleAsync(string id, Stream output, CancellationToken cancellationToken = default)
     {
         var socketPath = PtyDaemonPaths.SocketPath();
         var portFile = OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null;
-        await TryResizeToConsoleAsync(id, socketPath, portFile, cancellationToken, resizeDiagnostic);
+        await TryResizeToConsoleAsync(id, socketPath, portFile, cancellationToken);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var sizeWatch = WatchConsoleSizeAsync(id, socketPath, portFile, stop.Token, resizeDiagnostic);
+        var sizeWatch = WatchConsoleSizeAsync(id, socketPath, portFile, stop.Token);
         try
         {
             var input = ConsoleInput.OpenForRead();
@@ -114,57 +110,18 @@ public static class PtyDaemonClient
      * 常驻 TUI 便一直按旧尺寸画(调大留白、调小被压)。这里定时比对并上报, daemon 落盘尺寸文件后会话重排。
      * 独立窗口(GPU)形态有自己的尺寸来源(窗口 OnResize), 不走这里。
      */
-    private static Task WatchConsoleSizeAsync(string id, string socketPath, string? portFile, CancellationToken cancellationToken, Action<string>? diagnostic)
-    {
-        var samples = 0;
-        var changes = 0;
-        var sent = 0;
-        var acknowledged = 0;
-        var failed = 0;
-        var logged = 0;
-        (int Columns, int Rows)? previous = null;
-        (int Columns, int Rows)? target = null;
-        var errorType = "none";
-        var errorCode = 0;
-        // Temporary CI111 investigation: share one bounded snapshot across source reads, sends, ACKs and failures.
-        void LogResizeState(bool periodic = false)
+    private static Task WatchConsoleSizeAsync(string id, string socketPath, string? portFile, CancellationToken cancellationToken)
+        => ConsoleTunnel.WatchSizeAsync(async (columns, rows, token) =>
         {
-            if (diagnostic is null || logged >= 16 || (periodic && logged >= 8))
-                return;
-            logged++;
-            diagnostic($"pty-size sample={samples} read={previous?.Columns ?? 0}x{previous?.Rows ?? 0} changes={changes} target={target?.Columns ?? 0}x{target?.Rows ?? 0} sent={sent} ack={acknowledged} failed={failed} error={errorType} code={errorCode} redirected={Console.IsOutputRedirected}");
-        }
-        return ConsoleTunnel.WatchSizeAsync(async (columns, rows, token) =>
-        {
-            target = (columns, rows);
-            sent++;
-            LogResizeState();
             try
             {
                 await ResizeAsync(id, rows, columns, socketPath, portFile, token);
-                acknowledged++;
-                LogResizeState();
             }
             catch (Exception error) when (error is IOException or SocketException or InvalidOperationException or PtyDaemonNotRunningException)
             {
-                failed++;
-                errorType = error.GetType().Name;
-                errorCode = error.HResult;
-                LogResizeState();
                 // daemon 暂时不可用: 保留旧尺寸, 下一次变化再试
             }
-        }, cancellationToken, reportInitial: false, observeSize: diagnostic is null ? null : size =>
-        {
-            samples++;
-            var changed = size != previous;
-            if (changed && samples > 1)
-                changes++;
-            previous = size;
-            // Do not allocate a diagnostic string or write a log on every polling tick.
-            if (samples == 1 || changed || samples % 25 == 0)
-                LogResizeState(periodic: !changed);
-        });
-    }
+        }, cancellationToken, reportInitial: false);
 
     /** 把代理解析出的鼠标事件发给 daemon 注入会话; 失败只丢这一条, 绝不打断输入。 */
     private static async Task ForwardMouseAsync(string id, ChannelReader<PtyMouseEvent> events, CancellationToken cancellationToken)
@@ -491,22 +448,17 @@ public static class PtyDaemonClient
         string id,
         string socketPath,
         string? portFile,
-        CancellationToken cancellationToken,
-        Action<string>? diagnostic)
+        CancellationToken cancellationToken)
     {
         var size = ConsoleTunnel.ReadSize();
-        diagnostic?.Invoke($"pty-size initial={size?.Columns ?? 0}x{size?.Rows ?? 0} redirected={Console.IsOutputRedirected}");
         if (size is not var (columns, rows))
             return;
         try
         {
-            diagnostic?.Invoke($"pty-size initial-target={columns}x{rows} sent=1 ack=0");
             await ResizeAsync(id, rows, columns, socketPath, portFile, cancellationToken);
-            diagnostic?.Invoke($"pty-size initial-target={columns}x{rows} sent=1 ack=1");
         }
-        catch (Exception error)
+        catch (Exception)
         {
-            diagnostic?.Invoke($"pty-size initial-target={columns}x{rows} sent=1 ack=0 error={error.GetType().Name} code={error.HResult}");
             // 尺寸查询失败或会话已退出时保留原尺寸, 由 attach 报告连接结果。
             // 这里不能往 stderr 写东西 —— 终端形态下它会落到会话画面上, 污染用户的界面。
         }
