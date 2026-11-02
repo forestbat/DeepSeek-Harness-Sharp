@@ -302,13 +302,27 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Equal(allowed ? 1 : 0, fixture.Session.SnapshotEvents().Count(item => item.Data is FileChangedPayload));
     }
 
-    [Fact]
-    public async Task ExpiredInvocation_BackgroundWorkCannotBorrowLaterCallsSettingsAuthority()
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task ExpiredInvocation_BackgroundWorkCannotBorrowLaterCallsSettingsAuthority(bool sandbox, bool hostRole)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(settings =>
+        {
+            settings.Sandbox = new SandboxSettings { Enabled = sandbox };
+            if (hostRole)
+                foreach (var package in new[] { Alpha, Beta })
+                    settings.Plugins[package] = settings.Plugins[package] with { Execution = PluginExecution.Host };
+        });
         await fixture.StartAsync();
         using var answerer = ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
-        var instance = await fixture.Instance("alpha");
+        var identity = await fixture.Success("alpha", "identity");
+        var instance = identity.GetProperty("instance").GetGuid();
+        if (sandbox && !hostRole)
+            fixture.AssertNoMainExecution();
+        else
+            Assert.Equal(Environment.ProcessId, identity.GetProperty("processId").GetInt32());
         var before = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
         var after = before.Replace("sandbox-test/old", "sandbox-test/background", StringComparison.Ordinal);
         Assert.NotEqual(before, after);
@@ -323,7 +337,16 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
         Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is SettingsMutationAuditPayload { Outcome: "committed" });
-        Assert.Equal(instance, await fixture.Instance("alpha"));
+        Assert.Equal(instance, (await fixture.Success("alpha", "identity")).GetProperty("instance").GetGuid());
+
+        await fixture.Success("alpha", "write", WriteArguments(fixture.Home.SettingsFile, after));
+        Assert.Equal(after, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        Assert.Equal(after, Decode(await fixture.Success("alpha", "read", new { path = fixture.Home.SettingsFile }), "data"));
+        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        var committed = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>(),
+            audit => audit.Outcome == "committed");
+        Assert.Equal(asked.CallId, committed.CallId);
+        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
     }
 
     [Fact]

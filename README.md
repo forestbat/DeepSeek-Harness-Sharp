@@ -55,8 +55,10 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
 The approval carries the canonical target, redacted changed-line diff, and before/after hashes; the audit records those fields plus the originating tool call, root call, decision, and commit outcome, not complete document snapshots.
+Redaction recognizes common credential field names and known token formats; arbitrary custom secret names or formats may not be recognized.
 The writer releases the settings lock while waiting for approval, then reacquires it and rejects a stale proposal rather than overwriting a concurrent human edit.
 Approved content is published atomically through a private temporary file; existing readers that allow file deletion retain their previous snapshot.
+Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
 Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
 Missing settings gate, session, or approval service fails closed for these model-originated updates.
 

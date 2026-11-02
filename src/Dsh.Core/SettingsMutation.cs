@@ -2,6 +2,7 @@ using System.Text;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Sandbox;
+using Dsh.Transport;
 
 namespace Dsh.Core;
 
@@ -45,8 +46,48 @@ public static class SettingsMutation
                 (temporary, signal) => WriteFileAsync(temporary, after, FileMode.Create, signal), run.Signal).ConfigureAwait(false);
         else
         {
-            await WriteFileAsync(path, after, mode, run.Signal).ConfigureAwait(false);
+            await WriteOrdinaryFileAsync(path, after, mode, run.Signal).ConfigureAwait(false);
             run.RecordFileChange(path);
+        }
+    }
+
+    private static async Task WriteOrdinaryFileAsync(string path, string text, FileMode mode, CancellationToken signal)
+    {
+        if (mode is not (FileMode.Create or FileMode.CreateNew or FileMode.Open))
+        {
+            await WriteFileAsync(path, text, mode, signal).ConfigureAwait(false);
+            return;
+        }
+        signal.ThrowIfCancellationRequested();
+        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        var temporary = Path.Combine(directory, $".{Guid.NewGuid():N}.tmp");
+        var ownsTemporary = false;
+        try
+        {
+            await using (var stream = OwnerOnlyFiles.Create(temporary))
+            {
+                ownsTemporary = true;
+                await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+                await writer.WriteAsync(text.AsMemory(), signal).ConfigureAwait(false);
+                await writer.FlushAsync(signal).ConfigureAwait(false);
+            }
+            signal.ThrowIfCancellationRequested();
+            if (!OperatingSystem.IsWindows() && mode == FileMode.Open)
+                File.SetUnixFileMode(temporary, File.GetUnixFileMode(path));
+            if (mode == FileMode.CreateNew)
+                File.Move(temporary, path);
+            else if (mode == FileMode.Open || File.Exists(path))
+                File.Replace(temporary, path, destinationBackupFileName: null);
+            else
+                File.Move(temporary, path);
+            ownsTemporary = false;
+        }
+        finally
+        {
+            if (ownsTemporary)
+                File.Delete(temporary);
         }
     }
 

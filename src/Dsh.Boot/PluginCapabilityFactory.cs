@@ -236,8 +236,8 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];
         private int _nextHandle;
-        private readonly SemaphoreSlim _invocations = new(1, 1);
-        private ToolRunContext? _execution;
+        private readonly AsyncLocal<Invocation?> _current = new();
+        private readonly CancellationTokenSource _lifetime = new();
         private bool _disposed;
 
         public IDisposable RegisterTool(PluginToolDefinition definition)
@@ -276,27 +276,63 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         private async ValueTask<JsonElement> InvokeDefinitionAsync(PluginToolDefinition definition, JsonElement arguments,
             ToolRunContext run, CancellationToken signal)
         {
-            await _invocations.WaitAsync(signal).ConfigureAwait(false);
-            try
+            Invocation invocation;
+            lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                _execution = run;
-                return await definition.Execute(arguments, signal).ConfigureAwait(false);
+                invocation = new Invocation(run, CancellationTokenSource.CreateLinkedTokenSource(signal, _lifetime.Token));
+            }
+            var previous = _current.Value;
+            _current.Value = invocation;
+            try
+            {
+                invocation.Cancellation.Token.ThrowIfCancellationRequested();
+                var result = await definition.Execute(arguments, invocation.Cancellation.Token).ConfigureAwait(false);
+                invocation.Cancellation.Token.ThrowIfCancellationRequested();
+                return result;
             }
             finally
             {
-                _execution = null;
-                _invocations.Release();
+                _current.Value = previous;
+                lock (_sync)
+                {
+                    invocation.Active = false;
+                    invocation.Execution = null;
+                }
+                try { invocation.Cancellation.Cancel(); }
+                finally { invocation.Cancellation.Dispose(); }
             }
         }
 
-        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
-            => CallAsync(operation, arguments, _execution, cancellationToken);
-
-        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            return factory.ExecuteAsync(package, operation, arguments, run, cancellationToken);
+            ToolRunContext? run;
+            CancellationTokenSource linked;
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                var invocation = _current.Value;
+                run = invocation is { Active: true } ? invocation.Execution : null;
+                linked = run is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, invocation!.Cancellation.Token);
+            }
+            using (linked)
+                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
+        }
+
+        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+        {
+            CancellationTokenSource linked;
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                linked = run is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, run.Signal);
+            }
+            using (linked)
+                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
         }
 
         public void Log(int level, string message)
@@ -331,8 +367,20 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
                 leases = _registrations.Values.ToArray();
                 _registrations.Clear();
             }
-            foreach (var lease in leases)
-                lease.Dispose();
+            try { _lifetime.Cancel(); }
+            finally
+            {
+                _lifetime.Dispose();
+                foreach (var lease in leases)
+                    lease.Dispose();
+            }
+        }
+
+        private sealed class Invocation(ToolRunContext execution, CancellationTokenSource cancellation)
+        {
+            internal ToolRunContext? Execution { get; set; } = execution;
+            internal CancellationTokenSource Cancellation { get; } = cancellation;
+            internal bool Active { get; set; } = true;
         }
 
         private sealed class ToolLease(LocalHost owner, int handle, IDisposable registration) : IDisposable

@@ -307,33 +307,50 @@ public sealed class SettingsMutationTests
         Assert.False((await WriteOrdinary("auto-approved.txt")).IsError);
     }
 
-    [Fact]
-    public async Task RedactedOnlyChange_StillRequiresApproval_AndPublishesWithoutPersistingTokens()
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task SecretOnlyChange_RequiresApproval_WithoutCopyingCredentials(bool tokenShaped, bool approve)
     {
         using var fixture = new Fixture();
-        // Synthetic token-shaped values exercise redaction without using credentials.
-        var oldToken = $"sk-{new string('a', 24)}";
-        var newToken = $"sk-{new string('b', 24)}";
+        // Synthetic values exercise credential handling without using a real secret.
+        var oldToken = tokenShaped ? $"sk-{new string('a', 24)}" : "credential-old-for-test";
+        var newToken = tokenShaped ? $"sk-{new string('b', 24)}" : "credential-new-for-test";
         var before = Fixture.Original.Replace("credential-old-for-test", oldToken);
         var after = before.Replace(oldToken, newToken);
         await File.WriteAllTextAsync(fixture.Home.SettingsFile, before, TestContext.Current.CancellationToken);
-        using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
-
-        var result = Assert.IsType<ToolExecutionResult.Success>(await fixture.Execute("write",
-            new JsonObject { ["file_path"] = fixture.Home.SettingsFile, ["content"] = after }));
-
-        Assert.Equal(after, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
-        var audit = Assert.Single(fixture.Audits);
-        Assert.Equal("committed", audit.Outcome);
-        Assert.NotEqual(audit.BeforeHash, audit.AfterHash);
-        Assert.DoesNotContain(oldToken, audit.Diff);
-        Assert.DoesNotContain(newToken, audit.Diff);
-        Assert.DoesNotContain("# keep this comment", audit.Diff);
-        Assert.DoesNotContain(oldToken, result.Value.GetRawText());
-        Assert.DoesNotContain(newToken, result.Value.GetRawText());
-        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-        Assert.Contains(audit.BeforeHash, ApprovalHints.SettingsDiff(asked.Arguments));
-        Assert.Contains(audit.AfterHash, ApprovalHints.SettingsDiff(asked.Arguments));
+        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>((_, _) =>
+            new(approve ? ApprovalOutcome.AllowedOnce : ApprovalOutcome.Rejected), new EventOptions { Global = true });
+        try
+        {
+            var result = await fixture.Execute("write",
+                new JsonObject { ["file_path"] = fixture.Home.SettingsFile, ["content"] = after });
+            Assert.Equal(approve, !result.IsError);
+            Assert.Equal(approve ? after : before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+            var audit = Assert.Single(fixture.Audits);
+            Assert.Equal(approve ? "committed" : "rejected", audit.Outcome);
+            Assert.NotEqual(audit.BeforeHash, audit.AfterHash);
+            var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+            foreach (var surface in new[]
+            {
+                audit.Diff, asked.Arguments, result.Meta?.GetRawText() ?? "",
+                result is ToolExecutionResult.Success success ? success.Value.GetRawText() : "",
+            })
+            {
+                Assert.DoesNotContain(oldToken, surface);
+                Assert.DoesNotContain(newToken, surface);
+            }
+            Assert.DoesNotContain("# keep this comment", audit.Diff);
+            Assert.DoesNotContain("# keep this comment", asked.Arguments);
+            Assert.Contains(audit.BeforeHash, ApprovalHints.SettingsDiff(asked.Arguments));
+            Assert.Contains(audit.AfterHash, ApprovalHints.SettingsDiff(asked.Arguments));
+        }
+        finally
+        {
+            remove();
+        }
     }
 
     private sealed class Fixture : IDisposable
