@@ -11,6 +11,8 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class CSharpReplToolsTests
 {
+    private const long BlockingEvaluationTimeoutMs = 5_000;
+
     [Fact(Timeout = 60000)]
     public async Task MultilineProgram_PreservesStateAndPrintsFinalExpression()
     {
@@ -127,7 +129,7 @@ public sealed class CSharpReplToolsTests
     {
         using var harness = await Harness.CreateAsync();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var pending = harness.RunAsync(BlockingProgram, cancellation.Token, timeoutMs: 30_000);
+        var pending = harness.RunAsync(BlockingProgram, cancellation.Token, timeoutMs: BlockingEvaluationTimeoutMs);
         try
         {
             var pid = await harness.WaitForPidAsync(pending);

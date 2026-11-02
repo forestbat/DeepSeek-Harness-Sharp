@@ -4,6 +4,7 @@ using Dsh.Runtime;
 
 namespace Dsh.Tests;
 
+[Collection(SettingsTemplateTests.RegistryCollection)]
 public class ThirdPartyEventTests
 {
     [Fact]
