@@ -585,7 +585,12 @@ public sealed class OutboundProxyTests
             return;
         }
         var cancellation = TestContext.Current.CancellationToken;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Mark(string stage) => TestContext.Current.TestOutputHelper?.WriteLine(
+            $"doctor-misconfigured stage={stage} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
+        Mark("start");
         await using var ssh = await TestSshServer.StartAsync(cancellation);
+        Mark("ssh-ready");
         // These randomized credentials are synthetic test data, not real credentials.
         var password = $"synthetic-{Guid.NewGuid():N}";
         var home = Path.Combine(ssh.Home, "doctor-home");
@@ -598,12 +603,16 @@ public sealed class OutboundProxyTests
         // A real non-Host executable represents an invalid configured installation without emulating SSH or RPC replies.
         File.CreateSymbolicLink(Path.Combine(bin, "dsharp"), OperatingSystem.IsMacOS() ? "/usr/bin/false" : "/bin/false");
         var direct = ssh.Machine($"doctor-{password}", home);
+        Mark("trust-start");
         var trusted = await FleetDoctor.CheckSshAsync(direct, new SshTransport(direct), cancellation);
+        Mark("trust-returned");
         Assert.True(trusted.Outcome == DoctorOutcome.Ok, trusted.Detail);
         var proxyCommand = $"ssh -F /dev/null -p {direct.Port} -i {RemoteShell.Quote(direct.KeyPath!)} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile={RemoteShell.Quote(Path.Combine(ssh.Root, "known_hosts"))} -W %h:%p {RemoteShell.Quote($"{direct.User}@{direct.Host}")} # {password}";
         var machine = direct with { Password = password, Proxy = proxyCommand };
 
+        Mark("doctor-start");
         var checks = await FleetDoctor.CheckAsync(machine, FleetConnectionTests.TestOptions, cancellation);
+        Mark("doctor-returned");
 
         Assert.Equal(DoctorOutcome.Ok, Assert.Single(checks, check => check.Name == "ssh").Outcome);
         Assert.Equal(DoctorOutcome.Failed, Assert.Single(checks, check => check.Name == "permissions").Outcome);
@@ -617,6 +626,7 @@ public sealed class OutboundProxyTests
         }
         Assert.Contains("chmod", Assert.Single(checks, check => check.Name == "permissions").Fix);
         Assert.Contains("host serve", Assert.Single(checks, check => check.Name == "connection").Fix);
+        Mark("body-complete");
     }
 
     [Theory]
