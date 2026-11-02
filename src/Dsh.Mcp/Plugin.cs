@@ -30,9 +30,10 @@ public sealed class Plugin(string packageName) : IDshPlugin
         var homePath = ctx.GetProp("dshHomePath") as string
             ?? throw new InvalidOperationException("dshHomePath is required for the mcp plugin");
         var home = new HarnessHome(homePath);
-        var service = new McpService(ctx);
+        var settings = LoadSettings(ctx, home);
+        var service = new McpService(ctx, settings.Tools?.DisclosureThreshold ?? ToolsSettings.DefaultDisclosureThreshold);
         var command = McpCommand.Register(ctx, service, home);
-        var servers = LoadServers(ctx, home);
+        var servers = McpServerConfig.FromSettings(settings);
         if (servers.Count > 0)
             _ = ConnectBackgroundAsync(ctx, service, servers);
         return new CallbackDisposable(() =>
@@ -42,16 +43,17 @@ public sealed class Plugin(string packageName) : IDshPlugin
         });
     }
 
-    internal static List<McpServerConfig> LoadServers(Context ctx, HarnessHome home)
+    /** 读 settings.yaml; 读不到时按默认值继续, MCP 工具不该因为配置文件问题整体消失。 */
+    internal static HarnessSettings LoadSettings(Context ctx, HarnessHome home)
     {
         try
         {
-            return McpServerConfig.FromSettings(HarnessSettings.Load(home));
+            return HarnessSettings.Load(home);
         }
         catch (Exception error)
         {
             ctx.LoggerFor(LoggerName).Warn($"failed to read mcp settings: {error.Message}");
-            return [];
+            return new HarnessSettings();
         }
     }
 

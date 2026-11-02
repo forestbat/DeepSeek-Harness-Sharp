@@ -40,7 +40,8 @@ public sealed record McpServerStatus(
  * 常驻 MCP 服务:进程存活期内保持与各 server 的连接,并把每个 MCP 工具注册为 agent 原生工具。
  * 至少有一个 server 在册时, 另注册按 server 名取资源的三个共享资源工具。
  */
-public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncDisposable
+public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSettings.DefaultDisclosureThreshold)
+    : Service(ctx, ServiceName), IAsyncDisposable
 {
     public const string ServiceName = "mcp";
 
@@ -98,8 +99,13 @@ public sealed class McpService(Context ctx) : Service(ctx, ServiceName), IAsyncD
     private IReadOnlyList<IDisposable> RegisterTools(McpServerHandle handle, IList<McpClientTool> tools)
     {
         var runtime = Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+        // 只有工具够多、且用户打开了渐进式披露, 才值得走路由展开: 小服务器直接可见, 省掉一次额外往返。
+        var grouped = Ctx.GetProp(ToolDisclosureSwitch.PropName) is true && tools.Count >= disclosureThreshold;
+        var group = grouped ? new ToolDisclosure(
+            $"mcp:{handle.Config.Name}",
+            $"tools exposed by the MCP server \"{handle.Config.Name}\"") : null;
         return tools
-            .Select(tool => runtime.Register(McpToolBridge.Wrap(handle, tool)))
+            .Select(tool => runtime.Register(McpToolBridge.Wrap(handle, tool, group)))
             .ToList();
     }
 
