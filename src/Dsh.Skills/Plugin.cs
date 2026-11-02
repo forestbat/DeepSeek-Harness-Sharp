@@ -30,7 +30,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static IDisposable RegisterSkillRegistry(Context ctx, object? config)
     {
         _ = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
-        return new DisposableBundle(new NoopDisposable(), SkillCommand.Register(ctx));
+        return new DisposableBundle(new SkillCatalog(ctx), SkillCommand.Register(ctx));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)
@@ -98,13 +98,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         => value is IEnumerable<object?> items
             ? items.OfType<string>().ToList()
             : null;
-
-    private sealed class NoopDisposable : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
 
     private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
     {

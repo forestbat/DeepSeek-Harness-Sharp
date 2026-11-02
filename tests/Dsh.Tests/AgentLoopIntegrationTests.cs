@@ -169,6 +169,7 @@ public class AgentLoopIntegrationTests
         Assert.Equal(3, messages.Count);
         Assert.Equal(MessageRole.System, messages[0].Role);
         Assert.Contains("test-model", server.LastRequestBody);
+        Assert.Contains("environment_details", server.LastRequestBody);
         Assert.Contains("\"stream\":true", server.LastRequestBody);
     }
 
@@ -305,6 +306,139 @@ public class AgentLoopIntegrationTests
         Assert.Equal(1, peak);
     }
 
+    /**
+     * 并发调用里有一个抛异常时，其余调用必须照常结算，成果不能一起丢掉。
+     *
+     * 现状: ToolRuntime 在 Prepare/Dispatch/Finalize 三层各自把异常转成单次调用的 Failure，
+     * 所以异常本身是隔离的；真正会把整批拖垮的是调度器 catch 到的异常(RunGroup 的 schedulerFailure)。
+     * 这条用例钉的是"异常隔离"这个对外可见契约，实现细节不在测试里复制。
+     */
+    [Fact]
+    public async Task ParallelToolCalls_OneThrowingCallDoesNotDiscardTheOthers()
+    {
+        var scriptCalls = 0;
+        await using var server = await MockDeepSeekServer.StartAsync(_ =>
+        {
+            scriptCalls++;
+            if (scriptCalls > 1)
+            {
+                return
+                [
+                    """data: {"choices":[{"delta":{"content":"done"}}]}""",
+                    "",
+                    """data: {"choices":[{"delta":{},"finish_reason":"stop"}]}""",
+                    "",
+                    "data: [DONE]",
+                    "",
+                ];
+            }
+            var calls = Enumerable.Range(0, 3).Select(index =>
+                $$$"""{"index":{{{index}}},"id":"call_{{{index}}}","type":"function","function":{"name":"probe","arguments":"{\"index\":{{{index}}}}"}}""");
+            return
+            [
+                $$$"""data: {"choices":[{"delta":{"role":"assistant","content":null,"tool_calls":[{{{string.Join(",", calls)}}}]}}]}""",
+                "",
+                """data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                "",
+                "data: [DONE]",
+                "",
+            ];
+        });
+        using var fixture = new HarnessFixture(server.BaseUrl);
+        var completed = new System.Collections.Concurrent.ConcurrentBag<int>();
+        fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "probe",
+            Description = "throws for index 0, succeeds otherwise",
+            Parameters = new System.Text.Json.Nodes.JsonObject(),
+            Output = new ToolOutputDefinition(new System.Text.Json.Nodes.JsonObject(), (_, _) => [new TextBlock("ok")]),
+            Execute = async (args, _) =>
+            {
+                var index = args.GetProperty("index").GetInt32();
+                if (index == 0)
+                    throw new InvalidOperationException("probe blew up on purpose");
+                await Task.Delay(50);
+                completed.Add(index);
+                return new { };
+            },
+            IsConcurrencySafe = _ => true,
+        });
+        var handle = await fixture.Agents.Create(new CreateAgentOptions(
+            SessionId.Create("session-parallel-isolation"),
+            null,
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
+        var agent = (AgentLoopAgent)handle.Agent;
+
+        agent.Followup(MessageFactory.CreateUserText("probe three times"));
+        await agent.WhenIdle();
+
+        var results = agent.Session.SnapshotEvents().Select(e => e.Data).OfType<ToolResultPayload>().ToList();
+        Assert.Equal(3, results.Count);
+        Assert.Single(results, result => result.Message.Block.IsError == true);
+        Assert.Equal(2, results.Count(result => result.Message.Block.IsError != true));
+        // 幸存的两次调用真的跑到了 Execute，而不是被"跳过"占位。
+        Assert.Equal([1, 2], completed.Order());
+        Assert.IsType<TurnEndReason.Completed>(
+            agent.Session.SnapshotEvents().Select(e => e.Data).OfType<TurnEndPayload>().Single().Reason);
+    }
+
+    /**
+     * 用户按停/父会话连坐/进程销毁 必须能区分开: 回合结算写的是真实取消原因, 不是一律 User。
+     *
+     * 旧实现把 Cancel 的 cause 丢掉, 结算时硬编码 User, 于是界面上永远显示"中止 · user",
+     * 连"子代理是被父会话掐掉的"都看不出来。这里用一个卡住的工具把取消点固定在回合中间。
+     */
+    [Fact]
+    public async Task CancelledTurn_RecordsWhoCancelledIt()
+    {
+        await using var server = await MockDeepSeekServer.StartAsync(_ =>
+        [
+            """data: {"choices":[{"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_block","type":"function","function":{"name":"block","arguments":"{}"}}]}}]}""",
+            "",
+            """data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+            "",
+            "data: [DONE]",
+            "",
+        ]);
+        using var fixture = new HarnessFixture(server.BaseUrl);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "block",
+            Description = "blocks until the test releases it",
+            Parameters = new System.Text.Json.Nodes.JsonObject(),
+            Output = new ToolOutputDefinition(new System.Text.Json.Nodes.JsonObject(), (_, _) => [new TextBlock("ok")]),
+            Execute = async (_, runContext) =>
+            {
+                started.TrySetResult();
+                await release.Task.WaitAsync(runContext.Signal);
+                return new { };
+            },
+            IsConcurrencySafe = _ => true,
+        });
+        var handle = await fixture.Agents.Create(new CreateAgentOptions(
+            SessionId.Create("session-cancel-cause"),
+            null,
+            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
+        var agent = (AgentLoopAgent)handle.Agent;
+
+        agent.Followup(MessageFactory.CreateUserText("run the blocking tool"));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        agent.Cancel(new AgentCancelCause.Hook("cancel-reason-probe"));
+        release.TrySetResult();
+        await agent.WhenIdle();
+
+        var reason = agent.Session.SnapshotEvents()
+            .Select(sessionEvent => sessionEvent.Data)
+            .OfType<TurnEndPayload>()
+            .Single()
+            .Reason;
+        var aborted = Assert.IsType<TurnEndReason.Aborted>(reason);
+        var cause = Assert.IsType<AgentCancelCause.Hook>(aborted.Reason);
+        Assert.Equal("cancel-reason-probe", cause.Reason);
+    }
+
     private static void InterlockedMax(ref int target, int value)
     {
         var current = Volatile.Read(ref target);
@@ -374,12 +508,12 @@ public class AgentLoopIntegrationTests
             .Where(e => e.Type == SessionEventTypes.SystemMessage)
             .ToList();
         Assert.Equal(2, systemEvents.Count);
-        Assert.All(systemEvents, e => Assert.IsType<SurfaceOp.Append>(e.SurfaceOp));
+        Assert.All(systemEvents, sessionEvent => Assert.IsType<SurfaceOp.Append>(sessionEvent.SurfaceOp));
         var messages = agent.Session.DeriveMessages();
-        Assert.Equal(MessageRole.System, messages[0].Role);
-        Assert.Equal(2, messages.Count(message => message.Role == MessageRole.System));
-        var persona = Assert.IsType<TextBlock>(messages.Last(message => message.Role == MessageRole.System).Content[0]).Text;
-        Assert.Contains("persona v2", persona);
+        var systems = messages.Where(message => message.Role == MessageRole.System).ToList();
+        Assert.Equal(2, systems.Count);
+        Assert.DoesNotContain("persona v2", Assert.IsType<TextBlock>(systems[0].Content[0]).Text);
+        Assert.Contains("persona v2", Assert.IsType<TextBlock>(systems[^1].Content[0]).Text);
         var systemCount = server.LastRequestBody!.Split("\"role\":\"system\"").Length - 1;
         Assert.Equal(2, systemCount);
     }

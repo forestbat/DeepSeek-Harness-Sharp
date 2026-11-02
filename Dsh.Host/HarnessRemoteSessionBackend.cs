@@ -97,6 +97,7 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         if (agents.IsAcp(sessionId))
             return agents.CancelAsync(sessionId, cancellationToken);
         runtime.Require(sessionId).Cancel(new AgentCancelCause.User());
+        runtime.App.Ctx.LoggerFor("host").Info($"session stop: session={sessionId} cause=user");
         runtime.Pending.CancelSession(sessionId);
         return Task.CompletedTask;
     }

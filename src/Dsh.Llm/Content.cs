@@ -22,7 +22,13 @@ public sealed record TextBlock(string Text) : ContentBlock
     public override string Type => ContentBlockTypes.Text;
 }
 
-public sealed record ReasoningBlock(string Text) : ContentBlock
+/**
+ * 思维链块。
+ * ProtectedData / ItemId 是 OpenAI 兼容层(MEAI)对"服务端要求原样回传"的推理凭据的通用载体:
+ * Responses 的 reasoning item 加密内容与 item id、Chat Completions 各家的签名都从这里过。
+ * 缺省为 null 时序列化不落字段, 老会话与只产出纯文本的供应商行为不变。
+ */
+public sealed record ReasoningBlock(string Text, string? ProtectedData = null, string? ItemId = null) : ContentBlock
 {
     public override string Type => "reasoning";
 }
@@ -65,7 +71,10 @@ public sealed class ContentBlockJsonConverter : JsonConverter<ContentBlock>
         return type switch
         {
             ContentBlockTypes.Text => new TextBlock(root.GetProperty("text").GetString() ?? ""),
-            "reasoning" => new ReasoningBlock(root.GetProperty("text").GetString() ?? ""),
+            "reasoning" => new ReasoningBlock(
+                root.GetProperty("text").GetString() ?? "",
+                root.TryGetProperty("protectedData", out var protectedData) ? protectedData.GetString() : null,
+                root.TryGetProperty("itemId", out var itemId) ? itemId.GetString() : null),
             ContentBlockTypes.Image => new ImageBlock(DshJson.Deserialize<ImageAttachmentRef>(root.GetProperty("attachment"))
                 ?? throw new JsonException("image block missing attachment")),
             "tool-call" => new ToolCallBlock(
@@ -96,6 +105,10 @@ public sealed class ContentBlockJsonConverter : JsonConverter<ContentBlock>
                 break;
             case ReasoningBlock reasoning:
                 writer.WriteString("text", reasoning.Text);
+                if (reasoning.ProtectedData is { } protectedData)
+                    writer.WriteString("protectedData", protectedData);
+                if (reasoning.ItemId is { } itemId)
+                    writer.WriteString("itemId", itemId);
                 break;
             case ImageBlock image:
                 writer.WritePropertyName("attachment");

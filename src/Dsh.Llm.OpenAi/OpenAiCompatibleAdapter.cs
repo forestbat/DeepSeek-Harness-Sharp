@@ -1,4 +1,5 @@
 #pragma warning disable OPENAI001
+#pragma warning disable SCME0001
 
 using System.ClientModel;
 using System.ClientModel.Primitives;
@@ -6,12 +7,17 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using OpenAiAssistantChatMessage = OpenAI.Chat.AssistantChatMessage;
+using OpenAiChatToolCall = OpenAI.Chat.ChatToolCall;
 
 namespace Dsh.Llm.OpenAi;
 
 public sealed class OpenAiCompatibleAdapter : LlmAdapter
 {
     private static readonly IReadOnlyList<string> ReasoningKeys = ["reasoning", "reasoning_content", "thinking"];
+
+    /** MEAI 在 TextReasoningContent 上保存 reasoning item id 的键名(与 Responses 客户端出站时读取的键一致)。 */
+    private const string ReasoningItemIdKey = "reasoningItemId";
 
     private readonly string _providerId;
     private readonly IReadOnlyList<ProviderModelSpec> _models;
@@ -179,9 +185,14 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                             yield return new StreamChunk.TextDelta(textBlock.Index, text.Text);
                             break;
                         }
-                    case TextReasoningContent reasoning when reasoning.Text.Length > 0:
+                    case TextReasoningContent reasoning when reasoning.Text.Length > 0
+                                                            || reasoning.ProtectedData?.Length > 0
+                                                            || ReasoningItemId(reasoning) is not null:
                         {
                             reasoningBlock ??= Open("reasoning");
+                            CaptureReasoningCredentials(reasoningBlock, reasoning);
+                            if (reasoning.Text.Length == 0)
+                                break;
                             if (reasoningBlock.Text.Length == 0)
                                 yield return new StreamChunk.BlockStart(reasoningBlock.Index, "reasoning");
                             reasoningBlock.Text += reasoning.Text;
@@ -261,7 +272,7 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                     messages.Add(new ChatMessage(ChatRole.System, FlattenText(message.Content)));
                     break;
                 case MessageRole.Assistant:
-                    messages.Add(new ChatMessage(ChatRole.Assistant, ToAssistantContents(message.Content)));
+                    messages.Add(ToAssistantMessage(message.Content));
                     break;
                 default:
                     {
@@ -317,7 +328,7 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
                     contents.Add(new TextContent(text.Text));
                     break;
                 case ReasoningBlock reasoning:
-                    contents.Add(new TextReasoningContent(reasoning.Text));
+                    contents.Add(ToReasoningContent(reasoning));
                     break;
                 case ToolCallBlock call:
                     contents.Add(new FunctionCallContent(call.Id.Value, call.Name, ParseArguments(call.Arguments)));
@@ -325,6 +336,44 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             }
         }
         return contents;
+    }
+
+    private ChatMessage ToAssistantMessage(IReadOnlyList<ContentBlock> blocks)
+    {
+        var content = ToAssistantContents(blocks);
+        if (_useResponses)
+            return new ChatMessage(ChatRole.Assistant, content);
+        // MEAI 的 Chat Completions 客户端会原样转发 RawRepresentation, 这是把 DeepSeek 的
+        // reasoning_content 放进历史 assistant 消息的唯一入口(MEAI 自身不序列化 TextReasoningContent)。
+        var text = string.Concat(blocks.OfType<TextBlock>().Select(block => block.Text));
+        var calls = blocks.OfType<ToolCallBlock>()
+            .Select(call => OpenAiChatToolCall.CreateFunctionToolCall(
+                call.Id.Value,
+                call.Name,
+                BinaryData.FromString(call.Arguments)))
+            .ToList();
+        // 工具调用轮次发 content:null; 空字符串会让模型把这一轮当成一次空的文本回复。
+        OpenAiAssistantChatMessage raw = text.Length == 0 && calls.Count > 0
+            ? new OpenAiAssistantChatMessage(calls)
+            : new OpenAiAssistantChatMessage(text);
+        if (text.Length > 0)
+        {
+            foreach (var call in calls)
+                raw.ToolCalls.Add(call);
+        }
+        var reasoning = string.Concat(blocks.OfType<ReasoningBlock>().Select(block => block.Text));
+        if (reasoning.Length > 0)
+            raw.Patch.Set("$.reasoning_content"u8, reasoning);
+        return new ChatMessage(ChatRole.Assistant, content) { RawRepresentation = raw };
+    }
+
+    /** 还原推理凭据: Responses 客户端会据此重建带 id/加密内容的 reasoning item, 缺凭据项会被服务端拒绝。 */
+    private static TextReasoningContent ToReasoningContent(ReasoningBlock reasoning)
+    {
+        var content = new TextReasoningContent(reasoning.Text) { ProtectedData = reasoning.ProtectedData };
+        if (reasoning.ItemId is { } itemId)
+            (content.AdditionalProperties ??= [])[ReasoningItemIdKey] = itemId;
+        return content;
     }
 
     private static ChatOptions ToChatOptions(GenerateOptions options)
@@ -395,10 +444,31 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             null,
             details.ReasoningTokenCount);
 
+    /** 读取 MEAI 挂在 reasoning 内容上的 item id; 兼容进程内 string 与会话回放后的 JsonElement。 */
+    private static string? ReasoningItemId(TextReasoningContent content)
+        => content.AdditionalProperties is { } properties
+            && properties.TryGetValue(ReasoningItemIdKey, out var value)
+                ? value switch
+                {
+                    string text when text.Length > 0 => text,
+                    JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+                    _ => null,
+                }
+                : null;
+
+    /** 记住服务端要求原样回传的推理凭据; 后续回合只发文本、不发凭据时, 保留先到的凭据。 */
+    private static void CaptureReasoningCredentials(OpenBlock block, TextReasoningContent content)
+    {
+        if (content.ProtectedData is { Length: > 0 } protectedData)
+            block.ProtectedData = protectedData;
+        if (ReasoningItemId(content) is { } itemId)
+            block.ItemId = itemId;
+    }
+
     private static ContentBlock CloseBlock(OpenBlock block) => block.Kind switch
     {
         "text" => new TextBlock(block.Text),
-        "reasoning" => new ReasoningBlock(block.Text),
+        "reasoning" => new ReasoningBlock(block.Text, block.ProtectedData, block.ItemId),
         "tool-call" => new ToolCallBlock(
             block.CallId,
             block.Name ?? "",
@@ -414,5 +484,7 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         public ToolCallId CallId;
         public string? Name;
         public string Arguments = "";
+        public string? ProtectedData;
+        public string? ItemId;
     }
 }

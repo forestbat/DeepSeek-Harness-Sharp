@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Llm;
 using Dsh.Runtime.Events;
@@ -92,6 +92,12 @@ public sealed record SubagentStartRequest
     public int? MaxDepth { get; init; }
     public ToolRestriction? ToolFilter { get; init; }
     public string? Persona { get; init; }
+
+    /**
+     * 后台运行: 子代理不再随父回合的取消信号一起终止, 完成后由调用方唤醒父会话。
+     * 父会话按停只应结束父自己的回合, 子代理继续跑完 —— 否则用户一按停, 跑了一半的子代理成果就全丢了。
+     */
+    public bool Background { get; init; }
 }
 
 /** 子代理 provider 的能力视图:供消费方在不接触 provider SPI 的情况下探测能力。 */

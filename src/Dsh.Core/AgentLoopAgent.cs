@@ -7,6 +7,9 @@ namespace Dsh.Core;
 
 public sealed class AgentLoopAgent : IAgent, IDisposable
 {
+    /** 日志分类名: 取消与回合结算行都挂在这里, 便于 grep 出"谁停了谁"。 */
+    private const string LogName = "agent";
+
     private abstract class Phase
     {
         public sealed class Idle : Phase
@@ -19,6 +22,9 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             public CancellationTokenSource Abort { get; } = new();
             public int LastTurn { get; set; }
             public bool WakeRequested { get; set; }
+
+            /** 谁取消了这段工作; 首个取消者决定它, 后续取消不覆盖(第一个才是真正让它停下来的人)。 */
+            public AgentCancelCause? Cause { get; set; }
         }
 
         public sealed class Running : Phase
@@ -27,6 +33,9 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             public int Turn { get; set; }
             public int Step { get; set; }
             public bool WakeRequested { get; set; }
+
+            /** 谁取消了这一回合; 结算时据此写 TurnEndPayload, 而不是一律当成用户按停。 */
+            public AgentCancelCause? Cause { get; set; }
         }
     }
 
@@ -114,12 +123,18 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
 
     public void Inject(UserMessage message) => Send(message, InboxTargets.NextStep, false);
 
+    /**
+     * 取消当前工作。cause 必须落到相位上 —— 结算时要用它写 TurnEndPayload;
+     * 丢弃它(旧实现)会让"父会话连坐取消"和"用户按停"在日志与界面上一模一样。
+     */
     public void Cancel(AgentCancelCause cause, bool keepInbox = false)
     {
+        var phase = _phase;
         if (!keepInbox)
         {
-            Inbox.Clear();
-            switch (_phase)
+            // 照常清空待办提示词, 但保住"后台任务已完成"的通知: 它是按停之后用户最需要看到的结果。
+            Inbox.Clear(BackgroundResultNotice.IsNotice);
+            switch (phase)
             {
                 case Phase.Maintenance maintenance:
                     maintenance.WakeRequested = false;
@@ -129,7 +144,40 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                     break;
             }
         }
-        PhaseAbort(_phase)?.Cancel();
+        // 首个取消者决定原因: 后续取消(例如父会话连带取消)不覆盖, 否则真正让人停手的那一方会被掩盖。
+        switch (phase)
+        {
+            case Phase.Maintenance maintenance:
+                maintenance.Cause ??= cause;
+                maintenance.Abort.Cancel();
+                break;
+            case Phase.Running running:
+                running.Cause ??= cause;
+                running.Abort.Cancel();
+                break;
+        }
+        Ctx.LoggerFor(LogName).Info($"cancel: agent={Id} phase={Describe(phase)} cause={cause.Kind}");
+    }
+
+    private static string Describe(Phase phase) => phase switch
+    {
+        Phase.Running running => $"running(turn={running.Turn})",
+        Phase.Maintenance => "maintenance",
+        _ => "idle",
+    };
+
+    /** 回合结束的原因写进日志: 区分"谁取消的"和"结算点抛错", 这是排查连坐/误停的唯一线索。 */
+    private void LogTurnEnd(int turn, TurnEndReason reason)
+    {
+        var tag = reason switch
+        {
+            TurnEndReason.Aborted aborted => $"aborted(handle={aborted.Reason.Kind})",
+            TurnEndReason.Error error => $"failed(handle=scheduler, code={error.Failure.Code})",
+            TurnEndReason.Blocked => "blocked",
+            TurnEndReason.MaxTokens => "max-tokens",
+            _ => "completed",
+        };
+        Ctx.LoggerFor(LogName).Info($"turn-end: agent={Id} turn={turn} {tag}");
     }
 
     public async Task<T> RunMaintenance<T>(Func<CancellationToken, Task<T>> job)
@@ -328,7 +376,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         {
             if (signal.IsCancellationRequested)
             {
-                turnEnds = new TurnEndReason.Aborted(new AgentCancelCause.User());
+                // 用相位上记录的真实原因: 父会话连坐、进程销毁、用户按停必须能区分开。
+                turnEnds = new TurnEndReason.Aborted(phase.Cause ?? new AgentCancelCause.User());
                 throw;
             }
             turnEnds = new TurnEndReason.Error(error is LlmException llm
@@ -338,14 +387,16 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         }
         finally
         {
+            var reason = turnEnds ?? new TurnEndReason.Error(new LlmFailure("turn ended without a reason", "UNKNOWN"));
             try
             {
-                Session.Append(new TurnEndPayload(turn, turnEnds ?? new TurnEndReason.Error(new LlmFailure("turn ended without a reason", "UNKNOWN"))));
+                Session.Append(new TurnEndPayload(turn, reason));
             }
             catch (Exception error)
             {
                 ReportError(error);
             }
+            LogTurnEnd(turn, reason);
         }
         if (!Inbox.HasPending)
             return false;
@@ -492,13 +543,13 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     {
         if (_pendingAssembly is not { } assembly)
             return;
-        var startsSeries = startsRequestSeries || _requestSurfaceGeneration != Session.SurfaceManager.ReplaceGeneration;
         if (ResolveInHistory())
         {
-            CommitProjected(turn, step, PromptRender.RenderPrompt(assembly), true, startsSeries);
+            var startsSeries = startsRequestSeries || _requestSurfaceGeneration != Session.SurfaceManager.ReplaceGeneration;
+            CommitProjected(turn, step, PromptRender.RenderPrompt(assembly), inHistory: true, startsSeries);
             return;
         }
-        CommitProjected(turn, step, RenderSections(assembly, false), false, startsSeries);
+        CommitProjected(turn, step, RenderSections(assembly, false));
         var dynamicText = RenderSections(assembly, true);
         if (dynamicText != _lastDynamicText)
         {
@@ -507,7 +558,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         }
     }
 
-    private void CommitProjected(int turn, int step, string rendered, bool inHistory, bool startsSeries)
+    private void CommitProjected(int turn, int step, string rendered, bool inHistory = false, bool startsSeries = false)
     {
         foreach (var commit in _systemPrompt.Project(rendered, inHistory, startsSeries))
             Session.Append(new SystemMessagePayload(turn, step, commit.Message), commit.Op, commit.SourceSeqs);
@@ -546,6 +597,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         CancellationToken signal)
     {
         var session = Session;
+        boundaryMessages = EnvironmentDetails.Append(session, MergeRuntimeContext(boundaryMessages));
         var persistedHeader = session.RequestHeader();
         var persistedConfig = persistedHeader?.Config;
         var provider = Options.Provider ?? "";
@@ -848,6 +900,32 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             }
         }
         return changed ? mapped : content;
+    }
+
+    /**
+     * 把运行期上下文快照并入它前面的那条 user 消息, 而不是作为独立 user 消息发出去。
+     * Kilo 把环境细节放在用户消息末尾; 单独一条"Current runtime context"会让模型把最后看到的
+     * 元信息当成当前任务, 退回逐项自述的 Let me 风格。会话里仍保留独立事件, 只改变请求投影。
+     */
+    private static IReadOnlyList<Message> MergeRuntimeContext(IReadOnlyList<Message> messages)
+    {
+        var merged = new List<Message>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (message.Source is PluginMessageSource { Plugin: RuntimeContextProjection.Source }
+                && merged.Count > 0
+                && merged[^1] is UserMessage previous)
+            {
+                var text = string.Concat(message.Content.OfType<TextBlock>().Select(block => block.Text));
+                merged[^1] = previous with
+                {
+                    Content = [.. previous.Content, new TextBlock($"\n\n<system-reminder>\n{text}\n</system-reminder>")],
+                };
+                continue;
+            }
+            merged.Add(message);
+        }
+        return merged;
     }
 
     private static JsonElement ParseArguments(string raw)

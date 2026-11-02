@@ -20,11 +20,14 @@ public static class WindowsPowerShellTool
         + "Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. "
         + "Background execution is not available; long-running commands must finish within the timeout.";
 
+    /** 退出码规则已由 `tool:pwsh` 段覆盖, 这里不再注册第二份相同文案。 */
+    private const string SectionText = "";
+
     public static IDisposable Register(Context ctx, BashToolConfig? config = null)
         => BashTool.RegisterShell(ctx, new ShellCommandDialect(
                 ToolName,
                 Description,
-                PwshTool.SectionText,
+                SectionText,
                 "The Windows PowerShell 5.1 command to execute.",
                 PwshTool.DescriptionExample,
                 (command, _, envs) => PwshTool.CommandLaunch(Executable, command, envs))

@@ -15,10 +15,15 @@ public sealed record PromptSection(
     bool Complete = false,
     bool Dynamic = false,
     IReadOnlyList<string>? After = null,
-    IReadOnlyList<string>? Before = null)
+    IReadOnlyList<string>? Before = null,
+    IReadOnlyList<string>? ToolNames = null)
 {
-    public static PromptSection Literal(string name, string text, bool complete = false)
-        => new(name, _ => text, complete);
+    public static PromptSection Literal(
+        string name,
+        string text,
+        bool complete = false,
+        IReadOnlyList<string>? ToolNames = null)
+        => new(name, _ => text, complete, ToolNames: ToolNames);
 }
 
 public sealed record PromptContext(
@@ -52,6 +57,7 @@ public static class PromptSpine
     public static readonly IReadOnlyList<string> Sections =
     [
         "harness:identity",
+        "harness:tone",
         "deployment:persona",
         "agent-instructions",
         "plan:policy",
@@ -95,7 +101,10 @@ public static class PromptSpine
 public sealed class SystemPromptConfig
 {
     public bool IncludeHarnessIdentity { get; init; } = true;
+    public bool IncludeTone { get; init; } = true;
     public bool IncludeRuntimeContext { get; init; } = true;
+    public bool FoldContextsIntoSystem { get; init; } = true;
+    public bool IncludeEnvironment { get; init; }
     public string Persona { get; init; } = "";
     public IReadOnlyList<string>? ToolOrder { get; init; }
 }
@@ -104,7 +113,15 @@ public sealed class SystemPrompt : Service
 {
     public const string ServiceName = "systemPrompt";
     public const string PersonaSection = "deployment:persona";
+    public const string RuntimeContextSection = "runtime:context";
     public const string ToolOrderRest = "<unlisted-tools>";
+
+    /** 基调段: 只约束篇幅与收尾方式, 不含人称要求。 */
+    private const string ToneSection =
+        "Be direct and brief. Report what you found or changed, then stop.\n"
+        + "Your goal is to accomplish the task, not to discuss it: work in small steps and keep the task moving forward.\n"
+        + "Skip opening courtesies, restatements of the plan, and summaries of work the transcript already shows.\n"
+        + "Do not end a reply with a question or an offer to do more unless the user asked for it.";
 
     private sealed record SequencedSection(long Seq, PromptSection Section);
 
@@ -134,6 +151,7 @@ public sealed class SystemPrompt : Service
 
     private readonly ScopedLayers<PromptLayer> _layers;
     private readonly IReadOnlyList<string>? _toolOrder;
+    private readonly bool _foldContextsIntoSystem;
     private long _sequence;
 
     private long NextSeq() => Interlocked.Increment(ref _sequence);
@@ -142,13 +160,20 @@ public sealed class SystemPrompt : Service
     {
         _layers = new ScopedLayers<PromptLayer>(scope => new PromptLayer(scope), () => ctx.Emit(new SystemPromptChangeNotification()));
         _toolOrder = ValidateToolOrder(config.ToolOrder);
+        _foldContextsIntoSystem = config.FoldContextsIntoSystem;
         if (config.IncludeHarnessIdentity)
         {
             Section(PromptSection.Literal(
                 "harness:identity",
                 "You are an AI agent powered by DeepSeek Harness."));
+            if (config.IncludeTone)
+                Section(PromptSection.Literal("harness:tone", ToneSection));
         }
-        Section(PromptSection.Literal(PersonaSection, config.Persona));
+        Section(new PromptSection(
+            PersonaSection,
+            context => config.IncludeEnvironment
+                ? EnvironmentPrompt.AppendToPersona(config.Persona, context)
+                : config.Persona));
         if (!config.IncludeRuntimeContext)
             SuppressRuntimeContext();
     }
@@ -249,6 +274,9 @@ public sealed class SystemPrompt : Service
             section => section.Before,
             PromptSpine.Sections,
             "section");
+        sectionDefinitions = sectionDefinitions
+            .Where(section => ToolSectionVisible(section, context))
+            .ToList();
         var completeSections = sectionDefinitions.Where(section => section.Complete).ToList();
         if (completeSections.Count > 1)
         {
@@ -282,13 +310,42 @@ public sealed class SystemPrompt : Service
             DshScope.ScopeTarget(Ctx, scope),
             new SystemPromptAssembleNotification(assembly, context),
             () => new ValueTask<object?>(assembly)) as PromptAssembly ?? assembly;
-        if (completeSection is null && !runtimeContextSuppressed)
+        if (completeSection is not null)
+            return transformed with
+            {
+                Sections = [completeSection],
+                Contexts = runtimeContextSuppressed ? [] : transformed.Contexts,
+            };
+        if (runtimeContextSuppressed)
+            return transformed with { Contexts = [] };
+        if (!_foldContextsIntoSystem || transformed.Contexts.Count == 0)
             return transformed;
-        return transformed with
-        {
-            Sections = completeSection is null ? transformed.Sections : [completeSection],
-            Contexts = runtimeContextSuppressed ? [] : transformed.Contexts,
-        };
+        var contextText = PromptRender.JoinContextSections(PromptRender.RenderContextSections(transformed));
+        if (contextText.Length == 0)
+            return transformed with { Contexts = [] };
+        var folded = transformed.Sections.ToList();
+        var insert = folded.FindIndex(section => section.Name == PersonaSection) + 1;
+        if (insert == 0)
+            insert = folded.Count;
+        folded.Insert(insert, new AssembledSection(RuntimeContextSection, contextText));
+        return transformed with { Sections = folded, Contexts = [] };
+    }
+
+    /** tool:* 段跟随工具可见性: 工具被限制/未注册时不输出对应 system 说明。 */
+    private bool ToolSectionVisible(PromptSection section, AssembleContext context)
+    {
+        if (context.Agent is null)
+            return true;
+        var tools = Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName, false);
+        if (tools is null)
+            return true;
+        if (section.ToolNames is { Count: > 0 } names)
+            return names.Any(name => tools.Get(name, context.Agent.ScopeKey) is not null);
+        if (!section.Name.StartsWith("tool:", StringComparison.Ordinal))
+            return true;
+        var toolName = section.Name["tool:".Length..];
+        return tools.Get(toolName, context.Agent.ScopeKey) is not null
+            || tools.Schemas(context.Agent.ScopeKey).All(schema => schema.Name != toolName);
     }
 
     /**

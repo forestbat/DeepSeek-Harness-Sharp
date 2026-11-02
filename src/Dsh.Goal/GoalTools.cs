@@ -98,7 +98,7 @@ public static class GoalTools
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("tool-goal requires the tools service");
         return new RegistrationBundle(
-            systemPrompt.Section(PromptSection.Literal("tool:goal", Guidance(blockedAfter))),
+            systemPrompt.Section(PromptSection.Literal("tool:goal", Guidance(blockedAfter), ToolNames: ["get_goal", "create_goal", "update_goal"])),
             tools.Register(GetGoalTool(ctx)),
             tools.Register(CreateGoalTool(ctx)),
             tools.Register(UpdateGoalTool(ctx, blockedAfter)));
