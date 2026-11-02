@@ -34,7 +34,11 @@ public static class PwshTool
                 SectionText,
                 "The PowerShell command to execute.",
                 DescriptionExample,
-                (command, _, envs) => CommandLaunch("pwsh", command, envs)),
+                (command, _, envs) => CommandLaunch("pwsh", command, envs))
+            {
+                // pwsh 在 Windows 上总提供(pwsh 7 或需用户自行安装); 其他平台必须有 PowerShell Core 才提供, 5.1 由 powershell 工具负责。
+                IsAvailable = PowerShellCoreProbe.IsAvailable,
+            },
             config ?? new BashToolConfig());
 
     /** A non-interactive `-Command` run of the given PowerShell executable with the shared preamble. */
