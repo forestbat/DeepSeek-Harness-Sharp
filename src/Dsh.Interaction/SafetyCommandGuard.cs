@@ -41,9 +41,10 @@ public static class SafetyCommandGuard
         {
             var request = notification.Request;
             using var arguments = JsonDocument.Parse(request.Arguments ?? "{}");
+            var ruleArguments = request.RuleArguments ?? arguments.RootElement;
             var safety = readSafety();
-            return MatchingRule(safety?.Blacklist, request.ToolName, arguments.RootElement) is null
-                && (safety?.AutoApprove == true || MatchingRule(safety?.Whitelist, request.ToolName, arguments.RootElement) is not null)
+            return MatchingRule(safety?.Blacklist, request.ToolName, ruleArguments) is null
+                && (safety?.AutoApprove == true || MatchingRule(safety?.Whitelist, request.ToolName, ruleArguments) is not null)
                 ? ValueTask.FromResult<object?>(ApprovalOutcome.AllowedOnce)
                 : next();
         }, new EventOptions { Global = true });

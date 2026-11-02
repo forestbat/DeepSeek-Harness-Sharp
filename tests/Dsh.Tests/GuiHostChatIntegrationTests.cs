@@ -329,11 +329,14 @@ public sealed class GuiHostChatIntegrationTests
                 if (viewModel.SubmitCommand.ExecutionTask is { } submission)
                     await GuiTestEnvironment.PumpAsync(submission);
                 await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
-                    () => viewModel.Messages.Any(message => message.Kind == MessageKind.User && message.Text == "typed through the ordinary composer"),
+                    () => viewModel.Messages.Any(message => message.Kind == MessageKind.User
+                        && message.Text.Contains("typed through the ordinary composer", StringComparison.Ordinal)),
                     () => GuiTestEnvironment.DescribeChatState(viewModel));
                 var snapshot = await observer.GetSessionSnapshotAsync(viewModel.CurrentSessionId.Value, Ct);
-                Assert.Contains(snapshot.Events, item => item.Data is UserMessagePayload user
-                    && user.Message.Content.OfType<Dsh.Llm.TextBlock>().Any(block => block.Text == "typed through the ordinary composer"));
+                Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User
+                    && message.Text.Contains("typed through the ordinary composer", StringComparison.Ordinal));
+                Assert.Single(snapshot.Events.Select(item => item.Data).OfType<UserMessagePayload>(),
+                    user => user.Message.Content.OfType<Dsh.Llm.TextBlock>().Any(block => block.Text == "typed through the ordinary composer"));
                 // Schedule close ahead of the queued sticky scroll without reentering message projection.
                 viewModel.MessagesChanged += () =>
                 {

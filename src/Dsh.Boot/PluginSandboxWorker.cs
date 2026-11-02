@@ -23,7 +23,7 @@ public static class PluginSandboxWorker
         Console.SetIn(TextReader.Null);
         await using var stream = new StandardIoDuplexStream(input, output, ownsStreams: true);
         await using var peer = new JsonRpcPeer(stream, PluginSandboxMethods.MaximumFrameBytes);
-        var session = new Session(peer, stream);
+        var session = new Session(peer);
         peer.RequestPreparation = session.Prepare;
         peer.Closed += session.Closed;
         peer.Start();
@@ -37,17 +37,14 @@ public static class PluginSandboxWorker
         private int _cancellations;
         private int _active = 1;
 
-        internal Invocation(string token, string package, CancellationToken lifetime)
+        internal Invocation(string token, CancellationToken lifetime)
         {
             Token = token;
-            Package = package;
             _lifetime = lifetime.Register(Cancel);
         }
 
         internal string Token { get; }
-        internal string Package { get; }
         internal CancellationTokenSource Cancellation { get; } = new();
-        internal TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool Active => Volatile.Read(ref _active) != 0;
 
         internal void Cancel()
@@ -79,7 +76,7 @@ public static class PluginSandboxWorker
         }
     }
 
-    internal sealed class Session(JsonRpcPeer peer, Stream stream)
+    internal sealed class Session(JsonRpcPeer peer)
     {
         private readonly Lock _gate = new();
         private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -88,22 +85,15 @@ public static class PluginSandboxWorker
         private readonly Dictionary<string, Invocation> _invocations = new(StringComparer.Ordinal);
         private readonly CancellationTokenSource _lifetime = new();
         private readonly TaskCompletionSource<int> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _inbound;
-        private int _reverse;
+        private readonly SemaphoreSlim _inbound = new(PluginSandboxMethods.MaximumPendingRequests);
+        private readonly SemaphoreSlim _reverse = new(PluginSandboxMethods.MaximumPendingRequests);
         private int _toolCount;
-        private int _toolBytes;
         private int _failed;
 
         internal Task<int> Completion => _closed.Task;
 
         internal ValueTask<JsonElement?>? Prepare(JsonRpcMessage message, CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref _inbound) > PluginSandboxMethods.MaximumInboundRequests)
-            {
-                Interlocked.Decrement(ref _inbound);
-                Fail();
-                return ValueTask.FromException<JsonElement?>(new IOException("Worker inbound request limit exceeded."));
-            }
             Invocation? invocation = null;
             PluginSandboxInvokeRequest? invoke = null;
             Exception? preparationFailure = null;
@@ -112,15 +102,13 @@ public static class PluginSandboxWorker
                 if (message.Method == PluginSandboxMethods.Invoke)
                 {
                     invoke = Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxInvokeRequest);
-                    Text(invoke.Package, 256);
-                    Text(invoke.Invocation, 256);
                     if (invoke.Invocation.Length == 0)
                         throw new InvalidOperationException("Missing invocation authority.");
                     lock (_gate)
                     {
                         if (_invocations.ContainsKey(invoke.Invocation))
                             throw new InvalidOperationException("Duplicate invocation authority.");
-                        invocation = new Invocation(invoke.Invocation, invoke.Package, _lifetime.Token);
+                        invocation = new Invocation(invoke.Invocation, _lifetime.Token);
                         _invocations.Add(invoke.Invocation, invocation);
                     }
                 }
@@ -132,8 +120,11 @@ public static class PluginSandboxWorker
             // Constructors, initialization and synchronous reverse interop never occupy the reader.
             return new ValueTask<JsonElement?>(Task.Run(async () =>
             {
+                var admitted = false;
                 try
                 {
+                    await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    admitted = true;
                     if (preparationFailure is not null)
                         throw preparationFailure;
                     if (invoke is not null && invocation is not null)
@@ -152,9 +143,9 @@ public static class PluginSandboxWorker
                         invocation.End();
                         lock (_gate)
                             _invocations.Remove(invocation.Token);
-                        invocation.Finished.TrySetResult();
                     }
-                    Interlocked.Decrement(ref _inbound);
+                    if (admitted)
+                        _inbound.Release();
                 }
             }));
         }
@@ -166,16 +157,8 @@ public static class PluginSandboxWorker
                 case PluginSandboxMethods.Ready:
                     return Serialize(new PluginSandboxReady(PluginSandboxMethods.Version, Environment.ProcessId),
                         PluginSandboxJsonContext.Default.PluginSandboxReady);
-                case PluginSandboxMethods.Cancel:
-                    var cancel = Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxCancelRequest);
-                    Invocation? pending;
-                    lock (_gate)
-                        _invocations.TryGetValue(cancel.Invocation, out pending);
-                    pending?.Cancel();
-                    return Ack();
                 case PluginSandboxMethods.Inspect:
                 case PluginSandboxMethods.Load:
-                case PluginSandboxMethods.Unload:
                     await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
                     try
                     {
@@ -183,15 +166,9 @@ public static class PluginSandboxWorker
                             return Serialize(await InspectAsync(Read(message.Params,
                                 PluginSandboxJsonContext.Default.PluginSandboxInspectRequest)).ConfigureAwait(false),
                                 PluginSandboxJsonContext.Default.PluginSandboxInspection);
-                        if (message.Method == PluginSandboxMethods.Load)
-                        {
-                            await LoadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxLoadRequest),
-                                cancellationToken).ConfigureAwait(false);
-                            return Ack();
-                        }
-                        return Serialize(await UnloadAsync(Read(message.Params,
-                            PluginSandboxJsonContext.Default.PluginSandboxUnloadRequest).Package).ConfigureAwait(false),
-                            PluginSandboxJsonContext.Default.PluginSandboxUnloadReply);
+                        await LoadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxLoadRequest),
+                            cancellationToken).ConfigureAwait(false);
+                        return Ack();
                     }
                     finally
                     {
@@ -204,16 +181,12 @@ public static class PluginSandboxWorker
 
         internal async Task<JsonElement> Reverse(string method, JsonElement parameters, CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref _reverse) > PluginSandboxMethods.MaximumInboundRequests)
-            {
-                Interlocked.Decrement(ref _reverse);
-                Fail();
-                throw new IOException("Worker reverse request limit exceeded.");
-            }
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            await _reverse.WaitAsync(linked.Token).ConfigureAwait(false);
             try
             {
-                var result = Element(await peer.RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false)
-                    ?? throw new IOException("Missing parent response."));
+                var result = await peer.RequestAsync(method, parameters, linked.Token).ConfigureAwait(false)
+                    ?? throw new IOException("Missing parent response.");
                 if (method != PluginSandboxMethods.HostCall
                     && !Read(result, PluginSandboxJsonContext.Default.PluginSandboxAck).Success)
                     throw new InvalidOperationException("Parent rejected the worker operation.");
@@ -221,27 +194,25 @@ public static class PluginSandboxWorker
             }
             finally
             {
-                Interlocked.Decrement(ref _reverse);
+                _reverse.Release();
             }
         }
 
-        internal void ReserveTool(int bytes)
+        internal void ReserveTool()
         {
             lock (_gate)
             {
-                if (_toolCount >= MaximumTools || bytes > MaximumRegistrationBytes - _toolBytes)
-                    throw new InvalidOperationException("Worker tool registration budget exceeded.");
+                if (_toolCount >= PluginSandboxMethods.MaximumTools)
+                    throw new InvalidOperationException("Worker tool registration limit exceeded.");
                 _toolCount++;
-                _toolBytes += bytes;
             }
         }
 
-        internal void ReleaseTool(int bytes)
+        internal void ReleaseTool()
         {
             lock (_gate)
             {
                 _toolCount--;
-                _toolBytes -= bytes;
             }
         }
 
@@ -257,14 +228,11 @@ public static class PluginSandboxWorker
 
         private async Task LoadAsync(PluginSandboxLoadRequest request, CancellationToken cancellationToken)
         {
-            Text(request.Package, 256);
-            var configuration = Element(request.Configuration);
+            var configuration = request.Configuration;
             lock (_gate)
             {
                 if (_packages.ContainsKey(request.Package))
                     throw new InvalidOperationException("Plugin package is already loaded.");
-                if (_packages.Count >= MaximumPackages)
-                    throw new InvalidOperationException("Worker package budget exceeded.");
             }
             Artifact? artifact = null;
             IDshPlugin? candidate = null;
@@ -352,71 +320,8 @@ public static class PluginSandboxWorker
             }
         }
 
-        private async Task<PluginSandboxUnloadReply> UnloadAsync(string package)
-        {
-            Text(package, 256);
-            var cleanup = await DetachAsync(package).ConfigureAwait(false);
-            // The producer frame holding plugin/configuration/lease must be gone before GC.
-            await Task.Yield();
-            if (cleanup.Weak is not null && !PluginUnloader.WaitForCollection(cleanup.Weak, out var report))
-                return new PluginSandboxUnloadReply(false, cleanup.Failure ?? report);
-            return new PluginSandboxUnloadReply(cleanup.Failure is null, cleanup.Failure);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private async Task<(WeakReference? Weak, string? Failure)> DetachAsync(string package)
-        {
-            LoadedPackage? loaded;
-            Invocation[] invocations;
-            lock (_gate)
-            {
-                if (!_packages.Remove(package, out loaded))
-                    return (null, "Plugin package is not loaded.");
-                invocations = [.. _invocations.Values.Where(item => item.Package == package)];
-            }
-            string? failure = null;
-            try { loaded.Host.Stop(); }
-            catch (Exception error) { failure = BoundedFailure(error); }
-            // A cancellation-ignoring callback is still running. Do not free its library or
-            // report it stopped; the parent's retirement deadline terminates the domain.
-            await Task.WhenAll(invocations.Select(item => item.Finished.Task)).ConfigureAwait(false);
-            try
-            {
-                if (loaded.Lease is not null)
-                    await loaded.Lease.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception error) { failure ??= BoundedFailure(error); }
-            try { await DisposePluginAsync(loaded.Plugin, loaded.Lease).ConfigureAwait(false); }
-            catch (Exception error) { failure ??= BoundedFailure(error); }
-            try { loaded.Host.ReleaseTools(); }
-            catch (Exception error) { failure ??= BoundedFailure(error); }
-            WeakReference? weak = null;
-            if (loaded.Artifact is { } artifact)
-            {
-                artifact.References--;
-                if (artifact.References == 0)
-                {
-                    _artifacts.Remove(artifact.Path);
-                    try { weak = artifact.Release(); }
-                    catch (Exception error) { failure ??= BoundedFailure(error); }
-                }
-                else
-                {
-                    failure ??= "The artifact is retained by another active package; collection was not attempted.";
-                }
-            }
-            else
-            {
-                failure ??= "Compiled-in code requires OS domain termination; its assembly cannot be collected.";
-            }
-            loaded = null;
-            return (weak, failure);
-        }
-
         private static async Task<PluginSandboxInspection> InspectAsync(PluginSandboxInspectRequest request)
         {
-            if (request.Package is not null)
-                Text(request.Package, 256);
             var result = await ProbeAsync(request).ConfigureAwait(false);
             await Task.Yield();
             if (result.Weak is not null && !PluginUnloader.WaitForCollection(result.Weak, out var report))
@@ -437,8 +342,6 @@ public static class PluginSandboxWorker
                 {
                     foreach (var registration in Compiled(request.Package))
                     {
-                        if (metadata.Count >= MaximumPackages)
-                            throw new InvalidOperationException("Worker metadata package limit exceeded.");
                         metadata.Add(await ProbePluginAsync(registration.Package, PluginForm.CompiledIn,
                             registration.Entry, registration.Create).ConfigureAwait(false));
                     }
@@ -450,7 +353,6 @@ public static class PluginSandboxWorker
                     {
                         if (request.Package is null || request.Package == native.Package)
                         {
-                            Text(native.Package, 256);
                             metadata.Add(new PluginSandboxMetadata(native.Package, PluginForm.NativeLibrary, null, true));
                         }
                     }
@@ -460,8 +362,6 @@ public static class PluginSandboxWorker
                         {
                             if (request.Package is not null && descriptor.Package != request.Package)
                                 continue;
-                            if (metadata.Count >= MaximumPackages)
-                                throw new InvalidOperationException("Worker metadata package limit exceeded.");
                             if (artifact.Host.Catalog.TryGet(descriptor.Package, out var create))
                                 metadata.Add(await ProbePluginAsync(descriptor.Package, descriptor.Form,
                                     descriptor.Entry, create).ConfigureAwait(false));
@@ -489,9 +389,6 @@ public static class PluginSandboxWorker
         private static async Task<PluginSandboxMetadata> ProbePluginAsync(string package, PluginForm form,
             string? entry, Func<IDshPlugin> create)
         {
-            Text(package, 256);
-            if (entry is not null)
-                Text(entry, 256);
             var plugin = create();
             try { return new PluginSandboxMetadata(package, form, entry, plugin is IDshIsolatedPlugin); }
             finally { await DisposePluginAsync(plugin, null).ConfigureAwait(false); }
@@ -537,11 +434,6 @@ public static class PluginSandboxWorker
             _closed.TrySetResult(Volatile.Read(ref _failed));
         }
 
-        private void Fail()
-        {
-            Interlocked.Exchange(ref _failed, 1);
-            stream.Dispose();
-        }
     }
 
     private sealed record LoadedPackage(PluginSandboxWorkerHost Host, Artifact? Artifact,
@@ -570,8 +462,7 @@ public static class PluginSandboxWorker
                 try
                 {
                     var result = host.TryLoad(path);
-                    if (result.Context is not null && result.Packages.Count is > 0 and <= MaximumPackages
-                        && result.Skipped.Count == 0)
+                    if (result.Context is not null && result.Packages.Count > 0 && result.Skipped.Count == 0)
                         return new Artifact(path, host, result.Context, null) { SharedDependencies = result.SharedDependencies };
                     foreach (var package in host.Catalog.PackageNames.ToArray())
                         host.Catalog.Remove(package);

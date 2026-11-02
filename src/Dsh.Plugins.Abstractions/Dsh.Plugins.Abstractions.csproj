@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
-    <ProjectReference Include="..\Dsh.Plugins.Protocol\Dsh.Plugins.Protocol.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

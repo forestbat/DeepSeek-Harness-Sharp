@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using System.Text.Json;
+using Dsh.Boot;
+using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Mcp;
@@ -19,7 +21,8 @@ public sealed class McpSettingsBoundaryTests
     [Trait("Category", "SandboxNative")]
     public async Task OwnedStdio_PreservesToolOutputOrRefusesUnsupportedWritableCwd_ButNeverMutatesSettings()
     {
-        using var fixture = ExternalProcessBoundaryTests.ProtectedFixture();
+        using var fixture = ProtectedFixture();
+        await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var output = Path.Combine(fixture.Root, "mcp-output");
@@ -42,7 +45,8 @@ public sealed class McpSettingsBoundaryTests
     [Trait("Category", "SandboxNative")]
     public async Task OwnedStdio_CrashDoesNotReplay_OrRefusesUnsupportedWritableCwdBeforeMutation()
     {
-        using var fixture = ExternalProcessBoundaryTests.ProtectedFixture();
+        using var fixture = ProtectedFixture();
+        await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var ledger = Path.Combine(fixture.Root, "mcp-once");
@@ -63,7 +67,8 @@ public sealed class McpSettingsBoundaryTests
     [Trait("Category", "SandboxNative")]
     public async Task OwnedStdio_CancellationDoesNotRestart_OrRefusesUnsupportedWritableCwdBeforeStarting()
     {
-        using var fixture = ExternalProcessBoundaryTests.ProtectedFixture();
+        using var fixture = ProtectedFixture();
+        await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var marker = Path.Combine(fixture.Root, "mcp-ready");
@@ -94,26 +99,13 @@ public sealed class McpSettingsBoundaryTests
         Assert.False(File.Exists(after));
     }
 
-    [Fact(Timeout = 5000)]
-    public async Task RemoteTransport_IsExplicitlyUnavailableInsteadOfClaimingOsIsolation()
-    {
-        using var fixture = new ExternalProcessBoundaryTests.Fixture(sandboxEnabled: true);
-        _ = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
-        await service.ConnectAsync([new McpServerConfig("remote", "streamable-http", Url: "https://example.invalid/mcp")], TestContext.Current.CancellationToken);
-        var status = Assert.Single(service.Status());
-        Assert.False(status.Connected);
-        Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-        Assert.Equal(0, status.ToolCount);
-    }
-
     [Fact(Timeout = 60000)]
-    public async Task PublicUnownedBridge_CannotDispatchModelWritesToAnOperatorStartedServer()
+    public async Task PublicUnownedBridge_RemainsAvailableWithPluginSandboxEnabled()
     {
-        using var fixture = new ExternalProcessBoundaryTests.Fixture(sandboxEnabled: true);
+        using var fixture = new Fixture(sandboxEnabled: true);
         var tools = Tools(fixture);
         var config = McpResourceServerFixture.ServerConfig("operator", false, "--file-tools");
-        // This operator-owned connection is intentionally outside the model's OS execution domain.
+        // An operator-owned transport is not part of the owned stdio sandbox path.
         await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
         {
             Name = config.Name,
@@ -124,15 +116,15 @@ public sealed class McpSettingsBoundaryTests
             tool => tool.Name == "write_file");
         using var registration = tools.Register(McpToolBridge.Wrap("owned", write));
         var output = Path.Combine(fixture.Root, "unowned-write");
-        var denied = await Execute(tools, "write_file", new { path = output, content = "must not dispatch" }, TestContext.Current.CancellationToken);
-        Assert.True(denied.IsError);
-        Assert.False(File.Exists(output));
+        var result = await Execute(tools, "write_file", new { path = output, content = "operator transport" }, TestContext.Current.CancellationToken);
+        Assert.False(result.IsError, Text(result));
+        Assert.Equal("operator transport", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
     public async Task DefaultOff_StdioToolRetainsDirectSettingsIo()
     {
-        using var fixture = new ExternalProcessBoundaryTests.Fixture();
+        using var fixture = new Fixture();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         await Connect(service);
@@ -141,10 +133,12 @@ public sealed class McpSettingsBoundaryTests
         Assert.Equal("stdio 中文", await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task DefaultOff_RemoteHttpToolRetainsDirectSettingsIo()
+    [Theory(Timeout = 60000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteHttpTool_RemainsAvailableIndependentlyOfPluginSandbox(bool sandboxEnabled)
     {
-        using var fixture = new ExternalProcessBoundaryTests.Fixture();
+        using var fixture = new Fixture(sandboxEnabled: sandboxEnabled);
         var tools = Tools(fixture);
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -188,7 +182,7 @@ public sealed class McpSettingsBoundaryTests
     {
         if (!OperatingSystem.IsMacOS())
             Assert.Skip("The unsupported arbitrary-child ownership combination is macOS-specific.");
-        using var fixture = new ExternalProcessBoundaryTests.Fixture(sandboxEnabled: true);
+        using var fixture = new Fixture(sandboxEnabled: true);
         _ = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         await service.ConnectAsync([McpResourceServerFixture.ServerConfig("owned", false, "--file-tools")],
@@ -199,7 +193,7 @@ public sealed class McpSettingsBoundaryTests
         Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
 
-    private static ToolRuntime Tools(ExternalProcessBoundaryTests.Fixture fixture)
+    private static ToolRuntime Tools(Fixture fixture)
     {
         _ = new SystemPrompt(fixture.Context, new SystemPromptConfig());
         _ = new FileAttachmentStore(fixture.Context);
@@ -227,6 +221,39 @@ public sealed class McpSettingsBoundaryTests
             Arguments = JsonSerializer.SerializeToElement(arguments),
             Signal = signal == default ? TestContext.Current.CancellationToken : signal,
         });
+
+    private static Fixture ProtectedFixture()
+    {
+        if (OperatingSystem.IsMacOS())
+            Assert.Skip("The macOS backend does not support owned child-spawning stdio processes.");
+        return new Fixture(sandboxEnabled: true);
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        public string Root { get; } = TempTree.CreateDirectory("mcp-settings");
+        public Context Context { get; } = new();
+        public string SettingsPath { get; }
+        public string InitialSettings { get; }
+        private readonly SubprocessService _processes;
+
+        public Fixture(bool sandboxEnabled = false)
+        {
+            var home = new HarnessHome(Path.Combine(Root, "config"));
+            Directory.CreateDirectory(home.Root);
+            SettingsPath = home.SettingsFile;
+            InitialSettings = $"global_default_model: unchanged\nsandbox:\n  enabled: {sandboxEnabled.ToString().ToLowerInvariant()}\n";
+            File.WriteAllText(SettingsPath, InitialSettings);
+            Context.SetOwn("dshHomePath", home.Root);
+            _processes = new SubprocessService(Context);
+        }
+
+        public void Dispose()
+        {
+            _processes.Dispose();
+            TempTree.Delete(Root);
+        }
+    }
 
     private static string Text(ToolExecutionResult result)
         => string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));

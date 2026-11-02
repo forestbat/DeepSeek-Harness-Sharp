@@ -109,7 +109,7 @@ public sealed class ToolRunContext : ToolExecution
 
     public bool BodyInvoked { get; internal set; }
 
-    public bool ExternalProcessProtectionRequired { get; internal set; }
+    internal Dsh.Runtime.Context? HostContext { get; init; }
 
     public SettingsMutationAuditPayload? LastSettingsMutation { get; private set; }
 
@@ -120,7 +120,7 @@ public sealed class ToolRunContext : ToolExecution
             agent.Session.Append(audit);
         else
             fallback?.LoggerFor("settings-mutation").Warn(
-                $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}\n--- before\n{audit.Before}\n+++ after\n{audit.After}");
+                $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}; beforeHash={audit.BeforeHash}; afterHash={audit.AfterHash}\n{audit.Diff}");
     }
 
     internal Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? CapturedFinalizer { get; set; }

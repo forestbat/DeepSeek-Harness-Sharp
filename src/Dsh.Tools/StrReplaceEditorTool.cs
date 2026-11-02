@@ -258,7 +258,7 @@ public static class StrReplaceEditorTool
         exec.Signal.ThrowIfCancellationRequested();
         if (File.Exists(target) || Directory.Exists(target))
             throw new ArgumentException($"File already exists at: {target}. Cannot overwrite files using command `create`.");
-        await SettingsMutationScope.WriteTextAsync(target, "", content, exec, Dsh.Transport.PinnedFileMode.CreateNew).ConfigureAwait(false);
+        await SettingsMutation.WriteTextAsync(target, "", content, exec, FileMode.CreateNew).ConfigureAwait(false);
         return $"New file created successfully at: {target}";
     }
 
@@ -273,7 +273,7 @@ public static class StrReplaceEditorTool
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SettingsMutationScope.ReadTextAsync(target, exec).ConfigureAwait(false);
+        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
         var offsets = MatchOffsets(before, oldValue);
         if (offsets.Count == 0)
             throw new HarnessException($"No replacement was performed, old_str `{oldValue}` did not appear verbatim in {target}.", "FS_EDIT_NOT_FOUND");
@@ -284,7 +284,7 @@ public static class StrReplaceEditorTool
         }
         var offset = offsets[0];
         var after = string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length));
-        await SettingsMutationScope.WriteTextAsync(target, before, after, exec, Dsh.Transport.PinnedFileMode.Overwrite).ConfigureAwait(false);
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 
@@ -296,12 +296,12 @@ public static class StrReplaceEditorTool
         var target = ResolveTarget(path);
         StatExisting(target, "insert");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SettingsMutationScope.ReadTextAsync(target, exec).ConfigureAwait(false);
+        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
         var lines = before.Split('\n');
         if (insertLine.Value < 0 || insertLine.Value > lines.Length)
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");
         var after = string.Join('\n', lines.Take(insertLine.Value).Concat(value.Split('\n')).Concat(lines.Skip(insertLine.Value)));
-        await SettingsMutationScope.WriteTextAsync(target, before, after, exec, Dsh.Transport.PinnedFileMode.Overwrite).ConfigureAwait(false);
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 

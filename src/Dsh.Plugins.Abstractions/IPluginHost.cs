@@ -18,6 +18,9 @@ public sealed record PluginToolDefinition(
 
 public static class PluginHostOperations
 {
+    /// <summary>Maximum encoded capability or worker protocol frame size.</summary>
+    public const int MaximumFrameBytes = 1024 * 1024;
+
     /// <summary>{path, offset?, count?} returns {data: base64, length, eof}.</summary>
     public const string ReadFile = "files.read";
 

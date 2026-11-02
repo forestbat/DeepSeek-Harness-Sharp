@@ -20,8 +20,11 @@ public sealed record ApprovalRequest(
     string ToolName,
     ToolCallId CallId,
     string? Reason = null,
-    string? Arguments = null,
-    bool AllowByRule = false);
+    string? Arguments = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public JsonElement? RuleArguments { get; init; }
+}
 
 public interface IApprovalService
 {
@@ -378,6 +381,7 @@ public sealed class ToolRuntime : Service
             Agent = input.Agent,
             Parent = input.Parent,
             Signal = input.Signal,
+            HostContext = Ctx,
         };
         var visible = Get(input.Name, input.Agent?.ScopeKey);
         runContext.CapturedFinalizer = visible?.FinalizeContent;
@@ -429,7 +433,7 @@ public sealed class ToolRuntime : Service
             return gate;
         var tool = Get(exec.Name, agent.ScopeKey);
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
-        // The actual settings writer requests its own complete diff decision, not a second root-only decision.
+        // The actual settings writer requests its own diff decision instead of a second root-only decision.
         if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
             targets = targets.Where(path => !settings.Owns(path)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
@@ -481,12 +485,8 @@ public sealed class ToolRuntime : Service
 
     public async Task<ScheduledToolDispatch> DispatchScheduledExecution(ToolRunContext exec)
     {
-        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
         try
         {
-            exec.ExternalProcessProtectionRequired = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true;
-            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
             var result = await Ctx.Events.Waterfall(
                 carrier, new ToolExecuteNotification(exec),
@@ -510,11 +510,8 @@ public sealed class ToolRuntime : Service
 
     public async Task<ToolExecutionResult> FinalizeScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
-        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false));
         try
         {
-            using var gitScope = exec.ExternalProcessProtectionRequired ? new Dsh.GitInspect.GitExecutionScope() : null;
             var postResult = await PostExecute(exec, result);
             return FinishScheduledExecution(
                 exec,
@@ -600,13 +597,13 @@ public sealed class ToolRuntime : Service
     private ToolExecutionResult CreateSuccessResult(ToolRunContext exec, ToolDefinition tool, object? candidate)
     {
         var value = SnapshotValue(tool.Name, candidate);
-        if (exec.LastSettingsMutation is { } settings && value.ValueKind == JsonValueKind.Object)
+        if (exec.LastSettingsMutation is not null && value.ValueKind == JsonValueKind.Object)
         {
             var document = JsonNode.Parse(value.GetRawText())!.AsObject();
             if (document.ContainsKey("before"))
-                document["before"] = settings.Before;
+                document["before"] = Dsh.Runtime.Logging.Redaction.Apply(document["before"]?.GetValue<string>() ?? "");
             if (document.ContainsKey("after"))
-                document["after"] = settings.After;
+                document["after"] = Dsh.Runtime.Logging.Redaction.Apply(document["after"]?.GetValue<string>() ?? "");
             value = JsonDocument.Parse(document.ToJsonString()).RootElement;
         }
         var violations = JsonSchemaValidator.Validate(tool.Output.Schema, value, "value");
@@ -638,7 +635,9 @@ public sealed class ToolRuntime : Service
             {
                 ["card"] = "diff",
                 ["title"] = $"settings {mutation.Outcome}: {mutation.Path}",
-                ["diffs"] = new JsonArray(new JsonObject { ["path"] = mutation.Path, ["oldText"] = mutation.Before, ["newText"] = mutation.After }),
+                ["patch"] = mutation.Diff,
+                ["beforeHash"] = mutation.BeforeHash,
+                ["afterHash"] = mutation.AfterHash,
             }.ToJsonString()).RootElement;
         return new ToolExecutionResult.Success
         {

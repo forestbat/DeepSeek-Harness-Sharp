@@ -17,8 +17,6 @@ public sealed record PluginSetting
     public const string EnabledKey = "enabled";
     public const string PermissionsKey = "permissions";
     public const string ExecutionKey = "execution";
-    public const string TrustDomainKey = "trustDomain";
-    public const string HostArtifactKey = "hostArtifact";
 
     public bool Enabled { get; init; } = true;
     public Dictionary<string, object?> Parameters { get; init; } = [];
@@ -27,8 +25,6 @@ public sealed record PluginSetting
     public PluginPermissions? Permissions { get; init; }
 
     public PluginExecution? Execution { get; init; }
-    public string? TrustDomain { get; init; }
-    public string? HostArtifact { get; init; }
 
     public static PluginSetting FromRaw(object? raw) => raw switch
     {
@@ -52,8 +48,6 @@ public sealed record PluginSetting
         parameters.Remove(EnabledKey);
         parameters.Remove(PermissionsKey, out var permissions);
         parameters.Remove(ExecutionKey, out var execution);
-        parameters.Remove(TrustDomainKey, out var domain);
-        parameters.Remove(HostArtifactKey, out var artifact);
         var role = execution switch
         {
             null => (PluginExecution?)null,
@@ -61,30 +55,12 @@ public sealed record PluginSetting
             "host" => PluginExecution.Host,
             _ => throw new RuntimeException("INVALID_PLUGIN_SETTING", $"plugins.<name>.{ExecutionKey} must be sandbox or host"),
         };
-        var trustDomain = domain switch
-        {
-            null => null,
-            string text when !string.IsNullOrWhiteSpace(text) => text,
-            _ => throw new RuntimeException("INVALID_PLUGIN_SETTING", $"plugins.<name>.{TrustDomainKey} must be a nonempty string"),
-        };
-        if (role == PluginExecution.Host && trustDomain is not null)
-            throw new RuntimeException("INVALID_PLUGIN_SETTING", "A full-authority host plugin cannot join an isolated trust domain.");
-        var hostArtifact = artifact switch
-        {
-            null => null,
-            string token when PluginHostAuthority.IsArtifactToken(token) => token,
-            _ => throw new RuntimeException("INVALID_PLUGIN_SETTING", $"plugins.<name>.{HostArtifactKey} must identify image or a sha256 artifact digest"),
-        };
-        if (hostArtifact is not null && role != PluginExecution.Host)
-            throw new RuntimeException("INVALID_PLUGIN_SETTING", "A hostArtifact grant requires explicit host execution.");
         return new PluginSetting
         {
             Enabled = enabled,
             Parameters = parameters,
             Permissions = permissions is null ? null : PluginPermissions.FromRaw(permissions),
             Execution = role,
-            TrustDomain = trustDomain,
-            HostArtifact = hostArtifact,
         };
     }
 }

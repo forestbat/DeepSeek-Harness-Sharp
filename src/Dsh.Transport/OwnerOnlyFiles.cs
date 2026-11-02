@@ -1,6 +1,3 @@
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -36,21 +33,6 @@ public static class OwnerOnlyFiles
     public static FileStream Create(string path)
         => OperatingSystem.IsWindows() ? CreateWindows(path) : CreateUnix(path);
 
-    /** Creates a new owner-only file relative to an already pinned Unix directory. */
-    [UnsupportedOSPlatform("windows")]
-    public static FileStream CreateAt(SafeFileHandle directory, string name)
-    {
-        if (string.IsNullOrEmpty(name) || name is "." or ".." || Path.GetFileName(name) != name)
-            throw new ArgumentException("A relative file creation requires one ordinary filename.", nameof(name));
-        const int writeOnly = 1;
-        var flags = OperatingSystem.IsMacOS() ? 0x1000000 | 0x200 | 0x800 | 0x100 : 0x80000 | 0x40 | 0x80 | 0x20000;
-        var descriptor = Dsh.Sandbox.UnixFileInterop.OpenAt(directory.DangerousGetHandle().ToInt32(), name, flags | writeOnly, (uint)OwnerReadWrite);
-        if (descriptor < 0)
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create a pinned owner-only file.");
-        var handle = new SafeFileHandle(descriptor, ownsHandle: true);
-        try { return new FileStream(handle, FileAccess.Write, WriteBufferSize, isAsync: false); }
-        catch { handle.Dispose(); throw; }
-    }
 
     /** Writes a new owner-only file, replacing whatever was at the path. */
     public static void Write(string path, string contents)

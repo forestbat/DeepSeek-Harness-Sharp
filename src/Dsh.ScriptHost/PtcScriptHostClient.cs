@@ -74,8 +74,6 @@ public sealed class PtcScriptHostClient
             Cwd = _cwd,
             KeepStandardInputOpen = true,
             Signal = signal,
-            ModelExecution = true,
-            ExecutionKind = SubprocessExecutionKind.Script,
             Stdout = new SubprocessCollect(_outputLimitBytes + FrameSlackBytes, null),
             Stderr = new SubprocessCollect(MaxStderrBytes, null),
         });

@@ -1,6 +1,6 @@
-using Dsh.Llm;
-using Dsh.Transport;
 using System.Text;
+using Dsh.Llm;
+using Dsh.Runtime;
 using Dsh.Sandbox;
 
 namespace Dsh.Core;
@@ -10,120 +10,73 @@ public readonly record struct SettingsMutationRequest(string Path, string Before
 public interface ISettingsMutationGate
 {
     const string ServiceName = "settingsMutations";
+    const string SettingsPathProperty = "activeSettingsPath";
     string SettingsPath { get; }
     bool Owns(string path);
-    bool Owns(PinnedFileTarget target)
-    {
-        if (Owns(target.Path))
-            return true;
-        if (target.IsDirectory || target.Identity is not { } actual || !File.Exists(SettingsPath))
-            return false;
-        var settings = NativeFileIdentity.Get(SettingsPath);
-        return actual.Device == settings.Device && actual.Inode == settings.Inode;
-    }
-    Task CommitAsync(SettingsMutationRequest request, Func<CancellationToken, Task> commit, CancellationToken cancellationToken = default);
+    Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default);
 }
 
-public static class SettingsMutationLimits
+public static class SettingsMutation
 {
-    public const int MaxDocumentBytes = 4 * 1024 * 1024;
+    private const int ReadBufferBytes = 4096;
 
-    public static bool CanReview(string text)
-        => text.Length <= MaxDocumentBytes && Encoding.UTF8.GetByteCount(text) <= MaxDocumentBytes;
+    public static ISettingsMutationGate RequireGate(ToolRunContext run)
+        => (run.Agent?.Ctx ?? run.HostContext)?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)
+            ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
 
     public static async Task<string> ReadTextAsync(string path, CancellationToken signal)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-        var length = stream.Length;
-        if (length > MaxDocumentBytes)
-            throw new InvalidOperationException("The settings document exceeds the 4 MiB review limit.");
-        var bytes = new byte[checked((int)length)];
-        await stream.ReadExactlyAsync(bytes, signal).ConfigureAwait(false);
-        signal.ThrowIfCancellationRequested();
-        if (stream.ReadByte() != -1)
-            throw new IOException("Settings changed while their bounded snapshot was being read.");
-        using var reader = new StreamReader(new MemoryStream(bytes, writable: false));
-        return reader.ReadToEnd();
-    }
-}
-
-/** Trusted-host correlation only; this scope never grants authority to isolated code. */
-public sealed class SettingsMutationScope : IDisposable
-{
-    private static readonly AsyncLocal<SettingsMutationScope?> Active = new();
-    private readonly SettingsMutationScope? _previous;
-    private bool _disposed;
-    public static SettingsMutationScope? Current => Active.Value is { _disposed: false } scope ? scope : null;
-    public ToolRunContext Context { get; }
-    public ISettingsMutationGate? Gate { get; }
-    private IRuntimeCodeIntegrity? CodeIntegrity { get; }
-
-    public SettingsMutationScope(ToolRunContext context, ISettingsMutationGate? gate, IRuntimeCodeIntegrity? codeIntegrity = null)
-    {
-        Context = context;
-        Gate = gate;
-        CodeIntegrity = codeIntegrity;
-        _previous = Active.Value;
-        Active.Value = this;
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+            bufferSize: ReadBufferBytes, options: FileOptions.Asynchronous);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync(signal).ConfigureAwait(false);
     }
 
-    public Task CommitAsync(string path, string before, string after, Func<CancellationToken, Task> commit)
-        => (Gate ?? throw new InvalidOperationException("Settings mutations require the active settings approval service."))
-            .CommitAsync(new(path, before, after, Context), commit, Context.Signal);
-
-    public static Task<string> ReadTextAsync(string path, ToolRunContext context)
-        => Current?.Gate?.Owns(path) == true
-            ? SettingsMutationLimits.ReadTextAsync(path, context.Signal)
-            : File.ReadAllTextAsync(path, new UTF8Encoding(false, false), context.Signal);
-
-    public static async Task WriteTextAsync(string path, string before, string after, ToolRunContext context,
-        PinnedFileMode mode = PinnedFileMode.Replace)
+    public static async Task WriteTextAsync(string path, string before, string after, ToolRunContext run,
+        FileMode mode = FileMode.Create)
     {
-        var gate = Current?.Gate;
-        if (gate is not null && gate.Owns(path))
+        var context = run.Agent?.Ctx ?? run.HostContext;
+        var gate = context?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
+        var active = gate?.SettingsPath ?? context?.GetProp(ISettingsMutationGate.SettingsPathProperty) as string;
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var isSettings = active is not null && comparer.Equals(SandboxFileAccess.Canonicalize(path), SandboxFileAccess.Canonicalize(active));
+        if (isSettings)
+            await RequireGate(run).CommitAsync(new(path, before, after, run),
+                (temporary, signal) => WriteFileAsync(temporary, after, FileMode.Create, signal), run.Signal).ConfigureAwait(false);
+        else
         {
-            await gate.CommitAsync(new(path, before, after, context), async signal =>
-            {
-                await WriteTextFileAsync(gate.SettingsPath, after, PinnedFileMode.Replace, target =>
-                {
-                    if (!target.IsDirectory && !gate.Owns(target))
-                        throw new IOException("The settings target changed before publication.");
-                }, signal).ConfigureAwait(false);
-                context.RecordFileChange(gate.SettingsPath);
-            }, context.Signal).ConfigureAwait(false);
-            return;
+            await WriteFileAsync(path, after, mode, run.Signal).ConfigureAwait(false);
+            run.RecordFileChange(path);
         }
-        await WriteTextFileAsync(path, after, mode, target =>
-        {
-            if (gate?.Owns(target) == true)
-                throw new IOException("The file target changed to active settings; propose the settings diff explicitly.");
-            if (context.ExternalProcessProtectionRequired)
-                (Current?.CodeIntegrity ?? throw new InvalidOperationException("Protected writes require the runtime code integrity boundary."))
-                    .DemandWritable(target);
-        }, context.Signal).ConfigureAwait(false);
-        context.RecordFileChange(path);
     }
 
-    private static async Task WriteTextFileAsync(string path, string text, PinnedFileMode mode,
-        Action<PinnedFileTarget> authorize, CancellationToken signal)
+    private static async Task WriteFileAsync(string path, string text, FileMode mode, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
-        await using var file = PinnedFileAccess.Open(path, mode, authorize);
-        await using (var writer = new StreamWriter(file.Stream, new UTF8Encoding(false, false), leaveOpen: true))
-            await writer.WriteAsync(text.AsMemory(), signal).ConfigureAwait(false);
-        await file.CompleteAsync(signal).ConfigureAwait(false);
-    }
-
-    public void Dispose()
-    {
-        _disposed = true;
-        Active.Value = _previous;
+        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var options = new FileStreamOptions
+        {
+            Mode = mode,
+            Access = FileAccess.Write,
+            Share = FileShare.Read | FileShare.Delete,
+            Options = FileOptions.Asynchronous,
+        };
+        if (!OperatingSystem.IsWindows()
+            && mode is FileMode.Create or FileMode.CreateNew or FileMode.OpenOrCreate or FileMode.Append)
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await using var stream = new FileStream(path, options);
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        await writer.WriteAsync(text.AsMemory(), signal).ConfigureAwait(false);
+        await writer.FlushAsync(signal).ConfigureAwait(false);
+        if (mode == FileMode.Open)
+            stream.SetLength(stream.Position);
     }
 }
 
 public sealed record SettingsMutationAuditPayload(
     string Id, ToolCallId CallId, ToolCallId RootCallId, string ToolName,
-    string Path, string Before, string After, string Outcome) : SessionEventPayload
+    string Path, string Diff, string BeforeHash, string AfterHash, string Outcome) : SessionEventPayload
 {
     public const string EventType = "settings/mutation";
     public override string Type => EventType;

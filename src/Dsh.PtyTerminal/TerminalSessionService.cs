@@ -58,7 +58,6 @@ public sealed class TerminalSessionService : Service
 
     public async Task<TerminalSpawnResult> Spawn(IAgent owner, TerminalSpawnRequest request, CancellationToken signal = default)
     {
-        DemandProtectedModelTerminal();
         lock (_gate) AssertActive();
         signal.ThrowIfCancellationRequested();
         EnsureOwnerCleanup(owner);
@@ -154,7 +153,6 @@ public sealed class TerminalSessionService : Service
 
     public TerminalSendOperation StartSend(IAgent owner, TerminalSessionId id, TerminalSendRequest request)
     {
-        DemandProtectedModelTerminal();
         var record = ExpectOwned(owner, id);
         if (record.Closing is not null)
             throw new InvalidOperationException($"PTY session {id} is closing");
@@ -241,11 +239,6 @@ public sealed class TerminalSessionService : Service
         public required Action<Exception?> Release { get; init; }
     }
 
-    private void DemandProtectedModelTerminal()
-    {
-        if (Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true)
-            throw new NotSupportedException("Model PTY creation and input require an OS-confined PTY backend; existing unprotected terminals cannot enforce scripts.permissions or active settings protection while sandbox.enabled is ON. Use a confined one-shot script instead.");
-    }
 
     private void AssertActive()
     {

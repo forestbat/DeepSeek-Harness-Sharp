@@ -93,10 +93,10 @@ public static class WriteTool
         var operation = "create";
         if (File.Exists(target))
         {
-            before = await SettingsMutationScope.ReadTextAsync(target, exec).ConfigureAwait(false);
+            before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
             operation = "update";
         }
-        await SettingsMutationScope.WriteTextAsync(target, before ?? "", content, exec).ConfigureAwait(false);
+        await SettingsMutation.WriteTextAsync(target, before ?? "", content, exec).ConfigureAwait(false);
         return new WriteResultValue(target, operation, before, content);
     }
 }

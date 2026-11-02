@@ -100,7 +100,7 @@ public static class BashTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = dialect.ToolName,
-            Description = dialect.Description + IExternalProcessPolicy.SettingsProtectionNotice,
+            Description = dialect.Description,
             Parameters = ToolSchemas.ObjectSchema(parameters, "command"),
             Output = new ToolOutputDefinition(OutputSchema, (_, value) => Render(value, dialect.ToolName)),
             Execute = (args, exec) => Execute(args, exec, subprocess, config, dialect),
@@ -168,8 +168,6 @@ public static class BashTool
             Argv = launch.Argv,
             Cwd = workdir,
             Env = launch.Env,
-            ModelExecution = true,
-            ExecutionKind = SubprocessExecutionKind.Script,
             Stdout = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Stderr = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Signal = fused.Token,

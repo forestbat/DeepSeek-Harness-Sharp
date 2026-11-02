@@ -25,13 +25,11 @@ internal sealed class UnixChildProcess : IAsyncDisposable
         Exit = ReapAsync();
     }
 
-    public static UnixChildProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory, string[] environmentEntries, byte[]? seccomp = null, IReadOnlyList<SafeFileHandle>? mountPins = null)
+    public static UnixChildProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory, string[] environmentEntries)
     {
         using var input = UnixPipe.Create();
         using var output = UnixPipe.Create();
         using var error = UnixPipe.Create();
-        using var filter = seccomp is null ? null : CreateSeccompFile(seccomp);
-        using var passed = new SpawnDescriptors(filter, mountPins);
         using var memory = new SpawnMemory();
         var actions = memory.Allocate(1024);
         var attributes = memory.Allocate(1024);
@@ -47,11 +45,7 @@ internal sealed class UnixChildProcess : IAsyncDisposable
                 Check(posix_spawn_file_actions_addchdir_np(actions, memory.Text(workingDirectory)), "set working directory");
                 // Darwin's close-on-exec default and glibc's closefrom action exclude every non-stdio descriptor.
                 if (OperatingSystem.IsLinux())
-                {
-                    for (var index = 0; index < passed.Handles.Count; index++)
-                        Check(posix_spawn_file_actions_adddup2(actions, checked((int)passed.Handles[index].DangerousGetHandle()), 3 + index), "pass an owned sandbox descriptor");
-                    Check(posix_spawn_file_actions_addclosefrom_np(actions, 3 + passed.Handles.Count), "close unrelated descriptors");
-                }
+                    Check(posix_spawn_file_actions_addclosefrom_np(actions, 3), "close unrelated descriptors");
                 else
                     Check(posix_spawnattr_setflags(attributes, 0x4000), "exclude unrelated descriptors");
                 var argv = memory.Strings(new[] { executable }.Concat(arguments));
@@ -81,19 +75,6 @@ internal sealed class UnixChildProcess : IAsyncDisposable
         finally { posix_spawn_file_actions_destroy(actions); }
     }
 
-    private static SafeFileHandle CreateSeccompFile(byte[] program)
-    {
-        var descriptor = memfd_create("dsh-seccomp", 1);
-        if (descriptor < 0)
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot create the anonymous sandbox seccomp program.");
-        var handle = new SafeFileHandle(descriptor, ownsHandle: true);
-        try
-        {
-            RandomAccess.Write(handle, program, 0);
-            return handle;
-        }
-        catch { handle.Dispose(); throw; }
-    }
 
     public void Kill()
     {
@@ -104,11 +85,6 @@ internal sealed class UnixChildProcess : IAsyncDisposable
         }
     }
 
-    public bool InspectWhileOwned(Func<int, bool> inspect)
-    {
-        lock (_gate)
-            return !_exited && inspect(Id);
-    }
 
     private async Task<int> ReapAsync()
     {
@@ -182,44 +158,6 @@ internal sealed class UnixChildProcess : IAsyncDisposable
         }
     }
 
-    private sealed class SpawnDescriptors : IDisposable
-    {
-        public List<SafeFileHandle> Handles { get; } = [];
-        public SpawnDescriptors(SafeFileHandle? filter, IReadOnlyList<SafeFileHandle>? pins)
-        {
-            if (!OperatingSystem.IsLinux() && (filter is not null || pins is { Count: > 0 }))
-                throw new PlatformNotSupportedException("Explicit mount and seccomp descriptors require Linux.");
-            var count = (filter is null ? 0 : 1) + (pins?.Count ?? 0);
-            try
-            {
-                if (filter is not null)
-                    Add(filter, count);
-                if (pins is not null)
-                    foreach (var pin in pins)
-                        Add(pin, count);
-            }
-            catch { Dispose(); throw; }
-        }
-        private void Add(SafeFileHandle source, int count)
-        {
-            var added = false;
-            try
-            {
-                source.DangerousAddRef(ref added);
-                // Stage sources above every dup2 destination so file actions cannot overwrite a later source.
-                var duplicate = UnixFileInterop.Fcntl(checked((int)source.DangerousGetHandle()), 1030, checked(3 + count));
-                if (duplicate < 0)
-                    throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot duplicate an owned sandbox descriptor.");
-                Handles.Add(new SafeFileHandle(duplicate, ownsHandle: true));
-            }
-            finally { if (added) source.DangerousRelease(); }
-        }
-        public void Dispose()
-        {
-            foreach (var handle in Handles)
-                handle.Dispose();
-        }
-    }
 
     private sealed class UnixPipe : IDisposable
     {
@@ -270,7 +208,6 @@ internal sealed class UnixChildProcess : IAsyncDisposable
     }
 
     [DllImport("libc")] private static extern int posix_spawn(out int pid, nint path, nint actions, nint attributes, nint argv, nint environment);
-    [DllImport("libc", SetLastError = true)] private static extern int memfd_create([MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint flags);
     [DllImport("libc")] private static extern int posix_spawn_file_actions_init(nint actions);
     [DllImport("libc")] private static extern int posix_spawn_file_actions_destroy(nint actions);
     [DllImport("libc")] private static extern int posix_spawn_file_actions_adddup2(nint actions, int descriptor, int target);

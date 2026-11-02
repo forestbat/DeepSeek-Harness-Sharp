@@ -107,6 +107,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         {
             Version = Constant(constants, "Version", 0),
             EntryExport = Constant(constants, "EntryPoint", ""),
+            SizedEntryExport = Constant(constants, "SizedEntryPoint", ""),
             PackageExport = Constant(constants, "PackageExport", ""),
             VersionExport = Constant(constants, "VersionExport", ""),
             SettingsSchemaExport = Constant(constants, "SettingsSchemaExport", ""),
@@ -241,6 +242,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         public string PluginInvokeToolField { get; set; } = "";
 
         public string HostLogField { get; set; } = "";
+        public string SizedEntryExport { get; set; } = "";
         public string HostCallField { get; set; } = "";
 
 

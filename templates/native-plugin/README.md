@@ -5,8 +5,8 @@
 
 ## 一句话定位
 
-原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主通过 **C ABI v2** 交换日志、工具、配置及显式宿主能力调用。
-它看不到父进程的服务表、类型或会话。文件和网络操作使用与托管 `IDshIsolatedPlugin` 相同的 `Dsh.Plugins.Protocol` 操作常量，不把完整 Context 伪装成远程对象。ABI v1 插件必须重新编译，没有旧版本兼容回退。
+原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主通过 **C ABI v1** 交换日志、工具、配置及可选的宿主能力调用。
+它看不到父进程的服务表、类型或会话。文件和网络操作使用与托管 `IDshIsolatedPlugin` 相同的 `Dsh.Plugins.Abstractions` 操作常量，不把完整 Context 伪装成远程对象。原有 v1 二进制可以继续加载、配置和调用；新回调不要求旧插件重新编译。
 
 ## 最小骨架
 
@@ -50,8 +50,8 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 ## 生成器已经替你做掉的（不要手写）
 
-- 导出 `dsh_plugin_package` 与 `dsh_plugin_entry` 两个 C 符号与握手；
-- 句柄表、两段式缓冲协议（放不下时先报长度并保留结果，宿主再取时直接交付，工具只执行一次）、NUL 结尾的 UTF-8 编解码；
+- 保留 `dsh_plugin_package` 与原有 `dsh_plugin_entry(host, plugin)` C 符号，另导出可选的 `dsh_plugin_entry_with_host_size(host, hostApiSize, plugin)`；
+- NUL 结尾的 UTF-8 编解码、句柄表与缓冲交换；当前宿主一次提供完整协议帧，不为取回结果再次执行工具；
 - 工具注册与调用派发，以及两侧的异常拦截（异常不会穿过 ABI 边界）；
 - 日志、配置、工具表和 `DshNativePluginRuntime.CallHost` 的激活／撤销。
 你只声明 `Package` 与 `Tools`；手写导出会与生成物重复定义。
@@ -60,13 +60,13 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 **构建与分发**
 - `PublishAot` + `NativeLib=Shared` + **具体 RID**：一个平台/架构一份产物，跨平台要各编一份（改 `RuntimeIdentifier` 或按 RID 分别发布）。
-- 只依赖 `Dsh.Plugins.Native`，它引用的薄 `Dsh.Plugins.Protocol` 仅依赖 BCL。宿主其它模块（`Dsh.Core`、`Dsh.Runtime`、YAML 等）不属于原生契约，不要将它们编进插件。
-- 不需要 `deps.json`，也没有托管依赖闭包；**额外的原生依赖要靠操作系统解析**（插件目录不会自动加进搜索路径，必要时用 `$ORIGIN`/RPATH 或放进系统库路径）。
+- 作者工程只需直接引用 `Dsh.Plugins.Native`。能力 DTO 来自它引用的 `Dsh.Plugins.Abstractions`，后者还引用 `Dsh.Runtime`，因此不能把整个传递依赖闭包描述为仅含 BCL。原生调用仍只交换 C 函数表、UTF-8 与 JSON，不向插件提供宿主 Context；不要额外引用 `Dsh.Core`、宿主配置或 YAML 模块。
+- NativeAOT 把可达的托管依赖编入原生映像，分发共享库时不依赖托管 `deps.json` 或运行期 DLL 装载闭包；**额外的原生依赖要靠操作系统解析**（插件目录不会自动加进搜索路径，必要时用 `$ORIGIN`/RPATH 或放进系统库路径）。
 - 插件自身也是 AOT 代码：不用反射与动态代码；JSON 用 `JsonDocument`/`JsonNode`（样例如此）或源生成上下文，不要无上下文地 `JsonSerializer.Serialize<T>`。
 
-**能力面（ABI v2）**
+**能力面（ABI v1 的可选尾部）**
 - 没有 `Inject`/服务提供、没有 `ConfigType` 配置绑定、没有提示词段、没有会话事件、没有 `[DshEntrypoint]`；`DshNativePluginRuntime.Config` 返回本插件 JSON 配置。
-- 工具可通过 `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 登记、通过 `UnregisterTool(handle)` 撤销，宿主侧即时生效。ABI v2 必须提供所有宿主回调，不降级到旧函数表。
+- 工具可通过 `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 登记、通过 `UnregisterTool(handle)` 撤销，宿主侧即时生效。新宿主优先调用带大小的入口；旧宿主调用原入口时，新插件只读取原始函数表前缀，仍能使用日志、工具及配置，不能调用缺失的能力回调。
 - `DshNativePluginRuntime.CallHost(PluginHostOperations.ReadFile, inputJson)` 返回 JSON 文本：`{path, offset?, count?}` → `{data, length, eof}`，`data` 为 base64。
 - `PluginHostOperations.WriteFile`：`{path, data, append?}` → `{bytesWritten}`，`data` 为 base64；写 settings 同样受宿主审批 gate 约束。
 - `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` → `{status, headers, body}`；请求和响应 `body` 为 base64。网络权限、代理及响应限额由共同宿主实现。
@@ -74,18 +74,18 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 **缓冲与副作用**
 - `host_call` 的参数为 context、NUL 结尾的 operation/arguments、output、capacity。返回 UTF-8 字节长度，负数表示协议失败；内部响应为 `{"result": ...}` 或 `{"error": "..."}`，公开 `CallHost` 负责解包并传播错误。
-- output 为空或容量不足时，同一线程必须用相同 operation/arguments 重取；宿主交付保留结果，不重新执行写入或网络请求。已有未取走结果时另一个调用被拒绝，不能覆盖并重放。
-- 工具返回值和宿主响应的保留缓冲各按插件限制为总计 4 MiB（含输入键）、最多 16 个未取结果；超限明确失败，停用时释放全部保留资源。正常 SDK 先用 64 KiB 缓冲，最多按已报告长度重取一次。
+- output 必须指向调用者实际拥有的至少一个完整协议帧（1 MiB）缓冲；空指针或短缓冲在执行操作前直接拒绝，不支持探测长度、保留回复或重试。SDK 每次只调用一次；超出帧大小的回复明确失败，不自动重放可能已发生的写入或网络请求。
+- 宿主只在调用期间写入 output，从不持有该指针；成功返回写入长度，调用者只能读取这部分字节。配置沿用原 v1 的只读长度探测；插件侧仅为旧宿主保留原 v1 工具结果重取语义。
 - 原生调用是同步的，ABI 没有独立取消令牌；宿主可通过其工具调用和 worker 生命周期取消真实操作。不要启动不受插件生命周期管理的回调线程。
 
 **工具契约**
 - 名字/描述/JSON Schema 都是字符串：Schema **必须能被解析**，否则激活失败（不是工具失败）。
 - 调用是 JSON 进、JSON 出；返回值必须是 JSON 对象，其中 `{"text": "..."}` 才会作为文本展示给模型，否则原样输出 JSON；返回 null 或抛错都算工具失败。
 - 工具名沿用与托管插件相同的命名规则（合法标识符才能在 PTC 里直接调用；重名由宿主自动改名并 WARN）。
-- `Invoke` **可能被并发调用**（宿主并行调度工具时），要自己保证线程安全。
+- 当前桥接逐插件序列化同步工具调用，并只在实际调用线程上传递该次真实工具上下文；初始化和后台线程没有工具审批身份。插件自己的后台状态仍需自行保证线程安全。
 
 **线程与生命周期**
-- `Deactivate` 之后共享库会被 `NativeLibrary.Free`：在这里停掉后台线程/定时器，此后再调用宿主回调即属未定义行为。
+- `Deactivate` 停止工具与回调；插件必须在这里停掉后台线程/定时器，此后再调用宿主回调即属未定义行为。NativeAOT 不支持 `dlclose`/`FreeLibrary`，共享库映像保留至承载进程退出。
 - 日志统一走 `DshNativePluginRuntime.Log(level, message)`（激活前是静默的），不要写控制台。
 
 **握手失败不再静默**
@@ -97,11 +97,11 @@ public sealed class SamplePlugin : IDshNativePlugin
 - 主要分发方式是**放进 `<安装目录>/plugins/<目录>/` 启动加载**（原生库与托管插件同目录规则：目录名不参与识别）。
 - `/plugins add <路径>` 现在**支持原生插件**：按扩展名（`.so`/`.dylib`，Windows 下的原生 `.dll`）与导出符号识别原生库，路由到原生装载；AOT 宿主不能热载托管 dll，但加载原生库可行。
 - 更新与托管插件同规矩：**同名文件内容不一致不覆盖**。先 `/plugins remove <包名>`（或直接停宿主）→ 删掉旧目录 → 放入新库 → 重启。
-- 卸载原生插件是 `Deactivate` + `NativeLibrary.Free`，没有可回收 ALC，因此没有托管那种"回收校验/leaked"标记。
+- 原生插件停用会撤销工具和回调，映像随宿主或 worker 进程退出回收，没有可回收 ALC，也没有托管那种“回收校验/leaked”标记。
 
 **稳定性与进程边界**
 - 每个原生插件拥有 `NativePluginLoadContext`；工具运行失败会向调用者返回错误，原生故障按既有 guard、Faulted 与 quarantine 路径处理。
-- 这些进程内防护不等于 OS 权限隔离。启用沙箱后，不可信插件应在受限 worker 中运行，只能通过宿主能力 broker 请求文件／网络操作；显式完全信任的进程内插件拥有宿主进程权限，不能声称已被沙箱保护。
+- 这些进程内防护不等于 OS 权限隔离。共享 worker 中的插件互相信任同一进程内存，broker 仍逐插件检查权限，但不能声称同进程恶意代码无法冒用其他插件身份。显式进程内插件拥有宿主进程权限，不能声称已被沙箱保护。
 
 ## 编译期诊断
 
@@ -116,10 +116,29 @@ public sealed class SamplePlugin : IDshNativePlugin
 | 维度 | 托管（`templates/managed-plugin`） | 原生（本文） |
 | --- | --- | --- |
 | 产物 | 托管 dll + deps.json 闭包 | 每 RID 一份原生共享库 |
-| 契约 | `IDshIsolatedPlugin` / 完全信任的 `IDshPlugin` | C ABI v2 |
+| 契约 | `IDshIsolatedPlugin` / 完全信任的 `IDshPlugin` | C ABI v1 + 可选带大小入口 |
 | 能力面 | 显式工具/日志/文件/网络；完全信任接口另有服务组合 | 显式工具/日志/配置/文件/网络 |
 | 装载 | 启动扫描 + `/plugins add` 热装载托管 dll | 启动扫描 + `/plugins add` 热装载原生库 |
-| 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate` + `NativeLibrary.Free` |
+| 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate`；映像随承载进程退出 |
 | 版本闸门 | 清单 `DescriptorVersion` | ABI 版本（不符即结构化失败，`/plugins doctor` 可查） |
 | 故障隔离 | OS worker 才是权限边界；ALC 不是安全边界 | OS worker 才是权限边界；进程内 guard 不是沙箱 |
 | AOT 宿主 | 不能在运行期装载 | 正常加载 |
+
+## v1 布局与真实二进制兼容回归
+
+手写 C 消费者可参考本目录的 `dsh_plugin.h`。调用约定保持 Cdecl，原入口返回 `int` 并写入调用者提供的插件函数表，不是结构体返回。`DshPluginApi` 的布局未变化。x64 的原宿主前缀为 48 字节，`HostCall` 位于偏移 48，新表为 56 字节；x86 对应 24、24、28 字节。只有带大小入口明确提供足够空间时，新插件才读取尾部；原入口始终按原前缀大小处理，不能以 `Version == 1` 猜测尾部存在。
+
+`tests/Dsh.NativePluginV1Fixture/v1.h` 是冻结的原始 v1 契约，不依赖当前 SDK；`plugin.c` 产出真实旧插件，`host.c` 产出真实旧宿主。后者把宿主表紧贴不可读保护页，加载新 NativeAOT 样例，执行 echo、读取配置、拒绝缺失的 HostCall 并停用，读取尾部会令独立消费者进程失败。所有输入均为合成测试数据，不使用真实配置或模型。
+
+在仓库根目录执行以下 Linux 命令，产物只写入被忽略的项目 `bin` 目录：
+
+```sh
+mkdir -p tests/Dsh.NativePluginV1Fixture/bin
+cc -std=c11 -O2 -fPIC -shared tests/Dsh.NativePluginV1Fixture/plugin.c -o tests/Dsh.NativePluginV1Fixture/bin/liblegacy_v1.so
+cc -std=c11 -D_DEFAULT_SOURCE -O2 tests/Dsh.NativePluginV1Fixture/host.c -ldl -o tests/Dsh.NativePluginV1Fixture/bin/legacy_host
+dotnet publish tests/Dsh.NativePluginSample -c Release
+tests/Dsh.NativePluginV1Fixture/bin/legacy_host tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so
+dotnet test tests/Dsh.Tests/Dsh.Tests.csproj -c Release --filter 'FullyQualifiedName~NativePluginAbiTests|FullyQualifiedName~NativeHostCallBufferTests|FullyQualifiedName~NativePluginBridgeTests'
+```
+
+旧插件回归通过真实 `NativePluginLibrary`、配置桥接和工具运行时验证加载、配置、一次执行、停用和再激活；新插件回归另外通过真实文件及 HTTP broker 验证一次性副作用和失败传播。尚未编译 fixture 或发布样例时相应用例明确 skip，不代表二进制兼容已通过。macOS 可用 `cc -dynamiclib` 生成 `liblegacy_v1.dylib`、以 `cc host.c -o bin/legacy_host` 编译旧宿主；Windows 在 C++ 开发环境用 `cl /TC /LD plugin.c /Fe:bin/legacy_v1.dll` 与 `cl /TC host.c /Fe:bin/legacy_host.exe`，原有 v1 插件回归会按平台选择产物。

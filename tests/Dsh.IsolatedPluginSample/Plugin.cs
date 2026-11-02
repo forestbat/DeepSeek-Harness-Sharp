@@ -41,6 +41,7 @@ public sealed class Plugin : IDshIsolatedPlugin
     private readonly string _name;
     private readonly int _constructorProcessId = Environment.ProcessId;
     private int _initializationProcessId;
+    private JsonElement _configuration;
     private TaskCompletionSource? _release;
     private Task<JsonElement>? _background;
 
@@ -54,6 +55,7 @@ public sealed class Plugin : IDshIsolatedPlugin
         CancellationToken cancellationToken = default)
     {
         _initializationProcessId = Environment.ProcessId;
+        _configuration = configuration.Clone();
         ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-initialize-marker", "initialize executed");
         var registration = host.RegisterTool(new PluginToolDefinition(
             "isolated_" + _name,
@@ -88,6 +90,41 @@ public sealed class Plugin : IDshIsolatedPlugin
                     initializationProcessId = _initializationProcessId,
                     pidNamespace = OperatingSystem.IsLinux() ? new FileInfo("/proc/self/ns/pid").LinkTarget : null,
                 });
+            case "configuration":
+                return _configuration;
+            case "invalid-registration":
+                try
+                {
+                    using var invalid = host.RegisterTool(new PluginToolDefinition("", "", JsonSerializer.SerializeToElement(new { }),
+                        (_, _) => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { }))));
+                    return JsonSerializer.SerializeToElement(new { rejected = false });
+                }
+                catch (Exception)
+                {
+                    return JsonSerializer.SerializeToElement(new { rejected = true });
+                }
+            case "oversized-log":
+                try
+                {
+                    host.Log(1, new string('x', PluginHostOperations.MaximumFrameBytes));
+                    return JsonSerializer.SerializeToElement(new { rejected = false });
+                }
+                catch (Exception)
+                {
+                    return JsonSerializer.SerializeToElement(new { rejected = true });
+                }
+            case "log-burst":
+                for (var index = 0; index < 40; index++)
+                    host.Log(1, "fixture log");
+                return JsonSerializer.SerializeToElement(new { completed = true });
+            case "stderr-burst":
+                await Console.Error.WriteAsync(new string('x', 9000));
+                await Console.Error.FlushAsync(signal);
+                return JsonSerializer.SerializeToElement(new { completed = true });
+            case "wait-after-write":
+                await host.CallAsync(PluginHostOperations.WriteFile, arguments, signal);
+                await Task.Delay(Timeout.InfiniteTimeSpan, signal);
+                throw new InvalidOperationException("An infinite wait unexpectedly completed.");
             case "read":
                 return await host.CallAsync(PluginHostOperations.ReadFile, arguments, signal);
             case "write":

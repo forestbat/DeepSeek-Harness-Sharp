@@ -53,7 +53,6 @@ internal sealed class GitHeadSnapshot(Dictionary<string, string> objects, bool a
 
     private static string? Run(string directory, IReadOnlyList<string> arguments)
     {
-        Dsh.GitInspect.GitExecutionScope.DemandUnconfinedExecution();
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo("git")

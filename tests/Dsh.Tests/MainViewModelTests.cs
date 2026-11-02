@@ -369,8 +369,10 @@ public sealed class MainViewModelTests
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                 () => viewModel.Messages.Any(message => message.Kind == MessageKind.User),
                 () => GuiTestEnvironment.DescribeChatState(viewModel));
-            Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
-            Assert.Equal("你好", viewModel.Messages[0].Text);
+            var rendered = Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
+            Assert.Contains("你好", rendered.Text, StringComparison.Ordinal);
+            Assert.Single(environment.Agent.Session.SnapshotEvents().Select(item => item.Data).OfType<UserMessagePayload>(),
+                payload => payload.Message.Content.OfType<TextBlock>().Any(block => block.Text == "你好"));
         });
 
     [Fact]

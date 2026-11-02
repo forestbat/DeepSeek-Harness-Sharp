@@ -48,7 +48,6 @@
     <Project Path="src/Dsh.Plugins.Host/Dsh.Plugins.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native.Host/Dsh.Plugins.Native.Host.csproj" />
     <Project Path="src/Dsh.Plugins.Native/Dsh.Plugins.Native.csproj" />
-    <Project Path="src/Dsh.Plugins.Protocol/Dsh.Plugins.Protocol.csproj" />
     <Project Path="src/Dsh.Pty/Dsh.Pty.csproj" />
     <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />

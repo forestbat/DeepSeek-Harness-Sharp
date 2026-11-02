@@ -89,10 +89,10 @@ public static class ToolPluginManager
                 }
                 """)!.AsObject(),
             (_, value) => [new TextBlock(value.GetProperty("result").GetString() ?? "")]),
-        Execute = (args, _) => Execute(ctx, args),
+        Execute = (args, run) => Execute(ctx, args, run),
     };
 
-    private static async Task<object?> Execute(Context ctx, JsonElement args)
+    private static async Task<object?> Execute(Context ctx, JsonElement args, ToolRunContext run)
     {
         var action = RequireAction(args);
         var target = args.TryGetProperty("target", out var targetElement) && targetElement.ValueKind == JsonValueKind.String
@@ -105,10 +105,10 @@ public static class ToolPluginManager
         {
             "list" => ListResult(manager),
             "describe" => manager.Describe(RequireTarget(target)),
-            "enable" => await manager.EnableAsync(RequireTarget(target)),
-            "disable" => await manager.DisableAsync(RequireTarget(target)),
-            "add" => await manager.AddAsync(RequireTarget(target)),
-            "remove" => await manager.RemoveAsync(RequireTarget(target), force),
+            "enable" => await manager.EnableAsync(RequireTarget(target), run),
+            "disable" => await manager.DisableAsync(RequireTarget(target), run),
+            "add" => await manager.AddAsync(RequireTarget(target), run),
+            "remove" => await manager.RemoveAsync(RequireTarget(target), force, run),
             _ => throw new InvalidOperationException($"unknown plugin_manager action \"{action}\""),
         };
         return new JsonObject

@@ -67,10 +67,10 @@ public sealed class McpService(Context ctx, string? workingDirectory = null) : S
     }
 
     internal async Task ConnectAsync(McpServerConfig server, IClientTransport transport, CancellationToken signal = default)
-        => await ConnectOneAsync(server, () => RequireUnownedTransportAllowed(transport), signal);
+        => await ConnectOneAsync(server, () => transport, signal);
 
     internal async Task ConnectAsync(McpServerConfig server, Func<IClientTransport> transportFactory, CancellationToken signal = default)
-        => await ConnectOneAsync(server, () => RequireUnownedTransportAllowed(transportFactory()), signal);
+        => await ConnectOneAsync(server, transportFactory, signal);
 
     public async Task ReloadAsync(IReadOnlyList<McpServerConfig> servers, CancellationToken signal = default)
     {
@@ -133,13 +133,6 @@ public sealed class McpService(Context ctx, string? workingDirectory = null) : S
         }
     }
 
-    private IClientTransport RequireUnownedTransportAllowed(IClientTransport transport)
-    {
-        if (Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true)
-            throw new InvalidOperationException(
-                "Unowned MCP transports cannot enforce active settings protection. Configure an owned local stdio server instead.");
-        return transport;
-    }
 
     private IClientTransport CreateTransport(McpServerConfig server)
     {
@@ -147,7 +140,8 @@ public sealed class McpService(Context ctx, string? workingDirectory = null) : S
         {
             if (string.IsNullOrWhiteSpace(server.Command))
                 throw new ArgumentException($"mcp server \"{server.Name}\" requires a command for stdio transport");
-            if (Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled != true)
+            var home = Ctx.GetProp("dshHomePath") is string root ? new HarnessHome(root) : null;
+            if (home is null || HarnessSettings.LoadForReview(home).Sandbox?.Enabled != true)
                 return new StdioClientTransport(new StdioClientTransportOptions
                 {
                     Name = server.Name,
@@ -156,14 +150,11 @@ public sealed class McpService(Context ctx, string? workingDirectory = null) : S
                 });
             var subprocess = Ctx.Get<SubprocessService>(SubprocessService.ServiceName, false)
                 ?? throw new InvalidOperationException("Owned MCP stdio requires the subprocess service.");
-            return new OwnedStdioClientTransport(subprocess, server, workingDirectory ?? Environment.CurrentDirectory);
+            return new OwnedStdioClientTransport(subprocess, server, workingDirectory ?? Environment.CurrentDirectory, home.SettingsFile);
         }
 
         if (server.Transport is "streamable-http" or "sse")
         {
-            if (Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true)
-                throw new InvalidOperationException(
-                    "Remote MCP cannot be OS-constrained while plugin sandboxing is enabled. Use an owned local stdio server.");
             if (string.IsNullOrWhiteSpace(server.Url))
                 throw new ArgumentException($"mcp server \"{server.Name}\" requires a url for {server.Transport} transport");
             return new HttpClientTransport(

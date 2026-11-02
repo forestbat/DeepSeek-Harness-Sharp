@@ -1652,7 +1652,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case SettingsMutationAuditPayload mutation:
                 AddTrace(sessionEvent.Seq, TraceKind.Approval, $"settings {mutation.Outcome} · {mutation.ToolName}",
-                    $"{mutation.Path}\n{ApprovalHints.SettingsDiff(mutation.Before, mutation.After)}");
+                    $"{mutation.Path}\n{mutation.Diff}\nbeforeHash={mutation.BeforeHash}\nafterHash={mutation.AfterHash}");
                 if (!replay)
                     SetStatus($"settings {mutation.Outcome}: {mutation.Path}");
                 break;

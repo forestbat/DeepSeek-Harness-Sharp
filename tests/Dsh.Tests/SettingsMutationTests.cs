@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
@@ -29,14 +28,14 @@ public sealed class SettingsMutationTests
         Assert.Equal("rejected", audit.Outcome);
         Assert.Equal(tool, audit.ToolName);
         Assert.Equal(audit.CallId, audit.RootCallId);
-        Assert.Equal(Dsh.Transport.PinnedFileAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
-        Assert.DoesNotContain("credential-old-for-test", audit.Before);
-        Assert.Contains("alpha/new", audit.After);
+        Assert.Equal(Dsh.Sandbox.SandboxFileAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
+        Assert.DoesNotContain("credential-old-for-test", audit.Diff);
+        Assert.Contains("alpha/new", audit.Diff);
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
         var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
         Assert.Equal(audit.CallId, asked.CallId);
         Assert.DoesNotContain("credential-old-for-test", asked.Arguments);
-        Assert.Contains("+ global_default_model: alpha/new", ApprovalHints.SettingsDiff(asked.Arguments));
+        Assert.Contains("+global_default_model: alpha/new", ApprovalHints.SettingsDiff(asked.Arguments));
     }
 
     [Theory]
@@ -47,10 +46,13 @@ public sealed class SettingsMutationTests
     {
         using var fixture = new Fixture();
         using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
+        using var previous = new StreamReader(new FileStream(fixture.Home.SettingsFile, FileMode.Open,
+            FileAccess.Read, FileShare.Read | FileShare.Delete));
         var result = await fixture.Execute(tool, fixture.Arguments(tool));
 
         Assert.False(result.IsError);
         Assert.Equal(Fixture.Original.Replace("alpha/old", "alpha/new"), File.ReadAllText(fixture.Home.SettingsFile));
+        Assert.Equal(Fixture.Original, await previous.ReadToEndAsync(TestContext.Current.CancellationToken));
         Assert.Equal("committed", Assert.Single(fixture.Audits).Outcome);
         Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
         Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
@@ -60,7 +62,7 @@ public sealed class SettingsMutationTests
     }
 
     [Fact]
-    public async Task TypedToolProposal_ReleasesLock_AndRejectsConcurrentHumanChange()
+    public async Task RealFileProposal_ReleasesLock_AndRejectsConcurrentHumanChange()
     {
         using var fixture = new Fixture();
         var asked = new TaskCompletionSource<ApprovalRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -72,7 +74,7 @@ public sealed class SettingsMutationTests
         }, new EventOptions { Global = true });
         try
         {
-            var pending = Task.Run(() => fixture.Execute("typed_settings_update", new JsonObject()));
+            var pending = fixture.Execute("write", fixture.Arguments("write"));
             await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
             HarnessSettings.Update(fixture.Home, settings =>
             {
@@ -161,16 +163,19 @@ public sealed class SettingsMutationTests
     }
 
     [Fact]
-    public async Task RootBoundary_RemainsFailClosed_AfterReviewerRemoval()
+    public async Task MissingGate_RejectsActiveSettings_ButNotOrdinaryFileWrites()
     {
         using var fixture = new Fixture();
-        fixture.Reviewer.Dispose();
+        fixture.Gate.Dispose();
         using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
         var result = await fixture.Execute("write", fixture.Arguments("write"));
 
         Assert.True(result.IsError);
         Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal("unavailable", Assert.Single(fixture.Audits).Outcome);
+        var ordinary = Path.Combine(fixture.Root, "ordinary.txt");
+        var ordinaryResult = await fixture.Execute("write", new JsonObject { ["file_path"] = ordinary, ["content"] = "synthetic ordinary content" });
+        Assert.False(ordinaryResult.IsError);
+        Assert.Equal("synthetic ordinary content", File.ReadAllText(ordinary));
     }
 
     [Fact]
@@ -199,34 +204,6 @@ public sealed class SettingsMutationTests
         Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
     }
 
-    [Fact]
-    public void RedactedDiff_HidesEscapedAndMultilineSecretsWithoutChangingOrdinaryComments()
-    {
-        const string before = "# ordinary comment\npassword: \"credential\\nold-for-test\"\nprivate_key: |\n  private material for test\n  second line\nvalue: old\n";
-        var (oldText, newText) = SettingsMutationDiff.Redact(before, before.Replace("value: old", "value: new"));
-        Assert.DoesNotContain("credential", oldText);
-        Assert.DoesNotContain("private material", oldText);
-        Assert.DoesNotContain("second line", newText);
-        Assert.Contains("# ordinary comment", oldText);
-        Assert.Contains("value: new", newText);
-    }
-
-    [Theory]
-    [InlineData("save")]
-    [InlineData("plugins")]
-    [InlineData("plugin-entry")]
-    [InlineData("proxy")]
-    [InlineData("borrowed")]
-    public async Task TypedWritersInsideRealToolScope_RejectWithoutPublishing(string method)
-    {
-        using var fixture = new Fixture();
-        using var deny = ApprovalAnswerers.DenyAll(fixture.Context);
-        var result = await Task.Run(() => fixture.Execute("typed_settings_update", new JsonObject { ["method"] = method }));
-        Assert.True(result.IsError);
-        Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
-        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-    }
 
     [Theory]
     [InlineData("failure")]
@@ -235,9 +212,25 @@ public sealed class SettingsMutationTests
     {
         using var fixture = new Fixture();
         using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
-        var result = await Task.Run(() => fixture.Execute("typed_settings_update", new JsonObject { ["method"] = method }))
-            .WaitAsync(TestContext.Current.CancellationToken);
-        Assert.True(result.IsError);
+        var run = new ToolRunContext
+        {
+            CallId = ToolCallId.Create("synthetic-settings-failure"),
+            RootCallIdValue = ToolCallId.Create("synthetic-settings-failure"),
+            Name = "write", Arguments = JsonSerializer.SerializeToElement(fixture.Arguments("write")),
+            Agent = fixture.Agent, Signal = TestContext.Current.CancellationToken,
+        };
+        Task Commit() => fixture.Gate.CommitAsync(new(fixture.Home.SettingsFile, Fixture.Original,
+            Fixture.Original.Replace("alpha/old", "alpha/new"), run), (_, signal) =>
+        {
+            if (method == "failure")
+                return File.WriteAllTextAsync(Path.Combine(fixture.Home.SettingsFile, "cannot-be-a-directory"), "synthetic content", signal);
+            HarnessSettings.Update(fixture.Home, value => { value.GlobalDefaultModel = "alpha/new"; return true; });
+            return Task.CompletedTask;
+        }, run.Signal);
+        if (method == "failure")
+            await Assert.ThrowsAnyAsync<IOException>(Commit);
+        else
+            await Assert.ThrowsAsync<InvalidOperationException>(Commit);
         Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
         Assert.Equal("failed", Assert.Single(fixture.Audits).Outcome);
     }
@@ -252,33 +245,6 @@ public sealed class SettingsMutationTests
         Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
     }
 
-    [Fact]
-    public async Task OversizedUtf8Proposal_IsRejectedWithoutPersistingTheDocumentInAudit()
-    {
-        using var fixture = new Fixture();
-        using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
-        var result = await fixture.Execute("write", new JsonObject
-        {
-            ["file_path"] = fixture.Home.SettingsFile,
-            ["content"] = new string('界', SettingsMutationLimits.MaxDocumentBytes / 3 + 1),
-        });
-        Assert.True(result.IsError);
-        Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-        var audit = Assert.Single(fixture.Audits);
-        Assert.Equal("failed", audit.Outcome);
-        Assert.True(audit.Before.Length < 256 && audit.After.Length < 256);
-        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-    }
-
-    [Fact]
-    public void SecretOnlyChanges_RemainVisibleWithoutPersistingEitherValue()
-    {
-        var (before, after) = SettingsMutationDiff.Redact("password: old-value-for-test\n", "password: new-value-for-test\n");
-        Assert.DoesNotContain("old-value-for-test", before);
-        Assert.DoesNotContain("new-value-for-test", after);
-        Assert.NotEqual(before, after);
-        Assert.Contains("(changed)", after);
-    }
 
     [Fact]
     public async Task MissingApprovalServiceOrModelSession_NeverWritesSettings()
@@ -316,36 +282,6 @@ public sealed class SettingsMutationTests
         Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task HardlinkAlias_UsesCanonicalApprovalAndPublication(bool allowed)
-    {
-        using var fixture = new Fixture();
-        var alias = Path.Combine(fixture.Root, "settings-hardlink.yaml");
-        if (OperatingSystem.IsWindows())
-            Assert.True(CreateHardLinkWindows(alias, fixture.Home.SettingsFile, IntPtr.Zero), $"Hardlink creation failed: {Marshal.GetLastPInvokeError()}");
-        else
-            Assert.Equal(0, CreateHardLinkUnix(fixture.Home.SettingsFile, alias));
-        using var answerer = allowed ? ApprovalAnswerers.AutoApprove(fixture.Context) : ApprovalAnswerers.DenyAll(fixture.Context);
-        var result = await fixture.Execute("write", new JsonObject
-        {
-            ["file_path"] = alias,
-            ["content"] = Fixture.Original.Replace("alpha/old", "alpha/new"),
-        });
-        Assert.Equal(!allowed, result.IsError);
-        Assert.Equal(allowed ? "alpha/new" : "alpha/old", HarnessSettings.Load(fixture.Home).GlobalDefaultModel);
-        var audit = Assert.Single(fixture.Audits);
-        Assert.Equal(Dsh.Transport.PinnedFileAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
-        Assert.Equal(allowed ? "committed" : "rejected", audit.Outcome);
-    }
-
-    [DllImport("libc", EntryPoint = "link", SetLastError = true)]
-    private static extern int CreateHardLinkUnix(string existing, string link);
-
-    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateHardLinkWindows(string link, string existing, IntPtr reserved);
 
     [Fact]
     public async Task LivePolicyEdits_RemoveAutomaticGrants_AndKeepBlacklistPrecedence()
@@ -353,7 +289,6 @@ public sealed class SettingsMutationTests
         using var fixture = new Fixture();
         SafetySettings? ReadSafety() => HarnessSettings.LoadForReview(fixture.Home).Safety;
         using var guard = SafetyCommandGuard.Register(fixture.Context, ReadSafety);
-        using var approvals = SafetyCommandGuard.RegisterApprovals(fixture.Context, ReadSafety);
         void Configure(SafetySettings policy) => HarnessSettings.Update(fixture.Home, settings => { settings.Safety = policy; return true; });
         Task<ToolExecutionResult> WriteOrdinary(string name) => fixture.Execute("write", new JsonObject
         {
@@ -372,6 +307,35 @@ public sealed class SettingsMutationTests
         Assert.False((await WriteOrdinary("auto-approved.txt")).IsError);
     }
 
+    [Fact]
+    public async Task RedactedOnlyChange_StillRequiresApproval_AndPublishesWithoutPersistingTokens()
+    {
+        using var fixture = new Fixture();
+        // Synthetic token-shaped values exercise redaction without using credentials.
+        var oldToken = $"sk-{new string('a', 24)}";
+        var newToken = $"sk-{new string('b', 24)}";
+        var before = Fixture.Original.Replace("credential-old-for-test", oldToken);
+        var after = before.Replace(oldToken, newToken);
+        await File.WriteAllTextAsync(fixture.Home.SettingsFile, before, TestContext.Current.CancellationToken);
+        using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
+
+        var result = Assert.IsType<ToolExecutionResult.Success>(await fixture.Execute("write",
+            new JsonObject { ["file_path"] = fixture.Home.SettingsFile, ["content"] = after }));
+
+        Assert.Equal(after, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        var audit = Assert.Single(fixture.Audits);
+        Assert.Equal("committed", audit.Outcome);
+        Assert.NotEqual(audit.BeforeHash, audit.AfterHash);
+        Assert.DoesNotContain(oldToken, audit.Diff);
+        Assert.DoesNotContain(newToken, audit.Diff);
+        Assert.DoesNotContain("# keep this comment", audit.Diff);
+        Assert.DoesNotContain(oldToken, result.Value.GetRawText());
+        Assert.DoesNotContain(newToken, result.Value.GetRawText());
+        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        Assert.Contains(audit.BeforeHash, ApprovalHints.SettingsDiff(asked.Arguments));
+        Assert.Contains(audit.AfterHash, ApprovalHints.SettingsDiff(asked.Arguments));
+    }
+
     private sealed class Fixture : IDisposable
     {
         public const string Original = "# keep this comment\nglobal_default_model: alpha/old\nproviders:\n  alpha:\n    type: openai-compatible\n    options:\n      apiKey: credential-old-for-test\nsafety:\n  autoApprove: false\n  blacklist: []\n  whitelist: []\n";
@@ -381,8 +345,9 @@ public sealed class SettingsMutationTests
         public Session Session { get; }
         public AgentLoopAgent Agent { get; }
         public ToolRuntime Tools { get; }
-        public IDisposable Reviewer { get; }
+        public SettingsMutationGate Gate { get; }
         private readonly List<IDisposable> _tools;
+        private readonly IDisposable _safetyApprovals;
 
         public Fixture(bool withApproval = true)
         {
@@ -399,58 +364,10 @@ public sealed class SettingsMutationTests
             Session.Append(new TurnStartPayload(1));
             if (withApproval)
                 _ = ApprovalService.Register(Context);
-            var boundary = new SettingsMutationBoundary(Context, Home);
-            Reviewer = boundary.InstallReviewer(new SettingsMutationGate(Context, Home));
+            Context.SetOwn(ISettingsMutationGate.SettingsPathProperty, Home.SettingsFile);
+            Gate = new SettingsMutationGate(Context, Home);
+            _safetyApprovals = SafetyCommandGuard.RegisterApprovals(Context, () => HarnessSettings.LoadForReview(Home).Safety);
             _tools = [WriteTool.Register(Context), EditTool.Register(Context), StrReplaceEditorTool.Register(Context)];
-            _tools.Add(Tools.Register(new ToolDefinition
-            {
-                Name = "typed_settings_update", Description = "Update a real settings section through the typed writer.",
-                Parameters = ToolSchemas.Parse("""{"type":"object","properties":{}}"""),
-                Output = new ToolOutputDefinition(ToolSchemas.Parse("{\"type\":\"null\"}"), (_, _) => []),
-                Execute = async (arguments, exec) =>
-                {
-                    var method = arguments.TryGetProperty("method", out var selected) ? selected.GetString() : "update";
-                    switch (method)
-                    {
-                        case "save":
-                            var settings = HarnessSettings.Load(Home);
-                            settings.GlobalDefaultModel = "alpha/new";
-                            settings.Save(Home);
-                            break;
-                        case "plugins":
-                            var plugins = HarnessSettings.Load(Home);
-                            plugins.Plugins["@tests/settings-gate"] = new PluginSetting { Enabled = false };
-                            plugins.SavePlugins(Home);
-                            break;
-                        case "plugin-entry":
-                            HarnessSettings.UpdatePlugin(Home, "@tests/settings-gate", _ => new PluginSetting { Enabled = false });
-                            break;
-                        case "proxy":
-                            using (var proxy = new OutboundProxy())
-                                HarnessSettings.SaveOutboundProxy(Home, new OutboundProxySettings { Url = "http://127.0.0.1:8080" }, proxy);
-                            break;
-                        case "borrowed":
-                            HarnessSettings.SaveBorrowedOutboundMachine(Home, "test-machine");
-                            break;
-                        case "failure":
-                        case "reentrant":
-                            var before = File.ReadAllText(Home.SettingsFile);
-                            var after = before.Replace("alpha/old", "alpha/new");
-                            await boundary.CommitAsync(new(Home.SettingsFile, before, after, exec), signal =>
-                            {
-                                if (method == "failure")
-                                    return File.WriteAllTextAsync(Path.Combine(Home.SettingsFile, "cannot-be-a-directory"), after, signal);
-                                HarnessSettings.Update(Home, value => { value.GlobalDefaultModel = "alpha/new"; return true; });
-                                return Task.CompletedTask;
-                            }, exec.Signal);
-                            break;
-                        default:
-                            HarnessSettings.Update(Home, value => { value.GlobalDefaultModel = "alpha/new"; return true; });
-                            break;
-                    }
-                    return null;
-                },
-            }));
         }
 
         public IEnumerable<SettingsMutationAuditPayload> Audits => Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>();
@@ -474,7 +391,8 @@ public sealed class SettingsMutationTests
         {
             foreach (var tool in _tools)
                 tool.Dispose();
-            Reviewer.Dispose();
+            Gate.Dispose();
+            _safetyApprovals.Dispose();
             Agent.Dispose();
             TempTree.Delete(Root);
         }

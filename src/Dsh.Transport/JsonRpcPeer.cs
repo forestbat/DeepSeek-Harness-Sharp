@@ -110,6 +110,8 @@ public sealed class JsonRpcPeer : IAsyncDisposable
 
     private async Task WriteAsync(byte[] payload, CancellationToken cancellationToken)
     {
+        if (payload.Length > _maxFrameBytes)
+            throw new ArgumentOutOfRangeException(nameof(payload), "The protocol frame exceeds its maximum size.");
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

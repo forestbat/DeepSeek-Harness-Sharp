@@ -135,7 +135,6 @@ public static class WorktreeTool
             Argv = ["git", .. arguments],
             Cwd = repository,
             Env = GitEnvironment,
-            ModelExecution = true,
             Stdout = new SubprocessCollect(GitOutputBytes, null),
             Stderr = new SubprocessCollect(GitOutputBytes, null),
             Signal = signal,

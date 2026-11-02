@@ -41,7 +41,7 @@ public static class DshNativePluginRuntime
     public static Func<string, string, string>? HostCaller { get; set; }
 
     public static string CallHost(string operation, string argumentsJson)
-        => (HostCaller ?? throw new InvalidOperationException("the native plugin is not active"))(operation, argumentsJson);
+        => (HostCaller ?? throw new InvalidOperationException("native host calls are unavailable for this activation"))(operation, argumentsJson);
 
     public static void Log(int level, string message) => LogSink?.Invoke(level, message);
 

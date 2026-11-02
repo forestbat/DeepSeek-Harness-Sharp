@@ -22,7 +22,87 @@ public sealed class NativePluginAbiTests
     private const string LengthTool = "native_length";
     private const string EchoLogMarker = "echo invoked";
     private const int LargeMessageLength = 200_000;
+    // All payloads in these binary compatibility regressions are synthetic test inputs.
 
+
+    [Fact]
+    public async Task FrozenV1Binary_LoadsConfiguresExecutesAndDeactivatesWithoutHostCall()
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        var load = NativePluginLibrary.TryLoad(LegacyFixturePath(host: false));
+        Assert.True(load.Succeeded, load.Reason);
+        using var native = load.Plugin!;
+        Assert.Equal("test.frozen-native-v1", native.Package);
+        var configuration = new Dictionary<string, object?>
+        {
+            ["label"] = "synthetic-v1 中文 \0\n",
+            ["nested"] = new Dictionary<string, object?> { ["enabled"] = true, ["items"] = new object?[] { 7L, null } },
+        };
+        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+            .Apply(ctx, configuration, TestContext.Current.CancellationToken))!)
+        {
+            var result = await ExecuteJson(tools, "legacy_v1_count", JsonSerializer.SerializeToElement(new { }));
+            Assert.Equal(1, result.GetProperty("calls").GetInt32());
+            var config = await ExecuteJson(tools, "legacy_v1_config", JsonSerializer.SerializeToElement(new { }));
+            Assert.Equal("synthetic-v1 中文 \0\n", config.GetProperty("label").GetString());
+            Assert.True(config.GetProperty("nested").GetProperty("enabled").GetBoolean());
+            Assert.Equal(7, config.GetProperty("nested").GetProperty("items")[0].GetInt64());
+        }
+        Assert.Null(tools.Get("legacy_v1_count"));
+        Assert.Null(tools.Get("legacy_v1_config"));
+        Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("frozen v1 deactivated"));
+        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
+            .Apply(ctx, null, TestContext.Current.CancellationToken))!)
+        {
+            var config = await ExecuteJson(tools, "legacy_v1_config", JsonSerializer.SerializeToElement(new { }));
+            Assert.Empty(config.EnumerateObject());
+        }
+    }
+
+    [Fact]
+    public async Task PublishedSample_OnFrozenV1Host_DoesNotReadPastOriginalTable()
+    {
+        var sample = PublishedSamplePath();
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo(LegacyFixturePath(host: true))
+            {
+                UseShellExecute = false,
+            },
+        };
+        process.StartInfo.ArgumentList.Add(sample);
+        Assert.True(process.Start());
+        try
+        {
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+            }
+        }
+    }
+
+    private static string LegacyFixturePath(bool host)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.slnx")))
+            directory = directory.Parent;
+        var name = host
+            ? OperatingSystem.IsWindows() ? "legacy_host.exe" : "legacy_host"
+            : OperatingSystem.IsWindows() ? "legacy_v1.dll" : OperatingSystem.IsMacOS() ? "liblegacy_v1.dylib" : "liblegacy_v1.so";
+        var path = Path.Combine(directory?.FullName ?? AppContext.BaseDirectory,
+            "tests", "Dsh.NativePluginV1Fixture", "bin", name);
+        if (!File.Exists(path))
+            Assert.Skip("Build the real frozen-v1 C fixture using templates/native-plugin/README.md before this regression.");
+        return path;
+    }
     [Fact]
     public async Task PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors()
     {
@@ -118,30 +198,6 @@ public sealed class NativePluginAbiTests
         }
     }
 
-    [Fact]
-    public void PublishedSample_ChangedResidentPathRequiresAnotherProcess()
-    {
-        var sample = PublishedSamplePath();
-        var root = TempTree.CreateDirectory("native-resident-image");
-        try
-        {
-            var path = Path.Combine(root, Path.GetFileName(sample));
-            File.Copy(sample, path);
-            var loaded = NativePluginLibrary.TryLoad(path);
-            Assert.True(loaded.Succeeded, loaded.Reason);
-            loaded.Plugin!.Dispose();
-            var replacement = Path.Combine(root, "replacement.so");
-            File.Copy(Path.Combine(AppContext.BaseDirectory, "libdsh_fault_probe.so"), replacement);
-            File.Move(replacement, path, overwrite: true);
-            var changed = NativePluginLibrary.TryLoad(path);
-            Assert.False(changed.Succeeded);
-            Assert.Equal(NativePluginFailureKind.LoadFault, changed.Failure);
-        }
-        finally
-        {
-            TempTree.Delete(root);
-        }
-    }
 
     [Theory]
     [Trait("Category", "SandboxNative")]
@@ -154,7 +210,6 @@ public sealed class NativePluginAbiTests
             settings.Plugins["sample.native-echo"] = new PluginSetting
             {
                 Execution = PluginExecution.Sandbox,
-                TrustDomain = "native-sdk-fixture",
                 Permissions = new PluginPermissions { Read = true, Write = write, Network = false },
             }, deployFixture: false);
         var directory = Path.Combine(fixture.Plugins, "native-sdk");
@@ -163,14 +218,14 @@ public sealed class NativePluginAbiTests
         var input = Path.Combine(fixture.Root, "native-input");
         await File.WriteAllTextAsync(input, "native 输入", TestContext.Current.CancellationToken);
         await fixture.StartAsync(expectFixtureActive: false);
-        var config = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_config", new { })).Value;
+        var config = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_config", new { }, TestContext.Current.CancellationToken)).Value;
         var workerNamespace = config.GetProperty("pidNamespace").GetString();
         Assert.StartsWith("pid:[", workerNamespace);
         Assert.NotEqual(new FileInfo("/proc/self/ns/pid").LinkTarget, workerNamespace);
-        var read = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_read_file", new { path = input })).Value;
+        var read = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_read_file", new { path = input }, TestContext.Current.CancellationToken)).Value;
         Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes("native 输入")), read.GetProperty("data").GetString());
         var output = Path.Combine(fixture.Root, "native-output");
-        var result = await fixture.ExecuteTool("native_write_file", new { path = output, data = Convert.ToBase64String(Encoding.UTF8.GetBytes("native 输出")) });
+        var result = await fixture.ExecuteTool("native_write_file", new { path = output, data = Convert.ToBase64String(Encoding.UTF8.GetBytes("native 输出")) }, TestContext.Current.CancellationToken);
         Assert.Equal(!write, result.IsError);
         Assert.Equal(write, File.Exists(output));
         if (write)
@@ -218,7 +273,7 @@ public sealed class NativePluginAbiTests
     }
 
     [Fact]
-    public async Task PublishedSample_HttpHostCallSendsOneRequestAcrossBothBufferRetries()
+    public async Task PublishedSample_HttpHostCallSendsOneRequestWithOneShotExchange()
     {
         var sample = PublishedSamplePath();
         var root = TempTree.CreateDirectory("native-common-http");

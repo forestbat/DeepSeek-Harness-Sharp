@@ -284,7 +284,7 @@ internal static partial class SettingsDocument
     /** Render reserved authority fields separately from plugin-owned parameters. */
     private static void RenderPlugin(StringBuilder builder, string name, PluginSetting setting)
     {
-        if (setting.Parameters.Count == 0 && setting.Permissions is null && setting.Execution is null && setting.TrustDomain is null && setting.HostArtifact is null)
+        if (setting.Parameters.Count == 0 && setting.Permissions is null && setting.Execution is null)
         {
             builder.Append('\n').Append(Indent).Append(Quote(name)).Append(": ").Append(Bool(setting.Enabled));
             return;
@@ -295,10 +295,6 @@ internal static partial class SettingsDocument
         if (setting.Execution is { } execution)
             builder.Append('\n').Append(entryIndent).Append(PluginSetting.ExecutionKey).Append(": ")
                 .Append(execution == PluginExecution.Host ? "host" : "sandbox");
-        if (setting.TrustDomain is { } trustDomain)
-            builder.Append('\n').Append(entryIndent).Append(PluginSetting.TrustDomainKey).Append(": ").Append(Quote(trustDomain));
-        if (setting.HostArtifact is { } hostArtifact)
-            builder.Append('\n').Append(entryIndent).Append(PluginSetting.HostArtifactKey).Append(": ").Append(Quote(hostArtifact));
         if (setting.Permissions is { } permissions)
         {
             builder.Append('\n').Append(entryIndent).Append(PluginSetting.PermissionsKey).Append(':');

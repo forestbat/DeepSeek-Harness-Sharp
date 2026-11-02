@@ -33,8 +33,6 @@ public static class IdeTool
 
     private static async Task<object?> ExecuteAsync(Context ctx, IEditorService editors, JsonElement args, ToolRunContext run)
     {
-        if (Action(args) != "status" && ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true)
-            throw new NotSupportedException("Model editor launches and executable discovery probes have no OS-confined backend while sandbox.enabled is ON. Manual editor actions remain available.");
         var workspace = run.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory;
         if (Action(args) == "list")
         {

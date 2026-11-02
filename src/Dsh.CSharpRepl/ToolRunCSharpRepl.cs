@@ -34,7 +34,7 @@ public static class ToolRunCSharpRepl
                 + "This uses the ordinary CSharpRepl frontend, not the run_code tool SDK. "
                 + "Compilation and runtime failures are reported as tool errors with the frontend's output. "
                 + "CSharpRepl must already be installed; it is never downloaded automatically."
-                + IExternalProcessPolicy.SettingsProtectionNotice,
+                + IScriptExecutionPolicy.PermissionNotice,
             Parameters = JsonNode.Parse("""
                 {
                   "type": "object",
@@ -112,14 +112,12 @@ public static class ToolRunCSharpRepl
         using var status = new CSharpReplExitStatus();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeout.Token);
-        using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = [executable, status.PreloadPath],
             Cwd = workdir,
             KeepStandardInputOpen = true,
             Signal = fused.Token,
-            ModelExecution = true,
-            ExecutionKind = SubprocessExecutionKind.Script,
             AdditionalWritablePaths = [Path.GetDirectoryName(status.PreloadPath)!],
         });
         try
