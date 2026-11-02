@@ -49,8 +49,10 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         var renameAncestor = protectedParent ? """(ren "config" "moved-config") >nul 2>&1 && exit /b 96""" : "";
         // Named TYPE performs a directory search before reading; a single-file grant does not grant parent enumeration.
         // Read every fixture line through one native redirected handle and require EOF after the final line.
-        // Send shell syntax through stdin instead of encoding it as a CRT command-line argument.
+        // Keep batch syntax separate from stdin: SET /P redirects stdin to fixture data, not shell commands.
         var commands = $$"""
+            @echo off
+            setlocal EnableExtensions DisableDelayedExpansion
             echo stage=read 1>&2
             set "firstRead="
             set "secondRead="
@@ -80,13 +82,25 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             if not exist "{{deniedRelative}}" exit /b 95
             {{renameAncestor}}
             echo allowed>allowed.txt
+            if not exist allowed.txt exit /b 100
             echo disposable>rename-before.txt
-            ren rename-before.txt rename-after.txt || exit /b 97
+            if not exist rename-before.txt exit /b 101
+            echo stage=rename 1>&2
+            ren rename-before.txt rename-after.txt
+            if exist rename-before.txt exit /b 97
+            if not exist rename-after.txt exit /b 97
+            set "renamedRead="
+            set /p renamedRead=<rename-after.txt
+            if not "%renamedRead%"=="disposable" exit /b 102
+            echo stage=delete 1>&2
             del /q rename-after.txt
             if exist rename-after.txt exit /b 98
             echo diagnostic 1>&2
             exit /b 0
             """;
+        const string scriptName = "path-consumer.cmd";
+        var script = Path.Combine(working, scriptName);
+        await File.WriteAllTextAsync(script, $"{commands.ReplaceLineEndings("\r\n")}\r\n", System.Text.Encoding.ASCII, TestContext.Current.CancellationToken);
         await using (var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
         {
             Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
@@ -94,22 +108,30 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             ReadOnlyPaths = [input],
             WritablePaths = [working],
             DeniedWritePaths = [denied],
-            Arguments = ["/D", "/Q"],
+            Arguments = ["/D", "/Q", "/E:ON", "/V:OFF", "/C", scriptName],
         }, TestContext.Current.CancellationToken))
         {
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = new StreamReader(consumer.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-            await consumer.StandardInput.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"{commands.ReplaceLineEndings("\r\n")}\r\n"), TestContext.Current.CancellationToken);
-            await consumer.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
+            // The batch file supplies commands; close the data pipe so it cannot become a second command source.
             await consumer.StandardInput.DisposeAsync();
             var code = await consumer.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
             var stdout = await output;
             var stderr = await error;
             var diagnostic = System.Text.RegularExpressions.Regex.Replace(stderr, """(?:[A-Za-z]:[\\/]|/)[^\s"'<>]+""", "<path>");
-            var failure = $"The real Windows path consumer exited with {code} (0x{unchecked((uint)code):x8}); stdoutLength={stdout.Length}; stderr={diagnostic[..Math.Min(diagnostic.Length, 2048)]}";
+            var consequences = "";
+            if (code != 0)
+            {
+                var settingsUnchanged = File.Exists(denied) && (await File.ReadAllBytesAsync(denied, TestContext.Current.CancellationToken)).AsSpan().SequenceEqual(settingsBytes);
+                var inputUnchanged = File.Exists(input) && await File.ReadAllTextAsync(input, TestContext.Current.CancellationToken) == readable;
+                consequences = $"allowedExists={File.Exists(Path.Combine(working, "allowed.txt"))}; renameBeforeExists={File.Exists(Path.Combine(working, "rename-before.txt"))}; renameAfterExists={File.Exists(Path.Combine(working, "rename-after.txt"))}; settingsUnchanged={settingsUnchanged}; inputUnchanged={inputUnchanged}";
+            }
+            var failure = $"The real Windows path consumer exited with {code} (0x{unchecked((uint)code):x8}); {consequences}; stdoutLength={stdout.Length}; stderr={diagnostic[..Math.Min(diagnostic.Length, 2048)]}";
             Assert.True(code == 0, failure);
             Assert.True(stdout.Contains("read-complete:readable/second-readable-line/last-readable-line", StringComparison.Ordinal), failure);
             Assert.True(stderr.Contains("diagnostic", StringComparison.Ordinal), failure);
+            Assert.True(!File.Exists(Path.Combine(working, "rename-before.txt")), failure);
+            Assert.True(!File.Exists(Path.Combine(working, "rename-after.txt")), failure);
         }
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")).Trim());
         Assert.Equal(settingsBytes, File.ReadAllBytes(denied));
