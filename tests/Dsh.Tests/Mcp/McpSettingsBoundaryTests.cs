@@ -26,13 +26,16 @@ public sealed class McpSettingsBoundaryTests
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, fixture.Root);
         var output = Path.Combine(fixture.Root, "mcp-output");
+        var initialSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
         await Connect(service);
         var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
         Assert.False(permitted.IsError, Text(permitted));
+        Assert.Equal("workspace 中文", Text(permitted));
         Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
         var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
-        Assert.True(denied.IsError);
-        Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
+        var currentSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
+        Assert.Equal(initialSettings, currentSettings);
+        Assert.True(denied.IsError, "The owned MCP server reported success for the protected settings write.");
     }
 
     [Fact(Timeout = 60000)]
@@ -114,6 +117,7 @@ public sealed class McpSettingsBoundaryTests
         await Connect(service);
         var result = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "stdio 中文" }, TestContext.Current.CancellationToken);
         Assert.False(result.IsError, Text(result));
+        Assert.Equal("stdio 中文", Text(result));
         Assert.Equal("stdio 中文", await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
     }
 

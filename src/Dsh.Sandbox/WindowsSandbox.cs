@@ -72,8 +72,9 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             WindowsNative.ProcessInformation information;
             try
             {
+                // Keep the canonical DOS working directory: cmd treats a forced extended-length prefix as UNC and changes directories.
                 Check(WindowsNative.CreateProcess(WindowsNative.PathForNative(policy.Executable), command, 0, 0, true,
-                    0x00000004 | 0x00000400 | 0x00080000 | DetachedProcess, environment, WindowsNative.PathForNative(policy.WorkingDirectory), ref startup, out information), "create the suspended AppContainer process");
+                    0x00000004 | 0x00000400 | 0x00080000 | DetachedProcess, environment, policy.WorkingDirectory, ref startup, out information), "create the suspended AppContainer process");
             }
             finally { Marshal.FreeHGlobal(environment); }
             process = new SafeFileHandle(information.Process, ownsHandle: true);
