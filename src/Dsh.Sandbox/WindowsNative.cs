@@ -8,6 +8,7 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal static class WindowsNative
 {
+    internal static readonly string[] NetworkCapabilities = ["S-1-15-3-1", "S-1-15-3-2", "S-1-15-3-3"];
     [StructLayout(LayoutKind.Sequential)]
     internal struct SecurityAttributes { public int Length; public nint Descriptor; [MarshalAs(UnmanagedType.Bool)] public bool Inherit; }
     [StructLayout(LayoutKind.Sequential)]
@@ -99,6 +100,8 @@ internal static class WindowsNative
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string descriptor, uint revision, out nint converted, out uint size);
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetSecurityDescriptorSacl(nint descriptor, [MarshalAs(UnmanagedType.Bool)] out bool present, out nint sacl, [MarshalAs(UnmanagedType.Bool)] out bool defaulted);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetSecurityDescriptorControl(nint descriptor, out ushort control, out uint revision);
     [DllImport("ntdll.dll")]
     internal static extern int RtlGetLastNtStatus();
 }

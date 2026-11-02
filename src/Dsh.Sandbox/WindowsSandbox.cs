@@ -292,7 +292,6 @@ internal sealed class WindowsSandbox : ISandboxLifetime
 
     private sealed class ProcessAttributes : IDisposable
     {
-        private static readonly string[] NetworkCapabilities = ["S-1-15-3-1", "S-1-15-3-2", "S-1-15-3-3"];
         public nint List { get; private set; }
         private readonly List<nint> _allocations = [];
         private readonly List<nint> _sids = [];
@@ -309,7 +308,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
                 var capabilities = new WindowsNative.SecurityCapabilities { Sid = sid };
                 if (network)
                 {
-                    var values = NetworkCapabilities;
+                    var values = WindowsNative.NetworkCapabilities;
                     capabilities.Capabilities = Allocate(values.Length * sizeof(WindowsNative.SidAndAttributes));
                     capabilities.CapabilityCount = (uint)values.Length;
                     for (var index = 0; index < values.Length; index++)
