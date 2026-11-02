@@ -24,7 +24,7 @@ public sealed class McpSettingsBoundaryTests
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
+        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var output = Path.Combine(fixture.Root, "mcp-output");
         var initialSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
         await Connect(service);
@@ -35,7 +35,7 @@ public sealed class McpSettingsBoundaryTests
         var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
         var currentSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
         Assert.Equal(initialSettings, currentSettings);
-        Assert.True(denied.IsError, "The owned MCP server reported success for the protected settings write.");
+        Assert.True(denied.IsError, $"The owned MCP server reported success for the protected settings write. Output: {Text(denied)}");
     }
 
     [Fact(Timeout = 60000)]
@@ -45,7 +45,7 @@ public sealed class McpSettingsBoundaryTests
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
+        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var ledger = Path.Combine(fixture.Root, "mcp-once");
         await Connect(service);
         var result = await Execute(tools, "mutate_then_exit", new { path = ledger }, TestContext.Current.CancellationToken)
@@ -62,7 +62,7 @@ public sealed class McpSettingsBoundaryTests
         using var fixture = ProtectedFixture();
         await SandboxTestBackend.RequireAsync();
         var tools = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
+        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var marker = Path.Combine(fixture.Root, "mcp-ready");
         await Connect(service);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -113,7 +113,7 @@ public sealed class McpSettingsBoundaryTests
     {
         using var fixture = new Fixture();
         var tools = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
+        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         await Connect(service);
         var result = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "stdio 中文" }, TestContext.Current.CancellationToken);
         Assert.False(result.IsError, Text(result));
@@ -149,7 +149,7 @@ public sealed class McpSettingsBoundaryTests
         await server.StartAsync(TestContext.Current.CancellationToken);
         try
         {
-            await using var service = new McpService(fixture.Context, fixture.Root);
+            await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
             await service.ConnectAsync([new McpServerConfig("owned", "streamable-http",
                 Url: server.Urls.Single() + "/mcp")], TestContext.Current.CancellationToken);
             var status = Assert.Single(service.Status());
@@ -172,7 +172,7 @@ public sealed class McpSettingsBoundaryTests
             Assert.Skip("The unsupported arbitrary-child ownership combination is macOS-specific.");
         using var fixture = new Fixture(sandboxEnabled: true);
         _ = Tools(fixture);
-        await using var service = new McpService(fixture.Context, fixture.Root);
+        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         await service.ConnectAsync([McpResourceServerFixture.ServerConfig("owned", false, "--file-tools")],
             TestContext.Current.CancellationToken);
         var status = Assert.Single(service.Status());

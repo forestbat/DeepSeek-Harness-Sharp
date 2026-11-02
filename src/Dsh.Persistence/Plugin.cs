@@ -50,19 +50,32 @@ public sealed class Plugin(string packageName) : IDshPlugin
             {
                 if (handles.ContainsKey(session.Id))
                     return;
-                // 恢复既有会话时日志已在磁盘上, 只能接管不能重建。
-                handles[session.Id] = persistence.Stat(session.Id) is null
-                    ? Materialize(persistence, session)
-                    : Adopt(persistence, session);
+                // 恢复既有会话时日志已在磁盘上, 只能接管不能重建;
+                // 新会话先只留在内存里, 等第一条真实事件到来才建日志, 避免空会话落出垃圾文件。
+                if (persistence.Stat(session.Id) is not null)
+                    handles[session.Id] = Adopt(persistence, session);
             }
         });
         var eventHandler = ctx.On<SessionEventNotification>(notification =>
         {
             ISessionHandle? handle;
+            var created = false;
+            var session = notification.Session;
             lock (gate)
-                handles.TryGetValue(notification.Session.Id, out handle);
-            handle?.Append([notification.Event]);
-            DeriveTitle(ctx, persistence, notification.Session, notification.Event);
+            {
+                if (!handles.TryGetValue(session.Id, out handle))
+                {
+                    handle = persistence.Stat(session.Id) is null
+                        ? Materialize(persistence, session)
+                        : Adopt(persistence, session);
+                    handles[session.Id] = handle;
+                    created = true;
+                }
+            }
+            // 新建句柄时 Materialize 已经把当时的会话事件全量写入(含本条), 再追加会重复。
+            if (!created)
+                handle!.Append([notification.Event]);
+            DeriveTitle(ctx, persistence, session, notification.Event);
         });
         var flush = ctx.On<SessionFlushNotification>(notification =>
         {

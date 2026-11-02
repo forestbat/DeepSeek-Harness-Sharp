@@ -100,6 +100,20 @@ public class SkillTests
     }
 
     [Fact]
+    public void Plugin_Activates_Without_Resolving_Its_Own_Registry()
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        _ = CommandsService.Register(ctx);
+
+        using var registration = new Dsh.Skills.Plugin("@deepseek-ai/dsh-skill").Apply(ctx, null);
+
+        Assert.NotNull(tools.Get(SkillCatalog.ToolName, new ScopeKey()));
+        Assert.NotNull(ctx.Get<SkillRegistry>(SkillRegistry.ServiceName));
+    }
+
+    [Fact]
     public async Task CatalogTool_Loads_Skill_And_Catalog_Renders()
     {
         var ctx = new Context();
@@ -116,7 +130,7 @@ public class SkillTests
             Source = "test",
             Content = "demo skill instructions",
         });
-        using var catalog = new SkillCatalog(ctx);
+        using var catalog = new SkillCatalog(ctx, skills);
 
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),
@@ -169,7 +183,7 @@ public class SkillTests
             Source = "test",
             Content = "demo skill instructions",
         });
-        using var catalog = new SkillCatalog(ctx);
+        using var catalog = new SkillCatalog(ctx, skills);
 
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),

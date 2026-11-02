@@ -26,10 +26,9 @@ public sealed class SkillCatalog : IDisposable
     private readonly ConditionalWeakTable<Session, CatalogState> _states = new();
     private bool _disposed;
 
-    public SkillCatalog(Context ctx)
+    public SkillCatalog(Context ctx, SkillRegistry registry)
     {
-        _registry = ctx.Get<SkillRegistry>(SkillRegistry.ServiceName)
-            ?? throw new InvalidOperationException("skill catalog requires the skills service");
+        _registry = registry;
         ctx.OnWaterfall<AgentPreStepNotification>(PreStep, new EventOptions { Global = true });
         _tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName, false);
         if (_tools is not null)

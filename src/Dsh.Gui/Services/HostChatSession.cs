@@ -55,12 +55,44 @@ public sealed class HostChatSession : IDisposable
             || !lease.Client.Supports(PluginsProtocol.Capability))
             throw new InvalidOperationException("本机 Host 版本不支持完整 Chat；请升级 dsharp 并重启 Host");
         var info = sessionId is null
-            ? await lease.Client.CreateSessionAsync(cwd, cancellationToken)
+            ? await OpenRecentOrCreateAsync(lease.Client, cwd, cancellationToken)
             : await lease.Client.ResumeSessionAsync(sessionId, cancellationToken);
         var snapshot = await lease.Client.GetSessionSnapshotAsync(info.Id, cancellationToken);
         var chat = new HostChatSession(fleet, MachineSpec.LocalName, HostSessionKinds.Harness, info, snapshot);
         chat.Commands = await lease.Client.SessionEditing.ListSessionCommandsAsync(info.Id, cancellationToken);
         return chat;
+    }
+
+    /** 未显式指定会话时恢复同工作区最近一次会话, 没有可恢复的才新建; 新建的空会话不会立即落盘。 */
+    private static async Task<RemoteSessionSummary> OpenRecentOrCreateAsync(
+        IWorkspaceHost client,
+        string cwd,
+        CancellationToken cancellationToken)
+    {
+        var recent = (await client.ListSessionsAsync(cancellationToken))
+            .Where(session => SameDirectory(session.Cwd, cwd) && session.Summary is { Length: > 0 })
+            .OrderByDescending(session => session.UpdatedAt)
+            .FirstOrDefault();
+        return recent is not null
+            ? await client.ResumeSessionAsync(recent.SessionId, cancellationToken)
+            : await client.CreateSessionAsync(cwd, cancellationToken);
+    }
+
+    private static bool SameDirectory(string? path, string cwd)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(path),
+                Path.GetFullPath(cwd),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     public void Follow()
@@ -279,7 +311,5 @@ public sealed class HostChatSession : IDisposable
         _subscription?.Cancel();
     }
 }
-
-
 
 

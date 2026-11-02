@@ -61,7 +61,10 @@ public sealed class SessionCatalog(Context ctx, FleetWorkspace fleet)
             return cached;
         var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, strict: false);
         // 服务尚未注册时不缓存: 空结果一旦缓存, 之后即使服务就绪也永远看不到历史会话。
-        return persistence is null ? [] : _disk = persistence.List();
+        // EventCount == 0 是还没写过事件的内存会话, 不该出现在历史里; null 表示磁盘日志(未知条数), 要保留。
+        return persistence is null
+            ? []
+            : _disk = [.. persistence.List().Where(snapshot => snapshot.EventCount != 0)];
     }
 
     /** 丢弃磁盘缓存, 下次 Load 重新扫描。会话被删除时调用。 */

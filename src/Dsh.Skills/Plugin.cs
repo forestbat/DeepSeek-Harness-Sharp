@@ -29,8 +29,8 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     private static IDisposable RegisterSkillRegistry(Context ctx, object? config)
     {
-        _ = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
-        return new DisposableBundle(new SkillCatalog(ctx), SkillCommand.Register(ctx));
+        var registry = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
+        return new DisposableBundle(new SkillCatalog(ctx, registry), SkillCommand.Register(ctx));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)

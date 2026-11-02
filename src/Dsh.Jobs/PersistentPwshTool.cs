@@ -42,7 +42,10 @@ public static class PersistentPwshTool
                 "The PowerShell command to run. Relative path is preferred in the command.",
                 "`Select-String`",
                 signal => [subprocess.ResolveExecutable(Executable, null, signal).GetAwaiter().GetResult(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"],
-                WrapCommand),
+                WrapCommand)
+            {
+                IsAvailable = PowerShellCoreProbe.IsAvailable,
+            },
             new PersistentShellSettings(resolved.TimeoutMs, resolved.MaxOutputChars, resolved.Description));
     }
 

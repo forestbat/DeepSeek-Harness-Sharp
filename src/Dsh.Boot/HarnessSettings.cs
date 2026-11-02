@@ -34,6 +34,9 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "mcp")]
     public Dictionary<string, McpServerSettings> McpServers { get; set; } = [];
 
+    [YamlMember(Alias = "tools")]
+    public ToolsSettings? Tools { get; set; }
+
     [YamlMember(Alias = "a2a")]
     public A2aSettings? A2a { get; set; }
 
@@ -590,6 +593,23 @@ public sealed class A2aRemoteSettings
 
     [YamlMember(Alias = "headers")]
     public Dictionary<string, string> Headers { get; set; } = [];
+}
+
+/** 工具集行为: 渐进式披露与其阈值。 */
+public sealed class ToolsSettings
+{
+    public const int DefaultDisclosureThreshold = 8;
+
+    /**
+     * 是否启用渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开。
+     * 模型不一定理解"路由工具"这种约定, 所以默认关闭 —— 所有工具直接可见, 需要省 token 时再打开。
+     */
+    [YamlMember(Alias = "progressive_disclosure")]
+    public bool ProgressiveDisclosure { get; set; }
+
+    /** 启用渐进式披露时, 工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返。 */
+    [YamlMember(Alias = "disclosure_threshold")]
+    public int DisclosureThreshold { get; set; } = DefaultDisclosureThreshold;
 }
 
 public sealed class McpServerSettings

@@ -17,7 +17,8 @@ public static class SessionTitleFromUserMessage
 
     private static string? Shorten(string text)
     {
-        foreach (var line in text.Split('\n'))
+        // 提示词侧注入的 <system-reminder> 不是用户写的内容, 不能变成会话标题。
+        foreach (var line in UserFacingText.StripSystemReminders(text).Split('\n'))
         {
             var collapsed = string.Join(' ', line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             if (collapsed.Length == 0)

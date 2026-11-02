@@ -42,3 +42,21 @@ public interface ISessionPersistence
     void Rename(SessionId id, string title);
     void Delete(SessionId id);
 }
+
+public static class SessionPersistenceMetadata
+{
+    /**
+     * 空会话(还没有任何事件)默认不落盘; 改名是用户明确的动作, 此时先建出只含头的日志再写标题,
+     * 否则标题只活在内存里, 重启后就丢了。
+     */
+    public static void RenameSession(this ISessionPersistence persistence, SessionHeader header, string title)
+    {
+        if (persistence.Stat(header.Id) is null)
+        {
+            // Create 只登记内存待写; 必须 Flush 才会真正把(只有头的)日志写盘。
+            using var handle = persistence.Create(header);
+            handle.Flush();
+        }
+        persistence.Rename(header.Id, title);
+    }
+}

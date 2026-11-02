@@ -517,6 +517,12 @@ plugins:
 #   url:
 #   是否启用
 #   enabled: true
+# 工具集行为
+# tools:
+#   是否启用工具渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开
+#   progressive_disclosure:
+#   工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返
+#   disclosure_threshold:
 # A2A 服务
 # a2a:
 #   是否启用

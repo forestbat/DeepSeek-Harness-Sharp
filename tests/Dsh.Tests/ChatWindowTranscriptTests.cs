@@ -27,6 +27,10 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         using var chat = new ChatWindow(ctx, agent, home);
         chat.DrainUi();
 
+        // 工具调用/结果默认折叠成一个"⚙ bash"折叠头: 展开后再核对内容只出现一次。
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+
         var frame = DrawFrame(chat);
         Assert.Equal(1, Count(frame, "你好世界"));
         Assert.Equal(1, Count(frame, "流式回答甲"));
@@ -54,6 +58,10 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Contains("resumed:", frame);
         Assert.Equal(1, Count(frame, "继续任务丙"));
         Assert.Equal(1, Count(frame, "回答丁"));
+        // 工具结果在折叠头里: 展开后确认回放没有重复。
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        frame = DrawFrame(chat);
         Assert.Equal(1, Count(frame, "工具输出乙"));
     }
 
@@ -325,6 +333,68 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Equal(1, Count(frame, "[交付物]"));
         Assert.Equal(1, Count(frame, $"{report} - 季度报告"));
         Assert.Contains(TranscriptRenderer.DeliverablesHint, frame);
+    }
+
+    /** 工具卡片: 折叠只显示工具名, 展开后显示命令与结果; 长结果只占 20 行, 由滚轮在卡片内滚动。 */
+    [Fact]
+    public async Task ToolCard_FoldsToTheToolName_AndScrollsLongResults()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        var callSeq = agent.Session.Seq;
+        var callId = ToolCallId.Create("call-long");
+        agent.Session.Append(new ToolCallPayload(1, 1, callId, "bash", """{"command":"seq 1 45"}"""));
+        agent.Session.Append(
+            new ToolResultPayload(1, 1, MessageFactory.CreateToolResultMessage(
+                callId,
+                [new TextBlock(string.Join('\n', Enumerable.Range(1, 45).Select(index => $"page-row-{index:D2}")))],
+                false)),
+            new SurfaceOp.Append(),
+            [callSeq]);
+        chat.DrainUi();
+
+        var collapsed = DrawFrame(chat);
+        Assert.Contains("⚙ bash", collapsed);
+        Assert.DoesNotContain("seq 1 45", collapsed);
+        Assert.DoesNotContain("page-row-01", collapsed);
+
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+
+        var expanded = DrawFrame(chat);
+        Assert.Contains("seq 1 45", expanded);
+        Assert.Contains("page-row-01", expanded);
+        Assert.Contains($"第 1-{DiffCardDisplay.PageLines} 行 / 共 ", expanded);
+        Assert.DoesNotContain($"page-row-{DiffCardDisplay.PageLines + 5:D2}", expanded);
+
+        // 指针停在卡片里滚轮下滚: 卡片内容滚动, 整篇记录的滚动位置不变。
+        var layout = LayoutEngine.Calculate(120, 40);
+        var headerRow = RowOf(expanded, "seq 1 45");
+        var offsetBefore = chat.InputPane.ScrollOffset;
+        chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        var scrolled = DrawFrame(chat);
+
+        Assert.Equal(offsetBefore, chat.InputPane.ScrollOffset);
+        Assert.DoesNotContain("page-row-01", scrolled);
+        Assert.DoesNotContain("第 1-", scrolled);
+
+        // 继续滚到末尾后, 再滚一格交给整篇记录(不会卡死在卡片上)。
+        for (var step = 0; step < 20; step++)
+            chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        var tail = DrawFrame(chat);
+        Assert.Contains("page-row-45", tail);
+        chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        Assert.NotEqual(offsetBefore, chat.InputPane.ScrollOffset);
+    }
+
+    private static int RowOf(string frame, string needle)
+    {
+        var rows = frame.Split('\n');
+        for (var index = 0; index < rows.Length; index++)
+            if (rows[index].Contains(needle, StringComparison.Ordinal))
+                return index;
+        throw new InvalidOperationException($"row \"{needle}\" not found");
     }
 
     private async Task<(Context Ctx, AgentLoopAgent Agent, HarnessHome Home)> CreateAgent()

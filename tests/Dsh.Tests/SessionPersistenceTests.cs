@@ -389,6 +389,27 @@ public class SessionPersistenceTests : IDisposable
         Assert.Throws<SessionHandleClosedException>(() => reader.Read());
     }
 
+    /** 工具分组的展开状态要能落盘: 重开日志后仍是同一条记录, 不是未知事件。 */
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void RoundTrip_ToolDisclosure(JsonlCompression compression)
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        session.Append(new ToolDisclosedPayload("mcp:rider"));
+        var handle = persistence.Create(session.Header);
+        handle.Append(session.SnapshotEvents());
+        handle.Close();
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        var disclosed = Assert.IsType<ToolDisclosedPayload>(
+            Assert.Single(reader.Read(), item => item.Data is ToolDisclosedPayload).Data);
+
+        Assert.Equal("mcp:rider", disclosed.Group);
+    }
+
     [Fact]
     public void Open_MissingSession_ThrowsNotFound()
     {

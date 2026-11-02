@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -15,7 +16,7 @@ public sealed class DiffView : UserControl
         AvaloniaProperty.Register<DiffView, DiffCard?>(nameof(Card));
 
     public static readonly StyledProperty<bool> IsCardExpandedProperty =
-        AvaloniaProperty.Register<DiffView, bool>(nameof(IsCardExpanded), defaultValue: true);
+        AvaloniaProperty.Register<DiffView, bool>(nameof(IsCardExpanded), defaultValue: false);
 
     /** 在卡片展开态改变前冒泡, 供消息列表固定卡片位置。 */
     public static readonly RoutedEvent<RoutedEventArgs> CardToggleRequestedEvent =
@@ -30,6 +31,20 @@ public sealed class DiffView : UserControl
     private const double CharWidthGuess = 7;
     private const string MonoFontFallback = "Consolas, monospace";
 
+    /** 卡片内折叠按钮的名字: 卡片里还有滚动条按钮, 测试与自动化按名字定位它。 */
+    public const string ChevronName = "DiffChevron";
+
+    /** 展开后的行区域视口: 固定最多 VisibleLines 行高, 超出靠内层滚动条/滚轮查看。 */
+    public ScrollViewer BodyViewport => _body;
+
+    private const int VisibleLines = DiffCardDisplay.PageLines;
+
+    /** 固定行高: 滚动窗口正好容纳 VisibleLines 行, 不随字形度量浮动。 */
+    private const double LineHeight = 19;
+
+    /** 渲染上限: 超大 diff 只渲染前若干行并补一行省略提示, 避免一次建出上万个 TextBlock。 */
+    private const int MaxRenderedLines = 400;
+
     private static readonly IBrush AddBackground = new SolidColorBrush(Color.FromArgb(0x2E, 0x2E, 0xA0, 0x43));
     private static readonly IBrush DeleteBackground = new SolidColorBrush(Color.FromArgb(0x2E, 0xF8, 0x51, 0x49));
     private static readonly IBrush AddedBrush = new SolidColorBrush(Color.FromRgb(0x3F, 0xB9, 0x50));
@@ -39,14 +54,22 @@ public sealed class DiffView : UserControl
 
     private readonly StackPanel _root = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
     private readonly StackPanel _lines = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
+    private readonly ScrollViewer _body = new()
+    {
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+        MaxHeight = VisibleLines * LineHeight,
+    };
     private TextBlock? _chevron;
     private readonly FontFamily _monoFont = FontFamily.Parse(MonoFontFallback);
     private DiffCard? _renderedCard;
     private DiffCard? _pendingCard;
+    private DiffCard? _builtCard;
     private bool _rebuildPosted;
 
     public DiffView()
     {
+        _body.Content = _lines;
         Content = new Border
         {
             Background = CardBackground,
@@ -84,10 +107,11 @@ public sealed class DiffView : UserControl
         {
             _root.Children.Clear();
             _lines.Children.Clear();
+            _builtCard = null;
             if (card is not null)
             {
                 _root.Children.Add(BuildHeader(card));
-                _root.Children.Add(_lines);
+                _root.Children.Add(_body);
                 ApplyExpanded();
             }
         }
@@ -109,22 +133,45 @@ public sealed class DiffView : UserControl
         _renderedCard = card;
         _root.Children.Clear();
         _lines.Children.Clear();
+        _builtCard = null;
         if (card is null)
             return;
+        // 默认折叠: 只建标题栏, 行内容等用户展开时才建, 不会先铺满整段再收起。
         _root.Children.Add(BuildHeader(card));
-        var numberWidth = NumberWidth(card.Lines);
-        foreach (var line in card.Lines)
-            _lines.Children.Add(BuildLine(line, numberWidth));
-        _root.Children.Add(_lines);
+        _root.Children.Add(_body);
         ApplyExpanded();
     }
 
-    /** 卡片内 chevron: 折叠只隐藏 diff 行, 标题栏与计数始终可见。 */
+    /** 卡片内 chevron: 折叠只隐藏 diff 行, 标题栏与计数始终可见; 行内容按需构建一次。 */
     private void ApplyExpanded()
     {
         if (_chevron is not null)
             _chevron.Text = IsCardExpanded ? "▾" : "▸";
-        _lines.IsVisible = IsCardExpanded;
+        _body.IsVisible = IsCardExpanded;
+        if (IsCardExpanded && _renderedCard is { } card && !ReferenceEquals(_builtCard, card))
+            BuildLines(card);
+    }
+
+    /** 展开态最多渲染 MaxRenderedLines 行, 其余靠内层滚动条查看; 视口固定 VisibleLines 行高。 */
+    private void BuildLines(DiffCard card)
+    {
+        _lines.Children.Clear();
+        var display = DiffCardDisplay.ForDisplay(card);
+        var numberWidth = NumberWidth(display);
+        var shown = Math.Min(display.Count, MaxRenderedLines);
+        for (var index = 0; index < shown; index++)
+            _lines.Children.Add(BuildLine(display[index], numberWidth));
+        if (display.Count > shown)
+        {
+            _lines.Children.Add(new TextBlock
+            {
+                Text = $"… 其余 {display.Count - shown} 行请在卡片内滚动查看",
+                FontSize = CaptionFontSize,
+                Foreground = LineNumberBrush,
+                Height = LineHeight,
+            });
+        }
+        _builtCard = card;
     }
 
     private Control BuildHeader(DiffCard card)
@@ -133,6 +180,7 @@ public sealed class DiffView : UserControl
         _chevron = new TextBlock { FontSize = CaptionFontSize, VerticalAlignment = VerticalAlignment.Center };
         var toggle = new Button
         {
+            Name = ChevronName,
             Content = _chevron,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
@@ -159,6 +207,7 @@ public sealed class DiffView : UserControl
         var grid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
+            Height = LineHeight,
             Background = line.Kind switch
             {
                 DiffLineKind.Add => AddBackground,
@@ -173,7 +222,7 @@ public sealed class DiffView : UserControl
             Text = line.Text.Length == 0 ? " " : line.Text,
             FontFamily = _monoFont,
             FontSize = BodyFontSize,
-            TextWrapping = TextWrapping.Wrap,
+            TextWrapping = TextWrapping.NoWrap,
         };
         Grid.SetColumn(text, 2);
         grid.Children.Add(text);

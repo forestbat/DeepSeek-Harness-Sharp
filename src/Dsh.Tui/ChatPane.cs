@@ -62,7 +62,7 @@ public sealed class ChatPane : ITuiPane
     private List<string>? _wrapCacheLines;
     private int _wrapProcessedLine;
     private readonly List<VisualRow> _visualRows = [];
-    private readonly List<(int Start, int End, bool Collapsed)> _foldSnapshot = [];
+    private readonly List<(int Start, int End, bool Collapsed, int Scroll)> _foldSnapshot = [];
 
     public ChatPane(ChatWindow window, int id, AgentLoopAgent agent)
     {
@@ -1850,11 +1850,48 @@ public sealed class ChatPane : ITuiPane
         return true;
     }
 
-    /** 键盘(Enter)与鼠标点击共用同一切换入口。 */
+    /** 键盘(Enter)与鼠标点击共用同一切换入口: 展开 → 逐页翻 → 收起。 */
     public void ToggleFold(TranscriptFold fold)
     {
-        fold.Collapsed = !fold.Collapsed;
+        if (fold.Collapsed)
+        {
+            fold.Collapsed = false;
+            fold.Scroll = 0;
+        }
+        else if (fold.Paged && fold.Scroll + DiffCardDisplay.PageLines < fold.Lines)
+        {
+            fold.Scroll += DiffCardDisplay.PageLines;
+        }
+        else
+        {
+            fold.Collapsed = true;
+            fold.Scroll = 0;
+        }
         Renderer.BumpVersion();
+    }
+
+    /**
+     * 滚轮落在某个已展开的长折叠里时就滚折叠本身, 不再带动整篇记录。
+     * 到边界后返回 false, 让滚轮继续滚正文(用户不会觉得滚轮"卡住")。
+     */
+    public bool ScrollFoldAt(float delta, int cellY, ConsoleRect rect)
+    {
+        if (Math.Abs(delta) < float.Epsilon)
+            return false;
+        var wrappedIndex = ScrollOffset + (cellY - rect.Y);
+        if (wrappedIndex < 0 || SourceOffsetAt(wrappedIndex) is not { } offset)
+            return false;
+        var fold = Renderer.Folds.FirstOrDefault(candidate =>
+            !candidate.Collapsed && candidate.Paged && candidate.Start <= offset && offset < candidate.End);
+        if (fold is null)
+            return false;
+        var maxScroll = Math.Max(0, fold.Lines - DiffCardDisplay.PageLines);
+        var target = Math.Clamp(fold.Scroll - _wheel.Scroll(delta), 0, maxScroll);
+        if (target == fold.Scroll)
+            return false;
+        fold.Scroll = target;
+        Renderer.BumpVersion();
+        return true;
     }
 
     /** 视觉行 > 源偏移: rows 的 FlatStart 升序, 二分找最后一个不超过 wrappedIndex 的行。 */
@@ -1931,7 +1968,7 @@ public sealed class ChatPane : ITuiPane
             for (var index = 0; index < folds.Count; index++)
             {
                 var fold = folds[index];
-                if (index < _foldSnapshot.Count && _foldSnapshot[index] == (fold.Start, fold.End, fold.Collapsed))
+                if (index < _foldSnapshot.Count && _foldSnapshot[index] == (fold.Start, fold.End, fold.Collapsed, fold.Scroll))
                     continue;
                 if (index >= _foldSnapshot.Count && !fold.Collapsed)
                     continue;
@@ -1960,6 +1997,40 @@ public sealed class ChatPane : ITuiPane
         {
             var lineStart = lineIndex < lines.Count ? starts[lineIndex] : tailStart;
             var raw = lineIndex < lines.Count ? lines[lineIndex] : tail;
+            var expanded = FindExpandedFold(folds, lineStart);
+            if (expanded is not null)
+            {
+                var endLine = LineIndexOf(starts, lines.Count, tailStart, expanded.End);
+                var foldLines = Math.Max(0, endLine - lineIndex);
+                expanded.Lines = foldLines;
+                var pageCount = !expanded.Paged
+                    ? 1
+                    : Math.Max(1, (foldLines + DiffCardDisplay.PageLines - 1) / DiffCardDisplay.PageLines);
+                expanded.PageCount = pageCount;
+                var maxScroll = expanded.Paged ? Math.Max(0, foldLines - DiffCardDisplay.PageLines) : 0;
+                expanded.Scroll = Math.Clamp(expanded.Scroll, 0, maxScroll);
+                if (expanded.Paged && foldLines > DiffCardDisplay.PageLines)
+                {
+                    var last = Math.Min(foldLines, expanded.Scroll + DiffCardDisplay.PageLines);
+                    AddRow(expanded.Start,
+                        $"{expanded.Preview} [第 {expanded.Scroll + 1}-{last} 行 / 共 {foldLines} 行]  (滚轮滚动, 点击翻页)",
+                        width);
+                }
+                var bodyStart = expanded.Paged ? lineIndex + expanded.Scroll : lineIndex;
+                var bodyEnd = expanded.Paged ? Math.Min(endLine, bodyStart + DiffCardDisplay.PageLines) : endLine;
+                for (var pageLine = bodyStart; pageLine < bodyEnd; pageLine++)
+                {
+                    var pageStartOffset = pageLine < lines.Count ? starts[pageLine] : tailStart;
+                    var pageContent = pageLine < lines.Count ? lines[pageLine] : tail;
+                    if (pageContent.EndsWith('\r'))
+                        pageContent = pageContent[..^1];
+                    if (expanded.Paged && pageLine == bodyStart && expanded.Scroll == 0 && pageCount > 1)
+                        pageContent = $"{pageContent} [1/{pageCount}]";
+                    AddRow(pageStartOffset, pageContent, width);
+                }
+                lineIndex = endLine;
+                continue;
+            }
             var fold = FindCollapsedFold(folds, lineStart);
             if (fold is not null)
             {
@@ -2019,6 +2090,17 @@ public sealed class ChatPane : ITuiPane
         return outermost;
     }
 
+    /** 展开态的 fold 只渲染当前页; 折叠头所在的源偏移按 fold.Start 命中。 */
+    private static TranscriptFold? FindExpandedFold(IReadOnlyList<TranscriptFold> folds, int position)
+    {
+        foreach (var fold in folds)
+        {
+            if (!fold.Collapsed && fold.Start == position && fold.End > fold.Start)
+                return fold;
+        }
+        return null;
+    }
+
     private static int LowerBoundRow(List<VisualRow> rows, int sourceStart)
     {
         var low = 0;
@@ -2046,7 +2128,7 @@ public sealed class ChatPane : ITuiPane
     {
         _foldSnapshot.Clear();
         foreach (var fold in folds)
-            _foldSnapshot.Add((fold.Start, fold.End, fold.Collapsed));
+            _foldSnapshot.Add((fold.Start, fold.End, fold.Collapsed, fold.Scroll));
     }
 
     internal static void WrapSingleLine(string line, int width, List<string> output)
