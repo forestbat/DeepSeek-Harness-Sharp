@@ -422,6 +422,9 @@ public sealed class PluginSandboxIntegrationTests
         var stage = approvals.Length == 0 ? "before-approval" : audits.Length == 0 ? "approval-without-audit" : "audit-recorded";
         TestContext.Current.TestOutputHelper?.WriteLine(
             $"plugin-add stage={stage} error={errorCategory} approvals={approvals.Length} decisions={decisions.Length} audits={audits.Length} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
+        if (failure?.Error.Message is { } startupFailure
+            && startupFailure.StartsWith("The isolated worker startup was cancelled (", StringComparison.Ordinal))
+            TestContext.Current.TestOutputHelper?.WriteLine($"plugin-add {startupFailure}");
 
         Assert.Equal(!allowed, result.IsError);
         fixture.AssertNoMainExecution();
