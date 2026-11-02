@@ -68,6 +68,9 @@ public sealed class MessageSelectionTests
             new(DiffLineKind.Delete, 2, null, "删除的一行改动"),
         };
         message.SetDiff(new DiffCard("文件.cs", "", lines));
+        // diff 卡片默认折叠, 选中行为要在用户展开后的卡片上验证。
+        message.IsExpanded = true;
+        message.IsDiffExpanded = true;
         await using var scene = await SelectionScene.CreateAsync(message);
         var block = Assert.Single(scene.TextBlocks, candidate => TextOf(candidate).Contains("新增的一行改动", StringComparison.Ordinal));
         SelectFirstLine(scene, block);

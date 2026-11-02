@@ -17,6 +17,10 @@ public sealed partial class ChatView : UserControl
     private const double StickyTolerance = 24;
     private const double AnchorTolerance = 0.5;
     private const int MaxAnchorPasses = 4;
+
+    /** 一格滚轮在内层滚动区域里滚动的像素数(与常见 3 行文本高度相当)。 */
+    private const double NestedWheelStepPixels = 60;
+
     private const RoutingStrategies ScrollInputRoutes = RoutingStrategies.Tunnel | RoutingStrategies.Bubble;
 
     private MainViewModel? _viewModel;
@@ -31,7 +35,7 @@ public sealed partial class ChatView : UserControl
     private double _anchorTop;
     private int _anchorPasses;
     private bool _anchorRealizePosted;
-    private RoutedEventArgs? _scrollInput;
+    private bool _draggingThumb;
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _subagentFlyout;
@@ -42,11 +46,27 @@ public sealed partial class ChatView : UserControl
         DataContextChanged += OnDataContextChanged;
         InputBox.PropertyChanged += OnInputBoxPropertyChanged;
         MessageList.AddHandler(ScrollViewer.ScrollChangedEvent, OnScrollChanged);
+        // 卡片/结果里的内层滚动优先吃掉滚轮: 否则同一手势会同时滚动内层和消息列表, 表现为内容乱跳。
+        MessageList.AddHandler(
+            InputElement.PointerWheelChangedEvent,
+            OnNestedWheel,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         MessageList.AddHandler(InputElement.PointerWheelChangedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
         MessageList.AddHandler(InputElement.KeyDownEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
         MessageList.AddHandler(InputElement.PointerPressedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
         MessageList.AddHandler(InputElement.PointerMovedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
         MessageList.AddHandler(InputElement.PointerReleasedEvent, OnScrollInput, ScrollInputRoutes, handledEventsToo: true);
+        MessageList.AddHandler(
+            Thumb.DragStartedEvent,
+            (_, _) => _draggingThumb = true,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        MessageList.AddHandler(
+            Thumb.DragCompletedEvent,
+            (_, _) => _draggingThumb = false,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         MessageList.PropertyChanged += (_, change) =>
@@ -130,6 +150,40 @@ public sealed partial class ChatView : UserControl
         }
     }
 
+    private RoutedEventArgs? _scrollInput;
+
+    /** 滚轮落在消息里的内层滚动区域(工具长结果、diff 卡片)时, 由内层消费, 不再带动整个消息列表。 */
+    private void OnNestedWheel(object? sender, PointerWheelEventArgs e)
+    {
+        if (e.Handled || MessageList.Scroll is not ScrollViewer outer)
+            return;
+        var inner = InnermostScrollViewer(e.Source as Visual, outer);
+        if (inner is null)
+            return;
+        var maximum = Math.Max(0, inner.Extent.Height - inner.Viewport.Height);
+        if (maximum <= 0)
+            return;
+        var step = e.Delta.Y * NestedWheelStepPixels;
+        var target = Math.Clamp(inner.Offset.Y - step, 0, maximum);
+        if (Math.Abs(target - inner.Offset.Y) < 1)
+            return;
+        inner.Offset = new Vector(inner.Offset.X, target);
+        e.Handled = true;
+    }
+
+    /** 从事件源向上找第一个滚动视口; 命中消息列表本身说明没有内层, 交给默认行为。 */
+    private static ScrollViewer? InnermostScrollViewer(Visual? source, ScrollViewer outer)
+    {
+        for (var visual = source; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is not ScrollViewer scroll)
+                continue;
+            return ReferenceEquals(scroll, outer) ? null : scroll;
+        }
+        return null;
+    }
+
+    /** 用户输入产生的位置变化才改判跟随意图; 程序/布局引起的位置变化不动它。 */
     private void OnScrollInput(object? sender, RoutedEventArgs e) =>
         _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
 
@@ -158,26 +212,23 @@ public sealed partial class ChatView : UserControl
             return;
         // 用户重新滚动时放弃折叠对齐, 不与其滚动意图抢位置。
         ClearAnchor();
-        var previous = change.GetOldValue<Vector>().Y;
-        var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
-        // A smaller scroll range can clamp the offset without the reader scrolling.
-        if (scroll.Offset.Y < Math.Min(previous, maximum) || !_sticky)
-            _sticky = scroll.Offset.Y >= maximum - StickyTolerance;
+        _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
     }
 
-    /** Follow layout growth only while pinned; scrolling can leave or rejoin the tail. */
+    /** 跟随中随内容增长贴合末尾; 用户停在中途时一帧都不动, 阅读位置因此保持稳定。 */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
         if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
-        // Preserve pinned intent through growth after immediate offset intent was observed.
+        // 内容增长不改判跟随意图, 否则流式输出时跟随会被自己关掉(表现为来回跳)。
         if (!layoutChanged || !_sticky)
             _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
         // 折叠引起的高度变化不能触发触底跟随, 否则用户刚操作的消息会被甩出视口。
         if (!layoutChanged)
             _scrollGeneration++;
-        if (layoutChanged && _sticky && !ReferenceEquals(_anchorList, MessageList))
+        // 拖动滚动条期间一帧都不许自动滚, 否则会和用户的拖动抢位置。
+        if (layoutChanged && _sticky && _anchorList is null && !_draggingThumb)
             scroll.ScrollToEnd();
     }
 

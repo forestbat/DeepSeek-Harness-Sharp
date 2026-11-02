@@ -29,6 +29,7 @@ public static class ConfigBoot
         ctx.SetOwn("credentials", credentials);
         ctx.SetOwn("harnessOptions", options with { Home = home });
         ctx.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(ctx, settings.Network));
+        ctx.SetOwn(ToolDisclosureSwitch.PropName, settings.Tools?.ProgressiveDisclosure ?? false);
         _ = new ToolResultSpill(ctx, settings.Storage?.ToolResults is { } toolResults
             ? new ToolResultSpillOptions(toolResults.MaxBytes)
             : null);

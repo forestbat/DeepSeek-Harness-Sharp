@@ -38,6 +38,8 @@ public static class SessionEventCodec
         Register<AssistantMessagePayload>(SessionEventTypes.AssistantMessage);
         Register<ToolCallPayload>(SessionEventTypes.ToolCall);
         Register<ToolResultPayload>(SessionEventTypes.ToolResult);
+        // 未知该类型的旧版本跳过它即可(不隐藏任何工具), 所以可以标注 ignorable。
+        Register<ToolDisclosedPayload>(SessionEventTypes.ToolDisclosed, ignorable: true);
         Register<FileChangedPayload>(SessionEventTypes.FileChanged, ignorable: true);
         Register<SettingsMutationAuditPayload>(SettingsMutationAuditPayload.EventType);
         Register<SafetyDecisionAuditPayload>(SafetyDecisionAuditPayload.EventType, ignorable: true);

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Collections.Concurrent;
 using Dsh.Runtime;
 using Dsh.Llm;
 
@@ -46,6 +47,17 @@ public sealed class ToolRuntime : Service
 {
     public const string ServiceName = "tools";
 
+    /** 路由工具名: 组内工具在展开前不可见, 模型先用它拿到某个组的工具清单。 */
+    public const string RouterToolName = "tool_router";
+
+    /** settings.yaml 的 tools.progressive_disclosure 通过 ToolDisclosureSwitch.Context 属性传进来; 缺省关闭。 */
+    private readonly bool _progressiveDisclosure;
+
+    private readonly ConcurrentDictionary<string, byte> _disclosedGroups = new(StringComparer.Ordinal);
+
+    /** 已从会话历史同步过展开状态(每个会话一次)。 */
+    private readonly ConcurrentDictionary<string, byte> _hydratedSessions = new(StringComparer.Ordinal);
+
     /** 一条工具注册:definition 携带的最终名字(重名消解后)与注册来源包名(null = Apply 之外注册,归属未知)。 */
     private sealed record ToolEntry(ToolDefinition Definition, string? Owner, Guid RegistrationId);
 
@@ -76,10 +88,12 @@ public sealed class ToolRuntime : Service
 
     public ToolRuntime(Context ctx) : base(ctx, ServiceName)
     {
+        _progressiveDisclosure = ctx.GetProp(ToolDisclosureSwitch.PropName) is true;
         _layers = new ScopedLayers<ToolLayer>(scope => new ToolLayer(scope), () => ctx.Emit(new ToolChangeNotification()));
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
-        systemPrompt.Tools(context => WireSchemas(context.Scope));
+        systemPrompt.Tools(WireSchemas);
+        Register(RouterDefinition());
     }
 
     public IDisposable Register(ToolDefinition definition) => Register(definition, null);
@@ -132,6 +146,8 @@ public sealed class ToolRuntime : Service
                             FileIntent = definition.FileIntent,
                             FilePaths = definition.FilePaths,
                             UsesScriptPermissions = definition.UsesScriptPermissions,
+                            Disclosure = definition.Disclosure,
+                            IsAvailable = definition.IsAvailable,
                             WriteTargets = definition.WriteTargets,
                         }, owner, registrationId);
                     layer.Tools.Insert(registeredName, entry);
@@ -254,17 +270,181 @@ public sealed class ToolRuntime : Service
 
     public IReadOnlyList<ToolSchema> Schemas(ScopeKey? scope = null)
         => View(scope).Visible.Values
+            // 平台能力不满足的工具(如 Windows 上的 bash)任何界面都不暴露, 内部调用仍可按名执行。
+            .Where(definition => definition.IsAvailable?.Invoke() != false)
             .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
             .ToList();
 
-    private ToolProviderResult WireSchemas(ScopeKey? scope)
+    /** 只暴露未分组的工具与已展开组的工具; 存在未展开组时同时暴露路由工具。 */
+    private ToolProviderResult WireSchemas(AssembleContext context)
     {
-        var view = View(scope);
+        var view = View(context.Scope);
+        HydrateDisclosures(context.Agent?.Session);
+        var session = SessionKeyOf(context.Agent);
         var schemas = view.Visible.Values
+            .Where(definition => Visible(definition, session, context.Scope))
             .Select(definition => new ToolSchema(definition.Name, definition.Description, definition.Parameters))
             .ToList();
         return new ToolProviderResult(schemas, [.. view.KnownNames]);
     }
+
+    /**
+     * 从会话历史恢复展开过的分组: 上下文里已有该组的工具调用/结果, 重启进程后若这些工具又消失,
+     * 模型看到的就是断裂的对话。每个会话只扫一次, 之后由 Disclose 增量维护。
+     */
+    private void HydrateDisclosures(Session? session)
+    {
+        if (session is null)
+            return;
+        var key = session.Header.Id.Value;
+        if (!_hydratedSessions.TryAdd(key, 0))
+            return;
+        foreach (var sessionEvent in session.SnapshotEvents())
+            if (sessionEvent.Data is ToolDisclosedPayload disclosed)
+                _disclosedGroups[GroupKey(key, disclosed.Group)] = 0;
+    }
+
+    private static string SessionKeyOf(IAgent? agent)
+        => agent is null ? "" : agent.Session.Header.Id.Value;
+
+    private bool Visible(ToolDefinition definition, string session, ScopeKey? scope)
+    {
+        if (definition.IsAvailable?.Invoke() == false)
+            return false;
+        // 未启用渐进式披露: 不分组、不出现路由工具, 所有工具直接可见。
+        if (!_progressiveDisclosure)
+            return definition.Name != RouterToolName;
+        // 路由工具只在确有未展开的分组时才出现: 没有分组就没有额外 schema 开销。
+        if (definition.Name == RouterToolName)
+            return HasUndisclosedGroups(scope, session);
+        return definition.Disclosure is not { } disclosure
+               || disclosure.DefaultVisible
+               || _disclosedGroups.ContainsKey(GroupKey(session, disclosure.Group));
+    }
+
+    private bool HasUndisclosedGroups(ScopeKey? scope, string session)
+        => Groups(scope).Any(group => !_disclosedGroups.ContainsKey(GroupKey(session, group.Name)));
+
+    private static string GroupKey(string session, string group) => $"{session}\u0000{group}";
+
+    /** 当前 scope 里所有分组(名字, 说明, 工具数), 供路由工具列出。 */
+    public IReadOnlyList<ToolGroupInfo> Groups(ScopeKey? scope)
+        => [.. View(scope).Visible.Values
+            .Where(definition => definition.Disclosure is not null && definition.IsAvailable?.Invoke() != false)
+            .GroupBy(definition => definition.Disclosure!.Group, StringComparer.Ordinal)
+            .Select(grouping => new ToolGroupInfo(
+                grouping.Key,
+                grouping.First().Disclosure!.Summary,
+                grouping.Select(definition => definition.Name).Order(StringComparer.Ordinal).ToList()))];
+
+    public IReadOnlyList<ToolDefinition> GroupTools(string group, ScopeKey? scope)
+        => [.. View(scope).Visible.Values
+            .Where(definition => definition.IsAvailable?.Invoke() != false
+                && string.Equals(definition.Disclosure?.Group, group, StringComparison.Ordinal))
+            .OrderBy(definition => definition.Name, StringComparer.Ordinal)];
+
+    private bool Disclose(string group, ScopeKey? scope, IAgent? agent)
+    {
+        if (Groups(scope).All(candidate => !string.Equals(candidate.Name, group, StringComparison.Ordinal)))
+            return false;
+        // 没有归属会话(直接调用工具运行时)时只在内存里展开, 没有可落盘的目标。
+        if (!_disclosedGroups.TryAdd(GroupKey(SessionKeyOf(agent), group), 0))
+            return true;
+        agent?.Session.Append(new ToolDisclosedPayload(group));
+        Ctx.Emit(new ToolChangeNotification());
+        return true;
+    }
+
+    /**
+     * 路由工具: 无参列出分组, 指定 group 或 query 时展开命中分组并返回其工具清单。
+     * 展开后的工具在下一个请求的 schema 里出现, 同一轮内也能直接按清单调用。
+     */
+    private ToolDefinition RouterDefinition() => new()
+    {
+        Name = RouterToolName,
+        Description =
+            "List and unlock tool groups. Large tool sets (for example each MCP server) are hidden from your tool list "
+            + "until you open their group: call with no arguments to see the groups, then call again with "
+            + "{\"group\": \"<name>\"} (or {\"query\": \"<keywords>\"} to search) so that group's tools become callable.",
+        Parameters = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["group"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Exact group name from the no-argument listing.",
+                },
+                ["query"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = "Keywords matched against group names, summaries and tool names/descriptions.",
+                },
+            },
+            ["additionalProperties"] = false,
+        },
+        Output = new ToolOutputDefinition(
+            new JsonObject { ["type"] = "object", ["properties"] = new JsonObject { ["text"] = new JsonObject { ["type"] = "string" } } },
+            (_, value) => [new TextBlock(value.TryGetProperty("text", out var text) ? text.GetString() ?? "" : value.GetRawText())]),
+        Execute = (arguments, exec) =>
+        {
+            HydrateDisclosures(exec.Agent?.Session);
+            var scope = exec.Agent?.ScopeKey;
+            var group = arguments.TryGetProperty("group", out var groupValue) ? groupValue.GetString() : null;
+            var query = arguments.TryGetProperty("query", out var queryValue) ? queryValue.GetString() : null;
+            return Task.FromResult<object?>(JsonSerializer.SerializeToElement(new
+            {
+                text = RouterText(scope, exec.Agent, group, query),
+            }));
+        },
+    };
+
+    private string RouterText(ScopeKey? scope, IAgent? agent, string? group, string? query)
+    {
+        var groups = Groups(scope);
+        if (groups.Count == 0)
+            return "no tool groups are registered";
+        if (string.IsNullOrWhiteSpace(group) && string.IsNullOrWhiteSpace(query))
+            return RenderGroups(groups);
+        List<ToolGroupInfo> matched = string.IsNullOrWhiteSpace(group)
+            ? MatchGroups(groups, query!)
+            : groups.Where(candidate => string.Equals(candidate.Name, group, StringComparison.Ordinal)).ToList();
+        if (matched.Count == 0)
+            return $"no group matches {(group is null ? $"query \"{query}\"" : $"\"{group}\"")}; available groups:\n{RenderGroups(groups)}";
+        var builder = new System.Text.StringBuilder();
+        foreach (var candidate in matched)
+        {
+            Disclose(candidate.Name, scope, agent);
+            builder.AppendLine($"group {candidate.Name}: {candidate.Summary}");
+            foreach (var tool in GroupTools(candidate.Name, scope))
+            {
+                builder.AppendLine($"- {tool.Name}: {FirstLine(tool.Description)}");
+                if (tool.Parameters["properties"] is JsonObject properties && properties.Count > 0)
+                    builder.AppendLine($"  parameters: {string.Join(", ", properties.Select(property => property.Key))}");
+            }
+            builder.AppendLine("these tools are now callable; call them directly by name");
+        }
+        return builder.ToString().TrimEnd();
+    }
+
+    private static List<ToolGroupInfo> MatchGroups(IReadOnlyList<ToolGroupInfo> groups, string query)
+        => [.. groups.Where(candidate =>
+            Contains(candidate.Name, query)
+            || Contains(candidate.Summary, query)
+            || candidate.Tools.Any(tool => Contains(tool, query)))];
+
+    private static bool Contains(string? text, string query)
+        => text is not null && text.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private static string FirstLine(string text)
+    {
+        var line = text.Replace("\r\n", "\n").Split('\n')[0].Trim();
+        return line.Length <= 160 ? line : $"{line[..160]}…";
+    }
+
+    private static string RenderGroups(IReadOnlyList<ToolGroupInfo> groups)
+        => string.Join('\n', groups.Select(group => $"- {group.Name} ({group.Tools.Count} tools): {group.Summary}"));
 
     private static PreToolDecision NormalizePreDecision(object? value)
     {
@@ -816,3 +996,6 @@ public enum ToolExecutionModeKind
     Parallel,
     Exclusive,
 }
+
+/** 一个可被路由工具展开的工具组: 名字、说明与组内工具名。 */
+public sealed record ToolGroupInfo(string Name, string Summary, IReadOnlyList<string> Tools);

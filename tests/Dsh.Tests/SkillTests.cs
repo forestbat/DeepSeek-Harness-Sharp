@@ -101,6 +101,20 @@ public class SkillTests
     }
 
     [Fact]
+    public void Plugin_Activates_Without_Resolving_Its_Own_Registry()
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        _ = CommandsService.Register(ctx);
+
+        using var registration = new Dsh.Skills.Plugin("@deepseek-ai/dsh-skill").Apply(ctx, null);
+
+        Assert.NotNull(tools.Get(SkillCatalog.ToolName, new ScopeKey()));
+        Assert.NotNull(ctx.Get<SkillRegistry>(SkillRegistry.ServiceName));
+    }
+
+    [Fact]
     public async Task CatalogTool_Loads_Skill_And_Catalog_Renders()
     {
         var ctx = new Context();
@@ -117,7 +131,7 @@ public class SkillTests
             Source = "test",
             Content = "demo skill instructions",
         });
-        using var catalog = new SkillCatalog(ctx);
+        using var catalog = new SkillCatalog(ctx, skills);
 
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),
@@ -171,7 +185,7 @@ public class SkillTests
             {
                 ProviderName = "policy-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [root], Watch = false,
             });
-            using var catalog = new SkillCatalog(context);
+            using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-invocation"] = new() { Tool = [SkillCatalog.ToolName] } } };
             _ = new SafetyBoundary(context, () => new HarnessSettings { Safety = policy });
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
@@ -252,7 +266,7 @@ public class SkillTests
             {
                 ProviderName = "linked-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [skills], Watch = false,
             });
-            using var catalog = new SkillCatalog(context);
+            using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
             _ = new SafetyBoundary(context, () => new HarnessSettings { Safety = policy });
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
@@ -308,12 +322,12 @@ public class SkillTests
             _ = new SystemPrompt(context, new SystemPromptConfig());
             _ = new LlmRuntime(context);
             var tools = new ToolRuntime(context);
-            _ = new SkillRegistry(context, new SkillRegistryConfig());
+            var registry = new SkillRegistry(context, new SkillRegistryConfig());
             using var registration = SkillFilesystem.Apply(context, new SkillFilesystemConfig
             {
                 ProviderName = "dangling-entry-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [root], Watch = false,
             });
-            using var catalog = new SkillCatalog(context);
+            using var catalog = new SkillCatalog(context, registry);
             _ = new SafetyBoundary(context, () => new HarnessSettings
             {
                 Safety = new() { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } },
@@ -471,7 +485,7 @@ public class SkillTests
                 Name = "runtime-selected", Description = "Selected public runtime skill", Source = SkillSources.Runtime,
                 Content = "public-runtime-selected-body",
             });
-            _catalog = new SkillCatalog(Context);
+            _catalog = new SkillCatalog(Context, Registry);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             Session = Session.Create(id, null, new SessionHeader
             {
@@ -628,7 +642,7 @@ public class SkillTests
             Source = "test",
             Content = "demo skill instructions",
         });
-        using var catalog = new SkillCatalog(ctx);
+        using var catalog = new SkillCatalog(ctx, skills);
 
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),

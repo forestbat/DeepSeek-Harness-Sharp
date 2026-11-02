@@ -42,7 +42,10 @@ public sealed partial class MessageViewModel : ObservableObject
         Role = role;
         Kind = kind;
         IsStreaming = streaming;
-        IsExpanded = !IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars);
+        // 工具/结果默认折叠, 只显示工具名; 其余可折叠消息在短文本时直接展开。
+        IsExpanded = Kind is MessageKind.Tool or MessageKind.Result
+            ? false
+            : !IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars);
         _buffer.Append(text);
         Text = text;
     }
@@ -75,6 +78,22 @@ public sealed partial class MessageViewModel : ObservableObject
 
     public bool IsTool => Kind is MessageKind.Tool or MessageKind.Result;
 
+    /** 合并卡片的工具名; 折叠态只显示它。 */
+    public string ToolName { get; init; } = "";
+
+    /** 展开态显示的命令/参数; 已由 ToolPresentation 去掉 JSON 转义。 */
+    public string ArgumentText { get; init; } = "";
+
+    /** 工具结果文本; 工具卡片收到结果后填充。 */
+    [ObservableProperty]
+    private string _resultText = "";
+
+    [ObservableProperty]
+    private bool _hasResult;
+
+    [ObservableProperty]
+    private bool _isToolError;
+
     public bool IsContext => Kind == MessageKind.Context;
 
     public bool IsSystem => Kind is MessageKind.System or MessageKind.Approval;
@@ -83,7 +102,13 @@ public sealed partial class MessageViewModel : ObservableObject
 
     public bool ShowMarkdown => IsAssistant && ShowBody;
 
-    public bool ShowPlainBody => ShowBody && !IsAssistant && !HasDiff;
+    public bool ShowPlainBody => ShowBody && !IsAssistant && !HasDiff && Kind != MessageKind.Tool;
+
+    /** 展开的工具卡片显示命令/参数; 命中 diff 时由 diff 卡片替代。 */
+    public bool ShowToolArguments => Kind == MessageKind.Tool && IsExpanded && !HasDiff && ArgumentText.Length > 0;
+
+    /** 展开的工具卡片显示结果; 命中 diff 时由 diff 卡片替代。 */
+    public bool ShowToolResult => Kind == MessageKind.Tool && IsExpanded && !HasDiff && HasResult;
 
     /** 工具结果命中 diff 提取时挂载的卡片; 展开时替代纯文本正文。 */
     public DiffCard? Diff { get; private set; }
@@ -94,15 +119,27 @@ public sealed partial class MessageViewModel : ObservableObject
 
     /** diff 卡片自身的展开态(卡片内 chevron 控制; 独立于消息折叠, 置于 VM 以免列表虚拟化后丢失)。 */
     [ObservableProperty]
-    private bool _isDiffExpanded = true;
+    private bool _isDiffExpanded;
 
     public void SetDiff(DiffCard diff)
     {
         Diff = diff;
+        // 消息级展开以露出卡片标题栏, 卡片本体仍保持折叠(IsDiffExpanded 默认 false)。
+        IsExpanded = true;
         OnPropertyChanged(nameof(HasDiff));
         OnPropertyChanged(nameof(ShowDiff));
         OnPropertyChanged(nameof(ShowPlainBody));
+        OnPropertyChanged(nameof(ShowToolArguments));
+        OnPropertyChanged(nameof(ShowToolResult));
         OnPropertyChanged(nameof(Preview));
+    }
+
+    public void SetToolResult(string text, bool isError)
+    {
+        ResultText = text;
+        HasResult = true;
+        IsToolError = isError;
+        OnPropertyChanged(nameof(ShowToolResult));
     }
 
     public bool ShowPreview => IsFoldable && !IsExpanded;
@@ -151,6 +188,8 @@ public sealed partial class MessageViewModel : ObservableObject
         {
             if (Diff is { } diff)
                 return $"{diff.Title} (+{diff.Added} -{diff.Removed})";
+            if (Kind == MessageKind.Tool)
+                return ToolName.Length > 0 ? $"{ToolName}" : "工具";
             var flat = Flatten(Text);
             return flat.Length <= PreviewChars ? flat : flat[..PreviewChars] + "…";
         }
@@ -205,6 +244,8 @@ public sealed partial class MessageViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowPreview));
         OnPropertyChanged(nameof(ShowDetail));
         OnPropertyChanged(nameof(ShowDiff));
+        OnPropertyChanged(nameof(ShowToolArguments));
+        OnPropertyChanged(nameof(ShowToolResult));
         OnPropertyChanged(nameof(ShowSubagentStream));
         OnPropertyChanged(nameof(ShowSubagentEmpty));
     }
@@ -218,4 +259,3 @@ public sealed partial class MessageViewModel : ObservableObject
     [RelayCommand]
     private void ToggleFold() => IsExpanded = !IsExpanded;
 }
-

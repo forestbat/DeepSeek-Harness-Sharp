@@ -58,7 +58,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly List<MessageViewModel> _lastUserMessages = [];
     private IReadOnlyList<string> _skillNames = [];
     private readonly Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
-    private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
+    private readonly Dictionary<ToolCallId, (string Name, string Arguments, MessageViewModel Message)> _pendingToolCalls = [];
     private readonly Dictionary<string, DecisionViewModel?> _pendingDialogs = new(StringComparer.Ordinal);
     private CancellationTokenSource? _contentSearch;
 
@@ -1665,10 +1665,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyUserMessage(long seq, UserMessagePayload payload)
     {
-        var text = SessionText.ContentText(payload.Message.Content);
+        var text = UserFacingText.StripSystemReminders(SessionText.ContentText(payload.Message.Content));
         switch (payload.Message.Source)
         {
             case UserMessageSource:
+                if (text.Length == 0)
+                    break;
                 var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false));
                 _lastUserMessages.Add(user);
                 break;
@@ -1678,7 +1680,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case PluginMessageSource plugin:
                 var label = $"上下文注入 · {plugin.Plugin}";
                 var injected = AppendMessage(new MessageViewModel("", label, MessageKind.Context, false));
-                injected.Detail = plugin.Summary ?? text;
+                injected.Detail = UserFacingText.StripSystemReminders(plugin.Summary ?? text);
                 AddTrace(seq, TraceKind.Context, label, injected.Detail);
                 break;
             default:
@@ -1799,20 +1801,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _openReasoning = null;
         var isSubagent = string.Equals(call.Name, ISubagentService.DefaultToolName, StringComparison.Ordinal);
         var label = isSubagent ? ReadDescription(call.Arguments) : null;
+        var arguments = ToolPresentation.FormatArguments(call.Arguments);
         var message = AppendMessage(new MessageViewModel(
             "工具",
-            isSubagent ? SubagentCardText(label) : $"{call.Name} {call.Arguments}",
+            isSubagent ? SubagentCardText(label) : call.Name,
             MessageKind.Tool,
-            false));
-        message.Detail = call.Arguments;
-        _pendingToolCalls[call.CallId] = (call.Name, call.Arguments);
+            false)
+        {
+            ToolName = isSubagent ? SubagentCardText(label) : call.Name,
+            ArgumentText = arguments,
+        });
+        message.Detail = arguments;
+        _pendingToolCalls[call.CallId] = (call.Name, call.Arguments, message);
         if (isSubagent)
         {
             message.IsSubagentTool = true;
             message.SubagentLabel = label;
             message.IsExpanded = false;
         }
-        AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", call.Arguments);
+        AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", arguments);
     }
 
     /** subagent 工具的 description 参数即子会话 descriptor 的 Label, 用它把工具卡片关联到子代理条目。 */
@@ -1868,11 +1875,19 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyToolResult(long seq, ToolResultPayload result)
     {
-        var text = SessionText.ContentText(result.Message.Content);
+        var text = ToolPresentation.FormatResult(SessionText.ContentText(result.Message.Content));
         var label = result.Error is null ? "结果" : $"错误 {result.Error.Code}";
-        var message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
-        message.Detail = text;
         _pendingToolCalls.Remove(result.Message.Block.ToolCallId, out var pending);
+        MessageViewModel? message = pending.Message;
+        if (message is null)
+        {
+            message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
+            message.Detail = text;
+        }
+        else
+        {
+            message.SetToolResult(text, result.Error is not null);
+        }
         if (result.Error is null && DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text) is { } card)
             message.SetDiff(card);
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);

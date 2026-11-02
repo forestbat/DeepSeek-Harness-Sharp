@@ -144,6 +144,19 @@ internal sealed class PtyTuiHarness : IDisposable
         }
     }
 
+    public async Task<char[,]> WaitForScreenAsync(Func<char[,], bool> isReady, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var screen = ReadScreen();
+            var remaining = deadline - DateTime.UtcNow;
+            if (isReady(screen) || remaining <= TimeSpan.Zero)
+                return screen;
+            await _signal.WaitAsync(remaining, TestContext.Current.CancellationToken);
+        }
+    }
+
     public async Task WriteTextAsync(string text)
         => await Session.WriteAsync(Encoding.UTF8.GetBytes(text), TestContext.Current.CancellationToken);
 

@@ -23,7 +23,8 @@ public static class McpToolBridge
         string toolName,
         string? description,
         JsonElement inputSchema,
-        Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call)
+        Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call,
+        ToolDisclosure? disclosure = null)
         => new()
         {
             Name = $"mcp_{Sanitize(serverName)}_{Sanitize(toolName)}",
@@ -31,12 +32,13 @@ public static class McpToolBridge
             Parameters = SchemaOrDefault(inputSchema),
             Output = new ToolOutputDefinition(OutputSchema(), Render),
             Execute = (args, exec) => ExecuteAsync(call, args, exec),
+            Disclosure = disclosure,
         };
 
     // Owned opaque tool calls are never replayed after cancellation, transport loss or process failure.
-    internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool)
+    internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool, ToolDisclosure? disclosure = null)
         => Wrap(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
-            (arguments, signal) => handle.CallOwnedToolAsync(tool.Name, arguments, signal));
+            (arguments, signal) => handle.CallOwnedToolAsync(tool.Name, arguments, signal), disclosure);
 
     internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
         McpServerHandle handle,

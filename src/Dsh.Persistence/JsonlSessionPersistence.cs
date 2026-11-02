@@ -137,8 +137,9 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         EnsureRootEncoding();
         lock (_trackerGate)
         {
+            // 未落盘的内存会话事件数为 0; 已在磁盘上的日志这里不数事件数(null = 未知)。
             if (_pending.TryGetValue(id, out var pending))
-                return new SessionPersistenceSnapshot { Header = pending.Header, Revision = pending.Revision, InheritedEventCount = pending.InheritedEventCount };
+                return new SessionPersistenceSnapshot { Header = pending.Header, Revision = pending.Revision, EventCount = 0, InheritedEventCount = pending.InheritedEventCount };
         }
         var path = FindLog(id);
         return path is null ? null : ReadLogSnapshot(path, id);
@@ -152,7 +153,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         var listed = snapshots.Select(snapshot => snapshot.Header.Id).ToHashSet();
         foreach (var (id, entry) in pending)
             if (!listed.Contains(id))
-                snapshots.Add(new SessionPersistenceSnapshot { Header = entry.Header, Revision = entry.Revision, InheritedEventCount = entry.InheritedEventCount });
+                snapshots.Add(new SessionPersistenceSnapshot { Header = entry.Header, Revision = entry.Revision, EventCount = 0, InheritedEventCount = entry.InheritedEventCount });
         return snapshots;
     }
 

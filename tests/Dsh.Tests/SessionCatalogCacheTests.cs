@@ -1,5 +1,6 @@
 using Dsh.Core;
 using Dsh.Gui.Services;
+using Dsh.Llm;
 
 namespace Dsh.Tests;
 
@@ -20,6 +21,9 @@ public class SessionCatalogCacheTests
     public async Task Load_CachesDiskScanUntilInvalidated()
     {
         await using var env = await GuiTestEnvironment.CreateAsync();
+        // 空会话不落盘: 先写入一条消息, 让这个会话真正出现在磁盘上。
+        env.Agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("缓存用例")), new SurfaceOp.Append());
+        env.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(env.Agent.Session).GetAwaiter().GetResult();
         var persistence = env.App.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName);
         Assert.NotNull(persistence);
         await using var fleet = FleetWorkspace.ForContext(env.App.Ctx, env.App.Home, null);
@@ -36,6 +40,29 @@ public class SessionCatalogCacheTests
 
         catalog.InvalidateDiskCache();
         Assert.Empty(catalog.Load());
+    }
+
+    /** 一条事件都没写过的会话只是内存里的占位, 不能出现在侧栏历史里(否则每开一次界面就多一条垃圾会话)。 */
+    [Fact]
+    public async Task Load_SkipsSessionsThatNeverWroteAnEvent()
+    {
+        await using var env = await GuiTestEnvironment.CreateAsync();
+        var persistence = env.App.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName);
+        Assert.NotNull(persistence);
+        var empty = persistence.Create(new SessionHeader
+        {
+            Version = SessionHeader.SessionFormatVersion,
+            Id = SessionId.Create(Guid.NewGuid().ToString("N")),
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Cwd = env.Agent.Session.Header.Cwd,
+            IsSeeded = false,
+        });
+        await using var fleet = FleetWorkspace.ForContext(env.App.Ctx, env.App.Home, null);
+        var catalog = new SessionCatalog(env.App.Ctx, fleet);
+
+        Assert.Contains(persistence.List(), snapshot => snapshot.Header.Id == empty.Id);
+        Assert.DoesNotContain(catalog.Load(), node => node.SessionId == empty.Id);
+        empty.Close();
     }
 
     /** 反复读取只做一次扫描: 同一批实例应被复用, 而不是每次都新建。 */

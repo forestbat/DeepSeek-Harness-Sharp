@@ -7,7 +7,6 @@ namespace Dsh.Tui;
 
 public sealed class TranscriptRenderer
 {
-    public const int ToolArgumentsPreviewChars = 120;
     public const int ToolResultPreviewChars = 300;
     public const int SystemMessageFoldChars = 140;
     public const string DeliverablesHint = "/deliverables 列出本会话交付物, /deliverables open <编号> 用默认程序打开";
@@ -18,7 +17,7 @@ public sealed class TranscriptRenderer
     private readonly List<string> _lines = [];
     private readonly List<TranscriptTint> _tints = [];
     private TranscriptTint _pendingTint;
-    private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
+    private readonly Dictionary<ToolCallId, (string Name, string Arguments, TranscriptFold Fold)> _pendingToolCalls = [];
     private readonly List<int> _lineStarts = [];
     private readonly StringBuilder _tail = new();
     private int _tailStart;
@@ -82,7 +81,23 @@ public sealed class TranscriptRenderer
         if (end <= start)
             return;
         lock (_buffer)
+        {
+            // 同一段内容已经被收成 fold(例如工具调用 fold 已覆盖这段)时只延长它, 不叠第二个 fold。
+            var existing = _folds.FirstOrDefault(fold => fold.Start == start);
+            if (existing is not null)
+            {
+                existing.End = Math.Max(existing.End, end);
+                // 后到的 fold 更具体(例如 subagent 卡片带标签)时, 用它的名字做折叠头。
+                if (existing.Label == "tool" && label != "tool")
+                {
+                    existing.Label = label;
+                    existing.Preview = preview;
+                }
+                BumpVersion();
+                return;
+            }
             _folds.Add(new TranscriptFold { Start = start, End = end, Label = label, Preview = preview });
+        }
         BumpVersion();
     }
 
@@ -90,6 +105,9 @@ public sealed class TranscriptRenderer
 
     public void AppendSystemMessage(string text)
     {
+        text = UserFacingText.StripSystemReminders(text);
+        if (text.Length == 0)
+            return;
         var flat = text.Replace("\r\n", " ").Replace('\n', ' ').Trim();
         if (flat.Length <= SystemMessageFoldChars)
         {
@@ -109,7 +127,9 @@ public sealed class TranscriptRenderer
 
     public void AppendUserMessage(UserMessage message)
     {
-        var text = string.Concat(message.Content.OfType<TextBlock>().Select(block => block.Text));
+        var text = UserFacingText.StripSystemReminders(string.Concat(message.Content.OfType<TextBlock>().Select(block => block.Text)));
+        if (text.Length == 0)
+            return;
         var imageNames = message.Content.OfType<ImageBlock>().Select(block => ImageName(block.Attachment)).ToList();
         var suffix = imageNames.Count == 0 ? "" : $" [图片: {string.Join(", ", imageNames)}]";
         Append($"\n❯ {text}{suffix}\n");
@@ -147,32 +167,59 @@ public sealed class TranscriptRenderer
                 CloseReasoning();
                 CloseAssistant();
                 _assistantStreamed = false;
-                _pendingToolCalls[call.CallId] = (call.Name, call.Arguments);
-                Append($"⚙ {call.Name} {Preview(call.Arguments, ToolArgumentsPreviewChars)}\n");
+                var toolStart = _buffer.Length;
+                Append($"⚙ {call.Name}\n");
+                AppendIndented(ToolPresentation.FormatArguments(call.Arguments));
+                var toolFold = new TranscriptFold
+                {
+                    Start = toolStart,
+                    End = _buffer.Length,
+                    Label = "tool",
+                    Preview = $"⚙ {call.Name}",
+                    // 工具参数与结果可能很长: 展开后按 20 行分页, 而不是一次铺满屏幕。
+                    Paged = true,
+                };
+                _folds.Add(toolFold);
+                _pendingToolCalls[call.CallId] = (call.Name, call.Arguments, toolFold);
                 break;
             case ToolResultPayload result:
                 {
-                    var text = MessageText.Flatten(result.Message.Content);
+                    var text = ToolPresentation.FormatResult(MessageText.Flatten(result.Message.Content));
                     _pendingToolCalls.Remove(result.Message.Block.ToolCallId, out var pending);
                     var card = result.Error is null
                         ? DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text)
                         : null;
                     if (card is not null)
                     {
-                        AppendDiffCard(card, foldToolResult);
+                        AppendDiffCard(card, fold: pending.Fold is null && foldToolResult);
+                        if (pending.Fold is { } diffFold)
+                        {
+                            diffFold.End = _buffer.Length;
+                            // 折叠态显示"改了什么", 和 GUI 的编辑卡片标题一致。
+                            diffFold.Label = "diff";
+                            diffFold.Preview = $"  ⤿ {card.Title} (+{card.Added} -{card.Removed})";
+                            diffFold.Paged = true;
+                        }
                         break;
                     }
                     var label = result.Error is not null ? $"x {result.Error.Code} " : "↳ ";
-                    var start = _buffer.Length;
+                    var resultStart = _buffer.Length;
                     // 失败的工具结果整行按错误色着色(颜色由 TuiTheme.Error 决定, 设 Default 即不着色)。
                     _pendingTint = result.Error is not null ? TranscriptTint.Error : TranscriptTint.None;
                     Append($"  {label}{text}\n");
                     _pendingTint = TranscriptTint.None;
-                    if (foldToolResult)
+                    if (pending.Fold is { } resultFold)
+                    {
+                        resultFold.End = _buffer.Length;
+                        // 失败结果直接展开: 错误信息不该藏在"⚙ 工具名"后面。
+                        if (result.Error is not null)
+                            resultFold.Collapsed = false;
+                    }
+                    else if (foldToolResult)
                     {
                         _folds.Add(new TranscriptFold
                         {
-                            Start = start,
+                            Start = resultStart,
                             End = _buffer.Length,
                             Label = "tool result",
                             Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
@@ -407,8 +454,9 @@ public sealed class TranscriptRenderer
         var title = $"  ⤿ {card.Title} (+{card.Added} -{card.Removed})";
         _pendingTint = TranscriptTint.DiffTitle;
         Append($"{title}\n");
-        var numberWidth = LineNumberWidth(card.Lines);
-        foreach (var line in card.Lines)
+        var display = DiffCardDisplay.ForDisplay(card);
+        var numberWidth = LineNumberWidth(display);
+        foreach (var line in display)
         {
             _pendingTint = line.Kind switch
             {
@@ -427,6 +475,7 @@ public sealed class TranscriptRenderer
                 End = _buffer.Length,
                 Label = "diff",
                 Preview = title,
+                Paged = true,
             });
         }
     }
@@ -456,6 +505,8 @@ public sealed class TranscriptRenderer
 
     private static string FormatDiffLine(DiffLine line, int width)
     {
+        if (line.OldLine is null && line.NewLine is null)
+            return $"  {line.Text}\n";
         var marker = line.Kind switch
         {
             DiffLineKind.Add => "+",
@@ -471,6 +522,14 @@ public sealed class TranscriptRenderer
     {
         var flat = text.Replace("\r\n", " ").Replace('\n', ' ').Trim();
         return flat.Length <= limit ? flat : $"{flat[..limit]}~";
+    }
+
+    private void AppendIndented(string text)
+    {
+        if (text.Length == 0)
+            return;
+        foreach (var line in text.Split('\n'))
+            Append($"  {line}\n");
     }
 
     private void Append(string text)
@@ -506,4 +565,3 @@ public sealed class TranscriptRenderer
         }
     }
 }
-

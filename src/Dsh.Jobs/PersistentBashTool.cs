@@ -100,7 +100,11 @@ public static class PersistentBashTool
                 "The bash command to run. Relative path is preferred in the command.",
                 "`grep -n`",
                 signal => [resolver.Resolve(signal)],
-                WrapCommand),
+                WrapCommand)
+            {
+                // Windows 上 bash 与 pwsh 并存时模型总选 bash: 只把 bash 从可见工具里收起, 内部调用仍然可用。
+                IsAvailable = static () => !OperatingSystem.IsWindows(),
+            },
             new PersistentShellSettings(resolved.TimeoutMs, resolved.MaxOutputChars, resolved.Description));
     }
 

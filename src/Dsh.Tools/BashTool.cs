@@ -47,6 +47,9 @@ internal sealed record ShellCommandDialect(
 
     /** The shell exists only on Windows; elsewhere the tool is not registered at all. */
     public bool WindowsOnly { get; init; }
+
+    /** Extra platform capability check (e.g. an executable that may be missing); false hides it from the model's tool list. */
+    public Func<bool>? IsAvailable { get; init; }
 }
 
 public static class BashTool
@@ -73,7 +76,11 @@ public static class BashTool
                 SectionText,
                 "The bash command to execute.",
                 "\"npm install\" → \"Install package dependencies\"",
-                (command, _, envs) => new ShellLaunch(["bash", "-c", command], MergeEnv(envs))),
+                (command, _, envs) => new ShellLaunch(["bash", "-c", command], MergeEnv(envs)))
+            {
+                // Windows 上 Git-Bash 与 pwsh 并存时模型会一直选 bash, 因此只把 bash 从可见工具里收起, 工具本身仍可被内部调用。
+                IsAvailable = static () => !OperatingSystem.IsWindows(),
+            },
             config ?? new BashToolConfig());
 
     internal static IDisposable RegisterShell(Context ctx, ShellCommandDialect dialect, BashToolConfig config)
@@ -104,6 +111,7 @@ public static class BashTool
             Parameters = ToolSchemas.ObjectSchema(parameters, "command"),
             Output = new ToolOutputDefinition(OutputSchema, (_, value) => Render(value, dialect.ToolName)),
             Execute = (args, exec) => Execute(args, exec, subprocess, config, dialect),
+            IsAvailable = dialect.IsAvailable,
             WriteTargets = (args, exec) => [WorkdirOf(WorkdirArgument(args), exec, config)],
         });
         return new CompositeDisposable(section, registration);

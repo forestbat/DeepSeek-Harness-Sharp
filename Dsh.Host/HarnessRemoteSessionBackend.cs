@@ -17,13 +17,15 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         var byId = new Dictionary<string, RemoteSessionSummary>(StringComparer.Ordinal);
         foreach (var snapshot in runtime.Persistence?.List() ?? [])
         {
-            if (snapshot.Header.IsSubagent)
+            // 空会话(还没有事件)不落盘, 但内存里可能存在: 只有写过事件的会话才出现在列表里。
+            // EventCount 为 null 表示磁盘上的日志(实现不为此数事件), 不能当作空会话丢掉。
+            if (snapshot.Header.IsSubagent || snapshot.EventCount == 0)
                 continue;
             byId[snapshot.Header.Id.Value] = Describe(snapshot.Header);
         }
         foreach (var agent in runtime.Registry.List())
         {
-            if (agent.Session.Header.IsSubagent)
+            if (agent.Session.Header.IsSubagent || agent.Session.SnapshotEvents().Count == 0)
                 continue;
             byId[agent.Id.Value] = Describe(agent);
         }

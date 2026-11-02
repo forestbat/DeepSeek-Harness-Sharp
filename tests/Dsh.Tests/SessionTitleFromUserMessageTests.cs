@@ -26,6 +26,16 @@ public class SessionTitleFromUserMessageTests
         Assert.Equal(SessionTitleFromUserMessage.MaxTitleLength, title.Length);
     }
 
+    /** 提示词侧注入的 reminder 不是用户写的内容, 不能出现在会话标题里。 */
+    [Fact]
+    public void Derive_Ignores_System_Reminder_Blocks()
+    {
+        var message = MessageFactory.CreateUserText(
+            "修一下滚动\n\n<system-reminder>\n当前分支: main\n</system-reminder>");
+
+        Assert.Equal("修一下滚动", SessionTitleFromUserMessage.Derive(message));
+    }
+
     [Fact]
     public void Derive_Skips_Plugin_Messages_And_Empty_Text()
     {

@@ -52,13 +52,12 @@ public static class PtcSdkRenderer
         builder.Append("    // ").Append(schema.Name).Append(" — ").Append(OneLine(schema.Description)).Append('\n');
         if (schema.Parameters["properties"] is JsonObject properties)
         {
-            var required = (schema.Parameters["required"] as JsonArray)?
-                .Select(node => node?.GetValue<string>()).OfType<string>().ToHashSet(StringComparer.Ordinal) ?? [];
+            var required = RequiredNames(schema.Parameters);
             foreach (var (name, value) in properties.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 var optional = required.Contains(name) ? "" : "?";
                 builder.Append("    //   ").Append(name).Append(optional).Append(": ").Append(Project(value, MaxTypeDepth));
-                if (value is JsonObject property && property["description"]?.GetValue<string>() is { Length: > 0 } description)
+                if (value is JsonObject property && Text(property["description"]) is { Length: > 0 } description)
                     builder.Append(" — ").Append(OneLine(description));
                 builder.Append('\n');
             }
@@ -85,30 +84,43 @@ public static class PtcSdkRenderer
             return Join(oneOf.Select(value => Project(value, depth - 1)));
         if (node["anyOf"] is JsonArray anyOf)
             return Join(anyOf.Select(value => Project(value, depth - 1)));
-        return node["type"]?.GetValue<string>() switch
+        if (node["type"] is JsonArray types)
         {
-            "string" => "string",
-            "integer" => "int",
-            "number" => "double",
-            "boolean" => "bool",
-            "null" => "null",
-            "array" => $"{Project(node["items"], depth - 1)}[]",
-            "object" => ProjectObject(node, depth - 1),
-            _ => "JsonNode",
-        };
+            var projected = types.Select(value => ProjectType(Text(value), node, depth)).ToList();
+            return projected.Count == 0 ? "JsonNode" : Join(projected);
+        }
+        return ProjectType(Text(node["type"]), node, depth);
     }
+
+    private static string ProjectType(string? type, JsonObject node, int depth) => type switch
+    {
+        "string" => "string",
+        "integer" => "int",
+        "number" => "double",
+        "boolean" => "bool",
+        "null" => "null",
+        "array" => $"{Project(node["items"], depth - 1)}[]",
+        "object" => ProjectObject(node, depth - 1),
+        _ => "JsonNode",
+    };
 
     private static string ProjectObject(JsonObject node, int depth)
     {
         if (node["properties"] is not JsonObject properties)
             return "JsonObject";
-        var required = (node["required"] as JsonArray)?
-            .Select(value => value?.GetValue<string>()).OfType<string>().ToHashSet(StringComparer.Ordinal) ?? [];
+        var required = RequiredNames(node);
         var members = properties
             .OrderBy(entry => entry.Key, StringComparer.Ordinal)
             .Select(entry => $"{entry.Key}{(required.Contains(entry.Key) ? "" : "?")}: {Project(entry.Value, depth)}");
         return $"{{ {string.Join(", ", members)} }}";
     }
+
+    private static HashSet<string> RequiredNames(JsonObject schema)
+        => (schema["required"] as JsonArray)?
+            .Select(Text).OfType<string>().ToHashSet(StringComparer.Ordinal) ?? [];
+
+    private static string? Text(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     private static string Join(IEnumerable<string> parts) => string.Join(" | ", parts);
 

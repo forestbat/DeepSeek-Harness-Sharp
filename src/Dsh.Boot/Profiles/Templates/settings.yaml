@@ -521,22 +521,17 @@ plugins:
 # MCP 服务器
 # mcp:
 #   <id>:
-#     transport:
+#     transport: stdio | streamable-http | sse
 #     command: []
 #     args: []
 #     url:
 #     enabled: true
-# <id>:
-# stdio | streamable-http | sse
-# transport:
-# stdio 启动命令
-# command: []
-# 额外参数
-# args: []
-# HTTP 端点(transport: streamable-http 或 sse 时使用)
-# url:
-# 是否启用
-# enabled: true
+# Tool-set behavior
+# tools:
+#   Opt in to progressive disclosure of grouped tool schemas through tool_router.
+#   progressive_disclosure:
+#   Minimum group size for disclosure; smaller groups stay directly visible.
+#   disclosure_threshold:
 # A2A 服务
 # a2a:
 #   是否启用

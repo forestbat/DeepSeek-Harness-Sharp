@@ -1,4 +1,5 @@
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
 
 namespace Dsh.Gui.ViewModels;
@@ -46,7 +47,11 @@ internal sealed class SubagentTranscript
             case SystemMessagePayload system:
                 _openAssistant = null;
                 _openReasoning = null;
-                Add(new MessageViewModel(SystemLabel(system.Message.Source), SessionText.ContentText(system.Message.Content), MessageKind.System, false), messages);
+                Add(new MessageViewModel(
+                    SystemLabel(system.Message.Source),
+                    UserFacingText.StripSystemReminders(SessionText.ContentText(system.Message.Content)),
+                    MessageKind.System,
+                    false), messages);
                 break;
             case RequestHeaderPayload header when header.Header.Config.Model is { Length: > 0 } model:
                 _model = model;
@@ -60,11 +65,16 @@ internal sealed class SubagentTranscript
             case ToolCallPayload call:
                 _openAssistant = null;
                 _openReasoning = null;
-                var callMessage = Add(new MessageViewModel("工具", $"{call.Name} {call.Arguments}", MessageKind.Tool, false), messages);
-                callMessage.Detail = call.Arguments;
+                var arguments = ToolPresentation.FormatArguments(call.Arguments);
+                var callMessage = Add(new MessageViewModel("工具", call.Name, MessageKind.Tool, false)
+                {
+                    ToolName = call.Name,
+                    ArgumentText = arguments,
+                }, messages);
+                callMessage.Detail = arguments;
                 break;
             case ToolResultPayload result:
-                var resultText = SessionText.ContentText(result.Message.Content);
+                var resultText = ToolPresentation.FormatResult(SessionText.ContentText(result.Message.Content));
                 var resultMessage = Add(
                     new MessageViewModel(result.Error is null ? "结果" : $"错误 {result.Error.Code}", resultText, MessageKind.Result, false),
                     messages);
@@ -82,10 +92,12 @@ internal sealed class SubagentTranscript
 
     private void ApplyUserMessage(UserMessagePayload payload, IList<MessageViewModel> messages)
     {
-        var text = SessionText.ContentText(payload.Message.Content);
+        var text = UserFacingText.StripSystemReminders(SessionText.ContentText(payload.Message.Content));
         switch (payload.Message.Source)
         {
             case UserMessageSource:
+                if (text.Length == 0)
+                    break;
                 Add(new MessageViewModel("你", text, MessageKind.User, false), messages);
                 break;
             case PluginMessageSource plugin:

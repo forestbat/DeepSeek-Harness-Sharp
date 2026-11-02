@@ -553,6 +553,10 @@ public sealed partial class ChatWindow : IDisposable
         // 指针落在右栏上: 滚右栏内容(窄终端里才看得到下面的段落), 不再滚正文。分屏时右栏同样在正文区之外。
         if (layout.RightPanel.Contains(cellX, cellY) && InputPane.ScrollRightPanel(delta))
             return;
+        // 指针落在已展开的长折叠(工具结果/diff)上: 滚轮先滚折叠内容, 不带动整篇记录。
+        if (TryResolveTranscript(cellX, cellY, layout, out var transcriptPane, out var transcriptRect)
+            && transcriptPane.ScrollFoldAt(delta, cellY, transcriptRect))
+            return;
         var target = _panes.Count > 1 ? _paneLayout.HitTest(cellX, cellY) : null;
         if (target is { } id && _panes.TryGetValue(id, out var pane))
             pane.HandleMouseWheel(delta);
@@ -1109,8 +1113,8 @@ public sealed partial class ChatWindow : IDisposable
             {
                 foreach (var snapshot in _persistence.List())
                 {
-                    // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致)。
-                    if (snapshot.Header.IsSubagent)
+                    // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致); 没写过任何事件的空会话同样不算历史。
+                    if (snapshot.Header.IsSubagent || snapshot.EventCount == 0)
                         continue;
                     var info = MentionSessionInfo.FromSnapshot(snapshot);
                     if (seen.Add(info.Id))
@@ -1614,7 +1618,8 @@ public sealed partial class ChatWindow : IDisposable
         {
             if (sessionEvent.Data is not UserMessagePayload user || user.Message.Source is not UserMessageSource)
                 continue;
-            var text = string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)).Trim();
+            var text = UserFacingText.StripSystemReminders(
+                string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)));
             if (text.Length > 0)
                 messages.Add((sessionEvent.Seq, sessionEvent.Time, text));
         }
@@ -3018,4 +3023,3 @@ public sealed partial class ChatWindow : IDisposable
 
     private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId, string? PtyId = null);
 }
-

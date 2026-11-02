@@ -9,6 +9,12 @@ public sealed record ToolOutputDefinition(
     Func<JsonElement, JsonElement, IReadOnlyList<ContentBlock>> Render,
     Func<JsonElement, JsonElement, JsonElement?>? PresentationMeta = null);
 
+/**
+ * 渐进式披露: 同一 Group 的工具默认不出现在模型可见的 schema 里, 只暴露一个路由工具;
+ * 模型调用路由工具展开该组后才真正看到这些工具。DefaultVisible=true 表示即使成组也直接暴露。
+ */
+public sealed record ToolDisclosure(string Group, string Summary, bool DefaultVisible = false);
+
 public sealed class ToolDefinition
 {
     public required string Name { get; init; }
@@ -25,6 +31,10 @@ public sealed class ToolDefinition
     /** Preliminary admission hints only; actual host-mediated operations are authorized separately. */
     public Func<JsonElement, IEnumerable<string>>? FilePaths { get; init; }
     public bool UsesScriptPermissions { get; init; }
+    public ToolDisclosure? Disclosure { get; init; }
+
+    /** Unavailable tools remain callable internally but are omitted from model-visible schemas. */
+    public Func<bool>? IsAvailable { get; init; }
 
     /**
      * Absolute paths a call writes, including the directory a newly started process runs in.
