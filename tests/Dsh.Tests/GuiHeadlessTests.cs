@@ -486,7 +486,15 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Assert.True(message.ShowPreview);
             Capture(window, "headless-diff-card-collapsed");
 
+            // 消息展开后卡片本体仍折叠: 只有标题栏, 没有 diff 行。
             message.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(message.IsDiffExpanded);
+            Assert.All(
+                diffView.GetVisualDescendants().OfType<TextBlock>(),
+                block => Assert.NotEqual("line 3 changed", block.Text));
+
+            message.IsDiffExpanded = true;
             Dispatcher.UIThread.RunJobs();
             Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "+3");
             Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "-2");
@@ -494,7 +502,8 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Capture(window, "headless-diff-card-expanded");
 
             // 卡片内 chevron: 点击只隐藏 diff 行, 标题与计数保留
-            var chevron = diffView.GetVisualDescendants().OfType<Button>().Single();
+            var chevron = diffView.GetVisualDescendants().OfType<Button>()
+                .Single(button => button.Name == DiffView.ChevronName);
             chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Dispatcher.UIThread.RunJobs();
             Assert.False(message.IsDiffExpanded);

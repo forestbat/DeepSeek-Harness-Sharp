@@ -207,10 +207,11 @@ public sealed class SubagentViewModelTests
 
         child.Append(new TurnStartPayload(1));
         child.Append(new ToolCallPayload(1, 1, ToolCallId.Create("call-live"), "bash", """{"command":"live"}"""));
+        // 工具卡片折叠态只显示工具名, 命令行在 ArgumentText 里。
         await GuiTestEnvironment.WaitForAsync(panel.Viewing!.Messages,
-            () => panel.Viewing.Messages.Any(message => message.Text.Contains("live")));
+            () => panel.Viewing.Messages.Any(message => message.ArgumentText.Contains("live")));
 
-        Assert.Contains(panel.Viewing!.Messages, message => message.Text.Contains("live"));
+        Assert.Contains(panel.Viewing!.Messages, message => message.ArgumentText.Contains("live"));
     });
 
     [Fact]
@@ -264,7 +265,8 @@ public sealed class SubagentViewModelTests
         await viewModel.Subagents.RefreshAsync();
 
         Assert.True(card.ShowSubagentStream);
-        Assert.Contains(card.SubagentStream, message => message.Kind == MessageKind.Tool && message.Text.Contains("inline-live"));
+        // 工具卡片折叠态只显示工具名, 命令参数在 ArgumentText 里。
+        Assert.Contains(card.SubagentStream, message => message.Kind == MessageKind.Tool && message.ArgumentText.Contains("inline-live"));
         Assert.Contains(card.SubagentStream, message => message.Kind == MessageKind.Result && message.Text.Contains("inline-live-out"));
         Assert.Contains(card.SubagentStream, message => message.Text.Contains("child-out"));
     });
