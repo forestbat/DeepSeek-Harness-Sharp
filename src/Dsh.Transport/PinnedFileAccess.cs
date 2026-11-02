@@ -105,35 +105,79 @@ public sealed class PinnedFileAccess : IDisposable, IAsyncDisposable
 
     /** Enumerate a fixed directory object; a concurrent rename never returns an unauthorized snapshot. */
     public static async Task<IReadOnlyList<(string Path, bool IsDirectory)>> ReadDirectoryAsync(string path,
-        Action<PinnedFileTarget> authorize, Func<string, Task<Action<PinnedFileTarget>>> authorizeEntry)
+        Action<PinnedFileTarget> authorize, Func<string, Task<Action<PinnedFileTarget>>> authorizeEntry,
+        bool followLinks = false)
     {
         using var pin = new PinnedFileAccess(path, authorize);
         var actual = DirectoryPath(pin._directories[^1]);
         authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
-        var entries = new List<(string, bool)>();
+        var entries = new List<(string Path, bool IsDirectory)>();
+        List<int>? links = null;
         if (OperatingSystem.IsWindows())
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(actual))
             {
                 var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.ReparsePoint) == 0)
-                    entries.Add((entry, (attributes & FileAttributes.Directory) != 0));
+                var link = (attributes & FileAttributes.ReparsePoint) != 0;
+                if (link && !followLinks) continue;
+                if (link) (links ??= []).Add(entries.Count);
+                entries.Add((entry, (attributes & FileAttributes.Directory) != 0));
             }
         }
         else
         {
             foreach (var entry in UnixPathPin.Entries(pin._directories[^1]))
-                if (entry.Directory || entry.Regular)
-                    entries.Add((Path.Combine(actual, entry.Name), entry.Directory));
+            {
+                if (!entry.Directory && !entry.Regular && !(followLinks && entry.Link)) continue;
+                if (entry.Link) (links ??= []).Add(entries.Count);
+                entries.Add((Path.Combine(actual, entry.Name), entry.Directory));
+            }
             DemandUnmovedDirectory();
         }
-        foreach (var (entry, directory) in entries)
+        var nextLink = 0;
+        var visible = 0;
+        for (var index = 0; index < entries.Count; index++)
         {
+            var (entry, directory) = entries[index];
             var permit = await authorizeEntry(entry).ConfigureAwait(false);
             DemandUnmovedDirectory();
-            var identity = pin.ChildIdentity(pin._directories.Count - 1, Path.GetFileName(entry));
-            permit(pin.Describe(entry, identity, pin._parentIdentity, directory));
+            var link = links is not null && nextLink < links.Count && links[nextLink] == index;
+            if (link)
+            {
+                nextLink++;
+                try
+                {
+                    var target = Canonicalize(entry);
+                    directory = Directory.Exists(target);
+                    if (directory)
+                        DemandDirectory(target, permit);
+                    else
+                    {
+                        using var access = Open(target, PinnedFileMode.Read, permit);
+                    }
+                }
+                catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException
+                    || error is Win32Exception native && (native.NativeErrorCode == MissingPath
+                        || OperatingSystem.IsWindows() && native.NativeErrorCode is 3 or 267
+                        || !OperatingSystem.IsWindows() && native.NativeErrorCode == 20))
+                {
+                    DemandUnmovedDirectory();
+                    // The original permit rechecks its invocation token and current policy before skipping.
+                    authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
+                    DemandUnmovedDirectory();
+                    continue;
+                }
+                DemandUnmovedDirectory();
+            }
+            else
+            {
+                var identity = pin.ChildIdentity(pin._directories.Count - 1, Path.GetFileName(entry));
+                permit(pin.Describe(entry, identity, pin._parentIdentity, directory));
+            }
+            if (link || visible != index) entries[visible] = (entry, directory);
+            visible++;
         }
+        if (visible != entries.Count) entries.RemoveRange(visible, entries.Count - visible);
         DemandUnmovedDirectory();
         authorize(pin.Describe(actual, pin._parentIdentity, default, directory: true));
         DemandUnmovedDirectory();

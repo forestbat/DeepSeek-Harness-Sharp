@@ -154,7 +154,10 @@ public sealed class HostChatSession : IDisposable
         });
     }
 
-    public async Task ReloadAsync(CancellationToken cancellationToken = default)
+    public Task ReloadAsync(CancellationToken cancellationToken = default)
+        => ReloadAsync(false, cancellationToken);
+
+    public async Task ReloadAsync(bool forceReset, CancellationToken cancellationToken = default)
     {
         var id = Info.Id;
         var generation = _generation;
@@ -169,8 +172,9 @@ public sealed class HostChatSession : IDisposable
                 return;
             var titleChanged = !string.Equals(Header.Title, header.Title, StringComparison.Ordinal);
             Header = header;
-            // Commands such as /model and /reasoning usually append events; rebuilding the visual tree would repeat O(history) layout work.
-            if (titleChanged || !TryAppend(replacement, out var appended))
+            // 命令通常只在尾部追加事件(例如 /model、/reasoning、/preset)。全量 ReplaceEvents + Reset 会清空并重建
+            // 整个消息/视觉树, 长会话每次选择都要付一遍 O(历史) 的布局与样式分配。
+            if (forceReset || titleChanged || !TryAppend(replacement, out var appended))
             {
                 ReplaceEvents(snapshot);
                 Reset?.Invoke();

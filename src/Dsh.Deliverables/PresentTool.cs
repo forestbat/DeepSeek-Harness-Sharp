@@ -6,6 +6,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Transport;
 
 namespace Dsh.Deliverables;
 
@@ -33,7 +34,8 @@ public static class PresentTool
         + "Present only the most important files and mention them briefly in your reply instead of pasting their contents. "
         + "Deliverables belong to the calling session: a subagent's presented files are not shown to the user, so the top-level session presents them.";
 
-    private sealed record Staged(Session Session, int Turn, IReadOnlyList<PresentedFile> Files);
+    private sealed record Staged(Session Session, int Turn, IReadOnlyList<PresentedFile> Files,
+        IReadOnlyList<Action<PinnedFileTarget>> Authorizations);
 
     public static IDisposable Register(Context ctx)
     {
@@ -45,18 +47,19 @@ public static class PresentTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
+            FilePaths = InputPaths,
             Description = Description,
             Parameters = Parameters,
             Output = new ToolOutputDefinition(OutputSchema, static (_, value) => [new TextBlock(Rendered(value))]),
             Execute = (args, exec) => Execute(args, exec, projections, staged),
+            FinalizeContent = (exec, result) => Publish(exec, result, staged),
         });
-        var unsubscribe = ctx.On<ToolResultNotification>(
-            notification => Publish(notification, staged),
-            new EventOptions { Global = true });
-        return new Registration(section, registration, unsubscribe);
+        return new Registration(section, registration);
     }
 
-    private static Task<object?> Execute(
+    private static async Task<object?> Execute(
         JsonElement args,
         ToolRunContext exec,
         SessionProjectionRegistry projections,
@@ -71,11 +74,30 @@ public static class PresentTool
             : [];
         if (requested.Count is 0 or > MaxFiles)
             throw new ArgumentException($"present accepts 1 to {MaxFiles} files");
-        var cwd = session.Header.Cwd ?? Environment.CurrentDirectory;
-        List<PresentedFile> files = [.. requested.Select(item => Resolve(item, cwd))];
+        var cwd = session.WorkingDirectory ?? session.Header.Cwd ?? Environment.CurrentDirectory;
+        var files = new List<PresentedFile>(requested.Count);
+        var authorizations = new Action<PinnedFileTarget>[requested.Count];
+        foreach (var item in requested)
+        {
+            var file = Resolve(item, cwd);
+            var authorize = await SafetyFileAccess.AuthorizeAsync(file.Path, "read", exec, exec.Signal).ConfigureAwait(false);
+            await using var access = PinnedFileAccess.Open(file.Path, PinnedFileMode.Read, authorize);
+            authorizations[files.Count] = authorize;
+            files.Add(file);
+        }
         exec.Signal.ThrowIfCancellationRequested();
-        staged.AddOrUpdate(exec, new Staged(session, boundary.LastTurn, files));
-        return Task.FromResult<object?>(new PresentResult(boundary.LastTurn, files));
+        staged.AddOrUpdate(exec, new Staged(session, boundary.LastTurn, files, authorizations));
+        return new PresentResult(boundary.LastTurn, files);
+    }
+
+    private static IEnumerable<string> InputPaths(JsonElement args)
+    {
+        if (!args.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array
+            || files.GetArrayLength() > MaxFiles) yield break;
+        foreach (var item in files.EnumerateArray())
+            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("path", out var path)
+                && path.ValueKind == JsonValueKind.String && path.GetString() is { } value)
+                yield return value;
     }
 
     private static PresentedFile Resolve(JsonElement item, string cwd)
@@ -99,13 +121,21 @@ public static class PresentTool
         return new PresentedFile(target, string.IsNullOrEmpty(description) ? null : description);
     }
 
-    private static void Publish(ToolResultNotification notification, ConditionalWeakTable<ToolExecution, Staged> staged)
+    private static IReadOnlyList<ContentBlock>? Publish(ToolExecution execution, ToolExecutionResult result,
+        ConditionalWeakTable<ToolExecution, Staged> staged)
     {
-        if (!staged.TryGetValue(notification.Run, out var delivery))
-            return;
-        staged.Remove(notification.Run);
-        if (!notification.Result.IsError)
-            delivery.Session.Append(new DeliverablesPresentedPayload(delivery.Turn, notification.Run.CallId, delivery.Files));
+        if (!staged.TryGetValue(execution, out var delivery)) return null;
+        staged.Remove(execution);
+        if (result.IsError) return null;
+        execution.Signal.ThrowIfCancellationRequested();
+        for (var index = 0; index < delivery.Files.Count; index++)
+        {
+            using var access = PinnedFileAccess.Open(delivery.Files[index].Path, PinnedFileMode.Read,
+                delivery.Authorizations[index]);
+        }
+        execution.Signal.ThrowIfCancellationRequested();
+        delivery.Session.Append(new DeliverablesPresentedPayload(delivery.Turn, execution.CallId, delivery.Files));
+        return null;
     }
 
     private static string Rendered(JsonElement value)
@@ -158,11 +188,10 @@ public static class PresentTool
         }
         """)!.AsObject();
 
-    private sealed class Registration(IDisposable section, IDisposable registration, Func<bool> unsubscribe) : IDisposable
+    private sealed class Registration(IDisposable section, IDisposable registration) : IDisposable
     {
         public void Dispose()
         {
-            unsubscribe();
             registration.Dispose();
             section.Dispose();
         }

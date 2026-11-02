@@ -20,7 +20,7 @@ public sealed class SystemPromptProjectionTests
         var session = NewSession();
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("prompt v1", inHistory: false, startsSeries: true);
+        var commits = projection.Project("prompt v1");
 
         var commit = Assert.Single(commits);
         Assert.IsType<SurfaceOp.Append>(commit.Op);
@@ -35,7 +35,7 @@ public sealed class SystemPromptProjectionTests
         var session = NewSession();
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("", inHistory: false, startsSeries: true);
+        var commits = projection.Project("");
 
         var commit = Assert.Single(commits);
         Assert.IsType<SurfaceOp.Append>(commit.Op);
@@ -43,13 +43,13 @@ public sealed class SystemPromptProjectionTests
     }
 
     [Fact]
-    public void ReplaceRouteRewritesHeadOnChange()
+    public void RewritesHeadOnChange()
     {
         var session = NewSession();
         var head = AppendSystem(session, "prompt v1");
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("prompt v2", inHistory: false, startsSeries: false);
+        var commits = projection.Project("prompt v2");
 
         var commit = Assert.Single(commits);
         var replace = Assert.IsType<SurfaceOp.Replace>(commit.Op);
@@ -60,24 +60,24 @@ public sealed class SystemPromptProjectionTests
     }
 
     [Fact]
-    public void ReplaceRouteIsNoOpWhenUnchanged()
+    public void IsNoOpWhenUnchanged()
     {
         var session = NewSession();
         AppendSystem(session, "prompt v1");
         var projection = new SystemPromptProjection(session);
 
-        Assert.Empty(projection.Project("prompt v1", inHistory: false, startsSeries: false));
+        Assert.Empty(projection.Project("prompt v1"));
     }
 
     [Fact]
-    public void ReplaceRouteClearsNonHeadNodesAndRewritesHead()
+    public void ClearsNonHeadNodesAndRewritesHead()
     {
         var session = NewSession();
         var head = AppendSystem(session, "prompt v1");
         var tail = AppendSystem(session, "prompt v2");
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("prompt v3", inHistory: false, startsSeries: false);
+        var commits = projection.Project("prompt v3");
 
         Assert.Equal(2, commits.Count);
         var clearTail = commits[0];
@@ -88,17 +88,34 @@ public sealed class SystemPromptProjectionTests
         Assert.Equal("prompt v3", Assert.IsType<TextBlock>(rewriteHead.Message.Content[0]).Text);
     }
 
+    /** 回落到旧状态(尾节点还在且内容相同)时只清掉多余节点, 不追加新 system message。 */
     [Fact]
-    public void InHistoryAppendsOnChangeWithinSeries()
+    public void UnchangedHeadOnlyClearsStaleNonHeadNode()
+    {
+        var session = NewSession();
+        AppendSystem(session, "prompt v1");
+        var tail = AppendSystem(session, "prompt v2");
+        var projection = new SystemPromptProjection(session);
+
+        var commits = projection.Project("prompt v1");
+
+        var commit = Assert.Single(commits);
+        Assert.Equal(new SurfaceOp.Replace(tail.Seq, tail.Seq), commit.Op);
+        Assert.Empty(commit.Message.Content);
+    }
+
+    [Fact]
+    public void InHistoryAppendsChangedPrompt()
     {
         var session = NewSession();
         AppendSystem(session, "prompt v1");
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("prompt v2", inHistory: true, startsSeries: false);
+        var commits = projection.Project("prompt v2", inHistory: true);
 
         var commit = Assert.Single(commits);
         Assert.IsType<SurfaceOp.Append>(commit.Op);
+        Assert.Null(commit.SourceSeqs);
         Assert.Equal("prompt v2", Assert.IsType<TextBlock>(commit.Message.Content[0]).Text);
     }
 
@@ -109,35 +126,39 @@ public sealed class SystemPromptProjectionTests
         AppendSystem(session, "prompt v1");
         var projection = new SystemPromptProjection(session);
 
-        Assert.Empty(projection.Project("prompt v1", inHistory: true, startsSeries: false));
+        Assert.Empty(projection.Project("prompt v1", inHistory: true));
     }
 
     [Fact]
-    public void InHistoryRebaselinesOnNewSeries()
+    public void InHistoryConsolidatesAtSeriesStart()
     {
         var session = NewSession();
         var head = AppendSystem(session, "prompt v1");
+        AppendSystem(session, "prompt v2");
         var projection = new SystemPromptProjection(session);
 
-        var commits = projection.Project("prompt v1", inHistory: true, startsSeries: true);
+        var commits = projection.Project("prompt v3", inHistory: true, startsSeries: true);
 
-        Assert.Empty(commits);
-        var changeCommits = projection.Project("prompt v2", inHistory: true, startsSeries: true);
-        var commit = Assert.Single(changeCommits);
-        Assert.Equal(new SurfaceOp.Replace(head.Seq, head.Seq), commit.Op);
+        Assert.Equal(2, commits.Count);
+        Assert.Equal(new SurfaceOp.Replace(head.Seq, head.Seq), commits[^1].Op);
+        Assert.Equal("prompt v3", Assert.IsType<TextBlock>(commits[^1].Message.Content[0]).Text);
     }
 
     [Fact]
-    public void InHistoryComparesAgainstLatestNonEmptyNode()
+    public void InHistoryClearsAllNodesWhenPromptIsEmpty()
     {
         var session = NewSession();
         var head = AppendSystem(session, "prompt v1");
         var tail = AppendSystem(session, "prompt v2");
         var projection = new SystemPromptProjection(session);
 
-        Assert.Empty(projection.Project("prompt v2", inHistory: true, startsSeries: false));
-        var commits = projection.Project("prompt v1", inHistory: true, startsSeries: false);
-        var commit = Assert.Single(commits);
-        Assert.IsType<SurfaceOp.Append>(commit.Op);
+        var commits = projection.Project("", inHistory: true);
+
+        Assert.Equal(2, commits.Count);
+        Assert.All(commits, commit => Assert.Empty(commit.Message.Content));
+        Assert.Contains(commits, commit => commit.Op is SurfaceOp.Replace replace
+            && replace.Start == head.Seq);
+        Assert.Contains(commits, commit => commit.Op is SurfaceOp.Replace replace
+            && replace.Start == tail.Seq);
     }
 }

@@ -63,14 +63,33 @@ public sealed class SettingsMutationScope : IDisposable
     public ISettingsMutationGate? Gate { get; }
     private IRuntimeCodeIntegrity? CodeIntegrity { get; }
     public ISafetyBoundary? Safety { get; }
+    public IExternalProcessPolicy? ExternalProcessPolicy { get; }
+    private IMemoryStore? _mediatedMemoryStore;
+
+    /** Trusted memory-tool metadata; the actual sealed file backend still authorizes and pins each access. */
+    public void MarkMediatedMemoryStore(IMemoryStore store) => _mediatedMemoryStore = store;
+
+    internal bool MediatesMemoryStore(IMemoryStore store) => ReferenceEquals(_mediatedMemoryStore, store);
+
+    public async Task AuthorizeOpaqueOperationAsync(string surface, CancellationToken signal)
+    {
+        using var fused = FusedSignal.Fuse(Context.Signal, signal);
+        fused.Token.ThrowIfCancellationRequested();
+        if (Safety is not null)
+            await Safety.AuthorizeOperationAsync(Context, fused.Token).ConfigureAwait(false);
+        (ExternalProcessPolicy ?? throw new NotSupportedException($"{surface} requires an explicit opaque-operation boundary; no backend access was performed."))
+            .DemandUnconfined(surface);
+        fused.Token.ThrowIfCancellationRequested();
+    }
 
     public SettingsMutationScope(ToolRunContext context, ISettingsMutationGate? gate, IRuntimeCodeIntegrity? codeIntegrity = null,
-        ISafetyBoundary? safety = null)
+        ISafetyBoundary? safety = null, IExternalProcessPolicy? externalProcessPolicy = null)
     {
         Context = context;
         Gate = gate;
         CodeIntegrity = codeIntegrity;
         Safety = safety;
+        ExternalProcessPolicy = externalProcessPolicy ?? context.ExternalProcessPolicy;
         _previous = Active.Value;
         Active.Value = this;
     }
@@ -79,41 +98,49 @@ public sealed class SettingsMutationScope : IDisposable
         => (Gate ?? throw new InvalidOperationException("Settings mutations require the active settings approval service."))
             .CommitAsync(new(path, before, after, Context), commit, Context.Signal);
 
-    public static async Task<string> ReadTextAsync(string path, ToolRunContext context, bool settingsReview = false)
+    public static async Task<string> ReadTextAsync(string path, ToolRunContext context, bool settingsReview = false,
+        CancellationToken? signal = null)
     {
+        using var fused = FusedSignal.Fuse(context.Signal, signal ?? default);
+        var token = fused.Token;
+        token.ThrowIfCancellationRequested();
         var settings = Current?.Gate?.Owns(path) == true;
-        await using var file = await SafetyFileAccess.OpenReadAsync(path, context,
+        var authorize = await SafetyFileAccess.AuthorizeAsync(path, "read", context, token,
             settingsReview: settings && (settingsReview || context.InitialFileIntent == "write")).ConfigureAwait(false);
+        await using var file = PinnedFileAccess.Open(path, PinnedFileMode.Read, authorize);
         if (settings)
         {
-            return await SettingsMutationLimits.ReadTextAsync(file.Stream, context.Signal).ConfigureAwait(false);
+            return await SettingsMutationLimits.ReadTextAsync(file.Stream, token).ConfigureAwait(false);
         }
         using var reader = new StreamReader(file.Stream, new UTF8Encoding(false, false));
-        return await reader.ReadToEndAsync(context.Signal).ConfigureAwait(false);
+        return await reader.ReadToEndAsync(token).ConfigureAwait(false);
     }
 
     public static async Task WriteTextAsync(string path, string before, string after, ToolRunContext context,
-        PinnedFileMode mode = PinnedFileMode.Replace)
+        PinnedFileMode mode = PinnedFileMode.Replace, CancellationToken? signal = null)
     {
+        using var fused = FusedSignal.Fuse(context.Signal, signal ?? default);
+        var token = fused.Token;
+        token.ThrowIfCancellationRequested();
         var gate = Current?.Gate;
-        var authorizeSafety = await SafetyFileAccess.AuthorizeAsync(path, "write", context, context.Signal,
+        var authorizeSafety = await SafetyFileAccess.AuthorizeAsync(path, "write", context, token,
             settingsReview: gate?.Owns(path) == true).ConfigureAwait(false);
         if (gate is not null && gate.Owns(path))
         {
             var canonical = gate.SettingsPath;
             var authorizeCanonical = path == canonical ? authorizeSafety
-                : await SafetyFileAccess.AuthorizeAsync(canonical, "write", context, context.Signal,
+                : await SafetyFileAccess.AuthorizeAsync(canonical, "write", context, token,
                     settingsReview: true).ConfigureAwait(false);
-            await gate.CommitAsync(new(path, before, after, context), async signal =>
+            await gate.CommitAsync(new(path, before, after, context), async commitSignal =>
             {
                 await WriteTextFileAsync(canonical, after, PinnedFileMode.Replace, target =>
                 {
                     authorizeCanonical(target);
                     if (!target.IsDirectory && !gate.Owns(target))
                         throw new IOException("The settings target changed before publication.");
-                }, signal).ConfigureAwait(false);
+                }, commitSignal).ConfigureAwait(false);
                 context.RecordFileChange(canonical);
-            }, context.Signal).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
             return;
         }
         await WriteTextFileAsync(path, after, mode, target =>
@@ -124,7 +151,7 @@ public sealed class SettingsMutationScope : IDisposable
             if (context.ExternalProcessProtectionRequired)
                 (Current?.CodeIntegrity ?? throw new InvalidOperationException("Protected writes require the runtime code integrity boundary."))
                     .DemandWritable(target);
-        }, context.Signal).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
         context.RecordFileChange(path);
     }
 

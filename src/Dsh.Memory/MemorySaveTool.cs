@@ -27,14 +27,18 @@ public static class MemorySaveTool
         + "or skip (decline out-of-scope content). "
         + "Records are timestamped automatically; the injected index is capped at 8192 bytes, so read the memory file directly when you need full content.";
 
-    public static IDisposable Register(Context ctx, Func<ToolRunContext, ProjectMemory> resolve)
+    public static IDisposable Register(Context ctx, Func<string?, ProjectMemory> resolve)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:memory_save", SectionText));
+        var section = systemPrompt.Section(new PromptSection(
+            "tool:memory_save",
+            context => resolve(context.Agent?.Session.Header.Cwd).IsEnabled ? SectionText : "",
+            Dynamic: true));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = "Record-level operations on the project memory: remember, correct, forget (by key(s) or text query), or skip.",
             Parameters = JsonNode.Parse("""
                 {
@@ -75,7 +79,7 @@ public static class MemorySaveTool
                     }
                     """)!.AsObject(),
                 (_, value) => RenderResult(value)),
-            Execute = (args, exec) => Execute(args, exec, resolve(exec)),
+            Execute = (args, exec) => Execute(args, exec, resolve(exec.Agent?.Session.Header.Cwd)),
         });
         return new Registration(registration, section);
     }
@@ -85,6 +89,14 @@ public static class MemorySaveTool
         ToolRunContext exec,
         ProjectMemory memory)
     {
+        if (memory.Store is FileMemoryStore && SettingsMutationScope.Current is { } scope)
+            scope.MarkMediatedMemoryStore(memory.Store);
+        if (!memory.IsEnabled)
+        {
+            if (SettingsMutationScope.Current?.Safety is { } safety)
+                await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
+            return new MemorySaveResult("skip", [], [], 0, false, false, "project memory is off; run /memory on");
+        }
         var action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
         var key = GetString(args, "key");
         var text = GetString(args, "text");
@@ -108,6 +120,8 @@ public static class MemorySaveTool
                 var forgotten = await memory.ForgetAsync(BuildForgetRequest(key, keys, query, section, dryRun), "tool", exec.Signal);
                 return new MemorySaveResult("forget", forgotten.Keys, forgotten.Sections, forgotten.Count, false, forgotten.DryRun);
             case "skip":
+                if (SettingsMutationScope.Current?.Safety is { } safety)
+                    await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
                 var reason = GetString(args, "reason");
                 return new MemorySaveResult("skip", [], [], 0, false, false, string.IsNullOrWhiteSpace(reason) ? "out_of_scope" : reason);
             default:

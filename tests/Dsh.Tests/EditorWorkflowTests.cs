@@ -94,6 +94,11 @@ public sealed class EditorWorkflowTests
     public async Task Structured_Test_Failures_Open_The_Location_Regardless_Of_Tool_Error_Status(bool isError)
     {
         using var fixture = await CreateFixtureAsync("open_file", "test.failure");
+        HarnessSettings.Update(fixture.App.Home, settings =>
+        {
+            (settings.Safety ??= new SafetySettings()).Whitelist["structured-test-runner"] = new() { Tool = ["test-runner"] };
+            return true;
+        });
         fixture.Repository.Write("source.cs", "source");
         var handle = await fixture.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: fixture.Repository.Root), TestContext.Current.CancellationToken);
         using var lease = handle.Dispose;
@@ -173,6 +178,88 @@ public sealed class EditorWorkflowTests
         Assert.Contains("untrusted.cmd", userResult.PrintableCommand);
     }
 
+    [Fact(Timeout = 60000)]
+    public async Task ModelAfterWrite_QueuedEditorCannotEscapeFilePolicy_AndManualBarrierStillRuns()
+    {
+        if (await PolicyProcessIsolation.RunIfNeededAsync(
+            "Dsh.Tests.EditorWorkflowTests.ModelAfterWrite_QueuedEditorCannotEscapeFilePolicy_AndManualBarrierStillRuns",
+            TestContext.Current.CancellationToken)) return;
+        using var repository = new GitTestRepository();
+        using var editor = new EditorLauncherTests.FakeEditorFixture();
+        var home = HarnessHome.Resolve(Path.Combine(repository.Sandbox, "home"));
+        Directory.CreateDirectory(home.Root);
+        var source = Path.Combine(repository.Root, "model-output.cs");
+        var sentinel = Path.Combine(repository.Root, "manual-barrier.cs");
+        var privateFile = Path.Combine(repository.Root, "private.txt");
+        await File.WriteAllTextAsync(sentinel, "manual barrier", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(privateFile, "protected value", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(home.SettingsFile, $$"""
+            safety:
+              autoApprove: false
+              whitelist:
+                write-invocation: { tool: write }
+              blacklist:
+                private-source: { path: {{JsonSerializer.Serialize(privateFile)}}, intent: read }
+            plugins:
+              "@deepseek-ai/dsh-ide":
+                fallback: none
+                editors:
+                  - id: observed
+                    kind: terminal
+                    command: {{JsonSerializer.Serialize(editor.Executable)}}
+                    actions:
+                      open_file: ["{path}"]
+                      open_at_position: ["{path}", "{line}", "{column}"]
+                    env:
+                      DSH_FAKE_EDITOR_OUTPUT: {{JsonSerializer.Serialize(editor.Output)}}
+                      DSH_FAKE_EDITOR_VALUE: fixture
+                triggers:
+                  - id: model-write
+                    on: tool.after_write
+                    action: open_file
+                    editors: [observed]
+                    once: turn
+                  - id: manual-barrier
+                    on: agent.error
+                    action: open_file
+                    editors: [observed]
+                    once: turn
+            """, TestContext.Current.CancellationToken);
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: repository.Root,
+            PluginsDirectory: Path.Combine(repository.Sandbox, "plugins")));
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launches = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        app.Ctx.Provide("editorTerminalHost", new Dsh.Ide.Launch.DelegateTerminalHost("observed-real-editor", _ => true,
+            async (launch, signal) =>
+            {
+                var executed = await Dsh.Ide.Launch.EditorProcess.StartAsync(launch with { WaitForExit = true }, signal);
+                launches.Enqueue(launch.Arguments[0]);
+                if (launch.Arguments[0] == sentinel)
+                {
+                    if (executed.Success) barrier.TrySetResult();
+                    else barrier.TrySetException(new InvalidOperationException(executed.Message));
+                }
+                return executed;
+            }));
+        var handle = await app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(
+            new CreateAgentOptions(Cwd: repository.Root), TestContext.Current.CancellationToken);
+        using var lease = handle.Dispose;
+        handle.Agent.Session.Append(new TurnStartPayload(1));
+        var result = await app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!.Execute(new ToolExecutionInput
+        {
+            Name = "write", CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Agent = handle.Agent,
+            Arguments = JsonSerializer.SerializeToElement(new { file_path = source, content = "approved model output" }),
+            Signal = TestContext.Current.CancellationToken,
+        });
+        Assert.False(result.IsError, string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+        Assert.Equal("approved model output", File.ReadAllText(source));
+        Assert.Null(SettingsMutationScope.Current);
+        app.Ctx.Emit(new AgentErrorNotification(handle.Agent, 1, 1,
+            new InvalidOperationException($"{sentinel}:1:1: manual queue barrier")));
+        await barrier.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(sentinel, Assert.Single(launches));
+    }
+
     private static async Task<Fixture> CreateFixtureAsync(string action, string on = "manual", string environmentValue = "fixture", string fallback = "none")
     {
         var repository = new GitTestRepository();
@@ -182,6 +269,15 @@ public sealed class EditorWorkflowTests
         var selectedOutput = JsonSerializer.Serialize(editor.Output);
         var globalOutput = JsonSerializer.Serialize(Path.Combine(editor.Root, "global.txt"));
         File.WriteAllText(Path.Combine(homePath, "settings.yaml"), $$"""
+            safety:
+              autoApprove: false
+              whitelist:
+                editor-workflow-open:
+                  tool: ide
+                  args: { action: open }
+                editor-workflow-reveal:
+                  tool: ide
+                  args: { action: reveal }
             plugins:
               "@deepseek-ai/dsh-ide":
                 fallback: {{fallback}}

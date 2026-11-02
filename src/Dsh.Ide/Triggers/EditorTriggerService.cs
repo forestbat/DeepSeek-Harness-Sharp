@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Ide.Launch;
 
 namespace Dsh.Ide.Triggers;
 
@@ -15,7 +16,8 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
     private readonly Context _ctx;
     private readonly EditorTriggerEngine _engine;
     private readonly IReadOnlyList<EditorTrigger> _rules;
-    private readonly Channel<EditorTriggerContext> _queue = Channel.CreateBounded<EditorTriggerContext>(new BoundedChannelOptions(QueueCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+    private readonly record struct QueuedTrigger(EditorTriggerContext Trigger, ToolRunContext? Run);
+    private readonly Channel<QueuedTrigger> _queue = Channel.CreateBounded<QueuedTrigger>(new BoundedChannelOptions(QueueCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     private readonly CancellationTokenSource _stop = new();
     private readonly Func<bool>[] _remove;
     private readonly Task _worker;
@@ -58,7 +60,7 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
     {
         if (notification.Run.Agent is not { } agent)
             return;
-        ObserveTestFailures(agent, notification.Result.Meta);
+        ObserveTestFailures(agent, notification.Result.Meta, notification.Run);
     }
 
     private void FileChanged(SessionEventNotification notification)
@@ -81,14 +83,14 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
             Enqueue(ContextFor(notification.Agent, "test.failure", location, notification.Turn, "test"));
     }
 
-    private void ObserveTestFailures(IAgent agent, JsonElement? metadata)
+    private void ObserveTestFailures(IAgent agent, JsonElement? metadata, ToolRunContext run)
     {
         if (metadata is not { ValueKind: JsonValueKind.Object } meta || !meta.TryGetProperty("testFailures", out var failures) || failures.ValueKind != JsonValueKind.Array)
             return;
         foreach (var failure in failures.EnumerateArray())
         {
             if (ReadLocation(failure) is { } location)
-                Enqueue(ContextFor(agent, "test.failure", location, EditorSessionContext.CurrentTurn(_ctx, agent.Session), "test"));
+                Enqueue(ContextFor(agent, "test.failure", location, EditorSessionContext.CurrentTurn(_ctx, agent.Session), "test"), run);
         }
     }
 
@@ -113,11 +115,11 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
             : _ctx.Get<EditorExecutionContext>(EditorExecutionContext.ServiceName, false)?.IsRemoteHost == true ? "remote" : "local";
 
 
-    private void Enqueue(EditorTriggerContext context)
+    private void Enqueue(EditorTriggerContext context, ToolRunContext? run = null)
     {
         if (_rules.All(rule => !rule.Enabled || rule.On != context.Event) || _stop.IsCancellationRequested)
             return;
-        if (!_queue.Writer.TryWrite(context))
+        if (!_queue.Writer.TryWrite(new(context, run ?? SettingsMutationScope.Current?.Context)))
             _ctx.Logger.Warn("IDE trigger queue full; event=%s", context.Event);
     }
 
@@ -133,16 +135,36 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
         }
     }
 
-    private async Task ExecuteQueuedAsync(EditorTriggerContext context)
+    private async Task ExecuteQueuedAsync(QueuedTrigger queued)
     {
+        var context = queued.Trigger;
+        using var cancellation = queued.Run is { Signal.CanBeCanceled: true } run
+            ? CancellationTokenSource.CreateLinkedTokenSource(_stop.Token, run.Signal) : null;
+        var signal = cancellation?.Token ?? _stop.Token;
+        using var scope = queued.Run is { } invocation
+            ? new SettingsMutationScope(invocation, _ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
+                _ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false),
+                _ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false),
+                _ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)) : null;
         try
         {
-            var outcomes = await ExecuteAsync(context, _stop.Token).ConfigureAwait(false);
+            signal.ThrowIfCancellationRequested();
+            if (scope is not null)
+            {
+                if (scope.Safety is { } safety)
+                    await safety.AuthorizeOperationAsync(scope.Context, signal).ConfigureAwait(false);
+                EditorProcess.DemandModelExecution();
+            }
+            var outcomes = await ExecuteAsync(context, signal).ConfigureAwait(false);
             foreach (var outcome in outcomes)
                 _ctx.Logger.Info("IDE trigger rule=%s executed=%s result=%s", outcome.Rule, outcome.Executed, outcome.Reason);
         }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        catch (OperationCanceledException) when (signal.IsCancellationRequested)
         {
+        }
+        catch (Exception error) when (error is NotSupportedException or UnauthorizedAccessException)
+        {
+            _ctx.Logger.Warn("IDE trigger blocked; event=%s reason=%s", context.Event, error.Message);
         }
         catch (Exception error)
         {
@@ -191,6 +213,7 @@ public sealed partial class EditorTriggerService : IAsyncDisposable
         _queue.Writer.TryComplete();
         await _stop.CancelAsync().ConfigureAwait(false);
         await _worker.ConfigureAwait(false);
+        while (_queue.Reader.TryRead(out _)) { }
         _stop.Dispose();
     }
 }

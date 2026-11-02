@@ -123,6 +123,33 @@ public sealed class AgentInstructionsTests
         }
     }
 
+    [Fact]
+    public async Task DynamicRenderSkipsInstructionsAlreadyLoadedByStaticPrompt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-agents-md", Guid.NewGuid().ToString("N"));
+        var sub = Path.Combine(root, "sub");
+        var home = new HarnessHome(Path.Combine(root, "home"));
+        Directory.CreateDirectory(sub);
+        Directory.CreateDirectory(home.Root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "AGENTS.md"), "root instructions");
+            File.WriteAllText(Path.Combine(sub, "AGENTS.md"), "sub instructions");
+            var loaded = new HashSet<string>(
+                AgentInstructionsText.Discover(home, root),
+                StringComparer.Ordinal);
+
+            var rendered = await AgentInstructionsText.RenderNewAsync(home, sub, loaded, null, TestContext.Current.CancellationToken);
+
+            Assert.Contains("sub instructions", rendered);
+            Assert.DoesNotContain("root instructions", rendered);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private sealed class FakeAgent : IAgent
     {
         private readonly SessionId _id = SessionId.Create($"session-{Guid.NewGuid():N}");

@@ -21,7 +21,7 @@ public static class ReadTool
 {
     public const string ToolName = "read";
 
-    private const string SectionText = "Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files. To look at an image file, use read_image instead.";
+    private const string SectionText = "Use the read tool — not shell commands like cat — to inspect text files. Use offset and limit to continue reading large files.";
 
     public static IDisposable Register(Context ctx, ReadToolCaps? caps = null)
     {
@@ -34,7 +34,7 @@ public static class ReadTool
             Name = ToolName,
             MediatesFileAccess = true,
             FileIntent = _ => "read",
-            Description = "Read a UTF-8 text file and return line-numbered content.",
+            Description = "Read a UTF-8 text file and return line-numbered content. To inspect an image file, use read_image instead.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>
                 {

@@ -39,6 +39,7 @@ public sealed class ProjectMemory
     private readonly IMemoryStore _store;
     private readonly string _sidecarDir;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool? _enabled;
 
     public ProjectMemory(IMemoryStore store, string sidecarDir)
     {
@@ -48,7 +49,28 @@ public sealed class ProjectMemory
 
     public string Description => _store.Description;
 
+    public IMemoryStore Store => _store;
+
+    public bool IsEnabled => _enabled ??= !File.Exists(DisabledMarker);
+
     public static string SidecarDirFor(string projectRoot) => Path.Combine(projectRoot, SidecarDirName);
+
+    private string DisabledMarker => Path.Combine(_sidecarDir, "disabled");
+
+    public async Task SetEnabledAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        if (enabled)
+        {
+            if (File.Exists(DisabledMarker))
+                File.Delete(DisabledMarker);
+        }
+        else
+        {
+            Directory.CreateDirectory(_sidecarDir);
+            await File.WriteAllTextAsync(DisabledMarker, "", cancellationToken);
+        }
+        _enabled = enabled;
+    }
 
     private string SessionsDir => Path.Combine(_sidecarDir, "sessions");
 
@@ -188,7 +210,7 @@ public sealed class ProjectMemory
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            text = await _store.GetAsync(cancellationToken);
+            text = await ReadStoreAsync(cancellationToken);
         }
         finally
         {
@@ -259,17 +281,45 @@ public sealed class ProjectMemory
         }
     }
 
-    private async Task<MemoryDocument> LoadAsync(CancellationToken cancellationToken)
-        => MemoryDocument.Parse(await _store.GetAsync(cancellationToken));
+    private async Task<string?> ReadStoreAsync(CancellationToken cancellationToken)
+    {
+        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, cancellationToken);
+        await AuthorizeStoreAsync(fused.Token).ConfigureAwait(false);
+        fused.Token.ThrowIfCancellationRequested();
+        return await _store.GetAsync(fused.Token).ConfigureAwait(false);
+    }
 
-    private Task SaveAsync(MemoryDocument doc, CancellationToken cancellationToken)
-        => _store.SetAsync(doc.Render(), cancellationToken);
+    private Task AuthorizeStoreAsync(CancellationToken signal)
+        => SettingsMutationScope.Current is { } scope && !scope.MediatesMemoryStore(_store)
+            ? scope.AuthorizeOpaqueOperationAsync("Model memory access through a non-mediated backend", signal)
+            : Task.CompletedTask;
+
+    private async Task<MemoryDocument> LoadAsync(CancellationToken cancellationToken)
+        => MemoryDocument.Parse(await ReadStoreAsync(cancellationToken).ConfigureAwait(false));
+
+    private async Task SaveAsync(MemoryDocument doc, CancellationToken cancellationToken)
+    {
+        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, cancellationToken);
+        await AuthorizeStoreAsync(fused.Token).ConfigureAwait(false);
+        fused.Token.ThrowIfCancellationRequested();
+        await _store.SetAsync(doc.Render(), fused.Token).ConfigureAwait(false);
+    }
 
     private async Task AuditAsync(MemoryAuditEntry entry, CancellationToken cancellationToken)
     {
+        var line = JsonSerializer.Serialize(entry, DshCoreJsonContext.Default.MemoryAuditEntry) + "\n";
+        if (SettingsMutationScope.Current is { } scope)
+        {
+            var before = scope.Gate?.Owns(AuditPath) == true
+                ? await SettingsMutationScope.ReadTextAsync(AuditPath, scope.Context, settingsReview: true,
+                    signal: cancellationToken).ConfigureAwait(false)
+                : "";
+            await SettingsMutationScope.WriteTextAsync(AuditPath, before, before + line, scope.Context,
+                Dsh.Transport.PinnedFileMode.Append, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         Directory.CreateDirectory(_sidecarDir);
-        var line = JsonSerializer.Serialize(entry, DshCoreJsonContext.Default.MemoryAuditEntry);
-        await File.AppendAllTextAsync(AuditPath, line + "\n", cancellationToken);
+        await File.AppendAllTextAsync(AuditPath, line, cancellationToken).ConfigureAwait(false);
     }
 
     private SessionDigest? ParseDigest(string path)

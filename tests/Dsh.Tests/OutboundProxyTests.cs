@@ -715,7 +715,7 @@ public sealed class OutboundProxyTests
             var network = outboundProxyYaml is null ? "" : $"network:\n  outbound_proxy:\n    {outboundProxyYaml}\n";
             await File.WriteAllTextAsync(
                 Path.Combine(home.Root, "settings.yaml"),
-                $"{KeptComment}\nglobal_default_model: null\nproviders: {{}}\nlogging:\n  file: false\n{network}");
+                $"{KeptComment}\nglobal_default_model: null\nproviders: {{}}\nlogging:\n  file: false\nsafety:\n  autoApprove: false\n  whitelist:\n    outbound-proxy-consumer:\n      tool: web_fetch\n{network}");
             return new TestHarness(await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory)), directory);
         }
 

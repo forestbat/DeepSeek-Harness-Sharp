@@ -8,7 +8,7 @@ namespace Dsh.Core;
 public interface ISafetyBoundary
 {
     const string ServiceName = "safetyBoundary";
-    Task AdmitAsync(ToolRunContext run, bool mediatedFiles);
+    Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null);
     Task<Action<PinnedFileTarget>> AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
         CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false);
     Task AuthorizeOperationAsync(ToolRunContext? run, CancellationToken signal, string? lifecycleOwner = null,
@@ -36,22 +36,31 @@ public static class SafetyFileAccess
 
     public static async Task<PinnedFileAccess> OpenReadAsync(string path, ToolRunContext run, bool settingsReview = false)
     {
+        run.Signal.ThrowIfCancellationRequested();
         var authorize = await AuthorizeAsync(path, "read", run, run.Signal, settingsReview).ConfigureAwait(false);
         return PinnedFileAccess.Open(path, PinnedFileMode.Read, authorize);
     }
 
-    public static async Task<IReadOnlyList<(string Path, bool IsDirectory)>> ReadDirectoryAsync(string path, ToolRunContext run)
+    public static async Task<IReadOnlyList<(string Path, bool IsDirectory)>> ReadDirectoryAsync(string path, ToolRunContext run,
+        CancellationToken? signal = null, bool followLinks = false)
     {
-        var authorize = await AuthorizeAsync(path, "read", run, run.Signal).ConfigureAwait(false);
+        using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
+        var token = fused.Token;
+        token.ThrowIfCancellationRequested();
+        var authorize = await AuthorizeAsync(path, "read", run, token).ConfigureAwait(false);
         return await PinnedFileAccess.ReadDirectoryAsync(path, authorize,
-            entry => AuthorizeAsync(entry, "read", run, run.Signal)).ConfigureAwait(false);
+            entry => AuthorizeAsync(entry, "read", run, token), followLinks).ConfigureAwait(false);
     }
 
-    public static async Task<string> ReadTextAsync(string path, ToolRunContext run)
+    public static async Task<string> ReadTextAsync(string path, ToolRunContext run, CancellationToken? signal = null)
     {
-        await using var file = await OpenReadAsync(path, run).ConfigureAwait(false);
+        using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
+        var token = fused.Token;
+        token.ThrowIfCancellationRequested();
+        var authorize = await AuthorizeAsync(path, "read", run, token).ConfigureAwait(false);
+        await using var file = PinnedFileAccess.Open(path, PinnedFileMode.Read, authorize);
         using var reader = new StreamReader(file.Stream, new UTF8Encoding(false, false));
-        return await reader.ReadToEndAsync(run.Signal).ConfigureAwait(false);
+        return await reader.ReadToEndAsync(token).ConfigureAwait(false);
     }
 
     public static async Task<byte[]> ReadBytesAsync(string path, ToolRunContext run, long maximum)

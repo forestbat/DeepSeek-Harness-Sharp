@@ -20,7 +20,7 @@ public sealed class Plugin : IDshPlugin
             ?? throw new InvalidOperationException("harnessOptions is required for the memory plugin");
         var workspace = new MemoryWorkspace(config as MemoryPluginConfig ?? MemoryPluginConfig.Resolve(config));
         ctx.Provide(MemoryServices.Provider, workspace);
-        var tool = MemorySaveTool.Register(ctx, exec => workspace.For(exec.Agent?.Session.Header.Cwd));
+        var tool = MemorySaveTool.Register(ctx, workspace.For);
         var capture = new MemoryCapture(ctx, session => workspace.For(session.Header.Cwd), options);
         return new Bundle(workspace, tool, capture);
     }

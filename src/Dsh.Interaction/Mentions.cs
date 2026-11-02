@@ -19,6 +19,13 @@ public static partial class MentionResolver
     [GeneratedRegex(@"@([^\s@]+)", RegexOptions.Compiled)]
     private static partial Regex MentionPattern();
 
+    public static Task<IReadOnlyList<string>> ResolveCandidatesAsync(
+        string token,
+        string cwd,
+        IReadOnlyList<MentionSessionInfo> sessions,
+        CancellationToken cancellationToken = default)
+        => Task.Run(() => ResolveCandidates(token, cwd, sessions), cancellationToken);
+
     public static IReadOnlyList<string> ResolveCandidates(string token, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
     {
         var files = ResolveFileSystemCandidates(token, cwd);

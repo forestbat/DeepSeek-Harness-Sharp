@@ -88,6 +88,10 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
+            // This lifecycle/ALC consumer explicitly trusts direct code loading without a model invocation.
+            var settings = HarnessSettings.Load(home);
+            settings.Safety = new SafetySettings { AutoApprove = true };
+            settings.Save(home);
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");

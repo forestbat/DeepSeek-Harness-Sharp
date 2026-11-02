@@ -800,6 +800,106 @@ public sealed class SettingsMutationTests
         Assert.NotNull(audit.CallId);
     }
 
+    [Fact]
+    public async Task SuccessfulRead_PostInstructionsCannotInjectDeniedFile_AndKeepsTheAllowedContent()
+    {
+        var policy = new SafetySettings { Whitelist = new() { ["read-invocation"] = new() { Tool = ["read"] } } };
+        using var fixture = new Fixture(safety: policy);
+        var cwd = fixture.Session.WorkingDirectory!;
+        fixture.Context.SetOwn("harnessOptions", new HarnessOptions(fixture.Home, Cwd: cwd));
+        using var instructions = new Dsh.AgentInstructions.Plugin("@deepseek-ai/dsh-agent-instructions").Apply(fixture.Context, null);
+        var allowedDirectory = Directory.CreateDirectory(Path.Combine(cwd, "allowed-instructions")).FullName;
+        var allowedPath = Path.Combine(allowedDirectory, "public.txt");
+        await File.WriteAllTextAsync(allowedPath, "allowed-source-content", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(allowedDirectory, "AGENTS.md"), "allowed-instruction-marker", TestContext.Current.CancellationToken);
+        var allowed = await fixture.Execute("read", new JsonObject { ["file_path"] = allowedPath });
+        Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+        Assert.Contains("allowed-instruction-marker", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+
+        var deniedDirectory = Directory.CreateDirectory(Path.Combine(cwd, "denied-instructions")).FullName;
+        var source = Path.Combine(deniedDirectory, "public.txt");
+        var privateInstructions = Path.Combine(deniedDirectory, "AGENTS.md");
+        await File.WriteAllTextAsync(source, "second-allowed-source-content", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(privateInstructions, "private-post-read-instruction-marker", TestContext.Current.CancellationToken);
+        policy.Blacklist["deny-post-instructions"] = new() { Path = privateInstructions, Intent = "read" };
+        var callId = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+        var result = await fixture.Tools.Execute(new ToolExecutionInput
+        {
+            CallId = callId, Name = "read", Agent = fixture.Agent,
+            Arguments = JsonSerializer.SerializeToElement(new { file_path = source }), Signal = TestContext.Current.CancellationToken,
+        });
+        Assert.False(result.IsError, string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+        var content = string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
+        Assert.Contains("second-allowed-source-content", content);
+        Assert.DoesNotContain("private-post-read-instruction-marker", content);
+        Assert.DoesNotContain("private-post-read-instruction-marker", JsonSerializer.Serialize(result.AdditionalContexts));
+        Assert.Contains(fixture.SafetyAudits, audit => audit.RuleId == "deny-post-instructions" && audit.Decision == "deny"
+            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(privateInstructions) && audit.Intent == "read"
+            && audit.Tool == "read" && audit.SessionId == fixture.Session.Id.Value && audit.CallId == callId.Value);
+    }
+
+    [Theory]
+    [InlineData("delete-file")]
+    [InlineData("replace-directory")]
+    [InlineData("cancel")]
+    public async Task SuccessfulRead_OptionalInstructionsRemovedDuringApproval_DoNotLoseAllowedReadOrSwallowCancellation(string change)
+    {
+        var policy = new SafetySettings { AutoApprove = false };
+        using var fixture = new Fixture(safety: policy);
+        var cwd = fixture.Session.WorkingDirectory!;
+        fixture.Context.SetOwn("harnessOptions", new HarnessOptions(fixture.Home, Cwd: cwd));
+        using var instructions = new Dsh.AgentInstructions.Plugin("@deepseek-ai/dsh-agent-instructions").Apply(fixture.Context, null);
+        var directory = Directory.CreateDirectory(Path.Combine(cwd, "optional-instructions")).FullName;
+        var source = Path.Combine(directory, "public.txt");
+        var optional = Path.Combine(directory, "AGENTS.md");
+        await File.WriteAllTextAsync(source, "allowed-source-during-optional-removal", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(optional, "private-optional-instruction-body", TestContext.Current.CancellationToken);
+        var auditPath = Dsh.Transport.PinnedFileAccess.Canonicalize(optional);
+        policy.Whitelist["only-primary-source"] = new() { Tool = ["read"], Path = source, Intent = "read" };
+        var asked = new TaskCompletionSource<ApprovalRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>((notification, _) =>
+        {
+            asked.TrySetResult(notification.Request);
+            return new(answer.Task);
+        }, new EventOptions { Global = true });
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var callId = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var pending = fixture.Tools.Execute(new ToolExecutionInput
+            {
+                CallId = callId, Name = "read", Agent = fixture.Agent,
+                Arguments = JsonSerializer.SerializeToElement(new { file_path = source }), Signal = cancellation.Token,
+            });
+            await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (change == "replace-directory")
+            {
+                Directory.Move(directory, directory + ".retired");
+                await File.WriteAllTextAsync(directory, "directory replaced during optional approval", TestContext.Current.CancellationToken);
+            }
+            else
+                File.Delete(optional);
+            if (change == "cancel") cancellation.Cancel();
+            answer.TrySetResult(ApprovalOutcome.AllowedOnce);
+
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+            var content = string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
+            Assert.Equal(change == "cancel", result.IsError);
+            if (change != "cancel") Assert.Contains("allowed-source-during-optional-removal", content);
+            Assert.DoesNotContain("private-optional-instruction-body", content);
+            Assert.DoesNotContain("private-optional-instruction-body", JsonSerializer.Serialize(result.AdditionalContexts));
+            Assert.Contains(fixture.SafetyAudits, audit => audit.Path == auditPath && audit.Intent == "read"
+                && audit.Decision == "notify" && audit.Tool == "read"
+                && audit.SessionId == fixture.Session.Id.Value && audit.CallId == callId.Value);
+        }
+        finally
+        {
+            answer.TrySetResult(ApprovalOutcome.Cancelled);
+            remove();
+        }
+    }
+
     private sealed class Fixture : IDisposable
     {
         public const string Original = "# keep this comment\nglobal_default_model: alpha/old\nproviders:\n  alpha:\n    type: openai-compatible\n    options:\n      apiKey: credential-old-for-test\nsafety:\n  autoApprove: false\n  blacklist: {}\n  whitelist: {}\n";

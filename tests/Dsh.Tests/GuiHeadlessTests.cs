@@ -532,6 +532,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             // 选中引用候选后光标必须落在 token 之后, 继续打的提示词不能被清掉。
             window.KeyTextInput("@notes");
             Assert.Equal("@notes", viewModel.Composer.Input);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions, () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
             Assert.True(viewModel.IsSuggestionOpen);
             Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
             window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);

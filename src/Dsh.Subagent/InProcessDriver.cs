@@ -1,4 +1,4 @@
-﻿using Dsh.Runtime;
+using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Core;
 using Dsh.Llm;
@@ -7,6 +7,9 @@ namespace Dsh.Subagent;
 
 public static class InProcessDriver
 {
+    /** 日志分类名: 与 agent 的取消行同一套命名, 便于把父子的停摆串起来看。 */
+    private const string LogName = "subagent";
+
     public static Task<ISubagentRun> StartAsync(ResolvedSubagentStartRequest request, IReadOnlyList<SessionEvent>? seed, bool standalone = false)
     {
         DelegationDepth.AssertSubagentMaxDepth(request.Request.MaxDepth);
@@ -64,6 +67,8 @@ public static class InProcessDriver
         private readonly int _activationBoundary;
         private readonly List<IDisposable> _composition = [];
         private readonly CancellationTokenRegistration _abortRegistration;
+        /** 后台运行自己的取消源: 父回合取消不再经过它, 只有控制面(停止该子代理)才会触发。 */
+        private readonly CancellationTokenSource? _ownAbort;
         private readonly StructuredOutputAttachment? _structured;
         private volatile bool _cancelled;
 
@@ -85,10 +90,19 @@ public static class InProcessDriver
                 new ChildComposition(request.Request.Persona, request.Request.ToolFilter, request.Request.OutputSchema),
                 _structured));
             AttachDescriptorAppend(child.Ctx, child.Session, request.Descriptor);
-            _abortRegistration = request.Request.Signal.Register(() =>
+            // 后台运行刻意不挂父回合的信号: 用户在主会话按停只结束父自己的回合, 子代理要继续跑完。
+            // 它改挂自己的取消源, 由控制面(CancelChild)或处置触发。
+            var signal = request.Request.Background
+                ? (_ownAbort = new CancellationTokenSource()).Token
+                : request.Request.Signal;
+            _abortRegistration = signal.Register(() =>
             {
                 _cancelled = true;
-                child.Cancel(new AgentCancelCause.Parent());
+                child.Ctx.LoggerFor(LogName).Info(
+                    $"subagent cancel: child={child.Id} parent={request.Parent.Id} cause={(request.Request.Background ? "user" : "parent")}");
+                child.Cancel(request.Request.Background
+                    ? new AgentCancelCause.User()
+                    : new AgentCancelCause.Parent());
             });
             Result = DriveAsync(request.Request);
         }
@@ -135,6 +149,8 @@ public static class InProcessDriver
         public async Task DisposeAsync()
         {
             _cancelled = true;
+            if (_ownAbort is not null)
+                await _ownAbort.CancelAsync();
             await _abortRegistration.DisposeAsync();
             _child.Cancel(new AgentCancelCause.Disposed());
             try

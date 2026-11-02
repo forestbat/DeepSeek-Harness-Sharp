@@ -206,9 +206,15 @@ public sealed class TokenMeter : Service, IDisposable
             if (stepStart is null || stepStart.Value.Turn != assistant.Turn || stepStart.Value.Step != assistant.Step)
                 throw new InvalidOperationException($"token meter: assistant/message at seq {sessionEvent.Seq} has no matching step/start event");
             var eventTokens = plannedNode!.Tokens;
+            /*
+             * 锚点记录"这次请求实际发出去的表面": 用当前表面而不是 step/start 时的快照。
+             * 系统消息与本步的用户消息都在 step/start 之后才写入表面, 却已经在这次请求里发出去了;
+             * 若按开始时的快照算, 它们会被当成"请求之后新增的内容"再计一次(实测多算 193 token)。
+             */
+            IReadOnlyList<TokenSurfaceNode> anchorNodes = [.. state.Surface];
             nextAnchor = assistant.Usage is not null && nextHeader is not null
-                ? new MeasurementAnchor(nextHeader, stepStart.Value.Nodes, EstimateProviderAssistant(session, sessionEvent, assistant, eventTokens), assistant.Usage)
-                : new MeasurementAnchor(nextHeader, stepStart.Value.Nodes, eventTokens, null);
+                ? new MeasurementAnchor(nextHeader, anchorNodes, EstimateProviderAssistant(session, sessionEvent, assistant, eventTokens), assistant.Usage)
+                : new MeasurementAnchor(nextHeader, anchorNodes, eventTokens, null);
         }
 
         state.Header = nextHeader;

@@ -1293,5 +1293,5 @@ safety:
   # Example: deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
   blacklist: {}
   # Example: source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
-  # Matching allows do not override explicit session deny or settings diff review.
+  # Allows can skip notification, never explicit deny or the redacted diff/audit/authoritative approval gate.
   whitelist: {}

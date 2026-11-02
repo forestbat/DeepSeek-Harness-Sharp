@@ -46,7 +46,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
         => PermissionEngine.Decide(rules, input, static path => PinnedFileAccess.Canonicalize(path));
 
-    public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles)
+    public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
     {
         var active = _read();
         if (run.OwnerPackage is { } owner && Ctx.GetProp("pluginCatalog") is PluginCatalog catalog
@@ -67,6 +67,14 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
                 if (property.Name is not ("path" or "file_path") || property.Value.ValueKind != JsonValueKind.String) continue;
                 var value = property.Value.GetString();
                 if (string.IsNullOrWhiteSpace(value)) continue;
+                DemandPreliminary(value);
+            }
+            if (filePaths is not null)
+                foreach (var path in filePaths(run.Arguments))
+                    if (!string.IsNullOrWhiteSpace(path)) DemandPreliminary(path);
+
+            void DemandPreliminary(string value)
+            {
                 var preliminary = Input(run, PinnedFileAccess.Canonicalize(Path.GetFullPath(value, input.WorkingDirectory)), run.InitialFileIntent);
                 var known = Decide(rules, preliminary);
                 if (known.Decision == "deny")
@@ -93,8 +101,9 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
         var decision = Decide(rules, input);
         Audit(run, input, decision, space, lifecycleOwner);
         Reject(decision, space);
-        _ = await ApproveAsync(run, input, decision, space, Revision(rules), signal,
+        var authorization = await ApproveAsync(run, input, decision, space, Revision(rules), signal,
             alreadyApproved: run?.SafetyApprovalRevision == AuthorizationRevision(rules, space), lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
+        if (run is not null) run.SafetyApprovalRevision = authorization;
     }
 
     public void AuthorizeConfiguredMcp(string lifecycleOwner, CancellationToken signal)

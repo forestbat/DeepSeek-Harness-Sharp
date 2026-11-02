@@ -91,7 +91,7 @@ internal static class UnixPathPin
         finally { if (added) handle.DangerousRelease(); }
     }
 
-    internal static IEnumerable<(string Name, bool Directory, bool Regular)> Entries(SafeFileHandle directory)
+    internal static IEnumerable<(string Name, bool Directory, bool Regular, bool Link)> Entries(SafeFileHandle directory)
     {
         using var duplicate = OpenDescriptor(checked((int)directory.DangerousGetHandle()), ".", directory: true, enumerate: true);
         var descriptor = dup(checked((int)duplicate.DangerousGetHandle()));
@@ -124,7 +124,7 @@ internal static class UnixPathPin
                 var type = Marshal.ReadByte(entry, typeOffset);
                 if (type == 0)
                     type = checked((byte)(NativeFileIdentity.UnixTypeAt(directory, name) >> 12));
-                yield return (name, type == 4, type == 8);
+                yield return (name, type == 4, type == 8, type == 10);
             }
         }
         finally { closedir(stream); }

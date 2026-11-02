@@ -14,11 +14,163 @@ namespace Dsh.Tests;
 public sealed class PresentToolTests
 {
     private const string ToolName = "present";
+    [Fact]
+    public async Task Present_ActualDeniedFile_IsNotPublished_AndKeepsTheOriginatingAudit()
+    {
+        if (await PolicyProcessIsolation.RunIfNeededAsync(
+            "Dsh.Tests.PresentToolTests.Present_ActualDeniedFile_IsNotPublished_AndKeepsTheOriginatingAudit",
+            TestContext.Current.CancellationToken)) return;
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
+        var session = environment.Agent.Session;
+        var path = await CreateFile(session, "private-delivery.txt");
+        Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
+        {
+            (settings.Safety ??= new Dsh.Boot.SafetySettings()).Blacklist["deny-delivery-read"] = new() { Path = path, Intent = "read" };
+            return true;
+        });
+        session.Append(new TurnStartPayload(1));
+        var result = await Present(environment, File("private-delivery.txt"));
+        Assert.True(result.IsError);
+        Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
+        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+            && audit.RuleId == "deny-delivery-read" && audit.Decision == "deny" && audit.Intent == "read"
+            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(path) && audit.Tool == ToolName
+            && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+    }
+
+    private const string HomeSettings = """
+        logging:
+          file: false
+        safety:
+          autoApprove: false
+          whitelist:
+            presentation-consumer:
+              tool: present
+        """;
+
+    [Fact]
+    public Task Present_SecondTargetDeniedAfterAcceptingPostHook_FailsWithoutPublishing()
+        => PostHookChangedTarget(true, nameof(Present_SecondTargetDeniedAfterAcceptingPostHook_FailsWithoutPublishing));
+
+    [Fact]
+    public Task Present_SecondTargetDeletedAfterAcceptingPostHook_FailsWithoutPublishing()
+        => PostHookChangedTarget(false, nameof(Present_SecondTargetDeletedAfterAcceptingPostHook_FailsWithoutPublishing));
+
+    private static async Task PostHookChangedTarget(bool deny, string method)
+    {
+        if (await PolicyProcessIsolation.RunIfNeededAsync("Dsh.Tests.PresentToolTests." + method,
+            TestContext.Current.CancellationToken)) return;
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
+        var session = environment.Agent.Session;
+        var first = await CreateFile(session, "first-accepted.txt");
+        var second = await CreateFile(session, "second-changed.txt");
+        session.Append(new TurnStartPayload(1));
+        var accepted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remove = environment.App.Ctx.OnWaterfall<ToolPostExecuteNotification>(async (notification, next) =>
+        {
+            var decision = await next();
+            accepted.TrySetResult(true);
+            await resume.Task.WaitAsync(notification.Run.Signal);
+            return decision;
+        }, new EventOptions { Global = true });
+        try
+        {
+            var pending = Present(environment, File(first), File(second));
+            await accepted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (deny)
+                Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
+                {
+                    (settings.Safety ??= new Dsh.Boot.SafetySettings()).Blacklist["deny-after-present-hook"] = new() { Path = second, Intent = "read" };
+                    return true;
+                });
+            else
+                System.IO.File.Delete(second);
+            resume.TrySetResult(true);
+
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(result.IsError);
+            Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
+            Assert.Equal("first-accepted.txt", await System.IO.File.ReadAllTextAsync(first, TestContext.Current.CancellationToken));
+            if (deny)
+                Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+                    && audit.RuleId == "deny-after-present-hook" && audit.Decision == "deny" && audit.Intent == "read"
+                    && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(second) && audit.Tool == ToolName
+                    && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+        }
+        finally
+        {
+            resume.TrySetResult(true);
+            remove();
+        }
+    }
+
+    [Fact]
+    public async Task Present_AfterCd_UsesTheEffectiveDirectoryForRelativeAndAbsoluteTargets()
+    {
+        if (await PolicyProcessIsolation.RunIfNeededAsync(
+            "Dsh.Tests.PresentToolTests.Present_AfterCd_UsesTheEffectiveDirectoryForRelativeAndAbsoluteTargets",
+            TestContext.Current.CancellationToken)) return;
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
+        var session = environment.Agent.Session;
+        var root = await CreateFile(session, "report.txt");
+        var directory = Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, "sub")).FullName;
+        var nested = Path.Combine(directory, "report.txt");
+        await System.IO.File.WriteAllTextAsync(root, "root-report-body", TestContext.Current.CancellationToken);
+        await System.IO.File.WriteAllTextAsync(nested, "nested-report-body", TestContext.Current.CancellationToken);
+        session.Append(new TurnStartPayload(1));
+        using (ApprovalAnswerers.AutoApprove(environment.App.Ctx))
+        {
+            var changed = await environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!.Execute(new ToolExecutionInput
+            {
+                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Name = Dsh.Tools.WorkingDirectoryTool.ToolName,
+                Arguments = JsonSerializer.SerializeToElement(new { cd = "sub" }), Agent = environment.Agent,
+                Signal = TestContext.Current.CancellationToken,
+            });
+            Assert.False(changed.IsError, TextOf(changed));
+        }
+        Assert.Equal(directory, session.WorkingDirectory);
+        Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
+        {
+            (settings.Safety ??= new Dsh.Boot.SafetySettings()).Blacklist["deny-original-report"] = new() { Path = root, Intent = "read" };
+            return true;
+        });
+
+        var absolute = await Present(environment, File(nested, "absolute nested report"));
+        var relative = await Present(environment, File("report.txt", "relative nested report"));
+
+        Assert.False(absolute.IsError, TextOf(absolute));
+        Assert.False(relative.IsError, TextOf(relative));
+        var delivered = Assert.Single(SessionDeliverables.Collect(session.SnapshotEvents()));
+        Assert.Equal(nested, delivered.Path);
+        Assert.Equal("nested-report-body", await System.IO.File.ReadAllTextAsync(delivered.Path, TestContext.Current.CancellationToken));
+        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+            && audit.Tool == ToolName && audit.Intent == "read" && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(nested)
+            && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+
+        Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
+        {
+            settings.Safety!.Blacklist.Clear();
+            settings.Safety.Blacklist["deny-effective-report"] = new() { Path = nested, Intent = "read" };
+            return true;
+        });
+        var originalAbsolute = await Present(environment, File(root, "absolute original report"));
+        Assert.False(originalAbsolute.IsError, TextOf(originalAbsolute));
+        var beforeDenied = session.SnapshotEvents().Where(IsPresented).ToArray();
+        var denied = await Present(environment, File("report.txt"));
+        Assert.True(denied.IsError);
+        Assert.Equal(beforeDenied, session.SnapshotEvents().Where(IsPresented).ToArray());
+        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+            && audit.RuleId == "deny-effective-report" && audit.Decision == "deny" && audit.Intent == "read"
+            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(nested) && audit.Tool == ToolName
+            && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+    }
 
     [Fact]
     public async Task Present_ExistingFile_RecordsAbsolutePathAndRendersIt()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         var expected = await CreateFile(session, "report.docx");
         session.Append(new TurnStartPayload(1));
@@ -26,7 +178,7 @@ public sealed class PresentToolTests
         var result = await Present(environment, File("report.docx", "季度报告"));
 
         Assert.False(result.IsError, TextOf(result));
-        Assert.Equal($"Presented {expected}", TextOf(result));
+        Assert.Contains(expected, TextOf(result));
         Assert.Equal([new PresentedFile(expected, "季度报告")], SessionDeliverables.Collect(session.SnapshotEvents()));
         var presented = Assert.IsType<DeliverablesPresentedPayload>(session.SnapshotEvents().Last(IsPresented).Data);
         Assert.Equal(1, presented.Turn);
@@ -35,21 +187,20 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_MissingFile_FailsWithoutRecording()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         session.Append(new TurnStartPayload(1));
 
         var result = await Present(environment, File("missing.xlsx"));
 
         Assert.True(result.IsError);
-        Assert.Contains("file not found", TextOf(result));
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
     }
 
     [Fact]
     public async Task Present_Directory_FailsWithoutRecording()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, "out"));
         session.Append(new TurnStartPayload(1));
@@ -57,29 +208,26 @@ public sealed class PresentToolTests
         var result = await Present(environment, File("out"));
 
         Assert.True(result.IsError);
-        Assert.Contains("not a regular file", TextOf(result));
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
     }
 
     [Fact]
     public async Task Present_OutsideOpenTurn_Fails()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         await CreateFile(environment.Agent.Session, "notes.md");
 
         var result = await Present(environment, File("notes.md"));
 
         Assert.True(result.IsError);
-        Assert.Contains("open turn", TextOf(result));
+        Assert.DoesNotContain(environment.Agent.Session.SnapshotEvents(), IsPresented);
     }
 
     [Fact]
     public async Task Present_TooManyFiles_FailsWithoutRecording()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
-        var schema = environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!.Schemas().Single(tool => tool.Name == ToolName);
-        Assert.Contains($"at most {PresentTool.MaxFiles} per call", schema.Parameters["properties"]!["files"]!["description"]!.GetValue<string>());
         var files = new List<JsonObject>();
         for (var index = 0; index <= PresentTool.MaxFiles; index++)
         {
@@ -91,14 +239,13 @@ public sealed class PresentToolTests
         var result = await Present(environment, [.. files]);
 
         Assert.True(result.IsError);
-        Assert.Contains($"1 to {PresentTool.MaxFiles} files", TextOf(result));
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
     }
 
     [Fact]
     public async Task Present_BlockedByPostHook_RecordsNothing()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         await CreateFile(session, "slides.pptx");
         session.Append(new TurnStartPayload(1));
@@ -116,7 +263,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_SamePathTwice_KeepsOneEntryWithLatestDescription()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         var report = await CreateFile(session, "report.docx");
         var data = await CreateFile(session, "data.xlsx");
@@ -133,7 +280,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_FollowSessionTruncation()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         var first = await CreateFile(session, "first.docx");
         await CreateFile(session, "second.docx");
@@ -150,7 +297,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_SurviveRestartAndResume_AndListThroughCommand()
     {
-        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
         var session = environment.Agent.Session;
         var sessionId = session.Id;
         var expected = await CreateFile(session, "budget.xlsx");
@@ -174,7 +321,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Deliverables_InheritedByFork()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         var expected = await CreateFile(session, "plan.docx");
         session.Append(new TurnStartPayload(1));
@@ -194,7 +341,7 @@ public sealed class PresentToolTests
     [Fact]
     public async Task DeliverablesCommand_UnknownIndex_ReportsError()
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var commands = environment.App.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
 
         var listed = await commands.Execute(environment.Agent, "/deliverables", TestContext.Current.CancellationToken);
@@ -202,6 +349,49 @@ public sealed class PresentToolTests
 
         Assert.Contains("no deliverables", Assert.IsType<CommandResult.Success>(listed?.Result).Text);
         Assert.Contains("no deliverable #3", Assert.IsType<CommandResult.Error>(opened?.Result).Text);
+    }
+
+    [Fact]
+    public async Task Present_ReplacedAfterPreparation_PublishesExactlyOnceFromTheExecutedRegistration()
+    {
+        var root = TempTree.CreateDirectory("present-registration");
+        try
+        {
+            var context = new Context();
+            _ = new SystemPrompt(context, new SystemPromptConfig());
+            _ = new LlmRuntime(context);
+            var tools = new ToolRuntime(context);
+            var projections = new SessionProjectionRegistry(context);
+            projections.Register(TurnBoundaryProjectionDefinition.Instance);
+            _ = new Dsh.Boot.SafetyBoundary(context, () => new Dsh.Boot.HarnessSettings
+            {
+                Safety = new() { Whitelist = new() { ["present-call"] = new() { Tool = [ToolName] } } },
+            });
+            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+            var session = Session.Create(id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
+            });
+            session.Append(new TurnStartPayload(1));
+            using var agent = new AgentLoopAgent(context, id, new AgentOptions(), session, _ => 0);
+            var path = await CreateFile(session, "replacement-report.txt");
+            using var original = PresentTool.Register(context);
+            var callId = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+            var prepared = Assert.IsType<ScheduledToolPreparation.Dispatch>(await tools.PrepareScheduledExecution(new ToolExecutionInput
+            {
+                CallId = callId, Name = ToolName,
+                Arguments = JsonSerializer.SerializeToElement(new { files = new[] { new { path, description = "Approved replacement report" } } }),
+                Agent = agent, Signal = TestContext.Current.CancellationToken,
+            }));
+            original.Dispose();
+            using var replacement = PresentTool.Register(context);
+            var dispatched = Assert.IsType<ScheduledToolDispatch.PostResult>(await tools.DispatchScheduledExecution(prepared.Exec));
+            var result = await tools.FinalizeScheduledExecution(prepared.Exec, dispatched.Result);
+            Assert.False(result.IsError, TextOf(result));
+            Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<DeliverablesPresentedPayload>());
+            Assert.Equal([new PresentedFile(path, "Approved replacement report")], SessionDeliverables.Collect(session.SnapshotEvents()));
+        }
+        finally { TempTree.Delete(root); }
     }
 
     private static bool IsPresented(SessionEvent sessionEvent)

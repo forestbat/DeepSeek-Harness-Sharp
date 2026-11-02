@@ -93,8 +93,8 @@ scripts:
 A matcher supports `tool` (one name or a nonempty list), `dialect` (`posix` or `powershell`), `path`, `intent` (`read`, `write`, or `any`), and `args` (string argument patterns).
 Dimensions within one matcher are AND; separate rules are OR; a matching blacklist always wins over whitelist and `autoApprove`.
 With no matching rule, `autoApprove: false` requires notification/approval and `true` allows the operation.
-A whitelist bypasses the ordinary safety notification, not an explicit session `never` policy, root approval, or the mandatory settings diff review.
-The settings diff gate can approve a whitelisted proposal automatically, but still constructs and records the real redacted diff.
+A whitelist can bypass safety notification, including notification for a settings proposal, but cannot override explicit session never or blacklist denial.
+Settings mutations still pass through the mandatory gate, which constructs and audits the real redacted diff and obtains the authoritative approval result; a rule allow or automatic policy can approve without a human prompt.
 
 Path `*` matches within one segment and `**` crosses segments.
 Relative patterns use the invocation working directory; comparisons use the actual pinned parent of each component, including mount transitions, not a whole-OS case default.
@@ -109,8 +109,23 @@ Other argument patterns match strings; `args.command` with a shell dialect reuse
 Command matching is not an OS security boundary.
 
 Tool admission evaluates known denials before approval.
+Each prepared call binds one registration identity, owner, execution mode and permission namespace.
+A same-name replacement before dispatch receives fresh admission and approval without inheriting the retired registration's call or path approvals; authoritative session grants remain intact.
+Another registration change during renewed approval, retirement without replacement, or a changed execution mode fails before the body runs and requires a new call, without automatic retries or replay.
+Once a body starts, output validation, post-hook value rendering and final publication use that executed registration even if it is subsequently unloaded or replaced.
 Trusted filesystem tools and plugin SDK file brokers re-evaluate the current policy for the actual canonical target and real read/write intent at pinned I/O and commit boundaries.
 Directory search/listing checks each exposed target, not only the search root.
+Within a tool invocation, the same boundary covers memory-file reads and updates, memory audit appends, native skill discovery and body reads, and dynamically discovered instructions after read.
+Non-file memory backends require whole-call approval and opaque-operation capability checks before every actual backend read or update; a dry run cannot read backend data before authorization.
+Model loads of in-memory skill registrations still use ordinary tool approval; custom providers and filesystems must satisfy opaque-operation capability checks before discovery or content access instead of claiming a native pinned target.
+Model discovery propagates cancellation and policy rejection and does not reuse the control-plane catalog cache to bypass current authorization; manual and startup catalog caching remains separate.
+Native skill discovery follows explicitly selected directory and flat Markdown links only through canonical-target authorization and pinned verification; ordinary glob and directory-listing defaults still do not follow links.
+Missing link targets are skipped individually without hiding healthy sibling skills; policy denial, cancellation and a moved enumeration directory remain errors.
+Denied or removed optional instructions are not injected; the original permitted read remains available with an explicit skipped-instructions notice, while cancellation still propagates.
+Present resolves relative targets against the effective session working directory, validates every actual regular-file target through the pinned read boundary, and rechecks after accepting post-hooks before publishing any deliverables.
+If any target is denied or disappears at that final boundary, the original tool call fails without publishing a partial list; declaring a path is not authorization.
+Model-derived editor triggers retain their originating invocation only in the bounded in-memory queue and recheck current policy, cancellation and opaque-process capability before executing.
+Manual commands, startup catalogs and background bookkeeping without a tool invocation remain host control-plane operations; they do not fabricate model sessions or calls.
 Path-specific approval covers only that path and intent, not later writes or another target in the same call.
 Policy changes invalidate previous approval; a changed policy during a pinned operation fails before commit when renewed approval is required.
 Rejection or cancellation before actual I/O starts prevents the write; settings and replacement writes also recheck before their atomic publication point.

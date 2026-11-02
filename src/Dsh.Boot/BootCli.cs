@@ -9,7 +9,7 @@ namespace Dsh.Boot;
 
 public static class BootCli
 {
-    public static async Task<int> RunHeadlessAsync(HarnessHome home, string task)
+    public static async Task<int> RunHeadlessAsync(HarnessHome home, string task, string? resumeSessionId = null)
     {
         if (string.IsNullOrWhiteSpace(task))
         {
@@ -20,10 +20,22 @@ public static class BootCli
         using var autoApprove = InvokeStaticDisposable("Dsh.Interaction.ApprovalAnswerers", "Dsh.Interaction", "AutoApprove", app.Ctx);
         var agents = app.Ctx.Get("agents")!;
         var agentOptions = Activator.CreateInstance(RequireType("Dsh.Core.AgentOptions", "Dsh.Core"), app.Provider, app.Model, null, null)!;
-        var createOptions = Activator.CreateInstance(
-            RequireType("Dsh.Core.CreateAgentOptions", "Dsh.Core"),
-            [null, Directory.GetCurrentDirectory(), agentOptions, null, null, null, null])!;
-        var handle = await AwaitAsync(InvokeMethod(agents, "Create", createOptions));
+        object handle;
+        if (string.IsNullOrWhiteSpace(resumeSessionId))
+        {
+            var createOptions = Activator.CreateInstance(
+                RequireType("Dsh.Core.CreateAgentOptions", "Dsh.Core"),
+                [null, Directory.GetCurrentDirectory(), agentOptions, null, null, null, null])!;
+            handle = (await AwaitAsync(InvokeMethod(agents, "Create", createOptions)))!;
+        }
+        else
+        {
+            var sessionId = Activator.CreateInstance(RequireType("Dsh.Llm.SessionId", "Dsh.Llm"), resumeSessionId)!;
+            var resumeOptions = Activator.CreateInstance(
+                RequireType("Dsh.Core.ResumeAgentOptions", "Dsh.Core"),
+                [sessionId, agentOptions, null])!;
+            handle = (await AwaitAsync(InvokeMethod(agents, "Resume", resumeOptions)))!;
+        }
         var agent = RequireProp(handle, "Agent");
         await AwaitAsync(InvokeMethod(agent, "WhenIdle"));
         var session = RequireProp(agent, "Session");

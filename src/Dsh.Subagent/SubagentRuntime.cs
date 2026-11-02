@@ -109,10 +109,8 @@ public sealed partial class SubagentRuntime : Service, ISubagentService
             return false;
         if (Ctx.Get<SessionStore>(SessionStore.ServiceName, false) is not { } sessions)
             return false;
-        if (sessions.Get(childId) is not null)
-            return true;
-        sessions.Enter(child.Session, Ctx);
-        sessions.Announce(child.Session);
+        // TryEnter 把"已在店里"与"登记成功"合进同一把锁: 并发注入/升档同一子会话时不会撞 already live。
+        _ = sessions.TryEnter(child.Session);
         return true;
     }
 

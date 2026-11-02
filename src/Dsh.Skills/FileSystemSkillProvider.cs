@@ -1,4 +1,5 @@
 using Dsh.Runtime;
+using Dsh.Core;
 
 namespace Dsh.Skills;
 
@@ -87,7 +88,17 @@ public sealed class FileSystemSkillProvider : ISkillProvider
 
     public async Task<SkillProviderObservation> List(SkillLookupOptions options)
     {
-        var roots = await Roots(options.Cwd);
+        var run = SettingsMutationScope.Current?.Context;
+        using var fused = FusedSignal.Fuse(run?.Signal ?? default, options.Signal);
+        var signal = fused.Token;
+        signal.ThrowIfCancellationRequested();
+        var roots = await Roots(options.Cwd, signal, run);
+        var candidates = new List<SkillCandidate>();
+        // Model discovery is uncached and authorizes before observing new roots.
+        if (run is not null)
+            foreach (var root in roots)
+                candidates.AddRange(await DiscoverRoot(root, signal, run));
+        signal.ThrowIfCancellationRequested();
         var complete = true;
         try
         {
@@ -95,20 +106,24 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
         catch
         {
-            if (_disposal is not null)
-                throw;
+            signal.ThrowIfCancellationRequested();
+            if (_disposal is not null) throw;
             complete = false;
         }
-        var candidates = new List<SkillCandidate>();
-        foreach (var root in roots)
-            candidates.AddRange(await DiscoverRoot(root));
+        // Startup catalogs retain watcher-before-read ordering so changes cannot strand a stale cache.
+        if (run is null)
+            foreach (var root in roots)
+                candidates.AddRange(await DiscoverRoot(root, signal, run));
+        signal.ThrowIfCancellationRequested();
         return new SkillProviderObservation(candidates, complete);
     }
 
     public async Task<SkillDefinition?> Get(SkillCandidate candidate, SkillLookupOptions options)
     {
+        var run = SettingsMutationScope.Current?.Context;
+        using var fused = FusedSignal.Fuse(run?.Signal ?? default, options.Signal);
         var locator = (LocalLocator)candidate.Locator!;
-        var parsed = await ParseSkillFile(locator.Path, options.Signal, candidate.Source == SkillSources.Bundled);
+        var parsed = await ParseSkillFile(locator.Path, fused.Token, candidate.Source == SkillSources.Bundled, run);
         if (parsed is null)
             return null;
         return new SkillDefinition
@@ -130,12 +145,12 @@ public sealed class FileSystemSkillProvider : ISkillProvider
 
     public Task Dispose() => _disposal ??= _watchManager.Dispose();
 
-    private async Task<IReadOnlyList<SkillRoot>> Roots(string? cwd)
+    private async Task<IReadOnlyList<SkillRoot>> Roots(string? cwd, CancellationToken signal, ToolRunContext? run)
     {
         var roots = new List<SkillRoot>();
         if (_includeDefaultRoots && cwd is not null)
         {
-            var projectRoot = await FindProjectRoot(Path.GetFullPath(cwd));
+            var projectRoot = await FindProjectRoot(Path.GetFullPath(cwd), signal, run);
             roots.Add(new SkillRoot(Path.Combine(projectRoot, ".dsh", "skills"), SkillSources.ProjectDsh, ProjectDshRank, ProjectRoot: projectRoot));
             roots.Add(new SkillRoot(Path.Combine(projectRoot, ".agents", "skills"), SkillSources.ProjectAgents, ProjectAgentsRank, ProjectRoot: projectRoot));
         }
@@ -150,12 +165,13 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         return roots;
     }
 
-    private async Task<IReadOnlyList<SkillCandidate>> DiscoverRoot(SkillRoot root)
+    private async Task<IReadOnlyList<SkillCandidate>> DiscoverRoot(SkillRoot root, CancellationToken signal, ToolRunContext? run)
     {
         var skills = new List<SkillCandidate>();
-        var entries = await ListSkillRootEntries(root);
+        var entries = await ListSkillRootEntries(root, signal, run);
         foreach (var entry in entries.OrderBy(entry => entry.Name, StringComparer.Ordinal))
         {
+            signal.ThrowIfCancellationRequested();
             if (root.SkipSystem && entry.Name == ".system")
                 continue;
             var locator = entry.Type == SkillFsEntryTypes.Directory
@@ -165,7 +181,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
                     : null;
             if (locator is null)
                 continue;
-            var parsed = await ParseSkillFile(locator.Path, CancellationToken.None, root.TrustedHost);
+            var parsed = await ParseSkillFile(locator.Path, signal, root.TrustedHost, run);
             if (parsed is null)
                 continue;
             skills.Add(new SkillCandidate
@@ -186,38 +202,48 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         return skills;
     }
 
-    private async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntries(SkillRoot root)
+    private async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntries(SkillRoot root, CancellationToken signal, ToolRunContext? run)
     {
         var fs = OptionalFileSystem();
         if (fs is not null && !root.TrustedHost)
-            return await ListSkillRootEntriesFromFileSystem(root, fs);
-        return ListSkillRootEntriesFromNode(root);
+            return await ListSkillRootEntriesFromFileSystem(root, fs, signal, run);
+        return await ListSkillRootEntriesFromNode(root, signal, run);
     }
 
-    private static async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntriesFromFileSystem(SkillRoot root, ISkillFs fs)
+    private static async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntriesFromFileSystem(SkillRoot root, ISkillFs fs,
+        CancellationToken signal, ToolRunContext? run)
     {
         try
         {
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
             var target = await fs.Resolve(root.Path);
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
             return (await fs.ListDir(target))
                 .Select(entry => new SkillRootEntry(entry.Name, entry.Type, entry.Target.DisplayPath))
                 .ToList();
         }
         catch (Exception error) when (IsAbsentSkillPathError(error))
         {
+            signal.ThrowIfCancellationRequested();
             return [];
         }
     }
 
-    private IReadOnlyList<SkillRootEntry> ListSkillRootEntriesFromNode(SkillRoot root)
+    private async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntriesFromNode(SkillRoot root, CancellationToken signal, ToolRunContext? run)
     {
         IReadOnlyList<string> paths;
         try
         {
+            signal.ThrowIfCancellationRequested();
+            if (run is not null)
+                return (await SafetyFileAccess.ReadDirectoryAsync(root.Path, run, signal, followLinks: true).ConfigureAwait(false))
+                    .Select(entry => new SkillRootEntry(Path.GetFileName(entry.Path),
+                        entry.IsDirectory ? SkillFsEntryTypes.Directory : SkillFsEntryTypes.File, entry.Path)).ToList();
             paths = Directory.EnumerateFileSystemEntries(root.Path).ToList();
         }
         catch (Exception error) when (IsAbsentSkillPathError(error))
         {
+            signal.ThrowIfCancellationRequested();
             return [];
         }
         var result = new List<SkillRootEntry>();
@@ -240,9 +266,10 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    private async Task<ParsedSkill?> ParseSkillFile(string path, CancellationToken signal, bool trustedHost)
+    private async Task<ParsedSkill?> ParseSkillFile(string path, CancellationToken signal, bool trustedHost,
+        ToolRunContext? run = null)
     {
-        var raw = await ReadSkillText(path, signal, trustedHost);
+        var raw = await ReadSkillText(path, signal, trustedHost, run);
         signal.ThrowIfCancellationRequested();
         if (raw is null)
             return null;
@@ -294,15 +321,20 @@ public sealed class FileSystemSkillProvider : ISkillProvider
 
     private ISkillFs? OptionalFileSystem() => _ctx.Get<ISkillFs>("fs", false);
 
-    private async Task<string?> ReadSkillText(string path, CancellationToken signal, bool trustedHost)
+    private async Task<string?> ReadSkillText(string path, CancellationToken signal, bool trustedHost,
+        ToolRunContext? run)
     {
         signal.ThrowIfCancellationRequested();
         var fs = OptionalFileSystem();
         if (fs is not null && !trustedHost)
-            return await ReadSkillTextFromFileSystem(fs, path, signal);
+        {
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
+            return await ReadSkillTextFromFileSystem(fs, path, signal, run);
+        }
         try
         {
-            return await File.ReadAllTextAsync(path, signal);
+            return run is null ? await File.ReadAllTextAsync(path, signal)
+                : await SafetyFileAccess.ReadTextAsync(path, run, signal).ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -313,7 +345,15 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    private async Task<string?> ReadSkillTextFromFileSystem(ISkillFs fs, string path, CancellationToken signal)
+    private static Task AuthorizeCustomFilesystemAsync(ToolRunContext? run, CancellationToken signal)
+    {
+        signal.ThrowIfCancellationRequested();
+        return run is null ? Task.CompletedTask
+            : (SettingsMutationScope.Current ?? throw new NotSupportedException("Model custom filesystem access requires its actual invocation scope."))
+                .AuthorizeOpaqueOperationAsync("Model skill access through a custom filesystem", signal);
+    }
+
+    private async Task<string?> ReadSkillTextFromFileSystem(ISkillFs fs, string path, CancellationToken signal, ToolRunContext? run)
     {
         signal.ThrowIfCancellationRequested();
         SkillFsTarget target;
@@ -331,6 +371,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         SkillFsInfo? info;
         try
         {
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
             info = await fs.Stat(target, signal);
         }
         catch (Exception error)
@@ -344,6 +385,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
             return null;
         try
         {
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
             return await fs.ReadText(target, signal);
         }
         catch (Exception error)
@@ -358,12 +400,12 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    private async Task<string> FindProjectRoot(string cwd)
+    private async Task<string> FindProjectRoot(string cwd, CancellationToken signal, ToolRunContext? run)
     {
         var current = cwd;
         while (true)
         {
-            if (await PathExists(Path.Combine(current, ".git")))
+            if (await PathExists(Path.Combine(current, ".git"), signal, run))
                 return current;
             var parent = Path.GetDirectoryName(current);
             if (parent is null || parent == current)
@@ -372,33 +414,59 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    private async Task<bool> PathExists(string path)
+    private async Task<bool> PathExists(string path, CancellationToken signal, ToolRunContext? run)
     {
+        signal.ThrowIfCancellationRequested();
         var fs = OptionalFileSystem();
         if (fs is null)
-            return File.Exists(path) || Directory.Exists(path);
+        {
+            if (run is null) return File.Exists(path) || Directory.Exists(path);
+            var authorize = await SafetyFileAccess.AuthorizeAsync(path, "read", run, signal).ConfigureAwait(false);
+            try
+            {
+                if (Directory.Exists(path))
+                    Dsh.Transport.PinnedFileAccess.DemandDirectory(path, authorize);
+                else
+                {
+                    using var access = Dsh.Transport.PinnedFileAccess.Open(path, Dsh.Transport.PinnedFileMode.Read, authorize);
+                }
+                return true;
+            }
+            catch (Exception error) when (IsAbsentSkillPathError(error))
+            {
+                signal.ThrowIfCancellationRequested();
+                return false;
+            }
+        }
         SkillFsTarget target;
         try
         {
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
             target = await fs.Resolve(path);
         }
-        catch
+        catch (Exception error) when (IsAbsentSkillPathError(error) || run is null && error is not OperationCanceledException)
         {
+            signal.ThrowIfCancellationRequested();
             return false;
         }
         try
         {
-            return await fs.Stat(target, CancellationToken.None) is not null;
+            await AuthorizeCustomFilesystemAsync(run, signal).ConfigureAwait(false);
+            return await fs.Stat(target, signal) is not null;
         }
-        catch
+        catch (Exception error) when (IsAbsentSkillPathError(error) || run is null && error is not OperationCanceledException)
         {
+            signal.ThrowIfCancellationRequested();
             return false;
         }
     }
 
     internal static bool IsAbsentPathError(Exception error)
         => error is FileNotFoundException or DirectoryNotFoundException
-            || error is IOException { HResult: var hResult } && (hResult & 0xFFFF) == 267;
+            || error is IOException { HResult: var hResult } && (hResult & 0xFFFF) == 267
+            || error is System.ComponentModel.Win32Exception native && (native.NativeErrorCode == 2
+                || OperatingSystem.IsWindows() && native.NativeErrorCode is 3 or 267
+                || !OperatingSystem.IsWindows() && native.NativeErrorCode == 20);
 
     internal static bool IsAbsentSkillPathError(Exception error)
         => IsAbsentPathError(error) || error is SkillFsException { IsAbsent: true };

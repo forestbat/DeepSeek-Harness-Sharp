@@ -22,6 +22,8 @@ public sealed class ToolDefinition
     /** Trusted host file tools defer default notification to their actual mediated operations. */
     public bool MediatesFileAccess { get; init; }
     public Func<JsonElement, string>? FileIntent { get; init; }
+    /** Preliminary admission hints only; every actual file still requires its pinned operation boundary. */
+    public Func<JsonElement, IEnumerable<string>>? FilePaths { get; init; }
     public bool UsesScriptPermissions { get; init; }
 
     /**
@@ -84,6 +86,10 @@ public class ToolExecutionInput
     public object? Parent { get; init; }
     public required CancellationToken Signal { get; init; }
 
+    // Transient scheduler selection is consumed by preparation, never persisted or sent over RPC.
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal ToolRuntime.RegistrationSnapshot? ScheduledRegistration;
+
     // 以下投影由 dsh/service.call 桥按名字字符串访问(匹配不区分大小写)。
     public string name => Name;
     public JsonNode? arguments => Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
@@ -135,7 +141,13 @@ public sealed class ToolRunContext : ToolExecution
                 $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}\n--- before\n{audit.Before}\n+++ after\n{audit.After}");
     }
 
-    internal Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? CapturedFinalizer { get; set; }
+    internal ToolRuntime.RegistrationSnapshot Registration { get; set; }
+
+    internal void ClearSafetyApprovals()
+    {
+        SafetyApprovalRevision = null;
+        _fileApprovals.Clear();
+    }
 
     public void ConcludeTurn() => ConcludedRequested = true;
 
@@ -190,3 +202,22 @@ public sealed class ToolOutputException : HarnessException
 }
 
 public sealed record ToolRestriction(IReadOnlyList<string>? Allow = null, IReadOnlyList<string>? Deny = null);
+
+public readonly struct FusedSignal : IDisposable
+{
+    private readonly CancellationTokenSource? _linked;
+    private FusedSignal(CancellationToken token, CancellationTokenSource? linked)
+    {
+        Token = token;
+        _linked = linked;
+    }
+    public CancellationToken Token { get; }
+    public static FusedSignal Fuse(CancellationToken caller, CancellationToken wrapper)
+    {
+        if (caller == wrapper || !wrapper.CanBeCanceled) return new(caller, null);
+        if (!caller.CanBeCanceled) return new(wrapper, null);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(caller, wrapper);
+        return new(linked.Token, linked);
+    }
+    public void Dispose() => _linked?.Dispose();
+}
