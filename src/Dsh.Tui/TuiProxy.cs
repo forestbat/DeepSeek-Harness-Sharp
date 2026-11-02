@@ -42,8 +42,11 @@ public static class TuiProxy
             // 终端形态: 接管本终端, 输出即会话画面, 输入原样进会话; 常驻会话发 detach 标记或退出时本进程就结束。
             try
             {
+                // Temporary CI111 investigation; keep size diagnostics off the terminal's byte stream.
+                var resizeLogger = OperatingSystem.IsWindows() ? app.Ctx.LoggerFor("tui") : null;
                 await PtyDaemonClient.AttachConsoleAsync(
-                    session.Id, Console.OpenStandardOutput(), CancellationToken.None);
+                    session.Id, Console.OpenStandardOutput(), CancellationToken.None,
+                    resizeLogger is null ? null : message => resizeLogger.Info("%s", message));
             }
             catch (InvalidOperationException)
             {

@@ -226,10 +226,10 @@ public sealed class ScriptPermissionBoundaryTests
     }
 
     [Fact(Timeout = 60000)]
+    [Trait("Category", "SandboxNative")]
     public async Task GuestCwd_CannotReplaceThePrivateTmpRoot()
     {
-        if (!OperatingSystem.IsLinux())
-            Assert.Skip("Linux-only guest working-directory validation.");
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
         {

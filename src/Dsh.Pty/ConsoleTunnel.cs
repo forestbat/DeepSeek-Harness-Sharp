@@ -55,16 +55,22 @@ public static class ConsoleTunnel
     }
 
     /** Reports the current terminal size, then every change; report failures are left to the callback, which may retry on the next change. */
-    internal static async Task WatchSizeAsync(Func<int, int, CancellationToken, Task> report, CancellationToken cancellationToken, bool reportInitial = true)
+    // Temporary CI111 investigation: observeSize records source queries without changing report or polling semantics.
+    internal static async Task WatchSizeAsync(Func<int, int, CancellationToken, Task> report, CancellationToken cancellationToken, bool reportInitial = true,
+        Action<(int Columns, int Rows)?>? observeSize = null)
     {
-        if (ReadSize() is not var (columns, rows))
+        var initial = ReadSize();
+        observeSize?.Invoke(initial);
+        if (initial is not var (columns, rows))
             return;
         if (reportInitial)
             await report(columns, rows, cancellationToken);
         while (true)
         {
             await Task.Delay(SizePollMilliseconds, cancellationToken);
-            if (ReadSize() is not var (currentColumns, currentRows) || (currentColumns == columns && currentRows == rows))
+            var current = ReadSize();
+            observeSize?.Invoke(current);
+            if (current is not var (currentColumns, currentRows) || (currentColumns == columns && currentRows == rows))
                 continue;
             (columns, rows) = (currentColumns, currentRows);
             await report(columns, rows, cancellationToken);

@@ -161,7 +161,8 @@ public sealed class CSharpReplToolsTests
     }
 
     private const string BlockingProgram = """
-        await System.IO.File.WriteAllTextAsync("frontend.pid", System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await System.IO.File.WriteAllTextAsync("frontend.pid.tmp", System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        System.IO.File.Move("frontend.pid.tmp", "frontend.pid");
         await System.Threading.Tasks.Task.Delay(System.Threading.Timeout.Infinite);
         """;
 

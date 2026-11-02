@@ -26,6 +26,7 @@ public sealed class PluginSandboxIntegrationTests
     [Fact]
     public async Task InspectionAndActivation_NeverConstructUntrustedCodeInMain_AndDirectAccessIsDenied()
     {
+        await SandboxTestBackend.RequireAsync();
         using var fixture = new Fixture();
         var inspection = await ConfigBoot.InspectPluginsAsync(fixture.Options);
         Assert.Contains(inspection.Descriptors, descriptor => descriptor.Package == Alpha);
