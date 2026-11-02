@@ -145,6 +145,33 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         Assert.Equal(originalSettingsAcl, ReadDacl(settings));
     }
 
+    [Fact]
+    [Trait("Category", "SandboxNative")]
+    public async Task ReadOnlyDirectory_WithAmbientInheritOnlyWriteGrant_RefusesLaunchAndPreservesAcl()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "readonly"));
+        var acl = directory.GetAccessControl(AccessControlSections.Access);
+        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-2-1"), FileSystemRights.WriteData,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.InheritOnly, AccessControlType.Allow));
+        directory.SetAccessControl(acl);
+        var originalAcl = ReadDacl(directory.FullName);
+
+        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            await using var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+            {
+                Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                WorkingDirectory = directory.FullName,
+                ReadOnlyPaths = [directory.FullName],
+                Arguments = ["/D", "/Q", "/C", "exit", "0"],
+            }, TestContext.Current.CancellationToken);
+        });
+
+        Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+    }
+
     private static string ReadDacl(string path) => Directory.Exists(path)
         ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access)
         : new FileInfo(path).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);

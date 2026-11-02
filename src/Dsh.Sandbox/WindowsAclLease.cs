@@ -18,6 +18,10 @@ internal sealed class WindowsAclLease : IDisposable
     private const uint ProtectDacl = 0x80000000;
     private const uint UnprotectDacl = 0x20000000;
     private const ushort DaclProtected = 0x1000;
+    private static readonly SecurityIdentifier AllApplicationPackages = new("S-1-15-2-1");
+    private static readonly SecurityIdentifier AllRestrictedApplicationPackages = new("S-1-15-2-2");
+    private static readonly SecurityIdentifier[] NetworkCapabilitySids =
+        Array.ConvertAll(WindowsNative.NetworkCapabilities, static sid => new SecurityIdentifier(sid));
     private readonly List<Entry> _entries = [];
     private readonly SecurityIdentifier _sid;
     private bool _disposed;
@@ -174,10 +178,11 @@ internal sealed class WindowsAclLease : IDisposable
             const uint genericAll = 0x10000000, genericWrite = 0x40000000, fileAccessBits = 0x1fffff;
             foreach (GenericAce entry in acl)
             {
-                if (entry is not QualifiedAce { AceQualifier: AceQualifier.AccessAllowed } ace || (ace.AceFlags & AceFlags.InheritOnly) != 0)
+                if (entry is not QualifiedAce { AceQualifier: AceQualifier.AccessAllowed } ace)
                     continue;
-                var principal = ace.SecurityIdentifier.Value;
-                if (principal is not ("S-1-15-2-1" or "S-1-15-2-2") && (!network || !WindowsNative.NetworkCapabilities.Contains(principal)))
+                var principal = ace.SecurityIdentifier;
+                if (principal != AllApplicationPackages && principal != AllRestrictedApplicationPackages
+                    && (!network || !NetworkCapabilitySids.Contains(principal)))
                     continue;
                 var mask = unchecked((uint)ace.AccessMask);
                 if ((mask & fileAccessBits & ~(uint)access) != 0 || (mask & genericAll) != 0
