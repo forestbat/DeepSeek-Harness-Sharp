@@ -56,13 +56,16 @@ public static class SessionCommand
 
             var id = SessionId.Create(parts[1]);
             var snapshot = persistence.Stat(id);
-            if (snapshot is null)
+            // 还没有事件的新会话没有日志文件, 只要还在 registry 里就一样可删。
+            var live = ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.Get(id);
+            if (snapshot is null && live is null)
                 return Task.FromResult<CommandResult>(new CommandResult.Error($"session not found: {id}"));
             if (id == invocation.Agent.Id)
                 return Task.FromResult<CommandResult>(new CommandResult.Error("cannot delete the current session"));
             // 先移除 agent: 会话随之释放, 持久化正常收尾写句柄; 再删记录。
             ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)?.Remove(id);
-            persistence.Delete(id);
+            if (snapshot is not null)
+                persistence.Delete(id);
             return Task.FromResult<CommandResult>(new CommandResult.Success($"deleted session {id}"));
         }
 
@@ -79,7 +82,7 @@ public static class SessionCommand
         var title = invocation.RawInput.Trim();
         if (title.Length == 0)
             return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /rename <title>"));
-        persistence.Rename(invocation.Agent.Id, title);
+        persistence.RenameSession(invocation.Agent.Session.Header, title);
         invocation.Agent.Session.Rename(title);
         return Task.FromResult<CommandResult>(new CommandResult.Success($"renamed session to \"{title}\""));
     }

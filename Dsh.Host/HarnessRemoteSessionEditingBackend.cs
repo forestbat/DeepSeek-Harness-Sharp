@@ -31,9 +31,12 @@ internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime ru
     {
         var id = SessionId.Create(sessionId);
         var persistence = runtime.Persistence ?? throw new InvalidOperationException("session persistence is unavailable");
+        // 空会话默认不落盘, 但改名是用户明确动作: 先把只含头的日志建出来, 标题才能持久化。
+        var header = runtime.Store.Get(id)?.Header ?? persistence.Stat(id)?.Header;
+        if (header is not null)
+            persistence.RenameSession(header with { Title = title }, title);
         if (runtime.Store.Get(id) is { } session)
             session.Rename(title);
-        persistence.Rename(id, title);
         runtime.Sessions.SetTitle(sessionId, title);
         return Task.CompletedTask;
     }

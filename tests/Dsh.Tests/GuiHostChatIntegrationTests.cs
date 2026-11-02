@@ -154,6 +154,24 @@ public sealed class GuiHostChatIntegrationTests
         });
     }
 
+    /** Host 列出历史会话: 磁盘上的会话(前一个进程写的)必须在, 没写过事件的空会话不在。 */
+    [Fact]
+    public async Task HostSessionList_KeepsDiskHistory_AndSkipsSessionsWithoutEvents()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gl", TestContext.Current.CancellationToken);
+        var persisted = host.Environment.Agent.Session;
+        persisted.Append(new UserMessagePayload(MessageFactory.CreateUserText("历史会话")), new SurfaceOp.Append());
+        await host.Environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(persisted);
+        await host.RestartHostAsync(Ct);
+        var client = await host.ConnectAsync("history-reader", Ct);
+
+        var history = await client.ListSessionsAsync(Ct);
+        Assert.Contains(history, session => session.Id == persisted.Id.Value);
+
+        var empty = await client.CreateSessionAsync(host.Environment.App.Home.Root, Ct);
+        Assert.DoesNotContain(await client.ListSessionsAsync(Ct), session => session.Id == empty.Id);
+    }
+
     [Fact]
     public async Task HostTruncation_RebuildsRichChatProjection_WithoutKeepingDiscardedMessages()
     {
