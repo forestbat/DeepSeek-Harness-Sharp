@@ -63,10 +63,10 @@ public class PluginSchedulerTests
         }), "cleanup-blocker", ["svc"]));
         await ctx.Scheduler.SettleAsync();
 
-        var unloading = Task.Run(provider.DeactivateAsync);
+        var unloading = Task.Run(provider.DeactivateAsync, TestContext.Current.CancellationToken);
         try
         {
-            await disposing.Task.WaitAsync(RetirementTimeout);
+            await disposing.Task.WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
             var consumer = ctx.Plugin(PluginDefinition.From((c, _) =>
             {
                 applied.Add(typed ? c.Get<string>() : c.Get("svc") as string);
@@ -74,8 +74,8 @@ public class PluginSchedulerTests
             }, "late-consumer", inject: typed ? [] : ["svc"], injectTypes: typed ? [typeof(string)] : []));
             Assert.Equal(ActivationState.Pending, consumer.State);
             releaseDisposal.TrySetResult();
-            await unloading.WaitAsync(RetirementTimeout);
-            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+            await unloading.WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
             Assert.Equal(ActivationState.Pending, consumer.State);
             Assert.Empty(applied);
 
@@ -84,15 +84,15 @@ public class PluginSchedulerTests
                 c.Provide("svc", "two");
                 return null;
             }, "provider-2"));
-            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
             Assert.Equal(ActivationState.Active, consumer.State);
             Assert.Equal(["two"], applied);
         }
         finally
         {
             releaseDisposal.TrySetResult();
-            await unloading.WaitAsync(RetirementTimeout);
-            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+            await unloading.WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
+            await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
         }
     }
 
@@ -126,7 +126,7 @@ public class PluginSchedulerTests
         }, "consumer", ["svc"]));
         Assert.Equal(ActivationState.Disposed, provider.State);
         Assert.Equal(ActivationState.Pending, consumer.State);
-        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
         Assert.Empty(applied);
 
         ctx.Plugin(PluginDefinition.From((c, _) =>
@@ -134,7 +134,7 @@ public class PluginSchedulerTests
             c.Provide("svc", "two");
             return null;
         }, "provider-2"));
-        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout);
+        await ctx.Scheduler.SettleAsync().WaitAsync(RetirementTimeout, TestContext.Current.CancellationToken);
         Assert.Equal(ActivationState.Active, consumer.State);
         Assert.Equal(["two"], applied);
     }

@@ -1,25 +1,25 @@
 # 托管插件模板与作者指南
 
-一个可被宿主发现的插件需要一个实现 `IDshPlugin` 的类、csproj 中的生成器 props import，以及放在宿主 `plugins/<目录名>/` 下的编译产物（主 dll + deps.json + 私有依赖）。本模板实现其能力化子接口 `IDshIsolatedPlugin`，不接收宿主 `Context`。
+一个可被宿主发现的插件需要一个实现 `IDshPlugin` 的类、csproj 中的生成器 props import，以及放在宿主 `plugins/<目录名>/` 下的编译产物（主 dll + deps.json + 私有依赖）。本模板保留原有 `IDshPlugin`、`Apply(Context, object?)`、类型化依赖与配置约定。
 目录名不参与识别：加载后一律以清单内的包名为准，目录名只做发现入口。手工摆放时建议按包名把 `/` 换成 `__`（如 `@scope__one`）便于人读；而 `/plugins add` 装出来的目录名是 dll 文件名（如 `MyPlugin`）——两种命名都能被正常发现。
 
-本目录是可直接复制的能力插件工程：`DshPluginTemplate.csproj` + `Plugin.cs`。模板注册读文件、写文件和 HTTP 三个真实转发工具，不直接访问文件系统或网络；宿主决定每次操作是否获准。
+本目录可直接复制为插件工程：`DshPluginTemplate.csproj` + `Plugin.cs`。模板通过 `SystemPrompt` 注册可配置的提示词段，并保留读文件、写文件和 HTTP 三个真实转发工具；工具使用宿主能力工厂，不直接访问文件系统或网络。
 
 原生（AOT）插件使用相同操作定义，通过 C ABI v2 调用宿主；写法见 `templates/native-plugin/README.md`。
 
-## 显式能力接口
+## 原有插件生命周期与宿主能力
 
-`IDshIsolatedPlugin.InitializeAsync(IPluginHost host, JsonElement configuration, CancellationToken cancellationToken)` 返回 `IAsyncDisposable` 生命周期；卸载时必须释放工具注册和插件自己的后台工作。不要实现假的 `Apply(Context, ...)` 代理。`Inject` 默认空，`configuration` 是本插件的 JSON 配置。
+`Inject` / `InjectTypes` 声明服务依赖；本模板依赖 `SystemPrompt`、`ToolRuntime` 和 `IPluginHostFactory`。`ConfigType` 声明 `TemplateConfig`，其 `Message` 从插件配置绑定；`Apply` 注册提示词与工具，返回的 `IDisposable` 在卸载时逆序撤销这些效果。原有接口没有替换，也没有新增兼容方法。
+
+`ctx.Get<IPluginHostFactory>()!.Create(package, ctx)` 为原有 `IDshPlugin` 提供同一组宿主中介能力，包名应与程序集声明一致。模板保留完整 `Context` 组合能力，因此不是隔离 worker 插件；启用沙箱时必须显式授予相应制品宿主权限，不会自动回退到不受保护执行。使用宿主中介不等于使进程内任意代码成为受限代码。
 
 - `host.RegisterTool(new PluginToolDefinition(name, description, parameters, execute))` 返回可释放的注册；`execute` 获得 JSON 参数及真实取消令牌。
 - `await host.CallAsync(PluginHostOperations.ReadFile, arguments, cancellationToken)`：`{path, offset?, count?}` 返回 `{data, length, eof}`；`data` 为 base64。宿主限制单片大小。
 - `PluginHostOperations.WriteFile`：`{path, data, append?}` 返回 `{bytesWritten}`；`data` 为 base64。对 settings 的写入也必须经过宿主审批 gate，不能直接写配置文件绕开审批。
 - `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` 返回 `{status, headers, body}`；请求和响应 `body` 都为 base64。宿主应用网络权限、代理配置及响应大小限额。
-- `host.Log(level, message)` 发送宿主日志；不要污染 worker 的协议标准输出。
+- `host.Log(level, message)` 通过宿主 logger 记录日志。
 
-`Dsh.Plugins.Protocol` 只依赖 BCL。能力不是完整服务表：不能取得父进程 `Context`、agent、服务对象或凭据，也不能把透明 RPC 当作进程内 API。启用沙箱时不可信代码在受限 worker 中初始化；未启用 OS 隔离的进程内执行不提供安全隔离保证。
-
-以下的 `Apply`、类型化注入、服务和共享依赖示例仅面向显式完全信任的传统 `IDshPlugin`，不是受限插件接口；不要为了复用这些 API 而恢复 Context 代理。
+需要受限 worker 的插件可另行实现已有的 `IDshIsolatedPlugin.InitializeAsync(IPluginHost host, JsonElement configuration, CancellationToken cancellationToken)`，返回可异步释放的生命周期。该显式能力接口与完整服务表不同，不能取得父进程 `Context`、agent、服务对象或凭据，也不能将透明 RPC 当作进程内 API；它不取代本模板的原有接口。
 
 ## 编译期诊断
 

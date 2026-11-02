@@ -11,8 +11,10 @@ namespace Dsh.Tests;
 [Collection(SettingsTemplateTests.RegistryCollection)]
 public sealed class PluginTemplateTests
 {
-    [Fact]
-    public async Task TemplatePlugin_LoadsAndActivatesThroughCapabilityFactory()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Configured template prompt.")]
+    public async Task TemplatePlugin_OriginalLifecycleBindsConfigurationAndReleasesEffects(string? message)
     {
         var pluginPath = TemplatePath();
         var directory = TempTree.CreateDirectory("template-capabilities");
@@ -23,13 +25,17 @@ public sealed class PluginTemplateTests
             Assert.Contains("@example/dsh-plugin-template", loaded.Packages);
             var ctx = CreateContext(directory, out var tools);
             var definition = host.Catalog.CreateDefinition("@example/dsh-plugin-template");
-            var activation = await ctx.Scheduler.AddAsync(definition);
+            var configuration = message is null ? null : new Dictionary<string, object?> { ["message"] = message };
+            var activation = await ctx.Scheduler.AddAsync(definition, configuration);
             try
             {
                 Assert.Equal(ActivationState.Active, activation.State);
                 Assert.NotNull(tools.Get("template_read_file"));
                 Assert.NotNull(tools.Get("template_write_file"));
                 Assert.NotNull(tools.Get("template_http"));
+                var prompt = await ctx.Get<SystemPrompt>()!.Assemble(new AssembleContext());
+                Assert.Equal(message ?? "This deployment includes the example template plugin.",
+                    Assert.Single(prompt.Sections, section => section.Name == "template:hello").Text);
             }
             finally
             {
@@ -38,6 +44,8 @@ public sealed class PluginTemplateTests
             Assert.Null(tools.Get("template_read_file"));
             Assert.Null(tools.Get("template_write_file"));
             Assert.Null(tools.Get("template_http"));
+            var unloadedPrompt = await ctx.Get<SystemPrompt>()!.Assemble(new AssembleContext());
+            Assert.DoesNotContain(unloadedPrompt.Sections, section => section.Name == "template:hello");
         }
         finally
         {
@@ -168,7 +176,7 @@ public sealed class PluginTemplateTests
         var path = Path.Combine(root?.FullName ?? AppContext.BaseDirectory,
             "templates", "managed-plugin", "bin", configuration, "net10.0", "plugin", "DshPluginTemplate.dll");
         if (!File.Exists(path))
-            Assert.Skip("the managed capability template has not been built");
+            Assert.Skip("the managed plugin template has not been built");
         return path;
     }
 }
