@@ -16,9 +16,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The explicit capability template references abstractions, not host implementation services. -->
+    <!-- The template uses the original plugin contract and Core composition services. -->
     <!-- Host-shared contract assemblies are excluded from the plugin payload below. -->
     <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
   </ItemGroup>
 
   <!--
