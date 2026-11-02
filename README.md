@@ -104,6 +104,7 @@ On Linux, that case query currently requires an ext2/ext3/ext4 directory with a 
 Other filesystems, including XFS, fail explicitly when this query is required; a successful generic flags ioctl is not evidence of case-sensitive name lookup.
 A multiply-linked regular file with an otherwise relevant glob blacklist also fails explicitly when the backend cannot establish its other alias names; it is not reported as a proven rule match.
 On Unix, a backslash in a filename remains an ordinary character.
+On Windows, rule paths may use either separator; the native adapter restores Windows separators before applying the extended-length drive or UNC prefix.
 `args.path` and `args.file_path` are rejected: use the single `path` dimension.
 Other argument patterns match strings; `args.command` with a shell dialect reuses the existing token/wrapper parser, unordered options and short-option clusters.
 Command matching is not an OS security boundary.

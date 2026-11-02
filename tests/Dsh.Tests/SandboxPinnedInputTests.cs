@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Runtime.InteropServices;
 using Dsh.Sandbox;
+using Dsh.Runtime;
 
 namespace Dsh.Tests;
 
@@ -256,6 +257,34 @@ public sealed class SandboxPinnedInputTests : IDisposable
         Assert.True(original.Device != replacement.Device || original.Inode != replacement.Inode);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HandleIdentity_RuleNormalizedPathsOpenTheActualObject(bool extended)
+    {
+        if (extended && !OperatingSystem.IsWindows())
+            Assert.Skip("Extended DOS path prefixes are Windows-specific.");
+        var path = Path.Combine(_root, "rule-input-é-λ.txt");
+        var alias = Path.Combine(_root, "alias-é-λ.txt");
+        var other = Path.Combine(_root, "different-input-é-λ.txt");
+        File.WriteAllText(path, "rule-selected object");
+        File.WriteAllText(other, "a different object");
+        if (OperatingSystem.IsWindows()) Assert.True(CreateHardLinkWindows(alias, path, 0));
+        else Assert.Equal(0, link(path, alias));
+        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var expected = NativeFileIdentity.Get(handle);
+        Assert.True(expected.IsRegular);
+        string[] spellings = OperatingSystem.IsWindows()
+            ? [path, alias, PermissionEngine.PathText(path), PermissionEngine.PathText(alias),
+                $"{Path.GetDirectoryName(path)}/{Path.GetFileName(path)}",
+                $"{Path.GetDirectoryName(alias)}/{Path.GetFileName(alias)}"]
+            : [path, alias];
+        foreach (var spelling in spellings)
+            Assert.Equal(expected, NativeFileIdentity.Get(extended ? $@"\\?\{spelling}" : spelling));
+        var unrelated = NativeFileIdentity.Get(PermissionEngine.PathText(other));
+        Assert.NotEqual((expected.Device, expected.Inode), (unrelated.Device, unrelated.Inode));
+    }
+
     private static async Task AssertSuccessfulAsync(SandboxProcessOptions options, string expected)
     {
         await using var sandbox = await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken);
@@ -297,4 +326,8 @@ public sealed class SandboxPinnedInputTests : IDisposable
 
     [DllImport("libc", SetLastError = true)]
     private static extern int link([MarshalAs(UnmanagedType.LPUTF8Str)] string target, [MarshalAs(UnmanagedType.LPUTF8Str)] string alias);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkWindows(string path, string existing, nint securityAttributes);
 }

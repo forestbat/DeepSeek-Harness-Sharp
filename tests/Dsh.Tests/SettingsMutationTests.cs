@@ -872,6 +872,9 @@ public sealed class SettingsMutationTests
                 CallId = callId, Name = "read", Agent = fixture.Agent,
                 Arguments = JsonSerializer.SerializeToElement(new { file_path = source }), Signal = cancellation.Token,
             });
+            var first = await Task.WhenAny(asked.Task, pending).WaitAsync(TestContext.Current.CancellationToken);
+            if (first == pending)
+                Assert.Fail($"Read completed before requesting the optional instruction approval: {string.Concat((await pending).Content.OfType<TextBlock>().Select(block => block.Text))}");
             await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
             if (change == "replace-directory")
             {

@@ -93,8 +93,13 @@ internal static class WindowsNative
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetQueuedCompletionStatus(SafeFileHandle port, out uint message, out nuint key, out nint overlapped, uint milliseconds);
     internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
         => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
-    internal static string PathForNative(string path) => path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path
-        : path.StartsWith("\\\\", StringComparison.Ordinal) ? $"\\\\?\\UNC\\{path[2..]}" : $"\\\\?\\{path}";
+    internal static string PathForNative(string path)
+    {
+        // Extended-length paths bypass Win32 separator normalization.
+        path = path.Replace('/', '\\');
+        return path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path
+            : path.StartsWith("\\\\", StringComparison.Ordinal) ? $"\\\\?\\UNC\\{path[2..]}" : $"\\\\?\\{path}";
+    }
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
     [DllImport("advapi32.dll", SetLastError = true)]
