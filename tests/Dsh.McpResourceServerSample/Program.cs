@@ -23,9 +23,11 @@ public static class Program
     public const string DataUri = "files://data.bin";
     public const int DataLength = 256;
     public const string NoteTemplate = "notes://{name}";
+    private const string ShutdownNotification = "notifications/test/shutdown";
 
     public static async Task Main(string[] args)
     {
+        using var lifetime = new CancellationTokenSource();
         var startupMarker = Array.IndexOf(args, "--startup-marker");
         if (startupMarker >= 0)
             File.WriteAllText(args[startupMarker + 1], "started");
@@ -33,6 +35,17 @@ public static class Program
         {
             ServerInfo = new Implementation { Name = "resource-sample", Version = "1.0" },
             ProtocolVersion = args.Contains("--legacy") ? "2025-11-25" : "2026-07-28",
+            Handlers = new McpServerHandlers
+            {
+                NotificationHandlers =
+                [
+                    new(ShutdownNotification, (_, _) =>
+                    {
+                        lifetime.Cancel();
+                        return ValueTask.CompletedTask;
+                    }),
+                ],
+            },
         };
         if (args.Contains(NoResourcesFlag))
         {
@@ -141,9 +154,16 @@ public static class Program
             options.ResourceCollection = null;
         }
         await using var server = McpServer.Create(new StdioServerTransport("resource-sample"), options);
-        var running = server.RunAsync();
+        var running = server.RunAsync(lifetime.Token);
         await Console.Error.WriteLineAsync("MCP_RESOURCE_SAMPLE_READY");
-        await running;
+        try
+        {
+            await running;
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        {
+            // Fixture teardown requests an orderly exit before disposing the client transport.
+        }
     }
 
     private static McpServerResourceCollection Resources()
