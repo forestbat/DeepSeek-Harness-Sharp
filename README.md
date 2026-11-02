@@ -120,6 +120,7 @@ Non-file memory backends require whole-call approval and opaque-operation capabi
 Model loads of in-memory skill registrations still use ordinary tool approval; custom providers and filesystems must satisfy opaque-operation capability checks before discovery or content access instead of claiming a native pinned target.
 Model discovery propagates cancellation and policy rejection and does not reuse the control-plane catalog cache to bypass current authorization; manual and startup catalog caching remains separate.
 Native skill discovery follows explicitly selected directory and flat Markdown links only through canonical-target authorization and pinned verification; ordinary glob and directory-listing defaults still do not follow links.
+Search resolves an explicitly selected root and the effective working directory to the same native spelling used by pinned enumeration, so directory aliases do not turn relative glob/include filters into paths outside the search root.
 Missing link targets are skipped individually without hiding healthy sibling skills; policy denial, cancellation and a moved enumeration directory remain errors.
 Denied or removed optional instructions are not injected; the original permitted read remains available with an explicit skipped-instructions notice, while cancellation still propagates.
 Present resolves relative targets against the effective session working directory, validates every actual regular-file target through the pinned read boundary, and rechecks after accepting post-hooks before publishing any deliverables.

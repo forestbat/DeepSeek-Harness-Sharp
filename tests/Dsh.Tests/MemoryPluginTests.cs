@@ -157,7 +157,14 @@ public sealed class MemoryPluginTests
         Assert.True(denied.IsError);
         Assert.DoesNotContain("private-first-key", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
         if (operation == "audit")
-            Assert.Contains("approved-second-value", File.ReadAllText(fixture.MemoryPath));
+        {
+            var committed = File.ReadAllText(fixture.MemoryPath);
+            if (!committed.Contains("approved-second-value", StringComparison.Ordinal))
+                Assert.Fail("The expected memory update was not committed before the audit rejection.\n"
+                    + string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)) + "\n"
+                    + string.Join("\n", fixture.Session!.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
+                        .Where(audit => audit.CallId == fixture.LastCallId.Value).Select(audit => audit.ToString())));
+        }
         else
             Assert.Equal(before, File.ReadAllText(fixture.MemoryPath));
         Assert.Equal(auditBefore, File.ReadAllText(fixture.AuditPath));

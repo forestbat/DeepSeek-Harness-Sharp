@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dsh.Runtime;
 using Dsh.Core;
+using Dsh.Transport;
 using Dsh.Llm;
 using Microsoft.Extensions.FileSystemGlobbing;
 
@@ -181,6 +182,9 @@ public static class GlobTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
+        var canonicalRoot = PinnedFileAccess.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : PinnedFileAccess.Canonicalize(workdir);
+        root = canonicalRoot;
         if (!Directory.Exists(root))
             throw new HarnessException($"glob search failed (exit 2): the directory does not exist: \"{root}\"", "SEARCH_FAILED");
         var matcher = SearchFiles.CreateMatcher(pattern);
@@ -330,6 +334,9 @@ public static class GrepTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
+        var canonicalRoot = PinnedFileAccess.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : PinnedFileAccess.Canonicalize(workdir);
+        root = canonicalRoot;
         var includeMatcher = include is null ? null : SearchFiles.CreateMatcher(include);
         var matches = new List<GrepMatchValue>();
         IEnumerable<string> files;

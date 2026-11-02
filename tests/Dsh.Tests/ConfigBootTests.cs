@@ -121,7 +121,7 @@ public class ConfigBootTests
                 CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Signal = signal,
             });
             var read = await Execute("read", new { file_path = publicFile });
-            Assert.False(read.IsError);
+            Assert.False(read.IsError, string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
             Assert.Contains("public original", string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
             var write = await Execute("write", new { file_path = publicFile, content = "public replacement" });
             Assert.False(write.IsError, string.Concat(write.Content.OfType<TextBlock>().Select(block => block.Text)));
