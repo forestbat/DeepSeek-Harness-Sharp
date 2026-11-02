@@ -400,9 +400,28 @@ public sealed class PluginSandboxIntegrationTests
         }, deployFixture: false);
         await fixture.StartAsync(expectFixtureActive: false);
         using var answerer = allowed ? ApprovalAnswerers.AutoApprove(fixture.App.Ctx) : ApprovalAnswerers.DenyAll(fixture.App.Ctx);
-        var before = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        TestContext.Current.TestOutputHelper?.WriteLine("plugin-add stage=invoking");
 
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact }, TestContext.Current.CancellationToken);
+        var events = fixture.Session.SnapshotEvents().Select(item => item.Data).ToArray();
+        var approvals = events.OfType<ApprovalAskedPayload>().ToArray();
+        var decisions = events.OfType<ApprovalDecidedPayload>().ToArray();
+        var audits = events.OfType<SettingsMutationAuditPayload>().ToArray();
+        var failure = result as ToolExecutionResult.Failure;
+        var errorCategory = failure?.Error switch
+        {
+            null => "none",
+            { Info.Code: ToolErrorCodes.Aborted or ToolErrorCodes.AbortedBeforeDispatch } => "cancelled",
+            { Message: "Settings mutation was not approved (Rejected)." } => "settings-rejected",
+            { Message: var message } when message.StartsWith("The isolated worker could not start:", StringComparison.Ordinal) => "worker-start",
+            { Message: var message } when message.StartsWith("Plugin inspection failed for ", StringComparison.Ordinal) => "inspection",
+            _ => "other",
+        };
+        var stage = approvals.Length == 0 ? "before-approval" : audits.Length == 0 ? "approval-without-audit" : "audit-recorded";
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"plugin-add stage={stage} error={errorCategory} approvals={approvals.Length} decisions={decisions.Length} audits={audits.Length} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
 
         Assert.Equal(!allowed, result.IsError);
         fixture.AssertNoMainExecution();
@@ -412,9 +431,15 @@ public sealed class PluginSandboxIntegrationTests
             ? Directory.GetFiles(fixture.Plugins, "Dsh.IsolatedPluginSample.dll", SearchOption.AllDirectories)
             : Array.Empty<string>();
         Assert.Equal(allowed ? 1 : 0, installed.Length);
-        Assert.Equal(allowed ? "committed" : "rejected", Assert.Single(fixture.Session.SnapshotEvents()
-            .Select(item => item.Data).OfType<SettingsMutationAuditPayload>()).Outcome);
-        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        var asked = Assert.Single(approvals);
+        using var approvalArguments = JsonDocument.Parse(asked.Arguments!);
+        Assert.True(approvalArguments.RootElement.GetProperty("settingsMutation").GetBoolean());
+        var decided = Assert.Single(decisions);
+        Assert.Equal(asked.Id, decided.Id);
+        Assert.Equal(allowed ? ApprovalOutcome.AllowedOnce : ApprovalOutcome.Rejected, decided.Outcome);
+        var audit = Assert.Single(audits);
+        Assert.Equal(allowed ? "committed" : "rejected", audit.Outcome);
+        Assert.Equal(asked.CallId, audit.CallId);
         if (allowed)
         {
             Assert.Equal(await fixture.Instance("alpha"), await fixture.Instance("beta"));
@@ -424,7 +449,7 @@ public sealed class PluginSandboxIntegrationTests
         }
         else
         {
-            Assert.Equal(before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+            Assert.Equal(before, await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
             Assert.Null(fixture.App.Composition!.Find(Alpha));
             Assert.Null(fixture.App.Composition.Find(Beta));
         }
