@@ -105,7 +105,7 @@ public sealed class HarnessSettingsSaveTests
             HarnessSettings.UpdatePlugin(home, "test/first", _ => new PluginSetting
             {
                 Enabled = false,
-                TrustDomain = "shared-test",
+                Execution = PluginExecution.Sandbox,
                 Permissions = new PluginPermissions { Network = false },
                 Parameters = new Dictionary<string, object?> { ["limit"] = 7 },
             });
@@ -119,7 +119,7 @@ public sealed class HarnessSettingsSaveTests
             Assert.Equal("current", actual.Plugins["test/concurrent"].Parameters["marker"]);
             Assert.True(actual.Plugins["test/first"].Enabled);
             Assert.True(actual.Plugins["test/second"].Enabled);
-            Assert.Equal("shared-test", actual.Plugins["test/first"].TrustDomain);
+            Assert.Equal(PluginExecution.Sandbox, actual.Plugins["test/first"].Execution);
             Assert.False(actual.Plugins["test/first"].Permissions!.Network);
             Assert.Equal(7, PluginConfigBinding.Bind<LimitConfig>(actual.Plugins["test/first"].Parameters).Limit);
             var text = ReadSettings(home);

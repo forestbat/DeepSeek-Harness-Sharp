@@ -19,6 +19,7 @@ internal static class PluginSandboxLaunch
     {
         if (artifactPath is null)
             return Dsh.Plugins.PluginForm.CompiledIn;
+        artifactPath = SandboxFileAccess.Canonicalize(artifactPath);
         Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
         if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
             return Dsh.Plugins.PluginForm.NativeLibrary;
@@ -41,8 +42,8 @@ internal static class PluginSandboxLaunch
         {
             if (source.ArtifactPath is not { } artifact)
                 continue;
-            var full = Path.GetFullPath(artifact);
-            RejectLink(full);
+            var full = SandboxFileAccess.Canonicalize(artifact);
+            SandboxFileAccess.DemandOrdinaryFile(full, allowMissing: false);
             if (!File.Exists(full))
                 throw new FileNotFoundException("The isolated plugin artifact does not exist.");
             if (source.Descriptor.Form == Dsh.Plugins.PluginForm.ManagedAssembly)
@@ -58,20 +59,14 @@ internal static class PluginSandboxLaunch
     {
         if (paths.Contains(path) || !visited.Add(path))
             return;
-        if (visited.Count > 256)
-            throw new InvalidDataException("The managed code dependency closure exceeds its bounded capacity.");
         paths.Add(path);
-        RejectLink(path);
+        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
         string[] references;
         string[] imports;
         using (var input = File.OpenRead(path))
         using (var image = new PEReader(input))
         {
-            if (!image.HasMetadata || image.PEHeaders.CorHeader?.MetadataDirectory.Size is not (> 0 and <= 8 * 1024 * 1024))
-                throw new InvalidDataException("The managed plugin metadata is missing or exceeds its bounded capacity.");
             var metadata = image.GetMetadataReader();
-            if (metadata.AssemblyReferences.Count > 256)
-                throw new InvalidDataException("The managed plugin has too many assembly references.");
             references = metadata.AssemblyReferences.Select(reference =>
                 metadata.GetString(metadata.GetAssemblyReference(reference).Name)).ToArray();
             var libraries = new HashSet<string>(StringComparer.Ordinal);
@@ -81,8 +76,6 @@ internal static class PluginSandboxLaunch
                 if ((method.Attributes & MethodAttributes.PinvokeImpl) == 0)
                     continue;
                 libraries.Add(metadata.GetString(metadata.GetModuleReference(method.GetImport().Module).Name));
-                if (libraries.Count > 256)
-                    throw new InvalidDataException("The managed plugin has too many native library references.");
             }
             imports = libraries.ToArray();
         }
@@ -110,7 +103,7 @@ internal static class PluginSandboxLaunch
             var companion = Path.ChangeExtension(path, null) + suffix;
             if (File.Exists(companion))
             {
-                RejectLink(companion);
+                SandboxFileAccess.DemandOrdinaryFile(companion, allowMissing: false);
                 paths.Add(companion);
             }
         }
@@ -133,16 +126,6 @@ internal static class PluginSandboxLaunch
         return File.Exists(candidate) ? candidate : null;
     }
 
-    internal static void RejectLink(string path)
-    {
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
-        var file = new FileInfo(Path.GetFullPath(path));
-        if ((file.Attributes & FileAttributes.ReparsePoint) != 0)
-            throw new IOException("Sandbox code artifacts cannot be symbolic links or reparse points.");
-        for (var directory = file.Directory; directory is not null; directory = directory.Parent)
-            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Sandbox code paths cannot traverse symbolic links or reparse points.");
-    }
 
     internal static SandboxProcessOptions Options(IReadOnlyList<string> code)
     {
@@ -165,7 +148,6 @@ internal static class PluginSandboxLaunch
             WorkingDirectory = Path.GetPathRoot(Path.GetFullPath(executable)),
             AllowNetwork = false,
             AllowChildProcesses = false,
-            MemoryLimitBytes = PluginSandboxMethods.WorkerMemoryBytes,
             Environment = new Dictionary<string, string?>
             {
                 ["DOTNET_ROOT"] = SandboxRuntimePaths.DotnetRoot(),

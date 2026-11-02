@@ -88,7 +88,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
 
     public async Task<SkillProviderObservation> List(SkillLookupOptions options)
     {
-        var run = SettingsMutationScope.Current?.Context;
+        var run = options.Run;
         using var fused = FusedSignal.Fuse(run?.Signal ?? default, options.Signal);
         var signal = fused.Token;
         signal.ThrowIfCancellationRequested();
@@ -120,7 +120,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
 
     public async Task<SkillDefinition?> Get(SkillCandidate candidate, SkillLookupOptions options)
     {
-        var run = SettingsMutationScope.Current?.Context;
+        var run = options.Run;
         using var fused = FusedSignal.Fuse(run?.Signal ?? default, options.Signal);
         var locator = (LocalLocator)candidate.Locator!;
         var parsed = await ParseSkillFile(locator.Path, fused.Token, candidate.Source == SkillSources.Bundled, run);
@@ -210,7 +210,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         return await ListSkillRootEntriesFromNode(root, signal, run);
     }
 
-    private static async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntriesFromFileSystem(SkillRoot root, ISkillFs fs,
+    private async Task<IReadOnlyList<SkillRootEntry>> ListSkillRootEntriesFromFileSystem(SkillRoot root, ISkillFs fs,
         CancellationToken signal, ToolRunContext? run)
     {
         try
@@ -345,12 +345,12 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    private static Task AuthorizeCustomFilesystemAsync(ToolRunContext? run, CancellationToken signal)
+    private Task AuthorizeCustomFilesystemAsync(ToolRunContext? run, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
-        return run is null ? Task.CompletedTask
-            : (SettingsMutationScope.Current ?? throw new NotSupportedException("Model custom filesystem access requires its actual invocation scope."))
-                .AuthorizeOpaqueOperationAsync("Model skill access through a custom filesystem", signal);
+        return run is not null && _ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety
+            ? safety.AuthorizeOperationAsync(run, signal)
+            : Task.CompletedTask;
     }
 
     private async Task<string?> ReadSkillTextFromFileSystem(ISkillFs fs, string path, CancellationToken signal, ToolRunContext? run)
@@ -421,22 +421,8 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         if (fs is null)
         {
             if (run is null) return File.Exists(path) || Directory.Exists(path);
-            var authorize = await SafetyFileAccess.AuthorizeAsync(path, "read", run, signal).ConfigureAwait(false);
-            try
-            {
-                if (Directory.Exists(path))
-                    Dsh.Transport.PinnedFileAccess.DemandDirectory(path, authorize);
-                else
-                {
-                    using var access = Dsh.Transport.PinnedFileAccess.Open(path, Dsh.Transport.PinnedFileMode.Read, authorize);
-                }
-                return true;
-            }
-            catch (Exception error) when (IsAbsentSkillPathError(error))
-            {
-                signal.ThrowIfCancellationRequested();
-                return false;
-            }
+            await SafetyFileAccess.AuthorizeAsync(path, "read", run, signal).ConfigureAwait(false);
+            return File.Exists(path) || Directory.Exists(path);
         }
         SkillFsTarget target;
         try

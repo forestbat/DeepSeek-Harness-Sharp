@@ -7,10 +7,10 @@ public sealed class MongoTextStore(MongoMemoryStore store, MongoMemorySettings s
 {
     public string Description => $"{settings.Database}.{settings.Collection}#{key}";
 
-    public Task<string?> GetAsync(CancellationToken cancellationToken = default)
+    public Task<string?> GetAsync(CancellationToken cancellationToken = default, ToolRunContext? run = null)
         => store.GetAsync(key, cancellationToken);
 
-    public Task SetAsync(string text, CancellationToken cancellationToken = default)
+    public Task SetAsync(string text, CancellationToken cancellationToken = default, ToolRunContext? run = null)
         => store.SetAsync(key, text, cancellationToken);
 
     public void Dispose() => store.Dispose();

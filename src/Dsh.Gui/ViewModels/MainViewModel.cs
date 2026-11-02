@@ -113,11 +113,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RefreshFilteredModels();
         Composer.PropertyChanged += OnComposerPropertyChanged;
         _unsubscribers.Add(_ctx.On<SkillsChangedNotification>(notification => { _ = LoadSkillNamesAsync(); }));
-        _unsubscribers.Add(_ctx.On<SafetyPolicyStateChanged>(notification => Dispatcher.UIThread.Post(() =>
-        {
-            Preferences.SafetyActivationStatus = notification.Status.Reason ?? "Permission policy is active.";
-            if (notification.Status.Rejected) ShowToast("Permission policy not activated", notification.Status.Reason!, true);
-        })));
         _ = LoadSkillNamesAsync();
         _settings.Changed += OnSettingsChanged;
         RefreshTraceFilters();
@@ -1657,7 +1652,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case SettingsMutationAuditPayload mutation:
                 AddTrace(sessionEvent.Seq, TraceKind.Approval, $"settings {mutation.Outcome} · {mutation.ToolName}",
-                    $"{mutation.Path}\n{ApprovalHints.SettingsDiff(mutation.Before, mutation.After)}");
+                    $"{mutation.Path}\n{mutation.Diff}\nbeforeHash={mutation.BeforeHash}\nafterHash={mutation.AfterHash}");
                 if (!replay)
                     SetStatus($"settings {mutation.Outcome}: {mutation.Path}");
                 break;

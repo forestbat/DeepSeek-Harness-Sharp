@@ -3,7 +3,7 @@ using YamlDotNet.Serialization;
 
 namespace Dsh.Boot;
 
-/// <summary>Independent opaque script permissions; plugin grants and safety approval rules do not supply these values.</summary>
+/// <summary>Independent permissions for run_csx and run_csharp_repl, not other process tools or plugins.</summary>
 public sealed class ScriptsSettings
 {
     [YamlMember(Alias = "permissions")]

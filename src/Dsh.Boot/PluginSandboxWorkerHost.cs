@@ -5,7 +5,7 @@ using static Dsh.Boot.PluginSandboxWorkerWire;
 
 namespace Dsh.Boot;
 
-/** A package owns its callback table; the parent connection, not this table, grants authority. */
+/** Each package has callbacks and broker policy; the shared process is co-trusted. */
 internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session session, string package, bool native)
     : IPluginHost, INativePluginHost
 {
@@ -46,23 +46,19 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     private void Add(int id, string name, string description, JsonElement parameters,
         Func<JsonElement, CancellationToken, ValueTask<JsonElement>> execute)
     {
-        Text(package, 256);
-        Text(name, 256);
-        Text(description, 16 * 1024);
         ArgumentNullException.ThrowIfNull(execute);
         if (parameters.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("Plugin tool parameters must be a JSON object.");
-        var schema = Element(parameters, MaximumSchemaBytes);
+        var schema = parameters.Clone();
         var request = Serialize(new PluginSandboxToolRequest(package, id, name, description, schema),
             PluginSandboxJsonContext.Default.PluginSandboxToolRequest);
-        var bytes = System.Text.Encoding.UTF8.GetByteCount(request.GetRawText());
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_stopped, this);
             if (_tools.ContainsKey(id))
                 throw new InvalidOperationException("Duplicate plugin tool identifier.");
-            session.ReserveTool(bytes);
-            _tools.Add(id, new Tool(execute, bytes));
+            session.ReserveTool();
+            _tools.Add(id, new Tool(execute));
             try
             {
                 session.Reverse(PluginSandboxMethods.RegisterTool, request, Lifetime.Token).GetAwaiter().GetResult();
@@ -70,7 +66,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
             catch
             {
                 _tools.Remove(id);
-                session.ReleaseTool(bytes);
+                session.ReleaseTool();
                 throw;
             }
         }
@@ -80,9 +76,9 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     {
         lock (_gate)
         {
-            if (!_tools.Remove(handle, out var tool))
+            if (!_tools.Remove(handle))
                 return false;
-            session.ReleaseTool(tool.Bytes);
+            session.ReleaseTool();
             session.Reverse(PluginSandboxMethods.UnregisterTool,
                 Serialize(new PluginSandboxUnregisterTool(package, handle),
                     PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool), CancellationToken.None)
@@ -94,13 +90,12 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments,
         CancellationToken cancellationToken = default)
     {
-        Text(operation, 256);
         PluginSandboxWorker.Invocation? invocation;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_stopped, this);
-            // ABI v2 has no invocation argument. Only the actual synchronous calling thread
-            // may inherit the serialized native call's authority; background threads get none.
+            // The optional native callback inherits only the synchronous invocation's context.
+            // Background threads have no active tool execution.
             invocation = native
                 ? _nativeThread == Environment.CurrentManagedThreadId ? _nativeInvocation : null
                 : _current.Value;
@@ -120,7 +115,6 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
 
     public void Log(int level, string message)
     {
-        Text(message, 4096);
         lock (_gate)
             ObjectDisposedException.ThrowIf(_stopped, this);
         session.Reverse(PluginSandboxMethods.Log,
@@ -186,9 +180,9 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
             tools = [.. _tools];
             _tools.Clear();
         }
-        foreach (var (id, tool) in tools)
+        foreach (var (id, _) in tools)
         {
-            session.ReleaseTool(tool.Bytes);
+            session.ReleaseTool();
             session.Reverse(PluginSandboxMethods.UnregisterTool,
                 Serialize(new PluginSandboxUnregisterTool(package, id),
                     PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool), CancellationToken.None)
@@ -196,7 +190,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         }
     }
 
-    private sealed record Tool(Func<JsonElement, CancellationToken, ValueTask<JsonElement>> Execute, int Bytes);
+    private sealed record Tool(Func<JsonElement, CancellationToken, ValueTask<JsonElement>> Execute);
 
     private sealed class Registration(PluginSandboxWorkerHost owner, int id) : IDisposable
     {

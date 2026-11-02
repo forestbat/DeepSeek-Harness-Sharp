@@ -1,7 +1,5 @@
 using System.Text;
 using Dsh.Runtime;
-using Dsh.Core;
-using Dsh.Transport;
 
 namespace Dsh.Tools;
 
@@ -39,68 +37,49 @@ public sealed class LocalFsService : Service
         return Path.GetFullPath(string.IsNullOrEmpty(baseDir) ? Path.Combine(Cwd, path) : Path.Combine(baseDir, path));
     }
 
-    private CancellationToken Token(object? signal)
-        => signal is CancellationToken token ? token : SettingsMutationScope.Current?.Context.Signal ?? CancellationToken.None;
-
-    private async Task<Action<PinnedFileTarget>> Authorize(string path, string intent, CancellationToken signal)
-    {
-        if (SettingsMutationScope.Current is { } scope)
-            return await SafetyFileAccess.AuthorizeAsync(path, intent, scope.Context, signal).ConfigureAwait(false);
-        var safety = Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false);
-        return safety is null ? static _ => { }
-            : await safety.AuthorizeFileAsync(null, path, intent, signal, lifecycleOwner: ServiceName).ConfigureAwait(false);
-    }
-
-    public async Task<object?> Stat(string path, object? signal = null)
+    public object? Stat(string path, object? signal = null)
     {
         var full = Path.GetFullPath(path);
-        var token = Token(signal);
-        var authorize = await Authorize(full, "read", token).ConfigureAwait(false);
-        token.ThrowIfCancellationRequested();
         if (File.Exists(full))
         {
-            await using var file = PinnedFileAccess.Open(full, PinnedFileMode.Read, authorize);
+            var info = new FileInfo(full);
             return new Dictionary<string, object?>
             {
-                ["type"] = "file", ["isFile"] = true, ["isDirectory"] = false,
-                ["size"] = file.Stream.Length,
-                ["mtimeMs"] = new DateTimeOffset(File.GetLastWriteTimeUtc(file.Stream.SafeFileHandle)).ToUnixTimeMilliseconds(),
+                ["type"] = "file",
+                ["isFile"] = true,
+                ["isDirectory"] = false,
+                ["size"] = info.Length,
+                ["mtimeMs"] = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
             };
         }
-        if (!Directory.Exists(full)) return null;
-        PinnedFileAccess.DemandDirectory(full, authorize);
-        return new Dictionary<string, object?> { ["type"] = "directory", ["isFile"] = false, ["isDirectory"] = true };
+        if (Directory.Exists(full))
+        {
+            return new Dictionary<string, object?>
+            {
+                ["type"] = "directory",
+                ["isFile"] = false,
+                ["isDirectory"] = true,
+            };
+        }
+        return null;
     }
 
-    public async Task<object> ReadText(string path, object? signal = null)
-    {
-        var token = Token(signal);
-        var full = Path.GetFullPath(path);
-        var authorize = await Authorize(full, "read", token).ConfigureAwait(false);
-        await using var file = PinnedFileAccess.Open(full, PinnedFileMode.Read, authorize);
-        using var reader = new StreamReader(file.Stream, new UTF8Encoding(false, false));
-        return await reader.ReadToEndAsync(token).ConfigureAwait(false);
-    }
+    public object ReadText(string path, object? signal = null)
+        => File.ReadAllText(Path.GetFullPath(path), new UTF8Encoding(false, false));
 
-    public async Task<object> WriteText(string path, string content, object? signal = null)
+    public object WriteText(string path, string content, object? signal = null)
     {
-        var token = Token(signal);
         var full = Path.GetFullPath(path);
-        if (SettingsMutationScope.Current is { } scope)
-        {
-            var before = File.Exists(full) ? await SettingsMutationScope.ReadTextAsync(full, scope.Context).ConfigureAwait(false) : "";
-            await SettingsMutationScope.WriteTextAsync(full, before, content, scope.Context).ConfigureAwait(false);
-        }
-        else
-        {
-            var authorize = await Authorize(full, "write", token).ConfigureAwait(false);
-            await using var file = PinnedFileAccess.Open(full, PinnedFileMode.Replace, authorize);
-            await file.Stream.WriteAsync(Encoding.UTF8.GetBytes(content), token).ConfigureAwait(false);
-            await file.CompleteAsync(token).ConfigureAwait(false);
-        }
+        var directory = Path.GetDirectoryName(full);
+        if (directory is not null)
+            Directory.CreateDirectory(directory);
+        File.WriteAllText(full, content, new UTF8Encoding(false, false));
         return new Dictionary<string, object?> { ["path"] = full };
     }
 
-    public async Task<object> Exists(string path, object? signal = null)
-        => await Stat(path, signal).ConfigureAwait(false) is not null;
+    public object Exists(string path, object? signal = null)
+    {
+        var full = Path.GetFullPath(path);
+        return File.Exists(full) || Directory.Exists(full);
+    }
 }

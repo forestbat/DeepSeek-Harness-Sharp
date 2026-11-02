@@ -8,38 +8,36 @@ public sealed class FileMemoryStore(string path) : IMemoryStore
 {
     public string Description => path;
 
-    public async Task<string?> GetAsync(CancellationToken cancellationToken = default)
+    public async Task<string?> GetAsync(CancellationToken cancellationToken = default, ToolRunContext? run = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (SettingsMutationScope.Current is { } scope)
+        if (run is not null)
         {
             try
             {
-                return await SafetyFileAccess.ReadTextAsync(path, scope.Context, cancellationToken).ConfigureAwait(false);
+                return await SafetyFileAccess.ReadTextAsync(path, run, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException
                 || error is Win32Exception native && (native.NativeErrorCode == 2
                     || OperatingSystem.IsWindows() && native.NativeErrorCode == 3))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                scope.Context.Signal.ThrowIfCancellationRequested();
+                run.Signal.ThrowIfCancellationRequested();
                 return null;
             }
         }
         return File.Exists(path) ? await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false) : null;
     }
 
-    public async Task SetAsync(string text, CancellationToken cancellationToken = default)
+    public async Task SetAsync(string text, CancellationToken cancellationToken = default, ToolRunContext? run = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (SettingsMutationScope.Current is { } scope)
+        if (run is not null)
         {
-            var before = scope.Gate?.Owns(path) == true
-                ? await SettingsMutationScope.ReadTextAsync(path, scope.Context, settingsReview: true,
-                    signal: cancellationToken).ConfigureAwait(false)
+            var before = run.Agent?.Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)?.Owns(path) == true && File.Exists(path)
+                ? await SafetyFileAccess.ReadTextAsync(path, run, cancellationToken, settingsReview: true).ConfigureAwait(false)
                 : "";
-            await SettingsMutationScope.WriteTextAsync(path, before, text, scope.Context,
-                signal: cancellationToken).ConfigureAwait(false);
+            await SettingsMutation.WriteTextAsync(path, before, text, run, signal: cancellationToken).ConfigureAwait(false);
             return;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);

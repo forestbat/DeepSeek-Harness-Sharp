@@ -3,10 +3,10 @@ using System.Runtime.CompilerServices;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace Dsh.Boot;
+namespace Dsh.Sandbox;
 
 /// <summary>Read-only code/runtime closures, never an application directory or a user's home.</summary>
-internal static class SandboxRuntimePaths
+public static class SandboxRuntimePaths
 {
     private static readonly Lazy<IReadOnlyList<string>> CurrentHost = new(BuildCurrentHost);
     private static readonly EnumerationOptions CodeEnumeration = new()
@@ -80,7 +80,7 @@ internal static class SandboxRuntimePaths
         return paths.ToArray();
     }
 
-    internal static string? DotnetRoot()
+    public static string? DotnetRoot()
     {
         if (!RuntimeFeature.IsDynamicCodeSupported)
             return null;

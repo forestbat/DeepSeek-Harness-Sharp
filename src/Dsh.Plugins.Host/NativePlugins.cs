@@ -86,7 +86,6 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
     private readonly NativePluginLoadContext _context;
     private INativePluginHost? _host;
     private GCHandle _self;
-    private NativeHostCallBuffer? _hostResults;
 
     static NativePluginLibrary() => DshNativeHostApi.Calls = Dispatcher;
 
@@ -117,7 +116,8 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
         nint library;
         try
         {
-            library = NativePluginImages.Load(fullPath);
+            DshNativeGuard.Install();
+            library = NativeLibrary.Load(fullPath);
         }
         catch (Exception error)
         {
@@ -190,7 +190,6 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
     {
         if (_host is not null)
             throw new InvalidOperationException($"native plugin \"{Package}\" is already active");
-        _hostResults = new NativeHostCallBuffer();
         _host = host;
         _self = GCHandle.Alloc(this);
         try
@@ -202,8 +201,6 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
         catch
         {
             _self.Free();
-            _hostResults.Dispose();
-            _hostResults = null;
             _host = null;
             throw;
         }
@@ -219,8 +216,6 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
         }
         finally
         {
-            _hostResults?.Dispose();
-            _hostResults = null;
             _self.Free();
             _host = null;
         }
@@ -272,9 +267,9 @@ public sealed unsafe class NativePluginLibrary : INativePlugin
         public int HostCall(nint context, string operation, string argumentsJson, nint output, int capacity)
         {
             var plugin = FromHandle(context);
-            if (plugin?._host is null || plugin._hostResults is null)
+            if (plugin?._host is null)
                 return DshNativePluginAbi.Error;
-            return plugin._hostResults.Invoke(operation, argumentsJson, (byte*)output, capacity, plugin._host.CallHost);
+            return NativeHostCallBuffer.Invoke(operation, argumentsJson, (byte*)output, capacity, plugin._host.CallHost);
         }
 
         /** 宿主回调抛出的异常不能穿过原生边界:记到该插件的日志后由蹦床返回错误码。 */

@@ -2,7 +2,6 @@ using Dsh.Runtime.Events;
 using System.Text.Json;
 using Dsh.Boot;
 using Dsh.Interaction;
-using Dsh.Plugins;
 using Dsh.Tools;
 using System.Text.Json.Nodes;
 using Dsh.Core;
@@ -180,31 +179,6 @@ public sealed class ToolConflictTests
     }
 
     [Fact]
-    public async Task Replacement_UsesTheSupervisorRegisteredOwnerBeforeOpaqueFileAccess()
-    {
-        using var fixture = new ReplacementFixture(new SafetySettings { AutoApprove = true });
-        fixture.Settings.Safety!.Blacklist["private-target"] = new() { Path = fixture.Target, Intent = "read" };
-        const string owner = "@test/replacement-owner";
-        var catalog = new PluginCatalog();
-        catalog.Register(PluginDescriptor.For(owner, PluginForm.ManagedAssembly), () => new Dsh.Memory.Plugin());
-        fixture.Context.SetOwn("pluginCatalog", catalog);
-        using var original = fixture.Tools.Register(EchoTool("owner_consumer", "prepared"));
-        var prepared = await fixture.Prepare("owner_consumer", new { });
-        original.Dispose();
-        var calls = 0;
-        using var replacement = fixture.Tools.RegisterForPlugin(owner, new ToolDefinition
-        {
-            Name = "owner_consumer", Description = "Externally owned opaque reader", Parameters = new JsonObject(),
-            Output = new(new JsonObject(), (_, value) => [new TextBlock(value.GetString()!)]),
-            Execute = async (_, run) => { calls++; return await File.ReadAllTextAsync(fixture.Target, run.Signal); },
-        });
-        var result = await fixture.Complete(prepared);
-        Assert.True(result.IsError);
-        Assert.Equal(0, calls);
-        Assert.DoesNotContain("private-target-body", Text(result));
-    }
-
-    [Fact]
     public async Task Replacement_FilePathsAndIntent_AreAdmittedBeforeEnteringItsWriter()
     {
         using var fixture = new ReplacementFixture(new SafetySettings { AutoApprove = true });
@@ -228,7 +202,7 @@ public sealed class ToolConflictTests
             Execute = async (args, run) =>
             {
                 calls++;
-                await SettingsMutationScope.WriteTextAsync(args.GetProperty("write_target").GetString()!, "private-target-body", "changed", run);
+                await SettingsMutation.WriteTextAsync(args.GetProperty("write_target").GetString()!, "private-target-body", "changed", run);
                 return null;
             },
         });
@@ -261,7 +235,7 @@ public sealed class ToolConflictTests
             Execute = async (_, run) =>
             {
                 calls++;
-                await SettingsMutationScope.WriteTextAsync(outside, "outside-before", "changed", run);
+                await SettingsMutation.WriteTextAsync(outside, "outside-before", "changed", run);
                 return null;
             },
         });
@@ -385,9 +359,8 @@ public sealed class ToolConflictTests
             prepared = await fixture.Prepare("read", new { file_path = fixture.Target });
             if (pathScoped)
             {
-                var authorize = await fixture.Safety.AuthorizeFileAsync(prepared.Exec, fixture.Target, "read", prepared.Exec.Signal);
-                await using var access = Dsh.Transport.PinnedFileAccess.Open(fixture.Target, Dsh.Transport.PinnedFileMode.Read, authorize);
-                using var reader = new StreamReader(access.Stream);
+                await using var access = await SafetyFileAccess.OpenReadAsync(fixture.Target, prepared.Exec);
+                using var reader = new StreamReader(access);
                 Assert.Equal("private-target-body", await reader.ReadToEndAsync(prepared.Exec.Signal));
             }
         }

@@ -21,7 +21,6 @@ public sealed class EditorLauncher(IEditorCatalog catalog, EditorOptions? option
     }
     public async ValueTask<EditorResult> LaunchAsync(EditorRequest request, CancellationToken cancellationToken = default)
     {
-        EditorProcess.DemandModelExecution();
         try
         {
             cancellationToken.ThrowIfCancellationRequested();

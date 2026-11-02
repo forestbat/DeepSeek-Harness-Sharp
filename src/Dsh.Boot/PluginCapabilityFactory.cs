@@ -18,10 +18,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     : IPluginHostFactory, IDisposable
 {
     internal const int MaximumChunkBytes = 256 * 1024;
-    internal const int MaximumRegistrationBytes = 8 * 1024 * 1024;
-    internal const int MaximumRegistrations = 256;
-    internal const int MaximumLogCharacters = 4096;
-    private const int MaximumEncodedChunkCharacters = ((MaximumChunkBytes + 2) / 3) * 4;
+    internal const int MaximumRegistrations = PluginSandboxMethods.MaximumTools;
     private const int CopyBufferBytes = 16 * 1024;
     private static readonly JsonElement EmptyConfiguration = CreateEmptyConfiguration();
     private readonly Func<HarnessSettings> _read = HarnessSettings.CreatePolicyReader(home, settings);
@@ -39,9 +36,8 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         var host = new LocalHost(this, package, pluginContext);
         try
         {
-            var json = PluginConfigurationJson.Write(configuration);
-            using var document = json.Length == 0 ? null : JsonDocument.Parse(json);
-            var value = document?.RootElement.Clone() ?? EmptyConfiguration;
+            var value = configuration is null ? EmptyConfiguration
+                : JsonSerializer.SerializeToElement(configuration, PluginConfigurationJsonContext.Default.Object);
             var lifetime = await plugin.InitializeAsync(host, value, cancellationToken).ConfigureAwait(false);
             return new LocalLifetime(host, lifetime);
         }
@@ -59,24 +55,22 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     }
 
     internal ValueTask<JsonElement> ExecuteAsync(string package, string operation, JsonElement arguments,
-        ToolRunContext? execution, PluginPermissions? ceiling, CancellationToken cancellationToken)
+        ToolRunContext? execution, CancellationToken cancellationToken)
         => operation switch
         {
-            PluginHostOperations.ReadFile => ReadFileAsync(package, arguments, execution, ceiling, cancellationToken),
-            PluginHostOperations.WriteFile => WriteFileAsync(package, arguments, execution, ceiling, cancellationToken),
-            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, execution, ceiling, cancellationToken),
+            PluginHostOperations.ReadFile => ReadFileAsync(package, arguments, execution, cancellationToken),
+            PluginHostOperations.WriteFile => WriteFileAsync(package, arguments, execution, cancellationToken),
+            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, execution, cancellationToken),
             _ => throw new RuntimeException("PLUGIN_HOST_OPERATION_UNKNOWN", "The plugin requested an unsupported host operation."),
         };
 
-    private readonly record struct AccessGrant(bool Isolated, bool AllowNetwork);
-
-    private AccessGrant Require(string package, PluginPermission permission, PluginPermissions? ceiling)
+    private bool Require(string package, PluginPermission permission)
     {
         var active = _read();
         var configured = active.Plugins.GetValueOrDefault(package)?.Permissions ?? PluginPermissions.AllAllowed;
-        if (!configured.Allows(permission) || ceiling is not null && !ceiling.Allows(permission))
+        if (!configured.Allows(permission))
             throw new RuntimeException("PLUGIN_PERMISSION_DENIED", $"The plugin's {PluginPermissions.KeyOf(permission)} permission is denied.");
-        return new AccessGrant(active.Sandbox?.Enabled == true, configured.Network && ceiling?.Network != false);
+        return configured.Network;
     }
 
     private string ResolvePath(JsonElement arguments, ToolRunContext? execution, bool allowNetwork)
@@ -87,28 +81,24 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         var cwd = execution?.Agent?.Session.WorkingDirectory
             ?? (context.GetProp("harnessOptions") as HarnessOptions)?.Cwd
             ?? Environment.CurrentDirectory;
-        return Dsh.Transport.PinnedFileAccess.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
+        return SandboxFileAccess.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
     }
 
     private async ValueTask<JsonElement> ReadFileAsync(string package, JsonElement arguments,
-        ToolRunContext? execution, PluginPermissions? ceiling, CancellationToken cancellationToken)
+        ToolRunContext? execution, CancellationToken cancellationToken)
     {
-        var grant = Require(package, PluginPermission.Read, ceiling);
-        var path = ResolvePath(arguments, execution, grant.AllowNetwork);
+        var allowNetwork = Require(package, PluginPermission.Read);
+        var path = ResolvePath(arguments, execution, allowNetwork);
         SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
         var offset = arguments.TryGetProperty("offset", out var position) ? position.GetInt64() : 0;
         var count = arguments.TryGetProperty("count", out var requested) ? requested.GetInt32() : MaximumChunkBytes;
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MaximumChunkBytes);
-        var authorize = await Safety.AuthorizeFileAsync(execution, path, "read", cancellationToken, package).ConfigureAwait(false);
-        await using var file = PinnedFileAccess.Open(path, PinnedFileMode.Read, target =>
-        {
-            authorize(target);
-            if (!target.IsDirectory && target.Identity is not null)
-                Require(package, PluginPermission.Read, ceiling);
-        }, grant.AllowNetwork);
-        var stream = file.Stream;
+        await Safety.AuthorizeFileAsync(execution, path, "read", cancellationToken, package).ConfigureAwait(false);
+        Require(package, PluginPermission.Read);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+            CopyBufferBytes, FileOptions.Asynchronous);
         stream.Position = offset;
         var buffer = ArrayPool<byte>.Shared.Rent(count);
         try
@@ -125,85 +115,65 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     }
 
     private async ValueTask<JsonElement> WriteFileAsync(string package, JsonElement arguments,
-        ToolRunContext? execution, PluginPermissions? ceiling, CancellationToken cancellationToken)
+        ToolRunContext? execution, CancellationToken cancellationToken)
     {
-        var grant = Require(package, PluginPermission.Write, ceiling);
-        var path = ResolvePath(arguments, execution, grant.AllowNetwork);
+        var allowNetwork = Require(package, PluginPermission.Write);
+        var path = ResolvePath(arguments, execution, allowNetwork);
         SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: true);
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
-        var authorize = await Safety.AuthorizeFileAsync(execution, path, "write", cancellationToken, package,
-            settingsReview: execution is not null && gate?.Owns(path) == true).ConfigureAwait(false);
-        var settingsFile = gate?.Owns(path) == true || SettingsFilePath.SameFile(path, home.SettingsFile);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
-        if (settingsFile)
-            await WriteSettingsAsync(package, path, data, append, execution, ceiling, gate, authorize, cancellationToken).ConfigureAwait(false);
+        if (gate?.Owns(path) == true || SettingsFilePath.SameFile(path, home.SettingsFile))
+            await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
         {
-            await WriteBytesAsync(path, data, append, target =>
-            {
-                authorize(target);
-                if (!target.IsDirectory)
-                    Require(package, PluginPermission.Write, ceiling);
-                if (gate?.Owns(target) == true)
-                    throw new RuntimeException("SETTINGS_TARGET_CHANGED", "The file target changed to active settings; propose the settings diff explicitly.");
-                if (grant.Isolated || ceiling is not null)
-                    (context.Get<PluginHostAuthority>(PluginHostAuthority.ServiceName, false)
-                        ?? throw new RuntimeException("PLUGIN_HOST_INTEGRITY_UNAVAILABLE", "The host code-integrity boundary is unavailable.")).DemandWritable(target);
-            }, grant.AllowNetwork, cancellationToken).ConfigureAwait(false);
+            await Safety.AuthorizeFileAsync(execution, path, "write", cancellationToken, package).ConfigureAwait(false);
+            Require(package, PluginPermission.Write);
+            await WriteBytesAsync(path, data, append, cancellationToken).ConfigureAwait(false);
         }
         return JsonSerializer.SerializeToElement(new PluginFileWriteResult(data.Length),
             PluginBrokerJsonContext.Default.PluginFileWriteResult);
     }
 
     private async Task WriteSettingsAsync(string package, string path, byte[] data, bool append, ToolRunContext? execution,
-        PluginPermissions? ceiling, ISettingsMutationGate? gate, Action<PinnedFileTarget> authorize, CancellationToken cancellationToken)
+        ISettingsMutationGate? gate, CancellationToken cancellationToken)
     {
         if (gate is null || execution is null)
-            throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval boundary.");
+            throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval service.");
         var target = gate.SettingsPath;
-        var before = "";
-        if (File.Exists(target))
-        {
-            var read = await Safety.AuthorizeFileAsync(execution, target, "read", cancellationToken, package,
-                settingsReview: true).ConfigureAwait(false);
-            await using var snapshot = PinnedFileAccess.Open(target, PinnedFileMode.Read, read,
-                Require(package, PluginPermission.Write, ceiling).AllowNetwork);
-            before = await SettingsMutationLimits.ReadTextAsync(snapshot.Stream, cancellationToken).ConfigureAwait(false);
-        }
+        await Safety.AuthorizeFileAsync(execution, target, "read", cancellationToken, package,
+            settingsReview: true).ConfigureAwait(false);
+        var before = File.Exists(target) ? await SettingsMutation.ReadTextAsync(target, cancellationToken).ConfigureAwait(false) : "";
         var text = Encoding.UTF8.GetString(data);
         var after = append ? $"{before}{text}" : text;
-        if (!SettingsMutationLimits.CanReview(after))
-            throw new RuntimeException("SETTINGS_CONTENT_TOO_LARGE", "The settings change exceeds the broker's bounded review capacity.");
-        var authorizeCanonical = path == target ? authorize
-            : await Safety.AuthorizeFileAsync(execution, target, "write", cancellationToken, package,
-                settingsReview: true).ConfigureAwait(false);
-        await gate.CommitAsync(new SettingsMutationRequest(path, before, after, execution), signal =>
+        await gate.CommitAsync(new SettingsMutationRequest(path, before, after, execution), (temporary, signal) =>
         {
-            var grant = Require(package, PluginPermission.Write, ceiling);
-            return WriteBytesAsync(target, Encoding.UTF8.GetBytes(after), append: false, actual =>
-            {
-                authorizeCanonical(actual);
-                if (!actual.IsDirectory && !gate.Owns(actual))
-                    throw new RuntimeException("SETTINGS_TARGET_CHANGED", "The settings target changed before publication.");
-            }, grant.AllowNetwork, signal);
+            Require(package, PluginPermission.Write);
+            return WriteBytesAsync(temporary, Encoding.UTF8.GetBytes(after), append: false, signal);
         }, cancellationToken).ConfigureAwait(false);
-        execution.RecordFileChange(target);
     }
 
-    private static async Task WriteBytesAsync(string path, ReadOnlyMemory<byte> data, bool append,
-        Action<PinnedFileTarget> authorize, bool allowNetwork, CancellationToken cancellationToken)
+    private static async Task WriteBytesAsync(string path, ReadOnlyMemory<byte> data, bool append, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        await using var file = PinnedFileAccess.Open(path, append ? PinnedFileMode.Append : PinnedFileMode.Replace, authorize, allowNetwork);
-        await file.Stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-        await file.CompleteAsync(cancellationToken).ConfigureAwait(false);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var options = new FileStreamOptions
+        {
+            Mode = append ? FileMode.Append : FileMode.Create,
+            Access = FileAccess.Write,
+            Share = FileShare.Read | FileShare.Delete,
+            Options = FileOptions.Asynchronous,
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await using var stream = new FileStream(path, options);
+        await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<JsonElement> SendHttpAsync(string package, JsonElement arguments,
-        ToolRunContext? execution, PluginPermissions? ceiling, CancellationToken cancellationToken)
+        ToolRunContext? execution, CancellationToken cancellationToken)
     {
-        Require(package, PluginPermission.Network, ceiling);
+        Require(package, PluginPermission.Network);
         await Safety.AuthorizeOperationAsync(execution, cancellationToken, package).ConfigureAwait(false);
         var url = arguments.GetProperty("url").GetString() ?? throw new ArgumentException("The HTTP operation requires a URL.");
         var method = arguments.TryGetProperty("method", out var requested) ? requested.GetString() : null;
@@ -211,7 +181,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         if (arguments.TryGetProperty("body", out _))
             request.Content = new ByteArrayContent(DecodeBody(arguments, "body"));
         AddHeaders(request, arguments);
-        Require(package, PluginPermission.Network, ceiling);
+        Require(package, PluginPermission.Network);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         var body = await ReadResponseAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var headers = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
@@ -268,83 +238,134 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     private static byte[] DecodeBody(JsonElement arguments, string key)
     {
         var encoded = arguments.GetProperty(key).GetString() ?? throw new ArgumentException("File and HTTP bodies must be base64 strings.");
-        if (encoded.Length > MaximumEncodedChunkCharacters)
-            throw new RuntimeException("PLUGIN_REQUEST_TOO_LARGE", "The request exceeds the bounded broker chunk size.");
-        var bytes = Convert.FromBase64String(encoded);
-        if (bytes.Length > MaximumChunkBytes)
-            throw new RuntimeException("PLUGIN_REQUEST_TOO_LARGE", "The request exceeds the bounded broker chunk size.");
-        return bytes;
+        return Convert.FromBase64String(encoded);
     }
 
     public void Dispose() => _http.Dispose();
 
     private sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
-        : IPluginHost, IDisposable
+        : IPluginHost, IPluginExecutionHost, IDisposable
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];
         private int _nextHandle;
-        private int _registrationBytes;
+        private readonly AsyncLocal<Invocation?> _current = new();
+        private readonly CancellationTokenSource _lifetime = new();
         private bool _disposed;
 
         public IDisposable RegisterTool(PluginToolDefinition definition)
+            => RegisterTool(definition, (arguments, run, signal) => InvokeDefinitionAsync(definition, arguments, run, signal));
+
+        public IDisposable RegisterTool(PluginToolDefinition definition,
+            Func<JsonElement, ToolRunContext, CancellationToken, ValueTask<JsonElement>> execute)
         {
             var schema = definition.Parameters.GetRawText();
-            var bytes = Encoding.UTF8.GetByteCount(schema) + Encoding.UTF8.GetByteCount(definition.Name)
-                + Encoding.UTF8.GetByteCount(definition.Description);
             lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                if (_registrations.Count >= MaximumRegistrations || bytes > MaximumRegistrationBytes - _registrationBytes)
-                    throw new RuntimeException("PLUGIN_REGISTRATION_LIMIT", "The plugin exceeded its bounded tool registration capacity.");
+                if (_registrations.Count >= MaximumRegistrations)
+                    throw new RuntimeException("PLUGIN_REGISTRATION_LIMIT", "The plugin exceeded the tool count limit.");
                 var tools = pluginContext.Get<ToolRuntime>(ToolRuntime.ServiceName)
                     ?? throw new InvalidOperationException("The tools service is required to register plugin tools.");
-                var registration = tools.RegisterForPlugin(package, CreateDefinition(definition, schema));
+                var registration = tools.RegisterForPlugin(package, CreateDefinition(definition, schema, execute));
                 var handle = checked(++_nextHandle);
-                var lease = new ToolLease(this, handle, bytes, registration);
+                var lease = new ToolLease(this, handle, registration);
                 _registrations.Add(handle, lease);
-                _registrationBytes += bytes;
                 return lease;
             }
         }
 
-        private static ToolDefinition CreateDefinition(PluginToolDefinition definition, string schema) => new()
+        private static ToolDefinition CreateDefinition(PluginToolDefinition definition, string schema,
+            Func<JsonElement, ToolRunContext, CancellationToken, ValueTask<JsonElement>> execute) => new()
         {
             Name = definition.Name,
             Description = definition.Description,
             Parameters = JsonNode.Parse(schema)?.AsObject() ?? throw new ArgumentException("Plugin parameters must be an object schema."),
             Output = new ToolOutputDefinition([], (_, value) => [new TextBlock(value.ValueKind == JsonValueKind.String
                 ? value.GetString() ?? "" : value.GetRawText())]),
-            Execute = async (arguments, execution) => await definition.Execute(arguments, execution.Signal).ConfigureAwait(false),
+            Execute = async (arguments, execution) => await execute(arguments, execution, execution.Signal).ConfigureAwait(false),
         };
 
-        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
+        private async ValueTask<JsonElement> InvokeDefinitionAsync(PluginToolDefinition definition, JsonElement arguments,
+            ToolRunContext run, CancellationToken signal)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            return factory.ExecuteAsync(package, operation, arguments, SettingsMutationScope.Current?.Context,
-                ceiling: null, cancellationToken);
+            Invocation invocation;
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                invocation = new Invocation(run, CancellationTokenSource.CreateLinkedTokenSource(signal, _lifetime.Token));
+            }
+            var previous = _current.Value;
+            _current.Value = invocation;
+            try
+            {
+                invocation.Cancellation.Token.ThrowIfCancellationRequested();
+                var result = await definition.Execute(arguments, invocation.Cancellation.Token).ConfigureAwait(false);
+                invocation.Cancellation.Token.ThrowIfCancellationRequested();
+                return result;
+            }
+            finally
+            {
+                _current.Value = previous;
+                lock (_sync)
+                {
+                    invocation.Active = false;
+                    invocation.Execution = null;
+                }
+                try { invocation.Cancellation.Cancel(); }
+                finally { invocation.Cancellation.Dispose(); }
+            }
+        }
+
+        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
+        {
+            ToolRunContext? run;
+            CancellationTokenSource linked;
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                var invocation = _current.Value;
+                run = invocation is { Active: true } ? invocation.Execution : null;
+                linked = run is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, invocation!.Cancellation.Token);
+            }
+            using (linked)
+                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
+        }
+
+        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+        {
+            CancellationTokenSource linked;
+            lock (_sync)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                linked = run is null
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, run.Signal);
+            }
+            using (linked)
+                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
         }
 
         public void Log(int level, string message)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var logger = pluginContext.LoggerFor(package);
-            var bounded = message.Length <= MaximumLogCharacters ? message : message[..MaximumLogCharacters];
             switch (level)
             {
-                case 0: logger.Debug("%s", bounded); break;
-                case 2: logger.Warn("%s", bounded); break;
-                case 3: logger.Error("%s", bounded); break;
-                default: logger.Info("%s", bounded); break;
+                case 0: logger.Debug("%s", message); break;
+                case 2: logger.Warn("%s", message); break;
+                case 3: logger.Error("%s", message); break;
+                default: logger.Info("%s", message); break;
             }
         }
 
-        private void Release(int handle, int bytes)
+        private void Release(int handle)
         {
             lock (_sync)
             {
-                if (_registrations.Remove(handle))
-                    _registrationBytes -= bytes;
+                _registrations.Remove(handle);
             }
         }
 
@@ -358,13 +379,24 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
                 _disposed = true;
                 leases = _registrations.Values.ToArray();
                 _registrations.Clear();
-                _registrationBytes = 0;
             }
-            foreach (var lease in leases)
-                lease.Dispose();
+            try { _lifetime.Cancel(); }
+            finally
+            {
+                _lifetime.Dispose();
+                foreach (var lease in leases)
+                    lease.Dispose();
+            }
         }
 
-        private sealed class ToolLease(LocalHost owner, int handle, int bytes, IDisposable registration) : IDisposable
+        private sealed class Invocation(ToolRunContext execution, CancellationTokenSource cancellation)
+        {
+            internal ToolRunContext? Execution { get; set; } = execution;
+            internal CancellationTokenSource Cancellation { get; } = cancellation;
+            internal bool Active { get; set; } = true;
+        }
+
+        private sealed class ToolLease(LocalHost owner, int handle, IDisposable registration) : IDisposable
         {
             private int _disposed;
 
@@ -372,7 +404,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
             {
                 if (Interlocked.Exchange(ref _disposed, 1) != 0)
                     return;
-                owner.Release(handle, bytes);
+                owner.Release(handle);
                 registration.Dispose();
             }
         }

@@ -1,23 +1,12 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.CSharpRepl;
 using Dsh.Csx;
-using Dsh.GitInspect;
-using Dsh.Ide;
-using Dsh.Ide.Catalog;
-using Dsh.Ide.History;
-using Dsh.Ide.Launch;
-using Dsh.Ide.Surfaces;
-using Dsh.Jobs;
 using Dsh.Llm;
-using Dsh.PtyTerminal;
 using Dsh.Runtime;
-using Dsh.ScriptHost;
-using Dsh.Tools;
 
 namespace Dsh.Tests;
 
@@ -29,145 +18,69 @@ public sealed class ScriptPermissionBoundaryTests
     [InlineData(true, true)]
     [InlineData(true, false)]
     [InlineData(false, false)]
-    public async Task PtcBcl_WorkspacePermissionsAreIndependentAndEmptyGuestCwdStillComputes(bool read, bool write)
+    public async Task ExplicitScriptEntry_EnforcesWorkspacePermissions(bool read, bool write)
     {
-        RequireLinux();
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, read, write, false, TestContext.Current.CancellationToken);
-        var result = await fixture.RunProgram(FileProgram());
-        Assert.True(result.Ok, result.Message);
-        var value = Assert.IsType<JsonObject>(result.Value);
-        Assert.Equal(read, value["read"]!.GetValue<bool>());
-        Assert.Equal(write || !read, value["write"]!.GetValue<bool>());
-        Assert.Equal(fixture.Workspace, value["cwd"]!.GetValue<string>());
-        Assert.Equal(42, value["computed"]!.GetValue<int>());
+        using var child = await fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
+        {
+            Argv = ["/bin/sh", "-c", "if test -r host-input; then printf readable; fi; printf script > script-output"],
+            Cwd = fixture.Workspace,
+            Signal = TestContext.Current.CancellationToken,
+        });
+        await child.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken);
+        Assert.Equal(read, child.StdoutReader.ReadFrom(0).Text.Contains("readable", StringComparison.Ordinal));
         Assert.Equal(write, File.Exists(fixture.Output));
-        Assert.Equal("host input 中文", await File.ReadAllTextAsync(fixture.Input, TestContext.Current.CancellationToken));
-        if (write)
-            Assert.Equal("script output 中文", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
     }
 
     [Theory(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task PtcBcl_RealLoopbackConnectionFollowsOnlyScriptNetworkGrant(bool network)
+    public async Task ExplicitScriptEntry_EnforcesNetworkPermission(bool network)
     {
-        RequireLinux();
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, true, false, network, TestContext.Current.CancellationToken);
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        var result = await fixture.RunProgram(NetworkProgram(port));
-        Assert.True(result.Ok, result.Message);
-        Assert.Equal(network, Assert.IsType<JsonObject>(result.Value)["connected"]!.GetValue<bool>());
+        using var child = await fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
+        {
+            Argv = ["/bin/bash", "-c", $"printf probe > /dev/tcp/127.0.0.1/{port}"],
+            Cwd = fixture.Workspace,
+            Signal = TestContext.Current.CancellationToken,
+        });
+        Assert.Equal(network, (await child.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode == 0);
         Assert.Equal(network, listener.Pending());
-        if (network)
-        {
-            using var accepted = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
-            Assert.True(accepted.Connected);
-        }
-    }
-
-    [Theory(Timeout = 60000)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SandboxOff_RejectsUnenforceableScriptGrantsBeforeExecuting(bool networkSetting)
-    {
-        using (var denied = new Fixture(false, false, false, networkSetting, TestContext.Current.CancellationToken))
-        {
-            await Assert.ThrowsAsync<NotSupportedException>(() => denied.RunProgram(FileProgram()));
-            Assert.False(File.Exists(denied.Output));
-            Assert.Equal("host input 中文", await File.ReadAllTextAsync(denied.Input, TestContext.Current.CancellationToken));
-        }
-        using var allowed = new Fixture(false, true, true, true, TestContext.Current.CancellationToken);
-        var result = await allowed.RunProgram(FileProgram());
-        Assert.True(result.Ok, result.Message);
-        Assert.Equal("script output 中文", await File.ReadAllTextAsync(allowed.Output, TestContext.Current.CancellationToken));
     }
 
     [Fact(Timeout = 60000)]
     public async Task WriteOnlyScriptGrant_RefusesBeforeExecutingInsteadOfGrantingRead()
     {
         using var fixture = new Fixture(true, false, true, false, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.RunProgram("return 42;"));
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
+        {
+            Argv = [Environment.ProcessPath!],
+            Cwd = fixture.Workspace,
+            Signal = TestContext.Current.CancellationToken,
+        }));
         Assert.False(File.Exists(fixture.Output));
     }
 
     [Fact(Timeout = 60000)]
-    public async Task UnsupportedGuestOnlyBackend_RefusesBeforeExecuting()
+    public async Task OrdinaryProcessEntry_DoesNotInheritScriptDenials()
     {
-        if (OperatingSystem.IsLinux())
-            Assert.Skip("Linux supplies the guest-only tmpfs working-directory primitive.");
+        if (!OperatingSystem.IsLinux())
+            Assert.Skip("This direct process control uses the installed Linux bash executable.");
         using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAnyAsync<NotSupportedException>(() => fixture.RunProgram("return 42;"));
-        Assert.False(File.Exists(fixture.Output));
-    }
-
-    [Theory(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    [InlineData(SubprocessExecutionKind.Tool)]
-    [InlineData(SubprocessExecutionKind.Mcp)]
-    public async Task NonScriptOrigins_DoNotInheritScriptNamespaceDenials(SubprocessExecutionKind kind)
-    {
-        RequireLinux();
-        using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        var script = "printf helper > helper-output; exec /bin/bash -c 'echo helper >/dev/tcp/127.0.0.1/" + port + "'";
-        using var handle = await fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
+        using var child = await fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
         {
-            Argv = ["/bin/bash", "-c", script],
+            Argv = ["/bin/sh", "-c", "printf direct > script-output"],
             Cwd = fixture.Workspace,
-            ModelExecution = true,
-            ExecutionKind = kind,
             Signal = TestContext.Current.CancellationToken,
         });
-        Assert.Equal(0, (await handle.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode);
-        Assert.Equal("helper", await File.ReadAllTextAsync(Path.Combine(fixture.Workspace, "helper-output"), TestContext.Current.CancellationToken));
-        using var accepted = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
-        Assert.True(accepted.Connected);
-    }
-
-    [Theory(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RealShellTool_UsesSafetyAndDoesNotInheritScriptGrants(bool write)
-    {
-        RequireLinux();
-        using var fixture = new Fixture(true, true, write, false, TestContext.Current.CancellationToken);
-        using var registration = BashTool.Register(fixture.Context, new BashToolConfig { Cwd = fixture.Workspace });
-        var result = await fixture.Execute("bash", new { command = "printf shell > script-output", workdir = fixture.Workspace });
-        var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
-        Assert.Equal(0, value.GetProperty("exitCode").GetInt32());
-        Assert.Equal("shell", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
-    }
-
-    [Fact(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    public async Task PersistentShell_NewSafetyProfileRetiresPreviouslyWritableProcess()
-    {
-        RequireLinux();
-        using var fixture = new Fixture(true, true, true, false, TestContext.Current.CancellationToken);
-        using var agent = fixture.CreateAgent();
-        using var registration = PersistentBashTool.Register(fixture.Context);
-        var first = await fixture.Execute("bash_persistent", new { command = "boundary_previous_process=retire-me; printf first > script-output; printf policy-initial" }, agent);
-        Assert.False(first.IsError, TextOf(first));
-        Assert.Contains("policy-initial", TextOf(first));
-        Assert.Equal("first", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
-        HarnessSettings.Update(fixture.Home, settings =>
-        {
-            settings.Safety!.Blacklist["protect-output"] = new PermissionMatcher
-                { Tool = ["bash_persistent"], Path = fixture.Output, Intent = "write" };
-            return true;
-        });
-        var second = await fixture.Execute("bash_persistent", new { command = "printf second > script-output; printf 'previous=%s\\n' \"${boundary_previous_process-unset}\"; printf policy-current" }, agent);
-        Assert.False(second.IsError, TextOf(second));
-        Assert.Contains("policy-current", TextOf(second));
-        Assert.Contains("previous=unset", TextOf(second));
-        Assert.DoesNotContain("retire-me", TextOf(second));
-        Assert.Equal("first", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
+        Assert.Equal(0, (await child.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode);
+        Assert.Equal("direct", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
     }
 
     [Theory(Timeout = 120000)]
@@ -178,7 +91,7 @@ public sealed class ScriptPermissionBoundaryTests
     [InlineData(true, false)]
     public async Task InstalledCSharpFrontends_AreScriptsAndNotDotnetExempt(bool repl, bool write)
     {
-        RequireLinux();
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, true, write, true, TestContext.Current.CancellationToken);
         string executable;
         try
@@ -233,60 +146,6 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.Equal(write, File.Exists(fixture.Output));
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task ProtectedModelTerminalOpenAndSend_RefuseUnprotectedNativeBackend()
-    {
-        using var fixture = new Fixture(true, true, true, true, TestContext.Current.CancellationToken);
-        using var agent = fixture.CreateAgent();
-        var terminals = new TerminalSessionService(fixture.Context);
-        using var backend = PtyTerminalPlugin.Register(fixture.Context);
-        using var tools = TerminalTools.Register(fixture.Context);
-        var opened = await fixture.Execute("terminal_open", new { type = "shell" }, agent);
-        Assert.True(opened.IsError);
-        Assert.Empty(terminals.List(agent));
-        var sent = await fixture.Execute("terminal_send", new { sessionId = "unprotected-existing", text = "printf unsafe > script-output" }, agent);
-        Assert.True(sent.IsError);
-        Assert.False(File.Exists(fixture.Output));
-    }
-
-    [Fact(Timeout = 60000)]
-    public async Task ExistingOffTerminal_CannotAcceptModelInputAfterLiveToggle()
-    {
-        const string originalContent = "off-mode-original";
-        using var fixture = new Fixture(false, false, false, false, TestContext.Current.CancellationToken);
-        using var agent = fixture.CreateAgent();
-        var terminals = new TerminalSessionService(fixture.Context);
-        using var backend = PtyTerminalPlugin.Register(fixture.Context, new PtyTerminalConfig
-        {
-            Command = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
-            Args = OperatingSystem.IsWindows() ? ["/Q"] : ["--noprofile", "--norc", "-i"],
-        });
-        var opened = await terminals.Spawn(agent, new TerminalSpawnRequest("shell", null, fixture.Workspace), TestContext.Current.CancellationToken);
-        try
-        {
-            var initial = terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest($"echo {originalContent}>script-output", true, TestContext.Current.CancellationToken));
-            await initial.Done.WaitAsync(TimeSpan.FromSeconds(35), TestContext.Current.CancellationToken);
-            Assert.Equal(originalContent, (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
-            fixture.SetEnabled(true);
-            Assert.Throws<InvalidOperationException>(() => terminals.StartSend(agent, opened.SessionId, new TerminalSendRequest("echo unsafe>script-output", true)));
-            Assert.Equal(originalContent, (await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken)).Trim());
-        }
-        finally
-        {
-            await terminals.Kill(agent, opened.SessionId);
-        }
-    }
-
-    [Theory(Timeout = 60000)]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LiveSandboxToggle_RequiresRestartBeforeOpaqueLaunch(bool startupEnabled)
-    {
-        using var fixture = new Fixture(startupEnabled, true, true, true, TestContext.Current.CancellationToken);
-        fixture.SetEnabled(!startupEnabled);
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.RunProgram("return 42;"));
-        Assert.Contains("restarting", error.Message);
-    }
 
     [Fact(Timeout = 60000)]
     public void ScriptSettings_RoundTripWithoutChangingPluginPermissionsOrSafety()
@@ -307,63 +166,17 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.Contains("allow-all", reloaded.Safety.Whitelist.Keys);
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task DirectGitConsumers_RefuseProtectedScopeAndManualVersionRemainsAvailable()
-    {
-        using var fixture = new Fixture(false, true, true, true, TestContext.Current.CancellationToken);
-        var before = await GitCommand.RunAsync(Environment.CurrentDirectory, ["version"], cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(0, before.ExitCode);
-        using (new GitExecutionScope())
-        {
-            await Assert.ThrowsAsync<NotSupportedException>(() => GitCommand.RunAsync(Environment.CurrentDirectory, ["version"], cancellationToken: TestContext.Current.CancellationToken));
-            using var output = new MemoryStream();
-            await Assert.ThrowsAsync<NotSupportedException>(() => GitCommand.CopyOutputAsync(Environment.CurrentDirectory, ["version"], output, TestContext.Current.CancellationToken));
-            Assert.Throws<NotSupportedException>(() => GitHeadSnapshot.Read(fixture.Workspace, [fixture.Input]));
-        }
-        Assert.Equal(0, (await GitCommand.RunAsync(Environment.CurrentDirectory, ["version"], cancellationToken: TestContext.Current.CancellationToken)).ExitCode);
-    }
 
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task PluginDenials_DoNotSupplyScriptPermissions()
+    public async Task ExplicitScriptEntry_DoesNotRequireAmbientModelState()
     {
-        RequireLinux();
-        using var fixture = new Fixture(true, true, true, true, TestContext.Current.CancellationToken);
-        HarnessSettings.UpdatePlugin(fixture.Home, "permission-probe", setting => (setting ?? new PluginSetting()) with
-        {
-            Permissions = new PluginPermissions { Read = false, Write = false, Network = false },
-        });
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        var program = $$"""
-            var input = System.IO.File.ReadAllText("host-input");
-            System.IO.File.WriteAllText("script-output", "independent");
-            using var client = new System.Net.Sockets.TcpClient();
-            await client.ConnectAsync(System.Net.IPAddress.Loopback, {{port}}).WaitAsync(System.TimeSpan.FromSeconds(3));
-            return new System.Text.Json.Nodes.JsonObject { ["read"] = input == "host input 中文", ["connected"] = client.Connected };
-            """;
-        var result = await fixture.RunProgram(program);
-        Assert.True(result.Ok, result.Message);
-        var value = Assert.IsType<JsonObject>(result.Value);
-        Assert.True(value["read"]!.GetValue<bool>());
-        Assert.True(value["connected"]!.GetValue<bool>());
-        Assert.Equal("independent", await File.ReadAllTextAsync(fixture.Output, TestContext.Current.CancellationToken));
-        using var accepted = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
-        Assert.True(accepted.Connected);
-    }
-
-    [Fact(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    public async Task ScriptOrigin_CannotOmitModelMarkerToEscapeConfinement()
-    {
-        RequireLinux();
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, true, false, false, TestContext.Current.CancellationToken);
-        using var handle = await fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
+        using var handle = await fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = ["/bin/sh", "-c", "printf forbidden > script-output"],
             Cwd = fixture.Workspace,
-            ExecutionKind = SubprocessExecutionKind.Script,
             Signal = TestContext.Current.CancellationToken,
         });
         Assert.NotEqual(0, (await handle.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode);
@@ -374,16 +187,15 @@ public sealed class ScriptPermissionBoundaryTests
     [Trait("Category", "SandboxNative")]
     public async Task ScriptPrivateScratch_IsAHostGrantButGuestTmpDoesNotExposeHostTmp()
     {
-        RequireLinux();
+        await RequireLinuxAsync();
         using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
         var guestMarker = "/tmp/dsh-guest-only-" + Guid.NewGuid().ToString("N");
         Assert.False(File.Exists(guestMarker));
         string scratch;
-        using (var handle = await fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
+        using (var handle = await fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = ["/bin/sh", "-c", "printf scratch > \"$TMPDIR/scratch-output\"; printf guest > \"$1\"; printf '%s\\n' \"$TMPDIR\"; IFS= read -r done", "scratch-probe", guestMarker],
             Cwd = fixture.Workspace,
-            ExecutionKind = SubprocessExecutionKind.Script,
             KeepStandardInputOpen = true,
             Signal = TestContext.Current.CancellationToken,
         }))
@@ -419,11 +231,10 @@ public sealed class ScriptPermissionBoundaryTests
         if (!OperatingSystem.IsLinux())
             Assert.Skip("Linux-only guest working-directory validation.");
         using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnAsync(new SubprocessSpawnSpec
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = ["/bin/sh", "-c", "exit 0"],
             Cwd = "/tmp",
-            ExecutionKind = SubprocessExecutionKind.Script,
             Signal = TestContext.Current.CancellationToken,
         }));
     }
@@ -441,89 +252,18 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.Throws<RuntimeException>(() => HarnessSettings.Load(fixture.Home));
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task ModelIdeSurfaceAndAutomaticLauncher_RefuseUnconfinedProcessesButKeepPureStatus()
-    {
-        using var fixture = new Fixture(true, true, true, true, TestContext.Current.CancellationToken);
-        using var agent = fixture.CreateAgent();
-        var catalog = new EditorCatalog([], new EditorDetector(new Dictionary<string, string[]>(), [], []));
-        var editors = new EditorLauncher(catalog);
-        using var registration = IdeTool.Register(fixture.Context, editors);
-        Assert.True((await fixture.Execute("ide", new { action = "list" }, agent)).IsError);
-        Assert.False((await fixture.Execute("ide", new { action = "status" }, agent)).IsError);
-        using var automatic = fixture.Tools.Register(new ToolDefinition
-        {
-            Name = "automatic_editor_probe",
-            Description = "Exercise the actual automatic editor launch consumer.",
-            Parameters = new JsonObject { ["type"] = "object" },
-            Output = new ToolOutputDefinition(new JsonObject { ["type"] = "object" }, (_, value) => [new TextBlock(value.GetRawText())]),
-            Execute = async (_, exec) => await editors.LaunchAsync(new EditorRequest
-            {
-                WorkspaceRoot = fixture.Workspace,
-                Path = fixture.Input,
-                Action = EditorAction.OpenFile,
-            }, exec.Signal),
-        });
-        var result = await fixture.Execute("automatic_editor_probe", new { }, agent);
-        Assert.True(result.IsError);
-        Assert.Contains("OS-confined", TextOf(result));
-        Assert.False(File.Exists(fixture.Output));
-    }
 
-    [Fact(Timeout = 60000)]
-    public async Task PersistentShell_IndependentScriptGrantChangesDoNotRetireCommandState()
+    private static async Task RequireLinuxAsync()
     {
         if (!OperatingSystem.IsLinux())
-            Assert.Skip("The positive legacy control uses the installed Linux bash executable.");
-        using var fixture = new Fixture(false, true, true, true, TestContext.Current.CancellationToken);
-        using var agent = fixture.CreateAgent();
-        using var registration = PersistentBashTool.Register(fixture.Context);
-        Assert.False((await fixture.Execute("bash_persistent", new { command = "boundary_legacy_state=retained" }, agent)).IsError);
-        fixture.SetWrite(false);
-        var result = await fixture.Execute("bash_persistent", new { command = "printf '%s' \"$boundary_legacy_state\"" }, agent);
-        Assert.False(result.IsError);
-        Assert.Contains("retained", TextOf(result));
-    }
-
-    private static string FileProgram() => """
-        bool read = false;
-        bool write = false;
-        try { read = System.IO.File.ReadAllText("host-input") == "host input 中文"; }
-        catch (System.UnauthorizedAccessException) { }
-        catch (System.IO.IOException) { }
-        try { System.IO.File.WriteAllText("script-output", "script output 中文"); write = true; }
-        catch (System.UnauthorizedAccessException) { }
-        catch (System.IO.IOException) { }
-        return new System.Text.Json.Nodes.JsonObject {
-            ["read"] = read, ["write"] = write, ["cwd"] = System.IO.Directory.GetCurrentDirectory(), ["computed"] = 6 * 7
-        };
-        """;
-
-    private static string NetworkProgram(int port) => $$"""
-        bool connected = false;
-        try {
-            using var client = new System.Net.Sockets.TcpClient();
-            await client.ConnectAsync(System.Net.IPAddress.Loopback, {{port}}).WaitAsync(System.TimeSpan.FromSeconds(3));
-            connected = client.Connected;
-        }
-        catch (System.Net.Sockets.SocketException) { }
-        catch (System.UnauthorizedAccessException) { }
-        catch (System.TimeoutException) { }
-        return new System.Text.Json.Nodes.JsonObject { ["connected"] = connected };
-        """;
-
-    private static void RequireLinux()
-    {
-        if (!OperatingSystem.IsLinux())
-            Assert.Skip("These positive controls require the maintained Linux bubblewrap/cgroup/seccomp backend; unsupported backends are covered by refusal tests.");
+            Assert.Skip("These script filesystem and network controls require the Linux bubblewrap backend.");
+        await SandboxTestBackend.RequireAsync();
     }
 
     private static string TextOf(ToolExecutionResult result) => string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
 
     private sealed class Fixture : IDisposable
     {
-        private readonly PluginHostAuthority? _authority;
-        private readonly AgentRegistry _agents;
         private readonly CancellationToken _signal;
         public string Root { get; } = TempTree.CreateDirectory("script-permissions");
         public string Workspace { get; }
@@ -564,16 +304,9 @@ public sealed class ScriptPermissionBoundaryTests
             _ = new SystemPrompt(Context, new SystemPromptConfig());
             Processes = new SubprocessService(Context);
             Tools = new ToolRuntime(Context);
-            _agents = new AgentRegistry(Context);
-            _ = new SettingsMutationBoundary(Context, Home);
-            if (enabled)
-                _authority = new PluginHostAuthority(Context, Home);
-            _ = new ExternalProcessBoundary(Context, Home, HarnessSettings.Load(Home));
+            _ = new ScriptExecutionPolicy(Context, Home, HarnessSettings.Load(Home));
         }
 
-        public Task<PtcRunOutcome> RunProgram(string program)
-            => new PtcScriptHostClient(Processes, Workspace, [], (_, _) => throw new InvalidOperationException("The test must execute real BCL effects, not tool dispatch."))
-                .RunAsync(program, 45000, _signal);
 
         public Task<ToolExecutionResult> Execute(string name, object arguments, IAgent? agent = null)
             => Tools.Execute(new ToolExecutionInput
@@ -585,32 +318,10 @@ public sealed class ScriptPermissionBoundaryTests
                 Signal = _signal,
             });
 
-        public AgentLoopAgent CreateAgent()
-        {
-            var id = SessionId.Create("script-permission-owner-" + Guid.NewGuid().ToString("N"));
-            var session = Session.Create(id, null, new SessionHeader
-            {
-                Version = SessionHeader.SessionFormatVersion,
-                Id = id,
-                CreatedAt = 0,
-                Cwd = Workspace,
-                IsSeeded = false,
-            });
-            var agent = new AgentLoopAgent(Context, id, new AgentOptions(), session, static _ => 0);
-            _agents.Register(agent);
-            return agent;
-        }
-
-        public void SetWrite(bool write)
-            => HarnessSettings.Update(Home, settings => { settings.Scripts!.Permissions!.Write = write; return true; });
-
-        public void SetEnabled(bool enabled)
-            => HarnessSettings.Update(Home, settings => { settings.Sandbox!.Enabled = enabled; return true; });
 
         public void Dispose()
         {
             Processes.Dispose();
-            _authority?.Dispose();
             TempTree.Delete(Root);
         }
     }

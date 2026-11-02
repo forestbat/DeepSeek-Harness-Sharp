@@ -142,7 +142,7 @@ public sealed class ApprovalService : Service, IApprovalService, IApprovalConstr
             return ApprovalOutcome.Cancelled;
         if (EffectivePolicy(session) == ApprovalPolicy.Never)
             return ApprovalOutcome.Rejected;
-        if (request.AllowByRule || EffectivePolicy(session) == ApprovalPolicy.Auto || HasGrant(session, request.ToolName))
+        if (EffectivePolicy(session) == ApprovalPolicy.Auto || HasGrant(session, request.ToolName))
             return ApprovalOutcome.AllowedOnce;
         var answer = DispatchAnswerers(request, signal);
         if (!signal.CanBeCanceled)

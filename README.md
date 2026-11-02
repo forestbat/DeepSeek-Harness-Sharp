@@ -48,18 +48,19 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
-3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。受限托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
+3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
 4. dsharp日志默认位置为`<home>/logs/dsh-YYYYMMDD.log`，可以在 `settings.yaml`→`logging:` 中配置它们(TUI 下强制关闭)。
 
 ### Settings mutation approvals
 
-Settings review is limited to 4 MiB per UTF-8 before/after document; an oversized proposal fails closed and its content is withheld from the audit instead of silently truncated.
-
 Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
-The approval shows the canonical target and the real before/after diff with credentials redacted; the session records the originating tool call, root call, decision, and commit outcome.
+The approval carries the canonical target, redacted changed-line diff, and before/after hashes; the audit records those fields plus the originating tool call, root call, decision, and commit outcome, not complete document snapshots.
+Redaction recognizes common credential field names and known token formats; arbitrary custom secret names or formats may not be recognized.
 The writer releases the settings lock while waiting for approval, then reacquires it and rejects a stale proposal rather than overwriting a concurrent human edit.
+Approved content is published atomically through a private temporary file; existing readers that allow file deletion retain their previous snapshot.
+Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
 Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
-Missing session, reviewer, or approval service fails closed.
+Missing settings gate, session, or approval service fails closed for these model-originated updates.
 
 ### Permission rules
 
@@ -86,7 +87,7 @@ scripts:
     autoApprove: false
     blacklist: {}
     whitelist:
-      allow-example: { tool: run_code, args: { code: "Console.WriteLine(*)*" } }
+      allow-example: { tool: run_csharp_repl, args: { code: "Console.WriteLine(*)*" } }
 ```
 
 `blacklist` and `whitelist` are mappings from stable rule IDs to typed matchers, not lists of `tool:pattern` strings.
@@ -97,14 +98,9 @@ A whitelist can bypass safety notification, including notification for a setting
 Settings mutations still pass through the mandatory gate, which constructs and audits the real redacted diff and obtains the authoritative approval result; a rule allow or automatic policy can approve without a human prompt.
 
 Path `*` matches within one segment and `**` crosses segments.
-Relative patterns use the invocation working directory; comparisons use the actual pinned parent of each component, including mount transitions, not a whole-OS case default.
-Literal components use native name lookup and file identity, preserving case-sensitive Windows directories and Unicode filename aliases without inventing a universal case fold.
-Within-component wildcard matches that need case folding query that pinned directory; unknown native semantics or non-ASCII equivalence the backend cannot express fail explicitly before file data access.
-On Linux, that case query currently requires an ext2/ext3/ext4 directory with a readable FS_IOC_GETFLAGS result.
-Other filesystems, including XFS, fail explicitly when this query is required; a successful generic flags ioctl is not evidence of case-sensitive name lookup.
-A multiply-linked regular file with an otherwise relevant glob blacklist also fails explicitly when the backend cannot establish its other alias names; it is not reported as a proven rule match.
-On Unix, a backslash in a filename remains an ordinary character.
-On Windows, rule paths may use either separator; the native adapter restores Windows separators before applying the extended-length drive or UNC prefix.
+Relative patterns use the invocation working directory. Host-mediated access resolves ordinary canonical paths, including existing symbolic links; Windows comparisons are case-insensitive and Unix comparisons are ordinal.
+On Unix, a backslash in a filename remains an ordinary character; Windows rule paths may use either separator.
+These checks do not pin objects, identify hard-link aliases, infer per-directory case-folding behavior or prevent a concurrent path replacement.
 `args.path` and `args.file_path` are rejected: use the single `path` dimension.
 Other argument patterns match strings; `args.command` with a shell dialect reuses the existing token/wrapper parser, unordered options and short-option clusters.
 Command matching is not an OS security boundary.
@@ -114,47 +110,25 @@ Each prepared call binds one registration identity, owner, execution mode and pe
 A same-name replacement before dispatch receives fresh admission and approval without inheriting the retired registration's call or path approvals; authoritative session grants remain intact.
 Another registration change during renewed approval, retirement without replacement, or a changed execution mode fails before the body runs and requires a new call, without automatic retries or replay.
 Once a body starts, output validation, post-hook value rendering and final publication use that executed registration even if it is subsequently unloaded or replaced.
-Trusted filesystem tools and plugin SDK file brokers re-evaluate the current policy for the actual canonical target and real read/write intent at pinned I/O and commit boundaries.
-Directory search/listing checks each exposed target, not only the search root.
-Within a tool invocation, the same boundary covers memory-file reads and updates, memory audit appends, native skill discovery and body reads, and dynamically discovered instructions after read.
-Non-file memory backends require whole-call approval and opaque-operation capability checks before every actual backend read or update; a dry run cannot read backend data before authorization.
-Model loads of in-memory skill registrations still use ordinary tool approval; custom providers and filesystems must satisfy opaque-operation capability checks before discovery or content access instead of claiming a native pinned target.
-Model discovery propagates cancellation and policy rejection and does not reuse the control-plane catalog cache to bypass current authorization; manual and startup catalog caching remains separate.
-Native skill discovery follows explicitly selected directory and flat Markdown links only through canonical-target authorization and pinned verification; ordinary glob and directory-listing defaults still do not follow links.
-Search resolves an explicitly selected root and the effective working directory to the same native spelling used by pinned enumeration, so directory aliases do not turn relative glob/include filters into paths outside the search root.
-Missing link targets are skipped individually without hiding healthy sibling skills; policy denial, cancellation and a moved enumeration directory remain errors.
-Denied or removed optional instructions are not injected; the original permitted read remains available with an explicit skipped-instructions notice, while cancellation still propagates.
-Present resolves relative targets against the effective session working directory, validates every actual regular-file target through the pinned read boundary, and rechecks after accepting post-hooks before publishing any deliverables.
-If any target is denied or disappears at that final boundary, the original tool call fails without publishing a partial list; declaring a path is not authorization.
-Model-derived editor triggers retain their originating invocation only in the bounded in-memory queue and recheck current policy, cancellation and opaque-process capability before executing.
-Manual commands, startup catalogs and background bookkeeping without a tool invocation remain host control-plane operations; they do not fabricate model sessions or calls.
-Path-specific approval covers only that path and intent, not later writes or another target in the same call.
-Policy changes invalidate previous approval; a changed policy during a pinned operation fails before commit when renewed approval is required.
-Rejection or cancellation before actual I/O starts prevents the write; settings and replacement writes also recheck before their atomic publication point.
-An already-started ordinary append is a direct authorized write, not a rollback transaction; its final flush does not retroactively undo bytes already written.
-Existing settings identity, hardlink and concurrent-human-edit protections remain in force.
-An approved settings mutation requested through a hardlink alias publishes to the canonical settings location, using authorization pinned to that actual location rather than the alias parent.
+Trusted filesystem tools and plugin SDK file brokers evaluate the current policy for the actual canonical target and real read/write intent before their ordinary file operations.
+Directory search/listing checks each exposed target, not only the search root. Native skill discovery and body reads, memory file updates and audit appends, and dynamically discovered instructions carry the actual tool invocation explicitly; there is no ambient settings or execution scope.
+Non-file memory and skill providers use whole-call approval before backend access, not a claim that their arbitrary host code has a native file boundary.
+Model skill discovery propagates cancellation and policy rejection and does not reuse the control-plane catalog cache to bypass current authorization. Manual and startup catalogs remain host operations.
+Native discovery follows explicitly selected links through canonical-target authorization; ordinary glob and directory-listing defaults do not follow links. Missing linked targets are skipped individually without hiding healthy sibling skills.
+Denied or removed optional instructions are not injected; the permitted read remains available with a skipped-instructions notice, while cancellation propagates.
+Present validates actual regular-file targets and rechecks current policy and existence after accepting post-hooks before publishing the complete list.
+Path-specific approval covers only that path and intent, not later writes or another target in the same call. A policy change invalidates earlier grants at the next authorization boundary; settings proposals also recheck before publication and reject a stale document.
+Denial or cancellation before IO starts prevents that operation. An already-started ordinary write or append is not a rollback transaction. These checks do not provide file-identity, hard-link-alias or TOCTOU guarantees.
 
-Shell tools (including persistent shells), MCP and ordinary plugin operations use `safety`.
-Actual C# scripts, `run_code`, `csx` and C# REPL use the independent `scripts.permissions` rule maps.
-The script `read`/`write`/`network` booleans remain separate OS restrictions; a rule allow cannot grant a structurally denied capability.
+Ordinary tools, command admission, MCP tools and plugin broker operations use `safety`.
+Only actual C# script executors (`run_csx` and `run_csharp_repl`) use the independent `scripts.permissions` rule maps; `run_code` is PTC and remains outside that script policy.
+Both namespaces use the same matcher engine and boolean `autoApprove` semantics. Script invocation rules match the tool and its string arguments; `read`/`write`/`network` are separate workspace-level OS restrictions when sandboxing is enabled.
+A rule allow does not grant a structurally denied capability. Arbitrary filesystem opens made inside script code have no per-open matcher callback; use the structural script permissions for those operations rather than assuming a `path` rule intercepts arbitrary BCL/native IO.
 
-Opaque subprocesses have no per-open host callback.
-The existing OS profile can enforce concrete existing-file write denials; unsupported glob, read/intent, missing-target or directory restrictions fail explicitly before execution rather than pretending argument matching protects I/O.
-Sandbox-off opaque execution rejects restrictions that require an OS boundary.
-Persistent shells are retired when the effective policy/profile changes; owned MCP handles become unusable and require explicit reload after a policy revision.
-An operator-configured owned MCP connection separately authorizes initialization/discovery, with its real server name in lifecycle audit and no invented session/call IDs; it grants no approval to later model tool calls.
-Remote or unowned MCP transports fail when the required mediation/profile cannot be provided.
-The actual startup image, including every explicitly linked module and its initializers, is the existing host trusted computing base (TCB), regardless of package name, directory or author.
-Its mediated file operations still enforce safety at the real target; ordinary ConfigBoot startup can activate path/intent rules.
-Runtime-loaded full-context/native artifacts require the existing exact-artifact full-host grant where applicable, or an unconfined compatible policy.
-File-scoped deny rules, and effective file-scoped whitelists with autoApprove: false, cannot be combined with an external artifact that extends the TCB with arbitrary in-process BCL/native access.
-An explicit full-host grant authorizes lifecycle initialization without a fabricated session; model tool invocations still go through admission and settings approval.
-Once an external full-host artifact executes, that process-lifetime authority fact survives Context/Home disposal; enabling incompatible file policies requires restarting without that artifact.
-GUI saves, typed settings transactions and final settings diff commits reject incompatible policies before writing anything.
-An externally edited incompatible document stays on disk but is explicitly not activated: the runtime retains its previous immutable accepted snapshot and reports the rejection in the GUI safety status/toast, TUI status and diagnostic log.
-Editing a returned settings DTO cannot mutate the accepted snapshot; a supported repair is merged against the real disk document so unrelated human edits are not silently overwritten.
-With autoApprove: true, a file whitelist grants nothing additional and does not by itself require per-file authority.
+Owned local MCP stdio retains its explicit OS-sandboxed launch path when sandboxing is enabled, including refusal when the required backend is unavailable. Configured startup/discovery does not invent a model session or grant authority to subsequent tool calls.
+Shell, persistent shell, PTC, PTY, Git, editor launches and triggers, remote MCP and unowned MCP keep their ordinary behavior. This rule engine does not globally intercept their processes or arbitrary BCL/native file access.
+Compiled-in and directory plugins use the same explicit execution roles and permission declarations. Host-role code retains unrestricted in-process BCL/native authority; its broker calls are checked, but file rules do not revoke its other access or prevent live policy edits.
+There are no artifact/image/digest grants, retained full-host authority snapshots or rejected-policy activation status. Each mediated operation reads the current settings policy; editing a separately returned settings DTO does not change the runtime reader's private parsed snapshot.
 
 Each safety decision records rule ID/kind, `autoApprove`, `allow`/`deny`/`notify`, tool, dialect, matched field/pattern, normalized path, real intent, session/call IDs when present, and timestamp.
 Approval/commit outcome is recorded separately from the policy decision.
@@ -165,6 +139,7 @@ There is no TUI safety editor: edit `settings.yaml` and use the existing authori
 Human settings commands and GUI saves remain explicit human operations.
 
 
+The trusted settings diff gate is always enabled for these tool/API paths, independently of `sandbox.enabled`. It does not intercept arbitrary BCL/native writes by host-role code, shell, PTC, editor, Git, remote MCP, or other unconfined processes. Enabling the plugin sandbox does not turn those paths into a universal settings-write boundary.
 
 ## 不同于原版 DSH 的功能
 
@@ -401,7 +376,7 @@ storage:
 | `@deepseek-ai/dsh-tool-creative` | `creative_inspect_list`、`creative_inspect_query` 只读检查服务、配置和工具 | 事件检查仍不可用 |
 | `@deepseek-ai/dsh-plugin-manager` | `plugin_manager` 管理插件 | 保留既有审批门禁，不由检查插件自动启用 |
 
-通过 PTC 工具 SDK 发起的子调用仍遵循当前 scope、审批与审计；它与下面面向插件的 `IPluginHost` 能力 SDK 是不同接口。`sandbox.enabled: false` 时，`run_code` 不是 C# 安全沙箱；开启时，PTC 与外部 C# 前端的实际执行还须满足 OS 边界，不能满足就明确失败，不回退到未隔离执行。
+通过 PTC 工具 SDK 发起的子调用仍遵循当前 scope、审批与审计；它与下面面向插件的 `IPluginHost` 能力 SDK 是不同接口。`run_code` 本身不是 C# 安全沙箱，也不受独立的 `scripts.permissions` 接管；不要用子工具的审批语义推断任意 PTC/BCL 代码也被隔离。
 SDK 返回的 JSON 根节点可以直接组合进新的 `JsonObject` 或 `JsonArray`；工具返回的图片会作为模型上下文单独交付。
 
 PTC 的临时调试开关默认关闭，启用后会提示模型优先将独立、非交互的工具操作归并到一次 C# `run_code`，而不是分别发起原生调用（包括并行调用）。
@@ -470,72 +445,75 @@ plugins:
       network: false
 ```
 
-未明确授权宿主执行的新插件使用隔离角色；托管插件必须实现 `IDshIsolatedPlugin`，原生插件必须使用当前能力 ABI。不支持的完整 `Context` 契约不会被伪装成 RPC，也不会静默退回主进程。权限值未指定时为允许，因此要按需要显式收紧 `read`、`write`、`network`。
+未明确选择宿主角色的插件按能力接口尝试隔离加载；托管隔离插件必须实现 `IDshIsolatedPlugin`，原生插件使用同一 broker 操作。完整 `Context` 或入口插件缺少 `execution: host` 时明确拒绝，不伪装成 RPC，也不静默回退主进程。权限值未指定时为允许，因此要按需要显式收紧 `read`、`write`、`network`。
 
-隔离 worker 不直接取得业务目录、宿主凭据或网络访问。托管与原生插件通过同一组 broker 操作 `files.read`、`files.write`、`http.send` 请求能力；仍受会话审批、权限和大小限制约束，写当前 settings 还必须进入真实 diff 审批。受限接口不会向插件暴露 `Context`、`IAgent` 或宿主服务对象。
+隔离 worker 不直接取得业务目录、宿主凭据或网络访问。托管与原生插件通过同一组 broker 操作 `files.read`、`files.write`、`http.send` 请求能力；broker 检查对应插件的当前权限、路径与读写大小，写活动 settings 还需要真实工具上下文和 diff 审批。受限接口不暴露 `Context`、`IAgent` 或宿主服务对象。
 
-完整 `IDshPlugin`/`Context` 组合插件只能作为完全信任的宿主角色运行。例如，自己编译并实际链接进当前宿主镜像的组合插件，可使用与其他镜像插件完全相同的显式字段：
+完整 `IDshPlugin`/`Context` 组合插件需要显式选择完全信任的宿主角色；编译进程序的预置包与用户部署的文件插件使用同一字段和规则：
 
 ```yaml
 plugins:
   "@example/workspace-host":
     execution: host
-    hostArtifact: image
     permissions:
       read: true
-      write: true
-      network: true
+      write: false
+      network: false
 ```
 
-`image` 仅表示实际链接进当前宿主镜像的代码身份，不表示包名前缀、预置来源、安装目录或同名插件自动受信任。模板为现有完整 `Context` 默认包逐项列出这类授权，同时保留 memory、TOON、checkpoints 的默认关闭状态。用户自编的镜像插件也用相同规则，不存在按来源给予权限的例外。
+这些权限位只约束宿主角色通过 broker 发起的调用，不能撤销同地址空间代码的任意 BCL/原生访问。GUI/TUI 的权限修改入口不因插件来自编译镜像而禁用；需要真正受限的执行，应迁移到能力接口，而不是仅修改角色名称或权限位。
 
-**已经编译进主进程镜像的所有代码与模块初始化器都是宿主可信计算基（TCB）的一部分。** 即使某个镜像内类型实现能力 SDK，也不能声称它在主进程执行过的模块初始化器被事后 OS 隔离。不可信代码应作为独立文件部署的 SDK 托管插件或原生工件加载，而不是编译进宿主镜像。
+模板不为预置插件批量授予宿主角色，也不按包名前缀、安装目录或来源授信。开启沙箱前，需要为仍使用完整 `Context` 的启用插件明确配置 `execution: host`，或迁移其接口；`Dsh.Tool` 原有默认写能力/白名单不因此被收回。
 
-文件形态的完整 `Context` 插件需要 `execution: host` 和 `hostArtifact: "sha256:<64hex>"`。该标识必须覆盖实际部署工件的完整文件闭包，而不是仅主 DLL；`sha256sum plugin.dll` 的结果不是此授权标识。依赖或工件内容变化后必须重新确认授权，同包名的新代码不能继承旧代码的宿主授权。宿主角色必须保留全权限，不能用 `ban_*` 或 `permissions.write: false` 宣称撤销同地址空间 BCL/原生访问；需要窄权限就迁移到能力 SDK。
+**已经编译进主进程镜像的代码与模块初始化器都是宿主可信计算基（TCB）的一部分。** 事后把某个类型放入 worker，不能隔离它已经在主进程执行过的初始化器；不可信代码应作为独立文件部署的能力插件加载。
 
-获取文件授权标识时，可先用 `/plugins add` 或重启触发隔离发现；需要完整 `Context` 而缺少授权的工件会被拒绝，诊断给出此次真实代码闭包的 `execution: host`、`hostArtifact: sha256:...` 与全权限要求。先核对来源和整个部署闭包，再由用户明确写入这些字段并重试；不要把错误消息当成自动批准。没有独立的 hash CLI，也不要用单文件哈希替代。
+`/plugins add` 在实际共享 worker 中加载并观察待隔离工件，失败会保留为可见的加载错误。文件使用普通流与路径、权限和大小检查；不提供代码内容固定、工件哈希授权、硬链接别名识别或并发目录替换防护。
 
-升级不会自动覆盖已有 settings，也不会仅凭预置包名补授宿主权限。开启沙箱前，请对照当前模板审查并迁移所需的显式角色；拒绝审批不应安装、激活或修改权限。权限变化、禁用、卸载或故障恢复会停止旧信任域并重新建立仍启用的成员，不重放失败或取消的调用。
+升级不自动覆盖已有 settings，也不补授宿主角色。权限变化、禁用、卸载或故障恢复会退役旧共享 worker 并重建仍启用的成员，不重放失败或取消的调用；拒绝配置审批不会提交对应变更。
 
 `sandbox.enabled` 与宿主启动时的值不同会要求重启；热切换不会追溯隔离已经加载到主进程的代码。
 
-#### 信任域、资源与平台边界
+#### 共享 worker 与平台边界
 
-默认每包独立信任域；只有明确设置相同 `trustDomain` 且权限配置相同的隔离插件才复用 worker。同域代码共享地址空间、内存预算与故障后果，是相互信任的代码，不是插件间隔离。不同域或不同权限配置不共享 worker。当前每个 worker 的内存预算为 512 MiB，最多同时 8 个 worker；这不是整个应用或单个工具的独立内存保证。一个域越界或崩溃会使域内成员共同失效，错误明确返回用户与模型。
+所有隔离插件共用一个 worker，托管与原生代码共享地址空间和故障后果。它们必须相互信任；broker 的逐插件权限不是抵御同进程恶意插件伪造调用身份或内存访问的边界。崩溃、超时或取消会影响共享 worker 中的成员，主进程保留并返回明确错误。
+
+产品不提供 worker 内存上限、内存用量监测或内存耗尽保护；需要资源预算时，应由独立运行环境管理。
 
 | 平台 | 必需条件与实际边界 |
 |---|---|
-| Linux | 需要支持全部强制保护参数的 bubblewrap（已验证 0.13.1）、可用的用户/网络等 namespace，以及已委派且可写的 cgroup v2 子树：启用 memory/pids、`memory.swap.max` 和 `cgroup.kill`，宿主运行在委派下的叶节点。仅安装 bubblewrap 或存在 systemd 不足以说明委派可用；缺失时失败关闭，不自动下载或退回普通进程。内存限制由 cgroup 执行。 |
-| Windows | 使用 AppContainer 文件/网络边界与 Job Object 资源、进程树约束。当前明确拒绝直接可写目录授权，不能声称普通用户可可靠回收恶意创建的受保护 ACL 后代；文件写入应走宿主能力中介。AppContainer 的 localhost/loopback 限制意味着允许网络也不保证能连接本机模型、代理或 MCP 服务；不会自动添加 loopback exemption 来放宽边界。 |
-| macOS | 需要系统 `sandbox-exec`，支持不派生子进程的单 worker。内存采用 RSS 观察并在测量超预算后终止，不是内核硬上限；不能保证没有瞬时超额。需要派生子进程的不透明执行路径因无法提供无逃逸竞态的后代所有权而失败关闭，不能把整个 macOS 功能笼统标为不可用。 |
+| Linux | 需要可用的 bubblewrap 及所需 namespace、挂载能力，提供文件与网络隔离；后端或能力不可用时明确拒绝，不自动下载或改用普通进程。 |
+| Windows | 使用 AppContainer 文件/网络边界及 Job Object 的进程树终止能力；可写目录使用显式授权。AppContainer 的 localhost/loopback 限制仍可能阻止本机服务连接，不自动添加 loopback exemption。 |
+| macOS | 需要系统 `sandbox-exec`，保留单进程 Seatbelt 文件/网络隔离；要求派生子进程的执行明确拒绝，不声称已解决任意后代进程的所有权。 |
 
 Windows 进程创建失败会报告实际 Win32 错误码；载荷不附着控制台，三条标准流仅继承明确列出的管道，AppContainer 与 Job 约束在恢复执行前建立。
 AppContainer 的应用数据目录由 Windows 按当前容器身份重定向，用作容器自有临时区；这不授予宿主工作目录写权限，也不意味着继承完整宿主环境。
 
 macOS 的 dyld 共享缓存引导需要读取根目录对象；该权限仅针对 `/` 目录本身，不是递归读取根目录下文件内容的授权。
 托管 worker 的全球化运行时可只读系统 `/usr/share/icu` 数据；该例外不授予写入、执行或读取其他宿主数据的权限。
-单进程镜像替换只允许执行明确按文件授权、且没有 set-user/group-ID 位的只读输入；目录读取授权不自动变成执行授权，`fork` 仍被拒绝。
+单进程镜像替换只允许执行明确授权的只读输入；目录读取授权不自动变成执行授权。
 
-沙箱开启时，shell、PTC、C# 前端及可归属的本机 MCP stdio 进程也必须使用真实 OS 后端保护当前 settings，任意代码的直接写入会被拒绝，应改走审批工具或能力接口。后端缺失、目录授权不兼容、macOS 需要派生子进程、远程/不可归属 MCP 等不能兑现边界的路径都会报错，不静默回退。关闭沙箱可恢复原兼容行为，但也明确放弃这些不透明执行路径的 OS 保护；它不是绕过可信 settings diff 审批的开关。
-受保护的文件读写固定已授权的祖先目录，目录替换不得把操作重定向到未批准的对象；Windows 固定句柄需要宿主具备目录列表访问权限，无法建立固定时会报错。
+`scripts.permissions.read/write/network` 只用于实际脚本执行器 `run_csx` 和 `run_csharp_repl`，不从执行器插件权限推导，未指定的值为允许。
+沙箱开启时，脚本工作目录的数据访问按这些权限授权，运行时代码只读输入和独占临时目录另外授权；禁止工作目录写入仍可在私有临时目录计算。
+Linux 的 `read: false, write: false` 使用空的 guest 工作目录；`read: false, write: true` 无法兑现只写目录语义，明确拒绝。
+后续脚本调用读取当前权限；关闭沙箱时保留原有执行方式。
 
-`scripts.permissions.read/write/network` 独立约束 shell、持久 shell、PTC、dotnet-script 与 CSharpRepl，不从执行器插件的权限推导，未指定的值为允许。
-开启沙箱时，读写授权针对工作目录的宿主数据，运行时代码只读输入和独占临时目录另外授权；禁止写入仍允许在私有临时目录计算。
-Linux 的 `read: false, write: false` 使用空的 guest 工作目录，不暴露原工作目录；`read: false, write: true` 无法兑现只写目录语义，明确拒绝。
-权限变化会在后续执行前生效，持久 shell 会退役旧权限进程；关闭沙箱时这些脚本权限不改变原有不透明执行行为。
-模型可调用的原生 PTY、编辑器启动与间接 Git 进程若不能建立同等边界，也会明确拒绝；手工界面入口不因此变成模型可绕过的通道。
+可归属的本机 MCP stdio 进程保留显式 OS 沙箱启动路径，不支持的后端/子进程需求明确失败。shell、持久 shell、PTC、原生 PTY、编辑器、Git、远程和不可归属 MCP 不被这套脚本策略全局接管，也不因开启插件沙箱而自动获得 OS 保护。
 
-#### 能力 SDK 与原生 ABI 迁移
+#### 能力 SDK 与原生 ABI
 
-托管模板 `templates/managed-plugin` 使用 `IDshIsolatedPlugin.InitializeAsync(IPluginHost, JsonElement, CancellationToken)`，通过 `RegisterTool` 注册工具、`CallAsync` 调用能力、`Log` 输出日志。操作常量集中在薄契约项目 `Dsh.Plugins.Protocol` 的 `PluginHostOperations`，插件依赖宿主提供的同一契约身份，不打包第二份宿主契约程序集。
+`IPluginHost`、`IDshIsolatedPlugin` 与 `PluginHostOperations` 位于 `Dsh.Plugins.Abstractions`，命名空间仍为 `Dsh.Plugins`。托管隔离插件通过 `InitializeAsync(IPluginHost, JsonElement, CancellationToken)` 初始化，使用 `RegisterTool`、`CallAsync` 和 `Log`；插件引用宿主提供的同一契约，不打包第二份宿主契约程序集。
+
+`templates/managed-plugin` 保留 `IDshPlugin.Apply(Context, ...)` 生命周期、配置和 prompt 注入，并演示能力调用；它不是隔离插件模板，开启沙箱时仍需显式宿主角色。原生示例见 `tests/Dsh.NativePluginSample`。
 
 - `files.read`：参数 `{path, offset?, count?}`，返回 `{data, length, eof}`，`data` 为 base64。
 - `files.write`：参数 `{path, data, append?}`，`data` 为 base64，返回 `{bytesWritten}`。
 - `http.send`：参数 `{url, method?, headers?, body?}`，`body` 为 base64，返回 `{status, headers, body}`。
 
-原生 ABI 已升级为 **v2**，旧二进制需要用当前生成器与模板重新构建，不提供 v1 兼容 shim。`NativePluginContext.CallHost` / `DshNativePluginRuntime.CallHost` 使用相同操作和 JSON 语义；生成的两段式 UTF-8 `HostCall` 回调负责取回结果，缓冲重取不会再次执行写入副作用。隔离角色拿到的是 broker 能力，不是完整宿主对象；需要完整 `Context` 的旧插件应明确选择并审查全信任宿主角色，或实际迁移接口，不能只修改一个配置字段就宣称完成隔离。
+原生 ABI 保留 **v1** 版本、原入口和旧表前缀，在宿主 API 尾部追加可选 `HostCall`。新增可选入口 `dsh_plugin_entry_with_host_size` 用实际表长协商新能力；仅有版本号不能证明尾部字段存在，新插件在旧宿主中只读取旧前缀。原有 v1 二进制不要求重建。
 
-原生插件的逻辑停用会注销工具、释放本次激活的回调与缓冲，但原生镜像在所属进程中保持驻留。[NativeAOT 不支持通过 `dlclose` / `FreeLibrary` 卸载共享库](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/libraries)；重复加载同一路径、相同内容会复用镜像，同一路径内容改变则要求新 worker 或重启宿主。隔离角色通过退役所属 worker 回收原生镜像；在宿主进程运行时，不宣称逻辑卸载能够回收该镜像。
+`NativePluginContext.CallHost` / `DshNativePluginRuntime.CallHost` 使用上述操作与 JSON 语义，当前宿主以一次同步调用和完整响应缓冲执行，不通过重复调用业务操作探测结果大小。原生 SDK 同样提供 `Native.Host.SettingsJson.Write`。
+
+原生插件的逻辑停用会注销工具并释放本次激活资源，但镜像可驻留到所属进程退出。[NativeAOT 不支持通过 `dlclose` / `FreeLibrary` 卸载共享库](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/libraries)；替换原生工件后需要新 worker 或重启宿主，不宣称普通加载器会识别内容变化或逻辑卸载能回收镜像。
 
 <details>
 <summary>插件配置</summary>
@@ -567,6 +545,19 @@ sandbox:
 - TUI 问答与既有审批共用键鼠选择控件，支持多选、自定义输入、禁用/默认、中文折行命中、长内容滚动和草稿光标恢复。
 - 问答整组取消返回结构化 `dismissed`，审批保留当前会话工具授权边界，GUI/Web 复用选择与结果契约及 Host 先答者生效生命周期。
 - 决策取消采用显式 Host 能力门禁：旧 v2 Host 不会把取消误读为空答案或拒绝；GUI/Web 显示 Unsupported、保留未决项，既有回答与拒绝继续可用。
+
+</details>
+
+<details>
+<summary><b>未发布</b> — 插件隔离与配置变更审批</summary>
+
+- 增加默认关闭的插件沙箱；预置与用户插件使用同一显式执行角色、read/write/network 配置和权限修改入口。
+- 托管/原生能力插件共用一个 worker 和 broker，保留最小平台隔离及崩溃清理，不提供插件间内存隔离或内存预算。
+- 模型经内置写入工具、插件管理和 broker 修改活动 settings 时，共用一次 diff 审批与精简审计；人工保存和不受管的宿主执行路径保持明确边界。
+- safety 与真实脚本执行器使用带稳定 ID 的 matcher map；保留 AND/OR、deny 优先、布尔 autoApprove、tool/dialect/path/intent/args 语义，并明确普通路径中介与不受全局拦截的执行边界。
+- 原生 ABI 保留 v1 兼容与可选能力表长协商，脚本权限只作用于真实 C# 脚本执行器。
+- 工具在准备后被替换时，执行前按新注册重新授权，不复用旧注册的单次批准；授权中再次替换或与已排程并行模式不兼容时拒绝执行。
+- 修复首次创建工作树池时 `.gitignore` 的目录创建顺序，仍在写入授权后创建目录与文件。
 
 </details>
 

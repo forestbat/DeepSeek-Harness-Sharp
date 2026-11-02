@@ -98,7 +98,7 @@ internal static class SearchFiles
     {
         await using var file = await SafetyFileAccess.OpenReadAsync(path, exec).ConfigureAwait(false);
         var buffer = new byte[8192];
-        var read = await file.Stream.ReadAsync(buffer, exec.Signal).ConfigureAwait(false);
+        var read = await file.ReadAsync(buffer, exec.Signal).ConfigureAwait(false);
         return buffer.AsSpan(0, read).IndexOf((byte)0) >= 0;
     }
 }
@@ -182,8 +182,8 @@ public static class GlobTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
-        var canonicalRoot = PinnedFileAccess.Canonicalize(root);
-        workdir = root == workdir ? canonicalRoot : PinnedFileAccess.Canonicalize(workdir);
+        var canonicalRoot = Dsh.Sandbox.SandboxFileAccess.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Sandbox.SandboxFileAccess.Canonicalize(workdir);
         root = canonicalRoot;
         if (!Directory.Exists(root))
             throw new HarnessException($"glob search failed (exit 2): the directory does not exist: \"{root}\"", "SEARCH_FAILED");
@@ -334,8 +334,8 @@ public static class GrepTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
-        var canonicalRoot = PinnedFileAccess.Canonicalize(root);
-        workdir = root == workdir ? canonicalRoot : PinnedFileAccess.Canonicalize(workdir);
+        var canonicalRoot = Dsh.Sandbox.SandboxFileAccess.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Sandbox.SandboxFileAccess.Canonicalize(workdir);
         root = canonicalRoot;
         var includeMatcher = include is null ? null : SearchFiles.CreateMatcher(include);
         var matches = new List<GrepMatchValue>();
@@ -370,7 +370,7 @@ public static class GrepTool
     {
         var signal = exec.Signal;
         await using var access = await SafetyFileAccess.OpenReadAsync(file, exec).ConfigureAwait(false);
-        using var reader = new StreamReader(access.Stream, new UTF8Encoding(false, false), detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(access, new UTF8Encoding(false, false), detectEncodingFromByteOrderMarks: true);
         var lineNumber = 0;
         while (reader.ReadLine() is { } line)
         {

@@ -5,13 +5,14 @@ using System.Text.Json;
 namespace Dsh.Plugins.Native;
 
 /**
- * Native plugin ABI v2 exchanges C calling-convention function tables and UTF-8 strings.
+ * Native plugin ABI v1 exchanges C calling-convention function tables and UTF-8 strings.
  * Input strings are NUL-terminated; two-phase outputs carry their length without a terminator.
  */
 public static class DshNativePluginAbi
 {
-    public const int Version = 2;
+    public const int Version = 1;
     public const string EntryPoint = "dsh_plugin_entry";
+    public const string SizedEntryPoint = "dsh_plugin_entry_with_host_size";
     public const string PackageExport = "dsh_plugin_package";
     /** 可选的独立版本导出:插件声明自身 ABI 版本,使宿主在握手前就能精确区分“版本不符”与“其它拒绝”。 */
     public const string VersionExport = "dsh_plugin_abi_version";
@@ -19,9 +20,7 @@ public static class DshNativePluginAbi
     public const string SettingsSchemaExport = "dsh_plugin_settings_schema";
     /** 配置回传缓冲上限:超出即视为插件不认这份配置,宿主只记 WARN(避免无界重试)。 */
     public const int ConfigCapacityHint = 64 * 1024;
-    /** 宿主首次调用工具时提供的输出缓冲:多数结果一次放下,超出时按插件报的长度再取一次。 */
-    public const int InvokeCapacityHint = 64 * 1024;
-    public const int MaxResultBytes = 4 * 1024 * 1024;
+    public const int MaxResultBytes = PluginHostOperations.MaximumFrameBytes;
 
     public const int Ok = 0;
     public const int Error = -1;
@@ -79,7 +78,7 @@ public unsafe struct DshHostApi
     /** Reads plugin configuration; null output probes the required UTF-8 byte count. */
     [DshAbiRole(DshAbiRoles.GetConfig)]
     public delegate* unmanaged[Cdecl]<void*, byte*, int, int> GetConfig;
-    /** Returns a JSON result/error envelope, retaining it until a same-thread buffer retry collects it. */
+    /** Optional tail negotiated by the sized entry export; one caller-owned frame, no probes or retries. */
     [DshAbiRole(DshAbiRoles.HostCall)]
     public delegate* unmanaged[Cdecl]<void*, byte*, byte*, byte*, int, int> HostCall;
 }
@@ -110,12 +109,13 @@ public interface INativeToolRegistry
 }
 
 /** 插件侧工具注册与调度的便利包装:插件在 Activate 里注册工具,由 Dispatch 派发调用。 */
-public sealed unsafe class NativePluginContext(DshHostApi* host, void* context) : INativeToolRegistry, IDisposable
+public sealed unsafe class NativePluginContext(DshHostApi* host, void* context, int hostApiSize) : INativeToolRegistry, IDisposable
 {
     private readonly Dictionary<int, Func<string, string?>> _handlers = [];
     private int _nextHandle;
 
-    private readonly NativeResultBuffer _results = new();
+    [ThreadStatic]
+    private static RetainedToolResult? _retained;
 
     public void Log(int level, string message)
     {
@@ -145,6 +145,8 @@ public sealed unsafe class NativePluginContext(DshHostApi* host, void* context) 
     public int UnregisterTool(int handle)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (host->UnregisterTool is null)
+            return DshNativePluginAbi.Error;
         var result = host->UnregisterTool(context, handle);
         if (result == DshNativePluginAbi.Ok)
             _handlers.Remove(handle);
@@ -154,39 +156,46 @@ public sealed unsafe class NativePluginContext(DshHostApi* host, void* context) 
     public string? Dispatch(int handle, string inputJson)
         => _handlers.TryGetValue(handle, out var invoke) ? invoke(inputJson) : null;
 
-    /// <summary>Retries deliver a bounded retained result without executing the tool twice.</summary>
+    /// <summary>Preserves the v1 tool-output retry contract for older hosts.</summary>
     public int InvokeTool(int handle, byte* input, byte* output, int capacity)
     {
+        if (capacity < 0)
+            return DshNativePluginAbi.Error;
         var inputJson = NativeUtf8.Read(input);
-        return _results.Invoke(handle, "", inputJson, output, capacity, () =>
+        var retained = _retained;
+        _retained = null;
+        var matches = retained is { Owner: var owner } && ReferenceEquals(owner, this)
+            && retained.Handle == handle && retained.Input == inputJson;
+        var result = matches ? retained!.Result : Dispatch(handle, inputJson) ?? "";
+        var length = Encoding.UTF8.GetByteCount(result);
+        if (length > DshNativePluginAbi.MaxResultBytes)
+            return DshNativePluginAbi.Error;
+        if (output is null || capacity < length)
         {
-            var result = Dispatch(handle, inputJson) ?? throw new InvalidOperationException("native tool returned no result");
-            if (Encoding.UTF8.GetByteCount(result) > DshNativePluginAbi.MaxResultBytes)
-                throw new InvalidOperationException("native tool result exceeds its buffer limit");
-            return Encoding.UTF8.GetBytes(result);
-        });
+            _retained = matches ? retained : new RetainedToolResult(this, handle, inputJson, result);
+            return length;
+        }
+        return Encoding.UTF8.GetBytes(result, new Span<byte>(output, capacity));
     }
+
+    private sealed record RetainedToolResult(NativePluginContext Owner, int Handle, string Input, string Result);
+
+    public bool HasHostCall => hostApiSize >= sizeof(DshHostApi) && host->HostCall is not null;
 
     private bool _disposed;
 
     public string CallHost(string operation, string argumentsJson)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (host->HostCall is null)
-            throw new InvalidOperationException("the host does not provide ABI v2 host calls");
-        var buffer = new byte[DshNativePluginAbi.InvokeCapacityHint];
+        if (!HasHostCall)
+            throw new InvalidOperationException("the host does not provide native host calls");
+        var buffer = new byte[DshNativePluginAbi.MaxResultBytes];
         fixed (byte* operationPointer = NativeUtf8.Terminated(operation))
         fixed (byte* argumentsPointer = NativeUtf8.Terminated(argumentsJson))
         {
             int written;
             fixed (byte* output = buffer)
                 written = host->HostCall(context, operationPointer, argumentsPointer, output, buffer.Length);
-            if (written > buffer.Length && written <= DshNativePluginAbi.MaxResultBytes)
-            {
-                buffer = new byte[written];
-                fixed (byte* output = buffer)
-                    written = host->HostCall(context, operationPointer, argumentsPointer, output, buffer.Length);
-            }
             if (written <= 0 || written > buffer.Length)
                 throw new InvalidOperationException($"host operation '{operation}' failed its native buffer exchange");
             using var document = JsonDocument.Parse(buffer.AsMemory(0, written));
@@ -199,7 +208,8 @@ public sealed unsafe class NativePluginContext(DshHostApi* host, void* context) 
     public void Dispose()
     {
         _disposed = true;
-        _results.Dispose();
+        if (ReferenceEquals(_retained?.Owner, this))
+            _retained = null;
         _handlers.Clear();
     }
 
@@ -208,7 +218,7 @@ public sealed unsafe class NativePluginContext(DshHostApi* host, void* context) 
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (host->GetConfig is null)
-            throw new InvalidOperationException("the host does not provide ABI v2 configuration");
+            return "";
         var required = host->GetConfig(context, null, 0);
         if (required == 0)
             return "";

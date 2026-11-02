@@ -93,10 +93,7 @@ public sealed class RuleToolsYamlConverter : IYamlTypeConverter
 }
 
 public sealed record PermissionInput(string? Tool, JsonElement Arguments, string WorkingDirectory,
-    string? Path = null, string? Intent = null, ShellDialect? Dialect = null,
-    Func<string, bool>? IsFileAlias = null,
-    Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)>? ComparePathComponent = null,
-    bool PathIsCanonical = false);
+    string? Path = null, string? Intent = null, ShellDialect? Dialect = null, bool PathIsCanonical = false);
 public readonly record struct PermissionField(string Field, string Pattern);
 public sealed record PermissionMatch(string RuleId, string RuleKind, IReadOnlyList<PermissionField> Fields);
 public readonly record struct PermissionDecision(string Decision, bool AutoApprove, PermissionMatch? Match);
@@ -130,7 +127,7 @@ public static class PermissionEngine
     }
 
     public static IReadOnlyList<PermissionField>? MatchFields(PermissionMatcher matcher, PermissionInput input,
-        Func<string, string> physicalPath, bool omitFileDimensions = false)
+        Func<string, string> physicalPath)
     {
         var dialect = input.Dialect ?? DialectOf(input.Tool);
         if (matcher.Tool is { } tools)
@@ -152,27 +149,20 @@ public static class PermissionEngine
                 : StringGlob(pattern, value);
             if (!matches) return null;
         }
-        if (!omitFileDimensions)
+        if (matcher.Intent != "any" && input.Intent != matcher.Intent) return null;
+        if (matcher.Path is { } pathPattern)
         {
-            if (matcher.Intent != "any")
-            {
-                if (input.Intent != matcher.Intent) return null;
-            }
-            if (matcher.Path is { } pattern)
-            {
-                if (input.Path is null) return null;
-                var normalized = NormalizePattern(pattern, input.WorkingDirectory, physicalPath);
-                var actualPath = PathText(input.PathIsCanonical ? input.Path : physicalPath(input.Path));
-                if (!PathGlob(normalized, actualPath, input.ComparePathComponent)
-                    && !(normalized.IndexOfAny(['*', '?']) < 0 && input.IsFileAlias?.Invoke(normalized) == true)) return null;
-            }
+            if (input.Path is null) return null;
+            var normalized = NormalizePattern(pathPattern, input.WorkingDirectory, physicalPath);
+            var actualPath = PathText(input.PathIsCanonical ? input.Path : physicalPath(input.Path));
+            if (!PathGlob(normalized, actualPath)) return null;
         }
         var fields = new List<PermissionField>(matcher.Args.Count + 4);
         if (matcher.Tool is not null) fields.Add(new("tool", input.Tool!));
         if (matcher.Dialect is not null) fields.Add(new("dialect", matcher.Dialect));
         foreach (var (name, pattern) in matcher.Args) fields.Add(new($"args.{name}", pattern));
-        if (!omitFileDimensions && matcher.Intent != "any") fields.Add(new("intent", matcher.Intent));
-        if (!omitFileDimensions && matcher.Path is not null) fields.Add(new("path", matcher.Path));
+        if (matcher.Intent != "any") fields.Add(new("intent", matcher.Intent));
+        if (matcher.Path is not null) fields.Add(new("path", matcher.Path));
         return fields;
     }
 
@@ -193,12 +183,11 @@ public static class PermissionEngine
 
     public static string PathText(string path) => OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
 
-    private static bool PathGlob(string pattern, string value,
-        Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)>? compare)
+    private static bool PathGlob(string pattern, string value)
     {
         var patternRoot = PathText(System.IO.Path.GetPathRoot(pattern)!);
         var valueRoot = PathText(System.IO.Path.GetPathRoot(value)!);
-        if (patternRoot != valueRoot && compare?.Invoke(-1, patternRoot, valueRoot).LiteralMatch != true) return false;
+        if (!string.Equals(patternRoot, valueRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) return false;
         var patterns = pattern[patternRoot.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
         var values = value[valueRoot.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
         var rule = 0;
@@ -213,7 +202,7 @@ public static class PermissionEngine
                 retry = item;
                 continue;
             }
-            if (rule < patterns.Length && Component(patterns[rule], values[item], item, compare))
+            if (rule < patterns.Length && StringGlob(patterns[rule], values[item], ignoreCase: OperatingSystem.IsWindows()))
             {
                 rule++;
                 item++;
@@ -227,22 +216,11 @@ public static class PermissionEngine
         return rule == patterns.Length;
     }
 
-    private static bool Component(string pattern, string value, int index,
-        Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)>? compare)
-    {
-        if (pattern == value) return true;
-        if (pattern.IndexOfAny(['*', '?']) < 0) return compare?.Invoke(index, pattern, value).LiteralMatch == true;
-        // An exact-spelling wildcard match needs no filesystem case-folding assumption.
-        if (StringGlob(pattern, value)) return true;
-        if (compare is null) return false;
-        var semantics = compare(index, pattern, value);
-        if (pattern.Any(static character => character > 127) || value.Any(static character => character > 127))
-            throw new NotSupportedException("This path wildcard requires non-ASCII filesystem equivalence that the pinned backend cannot express. Use literal components or an unrestricted * or ** segment.");
-        return !semantics.CaseSensitive && StringGlob(pattern, value, ignoreCase: true);
-    }
 
     private static bool StringGlob(string pattern, string value, bool ignoreCase = false)
     {
+        if (pattern.IndexOfAny(['*', '?']) < 0)
+            return string.Equals(pattern, value, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         var expression = new System.Text.StringBuilder(pattern.Length + 4).Append("\\A");
         for (var index = 0; index < pattern.Length; index++)
         {

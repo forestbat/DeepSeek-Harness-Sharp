@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
@@ -79,33 +80,33 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return _leaked.Contains(package) ? $"{line}, leaked" : line;
     }
 
-    public async Task<string> AddAsync(string packageOrPath)
+    public async Task<string> AddAsync(string packageOrPath, ToolRunContext? run = null)
     {
         await _mutation.WaitAsync();
-        try { return await AddCoreAsync(packageOrPath); }
+        try { return await AddCoreAsync(packageOrPath, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> AddCoreAsync(string packageOrPath)
+    private async Task<string> AddCoreAsync(string packageOrPath, ToolRunContext? run)
     {
         var spec = packageOrPath.Trim();
         if (spec.Length == 0)
             return "usage: /plugins add <package|path>";
         if (IsLibraryPath(spec) || File.Exists(spec))
-            return await AddFromPathAsync(spec);
+            return await AddFromPathAsync(spec, run);
         if (IsKnown(spec))
-            return await EnableCoreAsync(spec);
+            return await EnableCoreAsync(spec, run);
         return $"plugin package not found: {spec}";
     }
 
-    public async Task<string> RemoveAsync(string package, bool force = false)
+    public async Task<string> RemoveAsync(string package, bool force = false, ToolRunContext? run = null)
     {
         await _mutation.WaitAsync();
-        try { return await RemoveCoreAsync(package, force); }
+        try { return await RemoveCoreAsync(package, force, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> RemoveCoreAsync(string package, bool force)
+    private async Task<string> RemoveCoreAsync(string package, bool force, ToolRunContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -113,7 +114,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         if (!IsKnown(trimmed))
             return $"plugin {trimmed} is not active";
         var domain = CaptureDomain(trimmed);
-        Persist(trimmed, _ => new PluginSetting { Enabled = false });
+        await PersistAsync(trimmed, _ => new PluginSetting { Enabled = false }, run);
         var message = _sandbox is null
             ? await DetachAsync(trimmed, force)
             : await RebuildDomainAsync(trimmed, domain, force);
@@ -163,14 +164,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         }
     }
 
-    public async Task<string> DisableAsync(string package)
+    public async Task<string> DisableAsync(string package, ToolRunContext? run = null)
     {
         await _mutation.WaitAsync();
-        try { return await DisableCoreAsync(package); }
+        try { return await DisableCoreAsync(package, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> DisableCoreAsync(string package)
+    private async Task<string> DisableCoreAsync(string package, ToolRunContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -178,7 +179,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         if (!IsKnown(trimmed))
             return $"plugin package not found: {trimmed}";
         var domain = CaptureDomain(trimmed);
-        Persist(trimmed, existing => Toggled(existing, enabled: false));
+        await PersistAsync(trimmed, existing => Toggled(existing, enabled: false), run);
         if (_sandbox is not null)
         {
             var result = await RebuildDomainAsync(trimmed, domain, force: false);
@@ -196,14 +197,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return $"plugin {trimmed} disabled (written to settings.yaml)";
     }
 
-    public async Task<string> EnableAsync(string package)
+    public async Task<string> EnableAsync(string package, ToolRunContext? run = null)
     {
         await _mutation.WaitAsync();
-        try { return await EnableCoreAsync(package); }
+        try { return await EnableCoreAsync(package, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> EnableCoreAsync(string package)
+    private async Task<string> EnableCoreAsync(string package, ToolRunContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -212,26 +213,26 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             return $"plugin package not found: {trimmed}";
         var domain = CaptureDomain(trimmed);
         var recover = _sandbox?.IsFaulted(trimmed) == true;
-        Persist(trimmed, existing => Toggled(existing, enabled: true));
+        await PersistAsync(trimmed, existing => Toggled(existing, enabled: true), run);
         if (recover)
             return await RebuildDomainAsync(trimmed, domain, force: false);
         if (_composition.Root.Scheduler.Find(trimmed) is not null)
             return $"plugin {trimmed} enabled (already active)";
-        if (_sandbox is not null && !_host.Catalog.PackageNames.Contains(trimmed, StringComparer.Ordinal))
+        if (_sandbox is not null)
             Track(await _sandbox.ScanAsync());
         return await ActivateAsync(trimmed);
     }
 
     public async Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, ToolRunContext? run = null)
     {
         await _mutation.WaitAsync(cancellationToken);
-        try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken); }
+        try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken, run); }
         finally { _mutation.Release(); }
     }
 
     private async Task<string> SetPermissionCoreAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ToolRunContext? run)
     {
         var trimmed = package.Trim();
         var key = PluginPermissions.KeyOf(permission);
@@ -241,17 +242,16 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             return $"plugin package not found: {trimmed}";
         cancellationToken.ThrowIfCancellationRequested();
         var domain = CaptureDomain(trimmed);
-        Persist(trimmed, existing =>
+        await PersistAsync(trimmed, existing => (existing ?? new PluginSetting()) with
         {
-            var updated = (existing?.Permissions ?? PluginPermissions.AllAllowed).With(permission, allowed);
-            if (existing?.Execution == PluginExecution.Host && updated != PluginPermissions.AllAllowed)
-                throw new InvalidOperationException("Full-Context host plugins have unrestricted in-process BCL access. Use the capability SDK with execution: sandbox for a restricted permission profile.");
-            return (existing ?? new PluginSetting()) with { Permissions = updated };
-        });
+            Permissions = (existing?.Permissions ?? PluginPermissions.AllAllowed).With(permission, allowed),
+        }, run);
         var result = $"plugin {trimmed} {key} permission {(allowed ? "allowed" : "denied")}";
         if (_sandbox is null)
             return $"{result} in its future isolation profile (sandbox is off; no OS access restrictions are enforced)";
-        // Once approved settings are committed, finish retiring the obsolete authority even if the caller disconnects.
+        if (_settings.Plugins.GetValueOrDefault(trimmed)?.Execution == PluginExecution.Host)
+            return $"{result} for broker calls; host-role code retains unrestricted in-process access";
+        // Finish retiring the old worker after the approved settings are committed.
         return $"{result}; {await RebuildDomainAsync(trimmed, domain, force: false)}";
     }
 
@@ -260,20 +260,17 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             || spec.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
             || spec.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<string> AddFromPathAsync(string spec)
+    private async Task<string> AddFromPathAsync(string spec, ToolRunContext? run)
     {
         var path = Path.GetFullPath(spec);
         if (!File.Exists(path))
             return $"plugin file not found: {path}";
-        if (_sandbox is null)
-            _composition.Root.Get<Dsh.Core.IExternalProcessPolicy>(Dsh.Core.IExternalProcessPolicy.ServiceName, false)
-                ?.DemandUnconfined("Sandbox-off plugin inspection/loading");
         var packages = _sandbox is not null
             ? await _sandbox.InspectPackagesAsync(path)
             : InspectLegacyPackages(path);
         if (packages.Count == 0)
             return $"assembly has no DSH plugin: {path}";
-        Persist(packages, existing => Toggled(existing, enabled: true));
+        await PersistAsync(packages, existing => Toggled(existing, enabled: true), run);
         string installPath;
         try
         {
@@ -539,15 +536,15 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _composition.Root.Logger.Error("%s", $"plugin {package} load context could not be collected: {report}");
     }
 
-    private void Persist(string package, Func<PluginSetting?, PluginSetting> update)
+    private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run)
     {
-        HarnessSettings.UpdatePlugin(_home, package, update);
+        await HarnessSettings.UpdatePluginAsync(_home, package, update, run);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 
-    private void Persist(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
+    private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run)
     {
-        HarnessSettings.UpdatePlugins(_home, packages, update);
+        await HarnessSettings.UpdatePluginsAsync(_home, packages, update, run);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 

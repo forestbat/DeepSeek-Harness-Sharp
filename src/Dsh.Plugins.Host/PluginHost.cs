@@ -34,8 +34,6 @@ public sealed class PluginHost
 
     /** 共享程序集池:由宿主在扫描前挂接,根目录为插件目录下的 .shared。 */
     public SharedAssemblyPool? SharedPool { get; set; }
-    /** Trusted host policy runs before loading any managed module or native image. */
-    public Action<string>? DemandDirectExecution { get; set; }
 
     /** 镜像内插件:由生成目录在模块初始化时自注册。 */
     public void RegisterCompiledIn()
@@ -45,28 +43,16 @@ public sealed class PluginHost
     }
 
     /** 从文件装载托管插件:按类型名读取插件自带的生成清单,不反射遍历插件类型。 */
-    public PluginLoadResult TryLoad(string path) => TryLoadCore(path, null);
-
-    public PluginLoadResult TryLoadVerified(VerifiedPluginBundle bundle) => TryLoadCore(bundle.EntryPath, bundle);
-
-    private PluginLoadResult TryLoadCore(string path, VerifiedPluginBundle? bundle)
+    public PluginLoadResult TryLoad(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        DemandDirectExecution?.Invoke(fullPath);
-        if (bundle is not null && SharedPool is null)
-            throw new InvalidOperationException("Verified host plugins require a shared assembly pool.");
-        var context = bundle is null ? new PluginLoadContext(fullPath) : new PluginLoadContext(bundle, SharedPool!);
-        IReadOnlyList<string> sharedDependencies = bundle?.SharedDependencies ?? [];
+        var context = new PluginLoadContext(fullPath);
+        IReadOnlyList<string> sharedDependencies = [];
         var referencesAdded = false;
         var retained = false;
         try
         {
-            if (bundle is not null)
-            {
-                SharedPool!.PrepareVerified(bundle);
-                referencesAdded = true;
-            }
-            var assembly = bundle is null ? context.LoadFromAssemblyPath(fullPath) : bundle.Entry.Load(context);
+            var assembly = context.LoadFromAssemblyPath(fullPath);
             var registrations = ReadManifest(assembly, out var failure);
             if (failure is not null)
                 return new PluginLoadResult([], [new PluginSkip(fullPath, failure)], [], null);
@@ -77,16 +63,10 @@ public sealed class PluginHost
                     return new PluginLoadResult([], [new PluginSkip(fullPath, "该程序集随宿主镜像分发,不随插件打包;请从插件目录删除")], [], null);
                 return new PluginLoadResult([], [], [], null);
             }
-            var declaredShared = ReadSharedDependencies(assembly);
-            if (bundle is not null && !new HashSet<string>(declaredShared, StringComparer.OrdinalIgnoreCase).SetEquals(sharedDependencies))
-                throw new FileLoadException("The plugin manifest disagrees with its verified shared dependency declarations.");
-            if (bundle is null)
-            {
-                sharedDependencies = declaredShared;
-                context.ConfigureShared(SharedPool, sharedDependencies);
-                SharedPool?.AddReferences(sharedDependencies);
-                referencesAdded = true;
-            }
+            sharedDependencies = ReadSharedDependencies(assembly);
+            context.ConfigureShared(SharedPool, sharedDependencies);
+            SharedPool?.AddReferences(sharedDependencies);
+            referencesAdded = true;
             var packages = new List<string>();
             var skipped = new List<PluginSkip>();
             foreach (var registration in registrations)
@@ -252,7 +232,6 @@ public sealed class PluginHost
         bool flatLayout,
         out NativePluginLoad load)
     {
-        DemandDirectExecution?.Invoke(file);
         load = NativePluginLibrary.TryLoad(file);
         if (!load.Succeeded)
             return false;
@@ -280,7 +259,6 @@ public sealed class PluginHost
     /** /plugins add 的原生装载:登记到目录并返回插件句柄;失败给出结构化原因。 */
     public NativePluginLoad LoadNativePlugin(string file, Func<INativePlugin, IDshPlugin> bridge)
     {
-        DemandDirectExecution?.Invoke(file);
         var load = NativePluginLibrary.TryLoad(file);
         if (!load.Succeeded)
             return load;

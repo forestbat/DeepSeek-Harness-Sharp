@@ -13,9 +13,6 @@ public sealed record SubprocessOutputRead(string Text, long NextOffset, bool Los
 
 public sealed record SubprocessOutcome(int? ExitCode, string? Signal);
 
-/// <summary>Selected only by trusted launchers, never inferred from executable names or model arguments.</summary>
-public enum SubprocessExecutionKind { Tool, Script, Mcp }
-
 public sealed record SubprocessSpawnSpec
 {
     public required IReadOnlyList<string> Argv { get; init; }
@@ -26,10 +23,6 @@ public sealed record SubprocessSpawnSpec
     /** 后台进程始终隔离终端; 只有管道协议调用方保留可写 stdin, 其余立即发送 EOF。 */
     public bool KeepStandardInputOpen { get; init; }
     public CancellationToken Signal { get; init; }
-    public bool ModelExecution { get; init; }
-    public SubprocessExecutionKind ExecutionKind { get; init; }
-    /** Host-owned configured MCP identity; broker requests never populate this field. */
-    public string? McpLifecycleOwner { get; init; }
     public bool ProtocolOutput { get; init; }
     public IReadOnlyList<string> AdditionalWritablePaths { get; init; } = [];
     public IReadOnlyList<string> AdditionalReadOnlyPaths { get; init; } = [];
@@ -240,8 +233,6 @@ public sealed class SubprocessHandle : IDisposable
                 : await WaitForOperatorExitAsync().ConfigureAwait(false);
             // WaitForExitAsync includes owned descendant teardown but leaves pipes open for draining.
             await Task.WhenAll(drainStdout, drainStderr).ConfigureAwait(false);
-            if (_sandbox?.WasMemoryLimitExceeded == true)
-                return new SubprocessOutcome(null, "MEMORY_LIMIT");
             if (_terminateRequested != 0)
                 return new SubprocessOutcome(null, "SIGKILL");
             if (exitCode > 128 && !OperatingSystem.IsWindows())
@@ -378,20 +369,25 @@ public sealed class SubprocessService : Service, IDisposable
         }
         throw new FileNotFoundException($"subprocess: executable \"{command}\" not found on PATH");
     }
-    public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec)
+    public Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec)
+        => Task.FromResult(SpawnDirect(spec));
+
+    public async Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec, ToolRunContext? run = null)
     {
-        if (!spec.ModelExecution && (spec.ExecutionKind != SubprocessExecutionKind.Tool || SettingsMutationScope.Current is not null))
-            spec = spec with { ModelExecution = true };
-        if (!spec.ModelExecution)
-            return Spawn(spec);
+        var policy = Ctx.Get<IScriptExecutionPolicy>(IScriptExecutionPolicy.ServiceName, false);
+        if (policy is not null)
+            await policy.AuthorizeAsync(run, spec.Signal).ConfigureAwait(false);
+        return policy?.Enabled == true
+            ? await SpawnSandboxedAsync(spec, policy.CreateOptions).ConfigureAwait(false)
+            : await SpawnAsync(spec).ConfigureAwait(false);
+    }
+
+    public async Task<SubprocessHandle> SpawnSandboxedAsync(SubprocessSpawnSpec spec,
+        Func<SubprocessSpawnSpec, string, string, SandboxProcessOptions> createOptions)
+    {
         if (spec.Argv.Count == 0)
             throw new ArgumentException("subprocess: argv must be non-empty");
         spec.Signal.ThrowIfCancellationRequested();
-        var policy = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false);
-        if (policy is not null)
-            await policy.DemandAsync(spec).ConfigureAwait(false);
-        if (policy?.Enabled != true)
-            return SpawnDirect(spec);
         IReadOnlyDictionary<string, string>? executableEnvironment = null;
         if (spec.Env?.TryGetValue("PATH", out var searchPath) == true && searchPath is not null)
             executableEnvironment = new Dictionary<string, string> { ["PATH"] = searchPath };
@@ -401,7 +397,7 @@ public sealed class SubprocessService : Service, IDisposable
         SandboxProcess? process = null;
         try
         {
-            var options = policy.CreateOptions(spec, executable, temporaryDirectory);
+            var options = createOptions(spec, executable, temporaryDirectory);
             process = await SandboxedProcess.StartAsync(options, spec.Signal).ConfigureAwait(false);
             var handle = new SubprocessHandle(process,
                 new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
@@ -422,12 +418,7 @@ public sealed class SubprocessService : Service, IDisposable
     }
 
 
-    public SubprocessHandle Spawn(SubprocessSpawnSpec spec)
-    {
-        if (spec.ModelExecution || spec.ExecutionKind != SubprocessExecutionKind.Tool || SettingsMutationScope.Current is not null)
-            return SpawnAsync(spec.ModelExecution ? spec : spec with { ModelExecution = true }).GetAwaiter().GetResult();
-        return SpawnDirect(spec);
-    }
+    public SubprocessHandle Spawn(SubprocessSpawnSpec spec) => SpawnDirect(spec);
 
     private SubprocessHandle SpawnDirect(SubprocessSpawnSpec spec)
     {

@@ -20,8 +20,11 @@ public sealed record ApprovalRequest(
     string ToolName,
     ToolCallId CallId,
     string? Reason = null,
-    string? Arguments = null,
-    bool AllowByRule = false);
+    string? Arguments = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public JsonElement? RuleArguments { get; init; }
+}
 
 public interface IApprovalService
 {
@@ -395,6 +398,7 @@ public sealed class ToolRuntime : Service
             Agent = input.Agent,
             Parent = input.Parent,
             Signal = input.Signal,
+            HostContext = Ctx,
         };
         var registration = input.ScheduledRegistration
             ?? CaptureRegistration(ResolveEntry(input.Name, input.Agent?.ScopeKey), input.Arguments);
@@ -408,8 +412,6 @@ public sealed class ToolRuntime : Service
         exec.Registration = registration;
         exec.InitialFileIntent = registration.Definition?.FileIntent?.Invoke(exec.Arguments);
         exec.UsesScriptPermissions = registration.Definition?.UsesScriptPermissions == true;
-        exec.OwnerPackage = registration.Owner;
-        exec.ExternalProcessPolicy = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false);
     }
 
     private ToolEntry? ResolveEntry(string name, ScopeKey? scope)
@@ -483,13 +485,6 @@ public sealed class ToolRuntime : Service
             return new ScheduledToolPreparation.FinalResult(exec, ErrorResult(error));
         }
     }
-    private static void DemandGitExecution()
-    {
-        var policy = SettingsMutationScope.Current?.Context.ExternalProcessPolicy;
-        policy?.DemandUnconfined("Direct git execution including repository-configured helpers");
-        if (policy?.Enabled == true)
-            throw new NotSupportedException("Direct git inspection has no OS-confined process backend; use a confined tool subprocess.");
-    }
 
 
     /** Writes outside the session's write permission root need approval, whatever the session's current directory is. */
@@ -499,7 +494,7 @@ public sealed class ToolRuntime : Service
             return gate;
         var tool = exec.Registration.Definition;
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
-        // The actual settings writer requests its own complete diff decision, not a second root-only decision.
+        // The actual settings writer requests its own diff decision instead of a second root-only decision.
         if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
             targets = targets.Where(path => !settings.Owns(path)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
@@ -533,9 +528,36 @@ public sealed class ToolRuntime : Service
             return AbortedBeforeDispatchResult();
         try
         {
+            var current = ResolveEntry(exec.Name, exec.Agent?.ScopeKey);
+            if ((current?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
+            {
+                if (current is null)
+                    throw new ToolNotFoundException(exec.Name);
+                var replacement = CaptureRegistration(current, exec.Arguments);
+                if (exec.Registration.Mode == ToolExecutionModeKind.Parallel
+                    && replacement.Mode != ToolExecutionModeKind.Parallel)
+                    throw new InvalidOperationException("The replacement tool requires exclusive scheduling; start a new call.");
+                // A replacement gets its own admission and root/pre-execute decisions, not the
+                // retired registration's per-call stamps. Session grants remain authoritative.
+                exec.ClearSafetyApprovals();
+                BindRegistration(exec, replacement);
+                var prepared = await PrepareExecution(exec).ConfigureAwait(false);
+                DemandCurrentRegistration(exec);
+                switch (prepared)
+                {
+                    case ScheduledToolPreparation.PostResult post:
+                        return post.Result;
+                    case ScheduledToolPreparation.FinalResult final:
+                        return final.Result;
+                    case ScheduledToolPreparation.Dispatch:
+                        break;
+                    default:
+                        throw new InvalidOperationException("unknown replacement preparation");
+                }
+            }
+            DemandCurrentRegistration(exec);
             var tool = exec.Registration.Definition
                 ?? throw new ToolNotFoundException(exec.Name);
-            DemandCurrentRegistration(exec);
             exec.BodyInvoked = true;
             var arguments = exec.Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
                 ? JsonDocument.Parse("{}").RootElement
@@ -552,30 +574,8 @@ public sealed class ToolRuntime : Service
 
     public async Task<ScheduledToolDispatch> DispatchScheduledExecution(ToolRunContext exec)
     {
-        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false),
-            Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false));
         try
         {
-            var current = ResolveEntry(exec.Name, exec.Agent?.ScopeKey);
-            if ((current?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
-            {
-                if (current is null)
-                    throw new InvalidOperationException("The prepared tool registration was retired before execution.");
-                var replacement = CaptureRegistration(current, exec.Arguments);
-                if (replacement.Mode != exec.Registration.Mode)
-                    throw new InvalidOperationException("The replacement tool requires a different execution mode; start a new call.");
-                exec.ClearSafetyApprovals();
-                BindRegistration(exec, replacement);
-                var prepared = await PrepareExecution(exec).ConfigureAwait(false);
-                if (prepared is ScheduledToolPreparation.FinalResult final)
-                    return new ScheduledToolDispatch.FinalResult(final.Result);
-                if (prepared is ScheduledToolPreparation.PostResult post)
-                    return new ScheduledToolDispatch.PostResult(post.Result);
-                DemandCurrentRegistration(exec);
-            }
-            exec.ExternalProcessProtectionRequired = Ctx.Get<IExternalProcessPolicy>(IExternalProcessPolicy.ServiceName, false)?.Enabled == true;
-            using var gitScope = exec.ExternalProcessPolicy is null ? null : new Dsh.GitInspect.GitExecutionScope(DemandGitExecution);
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
             var result = await Ctx.Events.Waterfall(
                 carrier, new ToolExecuteNotification(exec),
@@ -599,12 +599,8 @@ public sealed class ToolRuntime : Service
 
     public async Task<ToolExecutionResult> FinalizeScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
-        using var mutationScope = new SettingsMutationScope(exec, Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false),
-            Ctx.Get<IRuntimeCodeIntegrity>(IRuntimeCodeIntegrity.ServiceName, false),
-            Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false));
         try
         {
-            using var gitScope = exec.ExternalProcessPolicy is null ? null : new Dsh.GitInspect.GitExecutionScope(DemandGitExecution);
             var postResult = await PostExecute(exec, result);
             return FinishScheduledExecution(
                 exec,
@@ -700,13 +696,13 @@ public sealed class ToolRuntime : Service
     private ToolExecutionResult CreateSuccessResult(ToolRunContext exec, ToolDefinition tool, object? candidate)
     {
         var value = SnapshotValue(tool.Name, candidate);
-        if (exec.LastSettingsMutation is { } settings && value.ValueKind == JsonValueKind.Object)
+        if (exec.LastSettingsMutation is not null && value.ValueKind == JsonValueKind.Object)
         {
             var document = JsonNode.Parse(value.GetRawText())!.AsObject();
             if (document.ContainsKey("before"))
-                document["before"] = settings.Before;
+                document["before"] = Dsh.Runtime.Logging.Redaction.Apply(document["before"]?.GetValue<string>() ?? "");
             if (document.ContainsKey("after"))
-                document["after"] = settings.After;
+                document["after"] = Dsh.Runtime.Logging.Redaction.Apply(document["after"]?.GetValue<string>() ?? "");
             value = JsonDocument.Parse(document.ToJsonString()).RootElement;
         }
         var violations = JsonSchemaValidator.Validate(tool.Output.Schema, value, "value");
@@ -738,7 +734,9 @@ public sealed class ToolRuntime : Service
             {
                 ["card"] = "diff",
                 ["title"] = $"settings {mutation.Outcome}: {mutation.Path}",
-                ["diffs"] = new JsonArray(new JsonObject { ["path"] = mutation.Path, ["oldText"] = mutation.Before, ["newText"] = mutation.After }),
+                ["patch"] = mutation.Diff,
+                ["beforeHash"] = mutation.BeforeHash,
+                ["afterHash"] = mutation.AfterHash,
             }.ToJsonString()).RootElement;
         return new ToolExecutionResult.Success
         {

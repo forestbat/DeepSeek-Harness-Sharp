@@ -100,12 +100,12 @@ public static class EditTool
         exec.Signal.ThrowIfCancellationRequested();
         if (!File.Exists(target))
             throw new HarnessException($"file not found: \"{target}\"", "FS_NOT_FOUND");
-        var raw = await SettingsMutationScope.ReadTextAsync(target, exec).ConfigureAwait(false);
+        var raw = await SafetyFileAccess.ReadTextAsync(target, exec, settingsReview: true).ConfigureAwait(false);
         var lineEndings = DetectLineEndings(raw);
         var content = NormalizeLineEndings(raw);
         var (edited, _) = ApplyLiteralEdit(content, oldString, newString, replaceAll, target);
         var written = RestoreLineEndings(edited, lineEndings);
-        await SettingsMutationScope.WriteTextAsync(target, raw, written, exec).ConfigureAwait(false);
+        await SettingsMutation.WriteTextAsync(target, raw, written, exec).ConfigureAwait(false);
         return new EditResultValue(target, content, edited);
     }
 

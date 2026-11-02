@@ -18,12 +18,6 @@ internal static class TestProcessEntryPoint
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
         if (args.Any(argument => argument == PluginSandboxWorker.HostArgument))
             return PluginSandboxWorker.RunAsync(args).GetAwaiter().GetResult();
-        if (OperatingSystem.IsWindows() && args.Any(argument => argument == WindowsSandboxAuthorityTests.ProbeArgument))
-            return WindowsSandboxAuthorityTests.RunProbe(Environment.GetCommandLineArgs());
-        if (args.Any(argument => argument == ExternalProcessBoundaryTests.ProbeArgument))
-            return ExternalProcessBoundaryTests.RunProbe(Environment.GetCommandLineArgs());
-        if (args.Any(argument => argument == PolicyProcessIsolation.Argument))
-            return PolicyProcessIsolation.Run(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
             return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == UnixPtyDescriptorOwnershipTests.SpawnFailureProbeArgument))

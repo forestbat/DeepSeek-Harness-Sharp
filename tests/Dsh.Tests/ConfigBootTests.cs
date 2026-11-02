@@ -70,9 +70,6 @@ public class ConfigBootTests
     [Fact(Timeout = 60000)]
     public async Task StartupImageTcb_ActivatesFileRulesAndEnforcesActualProductionTools()
     {
-        if (await PolicyProcessIsolation.RunIfNeededAsync(
-            "Dsh.Tests.ConfigBootTests.StartupImageTcb_ActivatesFileRulesAndEnforcesActualProductionTools",
-            TestContext.Current.CancellationToken)) return;
         foreach (var scalarTool in new[] { false, true })
             await ExerciseStartupPolicyAsync(scalarTool);
     }
@@ -135,8 +132,6 @@ public class ConfigBootTests
             editable.Safety!.Blacklist["hot-read-deny"] = new() { Path = publicFile, Intent = "read" };
             editable.Save(home);
             Assert.True((await Execute("read", new { file_path = publicFile })).IsError);
-            var activation = Assert.IsType<SettingsPolicyActivation>(app.Ctx.GetProp("safetyPolicyActivation"));
-            Assert.False(activation.Status.Rejected);
             var mutable = HarnessSettings.LoadForReview(home);
             mutable.Safety!.Blacklist.Clear();
             Assert.True((await Execute("read", new { file_path = publicFile })).IsError);

@@ -22,7 +22,7 @@ public sealed class ToolDefinition
     /** Trusted host file tools defer default notification to their actual mediated operations. */
     public bool MediatesFileAccess { get; init; }
     public Func<JsonElement, string>? FileIntent { get; init; }
-    /** Preliminary admission hints only; every actual file still requires its pinned operation boundary. */
+    /** Preliminary admission hints only; actual host-mediated operations are authorized separately. */
     public Func<JsonElement, IEnumerable<string>>? FilePaths { get; init; }
     public bool UsesScriptPermissions { get; init; }
 
@@ -119,12 +119,10 @@ public sealed class ToolRunContext : ToolExecution
 
     public bool BodyInvoked { get; internal set; }
 
-    public bool ExternalProcessProtectionRequired { get; internal set; }
-    public IExternalProcessPolicy? ExternalProcessPolicy { get; internal set; }
+    internal Dsh.Runtime.Context? HostContext { get; init; }
     public string? SafetyApprovalRevision { get; set; }
     public string? InitialFileIntent { get; internal set; }
     public bool UsesScriptPermissions { get; internal set; }
-    public string? OwnerPackage { get; internal set; }
     private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
     public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
     public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
@@ -138,7 +136,7 @@ public sealed class ToolRunContext : ToolExecution
             agent.Session.Append(audit);
         else
             fallback?.LoggerFor("settings-mutation").Warn(
-                $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}\n--- before\n{audit.Before}\n+++ after\n{audit.After}");
+                $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}; beforeHash={audit.BeforeHash}; afterHash={audit.AfterHash}\n{audit.Diff}");
     }
 
     internal ToolRuntime.RegistrationSnapshot Registration { get; set; }

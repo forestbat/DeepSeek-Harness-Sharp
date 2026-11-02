@@ -126,10 +126,11 @@ public static class WorktreeTool
         if (Directory.Exists(pool))
             return checkout;
         var ignore = Path.Combine(pool, ".gitignore");
-        var authorize = await SafetyFileAccess.AuthorizeAsync(ignore, "write", exec, exec.Signal).ConfigureAwait(false);
-        await using var file = PinnedFileAccess.Open(ignore, PinnedFileMode.CreateNew, authorize);
-        await file.Stream.WriteAsync(Encoding.UTF8.GetBytes(PoolIgnoreContent), exec.Signal).ConfigureAwait(false);
-        await file.CompleteAsync(exec.Signal).ConfigureAwait(false);
+        await SafetyFileAccess.AuthorizeAsync(ignore, "write", exec, exec.Signal).ConfigureAwait(false);
+        Directory.CreateDirectory(pool);
+        await using var file = new FileStream(ignore, FileMode.CreateNew, FileAccess.Write, FileShare.Read | FileShare.Delete,
+            4096, FileOptions.Asynchronous);
+        await file.WriteAsync(Encoding.UTF8.GetBytes(PoolIgnoreContent), exec.Signal).ConfigureAwait(false);
         return checkout;
     }
 
@@ -140,7 +141,6 @@ public static class WorktreeTool
             Argv = ["git", .. arguments],
             Cwd = repository,
             Env = GitEnvironment,
-            ModelExecution = true,
             Stdout = new SubprocessCollect(GitOutputBytes, null),
             Stderr = new SubprocessCollect(GitOutputBytes, null),
             Signal = signal,

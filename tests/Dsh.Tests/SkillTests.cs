@@ -201,10 +201,9 @@ public class SkillTests
             Assert.DoesNotContain("private-skill-body-marker", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
             var deniedAudit = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
                 .FirstOrDefault(audit => audit.RuleId == "deny-skill-file" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(path)
+                    && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(path)
                     && audit.Tool == SkillCatalog.ToolName && audit.SessionId == id.Value && audit.CallId == deniedCall.Value);
             if (deniedAudit is null) Assert.Fail(CallSafetyFailure(session, deniedCall, denied));
-            Assert.Null(SettingsMutationScope.Current);
             var manual = await registry.Get("private-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
             Assert.NotNull(manual);
             Assert.Contains("private-skill-body-marker", manual.Content);
@@ -283,7 +282,7 @@ public class SkillTests
             Assert.DoesNotContain("linked-private-body", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
             var deniedAudit = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
                 .FirstOrDefault(audit => audit.RuleId == "deny-linked-target" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(target)
+                    && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(target)
                     && audit.Tool == SkillCatalog.ToolName && audit.SessionId == id.Value && audit.CallId == deniedInput.CallId.Value);
             if (deniedAudit is null) Assert.Fail(CallSafetyFailure(session, deniedInput.CallId, denied));
         }
@@ -426,7 +425,6 @@ public class SkillTests
         private readonly IDisposable _runtimeRegistration;
         private readonly IDisposable _filesystemRegistration;
         private readonly IDisposable _providerRegistration;
-        private readonly IDisposable _reviewer;
         private readonly FileSystemSkillProvider _filesystem;
         private readonly SkillCatalog _catalog;
         private readonly EffectHandle _filesystemService;
@@ -451,9 +449,6 @@ public class SkillTests
             if (allowTool) (settings.Safety ??= new SafetySettings()).Whitelist["discovery-invocation"] = new() { Tool = [SkillCatalog.ToolName] };
             settings.Save(home);
             _ = new SafetyBoundary(Context, () => HarnessSettings.Load(home));
-            var boundary = new SettingsMutationBoundary(Context, home);
-            _reviewer = boundary.InstallReviewer(new SettingsMutationGate(Context, home));
-            _ = new ExternalProcessBoundary(Context, home, settings);
             Registry = new SkillRegistry(Context, new SkillRegistryConfig());
             FileSystem = new ObservedSkillFileSystem();
             _filesystemService = Context.Provide("fs", FileSystem);
@@ -518,7 +513,6 @@ public class SkillTests
             _filesystemRegistration.Dispose();
             await _filesystem.Dispose();
             _filesystemService.Dispose();
-            _reviewer.Dispose();
             _agent.Dispose();
             TempTree.Delete(Root);
         }

@@ -44,10 +44,8 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ?? throw new InvalidOperationException("harnessOptions is required for the interaction plugin");
         var catalog = ctx.GetProp("pluginCatalog") as PluginCatalog
             ?? throw new InvalidOperationException("pluginCatalog is required for the interaction plugin");
-        var settingsBoundary = ctx.Get<SettingsMutationBoundary>(ISettingsMutationGate.ServiceName, false)
-            ?? new SettingsMutationBoundary(ctx, options.Home);
         return new DisposableBundle(
-            settingsBoundary.InstallReviewer(new SettingsMutationGate(ctx, options.Home)),
+            new SettingsMutationGate(ctx, options.Home),
             ProviderRegistrar.Register(ctx, options),
             ModelCommand.Register(ctx, options.Home),
             ReasoningCommand.Register(ctx),

@@ -17,9 +17,6 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_ActualDeniedFile_IsNotPublished_AndKeepsTheOriginatingAudit()
     {
-        if (await PolicyProcessIsolation.RunIfNeededAsync(
-            "Dsh.Tests.PresentToolTests.Present_ActualDeniedFile_IsNotPublished_AndKeepsTheOriginatingAudit",
-            TestContext.Current.CancellationToken)) return;
         await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
         var path = await CreateFile(session, "private-delivery.txt");
@@ -34,7 +31,7 @@ public sealed class PresentToolTests
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
         Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
             && audit.RuleId == "deny-delivery-read" && audit.Decision == "deny" && audit.Intent == "read"
-            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(path) && audit.Tool == ToolName
+            && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(path) && audit.Tool == ToolName
             && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
     }
 
@@ -50,16 +47,14 @@ public sealed class PresentToolTests
 
     [Fact]
     public Task Present_SecondTargetDeniedAfterAcceptingPostHook_FailsWithoutPublishing()
-        => PostHookChangedTarget(true, nameof(Present_SecondTargetDeniedAfterAcceptingPostHook_FailsWithoutPublishing));
+        => PostHookChangedTarget(true);
 
     [Fact]
     public Task Present_SecondTargetDeletedAfterAcceptingPostHook_FailsWithoutPublishing()
-        => PostHookChangedTarget(false, nameof(Present_SecondTargetDeletedAfterAcceptingPostHook_FailsWithoutPublishing));
+        => PostHookChangedTarget(false);
 
-    private static async Task PostHookChangedTarget(bool deny, string method)
+    private static async Task PostHookChangedTarget(bool deny)
     {
-        if (await PolicyProcessIsolation.RunIfNeededAsync("Dsh.Tests.PresentToolTests." + method,
-            TestContext.Current.CancellationToken)) return;
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
         var session = environment.Agent.Session;
         var first = await CreateFile(session, "first-accepted.txt");
@@ -96,7 +91,7 @@ public sealed class PresentToolTests
             if (deny)
                 Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
                     && audit.RuleId == "deny-after-present-hook" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(second) && audit.Tool == ToolName
+                    && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(second) && audit.Tool == ToolName
                     && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
         }
         finally
@@ -109,9 +104,6 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_AfterCd_UsesTheEffectiveDirectoryForRelativeAndAbsoluteTargets()
     {
-        if (await PolicyProcessIsolation.RunIfNeededAsync(
-            "Dsh.Tests.PresentToolTests.Present_AfterCd_UsesTheEffectiveDirectoryForRelativeAndAbsoluteTargets",
-            TestContext.Current.CancellationToken)) return;
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
         var session = environment.Agent.Session;
         var root = await CreateFile(session, "report.txt");
@@ -146,7 +138,7 @@ public sealed class PresentToolTests
         Assert.Equal(nested, delivered.Path);
         Assert.Equal("nested-report-body", await System.IO.File.ReadAllTextAsync(delivered.Path, TestContext.Current.CancellationToken));
         Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.Tool == ToolName && audit.Intent == "read" && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(nested)
+            && audit.Tool == ToolName && audit.Intent == "read" && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(nested)
             && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
 
         Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
@@ -163,7 +155,7 @@ public sealed class PresentToolTests
         Assert.Equal(beforeDenied, session.SnapshotEvents().Where(IsPresented).ToArray());
         Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
             && audit.RuleId == "deny-effective-report" && audit.Decision == "deny" && audit.Intent == "read"
-            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(nested) && audit.Tool == ToolName
+            && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(nested) && audit.Tool == ToolName
             && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
     }
 

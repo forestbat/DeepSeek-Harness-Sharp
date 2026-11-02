@@ -228,9 +228,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _whitelistText = "";
 
     [ObservableProperty]
-    private string _safetyActivationStatus = "Permission policy is active.";
-
-    [ObservableProperty]
     private bool _gpuEnabled = true;
 
     [ObservableProperty]
@@ -947,8 +944,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         AutoApprove = settings.Safety?.AutoApprove ?? false;
         BlacklistText = RuleMapYaml.Format(settings.Safety?.Blacklist ?? []);
         WhitelistText = RuleMapYaml.Format(settings.Safety?.Whitelist ?? []);
-        SafetyActivationStatus = (_ctx.GetProp("safetyPolicyActivation") as SettingsPolicyActivation)?.Status is { Rejected: true } rejected
-            ? rejected.Reason! : "Permission policy is active.";
         CompactionAuto = settings.Compaction?.Auto ?? true;
         McpServers.Clear();
         foreach (var (name, server) in settings.McpServers.OrderBy(entry => entry.Key, StringComparer.Ordinal))

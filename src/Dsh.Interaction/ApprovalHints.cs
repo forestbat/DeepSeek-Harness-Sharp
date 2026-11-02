@@ -76,10 +76,9 @@ public static class ApprovalHints
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("settingsMutation", out var marker) || marker.ValueKind != JsonValueKind.True)
                 return "";
-            if (!root.TryGetProperty("before", out var oldValue) || oldValue.ValueKind != JsonValueKind.String
-                || !root.TryGetProperty("after", out var newValue) || newValue.ValueKind != JsonValueKind.String)
-                return "";
-            return SettingsDiff(oldValue.GetString() ?? "", newValue.GetString() ?? "");
+            var patch = root.TryGetProperty("diff", out var diff) && diff.ValueKind == JsonValueKind.String
+                ? diff.GetString() ?? "" : "";
+            return $"{patch}\nbeforeHash={TryRead(root, "beforeHash")}\nafterHash={TryRead(root, "afterHash")}";
         }
         catch (JsonException)
         {
@@ -87,9 +86,6 @@ public static class ApprovalHints
         }
     }
 
-    public static string SettingsDiff(string before, string after)
-        => string.Join('\n', DiffCardExtractor.DiffLines(before, after).Select(line =>
-            $"{(line.Kind == DiffLineKind.Add ? "+" : line.Kind == DiffLineKind.Delete ? "-" : " ")} {line.Text}"));
 
     private static string? TryRead(JsonElement element, string key)
     {

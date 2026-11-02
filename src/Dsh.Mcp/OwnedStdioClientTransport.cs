@@ -5,7 +5,7 @@ using ModelContextProtocol.Protocol;
 namespace Dsh.Mcp;
 
 /// <summary>The MCP SDK owns framing only; SubprocessService owns the isolated process and stderr.</summary>
-internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, McpServerConfig config, string cwd)
+internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, McpServerConfig config, string cwd, string settingsPath)
     : IClientTransport, IAsyncDisposable
 {
     private SubprocessHandle? _process;
@@ -17,18 +17,16 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
     {
         if (Volatile.Read(ref _terminal) != 0)
             throw new IOException("The owned MCP process is unavailable; it cannot be restarted.");
-        _process = await subprocess.SpawnAsync(new SubprocessSpawnSpec
+        _process = await subprocess.SpawnSandboxedAsync(new SubprocessSpawnSpec
         {
             Argv = [config.Command!, .. config.Arguments ?? []],
             Cwd = cwd,
-            ModelExecution = true,
-            ExecutionKind = SubprocessExecutionKind.Mcp,
-            McpLifecycleOwner = config.Name,
             ProtocolOutput = true,
             KeepStandardInputOpen = true,
             Stderr = new SubprocessCollect(64 * 1024, null),
             Signal = cancellationToken,
-        });
+        }, (spec, executable, temporaryDirectory) => SubprocessSandboxOptions.Create(
+            spec, executable, temporaryDirectory, true, true, true, settingsPath));
         try
         {
             ThrowIfUnavailable();

@@ -1,74 +1,67 @@
+using System.Buffers;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
+using Dsh.Runtime.Logging;
+using Dsh.Sandbox;
 
 namespace Dsh.Interaction;
 
-/** One approval and publication boundary for trusted tools and the isolated capability broker. */
-public sealed class SettingsMutationGate(Context context, HarnessHome home) : ISettingsMutationGate
+/** The single settings approval, publication and redacted audit service. */
+public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
 {
-    public string SettingsPath => Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
+    private readonly Context context;
+    private readonly HarnessHome home;
+    private readonly EffectHandle registration;
+    private readonly Func<HarnessSettings> read;
+
+    public SettingsMutationGate(Context context, HarnessHome home)
+    {
+        this.context = context;
+        this.home = home;
+        read = HarnessSettings.CreatePolicyReader(home);
+        registration = context.Provide(ISettingsMutationGate.ServiceName, this);
+    }
+
+    public void Dispose() => registration.Dispose();
+
+    public string SettingsPath => SandboxFileAccess.Canonicalize(home.SettingsFile);
     public bool Owns(string path) => SettingsFilePath.SameFile(path, home.SettingsFile);
 
-    public async Task CommitAsync(SettingsMutationRequest request, Func<CancellationToken, Task> commit, CancellationToken cancellationToken = default)
+    public async Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default)
     {
         var run = request.Context;
         var id = Guid.NewGuid().ToString("N");
         var target = SettingsPath;
-        var before = "[Proposal unavailable]";
-        var after = "[Proposal unavailable]";
+        var diff = CreateDiff(request.Before, request.After);
+        var beforeHash = Hash(request.Before);
+        var afterHash = Hash(request.After);
         var outcome = "failed";
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, run.Signal);
         try
         {
-            (before, after) = SettingsMutationDiff.Redact(request.Before, request.After);
-            if (!SettingsMutationLimits.CanReview(request.Before) || !SettingsMutationLimits.CanReview(request.After))
-                throw new InvalidOperationException("The settings document exceeds the 4 MiB review limit.");
-            linked.Token.ThrowIfCancellationRequested();
-            if (!Owns(request.Path))
-                throw new InvalidOperationException("The mutation does not target the active settings document.");
-            if (run.Agent is null)
-                throw new InvalidOperationException("Settings mutations require an active model session.");
-            var approval = context.Get<IApprovalService>("approval", false)
-                ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
-            var boundary = context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
-                ?? throw new InvalidOperationException("Settings mutations require the host safety boundary.");
-            _ = await boundary.AuthorizeFileAsync(run, target, "write", linked.Token,
-                settingsReview: true).ConfigureAwait(false);
-            var safety = HarnessSettings.LoadForReview(home).Safety ?? new SafetySettings();
-            var actualTarget = Dsh.Transport.PinnedFileAccess.Canonicalize(target);
-            var input = new PermissionInput(run.Name, run.Arguments,
-                run.Agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, actualTarget, "write",
-                IsFileAlias: candidate => SettingsFilePath.SameFile(actualTarget, candidate),
-                ComparePathComponent: (index, pattern, value) => Dsh.Transport.PinnedFileAccess.ComparePathComponent(actualTarget, index, pattern, value),
-                PathIsCanonical: true);
-            var matched = PermissionEngine.Decide(safety, input, static path => Dsh.Transport.PinnedFileAccess.Canonicalize(path));
-            if (matched.Decision == "deny")
-            {
-                outcome = "rejected";
-                throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule '{matched.Match!.RuleId}'.");
-            }
-            var arguments = new JsonObject { ["settingsMutation"] = true, ["path"] = target, ["before"] = before, ["after"] = after };
-            var decision = await approval.Request(new(run.Agent, run.Name, run.CallId,
-                "Change the active settings file. Review the complete redacted before/after diff; this affects all sessions.", arguments.ToJsonString(),
-                AllowByRule: matched.Decision == "allow"), linked.Token).ConfigureAwait(false);
-            if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
-            {
-                outcome = decision == ApprovalOutcome.Cancelled ? "cancelled" : "rejected";
-                if (decision == ApprovalOutcome.Cancelled)
-                    throw new OperationCanceledException("Settings mutation was cancelled.", linked.Token);
-                throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
-            }
-            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async signal =>
+            var revision = await ApproveAsync(request, target, diff, beforeHash, afterHash, linked.Token).ConfigureAwait(false);
+            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
-                signal.ThrowIfCancellationRequested();
-                _ = await boundary.AuthorizeFileAsync(run, target, "write", signal,
-                    settingsReview: true).ConfigureAwait(false);
-                await commit(signal).ConfigureAwait(false);
+                var rules = read().Safety ?? new SafetySettings();
+                var input = new PermissionInput(run.Name, run.Arguments, run.Agent!.Session.WorkingDirectory ?? Environment.CurrentDirectory,
+                    target, "write", PathIsCanonical: true);
+                var current = PermissionEngine.Decide(rules, input, static path => SandboxFileAccess.Canonicalize(path));
+                if (current.Decision == "deny" || SafetyBoundary.Revision(rules) != revision && current.Decision != "allow")
+                {
+                    SafetyBoundary.RecordDecision(context, run, input, current, "safety", outcome: "policy-changed");
+                    throw new UnauthorizedAccessException("The settings policy changed while approval was pending; propose again.");
+                }
+                if (context.Get<IApprovalService>("approval", false) is IApprovalConstraints constraints && constraints.IsDenied(run.Agent!))
+                    throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
+                return commit(temporary, signal);
             }, linked.Token).ConfigureAwait(false);
+            run.RecordFileChange(target);
             outcome = "committed";
         }
         catch (OperationCanceledException)
@@ -76,10 +69,95 @@ public sealed class SettingsMutationGate(Context context, HarnessHome home) : IS
             outcome = "cancelled";
             throw;
         }
+        catch (UnauthorizedAccessException)
+        {
+            outcome = "rejected";
+            throw;
+        }
         finally
         {
-            run.RecordSettingsMutation(new(id, run.CallId, run.RootCallIdValue, run.Name, target, before, after, outcome), context);
+            run.RecordSettingsMutation(new(id, run.CallId, run.RootCallIdValue, run.Name, target, diff, beforeHash, afterHash, outcome), context);
         }
     }
 
+    private async Task<string> ApproveAsync(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash, CancellationToken signal)
+    {
+        signal.ThrowIfCancellationRequested();
+        if (!Owns(request.Path))
+            throw new InvalidOperationException("The mutation does not target the active settings document.");
+        var run = request.Context;
+        var agent = run.Agent ?? throw new InvalidOperationException("Settings mutations require an active model session.");
+        var approval = context.Get<IApprovalService>("approval", false)
+            ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
+        var safety = read().Safety ?? new SafetySettings();
+        var input = new PermissionInput(run.Name, run.Arguments, agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, target, "write", PathIsCanonical: true);
+        var permission = PermissionEngine.Decide(safety, input, static path => SandboxFileAccess.Canonicalize(path));
+        SafetyBoundary.RecordDecision(context, run, input, permission, "safety");
+        if (permission.Decision == "deny")
+            throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{permission.Match!.RuleId}\".");
+        if (approval is IApprovalConstraints constraints && constraints.IsDenied(agent))
+            throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
+        var revision = SafetyBoundary.Revision(safety);
+        if (permission.Decision == "allow") return revision;
+        var arguments = new JsonObject
+        {
+            ["settingsMutation"] = true, ["path"] = target, ["diff"] = diff,
+            ["beforeHash"] = beforeHash, ["afterHash"] = afterHash,
+        };
+        var decision = await approval.Request(new(agent, run.Name, run.CallId,
+            "Change active settings for all sessions. Review the redacted changed lines and document hashes.", arguments.ToJsonString())
+            { RuleArguments = run.Arguments }, signal).ConfigureAwait(false);
+        if (decision == ApprovalOutcome.Cancelled)
+            throw new OperationCanceledException("Settings mutation was cancelled.", signal);
+        if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
+            throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
+        return revision;
+    }
+
+    private static string CreateDiff(string before, string after)
+    {
+        var lines = DiffCardExtractor.DiffLines(Redaction.Apply(before), Redaction.Apply(after));
+        var patch = new StringBuilder("--- settings.yaml\n+++ settings.yaml\n");
+        var oldLine = 1;
+        var newLine = 1;
+        for (var index = 0; index < lines.Count;)
+        {
+            if (lines[index].Kind == DiffLineKind.Context)
+            {
+                oldLine++;
+                newLine++;
+                index++;
+                continue;
+            }
+            var start = index;
+            var oldStart = oldLine;
+            var newStart = newLine;
+            while (index < lines.Count && lines[index].Kind != DiffLineKind.Context)
+            {
+                if (lines[index++].Kind == DiffLineKind.Delete) oldLine++; else newLine++;
+            }
+            var removed = oldLine - oldStart;
+            var added = newLine - newStart;
+            patch.AppendLine($"@@ -{(removed == 0 ? oldStart - 1 : oldStart)},{removed} +{(added == 0 ? newStart - 1 : newStart)},{added} @@");
+            for (var row = start; row < index; row++)
+                patch.Append(lines[row].Kind == DiffLineKind.Delete ? '-' : '+').AppendLine(lines[row].Text);
+        }
+        return patch.ToString();
+    }
+
+    private static string Hash(string text)
+    {
+        var bytes = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetByteCount(text));
+        try
+        {
+            var length = Encoding.UTF8.GetBytes(text.AsSpan(), bytes);
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(bytes.AsSpan(0, length), digest);
+            return Convert.ToHexString(digest);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes, clearArray: true);
+        }
+    }
 }

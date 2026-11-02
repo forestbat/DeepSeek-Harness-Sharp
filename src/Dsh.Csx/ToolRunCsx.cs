@@ -40,7 +40,7 @@ public sealed class ToolRunCsx
                 + "Use C# script statements, declarations, #load and #r directives, not a run_code method body. "
                 + "Script arguments are available through Args, and #load paths retain their normal script-file semantics. "
                 + "Returns stdout, stderr and exit status; frontend failures are errors. "
-                + "It does not provide run_code tool bindings." + IExternalProcessPolicy.SettingsProtectionNotice,
+                + "It does not provide run_code tool bindings." + IScriptExecutionPolicy.PermissionNotice,
             Parameters = Parameters(),
             Output = new ToolOutputDefinition(OutputSchema(), (_, value) => [new TextBlock(Render(value))]),
             Execute = tool.ExecuteAsync,
@@ -138,15 +138,13 @@ public sealed class ToolRunCsx
         SubprocessHandle handle;
         try
         {
-            handle = await _subprocess.SpawnAsync(new SubprocessSpawnSpec
+            handle = await _subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
             {
                 Argv = argv,
                 Cwd = workdir,
                 Signal = fused.Token,
-                ModelExecution = true,
-                ExecutionKind = SubprocessExecutionKind.Script,
                 AdditionalReadOnlyPaths = bootstrap is null ? [script] : [script, bootstrap.ScriptPath],
-            });
+            }, exec);
         }
         catch (Win32Exception error)
         {

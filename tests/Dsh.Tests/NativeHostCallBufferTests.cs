@@ -11,30 +11,37 @@ namespace Dsh.Tests;
 public sealed unsafe class NativeHostCallBufferTests
 {
     [Fact]
-    public void SizeProbeAndShortBuffer_AppendOnlyOnceThroughRealBroker()
+    public void InvalidBuffers_DoNotExecuteAppend_AndFullFrameExecutesOnce()
     {
-        var root = TempTree.CreateDirectory("native-host-retry");
+        var root = TempTree.CreateDirectory("native-host-exchange");
         try
         {
             var host = CreateHost(root);
             var path = Path.Combine(root, "append.txt");
-            var arguments = JsonSerializer.Serialize(new
-            {
-                path,
-                data = Convert.ToBase64String(Encoding.UTF8.GetBytes("once")),
-                append = true,
-            });
-            using var replies = new NativeHostCallBuffer();
+            // Synthetic test input exercises a destructive operation through the real broker.
+            var arguments = JsonSerializer.Serialize(new { path, data = "b25jZQ==", append = true });
             string Call(string operation, string json) => CallHost(host, operation, json);
-            var required = replies.Invoke(PluginHostOperations.WriteFile, arguments, null, 0, Call);
-            Assert.True(required > 1);
+            Assert.Equal(DshNativePluginAbi.Error,
+                NativeHostCallBuffer.Invoke(PluginHostOperations.WriteFile, arguments, null, 0, Call));
+            Assert.Equal(DshNativePluginAbi.Error,
+                NativeHostCallBuffer.Invoke(PluginHostOperations.WriteFile, arguments, null, DshNativePluginAbi.MaxResultBytes, Call));
             byte* shortBuffer = stackalloc byte[1];
-            Assert.Equal(required, replies.Invoke(PluginHostOperations.WriteFile, arguments, shortBuffer, 1, Call));
-            var bytes = new byte[required];
+            shortBuffer[0] = 0x5a;
+            Assert.Equal(DshNativePluginAbi.Error,
+                NativeHostCallBuffer.Invoke(PluginHostOperations.WriteFile, arguments, shortBuffer, 1, Call));
+            Assert.Equal(0x5a, shortBuffer[0]);
+            Assert.False(File.Exists(path));
+
+            var bytes = new byte[DshNativePluginAbi.MaxResultBytes + 2];
+            bytes[0] = bytes[^1] = 0x5a;
+            int written;
             fixed (byte* output = bytes)
-                Assert.Equal(required, replies.Invoke(PluginHostOperations.WriteFile, arguments, output, bytes.Length, Call));
+                written = NativeHostCallBuffer.Invoke(PluginHostOperations.WriteFile, arguments, output + 1, bytes.Length - 2, Call);
+            Assert.InRange(written, 1, DshNativePluginAbi.MaxResultBytes);
+            Assert.Equal(0x5a, bytes[0]);
+            Assert.Equal(0x5a, bytes[^1]);
             Assert.Equal("once", File.ReadAllText(path));
-            using var result = JsonDocument.Parse(bytes);
+            using var result = JsonDocument.Parse(bytes.AsMemory(1, written));
             Assert.Equal(4, result.RootElement.GetProperty("result").GetProperty("bytesWritten").GetInt32());
         }
         finally
@@ -44,7 +51,7 @@ public sealed unsafe class NativeHostCallBufferTests
     }
 
     [Fact]
-    public void FailedOperation_IsRetainedAndReturnedAsAnError()
+    public void FailedOperation_ReturnsError_AndNextExchangeIsIndependent()
     {
         var root = TempTree.CreateDirectory("native-host-error");
         try
@@ -52,93 +59,24 @@ public sealed unsafe class NativeHostCallBufferTests
             var host = CreateHost(root);
             var path = Path.Combine(root, "missing.txt");
             var arguments = JsonSerializer.Serialize(new { path });
-            using var replies = new NativeHostCallBuffer();
             string Call(string operation, string json) => CallHost(host, operation, json);
-            var required = replies.Invoke(PluginHostOperations.ReadFile, arguments, null, 0, Call);
-            Assert.True(required > 0);
-            // If the retry repeats the operation, it would now succeed instead of returning the original failure.
-            File.WriteAllText(path, "created after failed probe");
-            var bytes = new byte[required];
+            var bytes = new byte[DshNativePluginAbi.MaxResultBytes];
+            int written;
             fixed (byte* output = bytes)
-                Assert.Equal(required, replies.Invoke(PluginHostOperations.ReadFile, arguments, output, bytes.Length, Call));
-            using var result = JsonDocument.Parse(bytes);
-            Assert.False(string.IsNullOrWhiteSpace(result.RootElement.GetProperty("error").GetString()));
-            Assert.False(result.RootElement.TryGetProperty("result", out _));
-        }
-        finally
-        {
-            TempTree.Delete(root);
-        }
-    }
-
-    [Fact]
-    public void PendingReply_CannotBeReplacedAndDeactivationRefusesMoreCalls()
-    {
-        var root = TempTree.CreateDirectory("native-host-pending");
-        try
-        {
-            var host = CreateHost(root);
-            var path = Path.Combine(root, "append.txt");
-            var arguments = JsonSerializer.Serialize(new { path, data = "eA==", append = true });
-            using var replies = new NativeHostCallBuffer();
-            string Call(string operation, string json) => CallHost(host, operation, json);
-            Assert.True(replies.Invoke(PluginHostOperations.WriteFile, arguments, null, 0, Call) > 0);
-            Assert.Equal(DshNativePluginAbi.Error,
-                replies.Invoke(PluginHostOperations.WriteFile, arguments + " ", null, 0, Call));
-            replies.Dispose();
-            Assert.Equal(DshNativePluginAbi.Error,
-                replies.Invoke(PluginHostOperations.WriteFile, arguments, null, 0, Call));
-            Assert.Equal("x", File.ReadAllText(path));
-        }
-        finally
-        {
-            TempTree.Delete(root);
-        }
-    }
-
-    [Fact]
-    public void PendingReplyBudget_IsSharedAcrossThreads()
-    {
-        var root = TempTree.CreateDirectory("native-host-budget");
-        try
-        {
-            var path = Path.Combine(root, "large-response.json");
-            File.WriteAllText(path, "{\"payload\":\"" + new string('x', 1024 * 1024) + "\"}");
-            const string arguments = "{}";
-            using var replies = new NativeHostCallBuffer();
-            var retained = 0;
-            var refused = 0;
-            for (var index = 0; index < 6; index++)
+                written = NativeHostCallBuffer.Invoke(PluginHostOperations.ReadFile, arguments, output, bytes.Length, Call);
+            Assert.InRange(written, 1, bytes.Length);
+            using (var result = JsonDocument.Parse(bytes.AsMemory(0, written)))
             {
-                Exception? failure = null;
-                var thread = new Thread(() =>
-                {
-                    try
-                    {
-                        var required = replies.Invoke("test.large-response", arguments, null, 0,
-                            (_, _) => File.ReadAllText(path));
-                        if (required > 0)
-                            retained++;
-                        else
-                            refused++;
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        refused++;
-                    }
-                    catch (Exception error)
-                    {
-                        failure = error;
-                    }
-                });
-                thread.Start();
-                thread.Join();
-                Assert.Null(failure);
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                Assert.False(string.IsNullOrWhiteSpace(result.RootElement.GetProperty("error").GetString()));
+                Assert.False(result.RootElement.TryGetProperty("result", out _));
             }
-            Assert.InRange(retained, 1, 3);
-            Assert.True(refused > 0);
+            File.WriteAllText(path, "synthetic second exchange");
+            fixed (byte* output = bytes)
+                written = NativeHostCallBuffer.Invoke(PluginHostOperations.ReadFile, arguments, output, bytes.Length, Call);
+            Assert.InRange(written, 1, bytes.Length);
+            using var next = JsonDocument.Parse(bytes.AsMemory(0, written));
+            Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes("synthetic second exchange")),
+                next.RootElement.GetProperty("result").GetProperty("data").GetString());
         }
         finally
         {

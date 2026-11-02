@@ -80,7 +80,15 @@ public static class SettingsSchemaCatalog
     }
 
     private static string? PublicDefault(PluginSettingSpec spec)
-        => SettingsMutationDiff.IsSensitiveKey(spec.Key) ? null : spec.DefaultLiteral;
+        => IsSensitiveKey(spec.Key) ? null : spec.DefaultLiteral;
+
+    private static bool IsSensitiveKey(string key)
+    {
+        var name = key.Replace("_", "").Replace("-", "").ToLowerInvariant();
+        return name.Contains("password") || name.Contains("secret") || name.Contains("token")
+            || name.Contains("apikey") || name.Contains("accesskey") || name.Contains("connectionstring")
+            || name is "key" or "authorization" or "credential" or "credentials" or "privatekey" or "cookie" or "setcookie";
+    }
 
     private static bool IsLiteral(string literal)
     {

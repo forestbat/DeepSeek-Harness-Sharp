@@ -3,43 +3,44 @@ using System.Text.Json;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Sandbox;
 
 namespace Dsh.Boot;
 
-/** Owns OS trust domains. A domain is co-trusted memory, not per-plugin address-space isolation. */
+/** Owns one co-trusted worker, not adversarial per-plugin memory or caller-identity isolation. */
 internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home, HarnessSettings settings,
     PluginCapabilityFactory capabilities) : IDisposable
 {
+    private static readonly JsonElement EmptyConfiguration = JsonSerializer.SerializeToElement(
+        new Dictionary<string, object?>(), PluginConfigurationJsonContext.Default.Object);
     private readonly Lock _sync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly Dictionary<string, PluginSandboxSource> _sources = new(StringComparer.Ordinal);
-    private readonly Dictionary<DomainKey, Domain> _domains = [];
     private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly HashSet<TaskCompletionSource> _inspectionCompletions = [];
-    private int _inspections;
+    private Domain? _domain;
     private bool _disposed;
 
-    internal sealed record DomainKey(string Name, bool Explicit, PluginPermissions Permissions);
-
-    internal sealed class Domain(DomainKey key, HashSet<string> code, IReadOnlyList<string> members)
+    internal sealed class Domain
     {
-        internal DomainKey Key { get; } = key;
-        internal HashSet<string> Code { get; } = code;
+        internal string Directory { get; } = System.IO.Directory.CreateTempSubdirectory("dsh-plugin-worker-").FullName;
+        internal HashSet<string> Runtime { get; } = new(SandboxRuntimePaths.ForCurrentHost(), PluginSandboxLaunch.PathComparer);
         internal ConcurrentDictionary<string, Binding> Bindings { get; } = new(StringComparer.Ordinal);
-        internal HashSet<string> Members { get; } = new(members, StringComparer.Ordinal);
+        internal HashSet<string> Members { get; } = new(StringComparer.Ordinal);
         internal CancellationTokenSource Cancellation { get; } = new();
+        internal Dictionary<string, string> Artifacts { get; } = new(PluginSandboxLaunch.PathComparer);
         internal PluginSandboxConnection? Connection;
         internal Task? Retirement;
         internal volatile string? Failure;
         internal volatile bool Retired;
     }
 
-    internal sealed class Binding(string package, Context pluginContext, IPluginHost host)
+    internal sealed class Binding(string package, Context pluginContext, IPluginHost host, PluginPermissions permissions)
     {
         internal string Package { get; } = package;
         internal Context Context { get; } = pluginContext;
         internal IPluginHost Host { get; } = host;
+        internal PluginPermissions Permissions { get; } = permissions;
         internal volatile bool Loading = true;
         private int _disposed;
         internal void Dispose()
@@ -56,23 +57,19 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
 
     public bool IsFaulted(string package)
     {
-        lock (_sync)
-            return _failures.ContainsKey(package);
+        lock (_sync) return _failures.ContainsKey(package);
     }
 
     public PluginSandboxSource? Source(string package)
     {
-        lock (_sync)
-            return _sources.GetValueOrDefault(package);
+        lock (_sync) return _sources.GetValueOrDefault(package);
     }
 
     public IReadOnlyList<string> DomainPackages(string package)
     {
         lock (_sync)
-        {
-            var domain = _domains.Values.FirstOrDefault(value => value.Members.Contains(package, StringComparer.Ordinal));
-            return domain?.Members.ToArray() ?? [package];
-        }
+            return _domain is { } domain && (domain.Members.Contains(package) || domain.Failure is not null)
+                ? domain.Members.Append(package).Distinct(StringComparer.Ordinal).ToArray() : [package];
     }
 
     public void Register(PluginHost host, PluginSandboxSource source)
@@ -81,8 +78,8 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_domains.Values.Any(domain => domain.Members.Contains(package)))
-                throw Failure("PLUGIN_SANDBOX_RESTART_REQUIRED", "Retire the old trust domain before replacing its source.");
+            if (_domain?.Bindings.ContainsKey(package) == true)
+                throw Failure("PLUGIN_SANDBOX_RESTART_REQUIRED", "Retire the shared worker before replacing an active source.");
             _sources[package] = source;
             host.Catalog.Remove(package);
             host.Catalog.Register(source.Descriptor, () => new Proxy(this, package));
@@ -92,13 +89,12 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
     private HarnessSettings CurrentSettings()
         => File.Exists(home.SettingsFile) ? HarnessSettings.LoadForReview(home) : settings;
 
-    private static DomainKey Key(string package, HarnessSettings active)
+    private static PluginPermissions Permissions(string package, HarnessSettings active)
     {
         var configured = active.Plugins.GetValueOrDefault(package);
         if (active.Sandbox?.Enabled != true || configured?.Enabled == false || configured?.Execution == PluginExecution.Host)
-            throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "The isolated plugin's active execution profile changed; retire its trust domain.");
-        return new DomainKey(configured?.TrustDomain ?? package, configured?.TrustDomain is not null,
-            configured?.Permissions ?? PluginPermissions.AllAllowed);
+            throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "The isolated plugin's active execution profile changed; retire the shared worker.");
+        return configured?.Permissions ?? PluginPermissions.AllAllowed;
     }
 
     internal void CheckAuthority(Domain domain, string package)
@@ -107,31 +103,19 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (domain.Retired || domain.Failure is not null || !domain.Bindings.ContainsKey(package))
-                throw Failure("PLUGIN_SANDBOX_UNAVAILABLE", "The isolated plugin's trust domain is no longer available.");
+                throw Failure("PLUGIN_SANDBOX_UNAVAILABLE", "The shared plugin worker is no longer available.");
         }
-        HarnessSettings active;
-        try { active = CurrentSettings(); }
+        try
+        {
+            var active = CurrentSettings();
+            foreach (var binding in domain.Bindings.Values)
+                if (Permissions(binding.Package, active) != binding.Permissions)
+                    throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "An isolated plugin's permission profile changed.");
+        }
         catch
         {
-            Fault(domain, "The trust domain has no valid active settings profile; explicit retirement and reload are required.");
+            Fault(domain, "The shared worker's active settings profile changed; explicit retirement and reload are required.");
             throw;
-        }
-        string[] packages;
-        lock (_sync) packages = domain.Bindings.Keys.ToArray();
-        foreach (var member in packages)
-        {
-            DomainKey key;
-            try { key = Key(member, active); }
-            catch
-            {
-                Fault(domain, "The trust domain's active execution profile changed; explicit retirement and reload are required.");
-                throw;
-            }
-            if (key != domain.Key)
-            {
-                Fault(domain, "The trust domain's active execution profile changed; explicit retirement and reload are required.");
-                throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "The isolated plugin's trust or permission profile changed.");
-            }
         }
     }
 
@@ -153,80 +137,108 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
             binding.Dispose();
     }
 
-    private async Task<IDisposable?> ActivateAsync(string package, Context pluginContext, object? configuration,
-        CancellationToken cancellationToken)
+    internal void Diagnostic(string message) => context.LoggerFor("plugin-sandbox").Warn("%s", message);
+
+    // The lifecycle semaphore serializes staging, launch, inspection and activation.
+    private async Task<Domain> SharedAsync(CancellationToken cancellationToken)
     {
-        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
-        Domain? domain = null;
-        CancellationTokenSource? operation = null;
-        try
+        Domain domain;
+        lock (_sync)
         {
-            PluginSandboxSource source;
-            var active = CurrentSettings();
-            var key = Key(package, active);
-            lock (_sync)
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            domain = _domain ??= new Domain();
+            if (domain.Retired || domain.Failure is not null)
+                throw Failure("PLUGIN_SANDBOX_FAULTED", "The shared worker failed; explicitly retire and reload it.");
+        }
+        if (domain.Connection is null)
+        {
+            using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
+            try
             {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                if (_failures.ContainsKey(package))
-                    throw Failure("PLUGIN_SANDBOX_FAULTED", "The isolated plugin failed; explicitly retire and reload its trust domain.");
-                source = _sources.GetValueOrDefault(package)
-                    ?? throw Failure("PLUGIN_SANDBOX_SOURCE_MISSING", "The isolated plugin has no registered source.");
-                domain = _domains.Values.FirstOrDefault(value => value.Members.Contains(package) && value.Key != key);
-                if (domain is not null)
-                    throw Failure("PLUGIN_SANDBOX_RESTART_REQUIRED", "Retire the old trust domain before activating a changed trust or permission profile.");
-                _domains.TryGetValue(key, out domain);
-            }
-            if (domain is null)
-            {
-                PluginSandboxSource[] sources;
-                lock (_sync)
-                {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
-                    if (_domains.Count + _inspections >= PluginSandboxMethods.MaximumWorkers)
-                        throw Failure("PLUGIN_SANDBOX_WORKER_LIMIT", "The isolated worker capacity is exhausted.");
-                    sources = _sources.Values.Where(value =>
-                        active.Plugins.GetValueOrDefault(value.Descriptor.Package)?.Enabled != false
-                        && active.Plugins.GetValueOrDefault(value.Descriptor.Package)?.Execution != PluginExecution.Host
-                        && Key(value.Descriptor.Package, active) == key).ToArray();
-                    domain = new Domain(key, PluginSandboxLaunch.CodeClosure(sources), sources.Select(value => value.Descriptor.Package).ToArray());
-                    _domains.Add(key, domain);
-                }
-                operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
-                var captured = domain;
-                var connection = await PluginSandboxConnection.StartAsync(
-                    this, captured, capabilities, operation.Token).ConfigureAwait(false);
+                var connection = await PluginSandboxConnection.StartAsync(this, domain, operation.Token).ConfigureAwait(false);
                 domain.Connection = connection;
                 lock (_sync)
-                    if (_disposed || captured.Retired)
+                    if (_disposed || domain.Retired)
                     {
                         connection.Abort();
                         throw new ObjectDisposedException(nameof(PluginSandboxSupervisor));
                     }
             }
-            operation ??= CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
-            if (domain.Failure is not null || domain.Retired)
-                throw Failure("PLUGIN_SANDBOX_FAULTED", "The isolated trust domain failed; explicit retirement is required.");
-            var required = PluginSandboxLaunch.CodeClosure([source]);
-            if (!required.IsSubsetOf(domain.Code))
-                throw Failure("PLUGIN_SANDBOX_RESTART_REQUIRED", "The new artifact is outside the running worker's immutable code namespace. Retire and reload the entire trust domain.");
-            var binding = new Binding(package, pluginContext, capabilities.Create(package, pluginContext));
+            catch
+            {
+                Fault(domain, "The shared plugin worker could not start.");
+                throw;
+            }
+        }
+        return domain;
+    }
+
+    private static string? Stage(Domain domain, PluginSandboxSource source)
+    {
+        if (source.ArtifactPath is not { } artifact)
+            return null;
+        var original = Dsh.Sandbox.SandboxFileAccess.Canonicalize(artifact);
+        if (domain.Artifacts.TryGetValue(original, out var staged))
+            return staged;
+        var directory = Path.Combine(domain.Directory, Guid.NewGuid().ToString("N"));
+        var runtime = domain.Runtime;
+        var closure = PluginSandboxLaunch.CodeClosure([source]);
+        string Destination(string path)
+        {
+            var root = Path.GetPathRoot(path)!;
+            var volume = root.Replace(':', '_').Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return Path.Combine(directory, volume, Path.GetRelativePath(root, path));
+        }
+        // A single read-only code directory lets later add observations use the running worker.
+        foreach (var path in closure)
+        {
+            if (runtime.Contains(path) && !PluginSandboxLaunch.PathComparer.Equals(path, original) || !File.Exists(path))
+                continue;
+            var destination = Destination(path);
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(path, destination);
+        }
+        staged = Destination(original);
+        domain.Artifacts.Add(original, staged);
+        return staged;
+    }
+
+    private async Task<IDisposable?> ActivateAsync(string package, Context pluginContext, object? configuration,
+        CancellationToken cancellationToken)
+    {
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Domain? domain = null;
+        try
+        {
+            var permissions = Permissions(package, CurrentSettings());
+            PluginSandboxSource source;
             lock (_sync)
             {
-                if (domain.Bindings.ContainsKey(package))
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_failures.ContainsKey(package))
+                    throw Failure("PLUGIN_SANDBOX_FAULTED", "The isolated plugin failed; explicitly retire and reload the shared worker.");
+                source = _sources.GetValueOrDefault(package)
+                    ?? throw Failure("PLUGIN_SANDBOX_SOURCE_MISSING", "The isolated plugin has no registered source.");
+            }
+            domain = await SharedAsync(cancellationToken).ConfigureAwait(false);
+            var artifact = Stage(domain, source);
+            var binding = new Binding(package, pluginContext, capabilities.Create(package, pluginContext), permissions);
+            lock (_sync)
+            {
+                if (!domain.Bindings.TryAdd(package, binding))
                 {
                     binding.Dispose();
                     throw Failure("PLUGIN_SANDBOX_ALREADY_ACTIVE", "The isolated plugin is already active.");
                 }
-                domain.Bindings.TryAdd(package, binding);
                 domain.Members.Add(package);
             }
             CheckAuthority(domain, package);
-            var bytes = PluginConfigurationJson.Write(configuration);
-            using var document = JsonDocument.Parse(bytes.Length == 0 ? "{}" : bytes);
-            using var initialization = CancellationTokenSource.CreateLinkedTokenSource(operation.Token);
+            var configurationJson = configuration is null ? EmptyConfiguration
+                : JsonSerializer.SerializeToElement(configuration, PluginConfigurationJsonContext.Default.Object);
+            using var initialization = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
             initialization.CancelAfter(PluginSandboxLaunch.InitializationBudget);
             var loaded = await domain.Connection!.RequestAsync(PluginSandboxMethods.Load,
-                new PluginSandboxLoadRequest(source.ArtifactPath, package, document.RootElement.Clone()),
+                new PluginSandboxLoadRequest(artifact, package, configurationJson),
                 PluginSandboxJsonContext.Default.PluginSandboxLoadRequest, initialization.Token).ConfigureAwait(false);
             if (loaded?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxAck)?.Success != true)
                 throw new IOException("The isolated plugin did not acknowledge successful initialization.");
@@ -238,69 +250,42 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         {
             if (domain is not null)
                 Fault(domain, cancellationToken.IsCancellationRequested
-                    ? "The isolated trust domain was terminated by user cancellation."
-                    : "The isolated trust domain could not initialize safely; explicit retirement and reload are required.");
+                    ? "The shared plugin worker was terminated by user cancellation."
+                    : "An isolated plugin could not initialize; explicit retirement and reload are required.");
             lock (_sync)
-                _failures[package] = domain?.Failure ?? "The isolated worker could not be started safely.";
+                _failures[package] = domain?.Failure ?? "The isolated worker could not be started.";
             throw;
         }
-        finally
-        {
-            operation?.Dispose();
-            _lifecycle.Release();
-        }
+        finally { _lifecycle.Release(); }
     }
 
     public async Task<PluginSandboxInspection> InspectAsync(string? artifactPath, string? package,
         CancellationToken cancellationToken = default)
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_sync)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_domains.Count + _inspections >= PluginSandboxMethods.MaximumWorkers)
-                throw Failure("PLUGIN_SANDBOX_WORKER_LIMIT", "The isolated worker capacity is exhausted.");
-            _inspections++;
-            _inspectionCompletions.Add(completion);
-        }
-        PluginSandboxConnection? connection = null;
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var form = PluginSandboxLaunch.InspectForm(artifactPath);
-            var source = new PluginSandboxSource(PluginDescriptor.For(package ?? "inspection", form), artifactPath);
-            var domain = new Domain(new DomainKey("inspection:" + Guid.NewGuid().ToString("N"), false,
-                new PluginPermissions { Read = false, Write = false, Network = false }), PluginSandboxLaunch.CodeClosure([source]), []);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+            var domain = await SharedAsync(cancellationToken).ConfigureAwait(false);
+            var source = new PluginSandboxSource(PluginDescriptor.For(package ?? "inspection", PluginSandboxLaunch.InspectForm(artifactPath)), artifactPath);
+            var staged = Stage(domain, source);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
             timeout.CancelAfter(PluginSandboxLaunch.InspectionBudget);
-            connection = await PluginSandboxConnection.StartAsync(this, domain, capabilities, timeout.Token).ConfigureAwait(false);
-            var result = await connection.RequestAsync(PluginSandboxMethods.Inspect,
-                new PluginSandboxInspectRequest(artifactPath, package), PluginSandboxJsonContext.Default.PluginSandboxInspectRequest,
+            var result = await domain.Connection!.RequestAsync(PluginSandboxMethods.Inspect,
+                new PluginSandboxInspectRequest(staged, package), PluginSandboxJsonContext.Default.PluginSandboxInspectRequest,
                 timeout.Token).ConfigureAwait(false);
             return result?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxInspection)
                 ?? throw new IOException("The isolated inspection returned no metadata.");
         }
-        finally
-        {
-            try { if (connection is not null) await connection.DisposeAsync().ConfigureAwait(false); }
-            finally
-            {
-                lock (_sync)
-                {
-                    _inspections--;
-                    _inspectionCompletions.Remove(completion);
-                }
-                completion.TrySetResult();
-            }
-        }
+        finally { _lifecycle.Release(); }
     }
 
     public async Task RetireAsync(string package, CancellationToken cancellationToken = default)
     {
-        Task? retirement;
+        Task retirement;
         lock (_sync)
         {
-            var domain = _domains.Values.FirstOrDefault(value => value.Members.Contains(package, StringComparer.Ordinal));
-            if (domain is null)
+            if (_domain is not { } domain
+                || domain.Members.Count != 0 && !domain.Members.Contains(package) && domain.Failure is null)
             {
                 _failures.Remove(package);
                 return;
@@ -316,58 +301,40 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
     {
         domain.Cancellation.Cancel();
         domain.Connection?.Abort();
-        // Wait for an in-progress launch/initialization to publish its owned connection before reaping.
         await _lifecycle.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            foreach (var binding in domain.Bindings.Values.ToArray())
+            foreach (var binding in domain.Bindings.Values)
                 binding.Dispose();
-            // Cancellation cannot interrupt revocation/reaping and leave the old authority alive.
             if (domain.Connection is not null)
                 await domain.Connection.DisposeAsync().ConfigureAwait(false);
+            System.IO.Directory.Delete(domain.Directory, recursive: true);
             lock (_sync)
-            {
-                if (ReferenceEquals(_domains.GetValueOrDefault(domain.Key), domain))
+                if (ReferenceEquals(_domain, domain))
                 {
-                    _domains.Remove(domain.Key);
-                    foreach (var member in domain.Members)
-                        _failures.Remove(member);
+                    _domain = null;
+                    _failures.Clear();
                 }
-            }
         }
         finally { _lifecycle.Release(); }
     }
 
     public void Dispose()
     {
-        Domain[] domains;
-        Task[] inspections;
+        Task? retirement = null;
         lock (_sync)
         {
             if (_disposed)
                 return;
             _disposed = true;
-            domains = _domains.Values.ToArray();
-            inspections = _inspectionCompletions.Select(completion => completion.Task).ToArray();
-            foreach (var domain in domains)
+            if (_domain is { } domain)
+            {
                 domain.Retired = true;
+                retirement = domain.Retirement ??= Task.Run(() => RetireCoreAsync(domain));
+            }
         }
         _shutdown.Cancel();
-        foreach (var domain in domains)
-        {
-            domain.Cancellation.Cancel();
-            domain.Connection?.Abort();
-        }
-        _lifecycle.Wait();
-        try
-        {
-            foreach (var domain in domains)
-                foreach (var binding in domain.Bindings.Values.ToArray())
-                    binding.Dispose();
-            var cleanup = domains.Select(domain => domain.Connection?.DisposeAsync().AsTask() ?? Task.CompletedTask);
-            Task.WhenAll(cleanup.Concat(inspections)).WaitAsync(PluginSandboxLaunch.ShutdownBudget).GetAwaiter().GetResult();
-        }
-        finally { _lifecycle.Release(); }
+        retirement?.WaitAsync(PluginSandboxLaunch.ShutdownBudget).GetAwaiter().GetResult();
     }
 
     internal static RuntimeException Failure(string code, string message) => new(code, message);

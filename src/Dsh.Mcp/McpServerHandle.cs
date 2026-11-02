@@ -12,8 +12,7 @@ namespace Dsh.Mcp;
  * 注册到 ToolRuntime 的 ToolDefinition 绑定本句柄而非某个具体 McpClientTool, 因此重连后无需重注册、agent 视角不失效。
  * 句柄还统计 resources/list_changed 通知, 资源工具据此提示模型重新列举。
  */
-internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransport> transportFactory,
-    Func<string>? policyRevision = null)
+internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransport> transportFactory)
 {
     public const string UnavailableCode = "MCP_SERVER_UNAVAILABLE";
     public const string ResourcesUnsupportedCode = "MCP_RESOURCES_UNSUPPORTED";
@@ -29,8 +28,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     private long _resourceListSeen;
     private long _resourceTemplatesSeen;
     private string? _error;
-    private string? _profileRevision;
-    private volatile bool _policyRetired;
 
     public McpServerConfig Config { get; } = config;
 
@@ -38,7 +35,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     public bool Connected => Volatile.Read(ref _live) is not null;
 
-    public bool HasOwnedProcess => Volatile.Read(ref _live)?.OwnedTransport is not null;
 
     public int ToolCount => Volatile.Read(ref _live)?.Tools.Count ?? 0;
 
@@ -57,9 +53,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     public async Task<IList<McpClientTool>> ConnectAsync(CancellationToken signal)
     {
-        if (_policyRetired)
-            throw new UnauthorizedAccessException("The MCP policy changed; reload the server explicitly before another operation.");
-        var revision = policyRevision?.Invoke();
         if (Volatile.Read(ref _ownedProcess) != 0)
             throw new IOException("An owned MCP connection cannot be restarted; the operation was not replayed.");
         var acknowledged = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -99,7 +92,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
             live = new Live(client, tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal), new CancellationTokenSource(),
                 transport as OwnedStdioClientTransport);
             Volatile.Write(ref _live, live);
-            _profileRevision = revision;
             _error = null;
             if (Interlocked.Increment(ref _version) > 1)
                 Interlocked.Increment(ref _resourceListChanges);
@@ -141,7 +133,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     public async ValueTask<CallToolResult> CallOwnedToolAsync(string toolName,
         IReadOnlyDictionary<string, object?>? arguments, CancellationToken signal)
     {
-        await DemandCurrentPolicyAsync().ConfigureAwait(false);
         var live = Volatile.Read(ref _live);
         if (live?.OwnedTransport is not { } owned)
         {
@@ -179,7 +170,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     /** Owned operations execute once; unprotected transports keep their reconnect behavior. */
     public async ValueTask<T> CallResourcesAsync<T>(Func<McpClient, ValueTask<T>> call, CancellationToken signal)
     {
-        await DemandCurrentPolicyAsync().ConfigureAwait(false);
         var live = Volatile.Read(ref _live);
         if (live?.OwnedTransport is { } owned)
         {
@@ -266,23 +256,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         _reconnectGate.Dispose();
     }
 
-    private async Task DemandCurrentPolicyAsync()
-    {
-        if (policyRevision is null) return;
-        try
-        {
-            if (!_policyRetired && policyRevision() == _profileRevision) return;
-        }
-        catch
-        {
-            _policyRetired = true;
-            await CloseAsync(Interlocked.Exchange(ref _live, null)).ConfigureAwait(false);
-            throw;
-        }
-        _policyRetired = true;
-        await CloseAsync(Interlocked.Exchange(ref _live, null)).ConfigureAwait(false);
-        throw new UnauthorizedAccessException("The MCP permission profile is stale. The connection was retired without executing or replaying the operation; use /mcp reload.");
-    }
 
     private McpClient ResourcesClient(Live? live)
     {

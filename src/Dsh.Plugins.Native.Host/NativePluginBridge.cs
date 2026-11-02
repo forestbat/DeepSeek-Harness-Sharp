@@ -19,7 +19,7 @@ public static class NativePluginBridge
             var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
                 ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the tools service");
             var logger = ctx.LoggerFor("native-plugin");
-            plugin.Configure(PluginConfigurationJson.Write(config));
+            plugin.Configure(SettingsJson.Write(config));
             var capabilities = new Lazy<IPluginHost>(() =>
                 (ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
                     ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the plugin capability service"))
@@ -53,6 +53,9 @@ public static class NativePluginBridge
     {
         private readonly Dictionary<int, IDisposable> _registrations = [];
         private readonly Lock _sync = new();
+        private readonly Lock _invocationSync = new();
+        private ToolRunContext? _activeRun;
+        private Thread? _invokingThread;
         private bool _disposed;
 
         public void Log(int level, string message)
@@ -93,7 +96,7 @@ public static class NativePluginBridge
                 Description = description,
                 Parameters = parameters,
                 Output = new ToolOutputDefinition(ResultSchema, (_, value) => [new TextBlock(Render(value))]),
-                Execute = (args, _) => ExecuteTool(name, invoke, args),
+                Execute = (args, run) => ExecuteTool(name, invoke, args, run),
             });
             lock (_sync)
                 _registrations[handle] = registration;
@@ -104,7 +107,11 @@ public static class NativePluginBridge
             lock (_sync)
                 ObjectDisposedException.ThrowIf(_disposed, this);
             using var document = JsonDocument.Parse(argumentsJson);
-            return capabilities.Value.CallAsync(operation, document.RootElement).AsTask().GetAwaiter().GetResult().GetRawText();
+            var host = capabilities.Value as IPluginExecutionHost
+                ?? throw new InvalidOperationException("native plugin capabilities require an execution-aware host");
+            var run = ReferenceEquals(_invokingThread, Thread.CurrentThread) ? _activeRun : null;
+            return host.CallAsync(operation, document.RootElement, run, run?.Signal ?? default)
+                .AsTask().GetAwaiter().GetResult().GetRawText();
         }
 
         public bool UnregisterTool(int handle)
@@ -119,24 +126,38 @@ public static class NativePluginBridge
             return true;
         }
 
-        private Task<object?> ExecuteTool(string name, Func<string, string?> invoke, JsonElement args)
+        private Task<object?> ExecuteTool(string name, Func<string, string?> invoke, JsonElement args, ToolRunContext run)
         {
-            if (plugin.State == NativePluginState.Faulted)
-                throw new InvalidOperationException($"native plugin \"{plugin.Package}\" is faulted and no longer callable");
-            string? result;
-            try
+            lock (_invocationSync)
             {
-                result = invoke(args.GetRawText());
+                if (plugin.State == NativePluginState.Faulted)
+                    throw new InvalidOperationException($"native plugin \"{plugin.Package}\" is faulted and no longer callable");
+                string? result;
+                try
+                {
+                    _activeRun = run;
+                    _invokingThread = Thread.CurrentThread;
+                    try
+                    {
+                        result = invoke(args.GetRawText());
+                    }
+                    finally
+                    {
+                        _invokingThread = null;
+                        _activeRun = null;
+                    }
+                }
+                catch (NativePluginFaultException error)
+                {
+                    logger.Error("%s", $"native plugin \"{plugin.Package}\" tool \"{name}\" invoke failed: {error.Message}");
+                    Fault(name, error);
+                    throw;
+                }
+                if (result is null)
+                    throw new InvalidOperationException($"native plugin \"{plugin.Package}\" tool \"{name}\" failed");
+                using var document = JsonDocument.Parse(result);
+                return Task.FromResult<object?>(document.RootElement.Clone());
             }
-            catch (NativePluginFaultException error)
-            {
-                logger.Error("%s", $"native plugin \"{plugin.Package}\" tool \"{name}\" invoke failed: {error.Message}");
-                Fault(name, error);
-                throw;
-            }
-            if (result is null)
-                throw new InvalidOperationException($"native plugin \"{plugin.Package}\" tool \"{name}\" failed");
-            return Task.FromResult<object?>(JsonDocument.Parse(result).RootElement.Clone());
         }
 
         /** 故障遏制(进程内、按插件):标记 Faulted + 移除其全部工具 + 尽力卸载;二次同类故障由 quarantine 禁装。 */

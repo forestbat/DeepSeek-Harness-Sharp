@@ -47,8 +47,6 @@ internal static class WindowsNative
         public nuint ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemory, PeakJobMemory;
     }
     [StructLayout(LayoutKind.Sequential)]
-    internal struct JobCompletionPort { public nint Key, Port; }
-    [StructLayout(LayoutKind.Sequential)]
     internal struct JobAccounting
     {
         public long TotalUserTime, TotalKernelTime, PeriodUserTime, PeriodKernelTime;
@@ -88,9 +86,6 @@ internal static class WindowsNative
     [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(nint list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateProcess(string executable, StringBuilder commandLine, nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, nint environment, string workingDirectory, ref StartupInfoEx startup, out ProcessInformation information);
-    [DllImport("kernel32.dll", SetLastError = true)] internal static extern SafeFileHandle CreateIoCompletionPort(nint file, nint existing, nuint key, uint concurrency);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetQueuedCompletionStatus(SafeFileHandle port, out uint message, out nuint key, out nint overlapped, uint milliseconds);
     internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
         => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
     internal static string PathForNative(string path)
@@ -111,11 +106,5 @@ internal static class WindowsNative
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetSecurityDescriptorSacl(nint descriptor, [MarshalAs(UnmanagedType.Bool)] out bool present, out nint sacl, [MarshalAs(UnmanagedType.Bool)] out bool defaulted);
     [DllImport("ntdll.dll")]
-    internal static extern int NtSetSecurityObject(SafeFileHandle handle, uint information, nint descriptor);
-    [DllImport("ntdll.dll")]
     internal static extern int RtlGetLastNtStatus();
-    [DllImport("ntdll.dll")]
-    internal static extern uint RtlNtStatusToDosError(int status);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint characters, uint flags);
 }

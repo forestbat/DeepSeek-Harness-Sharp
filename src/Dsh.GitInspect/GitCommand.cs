@@ -42,7 +42,6 @@ internal static class GitCommand
         int maxOutputChars = int.MaxValue,
         CancellationToken cancellationToken = default)
     {
-        GitExecutionScope.DemandUnconfinedExecution();
         using var process = new Process();
         process.StartInfo = CreateStartInfo(workingDirectory, arguments);
         try
@@ -75,7 +74,6 @@ internal static class GitCommand
 
     internal static async Task CopyOutputAsync(string workingDirectory, IReadOnlyList<string> arguments, Stream destination, CancellationToken cancellationToken)
     {
-        GitExecutionScope.DemandUnconfinedExecution();
         using var process = new Process { StartInfo = CreateStartInfo(workingDirectory, arguments) };
         process.Start();
         process.StandardInput.Close();

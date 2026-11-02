@@ -84,291 +84,28 @@ sandbox:
 
 # 插件开关:false 关闭;permissions(read/write/network)是保留键
 plugins:
-  # Explicit full-Context grants for code linked into this host image.
-  # These are fully trusted roles, not package-prefix privileges or OS isolation.
-  "@deepseek-ai/dsh-a2a":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-account":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-acp":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-agent-instructions":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-board":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-command-compact":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-compaction-basic":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-compaction-tool":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-compaction-tool-result-pruner":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-core":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-e2b":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-fleet":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-fleet-iroh":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-fs-local":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-git-inspect":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-goal":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-gui":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-interaction":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-jobs-local":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-llm-anthropic":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-llm-deepseek":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-llm-openai":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-lsp":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-mcp":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-persistence":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-persona":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-plan-mode":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-plugin-manager":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-remote-host-client":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-remote-host-server":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-schedule":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-session-graph":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-session-query":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-skill":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-skill-filesystem":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-subagent":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-subagent-fork-in-process":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-subagent-spawn-in-process":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-subprocess":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-telemetry":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-terminal":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-token-meter":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-ask-user":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-bash":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-bash-persistent":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-board":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-creative":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-e2b":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-fs":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-fs-search":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-goal":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-jobs":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-powershell":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-present":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-pwsh":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-pwsh-persistent":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-ralph":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-schedule":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-session-query":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-str-replace-editor":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-subagent":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-subagent-control":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-subagent-control/list-agents":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-subagent/list-models":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-terminal":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-todo":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-web":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-workflow":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-working-directory":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-worktree":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tool-wsl":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-tui":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-bridge":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-fetch-http":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-baidu":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-bing":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-deepseek":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-duckduckgo":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-github":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-google":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-web-search-stackoverflow":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-workflow-worker-thread":
-    execution: host
-    hostArtifact: image
-  "@deepseek-ai/dsh-workspace":
-    execution: host
-    hostArtifact: image
+  # Full-Context plugins require the same explicit host role regardless of source when sandboxing is enabled.
+  # "example/full-context-plugin":
+  #   execution: host
   # Debug-only preference for batching independent tool calls in run_code.
   "@deepseek-ai/dsh-ptc":
-    execution: host
-    hostArtifact: image
     debug_batching: false
   # Optional .csx execution requires an installed dotnet-script frontend.
   "@deepseek-ai/dsh-csx":
-    execution: host
-    hostArtifact: image
     executable: dotnet-script
   # Optional C# stdin evaluation requires an installed CSharpRepl frontend.
   "@deepseek-ai/dsh-csharprepl":
-    execution: host
-    hostArtifact: image
     executable: csharprepl
   # 项目记忆；参数 file/backend/capture/mongo
   "@deepseek-ai/dsh-memory":
     enabled: false
-    execution: host
-    hostArtifact: image
   # TOON 编码；参数 output/input
   "@deepseek-ai/dsh-toon": false
   # 快照恢复点；参数 max_points/keep_days
   "@deepseek-ai/dsh-checkpoints":
     enabled: false
-    execution: host
-    hostArtifact: image
   # IDE 集成
   "@deepseek-ai/dsh-ide":
-    execution: host
-    hostArtifact: image
     # 默认编辑器:auto 或编辑器 id
     default_editor: auto
     # 无匹配编辑器时是否失败
@@ -743,25 +480,36 @@ plugins:
 # LLM 提供方
 # providers:
 #   <id>:
-#     适配器类型:openai-compatible | openai-responses | anthropic | deepseek
 #     type:
-#     适配器选项
 #     options:
-#       接口地址
 #       baseUrl:
-#       API key(明文)
 #       apiKey:
-#       API key 环境变量
 #       apiKeyEnv:
-#     模型覆盖(显示名/系统提示等)
 #     models:
 #       <id>:
-#         显示名
 #         name:
-#         是否支持工具调用
 #         tool_call:
-#         系统提示覆盖
 #         system_prompt_update:
+# <id>:
+# 适配器类型:openai-compatible | openai-responses | anthropic | deepseek
+# type:
+# 适配器选项
+# options:
+# 接口地址
+# baseUrl:
+# API key(明文)
+# apiKey:
+# API key 环境变量
+# apiKeyEnv:
+# 模型覆盖(显示名/系统提示等)
+# models:
+# <id>:
+# 显示名
+# name:
+# 是否支持工具调用
+# tool_call:
+# 系统提示覆盖
+# system_prompt_update:
 # 技能目录
 # skills:
 #   本地目录列表
@@ -773,16 +521,22 @@ plugins:
 # MCP 服务器
 # mcp:
 #   <id>:
-#     stdio | streamable-http | sse
 #     transport:
-#     stdio 启动命令
 #     command: []
-#     额外参数
 #     args: []
-#     HTTP 端点(transport: streamable-http 或 sse 时使用)
 #     url:
-#     是否启用
 #     enabled: true
+# <id>:
+# stdio | streamable-http | sse
+# transport:
+# stdio 启动命令
+# command: []
+# 额外参数
+# args: []
+# HTTP 端点(transport: streamable-http 或 sse 时使用)
+# url:
+# 是否启用
+# enabled: true
 # A2A 服务
 # a2a:
 #   是否启用
@@ -806,12 +560,16 @@ plugins:
 #   远端 A2A 服务
 #   remotes:
 #     <id>:
-#       远端 URL
 #       url:
-#       鉴权 token
 #       token:
-#       额外请求头
 #       headers: {}
+# <id>:
+# 远端 URL
+# url:
+# 鉴权 token
+# token:
+# 额外请求头
+# headers: {}
 # 自动压缩
 # compaction:
 #   上下文超限时自动压缩
@@ -830,6 +588,12 @@ plugins:
 #       path:
 #       intent:
 #       args: {}
+#   <id>:
+#   tool: []
+#   dialect:
+#   path:
+#   intent:
+#   args: {}
 #   whitelist:
 #     <id>:
 #       tool: []
@@ -837,6 +601,12 @@ plugins:
 #       path:
 #       intent:
 #       args: {}
+# <id>:
+# tool: []
+# dialect:
+# path:
+# intent:
+# args: {}
 # 日志
 # logging:
 #   最低级别:trace | debug | info | warn | error | off
@@ -920,6 +690,12 @@ plugins:
 #         path:
 #         intent:
 #         args: {}
+#     <id>:
+#     tool: []
+#     dialect:
+#     path:
+#     intent:
+#     args: {}
 #     whitelist:
 #       <id>:
 #         tool: []
@@ -927,6 +703,12 @@ plugins:
 #         path:
 #         intent:
 #         args: {}
+# <id>:
+# tool: []
+# dialect:
+# path:
+# intent:
+# args: {}
 # 插件开关
 # plugins:
 #   <id>:
@@ -943,8 +725,6 @@ plugins:
 #       允许网络
 #       network: true
 #     execution:
-#     trustDomain:
-#     hostArtifact:
 #
 # 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
 # 账号服务
@@ -1016,12 +796,16 @@ plugins:
 #     各提供方存储位置
 #     discovery:
 #       <id>:
-#         用户配置目录
 #         roots: {}
-#         历史存储子目录
 #         store_paths: []
-#         设置文件名
 #         settings_file:
+#     <id>:
+#     用户配置目录
+#     roots: {}
+#     历史存储子目录
+#     store_paths: []
+#     设置文件名
+#     settings_file:
 #     是否读取时间线
 #     timeline:
 #     时间线条目上限

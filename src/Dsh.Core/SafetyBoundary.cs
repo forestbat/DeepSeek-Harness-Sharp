@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Dsh.Runtime;
-using Dsh.Transport;
+using Dsh.Sandbox;
 
 namespace Dsh.Core;
 
@@ -9,8 +9,9 @@ public interface ISafetyBoundary
 {
     const string ServiceName = "safetyBoundary";
     Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null);
-    Task<Action<PinnedFileTarget>> AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
+    Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
         CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false);
+    void DemandFileAuthorization(ToolRunContext run, string path, string intent);
     Task AuthorizeOperationAsync(ToolRunContext? run, CancellationToken signal, string? lifecycleOwner = null,
         bool scriptPermissions = false);
     void AuthorizeConfiguredMcp(string lifecycleOwner, CancellationToken signal);
@@ -25,20 +26,23 @@ public sealed record SafetyDecisionAuditPayload(string? RuleId, string RuleKind,
     public override string Type => EventType;
 }
 
-/** Every actual file is authorized, then opened through the existing pinned-object boundary. */
+/** Authorizes actual host-mediated operations; ordinary IO does not pin file identity. */
 public static class SafetyFileAccess
 {
-    public static async Task<Action<PinnedFileTarget>> AuthorizeAsync(string path, string intent,
-        ToolRunContext run, CancellationToken signal, bool settingsReview = false)
-        => SettingsMutationScope.Current?.Safety is { } safety
-            ? await safety.AuthorizeFileAsync(run, path, intent, signal, settingsReview: settingsReview).ConfigureAwait(false)
-            : static _ => { };
-
-    public static async Task<PinnedFileAccess> OpenReadAsync(string path, ToolRunContext run, bool settingsReview = false)
+    public static Task AuthorizeAsync(string path, string intent, ToolRunContext run,
+        CancellationToken signal, bool settingsReview = false)
     {
-        run.Signal.ThrowIfCancellationRequested();
-        var authorize = await AuthorizeAsync(path, "read", run, run.Signal, settingsReview).ConfigureAwait(false);
-        return PinnedFileAccess.Open(path, PinnedFileMode.Read, authorize);
+        signal.ThrowIfCancellationRequested();
+        var safety = (run.Agent?.Ctx ?? run.HostContext)?.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false);
+        return safety?.AuthorizeFileAsync(run, path, intent, signal, settingsReview: settingsReview) ?? Task.CompletedTask;
+    }
+
+    public static async Task<FileStream> OpenReadAsync(string path, ToolRunContext run, bool settingsReview = false)
+    {
+        await AuthorizeAsync(path, "read", run, run.Signal, settingsReview).ConfigureAwait(false);
+        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+            4096, FileOptions.Asynchronous);
     }
 
     public static async Task<IReadOnlyList<(string Path, bool IsDirectory)>> ReadDirectoryAsync(string path, ToolRunContext run,
@@ -46,30 +50,36 @@ public static class SafetyFileAccess
     {
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
         var token = fused.Token;
-        token.ThrowIfCancellationRequested();
-        var authorize = await AuthorizeAsync(path, "read", run, token).ConfigureAwait(false);
-        return await PinnedFileAccess.ReadDirectoryAsync(path, authorize,
-            entry => AuthorizeAsync(entry, "read", run, token), followLinks).ConfigureAwait(false);
+        await AuthorizeAsync(path, "read", run, token).ConfigureAwait(false);
+        var entries = new List<(string Path, bool IsDirectory)>();
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path))
+        {
+            token.ThrowIfCancellationRequested();
+            if (!followLinks && (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) continue;
+            await AuthorizeAsync(entry, "read", run, token).ConfigureAwait(false);
+            entries.Add((entry, Directory.Exists(entry)));
+        }
+        return entries;
     }
 
-    public static async Task<string> ReadTextAsync(string path, ToolRunContext run, CancellationToken? signal = null)
+    public static async Task<string> ReadTextAsync(string path, ToolRunContext run, CancellationToken? signal = null,
+        bool settingsReview = false)
     {
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
-        var token = fused.Token;
-        token.ThrowIfCancellationRequested();
-        var authorize = await AuthorizeAsync(path, "read", run, token).ConfigureAwait(false);
-        await using var file = PinnedFileAccess.Open(path, PinnedFileMode.Read, authorize);
-        using var reader = new StreamReader(file.Stream, new UTF8Encoding(false, false));
-        return await reader.ReadToEndAsync(token).ConfigureAwait(false);
+        await AuthorizeAsync(path, "read", run, fused.Token, settingsReview).ConfigureAwait(false);
+        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+            4096, FileOptions.Asynchronous);
+        using var reader = new StreamReader(stream, new UTF8Encoding(false, false));
+        return await reader.ReadToEndAsync(fused.Token).ConfigureAwait(false);
     }
 
     public static async Task<byte[]> ReadBytesAsync(string path, ToolRunContext run, long maximum)
     {
-        await using var file = await OpenReadAsync(path, run).ConfigureAwait(false);
-        if (file.Stream.Length > maximum)
-            throw new IOException("The file exceeds the permitted read size.");
-        var bytes = new byte[checked((int)file.Stream.Length)];
-        await file.Stream.ReadExactlyAsync(bytes, run.Signal).ConfigureAwait(false);
+        await using var stream = await OpenReadAsync(path, run).ConfigureAwait(false);
+        if (stream.Length > maximum) throw new IOException("The file exceeds the permitted read size.");
+        var bytes = new byte[checked((int)stream.Length)];
+        await stream.ReadExactlyAsync(bytes, run.Signal).ConfigureAwait(false);
         return bytes;
     }
 }

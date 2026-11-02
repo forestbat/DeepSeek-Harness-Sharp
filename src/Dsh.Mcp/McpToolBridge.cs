@@ -24,27 +24,19 @@ public static class McpToolBridge
         string? description,
         JsonElement inputSchema,
         Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call)
-        => WrapCore(serverName, toolName, description, inputSchema, call, null);
-
-    private static ToolDefinition WrapCore(
-        string serverName, string toolName, string? description, JsonElement inputSchema,
-        Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call,
-        Func<bool>? ownsProcess)
         => new()
         {
             Name = $"mcp_{Sanitize(serverName)}_{Sanitize(toolName)}",
-            Description = (string.IsNullOrWhiteSpace(description) ? toolName : description)
-                + IExternalProcessPolicy.SettingsProtectionNotice,
+            Description = string.IsNullOrWhiteSpace(description) ? toolName : description,
             Parameters = SchemaOrDefault(inputSchema),
             Output = new ToolOutputDefinition(OutputSchema(), Render),
-            Execute = (args, exec) => ExecuteAsync(call, args, exec, ownsProcess),
+            Execute = (args, exec) => ExecuteAsync(call, args, exec),
         };
 
     // Owned opaque tool calls are never replayed after cancellation, transport loss or process failure.
     internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool)
-        => WrapCore(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
-            (arguments, signal) => handle.CallOwnedToolAsync(tool.Name, arguments, signal),
-            () => handle.HasOwnedProcess);
+        => Wrap(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
+            (arguments, signal) => handle.CallOwnedToolAsync(tool.Name, arguments, signal));
 
     internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
         McpServerHandle handle,
@@ -89,15 +81,8 @@ public static class McpToolBridge
     private static async Task<object?> ExecuteAsync(
         Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call,
         JsonElement args,
-        ToolRunContext exec,
-        Func<bool>? ownsProcess)
+        ToolRunContext exec)
     {
-        if (ownsProcess?.Invoke() != true)
-            exec.ExternalProcessPolicy?.DemandUnconfined("Unowned or remote MCP tool invocation");
-        if (exec.ExternalProcessProtectionRequired && ownsProcess?.Invoke() != true)
-            throw new HarnessException(
-                "Unowned MCP tools cannot enforce active settings protection. Use an owned local stdio server instead.",
-                ErrorCode);
         var arguments = args.ValueKind == JsonValueKind.Object
             ? args.EnumerateObject().ToDictionary(property => property.Name, property => (object?)property.Value)
             : null;

@@ -149,6 +149,7 @@ public sealed class SkillCatalog : IDisposable
                     Cwd = exec.Agent?.Session.WorkingDirectory,
                     Scope = exec.Agent?.ScopeKey,
                     Signal = exec.Signal,
+                    Run = exec,
                 }) ?? throw new InvalidOperationException($"skill \"{name}\" is unknown or no longer available");
                 if (!skill.Invocation.ModelInvocable)
                     throw new InvalidOperationException($"skill \"{name}\" is not available for model invocation");

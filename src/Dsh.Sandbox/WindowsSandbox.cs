@@ -10,27 +10,24 @@ namespace Dsh.Sandbox;
 internal sealed class WindowsSandbox : ISandboxLifetime
 {
     private const uint DetachedProcess = 0x00000008;
-    private readonly SafeFileHandle _process, _job, _completionPort;
+    private readonly SafeFileHandle _process, _job;
     private readonly WindowsAclLease _acl;
     private readonly string _profile;
     private readonly Lock _gate = new();
     private bool _nativeHandlesClosed;
-    private int _memoryExceeded;
     private Exception? _terminationFailure;
     public int Id { get; }
     public Stream StandardInput { get; }
     public Stream StandardOutput { get; }
     public Stream StandardError { get; }
-    public bool WasMemoryLimitExceeded => Volatile.Read(ref _memoryExceeded) != 0;
     public Task<int> Exit { get; }
 
-    private WindowsSandbox(int id, SafeFileHandle process, SafeFileHandle job, SafeFileHandle completionPort,
+    private WindowsSandbox(int id, SafeFileHandle process, SafeFileHandle job,
         WindowsAclLease acl, string profile, Stream input, Stream output, Stream error)
     {
         Id = id;
         _process = process;
         _job = job;
-        _completionPort = completionPort;
         _acl = acl;
         _profile = profile;
         StandardInput = input;
@@ -46,7 +43,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         if (result < 0)
             Marshal.ThrowExceptionForHR(result);
         WindowsAclLease? acl = null;
-        SafeFileHandle? job = null, port = null, process = null;
+        SafeFileHandle? job = null, process = null;
         WindowsPipe? input = null, output = null, error = null;
         Stream? inputStream = null, outputStream = null, errorStream = null;
         try
@@ -54,9 +51,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             acl = WindowsAclLease.Create(sid, policy);
             job = WindowsNative.CreateJobObject(0, null);
             CheckHandle(job, "create the sandbox job");
-            port = WindowsNative.CreateIoCompletionPort(-1, 0, 0, 1);
-            CheckHandle(port, "create the sandbox completion port");
-            ConfigureJob(job, port, policy);
+            ConfigureJob(job, policy);
             input = WindowsPipe.Create(parentWrites: true);
             output = WindowsPipe.Create(parentWrites: false);
             error = WindowsPipe.Create(parentWrites: false);
@@ -94,7 +89,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
                 errorStream = error.TakeParent(FileAccess.Read);
                 if (WindowsNative.ResumeThread(thread) == uint.MaxValue)
                     throw NativeError("resume the AppContainer process");
-                return new WindowsSandbox((int)information.ProcessId, process, job, port, acl, profile,
+                return new WindowsSandbox((int)information.ProcessId, process, job, acl, profile,
                     inputStream, outputStream, errorStream);
             }
             catch
@@ -110,32 +105,13 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         catch (Exception launchFailure)
         {
             List<Exception>? failures = null;
-            var restore = true;
-            if (process is not null && job is not null)
-            {
-                try
-                {
-                    if (ActiveProcesses(job) != 0)
-                        throw new IOException("The failed Windows launch still has active job processes; filesystem authority cannot be restored.");
-                }
-                catch (Exception exception)
-                {
-                    restore = false;
-                    acl?.RetainFailure(exception);
-                    (failures ??= []).Add(exception);
-                }
-            }
             DisposeResource(inputStream, ref failures);
             DisposeResource(outputStream, ref failures);
             DisposeResource(errorStream, ref failures);
             DisposeResource(process, ref failures);
             DisposeResource(job, ref failures);
-            DisposeResource(port, ref failures);
-            if (restore)
-            {
-                DisposeResource(acl, ref failures);
-                DeleteProfile(profile, ref failures);
-            }
+            DisposeResource(acl, ref failures);
+            DeleteProfile(profile, ref failures);
             if (failures is not null)
             {
                 failures.Insert(0, launchFailure);
@@ -152,16 +128,13 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         }
     }
 
-    private static unsafe void ConfigureJob(SafeFileHandle job, SafeFileHandle port, SandboxPolicy policy)
+    private static unsafe void ConfigureJob(SafeFileHandle job, SandboxPolicy policy)
     {
         var limit = new WindowsNative.JobExtendedLimit
         {
-            Basic = new WindowsNative.JobBasicLimit { Flags = 0x2000 | 0x200 | 0x8 | 0x400, ActiveProcessLimit = policy.AllowChildProcesses ? 256u : 1u },
-            JobMemoryLimit = checked((nuint)policy.MemoryLimitBytes)
+            Basic = new WindowsNative.JobBasicLimit { Flags = 0x2000 | 0x8 | 0x400, ActiveProcessLimit = policy.AllowChildProcesses ? 256u : 1u },
         };
-        Check(WindowsNative.SetInformationJobObject(job, 9, (nint)(&limit), (uint)sizeof(WindowsNative.JobExtendedLimit)), "set the aggregate job memory/process limit");
-        var completion = new WindowsNative.JobCompletionPort { Key = 1, Port = port.DangerousGetHandle() };
-        Check(WindowsNative.SetInformationJobObject(job, 7, (nint)(&completion), (uint)sizeof(WindowsNative.JobCompletionPort)), "associate sandbox job notifications");
+        Check(WindowsNative.SetInformationJobObject(job, 9, (nint)(&limit), (uint)sizeof(WindowsNative.JobExtendedLimit)), "set the job process limit and termination policy");
     }
 
     private async Task<int> ObserveAsync()
@@ -170,7 +143,6 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         {
             while (!RootExited())
             {
-                DrainNotifications();
                 if (_terminationFailure is not null)
                     throw new IOException("Terminating the exact Windows sandbox job failed.", _terminationFailure);
                 await Task.Delay(25).ConfigureAwait(false);
@@ -178,7 +150,6 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             Check(WindowsNative.GetExitCodeProcess(_process, out var code), "read the sandbox process exit code");
             Kill();
             await WaitForEmptyJobAsync().ConfigureAwait(false);
-            DrainNotifications();
             return unchecked((int)code);
         }
         catch
@@ -213,17 +184,6 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         return accounting.ActiveProcesses;
     }
 
-    private void DrainNotifications()
-    {
-        while (WindowsNative.GetQueuedCompletionStatus(_completionPort, out var message, out _, out _, 0))
-            if (message == 10)
-            {
-                Interlocked.Exchange(ref _memoryExceeded, 1);
-                Kill();
-            }
-        if (Marshal.GetLastPInvokeError() != 258)
-            throw NativeError("read sandbox job notifications");
-    }
 
     public void Kill()
     {
@@ -240,18 +200,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         List<Exception>? failures = null;
         try { await Exit.ConfigureAwait(false); }
         catch (Exception exception) { (failures ??= []).Add(exception); }
-        var restore = true;
-        try
-        {
-            if (ActiveProcesses(_job) != 0)
-                throw new IOException("The Windows sandbox still has active job processes; filesystem authority cannot be restored.");
-        }
-        catch (Exception exception)
-        {
-            restore = false;
-            _acl.RetainFailure(exception);
-            (failures ??= []).Add(exception);
-        }
+        List<Exception>? cleanupFailures = null;
         try { await StandardInput.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { (failures ??= []).Add(exception); }
         try { await StandardOutput.DisposeAsync().ConfigureAwait(false); }
@@ -263,13 +212,11 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             _nativeHandlesClosed = true;
             DisposeResource(_process, ref failures);
             DisposeResource(_job, ref failures);
-            DisposeResource(_completionPort, ref failures);
         }
-        if (restore)
-        {
-            DisposeResource(_acl, ref failures);
-            DeleteProfile(_profile, ref failures);
-        }
+        DisposeResource(_acl, ref cleanupFailures);
+        DeleteProfile(_profile, ref cleanupFailures);
+        if (cleanupFailures is not null)
+            (failures ??= []).AddRange(cleanupFailures);
         if (failures is not null)
             throw new AggregateException("Disposing the Windows sandbox failed.", failures);
     }

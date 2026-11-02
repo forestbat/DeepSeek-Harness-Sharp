@@ -1,3 +1,4 @@
+using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
 using Dsh.Runtime.Logging;
@@ -57,28 +58,17 @@ public static class ConfigBoot
 
         try
         {
-            _ = new SettingsMutationBoundary(ctx, home);
-            app.Track(new SettingsPolicyActivation(ctx, home, settings));
-            PluginHostAuthority? authority = null;
-            if (settings.Sandbox?.Enabled == true)
-            {
-                authority = new PluginHostAuthority(ctx, home);
-                app.Track(authority);
-            }
+            ctx.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
+            _ = new SafetyBoundary(ctx, HarnessSettings.CreatePolicyReader(home, settings));
+            _ = new ScriptExecutionPolicy(ctx, home, settings);
             var capabilities = new PluginCapabilityFactory(ctx, home, settings);
             ctx.Provide(IPluginHostFactory.ServiceName, capabilities);
             app.Track(capabilities);
-            var external = new ExternalProcessBoundary(ctx, home, settings);
-            pluginHost.DemandDirectExecution = _ =>
-            {
-                external.DemandUnconfined("In-process managed/native plugin");
-                SettingsPolicyActivation.RegisterFullHost(home);
-            };
             PluginSandboxCatalog? sandbox = null;
-            if (authority is not null)
+            if (settings.Sandbox?.Enabled == true)
             {
                 sandbox = new PluginSandboxCatalog(home, pluginHost, settings, pluginsDirectory, nativeBridge,
-                    authority, new PluginSandboxSupervisor(ctx, home, settings, capabilities));
+                    new PluginSandboxSupervisor(ctx, home, settings, capabilities));
                 app.Track(sandbox);
             }
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
@@ -114,24 +104,18 @@ public static class ConfigBoot
         context.SetOwn("dshHomePath", home.Root);
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
-        _ = new SettingsMutationBoundary(context, home);
-        using var policyActivation = new SettingsPolicyActivation(context, home, settings);
-        using var authority = settings.Sandbox?.Enabled == true ? new PluginHostAuthority(context, home) : null;
+        context.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
+        _ = new SafetyBoundary(context, HarnessSettings.CreatePolicyReader(home, settings));
+        _ = new ScriptExecutionPolicy(context, home, settings);
         using var capabilities = new PluginCapabilityFactory(context, home, settings);
         context.Provide(IPluginHostFactory.ServiceName, capabilities);
-        var external = new ExternalProcessBoundary(context, home, settings);
         var host = new PluginHost();
-        host.DemandDirectExecution = _ =>
-        {
-            external.DemandUnconfined("In-process plugin inspection");
-            SettingsPolicyActivation.RegisterFullHost(home);
-        };
         host.RegisterCompiledIn();
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
         var bridge = ResolveNativeBridge();
-        using var sandbox = authority is null ? null : new PluginSandboxCatalog(home, host, settings, directory, bridge,
-            authority, new PluginSandboxSupervisor(context, home, settings, capabilities));
+        using var sandbox = settings.Sandbox?.Enabled != true ? null : new PluginSandboxCatalog(home, host, settings, directory, bridge,
+            new PluginSandboxSupervisor(context, home, settings, capabilities));
         var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
         try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
         finally { PluginSandboxCatalog.ReleaseLoaded(host, discovered); }

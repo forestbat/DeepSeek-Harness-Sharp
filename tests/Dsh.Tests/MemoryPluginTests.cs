@@ -172,14 +172,12 @@ public sealed class MemoryPluginTests
         Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
             && audit.RuleId == ruleId && audit.RuleKind == "blacklist" && audit.Decision == "deny"
             && audit.Tool == "memory_save" && audit.SessionId == session.Id.Value && audit.CallId == fixture.LastCallId.Value
-            && audit.Path == Dsh.Transport.PinnedFileAccess.Canonicalize(target) && audit.Intent == intent && audit.MatchedField == "path");
+            && audit.Path == Dsh.Sandbox.SandboxFileAccess.Canonicalize(target) && audit.Intent == intent && audit.MatchedField == "path");
 
-        Assert.Null(SettingsMutationScope.Current);
         var decisionCount = session.SnapshotEvents().Count(item => item.Data is SafetyDecisionAuditPayload);
         await fixture.Memory.RememberAsync("manual", "manual control-plane value", "Facts", "command", TestContext.Current.CancellationToken);
         Assert.Contains("manual control-plane value", await store.GetAsync(TestContext.Current.CancellationToken));
         Assert.Equal(decisionCount, session.SnapshotEvents().Count(item => item.Data is SafetyDecisionAuditPayload));
-        Assert.Null(SettingsMutationScope.Current);
     }
 
     [Theory]
@@ -229,7 +227,7 @@ public sealed class MemoryPluginTests
         public bool ReadBeforeApproval { get; private set; }
         public Func<bool>? HasCallApproval { get; set; }
 
-        public Task<string?> GetAsync(CancellationToken cancellationToken = default)
+        public Task<string?> GetAsync(CancellationToken cancellationToken = default, ToolRunContext? run = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Reads++;
@@ -237,7 +235,7 @@ public sealed class MemoryPluginTests
             return Task.FromResult(Text);
         }
 
-        public Task SetAsync(string text, CancellationToken cancellationToken = default)
+        public Task SetAsync(string text, CancellationToken cancellationToken = default, ToolRunContext? run = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Writes++;
@@ -259,7 +257,6 @@ public sealed class MemoryPluginTests
         private readonly ToolRuntime _tools;
         private readonly IDisposable _tool;
         private readonly AgentLoopAgent? _agent;
-        private readonly IDisposable? _settingsReviewer;
 
         public ToolFixture(SafetySettings? safety = null, IMemoryStore? store = null)
         {
@@ -275,18 +272,6 @@ public sealed class MemoryPluginTests
             {
                 _ = new LlmRuntime(ctx);
                 _ = new SafetyBoundary(ctx, () => new HarnessSettings { Safety = safety });
-                if (store is not null)
-                {
-                    var home = HarnessHome.Resolve(Path.Combine(_root, "home"));
-                    Directory.CreateDirectory(home.Root);
-                    File.WriteAllText(home.SettingsFile, "safety:\n  autoApprove: false\n");
-                    var settings = HarnessSettings.Load(home);
-                    settings.Safety = safety;
-                    settings.Save(home);
-                    var boundary = new SettingsMutationBoundary(ctx, home);
-                    _settingsReviewer = boundary.InstallReviewer(new SettingsMutationGate(ctx, home));
-                    _ = new ExternalProcessBoundary(ctx, home, settings);
-                }
                 var id = SessionId.Create(Guid.NewGuid().ToString("N"));
                 var session = Session.Create(id, null, new SessionHeader
                 {
@@ -319,7 +304,6 @@ public sealed class MemoryPluginTests
         {
             _tool.Dispose();
             _agent?.Dispose();
-            _settingsReviewer?.Dispose();
             if (Directory.Exists(_root))
                 Directory.Delete(_root, true);
         }

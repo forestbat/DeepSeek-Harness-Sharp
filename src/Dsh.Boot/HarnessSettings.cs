@@ -77,9 +77,6 @@ public sealed class HarnessSettings
         return File.ReadAllText(templatePath);
     }
 
-    [YamlIgnore]
-    internal string SnapshotDocument => _savedDocument ?? throw new InvalidOperationException("Settings do not have a source snapshot.");
-
     internal static HarnessSettings ParseSnapshot(string text, string canonicalPath)
     {
         var settings = Parse(text);
@@ -90,7 +87,7 @@ public sealed class HarnessSettings
     }
 
     /** Read current bytes every time; retain only one private parsed snapshot, never a public mutable Load DTO. */
-    internal static Func<HarnessSettings> CreatePolicyReader(HarnessHome home, HarnessSettings? fallback = null)
+    public static Func<HarnessSettings> CreatePolicyReader(HarnessHome home, HarnessSettings? fallback = null)
     {
         var sync = new Lock();
         string? previous = null;
@@ -99,11 +96,11 @@ public sealed class HarnessSettings
         return () =>
         {
             if (!File.Exists(home.SettingsFile)) return fallback ?? new HarnessSettings();
-            var canonical = Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
+            var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
             if (PublicationPath.Value == canonical)
-                return Read(canonical, ReadSettingsTextShared(canonical, bounded: true));
+                return Read(canonical, ReadSettingsTextShared(canonical));
             using var transaction = new SettingsWriteLock(canonical);
-            return Read(transaction.CanonicalPath, ReadSettingsTextShared(transaction.CanonicalPath, bounded: true));
+            return Read(transaction.CanonicalPath, ReadSettingsTextShared(transaction.CanonicalPath));
         };
 
         HarnessSettings Read(string canonical, string text)
@@ -111,8 +108,7 @@ public sealed class HarnessSettings
             lock (sync)
             {
                 if (cached is not null && previousPath == canonical && previous == text) return cached;
-                var parsed = ParseSnapshot(text, canonical);
-                cached = SettingsPolicyActivation.AcceptSnapshot(canonical, text, parsed);
+                cached = ParseSnapshot(text, canonical);
                 previousPath = canonical;
                 previous = text;
                 return cached;
@@ -129,18 +125,21 @@ public sealed class HarnessSettings
 
     public static HarnessSettings LoadForReview(HarnessHome home)
     {
-        var canonical = Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
+        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
         if (PublicationPath.Value == canonical)
-            return LoadSnapshot(home.SettingsFile, canonical, forReview: true);
+            return LoadSnapshot(home.SettingsFile, canonical);
         using var transaction = new SettingsWriteLock(home.SettingsFile);
-        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath, forReview: true);
+        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
     }
 
-    private static HarnessSettings LoadSnapshot(string path, string canonicalPath, bool forReview = false)
+    private static HarnessSettings LoadSnapshot(string path, string canonicalPath)
     {
-        var text = File.Exists(path) ? ReadSettingsTextShared(path, forReview) : LoadTemplate();
-        var settings = ParseSnapshot(text, canonicalPath);
-        return SettingsPolicyActivation.AcceptSnapshot(canonicalPath, text, settings);
+        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
+        var settings = Parse(text);
+        settings.Plugins = PluginSettingsSection.ParseDocument(text);
+        settings._savedDocument = text;
+        settings._savedPath = canonicalPath;
+        return settings;
     }
 
     private static HarnessSettings Parse(string text)
@@ -184,7 +183,7 @@ public sealed class HarnessSettings
         if (saved is not null)
         {
             _savedDocument = saved;
-            _savedPath = Dsh.Transport.PinnedFileAccess.Canonicalize(home.SettingsFile);
+            _savedPath = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
         }
     }
 
@@ -207,22 +206,30 @@ public sealed class HarnessSettings
 
     /** Changes one entry from the current locked document without replaying a stale plugin dictionary. */
     public static void UpdatePlugin(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update)
-        => MutateDocument(home.SettingsFile, (existing, _) =>
-        {
-            var plugins = PluginSettingsSection.ParseDocument(existing);
-            plugins[package] = update(plugins.GetValueOrDefault(package));
-            return SettingsDocument.MergePlugins(existing, plugins);
-        }, backup: true);
+        => UpdatePlugins(home, [package], update);
 
     /** Commits a multi-package install proposal against one current document and one approval. */
     public static void UpdatePlugins(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
-        => MutateDocument(home.SettingsFile, (existing, _) =>
-        {
-            var plugins = PluginSettingsSection.ParseDocument(existing);
-            foreach (var package in packages.Distinct(StringComparer.Ordinal))
-                plugins[package] = update(plugins.GetValueOrDefault(package));
-            return SettingsDocument.MergePlugins(existing, plugins);
-        }, backup: true);
+        => MutateDocument(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), backup: true);
+
+    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run = null)
+        => UpdatePluginsAsync(home, [package], update, run);
+
+    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run = null)
+    {
+        if (run is not null)
+            return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), run, backup: true);
+        UpdatePlugins(home, packages, update);
+        return Task.CompletedTask;
+    }
+
+    private static string MergePluginUpdates(string existing, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
+    {
+        var plugins = PluginSettingsSection.ParseDocument(existing);
+        foreach (var package in packages.Distinct(StringComparer.Ordinal))
+            plugins[package] = update(plugins.GetValueOrDefault(package));
+        return SettingsDocument.MergePlugins(existing, plugins);
+    }
 
     /** Validate independently, persist only the owned child, then publish the route to existing clients. */
     public static void SaveOutboundProxy(HarnessHome home, OutboundProxySettings value, OutboundProxy proxy)
@@ -248,89 +255,101 @@ public sealed class HarnessSettings
 
     private static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
     {
-        var activeScope = SettingsMutationScope.Current;
-        var canonical = activeScope?.Gate is { } gate && gate.Owns(path)
-            ? gate.SettingsPath : Dsh.Transport.PinnedFileAccess.Canonicalize(path);
-        if (PreparationPath.Value == canonical)
-            throw new InvalidOperationException("A settings update callback cannot recursively persist settings.");
+        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
+        using var transaction = new SettingsWriteLock(canonical);
+        var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+        if (PrepareMutation(before, canonical, prepare) is not { } after)
+            return false;
+        Publish(canonical, before, after, backup);
+        return true;
+    }
+
+    private static async Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare, ToolRunContext run, bool backup)
+    {
+        var gate = SettingsMutation.RequireGate(run);
+        if (!gate.Owns(path))
+            throw new InvalidOperationException("The mutation does not target the active settings document.");
+        var canonical = gate.SettingsPath;
         string before;
         string after;
+        await SafetyFileAccess.AuthorizeAsync(canonical, "read", run, run.Signal, settingsReview: true).ConfigureAwait(false);
         using (var transaction = new SettingsWriteLock(canonical))
         {
-            before = File.Exists(canonical)
-                ? activeScope is null ? ReadSettingsTextShared(canonical)
-                    : SettingsMutationScope.ReadTextAsync(canonical, activeScope.Context, settingsReview: true).GetAwaiter().GetResult()
-                : "";
-            string? proposed;
-            PreparationPath.Value = canonical;
-            try
-            {
-                proposed = prepare(before.Length == 0 ? LoadTemplate() : before, canonical);
-            }
-            finally
-            {
-                PreparationPath.Value = null;
-            }
-            if (proposed is null)
+            before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+            if (PrepareMutation(before, canonical, prepare) is not { } proposed)
                 return false;
-            SettingsPolicyActivation.ValidateCandidate(canonical, ParseSnapshot(proposed, canonical));
             after = proposed;
-            if (SettingsMutationScope.Current is null)
-            {
-                Publish();
-                return true;
-            }
         }
-        var scope = SettingsMutationScope.Current!;
-        Task.Run(() => scope.CommitAsync(canonical, before, after, _ =>
+        await gate.CommitAsync(new(canonical, before, after, run), (temporary, signal) =>
         {
-            Publish();
-            return Task.CompletedTask;
-        })).GetAwaiter().GetResult();
-        return true;
-
-        void Publish()
-        {
-            using var publication = SettingsPolicyActivation.BeginPublication(canonical, after);
-            Directory.CreateDirectory(Path.GetDirectoryName(canonical)!);
             if (backup && before != after && before.Length > 0)
                 WriteAtomic($"{canonical}.bak", before);
-            WriteAtomic(canonical, after);
-            publication.Commit();
+            return File.WriteAllTextAsync(temporary, after, signal);
+        }, run.Signal).ConfigureAwait(false);
+        return true;
+    }
+
+    private static string? PrepareMutation(string before, string canonical, Func<string, string, string?> prepare)
+    {
+        if (PreparationPath.Value == canonical)
+            throw new InvalidOperationException("A settings update callback cannot recursively persist settings.");
+        PreparationPath.Value = canonical;
+        try
+        {
+            var after = prepare(before.Length == 0 ? LoadTemplate() : before, canonical);
+            if (after is not null)
+                _ = Parse(after);
+            return after;
+        }
+        finally
+        {
+            PreparationPath.Value = null;
         }
     }
 
+    private static void Publish(string canonical, string before, string after, bool backup)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(canonical)!);
+        if (backup && before != after && before.Length > 0)
+            WriteAtomic($"{canonical}.bak", before);
+        WriteAtomic(canonical, after);
+    }
+
     /** The mutex remains on its owning thread even when a broker's real commit callback is asynchronous. */
-    public static Task CommitApprovedMutationAsync(string path, string before, string after, Func<CancellationToken, Task> commit, CancellationToken signal)
+    public static Task CommitApprovedMutationAsync(string path, string before, string after, Func<string, CancellationToken, Task> commit, CancellationToken signal)
         => Task.Run(() =>
         {
             using var transaction = new SettingsWriteLock(path);
             signal.ThrowIfCancellationRequested();
-            var current = File.Exists(path) ? ReadSettingsTextShared(path, bounded: true) : "";
+            var current = File.Exists(path) ? ReadSettingsTextShared(path) : "";
             if (current != before)
                 throw new InvalidOperationException("Settings changed while approval was pending; read the current settings and propose again.");
             _ = Parse(after);
-            using var publication = SettingsPolicyActivation.BeginPublication(transaction.CanonicalPath, after);
+            var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
             PublicationPath.Value = transaction.CanonicalPath;
             try
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                SettingsFilePermissions.Write(temporary, "");
+                commit(temporary, signal).GetAwaiter().GetResult();
                 signal.ThrowIfCancellationRequested();
-                commit(signal).GetAwaiter().GetResult();
-                if (!File.Exists(path) || ReadSettingsTextShared(path, bounded: true) != after)
-                    throw new IOException("The settings commit did not publish the approved document.");
-                publication.Commit();
+                if (ReadSettingsTextShared(temporary) != after)
+                    throw new IOException("The settings writer did not produce the approved document.");
+                if (File.Exists(path))
+                    File.Replace(temporary, path, destinationBackupFileName: null);
+                else
+                    File.Move(temporary, path);
             }
             finally
             {
                 PublicationPath.Value = null;
+                File.Delete(temporary);
             }
         }, signal);
 
     /** Keep a complete snapshot while allowing WriteAtomic to replace settings.yaml on Windows. */
-    private static string ReadSettingsTextShared(string path, bool bounded = false)
+    private static string ReadSettingsTextShared(string path)
     {
-        if (bounded || SettingsMutationScope.Current is not null || PublicationPath.Value is not null)
-            return SettingsMutationLimits.ReadTextAsync(path, SettingsMutationScope.Current?.Context.Signal ?? CancellationToken.None).GetAwaiter().GetResult();
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
@@ -363,7 +382,7 @@ public sealed class HarnessSettings
 
         public SettingsWriteLock(string path)
         {
-            var canonical = Dsh.Transport.PinnedFileAccess.Canonicalize(path);
+            var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
             CanonicalPath = canonical;
             if (PublicationPath.Value == canonical)
                 throw new InvalidOperationException("A settings commit callback cannot reenter settings persistence.");

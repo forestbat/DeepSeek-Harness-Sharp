@@ -25,36 +25,17 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
             : (active.Safety ?? new SafetySettings(), "safety");
     }
 
-    private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null,
-        Dsh.Sandbox.NativeFileIdentity? identity = null,
-        Func<int, string, string, (bool LiteralMatch, bool CaseSensitive)>? compare = null)
-    {
-        var pinnedPath = compare is not null;
-        if (path is not null && !pinnedPath) path = PinnedFileAccess.Canonicalize(path);
-        return new(run?.Name, run?.Arguments ?? default,
-            run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory, path, intent,
-            IsFileAlias: path is null ? null : candidate => identity is { } pinned && File.Exists(candidate)
-                ? SameObject(pinned, Dsh.Sandbox.NativeFileIdentity.Get(candidate))
-                : SettingsFilePath.SameFile(path, candidate),
-            ComparePathComponent: compare ?? (path is null ? null : (index, pattern, value) =>
-                PinnedFileAccess.ComparePathComponent(path, index, pattern, value)), PathIsCanonical: path is not null);
-    }
-
-    private static bool SameObject(Dsh.Sandbox.NativeFileIdentity left, Dsh.Sandbox.NativeFileIdentity right)
-        => left.Device == right.Device && left.Inode == right.Inode;
+    private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null)
+        => new(run?.Name, run?.Arguments ?? default,
+            run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory,
+            path is null ? null : Dsh.Sandbox.SandboxFileAccess.Canonicalize(path), intent,
+            PathIsCanonical: path is not null);
 
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
-        => PermissionEngine.Decide(rules, input, static path => PinnedFileAccess.Canonicalize(path));
+        => PermissionEngine.Decide(rules, input, static path => Dsh.Sandbox.SandboxFileAccess.Canonicalize(path));
 
     public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
     {
-        var active = _read();
-        if (run.OwnerPackage is { } owner && Ctx.GetProp("pluginCatalog") is PluginCatalog catalog
-            && catalog.TryDescribe(owner, out var descriptor)
-            && descriptor.Form is PluginForm.ManagedAssembly or PluginForm.NativeLibrary
-            && (active.Sandbox?.Enabled != true || active.Plugins.GetValueOrDefault(owner)?.Execution == PluginExecution.Host))
-            OpaquePermissionPolicy.DemandUnconfined(active.Safety ?? new SafetySettings(), "In-process plugin invocation",
-                explicitHostGrant: active.Plugins.GetValueOrDefault(owner)?.Execution == PluginExecution.Host);
         var (rules, space) = Policy(run);
         var input = Input(run);
         var decision = Decide(rules, input);
@@ -75,7 +56,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
 
             void DemandPreliminary(string value)
             {
-                var preliminary = Input(run, PinnedFileAccess.Canonicalize(Path.GetFullPath(value, input.WorkingDirectory)), run.InitialFileIntent);
+                var preliminary = Input(run, Path.GetFullPath(value, input.WorkingDirectory), run.InitialFileIntent);
                 var known = Decide(rules, preliminary);
                 if (known.Decision == "deny")
                 {
@@ -119,98 +100,41 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
         // The operator's configured connection authorizes discovery only, never a later model call.
     }
 
-    public async Task<Action<PinnedFileTarget>> AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
+    public async Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
         CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false)
     {
-        var canonical = PinnedFileAccess.Canonicalize(path);
-        var deferred = settingsReview && run is not null
-            && Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)?.Owns(canonical) == true;
-        if (settingsReview && !deferred)
-            throw new InvalidOperationException("Only the active settings proposal may defer notification to its mandatory diff reviewer.");
+        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
         var (rules, space) = Policy(run);
         var input = Input(run, canonical, intent);
         var decision = Decide(rules, input);
         Audit(run, input, decision, space, lifecycleOwner);
         Reject(decision, space);
-        var revision = Revision(rules);
+        // Proposal reads still obey denials; the one settings gate owns the diff notification.
+        if (settingsReview && run is not null
+            && Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
+            return;
         var authorization = AuthorizationRevision(rules, space);
-        var approved = run?.SafetyApprovalRevision == authorization || run?.HasFileApproval(authorization, canonical, intent) == true;
-        _ = await ApproveAsync(run, input, decision, space, revision, signal, alreadyApproved: deferred || approved,
+        var approved = run?.SafetyApprovalRevision == authorization
+            || run?.HasFileApproval(authorization, canonical, intent) == true;
+        await ApproveAsync(run, input, decision, space, Revision(rules), signal, alreadyApproved: approved,
             lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
-        if (!deferred && !approved && run is not null && decision.Decision == "notify")
+        if (!approved && run is not null && decision.Decision == "notify")
             run.RememberFileApproval(authorization, canonical, intent);
-        // No locks or synchronous UI waits in the pinned-file callback.
-        // A changed policy needing another decision fails before open/publication instead of using stale approval.
-        return target =>
-        {
-            signal.ThrowIfCancellationRequested();
-            var (current, currentSpace) = Policy(run);
-            var actual = Input(run, target.Path, intent, target.Identity, target.CompareComponent);
-            PermissionDecision latest;
-            try { latest = Decide(current, actual); }
-            catch (NotSupportedException)
-            {
-                Audit(run, actual, new("notify", current.AutoApprove, null), currentSpace, lifecycleOwner, "capability-rejected");
-                throw;
-            }
-            if (latest.Decision == "deny")
-            {
-                Audit(run, actual, latest, currentSpace, lifecycleOwner);
-                Reject(latest, currentSpace);
-            }
-            DemandResolvableAliases(current, actual, target, run, currentSpace, lifecycleOwner);
-            _ = DemandSessionPolicy(run, actual, latest, currentSpace);
-            var requestedDirectory = target.IsDirectory && (target.Path == canonical
-                || Directory.Exists(canonical) && PinnedFileAccess.SameDirectoryPath(target.Path, canonical));
-            if (target.IsDirectory && !requestedDirectory)
-            {
-                if (!IsPinnedAncestor(target.Path, canonical))
-                    throw new IOException("An authorized directory moved before access.");
-                return;
-            }
-            if (!target.IsDirectory && (!SameLeaf(target, canonical)
-                || !PinnedFileAccess.SameDirectoryPath(Path.GetDirectoryName(target.Path)!, Path.GetDirectoryName(canonical)!)))
-                throw new IOException("The authorized target changed before access.");
-            if (Revision(current) != revision && latest.Decision != "allow")
-            {
-                Audit(run, actual, latest, currentSpace, lifecycleOwner, "policy-changed");
-                throw new UnauthorizedAccessException("The permission rules changed during file authorization; a new decision is required.");
-            }
-            Audit(run, actual, latest, currentSpace, lifecycleOwner, "authorized");
-        };
     }
 
-    private void DemandResolvableAliases(PermissionRules rules, PermissionInput input, PinnedFileTarget target,
-        ToolRunContext? run, string space, string? lifecycleOwner)
+    public void DemandFileAuthorization(ToolRunContext run, string path, string intent)
     {
-        if (target.Identity is not { IsRegular: true, Links: > 1 }) return;
-        foreach (var (id, matcher) in rules.Blacklist)
-        {
-            if (matcher.Path is not { } pattern || pattern.IndexOfAny(['*', '?']) < 0
-                || matcher.Intent != "any" && matcher.Intent != input.Intent) continue;
-            if (PermissionEngine.MatchFields(matcher, input, static path => PinnedFileAccess.Canonicalize(path), omitFileDimensions: true) is null)
-                continue;
-            Audit(run, input, new("notify", rules.AutoApprove, null), space, lifecycleOwner, "capability-rejected");
-            throw new NotSupportedException($"Cannot establish whether another hard-link name matches blacklist rule '{id}'. The pinned backend reports link counts, not all alias paths; no file data was accessed.");
-        }
-    }
-
-    private static bool IsPinnedAncestor(string ancestor, string target)
-    {
-        for (var parent = Path.GetDirectoryName(target); parent is not null; parent = Path.GetDirectoryName(parent))
-            if (PinnedFileAccess.SameDirectoryPath(ancestor, parent)) return true;
-        return false;
-    }
-
-    private static bool SameLeaf(PinnedFileTarget target, string expected)
-    {
-        var actual = Path.GetFileName(target.Path);
-        var name = Path.GetFileName(expected);
-        if (actual == name) return true;
-        var index = 0;
-        for (var offset = Path.GetPathRoot(target.Path)!.Length; offset < target.Path.Length; offset++)
-            if (target.Path[offset] == Path.DirectorySeparatorChar) index++;
-        return target.CompareComponent?.Invoke(index, name, actual).LiteralMatch == true;
+        run.Signal.ThrowIfCancellationRequested();
+        var (rules, space) = Policy(run);
+        var input = Input(run, path, intent);
+        var decision = Decide(rules, input);
+        Audit(run, input, decision, space);
+        Reject(decision, space);
+        _ = DemandSessionPolicy(run, input, decision, space);
+        var revision = AuthorizationRevision(rules, space);
+        if (decision.Decision != "allow" && run.SafetyApprovalRevision != revision
+            && !run.HasFileApproval(revision, input.Path!, intent))
+            throw new UnauthorizedAccessException("The file policy changed before publication; a new authorization is required.");
     }
 
     private IApprovalService? DemandSessionPolicy(ToolRunContext? run, PermissionInput input,
@@ -272,6 +196,10 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
 
     private void Audit(ToolRunContext? run, PermissionInput input, PermissionDecision decision, string space,
         string? owner = null, string? outcome = null)
+        => RecordDecision(Ctx, run, input, decision, space, owner, outcome);
+
+    public static void RecordDecision(Context context, ToolRunContext? run, PermissionInput input,
+        PermissionDecision decision, string space, string? owner = null, string? outcome = null)
     {
         var fields = decision.Match?.Fields ?? [];
         if (fields.Count == 0) Record(null);
@@ -285,8 +213,8 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
             if (run?.Agent is { } agent) agent.Session.Append(payload);
             else
             {
-                Ctx.LoggerFor("safety").Info("%s", DshJson.Serialize(payload));
-                Ctx.Emit(new SafetyDecisionNotification(payload));
+                context.LoggerFor("safety").Info("%s", DshJson.Serialize(payload));
+                context.Emit(new SafetyDecisionNotification(payload));
             }
         }
     }

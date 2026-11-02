@@ -155,7 +155,7 @@ public sealed class SkillRegistry : Service, ISkillCatalog
     public async Task<SkillCatalogSnapshot> Snapshot(SkillViewOptions? options = null)
     {
         options ??= new SkillViewOptions();
-        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, options.Signal);
+        using var fused = FusedSignal.Fuse(options.Run?.Signal ?? default, options.Signal);
         if (options.Signal != fused.Token) options = options with { Signal = fused.Token };
         var collected = await Collect(options);
         var skills = collected.Entries.Values
@@ -170,20 +170,15 @@ public sealed class SkillRegistry : Service, ISkillCatalog
         if (!IsSkillName(name))
             return null;
         options ??= new SkillViewOptions();
-        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, options.Signal);
+        using var fused = FusedSignal.Fuse(options.Run?.Signal ?? default, options.Signal);
         if (options.Signal != fused.Token) options = options with { Signal = fused.Token };
         var collected = await Collect(options);
         options.Signal.ThrowIfCancellationRequested();
         if (!collected.Entries.TryGetValue(name, out var match))
             return null;
-        if (SettingsMutationScope.Current is { Safety: { } safety } scope
-            && match.Provider is not FileSystemSkillProvider)
-        {
-            if (match.Provider is RuntimeSkillProvider)
-                await safety.AuthorizeOperationAsync(scope.Context, options.Signal).ConfigureAwait(false);
-            else
-                await scope.AuthorizeOpaqueOperationAsync("Model skill reads through a custom provider", options.Signal).ConfigureAwait(false);
-        }
+        if (options.Run is { } run && match.Provider is not FileSystemSkillProvider
+            && Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+            await safety.AuthorizeOperationAsync(run, options.Signal).ConfigureAwait(false);
         var definition = await WaitWithAbort(match.Provider.Get(match.Candidate, options), options.Signal);
         if (definition is null)
             return null;
@@ -200,7 +195,7 @@ public sealed class SkillRegistry : Service, ISkillCatalog
     private async Task<CollectResult> Collect(SkillViewOptions options)
     {
         options.Signal.ThrowIfCancellationRequested();
-        var useCache = SettingsMutationScope.Current is null;
+        var useCache = options.Run is null;
         var attempt = 1;
         while (true)
         {
@@ -284,15 +279,16 @@ public sealed class SkillRegistry : Service, ISkillCatalog
         {
             var localOrder = 0;
             SkillProviderObservation observation;
-            if (SettingsMutationScope.Current is { Safety: not null } scope && slot.Provider is not FileSystemSkillProvider)
-                await scope.AuthorizeOpaqueOperationAsync("Model skill discovery through a custom provider", options.Signal).ConfigureAwait(false);
+            if (options.Run is { } run && slot.Provider is not FileSystemSkillProvider
+                && Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+                await safety.AuthorizeOperationAsync(run, options.Signal).ConfigureAwait(false);
             try
             {
                 observation = await WaitWithAbort(slot.Provider.List(options), options.Signal);
             }
             catch (Exception error)
             {
-                if (options.Signal.IsCancellationRequested || SettingsMutationScope.Current is not null
+                if (options.Signal.IsCancellationRequested || options.Run is not null
                     && error is UnauthorizedAccessException or OperationCanceledException or NotSupportedException)
                     throw;
                 cacheable = false;

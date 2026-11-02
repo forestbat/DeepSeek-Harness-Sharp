@@ -34,8 +34,7 @@ public static class PresentTool
         + "Present only the most important files and mention them briefly in your reply instead of pasting their contents. "
         + "Deliverables belong to the calling session: a subagent's presented files are not shown to the user, so the top-level session presents them.";
 
-    private sealed record Staged(Session Session, int Turn, IReadOnlyList<PresentedFile> Files,
-        IReadOnlyList<Action<PinnedFileTarget>> Authorizations);
+    private sealed record Staged(Session Session, int Turn, IReadOnlyList<PresentedFile> Files, ToolRunContext Run);
 
     public static IDisposable Register(Context ctx)
     {
@@ -76,17 +75,14 @@ public static class PresentTool
             throw new ArgumentException($"present accepts 1 to {MaxFiles} files");
         var cwd = session.WorkingDirectory ?? session.Header.Cwd ?? Environment.CurrentDirectory;
         var files = new List<PresentedFile>(requested.Count);
-        var authorizations = new Action<PinnedFileTarget>[requested.Count];
         foreach (var item in requested)
         {
             var file = Resolve(item, cwd);
-            var authorize = await SafetyFileAccess.AuthorizeAsync(file.Path, "read", exec, exec.Signal).ConfigureAwait(false);
-            await using var access = PinnedFileAccess.Open(file.Path, PinnedFileMode.Read, authorize);
-            authorizations[files.Count] = authorize;
+            await using var access = await SafetyFileAccess.OpenReadAsync(file.Path, exec).ConfigureAwait(false);
             files.Add(file);
         }
         exec.Signal.ThrowIfCancellationRequested();
-        staged.AddOrUpdate(exec, new Staged(session, boundary.LastTurn, files, authorizations));
+        staged.AddOrUpdate(exec, new Staged(session, boundary.LastTurn, files, exec));
         return new PresentResult(boundary.LastTurn, files);
     }
 
@@ -130,8 +126,10 @@ public static class PresentTool
         execution.Signal.ThrowIfCancellationRequested();
         for (var index = 0; index < delivery.Files.Count; index++)
         {
-            using var access = PinnedFileAccess.Open(delivery.Files[index].Path, PinnedFileMode.Read,
-                delivery.Authorizations[index]);
+            var path = delivery.Files[index].Path;
+            delivery.Run.Agent?.Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+                ?.DemandFileAuthorization(delivery.Run, path, "read");
+            Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
         }
         execution.Signal.ThrowIfCancellationRequested();
         delivery.Session.Append(new DeliverablesPresentedPayload(delivery.Turn, execution.CallId, delivery.Files));

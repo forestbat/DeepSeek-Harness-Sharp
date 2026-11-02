@@ -76,22 +76,22 @@ public sealed class ProjectMemory
 
     private string AuditPath => Path.Combine(_sidecarDir, "decisions.jsonl");
 
-    public Task<MemoryOpResult> RememberAsync(string key, string text, string? section, string source, CancellationToken cancellationToken = default)
-        => UpsertAsync("remember", key, text, string.IsNullOrWhiteSpace(section) ? FactsSection : section.Trim(), source, cancellationToken);
+    public Task<MemoryOpResult> RememberAsync(string key, string text, string? section, string source, CancellationToken cancellationToken = default, ToolRunContext? run = null)
+        => UpsertAsync("remember", key, text, string.IsNullOrWhiteSpace(section) ? FactsSection : section.Trim(), source, cancellationToken, run);
 
-    public Task<MemoryOpResult> CorrectAsync(string key, string text, string source, CancellationToken cancellationToken = default)
-        => UpsertAsync("correct", key, text, CorrectionsSection, source, cancellationToken);
+    public Task<MemoryOpResult> CorrectAsync(string key, string text, string source, CancellationToken cancellationToken = default, ToolRunContext? run = null)
+        => UpsertAsync("correct", key, text, CorrectionsSection, source, cancellationToken, run);
 
-    public async Task<MemoryOpResult> ForgetAsync(string key, string source, CancellationToken cancellationToken = default)
+    public async Task<MemoryOpResult> ForgetAsync(string key, string source, CancellationToken cancellationToken = default, ToolRunContext? run = null)
     {
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException("memory forget requires a non-empty key");
-        var result = await ForgetAsync(new MemoryForgetRequest([key.Trim()], null, null, false), source, cancellationToken);
+        var result = await ForgetAsync(new MemoryForgetRequest([key.Trim()], null, null, false), source, cancellationToken, run);
         return new MemoryOpResult("forget", key.Trim(), result.Sections.Count > 0 ? result.Sections[0] : "", true);
     }
 
     /** 批量/条件删除:按 keys 精确匹配 key,或按 query 在正文中做大小写不敏感子串匹配;`section` 为可选节过滤;`dryRun` 只返回命中不落盘。 */
-    public async Task<MemoryForgetResult> ForgetAsync(MemoryForgetRequest request, string source, CancellationToken cancellationToken = default)
+    public async Task<MemoryForgetResult> ForgetAsync(MemoryForgetRequest request, string source, CancellationToken cancellationToken = default, ToolRunContext? run = null)
     {
         var keys = NormalizeKeys(request.Keys);
         var query = string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim();
@@ -103,15 +103,15 @@ public sealed class ProjectMemory
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var doc = await LoadAsync(cancellationToken);
+            var doc = await LoadAsync(cancellationToken, run);
             var removed = doc.RemoveWhere(section, record => Matches(record, keys, query));
             if (removed.Count == 0 && !request.DryRun)
                 throw new InvalidOperationException(DescribeMiss(keys, query, section));
             if (!request.DryRun && removed.Count > 0)
             {
-                await SaveAsync(doc, cancellationToken);
+                await SaveAsync(doc, cancellationToken, run);
                 foreach (var (removedSection, record) in removed)
-                    await AuditAsync(new MemoryAuditEntry(Now(), "forget", record.Key, removedSection, null, source), cancellationToken);
+                    await AuditAsync(new MemoryAuditEntry(Now(), "forget", record.Key, removedSection, null, source), cancellationToken, run);
             }
             return new MemoryForgetResult(
                 "forget",
@@ -256,7 +256,7 @@ public sealed class ProjectMemory
             .ToList();
     }
 
-    private async Task<MemoryOpResult> UpsertAsync(string action, string key, string text, string section, string source, CancellationToken cancellationToken)
+    private async Task<MemoryOpResult> UpsertAsync(string action, string key, string text, string section, string source, CancellationToken cancellationToken, ToolRunContext? run)
     {
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException($"memory {action} requires a non-empty key");
@@ -269,10 +269,10 @@ public sealed class ProjectMemory
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var doc = await LoadAsync(cancellationToken);
+            var doc = await LoadAsync(cancellationToken, run);
             var replaced = doc.Upsert(section, record);
-            await SaveAsync(doc, cancellationToken);
-            await AuditAsync(new MemoryAuditEntry(Now(), action, record.Key, section, record.Text, source), cancellationToken);
+            await SaveAsync(doc, cancellationToken, run);
+            await AuditAsync(new MemoryAuditEntry(Now(), action, record.Key, section, record.Text, source), cancellationToken, run);
             return new MemoryOpResult(action, record.Key, section, replaced);
         }
         finally
@@ -281,41 +281,34 @@ public sealed class ProjectMemory
         }
     }
 
-    private async Task<string?> ReadStoreAsync(CancellationToken cancellationToken)
+    private async Task<string?> ReadStoreAsync(CancellationToken cancellationToken, ToolRunContext? run = null)
     {
-        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, cancellationToken);
-        await AuthorizeStoreAsync(fused.Token).ConfigureAwait(false);
+        using var fused = FusedSignal.Fuse(run?.Signal ?? default, cancellationToken);
         fused.Token.ThrowIfCancellationRequested();
-        return await _store.GetAsync(fused.Token).ConfigureAwait(false);
+        return await _store.GetAsync(fused.Token, run).ConfigureAwait(false);
     }
 
-    private Task AuthorizeStoreAsync(CancellationToken signal)
-        => SettingsMutationScope.Current is { } scope && !scope.MediatesMemoryStore(_store)
-            ? scope.AuthorizeOpaqueOperationAsync("Model memory access through a non-mediated backend", signal)
-            : Task.CompletedTask;
+    private async Task<MemoryDocument> LoadAsync(CancellationToken cancellationToken, ToolRunContext? run = null)
+        => MemoryDocument.Parse(await ReadStoreAsync(cancellationToken, run).ConfigureAwait(false));
 
-    private async Task<MemoryDocument> LoadAsync(CancellationToken cancellationToken)
-        => MemoryDocument.Parse(await ReadStoreAsync(cancellationToken).ConfigureAwait(false));
-
-    private async Task SaveAsync(MemoryDocument doc, CancellationToken cancellationToken)
+    private async Task SaveAsync(MemoryDocument doc, CancellationToken cancellationToken, ToolRunContext? run = null)
     {
-        using var fused = FusedSignal.Fuse(SettingsMutationScope.Current?.Context.Signal ?? default, cancellationToken);
-        await AuthorizeStoreAsync(fused.Token).ConfigureAwait(false);
+        using var fused = FusedSignal.Fuse(run?.Signal ?? default, cancellationToken);
         fused.Token.ThrowIfCancellationRequested();
-        await _store.SetAsync(doc.Render(), fused.Token).ConfigureAwait(false);
+        await _store.SetAsync(doc.Render(), fused.Token, run).ConfigureAwait(false);
     }
 
-    private async Task AuditAsync(MemoryAuditEntry entry, CancellationToken cancellationToken)
+    private async Task AuditAsync(MemoryAuditEntry entry, CancellationToken cancellationToken, ToolRunContext? run = null)
     {
         var line = JsonSerializer.Serialize(entry, DshCoreJsonContext.Default.MemoryAuditEntry) + "\n";
-        if (SettingsMutationScope.Current is { } scope)
+        if (run is not null)
         {
-            var before = scope.Gate?.Owns(AuditPath) == true
-                ? await SettingsMutationScope.ReadTextAsync(AuditPath, scope.Context, settingsReview: true,
-                    signal: cancellationToken).ConfigureAwait(false)
+            var gate = run.Agent?.Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
+            var before = gate?.Owns(AuditPath) == true
+                ? await SafetyFileAccess.ReadTextAsync(AuditPath, run, cancellationToken, settingsReview: true).ConfigureAwait(false)
                 : "";
-            await SettingsMutationScope.WriteTextAsync(AuditPath, before, before + line, scope.Context,
-                Dsh.Transport.PinnedFileMode.Append, cancellationToken).ConfigureAwait(false);
+            await SettingsMutation.WriteTextAsync(AuditPath, before, before + line, run,
+                FileMode.Append, cancellationToken).ConfigureAwait(false);
             return;
         }
         Directory.CreateDirectory(_sidecarDir);

@@ -17,7 +17,6 @@ public sealed class EditorExecutor : IEditorExecutor
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (command.Target == EditorExecutionTarget.Print) return await new PrintTerminalHost().LaunchAsync(command, cancellationToken);
-        EditorProcess.DemandModelExecution();
         if (command.Target == EditorExecutionTarget.Client)
             return clientExecutor is null ? new(false, EditorErrorCode.CLIENT_UNAVAILABLE, "No client editor execution channel is connected.") : await clientExecutor.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
         if (command.Kind == EditorKind.Terminal || command.Kind == EditorKind.Hybrid && !HasDisplay())
@@ -41,21 +40,6 @@ public sealed class EditorExecutor : IEditorExecutor
 
 public static class EditorProcess
 {
-    internal static void DemandModelExecution()
-    {
-        if (SettingsMutationScope.Current is not { } scope) return;
-        scope.Context.Signal.ThrowIfCancellationRequested();
-        if (scope.ExternalProcessPolicy is not { } policy)
-        {
-            if (scope.Safety is not null)
-                throw new NotSupportedException("Model editor execution requires the host opaque-operation boundary; no editor was launched.");
-            return;
-        }
-        policy.DemandUnconfined("Model editor process launch");
-        if (policy.Enabled)
-            throw new NotSupportedException("Model-triggered editor launches and executable probes require an OS-confined backend while sandbox.enabled is ON. Manual editor actions remain available.");
-    }
-
     public static async ValueTask<EditorExecutionResult> StartAsync(EditorLaunchCommand command, CancellationToken cancellationToken = default, ProcessStartInfo? preparedStartInfo = null)
     {
         // Starting a GUI can block in platform loaders; do not run it on the surface dispatcher.
@@ -67,7 +51,6 @@ public static class EditorProcess
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DemandModelExecution();
                 started = process.Start();
                 if (!started) return new EditorExecutionResult(false, EditorErrorCode.LAUNCH_FAILED, "The editor process did not start.");
                 var id = process.Id;

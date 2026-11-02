@@ -67,11 +67,20 @@ public sealed class NativePluginBridgeTests
         {
             ["timeoutMs"] = 2500L,
             ["enabled"] = true,
-            ["label"] = "hi \"there\"",
+            ["label"] = "synthetic 中文 \"label\"\0\n\t",
             ["tags"] = new List<object?> { "a", 2L },
+            ["nested"] = new Dictionary<string, object?> { ["fraction"] = 1.25, ["absent"] = null },
         }, TestContext.Current.CancellationToken))!;
 
-        Assert.Equal("""{"timeoutMs":2500,"enabled":true,"label":"hi \"there\"","tags":["a",2]}""", plugin.ConfigJson);
+        using var document = JsonDocument.Parse(plugin.ConfigJson);
+        var config = document.RootElement;
+        Assert.Equal(2500, config.GetProperty("timeoutMs").GetInt64());
+        Assert.True(config.GetProperty("enabled").GetBoolean());
+        Assert.Equal("synthetic 中文 \"label\"\0\n\t", config.GetProperty("label").GetString());
+        Assert.Equal("a", config.GetProperty("tags")[0].GetString());
+        Assert.Equal(2, config.GetProperty("tags")[1].GetInt64());
+        Assert.Equal(1.25, config.GetProperty("nested").GetProperty("fraction").GetDouble());
+        Assert.Equal(JsonValueKind.Null, config.GetProperty("nested").GetProperty("absent").ValueKind);
     }
 
     /** 没有配置段时交空串(插件按默认值走), 而不是 "null" 或 "{}"。 */
