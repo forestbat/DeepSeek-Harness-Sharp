@@ -73,6 +73,48 @@ public sealed class PtcRuntimeTests
     }
 
     [Fact]
+    public void SdkRender_UnionType_IsProjectedWithoutThrowing()
+    {
+        var schema = new ToolSchema("union", "Union tool", new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["value"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
+            },
+            ["required"] = new JsonArray("value"),
+        });
+
+        var rendered = PtcSdkRenderer.Render([schema], debugBatching: false);
+
+        Assert.Contains("value: string | null", rendered);
+    }
+
+    [Fact]
+    public void SdkRender_MalformedSchemaFields_AreIgnored()
+    {
+        var schema = new ToolSchema("malformed", "Malformed tool", new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["value"] = new JsonObject
+                {
+                    ["type"] = new JsonObject { ["kind"] = "string" },
+                    ["description"] = new JsonArray("ignored"),
+                },
+            },
+            ["required"] = new JsonArray("value", new JsonObject(), JsonValue.Create(3)),
+        });
+
+        var rendered = PtcSdkRenderer.Render([schema], debugBatching: false);
+
+        Assert.Contains("value: JsonNode", rendered);
+        Assert.Contains("public static Task<JsonNode?> malformed(", rendered);
+        Assert.DoesNotContain("ignored", rendered);
+    }
+
+    [Fact]
     public void SdkRender_NonIdentifierTool_DeclaredAsCallForm()
     {
         var odd = new ToolSchema("my-tool", "Odd tool", ObjectSchema(("x", "string", true)));
