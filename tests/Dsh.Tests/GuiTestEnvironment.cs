@@ -237,9 +237,22 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
         foreach (var path in new[] { app.Home.SessionsPath })
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
-        File.WriteAllText(app.Home.SettingsFile, shared.Settings!);
+        await RestoreSettingsAsync(app.Home, shared.Settings!);
         Restore(Path.Combine(app.Home.Root, ".agent-presets"), shared.Presets);
-        await Task.CompletedTask;
+    }
+
+    /** Publish the baseline transactionally while live readers retain their prior snapshot. */
+    private static async Task RestoreSettingsAsync(HarnessHome home, string snapshot)
+    {
+        var before = "";
+        if (File.Exists(home.SettingsFile))
+        {
+            using var stream = new FileStream(home.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            before = await reader.ReadToEndAsync();
+        }
+        await HarnessSettings.CommitApprovedMutationAsync(home.SettingsFile, before, snapshot,
+            (temporary, signal) => File.WriteAllTextAsync(temporary, snapshot, signal), CancellationToken.None);
     }
 
     private static IReadOnlyList<(string Path, byte[] Content)> Snapshot(string directory)
