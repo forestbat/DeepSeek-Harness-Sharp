@@ -344,3 +344,23 @@ jobs:
           # Verify that the alternate driver rebuilt both the guard and the probe.
           grep -E '${{ inputs.native-cc-alt }} /nologo' native-alt.log
           tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe -noColor -class Dsh.Tests.NativeGuardTests -failSkips
+
+      - name: Verify the SDK still runs after macOS test consumers
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          process = subprocess.Popen(
+              ["dotnet", "nuget", "locals", "all", "--list", "--force-english-output"],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          print(f"SDK_POST_TEST_PID={process.pid}", flush=True)
+          output, error = process.communicate()
+          code = process.returncode
+          print(f"SDK_POST_TEST_RETURN_CODE={code}; stdoutBytes={len(output)}; stderrBytes={len(error)}", flush=True)
+          sys.exit(code if code >= 0 else 128 - code)
+          PY
