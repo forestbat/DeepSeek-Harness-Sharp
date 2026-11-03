@@ -344,13 +344,13 @@ jobs:
           done
           exit "$NATIVE_CODE"
 
-      - name: Compare temporary native directory query classes
+      - name: Compare temporary bounded native directory concurrency
         if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && (inputs.suite == 'regression-2' || inputs.suite == 'regression-3') }}
         shell: bash
         run: |
           set -euo pipefail
-          ORDER=full-first
-          if [ "${{ inputs.suite }}" = "regression-3" ]; then ORDER=directory-first; fi
+          ORDER=parallel-first
+          if [ "${{ inputs.suite }}" = "regression-3" ]; then ORDER=sequential-first; fi
           python3 -c 'import subprocess,sys; subprocess.run([sys.executable,"tests/ci/diagnose_windows_directory_queries.py","--order",sys.argv[1]], timeout=120, check=True)' "$ORDER"
 
       - name: Check schedule time zones with invariant globalization
