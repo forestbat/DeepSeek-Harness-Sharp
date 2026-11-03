@@ -36,7 +36,7 @@ public static class SandboxedProcess
             throw new PlatformNotSupportedException("macOS sandbox child processes cannot currently be owned without escape races: XNU does not mediate setsid/setpgid with Seatbelt. Run a single executable or use a separately provisioned kernel-owned execution domain; no process-group approximation is used.");
         var policy = SandboxPolicy.Create(options);
         ISandboxLifetime lifetime = OperatingSystem.IsLinux() ? LinuxSandbox.Start(policy)
-            : OperatingSystem.IsWindows() ? WindowsSandbox.Start(policy)
+            : OperatingSystem.IsWindows() ? WindowsSandbox.Start(policy, cancellationToken)
             : OperatingSystem.IsMacOS() ? MacSandbox.Start(policy)
             : throw new PlatformNotSupportedException("No sandbox backend exists for this operating system.");
         var process = new SandboxProcess(lifetime, cancellationToken);
