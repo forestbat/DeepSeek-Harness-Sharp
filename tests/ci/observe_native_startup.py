@@ -8,6 +8,8 @@ import subprocess
 import sys
 import threading
 
+from observe_windows_file_io import NativeFileIoCapture
+
 
 class NativeStartupObserver:
     def __init__(self, options):
@@ -136,6 +138,16 @@ class NativeStartupObserver:
             self.observe(line)
 
     def run(self, command):
+        capture = NativeFileIoCapture(self.emit) if self.options.file_io else None
+        if capture is not None:
+            capture.start()
+        try:
+            return self.run_consumer(command)
+        finally:
+            if capture is not None:
+                capture.finish(self.process.pid if self.process is not None else 0)
+
+    def run_consumer(self, command):
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         pumps = [
             threading.Thread(target=self.copy_output, args=(self.process.stdout, sys.stdout), daemon=True),
@@ -168,6 +180,7 @@ def main():
     parser.add_argument("--stack-tool", required=True)
     parser.add_argument("--marker", default="owned-mcp-r10 launch=1 stage=30")
     parser.add_argument("--sample-after", type=float, default=15)
+    parser.add_argument("--file-io", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     options = parser.parse_args()
     command = options.command[1:] if options.command[:1] == ["--"] else options.command

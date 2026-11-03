@@ -331,10 +331,12 @@ jobs:
             '5|owned-plugin-r12 call=[0-9]+ stage=4|Dsh.Tests.PluginSandboxIntegrationTests.AddIndependentArtifact_ApprovesBeforeInstall_AndNeverConstructsFileCodeInMain' \
             '2|owned-pane-r12 stage=0|Dsh.Tests.ChatWindowPaneTests.Overview_Enter_Host_Shell_Pty_Opens_Terminal_Pane'; do
             IFS='|' read -r SAMPLE MARKER METHOD <<< "$SPEC"
+            IO_CAPTURE=()
+            if [ "$MARKER" = 'owned-mcp-r10 launch=1 stage=30' ]; then IO_CAPTURE+=(--file-io); fi
             set +e
             python3 tests/ci/observe_native_startup.py \
               --stack-tool .artifacts/native-startup-stack/dotnet-stack.exe \
-              --sample-after "$SAMPLE" --marker "$MARKER" -- \
+              --sample-after "$SAMPLE" --marker "$MARKER" "${IO_CAPTURE[@]}" -- \
               "$EXE" -noColor -parallelMode none -reporter verbose -method "$METHOD" \
               -trait- Category=GpuStress -trait- Category=OnlyGpu \
               -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
