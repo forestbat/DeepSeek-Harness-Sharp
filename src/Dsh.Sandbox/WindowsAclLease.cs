@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Enumeration;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -28,6 +29,8 @@ internal sealed class WindowsAclLease : IDisposable
     private static readonly Dictionary<string, TemporaryInheritance> ProtectedInheritance = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<Entry> _entries = [];
     private readonly SecurityIdentifier _sid;
+    private readonly AclMeasurements _measurements = new();
+    private CancellationTokenRegistration _cancellationRegistration;
     private bool _disposed;
 
     private WindowsAclLease(SecurityIdentifier sid) => _sid = sid;
@@ -35,31 +38,34 @@ internal sealed class WindowsAclLease : IDisposable
     public static WindowsAclLease Create(nint sid, SandboxPolicy policy, CancellationToken cancellationToken)
     {
         var lease = new WindowsAclLease(new SecurityIdentifier(sid));
+        lease._cancellationRegistration = cancellationToken.UnsafeRegister(static state => _ = ((AclMeasurements)state!).ReportAsync(0), lease._measurements);
         try
         {
-            var paths = new Dictionary<string, (bool Write, bool Directory)>(StringComparer.OrdinalIgnoreCase);
+            var paths = new Dictionary<string, (bool Write, bool Directory, int Class)>(StringComparer.OrdinalIgnoreCase);
             var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
             foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
                 if (!SandboxPolicy.Contains(windows, grant.Source))
-                    AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken);
+                    lease.AddTree(paths, grant.Source, grant.IsDirectory, true, 1, cancellationToken);
             foreach (var grant in policy.Readable.OrderBy(static grant => grant.Source.Length))
                 if (!SandboxPolicy.Contains(windows, grant.Source))
-                    AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken);
+                    lease.AddTree(paths, grant.Source, grant.IsDirectory, false, 0, cancellationToken);
             foreach (var denied in policy.Denied)
             {
                 if (File.Exists(denied) || Directory.Exists(denied))
-                    AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken);
+                    lease.AddTree(paths, denied, Directory.Exists(denied), false, 2, cancellationToken);
                 else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                     throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
             }
             var checkedAncestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var path in paths.Keys)
+            foreach (var (path, access) in paths)
                 for (var parent = Path.GetDirectoryName(path); parent is not null; parent = Path.GetDirectoryName(parent))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (paths.ContainsKey(parent) || !checkedAncestors.Add(parent))
                         break;
+                    lease._measurements.Set(1, access.Class);
                     Entry.DemandAmbientAncestorGrant(parent, policy.AllowNetwork);
+                    lease._measurements.Set(12, access.Class);
                 }
             foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
             {
@@ -71,10 +77,11 @@ internal sealed class WindowsAclLease : IDisposable
                 var inheritedMask = mask;
                 if (denyDelete)
                     mask &= ~Delete;
-                var entry = new Entry(path);
+                var entry = new Entry(path, lease._measurements, access.Class);
                 lease._entries.Add(entry);
                 entry.Grant(lease._sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork, cancellationToken);
             }
+            lease._measurements.Set(-1, 0);
             return lease;
         }
         catch (Exception creationFailure)
@@ -88,23 +95,28 @@ internal sealed class WindowsAclLease : IDisposable
         }
     }
 
-    private static void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,
-        CancellationToken cancellationToken)
+    private void AddTree(Dictionary<string, (bool Write, bool Directory, int Class)> paths, string root, bool directory, bool write,
+        int rootClass, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _measurements.Set(0, rootClass);
         // Earlier trees already include every descendant with the same access.
         // A different access still walks the subtree to narrow all existing children.
-        if (paths.TryGetValue(root, out var existing) && existing == (write, directory))
+        if (paths.TryGetValue(root, out var existing) && existing.Write == write && existing.Directory == directory)
+        {
+            _measurements.Set(12, rootClass);
             return;
-        paths[root] = (write, directory);
+        }
+        paths[root] = (write, directory, rootClass);
         if (directory)
             foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
                 static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
                 new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                paths[path] = (write, isDirectory);
+                paths[path] = (write, isDirectory, rootClass);
             }
+        _measurements.Set(12, rootClass);
     }
 
     public void Dispose()
@@ -118,8 +130,56 @@ internal sealed class WindowsAclLease : IDisposable
             try { _entries[index].Remove(_sid); }
             catch (Exception exception) { (failures ??= []).Add(exception); }
         }
+        _measurements.Set(-1, 0);
+        _cancellationRegistration.Dispose();
+        _ = _measurements.ReportAsync(2);
         if (failures is not null)
             throw new AggregateException("Removing the AppContainer filesystem grants failed.", failures);
+    }
+
+    private sealed class AclMeasurements
+    {
+        private const int Stages = 13;
+        // Classes are readonly=0, writable=1 and denied=2; a vector index is class * Stages + stage.
+        // Stages are enumeration, ancestors, grant lock/open/read/write/label, removal lock/open/read/write/label and managed preparation.
+        private static long _nextId;
+        private readonly long _id = Interlocked.Increment(ref _nextId);
+        private readonly long[] _ticks = new long[3 * Stages];
+        private readonly long[] _counts = new long[3 * Stages];
+        private readonly long _started = Stopwatch.GetTimestamp();
+        private long _stageStarted;
+        private int _current = -1;
+
+        public void Set(int stage, int rootClass)
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (_current >= 0)
+                Interlocked.Add(ref _ticks[_current], now - _stageStarted);
+            Volatile.Write(ref _stageStarted, now);
+            var current = stage < 0 ? -1 : rootClass * Stages + stage;
+            Volatile.Write(ref _current, current);
+            if (current >= 0)
+                Interlocked.Increment(ref _counts[current]);
+        }
+
+        public async Task ReportAsync(int reason)
+        {
+            try
+            {
+                var current = Volatile.Read(ref _current);
+                var activeMilliseconds = current < 0 ? 0 : (long)Stopwatch.GetElapsedTime(Volatile.Read(ref _stageStarted)).TotalMilliseconds;
+                var milliseconds = new long[_ticks.Length];
+                var counts = new long[_counts.Length];
+                for (var index = 0; index < milliseconds.Length; index++)
+                {
+                    milliseconds[index] = (long)(Volatile.Read(ref _ticks[index]) * 1000d / Stopwatch.Frequency);
+                    counts[index] = Volatile.Read(ref _counts[index]);
+                }
+                // Numeric snapshots are best-effort; each lease emits its cancellation snapshot and final aggregate.
+                await Console.Error.WriteLineAsync($"SANDBOX_ACL_MEASURE lease={_id} reason={reason} current={current} current-ms={activeMilliseconds} lifetime-ms={(long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds} counts={string.Join(",", counts)} completed-ms={string.Join(",", milliseconds)}").ConfigureAwait(false);
+            }
+            catch (Exception) { }
+        }
     }
 
     private sealed class WritableLabel(byte[]? original)
@@ -134,7 +194,7 @@ internal sealed class WindowsAclLease : IDisposable
         public int Owners { get; set; } = 1;
     }
 
-    private sealed class Entry(string path)
+    private sealed class Entry(string path, AclMeasurements measurements, int rootClass)
     {
         private WritableLabel? _label;
         private bool _sidGranted;
@@ -154,8 +214,10 @@ internal sealed class WindowsAclLease : IDisposable
             CancellationToken cancellationToken)
         {
             // SetSecurityInfo propagates to descendants; serialize the complete read/modify/write, not just one native write, so another lease cannot overwrite or revoke this SID.
+            measurements.Set(2, rootClass);
             lock (AclGate)
             {
+                measurements.Set(12, rootClass);
                 cancellationToken.ThrowIfCancellationRequested();
                 GrantCore(sid, access, inheritedAccess, directory, restrict, network);
             }
@@ -163,8 +225,11 @@ internal sealed class WindowsAclLease : IDisposable
 
         private void GrantCore(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network)
         {
+            measurements.Set(3, rootClass);
             using var handle = Open();
+            measurements.Set(4, rootClass);
             var (acl, protectedDacl) = ReadAcl(handle);
+            measurements.Set(12, rootClass);
             if (restrict)
                 DemandNoAmbientGrant(acl, access, network);
             if (restrict && ProtectedInheritance.TryGetValue(path, out var sharedInheritance))
@@ -197,7 +262,9 @@ internal sealed class WindowsAclLease : IDisposable
                 if (directory && inheritedAccess != access)
                     acl.InsertAce(insertion, new CommonAce(inherited | AceFlags.InheritOnly, AceQualifier.AccessAllowed, inheritedAccess, sid, false, null));
                 _sidGranted = true;
+                measurements.Set(5, rootClass);
                 WriteAcl(handle, acl, protectDacl ? ProtectDacl : 0);
+                measurements.Set(12, rootClass);
             }
             if ((access & WriteData) == 0)
                 return;
@@ -207,6 +274,7 @@ internal sealed class WindowsAclLease : IDisposable
                 _label = shared;
                 return;
             }
+            measurements.Set(6, rootClass);
             var originalLabel = ReadAclBytes(handle, 0x10).Acl;
             if (!WindowsNative.ConvertStringSecurityDescriptorToSecurityDescriptor(directory ? "S:(ML;OICI;NW;;;LW)" : "S:(ML;;NW;;;LW)", 1, out var descriptor, out _))
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot construct the AppContainer writable label.");
@@ -219,6 +287,7 @@ internal sealed class WindowsAclLease : IDisposable
                 WritableLabels.Add(path, _label);
             }
             finally { WindowsNative.LocalFree(descriptor); }
+            measurements.Set(12, rootClass);
         }
 
         private static bool HasInheritedGrant(RawAcl acl, SecurityIdentifier sid, int access, bool directory)
@@ -288,12 +357,14 @@ internal sealed class WindowsAclLease : IDisposable
 
         public void Remove(SecurityIdentifier sid)
         {
+            measurements.Set(7, rootClass);
             lock (AclGate)
                 RemoveCore(sid);
         }
 
         private unsafe void RemoveCore(SecurityIdentifier sid)
         {
+            measurements.Set(12, rootClass);
             var restoreInheritance = false;
             var copies = _inheritance?.Copies;
             if (_inheritance is { } inherited)
@@ -314,20 +385,29 @@ internal sealed class WindowsAclLease : IDisposable
             }
             if ((!_sidGranted && !restoreLabel && !restoreInheritance) || !File.Exists(path) && !Directory.Exists(path))
                 return;
+            measurements.Set(8, rootClass);
             using var handle = Open();
             if (_sidGranted || restoreInheritance)
             {
+                measurements.Set(9, rootClass);
                 var acl = ReadAcl(handle).Acl;
+                measurements.Set(12, rootClass);
                 for (var index = acl.Count - 1; index >= 0; index--)
                     if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
                         acl.RemoveAce(index);
                 if (restoreInheritance)
                     RemoveInheritanceCopies(acl, copies!);
+                measurements.Set(10, rootClass);
                 WriteAcl(handle, acl, restoreInheritance ? UnprotectDacl : 0);
+                measurements.Set(12, rootClass);
             }
             if (restoreLabel)
+            {
+                measurements.Set(11, rootClass);
                 fixed (byte* label = originalLabel)
                     Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, (nint)label));
+                measurements.Set(12, rootClass);
+            }
         }
 
         private static (RawAcl Acl, bool Protected) ReadAcl(SafeFileHandle handle)
