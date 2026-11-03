@@ -422,7 +422,7 @@ public sealed class FleetProxyProbeTests
             }
             catch (TimeoutException)
             {
-                await ManagedStackDiagnostics.ReportAsync(pending);
+                await ManagedStackDiagnostics.ReportAsync(pending, "OWNED_SSH_PROBE_TIMEOUT");
                 throw;
             }
             Assert.Equal((layer, ProxyProbeOutcome.Failed, ProxyProbeStage.Ssh, 1), (result.Layer, result.Outcome, result.Stage, result.ExitCode));
