@@ -496,6 +496,7 @@ Windows 的单文件读取授权不包含父目录枚举；`cmd` 的文件名形
 直接打开文件与列出父目录是不同的[文件访问权限](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)，后端不会为命令的额外目录搜索扩大单文件授权。
 可写目录内的只读或保护路径通过收窄当前 AppContainer SID 的 allow ACE 实现，不依赖包 SID 的 deny ACE；必要时暂时停止该对象的 DACL 继承，释放时按当前 ACL 移除本次 SID，并仅清除临时保护形成且内容未变的继承 ACE 副本，再恢复原继承状态；期间其他主体新增或修改的显式 ACE 不回滚。
 同一 SID 已继承、有效且完全匹配所需传播范围的只读授权会直接复用，不重复改写运行时后代 ACL；额外的环境组授权检查及保护路径的过量权限收窄仍然执行。
+目录授权在启动前递归准备普通后代，文件与目录的分类直接复用枚举器返回的属性，并跳过 reparse-point 条目，不扩大声明的目录树。
 Windows 的 `SetSecurityInfo` 可能把旧式 DACL 转换到[自动继承模型](https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces)并设置 SDDL 的 `AI` 标记；恢复契约保留全部 ACE 的顺序、权限与标志及原继承保护状态，并保持后续实际继承与保护行为，不要求撤销该系统元数据转换。
 若既有 AppContainer 组或本次启用的 capability SID 在保护对象或相关祖先上已有额外写入、删除或改权限的 allow，后端明确拒绝启动，不修改其他 SID 来伪装通用 deny 支持。
 保护路径的可写祖先目录不授予自身删除权限，但新建的普通工作区文件仍可继承正常修改、改名与删除权限。
