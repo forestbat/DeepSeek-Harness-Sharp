@@ -222,9 +222,10 @@ internal sealed class SshProxyProcess : IAsyncDisposable
         }
         else if (line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
             _failureDetail = "SSH authentication failed.";
-        else if (line.Contains("open failed", StringComparison.OrdinalIgnoreCase))
+        else if (line.Contains("open failed", StringComparison.OrdinalIgnoreCase)
+            || line.Contains("stdio forwarding failed", StringComparison.OrdinalIgnoreCase))
             _failureDetail = "SSH could not connect to the remote proxy endpoint.";
-        else if (line.Contains("forwarding failed", StringComparison.OrdinalIgnoreCase)
+        else if (line.Contains("Could not request local forwarding", StringComparison.OrdinalIgnoreCase)
             || line.Contains("Address already in use", StringComparison.OrdinalIgnoreCase))
             _failureDetail = "SSH could not bind the local proxy forwarding port.";
     }
