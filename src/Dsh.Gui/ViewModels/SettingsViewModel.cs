@@ -576,7 +576,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             PluginInput = path;
     }
 
-    /** Market permission toggles: the same settings mutation as /plugins ban_write|enable_write. */
+    /** Market permission toggles persist the same broker settings as the /plugins permission commands. */
     private void SetPluginPermission(string package, PluginPermission permission, bool allowed)
         => _ = SetPluginPermissionAsync(package, permission, allowed);
 
@@ -589,6 +589,20 @@ public sealed partial class SettingsViewModel : ObservableObject
         catch (Exception error)
         {
             Status = $"插件权限写入失败: {error.Message}";
+        }
+    }
+
+    private async Task<bool> SetPluginExecutionAsync(string package, string? execution)
+    {
+        try
+        {
+            Status = await (await _plugins()).SetPluginExecutionAsync(package, execution);
+            return true;
+        }
+        catch (Exception error)
+        {
+            Status = $"插件执行方式写入失败: {error.Message}";
+            return false;
         }
     }
 
@@ -995,7 +1009,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             Plugins.Clear();
             foreach (var plugin in plugins.OrderBy(item => item.Package, StringComparer.Ordinal))
                 Plugins.Add(new PluginRowViewModel(plugin.Package, plugin.Description, plugin.Enabled,
-                    new PluginPermissions { Read = plugin.ReadAllowed, Write = plugin.WriteAllowed, Network = plugin.NetworkAllowed }, SetPluginPermission));
+                    new PluginPermissions { Read = plugin.ReadAllowed, Write = plugin.WriteAllowed, Network = plugin.NetworkAllowed },
+                    SetPluginPermission, plugin.Execution, SetPluginExecutionAsync));
         }
         catch (Exception error)
         {
@@ -1063,13 +1078,15 @@ public sealed record ShortcutRowViewModel(string Keys, string Description);
 /** 显卡下拉的一项: Value 写进 settings.yaml 的 gpu.adapter, Label 给人看。 */
 public sealed record GpuAdapterOption(string Value, string Label);
 
-/** One plugin row; permission toggles write back through setPermission as soon as they change. */
+/** Installed plugin settings initialize backing fields and persist user changes through the host boundary. */
 public sealed partial class PluginRowViewModel(
     string package,
     string description,
     bool enabled,
     PluginPermissions permissions,
-    Action<string, PluginPermission, bool> setPermission) : ObservableObject
+    Action<string, PluginPermission, bool> setPermission,
+    string? execution,
+    Func<string, string?, Task<bool>> setExecution) : ObservableObject
 {
     public string Package { get; } = package;
 
@@ -1082,6 +1099,41 @@ public sealed partial class PluginRowViewModel(
     public string WireAction => $"{(Enabled ? "disable" : "enable")}:{Package}";
 
     public string RemoveAction => $"remove:{Package}";
+
+    public static IReadOnlyList<PluginExecutionOption> ExecutionOptions { get; } =
+    [
+        new(null, "默认"),
+        new("sandbox", "Sandbox"),
+        new("host", "Host · 完全信任"),
+    ];
+
+    [ObservableProperty]
+    private PluginExecutionOption? _execution = ExecutionOptions.Single(option => option.Value == execution);
+
+    [ObservableProperty]
+    private bool _isChangingExecution;
+
+    partial void OnExecutionChanged(PluginExecutionOption? oldValue, PluginExecutionOption? newValue)
+    {
+        if (newValue is null || IsChangingExecution)
+            SetProperty(ref _execution, oldValue, nameof(Execution));
+        else
+            _ = SaveExecutionAsync(oldValue, newValue);
+    }
+
+    private async Task SaveExecutionAsync(PluginExecutionOption? oldValue, PluginExecutionOption newValue)
+    {
+        IsChangingExecution = true;
+        try
+        {
+            if (!await setExecution(Package, newValue.Value))
+                SetProperty(ref _execution, oldValue, nameof(Execution));
+        }
+        finally
+        {
+            IsChangingExecution = false;
+        }
+    }
 
     [ObservableProperty]
     private bool _canRead = permissions.Read;
@@ -1098,3 +1150,5 @@ public sealed partial class PluginRowViewModel(
 
     partial void OnCanNetworkChanged(bool value) => setPermission(Package, PluginPermission.Network, value);
 }
+
+public sealed record PluginExecutionOption(string? Value, string Label);

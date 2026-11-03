@@ -4,7 +4,7 @@ using Dsh.RemoteHost;
 
 namespace Dsh.Host;
 
-/** Plugin metadata and permission changes backed by the installed plugin manager. */
+/** Plugin metadata, broker permissions and execution settings backed by the installed plugin manager. */
 internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager manager) : IRemotePluginsBackend
 {
     public Task<IReadOnlyList<RemotePluginInfo>> ListPluginsAsync(CancellationToken cancellationToken)
@@ -15,7 +15,8 @@ internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager
             var setting = settings.Plugins.GetValueOrDefault(package);
             var permissions = setting?.Permissions ?? PluginPermissions.AllAllowed;
             return new RemotePluginInfo(package, manager.Describe(package), setting?.Enabled ?? true,
-                permissions.Read, permissions.Write, permissions.Network);
+                permissions.Read, permissions.Write, permissions.Network,
+                setting?.Execution switch { PluginExecution.Host => "host", PluginExecution.Sandbox => "sandbox", _ => null });
         })]);
     }
 
@@ -25,4 +26,7 @@ internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager
             throw new ArgumentException($"unknown plugin permission: {permission}", nameof(permission));
         return manager.SetPermissionAsync(package, parsed, allowed, cancellationToken);
     }
+
+    public Task<string> SetPluginExecutionAsync(string package, string? execution, CancellationToken cancellationToken)
+        => manager.SetExecutionAsync(package, execution, cancellationToken);
 }

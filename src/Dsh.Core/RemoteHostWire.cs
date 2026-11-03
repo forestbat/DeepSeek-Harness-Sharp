@@ -273,9 +273,11 @@ public sealed record RemoteNotifyMarkRead(IReadOnlyList<string>? Ids = null, boo
 public sealed record RemoteNotificationChange(RemoteNotifyPage Page, NotificationRecord? Added = null, IReadOnlyList<string>? ReadIds = null);
 
 
-public sealed record RemotePluginInfo(string Package, string Description, bool Enabled, bool ReadAllowed, bool WriteAllowed, bool NetworkAllowed);
+public sealed record RemotePluginInfo(string Package, string Description, bool Enabled, bool ReadAllowed, bool WriteAllowed, bool NetworkAllowed, string? Execution);
 
 public sealed record RemotePluginPermissionRequest(string Package, string Permission, bool Allowed);
+
+public sealed record RemotePluginExecutionRequest(string Package, string? Execution);
 
 
 public sealed record RemotePtyAttachRequest(string PtyId, string SubscriptionId);

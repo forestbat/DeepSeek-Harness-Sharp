@@ -13,7 +13,7 @@ using Dsh.Interaction;
 
 namespace Dsh.Tests;
 
-/** Plugin market page rendered headlessly: library picker button, permission toggles shared with /plugins, and the remove button. */
+/** The rendered plugin market manages installed packages, broker permissions and execution settings through the host. */
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class PluginMarketGuiTests
 {
@@ -106,6 +106,93 @@ public sealed class PluginMarketGuiTests
         }
         finally
         {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Fact]
+    public async Task Market_ExecutionSelection_PersistsOverrides_AndDefaultPreservesOtherSettings() => await HeadlessGui.RunAsync(async () =>
+    {
+        var settings = $"""
+            # preserve execution settings comment
+            logging:
+              file: false
+            plugins:
+              "{Todo}":
+                enabled: false
+                execution-test: preserved
+                permissions:
+                  write: false
+            rules: []
+            """;
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(settings);
+        var settingsPath = Path.Combine(environment.App.Home.Root, "settings.yaml");
+        var before = File.ReadAllText(settingsPath);
+        var window = await OpenMarketAsync(environment);
+        try
+        {
+            var preferences = window.ViewModel!.Preferences;
+            await preferences.RefreshPluginsCommand.ExecuteAsync(null);
+            Dispatcher.UIThread.RunJobs();
+            window.CaptureRenderedFrame()?.Dispose();
+            var selection = RowControls(window, Todo).OfType<ComboBox>().Single();
+            Assert.Null(Assert.IsType<PluginExecutionOption>(selection.SelectedItem).Value);
+            Assert.Equal(before, File.ReadAllText(settingsPath));
+
+            foreach (var execution in new[] { "host", "sandbox", (string?)null })
+            {
+                selection.SelectedIndex = execution switch { "sandbox" => 1, "host" => 2, _ => 0 };
+                await GuiTestEnvironment.WaitForAsync(preferences,
+                    () => !Row(preferences, Todo).IsChangingExecution
+                        && HarnessSettings.Load(environment.App.Home).Plugins[Todo].Execution?.ToString().ToLowerInvariant() == execution);
+                var persisted = HarnessSettings.Load(environment.App.Home).Plugins[Todo];
+                Assert.False(persisted.Enabled);
+                Assert.Equal("preserved", persisted.Parameters["execution-test"]);
+                Assert.Equal(new PluginPermissions { Write = false }, persisted.Permissions);
+                Assert.Equal(execution, Row(preferences, Todo).Execution!.Value);
+                Assert.Contains("# preserve execution settings comment", File.ReadAllText(settingsPath));
+            }
+            await preferences.RefreshPluginsCommand.ExecuteAsync(null);
+            Assert.Null(Row(preferences, Todo).Execution!.Value);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Fact]
+    public async Task Market_FailedExecutionSave_RestoresSelection_AndPreservesSettings() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var window = await OpenMarketAsync(environment);
+        var settingsPath = Path.Combine(environment.App.Home.Root, "settings.yaml");
+        var original = await File.ReadAllTextAsync(settingsPath, TestContext.Current.CancellationToken);
+        try
+        {
+            var preferences = window.ViewModel!.Preferences;
+            window.CaptureRenderedFrame()?.Dispose();
+            var selection = RowControls(window, Todo).OfType<ComboBox>().Single();
+            var invalidSettings = $"""
+                plugins:
+                  "{Todo}":
+                    enabled: invalid
+                """;
+            await File.WriteAllTextAsync(settingsPath, invalidSettings, TestContext.Current.CancellationToken);
+
+            selection.SelectedIndex = 2;
+
+            await GuiTestEnvironment.WaitForAsync(preferences,
+                () => !Row(preferences, Todo).IsChangingExecution);
+            Assert.Null(Row(preferences, Todo).Execution!.Value);
+            Assert.Null(Assert.IsType<PluginExecutionOption>(selection.SelectedItem).Value);
+            Assert.Equal(invalidSettings, await File.ReadAllTextAsync(settingsPath, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(settingsPath, original);
             window.Close();
             Dispatcher.UIThread.RunJobs();
         }
