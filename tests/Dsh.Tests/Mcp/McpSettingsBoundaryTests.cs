@@ -21,21 +21,36 @@ public sealed class McpSettingsBoundaryTests
     [Trait("Category", "SandboxNative")]
     public async Task OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings()
     {
-        using var fixture = ProtectedFixture();
-        await SandboxTestBackend.RequireAsync();
-        var tools = Tools(fixture);
-        await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
-        var output = Path.Combine(fixture.Root, "mcp-output");
-        var initialSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
-        await Connect(service);
-        var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
-        Assert.False(permitted.IsError, Text(permitted));
-        Assert.Equal("workspace 中文", Text(permitted));
-        Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
-        var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
-        var currentSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
-        Assert.Equal(initialSettings, currentSettings);
-        Assert.True(denied.IsError, $"The owned MCP server reported success for the protected settings write. Output: {Text(denied)}");
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        Task Observe(int stage) => Console.Error.WriteLineAsync(
+            $"owned-mcp-r9 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}");
+        await Observe(1);
+        using (var fixture = ProtectedFixture())
+        {
+            await SandboxTestBackend.RequireAsync();
+            var tools = Tools(fixture);
+            await using (var service = new McpService(fixture.Context, workingDirectory: fixture.Root))
+            {
+                var output = Path.Combine(fixture.Root, "mcp-output");
+                var initialSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
+                await Observe(2);
+                await Connect(service);
+                await Observe(3);
+                var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
+                Assert.False(permitted.IsError, Text(permitted));
+                Assert.Equal("workspace 中文", Text(permitted));
+                Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
+                await Observe(4);
+                var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
+                await Observe(5);
+                var currentSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
+                Assert.Equal(initialSettings, currentSettings);
+                Assert.True(denied.IsError, $"The owned MCP server reported success for the protected settings write. Output: {Text(denied)}");
+                await Observe(6);
+            }
+            await Observe(7);
+        }
+        await Observe(8);
     }
 
     [Fact(Timeout = 60000)]
