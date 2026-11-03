@@ -192,14 +192,6 @@ jobs:
           echo "::error::The standalone PTY daemon from the current build did not publish an endpoint"
           cat "$HOME_DIR/daemon.log"
           exit 1
-      - name: Check real Unix TUI raw input and exit restoration
-        if: inputs.suite == 'raw' && runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests -noColor \
-            -class Dsh.Tests.TuiRawModeEndToEndTests \
-            -trait- "Category=LlmSmoke"
 
       - name: Check real Unix TUI raw input and exit restoration (eight native rounds)
         if: inputs.suite == 'raw' && runner.os != 'Windows'
@@ -210,8 +202,8 @@ jobs:
             -class Dsh.Tests.TuiRawModeEndToEndTests \
             -trait- "Category=LlmSmoke" -failSkips
 
-      - name: Prepare temporary owned SSH timeout stack capture
-        if: runner.os == 'macOS' && inputs.suite == 'quick' && (inputs.quick-cohort == 'fleet-iroh' || inputs.quick-cohort == 'all')
+      - name: Prepare temporary owned timeout stack capture
+        if: inputs.suite == 'quick' && (runner.os == 'Windows' || (runner.os == 'macOS' && (inputs.quick-cohort == 'fleet-iroh' || inputs.quick-cohort == 'all')))
         shell: bash
         run: |
           set -euo pipefail
