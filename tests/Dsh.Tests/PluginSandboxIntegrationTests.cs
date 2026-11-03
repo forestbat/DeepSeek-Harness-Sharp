@@ -545,37 +545,12 @@ public sealed class PluginSandboxIntegrationTests
         await fixture.StartAsync(expectFixtureActive: false);
         using var answerer = fixture.AnswerSettingsDiff(allowed);
         var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        TestContext.Current.TestOutputHelper?.WriteLine("plugin-add stage=invoking");
-
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact }, TestContext.Current.CancellationToken);
         var events = fixture.Session.SnapshotEvents().Select(item => item.Data).ToArray();
         var approvals = events.OfType<ApprovalAskedPayload>()
             .Where(request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0).ToArray();
         var decisions = events.OfType<ApprovalDecidedPayload>().ToArray();
         var audits = events.OfType<SettingsMutationAuditPayload>().ToArray();
-        var failure = result as ToolExecutionResult.Failure;
-        var errorCategory = failure?.Error switch
-        {
-            null => "none",
-            { Info.Code: ToolErrorCodes.Aborted or ToolErrorCodes.AbortedBeforeDispatch } => "cancelled",
-            { Message: "Settings mutation was not approved (Rejected)." } => "settings-rejected",
-            { Message: var message } when message.StartsWith("The isolated worker could not start:", StringComparison.Ordinal) => "worker-start",
-            { Message: var message } when message.StartsWith("Plugin inspection failed for ", StringComparison.Ordinal) => "inspection",
-            _ => "other",
-        };
-        var stage = approvals.Length == 0 ? "before-approval" : audits.Length == 0 ? "approval-without-audit" : "audit-recorded";
-        TestContext.Current.TestOutputHelper?.WriteLine(
-            $"plugin-add stage={stage} error={errorCategory} approvals={approvals.Length} decisions={decisions.Length} audits={audits.Length} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
-        if (failure?.Error.Message is { } startupFailure
-            && startupFailure.StartsWith("The isolated worker startup was cancelled (", StringComparison.Ordinal))
-        {
-            TestContext.Current.TestOutputHelper?.WriteLine($"plugin-add {startupFailure}");
-            if (OperatingSystem.IsWindows() && startupFailure.Contains("stage=native-launch;", StringComparison.Ordinal)
-                && startupFailure.Contains("startup-cancelled=True; caller-cancelled=False; lifetime-cancelled=False", StringComparison.Ordinal))
-                await ManagedStackDiagnostics.ReportAsync(null, "OWNED_WINDOWS_STARTUP_TIMEOUT");
-        }
-
         Assert.Equal(!allowed, result.IsError);
         fixture.AssertNoMainExecution();
         Assert.Equal(allowed, HarnessSettings.Load(fixture.Home).Plugins[Alpha].Enabled);
