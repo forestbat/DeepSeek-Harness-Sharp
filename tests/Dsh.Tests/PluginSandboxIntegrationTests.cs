@@ -513,6 +513,9 @@ public sealed class PluginSandboxIntegrationTests
             && startupFailure.StartsWith("The isolated worker startup was cancelled (", StringComparison.Ordinal))
         {
             TestContext.Current.TestOutputHelper?.WriteLine($"plugin-add {startupFailure}");
+            if (OperatingSystem.IsWindows() && startupFailure.Contains("stage=native-launch;", StringComparison.Ordinal)
+                && startupFailure.Contains("startup-cancelled=True; caller-cancelled=False; lifetime-cancelled=False", StringComparison.Ordinal))
+                await ManagedStackDiagnostics.ReportAsync();
         }
 
         Assert.Equal(!allowed, result.IsError);
