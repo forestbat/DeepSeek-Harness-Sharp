@@ -131,6 +131,8 @@ internal sealed class WindowsAclLease : IDisposable
             if (restrict)
             {
                 DemandNoAmbientGrant(acl, access, network);
+                if ((access & WriteData) == 0 && inheritedAccess == access && HasInheritedReadOnlyGrant(acl, sid, access, directory))
+                    return;
                 for (var index = acl.Count - 1; index >= 0; index--)
                     if (acl[index] is CommonAce ace && ace.SecurityIdentifier == sid)
                     {
@@ -165,6 +167,18 @@ internal sealed class WindowsAclLease : IDisposable
                 _labelChanged = true;
             }
             finally { WindowsNative.LocalFree(descriptor); }
+        }
+
+        private static bool HasInheritedReadOnlyGrant(RawAcl acl, SecurityIdentifier sid, int access, bool directory)
+        {
+            var propagation = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
+            for (var index = 0; index < acl.Count; index++)
+                if (acl[index] is CommonAce ace && ace.AceQualifier == AceQualifier.AccessAllowed
+                    && ace.SecurityIdentifier == sid && ace.AccessMask == access
+                    && (ace.AceFlags & (AceFlags.Inherited | AceFlags.InheritOnly | AceFlags.NoPropagateInherit)) == AceFlags.Inherited
+                    && (ace.AceFlags & propagation) == propagation)
+                    return true;
+            return false;
         }
 
         public static void DemandAmbientAncestorGrant(string path, bool network)
