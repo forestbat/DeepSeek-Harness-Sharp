@@ -735,7 +735,8 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Equal(before, await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
         Assert.Equal(copies, Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray());
         Assert.True(File.Exists(staged));
-        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        Assert.Contains(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>(),
+            audit => audit.Outcome == "rejected");
         var sibling = await fixture.Identity("beta");
         Assert.Equal(identity.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
         Assert.Equal(identity.GetProperty("instance").GetGuid(), sibling.GetProperty("instance").GetGuid());
