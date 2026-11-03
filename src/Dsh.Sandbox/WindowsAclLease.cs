@@ -97,9 +97,15 @@ internal sealed class WindowsAclLease : IDisposable
             return;
         _disposed = true;
         List<Exception>? failures = null;
+        // Restore labels in reverse order, then revoke parent grants before re-enabling child inheritance.
         for (var index = _entries.Count - 1; index >= 0; index--)
         {
-            try { _entries[index].Remove(_sid); }
+            try { _entries[index].RestoreLabel(); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
+        foreach (var entry in _entries)
+        {
+            try { entry.Remove(_sid); }
             catch (Exception exception) { (failures ??= []).Add(exception); }
         }
         if (failures is not null)
@@ -191,7 +197,7 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        public unsafe void Remove(SecurityIdentifier sid)
+        public void Remove(SecurityIdentifier sid)
         {
             if (!_sidGranted || !File.Exists(path) && !Directory.Exists(path))
                 return;
@@ -201,9 +207,15 @@ internal sealed class WindowsAclLease : IDisposable
                 if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
                     acl.RemoveAce(index);
             WriteAcl(handle, acl, _restoreInheritance ? UnprotectDacl : 0);
-            if (_labelChanged)
-                fixed (byte* label = _originalLabel)
-                    Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, (nint)label));
+        }
+
+        public unsafe void RestoreLabel()
+        {
+            if (!_labelChanged || !File.Exists(path) && !Directory.Exists(path))
+                return;
+            using var handle = Open();
+            fixed (byte* label = _originalLabel)
+                Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, (nint)label));
         }
 
         private static (RawAcl Acl, bool Protected) ReadAcl(SafeFileHandle handle)

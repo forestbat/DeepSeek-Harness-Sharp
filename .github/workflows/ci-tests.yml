@@ -49,8 +49,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-          cache: true
-          cache-dependency-path: '**/*.csproj'
+
+      - name: Cache NuGet packages without a post-job dotnet invocation
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: dotnet-cache-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
 
       - name: Download the native iroh-ssh built for this run
         if: inputs.suite == 'quick'
