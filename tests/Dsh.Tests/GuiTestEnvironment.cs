@@ -11,6 +11,7 @@ using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Host;
 using Dsh.RemoteHost;
+using Dsh.Persistence;
 
 namespace Dsh.Tests;
 
@@ -233,7 +234,27 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
                 backend.Sessions.Remove(session.SessionId);
         if (app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false) is { } persistence)
             foreach (var snapshot in persistence.List())
-                persistence.Delete(snapshot.Header.Id);
+            {
+                try
+                {
+                    persistence.Delete(snapshot.Header.Id);
+                }
+                catch (IOException error) when (OperatingSystem.IsWindows())
+                {
+                    try
+                    {
+                        var directory = JsonlLayout.SessionDir(app.Home.SessionsPath, snapshot.Header.Cwd, snapshot.Header.Id);
+                        TestContext.Current.TestOutputHelper?.WriteLine(
+                            $"GUI session deletion failed: hresult={error.HResult:X8} {WindowsSessionDeleteDiagnostics.Capture(directory)}");
+                    }
+                    catch (Exception diagnosticError)
+                    {
+                        TestContext.Current.TestOutputHelper?.WriteLine(
+                            $"GUI session deletion diagnostics failed: type={diagnosticError.GetType().Name} hresult={diagnosticError.HResult:X8}");
+                    }
+                    throw;
+                }
+            }
         foreach (var path in new[] { app.Home.SessionsPath })
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
