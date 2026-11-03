@@ -22,7 +22,8 @@ public sealed class McpSettingsBoundaryTests
     public async Task OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings()
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        Task Observe(int stage) => Console.Error.WriteLineAsync(
+        using var diagnostics = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        Task Observe(int stage) => diagnostics.WriteLineAsync(
             $"owned-mcp-r9 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}");
         await Observe(1);
         using (var fixture = ProtectedFixture())
