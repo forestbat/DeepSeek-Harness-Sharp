@@ -40,7 +40,18 @@ internal sealed class ShellPane : ITuiPane
         _backing = backing;
         LayerPtyId = layerPtyId;
         _screen = new VtScreen(Math.Max(1, width), Math.Max(1, height));
-        _screen.Reply += reply => EnqueueWrite(System.Text.Encoding.UTF8.GetBytes(reply));
+        _screen.Reply += reply =>
+        {
+            if (_window.ShellStartupStage is { } observe)
+            {
+                observe(5);
+                if (reply.EndsWith('R'))
+                    observe(18);
+                else if (reply.EndsWith('c'))
+                    observe(19);
+            }
+            EnqueueWrite(System.Text.Encoding.UTF8.GetBytes(reply));
+        };
         Id = id;
         StatusText = layerPtyId is { Length: > 0 }
             ? $"[pty {layerPtyId}] 层 - {window.KeyBindings.Keys(TuiAction.Overview)} 总览 - {window.KeyBindings.Keys(TuiAction.PrevSession, TuiAction.NextSession)} 切该 pty 的会话 - {window.KeyBindings.Keys(TuiAction.Detach)} 离开 DSH"
@@ -97,9 +108,11 @@ internal sealed class ShellPane : ITuiPane
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
+        _window.ShellStartupStage?.Invoke(10);
         lock (_screenGate)
         {
             _screen.Render(grid, rect, _scrollOffset);
+            _window.ShellStartupStage?.Invoke(16);
             if (_scrollOffset <= 0 && _screen.CursorVisible && rect.Contains(_screen.CursorX, _screen.CursorY))
             {
                 var cursor = grid[_screen.CursorX, _screen.CursorY];
@@ -158,7 +171,9 @@ internal sealed class ShellPane : ITuiPane
         }
         if (_disposed || _exited || _backing is null)
             return;
+        _window.ShellStartupStage?.Invoke(8);
         _backing.Resize(height, width);
+        _window.ShellStartupStage?.Invoke(9);
     }
 
     public void Dispose()
@@ -215,10 +230,13 @@ internal sealed class ShellPane : ITuiPane
                 continue;
             try
             {
+                _window.ShellStartupStage?.Invoke(6);
                 await _backing.WriteAsync(bytes, _pump.Token);
+                _window.ShellStartupStage?.Invoke(7);
             }
             catch (Exception)
             {
+                _window.ShellStartupStage?.Invoke(14);
                 // 写入失败(会话退出)由读取泵统一标定 Exited
                 return;
             }
@@ -227,6 +245,7 @@ internal sealed class ShellPane : ITuiPane
 
     private async Task PumpAsync()
     {
+        _window.ShellStartupStage?.Invoke(1);
         // 拉不起 shell 的 pty 层(受限环境/GPU 模式): 没有输出可泵, 只保持窗格存活, 按键仍由 ChatWindow 处理。
         if (_backing is null)
         {
@@ -246,10 +265,12 @@ internal sealed class ShellPane : ITuiPane
             int read;
             try
             {
+                _window.ShellStartupStage?.Invoke(2);
                 read = await _backing.ReadAsync(_readBuffer, _pump.Token);
             }
             catch (Exception error)
             {
+                _window.ShellStartupStage?.Invoke(13);
                 if (!_pump.IsCancellationRequested)
                 {
                     StatusText = $"终端泵中止: {error.Message}";
@@ -259,6 +280,7 @@ internal sealed class ShellPane : ITuiPane
             }
             if (read <= 0)
             {
+                _window.ShellStartupStage?.Invoke(12);
                 if (!_backing.Exited)
                 {
                     await DelayAsync();
@@ -267,9 +289,11 @@ internal sealed class ShellPane : ITuiPane
                 break;
             }
             _bytesRead += read;
+            _window.ShellStartupStage?.Invoke(3);
             StatusText = $"终端读取 {_bytesRead} 字节 - {_backing.Command}";
             lock (_screenGate)
                 _screen.Feed(_readBuffer.AsSpan(0, read));
+            _window.ShellStartupStage?.Invoke(4);
             Invalidate();
         }
         _exited = true;
