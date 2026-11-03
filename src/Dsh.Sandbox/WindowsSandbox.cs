@@ -49,7 +49,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         Stream? inputStream = null, outputStream = null, errorStream = null;
         try
         {
-            acl = WindowsAclLease.Create(sid, policy, cancellationToken);
+            acl = WindowsAclLease.CreateBootstrap(sid, policy, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             job = WindowsNative.CreateJobObject(0, null);
             CheckHandle(job, "create the sandbox job");
@@ -85,6 +85,8 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             try
             {
                 Check(WindowsNative.AssignProcessToJobObject(job, process), "assign the suspended process to its non-breakaway job");
+                // Apply the complete filesystem policy using the suspended process's actual token before any application code runs.
+                acl.Apply(policy, process, cancellationToken);
                 input.Child.Dispose();
                 output.Child.Dispose();
                 error.Child.Dispose();

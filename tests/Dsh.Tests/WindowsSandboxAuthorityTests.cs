@@ -148,6 +148,61 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [Trait("Category", "SandboxNative")]
+    public async Task ExistingReadAuthority_PreservesReadonlyAccessForRuntimeCreatedDescendants(bool inheritable, bool protectedRoot)
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows AppContainer and native filesystem access checks.");
+        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
+        var readable = Directory.CreateDirectory(Path.Combine(_root, "readonly"));
+        var acl = readable.GetAccessControl(AccessControlSections.Access);
+        if (protectedRoot)
+            acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
+        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-2-2"), FileSystemRights.ReadAndExecute,
+            inheritable ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None,
+            PropagationFlags.None, AccessControlType.Allow));
+        readable.SetAccessControl(acl);
+        var input = Path.Combine(readable.FullName, "input.txt");
+        File.WriteAllText(input, "initial-read");
+        var originalAcl = ReadDacl(readable.FullName);
+        string lateFile;
+        await using (var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+        {
+            Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+            WorkingDirectory = working,
+            ReadOnlyPaths = [readable.FullName],
+            Arguments = ["/D", "/Q", "/C",
+                @"set /p gate=&type ..\readonly\input.txt&type ..\readonly\new\late.txt&(echo tampered>>..\readonly\input.txt) 2>nul&exit /b 0"],
+        }, TestContext.Current.CancellationToken))
+        {
+            var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+            var error = consumer.StandardError.CopyToAsync(Stream.Null, TestContext.Current.CancellationToken);
+            if (inheritable)
+                AssertDaclRestored(originalAcl, readable.FullName);
+            // Runtime-created descendants exercise inherited authority after the real consumer starts and before its input is released.
+            var lateDirectory = Directory.CreateDirectory(Path.Combine(readable.FullName, "new")).FullName;
+            lateFile = Path.Combine(lateDirectory, "late.txt");
+            File.WriteAllText(lateFile, "late-read");
+            await consumer.StandardInput.WriteAsync("continue\n"u8.ToArray(), TestContext.Current.CancellationToken);
+            await consumer.StandardInput.DisposeAsync();
+            Assert.Equal(0, await consumer.WaitForExitAsync(TestContext.Current.CancellationToken)
+                .WaitAsync(Deadline, TestContext.Current.CancellationToken));
+            var stdout = await output;
+            await error;
+            Assert.Contains("initial-read", stdout);
+            Assert.Contains("late-read", stdout);
+            Assert.Equal("initial-read", File.ReadAllText(input));
+        }
+        AssertDaclRestored(originalAcl, readable.FullName);
+        var hostAfter = Path.Combine(Path.GetDirectoryName(lateFile)!, "host-after.txt");
+        File.WriteAllText(hostAfter, "host-after");
+        Assert.Equal(ReadDacl(hostAfter), ReadDacl(lateFile));
+    }
+
+    [Theory]
     [InlineData("S-1-15-2-1", false)]
     [InlineData("S-1-15-2-2", false)]
     [InlineData("S-1-15-3-1", true)]
@@ -168,6 +223,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         file.SetAccessControl(acl);
         var originalDirectoryAcl = ReadDacl(working);
         var originalSettingsAcl = ReadDacl(settings);
+        var resumedMarker = Path.Combine(working, "resumed.txt");
 
         await Assert.ThrowsAsync<NotSupportedException>(async () =>
         {
@@ -178,7 +234,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
                 WritablePaths = [working],
                 DeniedWritePaths = [settings],
                 AllowNetwork = network,
-                Arguments = ["/D", "/Q", "/C", "exit", "0"],
+                Arguments = ["/D", "/Q", "/C", "echo resumed>resumed.txt"],
             }, TestContext.Current.CancellationToken);
         });
 
@@ -186,6 +242,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         AssertDaclRestored(originalDirectoryAcl, working);
         AssertDaclRestored(originalSettingsAcl, settings);
         AssertInheritanceRestored(working, settings, protectedChild: false);
+        Assert.False(File.Exists(resumedMarker));
     }
 
     [Fact]
