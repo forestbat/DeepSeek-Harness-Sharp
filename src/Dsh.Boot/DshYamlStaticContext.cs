@@ -29,6 +29,7 @@ namespace Dsh.Boot;
 [YamlSerializable(typeof(ScriptPermissions))]
 [YamlSerializable(typeof(PermissionRules))]
 [YamlSerializable(typeof(PermissionMatcher))]
+[YamlSerializable(typeof(ToolsSettings))]
 public partial class DshYamlStaticContext : StaticContext
 {
 }
