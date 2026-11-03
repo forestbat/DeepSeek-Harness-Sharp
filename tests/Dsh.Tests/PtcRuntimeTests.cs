@@ -15,6 +15,8 @@ internal static class TestProcessEntryPoint
 {
     public static int Main(string[] args)
     {
+        if (args.FirstOrDefault() == SandboxFileGrantConsumer.Argument)
+            return SandboxFileGrantConsumer.RunAsync(args).GetAwaiter().GetResult();
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
         if (args.Any(argument => argument == PluginSandboxWorker.HostArgument))
             return PluginSandboxWorker.RunAsync(args).GetAwaiter().GetResult();
