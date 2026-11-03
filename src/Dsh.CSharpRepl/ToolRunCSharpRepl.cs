@@ -122,7 +122,7 @@ public static class ToolRunCSharpRepl
         ObserveWindowsStage(diagnostics, diagnosticCall, started, 0, 0);
         using var handle = await subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
         {
-            Argv = [executable, status.PreloadPath],
+            Argv = diagnostics is null ? [executable, status.PreloadPath] : [executable, "--trace", status.PreloadPath],
             Cwd = workdir,
             KeepStandardInputOpen = true,
             Signal = fused.Token,

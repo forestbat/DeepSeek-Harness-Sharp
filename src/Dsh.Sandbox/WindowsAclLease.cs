@@ -12,6 +12,7 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsAclLease : IDisposable
 {
+    private const int EnumerationBufferSize = 16 * 1024;
     private const int ReadExecute = 0x1200a9;
     private const int Modify = 0x1301bf;
     private const int Delete = 0x10000;
@@ -128,7 +129,7 @@ internal sealed class WindowsAclLease : IDisposable
             if (directory)
                 foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
                     static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
+                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, BufferSize = EnumerationBufferSize }))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     paths[path] = (write, isDirectory);
