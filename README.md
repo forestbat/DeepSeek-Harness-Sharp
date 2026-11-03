@@ -429,7 +429,7 @@ Windows 进程创建失败会报告实际 Win32 错误码；载荷不附着控�
 Windows 子进程保留声明的工作目录，相对路径按该目录解析。
 Windows 的单文件读取授权不包含父目录枚举；`cmd` 的文件名形式 `TYPE` 会先搜索目录，不能作为仅有单文件读取权限的通用消费者。
 直接打开文件与列出父目录是不同的[文件访问权限](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)，后端不会为命令的额外目录搜索扩大单文件授权。
-可写目录内的只读或保护路径通过收窄当前 AppContainer SID 的 allow ACE 实现，不依赖包 SID 的 deny ACE；必要时暂时停止该对象的 DACL 继承，保留其他 SID 的既有 ACE，释放后移除本次 SID 并恢复原继承状态。
+可写目录内的只读或保护路径通过收窄当前 AppContainer SID 的 allow ACE 实现，不依赖包 SID 的 deny ACE；必要时暂时停止该对象的 DACL 继承，释放时按当前 ACL 移除本次 SID，并仅清除临时保护形成且内容未变的继承 ACE 副本，再恢复原继承状态；期间其他主体新增或修改的显式 ACE 不回滚。
 Windows 的 `SetSecurityInfo` 可能把旧式 DACL 转换到[自动继承模型](https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces)并设置 SDDL 的 `AI` 标记；恢复契约保留全部 ACE 的顺序、权限与标志及原继承保护状态，并保持后续实际继承与保护行为，不要求撤销该系统元数据转换。
 若既有 AppContainer 组或本次启用的 capability SID 在保护对象或相关祖先上已有额外写入、删除或改权限的 allow，后端明确拒绝启动，不修改其他 SID 来伪装通用 deny 支持。
 保护路径的可写祖先目录不授予自身删除权限，但新建的普通工作区文件仍可继承正常修改、改名与删除权限。

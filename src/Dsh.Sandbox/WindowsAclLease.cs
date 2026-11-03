@@ -35,12 +35,12 @@ internal sealed class WindowsAclLease : IDisposable
         {
             var paths = new Dictionary<string, (bool Write, bool Directory)>(StringComparer.OrdinalIgnoreCase);
             var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            foreach (var grant in policy.Writable.Concat(policy.Readable))
-            {
-                if (SandboxPolicy.Contains(windows, grant.Source))
-                    continue;
-                AddTree(paths, grant.Source, grant.IsDirectory, policy.Writable.Contains(grant));
-            }
+            foreach (var grant in policy.Writable)
+                if (!SandboxPolicy.Contains(windows, grant.Source))
+                    AddTree(paths, grant.Source, grant.IsDirectory, true);
+            foreach (var grant in policy.Readable)
+                if (!SandboxPolicy.Contains(windows, grant.Source))
+                    AddTree(paths, grant.Source, grant.IsDirectory, false);
             foreach (var denied in policy.Denied)
             {
                 if (File.Exists(denied) || Directory.Exists(denied))
@@ -58,11 +58,10 @@ internal sealed class WindowsAclLease : IDisposable
                 }
             foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
             {
-                var denyWrite = policy.Denied.Any(denied => SandboxPolicy.Contains(denied, path))
-                    || policy.Readable.Any(read => SandboxPolicy.Contains(read.Source, path));
-                var denyDelete = access.Directory && (policy.Denied.Any(denied => SandboxPolicy.Contains(path, denied))
+                var denyWrite = !access.Write;
+                var denyDelete = access.Write && access.Directory && (policy.Denied.Any(denied => SandboxPolicy.Contains(path, denied))
                     || policy.Readable.Any(read => SandboxPolicy.Contains(path, read.Source)));
-                var mask = access.Write && !denyWrite ? Modify : ReadExecute;
+                var mask = access.Write ? Modify : ReadExecute;
                 var inheritedMask = mask;
                 if (denyDelete)
                     mask &= ~Delete;
@@ -112,6 +111,7 @@ internal sealed class WindowsAclLease : IDisposable
         private bool _labelChanged;
         private bool _sidGranted;
         private bool _restoreInheritance;
+        private List<GenericAce>? _inheritanceCopies;
 
         private SafeFileHandle Open()
         {
@@ -141,6 +141,8 @@ internal sealed class WindowsAclLease : IDisposable
             // AppContainer grants are allow-only: a package deny ACE cannot cancel an inherited writable grant.
             // Stop re-inheriting this SID's excess access while retaining every other principal's existing ACEs.
             _restoreInheritance = inheritedGrant && !protectedDacl;
+            if (_restoreInheritance)
+                TrackInheritanceCopies(acl);
             var inherited = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
             var insertion = 0;
             while (insertion < acl.Count && (acl[insertion].AceFlags & AceFlags.Inherited) == 0)
@@ -191,6 +193,34 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
+        private void TrackInheritanceCopies(RawAcl acl)
+        {
+            _inheritanceCopies = [];
+            foreach (GenericAce ace in acl)
+            {
+                if ((ace.AceFlags & AceFlags.Inherited) == 0)
+                    continue;
+                var copy = ace.Copy();
+                copy.AceFlags &= ~AceFlags.Inherited;
+                _inheritanceCopies.Add(copy);
+            }
+        }
+
+        private void RemoveInheritanceCopies(RawAcl acl)
+        {
+            if (_inheritanceCopies is not { } copies)
+                return;
+            // Protecting the DACL materializes inherited ACEs as explicit copies.
+            // Remove only unchanged copies before inheriting the current parent ACL again.
+            foreach (var copy in copies)
+                for (var index = 0; index < acl.Count; index++)
+                    if (copy.Equals(acl[index]))
+                    {
+                        acl.RemoveAce(index);
+                        break;
+                    }
+        }
+
         public unsafe void Remove(SecurityIdentifier sid)
         {
             if (!_sidGranted || !File.Exists(path) && !Directory.Exists(path))
@@ -200,6 +230,7 @@ internal sealed class WindowsAclLease : IDisposable
             for (var index = acl.Count - 1; index >= 0; index--)
                 if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
                     acl.RemoveAce(index);
+            RemoveInheritanceCopies(acl);
             WriteAcl(handle, acl, _restoreInheritance ? UnprotectDacl : 0);
             if (_labelChanged)
                 fixed (byte* label = _originalLabel)

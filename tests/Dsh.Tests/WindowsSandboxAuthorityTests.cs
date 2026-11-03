@@ -47,6 +47,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         var originalInputAcl = ReadDacl(input);
         var originalDeniedAcl = ReadDacl(denied);
         (string Parent, string File) startedAcl, completedAcl;
+        string expectedDeniedAcl, hostUpdatedAcl;
         var launch = PluginSandboxLaunch.Options(SandboxRuntimePaths.ForCurrentHost());
         await using (var consumer = await SandboxedProcess.StartAsync(launch with
         {
@@ -82,6 +83,8 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             Assert.True(!File.Exists(Path.Combine(working, "rename-before.txt")), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-after.txt")), failure);
             completedAcl = (ReadDacl(protectedDirectory), ReadDacl(denied));
+            expectedDeniedAcl = AddConcurrentReadAttributeGrant(denied, originalDeniedAcl);
+            hostUpdatedAcl = ReadDacl(denied);
         }
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")).Trim());
         Assert.Equal(settingsBytes, File.ReadAllBytes(denied));
@@ -94,7 +97,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             AssertDaclRestored(originalSecretAcl, secret);
             AssertDaclRestored(originalDirectoryAcl, working);
             AssertDaclRestored(originalInputAcl, input);
-            AssertDaclRestored(originalDeniedAcl, denied);
+            AssertDaclRestored(expectedDeniedAcl, denied);
         }
         catch (Exception)
         {
@@ -102,6 +105,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
                 ("original-parent", originalProtectedDirectoryAcl), ("original-file", originalDeniedAcl),
                 ("startup-parent", startedAcl.Parent), ("startup-file", startedAcl.File),
                 ("completed-parent", completedAcl.Parent), ("completed-file", completedAcl.File),
+                ("host-update-file", hostUpdatedAcl),
                 ("released-parent", ReadDacl(protectedDirectory)), ("released-file", ReadDacl(denied))));
             throw;
         }
@@ -176,6 +180,21 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         });
 
         Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+    }
+
+    private static string AddConcurrentReadAttributeGrant(string path, string original)
+    {
+        // This synthetic SID is a test-only principal, not a real account.
+        var principal = new SecurityIdentifier("S-1-5-21-0-0-0-271828");
+        var rule = new FileSystemAccessRule(principal, FileSystemRights.ReadAttributes, AccessControlType.Allow);
+        var expected = new FileSecurity();
+        expected.SetSecurityDescriptorSddlForm(original, AccessControlSections.Access);
+        expected.AddAccessRule(rule);
+        var file = new FileInfo(path);
+        var current = file.GetAccessControl(AccessControlSections.Access);
+        current.AddAccessRule(rule);
+        file.SetAccessControl(current);
+        return expected.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
     }
 
     private static string FormatDaclPhases(params (string Stage, string Acl)[] phases)
