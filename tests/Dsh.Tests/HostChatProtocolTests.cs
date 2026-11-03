@@ -97,9 +97,10 @@ public sealed class HostChatProtocolTests
     [Fact(Timeout = 5000)]
     public async Task PluginExecution_ChangesHostSettings_AndClearsOverrideAcrossClients()
     {
-        await using var host = await HarnessHostFixture.CreateAsync("hcx", Ct);
-        var editor = await host.ConnectAsync("editor", Ct);
-        var observer = await host.ConnectAsync("observer", Ct);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var host = await HarnessHostFixture.CreateAsync("hcx", cancellationToken);
+        var editor = await host.ConnectAsync("editor", cancellationToken);
+        var observer = await host.ConnectAsync("observer", cancellationToken);
         const string package = "@deepseek-ai/dsh-tool-todo";
         var home = host.Environment.App.Home;
         await HarnessSettings.UpdatePluginAsync(home, package, existing => (existing ?? new PluginSetting()) with
@@ -108,12 +109,12 @@ public sealed class HostChatProtocolTests
             Parameters = new() { ["execution-test"] = "preserved" },
             Permissions = new PluginPermissions { Read = false, Write = false },
         });
-        Assert.Null(Assert.Single(await observer.Plugins.ListPluginsAsync(Ct), plugin => plugin.Package == package).Execution);
+        Assert.Null(Assert.Single(await observer.Plugins.ListPluginsAsync(cancellationToken), plugin => plugin.Package == package).Execution);
 
         foreach (var execution in new[] { "host", "sandbox", (string?)null })
         {
-            await editor.Plugins.SetPluginExecutionAsync(package, execution, Ct);
-            var observed = Assert.Single(await observer.Plugins.ListPluginsAsync(Ct), plugin => plugin.Package == package);
+            await editor.Plugins.SetPluginExecutionAsync(package, execution, cancellationToken);
+            var observed = Assert.Single(await observer.Plugins.ListPluginsAsync(cancellationToken), plugin => plugin.Package == package);
             var persisted = HarnessSettings.Load(home).Plugins[package];
             Assert.Equal(execution, observed.Execution);
             Assert.Equal(execution, persisted.Execution?.ToString().ToLowerInvariant());
@@ -123,7 +124,7 @@ public sealed class HostChatProtocolTests
             Assert.Equal(new PluginPermissions { Read = false, Write = false }, persisted.Permissions);
         }
 
-        await Assert.ThrowsAsync<JsonRpcException>(() => editor.Plugins.SetPluginExecutionAsync(package, "default", Ct));
+        await Assert.ThrowsAsync<JsonRpcException>(() => editor.Plugins.SetPluginExecutionAsync(package, "default", cancellationToken));
         Assert.Null(HarnessSettings.Load(home).Plugins[package].Execution);
     }
 }

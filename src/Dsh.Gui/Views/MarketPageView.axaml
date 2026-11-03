@@ -84,7 +84,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Text="设置立即保存到 Host 的 settings.yaml。默认：编译入应用的插件使用 Host，外部插件使用 Sandbox。Host 在主进程内执行并获得完全信任。开启沙箱后，权限开关约束宿主中介操作，不限制 Host 插件的直接进程内访问。选择默认会清除 execution 覆盖。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
+            <TextBlock Text="设置立即保存到 Host 的 settings.yaml。沙箱开启时，默认在 Host 中运行编译入应用的插件，在 Sandbox 中运行外部插件。Host 在主进程内执行并获得完全信任。沙箱关闭时保留原有进程内执行方式，此处仅保存将来开启沙箱时使用的配置。开启沙箱后，权限开关约束宿主中介操作，不限制 Host 插件的直接进程内访问。选择默认会清除 execution 覆盖。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

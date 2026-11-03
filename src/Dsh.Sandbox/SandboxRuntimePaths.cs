@@ -71,9 +71,10 @@ public static class SandboxRuntimePaths
     {
         if (directory is null || !Directory.Exists(directory))
             return;
-        var full = Path.TrimEndingDirectorySeparator(SandboxFileAccess.Canonicalize(directory));
-        if (paths.Comparer.Equals(full, Path.GetPathRoot(full))
-            || UserHome is not null && paths.Comparer.Equals(full, UserHome))
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        var canonical = SandboxFileAccess.Canonicalize(full);
+        if (paths.Comparer.Equals(canonical, Path.GetPathRoot(canonical))
+            || UserHome is not null && paths.Comparer.Equals(canonical, UserHome))
             return;
         paths.Add(full);
     }

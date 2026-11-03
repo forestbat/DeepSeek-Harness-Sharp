@@ -597,6 +597,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         try
         {
             Status = await (await _plugins()).SetPluginExecutionAsync(package, execution);
+            await LoadPluginRowsAsync();
             return true;
         }
         catch (Exception error)
@@ -1006,11 +1007,23 @@ public sealed partial class SettingsViewModel : ObservableObject
         try
         {
             var plugins = await (await _plugins()).ListPluginsAsync();
-            Plugins.Clear();
+            List<PluginRowViewModel> rows = [];
+            var index = 0;
+            // Both catalog snapshots are ordered by package, so unchanged rows retain their controls.
             foreach (var plugin in plugins.OrderBy(item => item.Package, StringComparer.Ordinal))
-                Plugins.Add(new PluginRowViewModel(plugin.Package, plugin.Description, plugin.Enabled,
-                    new PluginPermissions { Read = plugin.ReadAllowed, Write = plugin.WriteAllowed, Network = plugin.NetworkAllowed },
-                    SetPluginPermission, plugin.Execution, SetPluginExecutionAsync));
+            {
+                while (index < Plugins.Count && string.CompareOrdinal(Plugins[index].Package, plugin.Package) < 0)
+                    index++;
+                var row = index < Plugins.Count && Plugins[index].Package == plugin.Package ? Plugins[index] : null;
+                if (row is null || row.Description != plugin.Description || row.Enabled != plugin.Enabled
+                    || row.CanRead != plugin.ReadAllowed || row.CanWrite != plugin.WriteAllowed || row.CanNetwork != plugin.NetworkAllowed
+                    || row.Execution?.Value != plugin.Execution)
+                    row = new PluginRowViewModel(plugin.Package, plugin.Description, plugin.Enabled,
+                        new PluginPermissions { Read = plugin.ReadAllowed, Write = plugin.WriteAllowed, Network = plugin.NetworkAllowed },
+                        SetPluginPermission, plugin.Execution, SetPluginExecutionAsync);
+                rows.Add(row);
+            }
+            CollectionSync.Sync(Plugins, rows);
         }
         catch (Exception error)
         {
@@ -1107,19 +1120,26 @@ public sealed partial class PluginRowViewModel(
         new("host", "Host · 完全信任"),
     ];
 
-    [ObservableProperty]
-    private PluginExecutionOption? _execution = ExecutionOptions.Single(option => option.Value == execution);
+    private bool _restoringExecution;
+
+    public PluginExecutionOption? Execution
+    {
+        get;
+        set
+        {
+            if (value is null || Equals(field, value) || IsChangingExecution && !_restoringExecution)
+                return;
+            var previous = field;
+            field = value;
+            OnPropertyChanged();
+            if (!_restoringExecution)
+                _ = SaveExecutionAsync(previous, value);
+        }
+    } = ExecutionOptions.Single(option => option.Value == execution);
 
     [ObservableProperty]
     private bool _isChangingExecution;
 
-    partial void OnExecutionChanged(PluginExecutionOption? oldValue, PluginExecutionOption? newValue)
-    {
-        if (newValue is null || IsChangingExecution)
-            SetProperty(ref _execution, oldValue, nameof(Execution));
-        else
-            _ = SaveExecutionAsync(oldValue, newValue);
-    }
 
     private async Task SaveExecutionAsync(PluginExecutionOption? oldValue, PluginExecutionOption newValue)
     {
@@ -1127,10 +1147,14 @@ public sealed partial class PluginRowViewModel(
         try
         {
             if (!await setExecution(Package, newValue.Value))
-                SetProperty(ref _execution, oldValue, nameof(Execution));
+            {
+                _restoringExecution = true;
+                Execution = oldValue;
+            }
         }
         finally
         {
+            _restoringExecution = false;
             IsChangingExecution = false;
         }
     }

@@ -222,6 +222,9 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         SandboxFileAccess.DemandOrdinaryFile(source, allowMissing: false);
         System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Copy(source, destination);
+        var attributes = File.GetAttributes(destination);
+        if ((attributes & FileAttributes.ReadOnly) != 0)
+            File.SetAttributes(destination, attributes & ~FileAttributes.ReadOnly);
     }
 
     private static void CopyDirectory(string source, string destination)
