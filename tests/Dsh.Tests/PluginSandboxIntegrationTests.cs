@@ -451,39 +451,47 @@ public sealed class PluginSandboxIntegrationTests
     [InlineData(true)]
     public async Task AddIndependentArtifact_ApprovesBeforeInstall_AndNeverConstructsFileCodeInMain(bool allowed)
     {
+        var call = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var diagnostics = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        Task Observe(int stage, int count = 0) => diagnostics.WriteLineAsync(
+            $"owned-plugin-r12 call={call} stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(call).TotalMilliseconds} count={count}");
+        await Observe(1, allowed ? 1 : 0);
         using var fixture = new Fixture(settings =>
         {
             foreach (var package in new[] { Alpha, Beta })
                 settings.Plugins[package] = settings.Plugins[package] with { Enabled = false };
         }, deployFixture: false);
+        await Observe(2);
         await fixture.StartAsync(expectFixtureActive: false);
+        await Observe(3);
         using var answerer = allowed ? ApprovalAnswerers.AutoApprove(fixture.App.Ctx) : ApprovalAnswerers.DenyAll(fixture.App.Ctx);
         var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        TestContext.Current.TestOutputHelper?.WriteLine("plugin-add stage=invoking");
-
+        await Observe(4);
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact }, TestContext.Current.CancellationToken);
+        await Observe(5, result.IsError ? 1 : 0);
+        if (result is ToolExecutionResult.Failure failure)
+        {
+            await Observe(10, failure.Error.Info?.Code switch
+            {
+                ToolErrorCodes.Aborted => 1,
+                ToolErrorCodes.AbortedBeforeDispatch => 2,
+                "PLUGIN_INSPECTION_FAILED" => 3,
+                "PLUGIN_INVALID_METADATA" => 4,
+                "PLUGIN_HOST_ROLE_REQUIRED" => 5,
+                "PLUGIN_SANDBOX_FAULTED" => 6,
+                null => 7,
+                _ => 8,
+            });
+            await Observe(11, failure.Error.Message.Contains("stage=native-launch;", StringComparison.Ordinal) ? 1 : 0);
+            await Observe(12, failure.Error.Message.Contains("stage=ready-request;", StringComparison.Ordinal) ? 1 : 0);
+        }
         var events = fixture.Session.SnapshotEvents().Select(item => item.Data).ToArray();
         var approvals = events.OfType<ApprovalAskedPayload>().ToArray();
         var decisions = events.OfType<ApprovalDecidedPayload>().ToArray();
         var audits = events.OfType<SettingsMutationAuditPayload>().ToArray();
-        var failure = result as ToolExecutionResult.Failure;
-        var errorCategory = failure?.Error switch
-        {
-            null => "none",
-            { Info.Code: ToolErrorCodes.Aborted or ToolErrorCodes.AbortedBeforeDispatch } => "cancelled",
-            { Message: "Settings mutation was not approved (Rejected)." } => "settings-rejected",
-            { Message: var message } when message.StartsWith("The isolated worker could not start:", StringComparison.Ordinal) => "worker-start",
-            { Message: var message } when message.StartsWith("Plugin inspection failed for ", StringComparison.Ordinal) => "inspection",
-            _ => "other",
-        };
-        var stage = approvals.Length == 0 ? "before-approval" : audits.Length == 0 ? "approval-without-audit" : "audit-recorded";
-        TestContext.Current.TestOutputHelper?.WriteLine(
-            $"plugin-add stage={stage} error={errorCategory} approvals={approvals.Length} decisions={decisions.Length} audits={audits.Length} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
-        if (failure?.Error.Message is { } startupFailure
-            && startupFailure.StartsWith("The isolated worker startup was cancelled (", StringComparison.Ordinal))
-            TestContext.Current.TestOutputHelper?.WriteLine($"plugin-add {startupFailure}");
-
+        await Observe(6, approvals.Length);
+        await Observe(7, decisions.Length);
+        await Observe(8, audits.Length);
         Assert.Equal(!allowed, result.IsError);
         fixture.AssertNoMainExecution();
         Assert.Equal(allowed, HarnessSettings.Load(fixture.Home).Plugins[Alpha].Enabled);
@@ -491,6 +499,7 @@ public sealed class PluginSandboxIntegrationTests
         var installed = Directory.Exists(fixture.Plugins)
             ? Directory.GetFiles(fixture.Plugins, "Dsh.IsolatedPluginSample.dll", SearchOption.AllDirectories)
             : Array.Empty<string>();
+        await Observe(9, installed.Length);
         Assert.Equal(allowed ? 1 : 0, installed.Length);
         var asked = Assert.Single(approvals);
         using var approvalArguments = JsonDocument.Parse(asked.Arguments!);
