@@ -48,7 +48,6 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     {
         var connection = new PluginSandboxConnection(owner, domain);
         Task<SandboxProcess>? launching = null;
-        var launchEntered = false;
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connection._lifetime.Token);
         var stage = "launch-options";
         try
@@ -57,11 +56,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
             var code = domain.Runtime.Append(domain.Directory).ToArray();
             var options = PluginSandboxLaunch.Options(code);
             stage = "native-launch";
-            launching = Task.Run(() =>
-            {
-                Volatile.Write(ref launchEntered, true);
-                return SandboxedProcess.StartAsync(options, connection._lifetime.Token);
-            }, CancellationToken.None);
+            launching = Task.Run(() => SandboxedProcess.StartAsync(options, connection._lifetime.Token), CancellationToken.None);
             connection._process = await launching.WaitAsync(startup.Token).ConfigureAwait(false);
             stage = "protocol-setup";
             var stream = new StandardIoDuplexStream(connection._process.StandardOutput,
@@ -87,7 +82,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         {
             // Snapshot before Abort changes the lifetime token; include no paths or worker-supplied text.
             var cancellationDiagnostic = error is OperationCanceledException
-                ? $"The isolated worker startup was cancelled (stage={stage}; launch-status={launching?.Status.ToString() ?? "not-scheduled"}; launch-entered={Volatile.Read(ref launchEntered)}; pool-threads={ThreadPool.ThreadCount}; pool-pending={ThreadPool.PendingWorkItemCount}; process-created={connection._process is not null}; startup-cancelled={startup.IsCancellationRequested}; caller-cancelled={cancellationToken.IsCancellationRequested}; lifetime-cancelled={connection._lifetime.IsCancellationRequested})."
+                ? $"The isolated worker startup was cancelled (stage={stage}; launch-status={launching?.Status.ToString() ?? "not-scheduled"}; process-created={connection._process is not null}; startup-cancelled={startup.IsCancellationRequested}; caller-cancelled={cancellationToken.IsCancellationRequested}; lifetime-cancelled={connection._lifetime.IsCancellationRequested})."
                 : null;
             connection.Abort();
             if (connection._process is null && launching is not null)
