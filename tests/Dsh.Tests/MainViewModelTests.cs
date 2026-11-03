@@ -9,6 +9,7 @@ using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
 
@@ -176,13 +177,39 @@ public sealed class MainViewModelTests
         var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First(item => item.SessionId == session.Id);
         Assert.False(node.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnStartPayload(1)), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.IsBusy);
-        Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != session.Id);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remove = environment.Agent.Ctx.OnWaterfall<AgentPreStepNotification>((notification, _) =>
+        {
+            entered.TrySetResult();
+            return new ValueTask<object?>(release.Task.WaitAsync(notification.Payload.Signal));
+        });
+        try
+        {
+            environment.Agent.Followup(MessageFactory.CreateUserText("Verify the background session running indicator."));
+            await GuiTestEnvironment.PumpAsync(entered.Task);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: true });
+            Assert.Equal(AgentStatus.Running, environment.Agent.Status);
+            Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnEndPayload(1, new TurnEndReason.Completed())), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => !viewModel.IsBusy);
-        Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            release.TrySetResult(new PreStepDecision.Reject());
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: false });
+            Assert.Equal(AgentStatus.Idle, environment.Agent.Status);
+            Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            Assert.DoesNotContain(session.SnapshotEvents(), item => item.Data is StepStartPayload);
+        }
+        finally
+        {
+            release.TrySetResult(new PreStepDecision.Reject());
+            remove();
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+        }
     });
 
     /** 交付物清单: 打开会话时从日志回放, 之后跟随新声明与会话截断。 */
