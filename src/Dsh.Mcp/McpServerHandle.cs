@@ -81,8 +81,11 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         {
             var launch = Interlocked.Increment(ref _startupSequence);
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var treeObservations = 0;
             observed.ObserveStartup = observeStartup = (stage, count) =>
             {
+                if (stage >= 30 && Interlocked.Increment(ref treeObservations) > 64)
+                    return;
                 // Each write owns its wrapper so a timed-out connection cannot close a later producer's writer.
                 using var diagnostics = new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
                 var milliseconds = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
