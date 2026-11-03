@@ -573,7 +573,7 @@ public sealed class PluginSandboxIntegrationTests
             TestContext.Current.TestOutputHelper?.WriteLine($"plugin-add {startupFailure}");
             if (OperatingSystem.IsWindows() && startupFailure.Contains("stage=native-launch;", StringComparison.Ordinal)
                 && startupFailure.Contains("startup-cancelled=True; caller-cancelled=False; lifetime-cancelled=False", StringComparison.Ordinal))
-                await ManagedStackDiagnostics.ReportAsync();
+                await ManagedStackDiagnostics.ReportAsync(null, "OWNED_WINDOWS_STARTUP_TIMEOUT");
         }
 
         Assert.Equal(!allowed, result.IsError);

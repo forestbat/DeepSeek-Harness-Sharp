@@ -46,14 +46,15 @@ public sealed class SandboxProcessTests : IDisposable
             Assert.Skip("The runtime directory alias consumer requires Linux and its native shell.");
             return;
         }
+        await SandboxTestBackend.RequireAsync();
         var script = Path.Combine(_root, "runtime-consumer.sh");
         await File.WriteAllTextAsync(script, "#!/bin/sh\nexec /bin/sh -c 'printf runtime-aliases'\n", TestContext.Current.CancellationToken);
         File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        await using var sandbox = await StartNativeAsync(Options(_root) with
+        await using var sandbox = await SandboxedProcess.StartAsync(Options(_root) with
         {
             Executable = script,
             RuntimePaths = SandboxRuntimePaths.ForExecutable(script),
-        });
+        }, TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
         var exitCode = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
