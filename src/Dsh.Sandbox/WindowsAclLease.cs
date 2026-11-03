@@ -15,7 +15,6 @@ internal sealed class WindowsAclLease : IDisposable
     private const int ReadExecute = 0x1200a9;
     private const int Modify = 0x1301bf;
     private const int Delete = 0x10000;
-    private const int EnumerationBufferBytes = 64 * 1024;
     private const int WriteData = 2;
     private const uint ProtectDacl = 0x80000000;
     private const uint UnprotectDacl = 0x20000000;
@@ -129,7 +128,7 @@ internal sealed class WindowsAclLease : IDisposable
             if (directory)
                 foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
                     static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, BufferSize = EnumerationBufferBytes }))
+                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     paths[path] = (write, isDirectory);

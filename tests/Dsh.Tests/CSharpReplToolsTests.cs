@@ -179,6 +179,8 @@ public sealed class CSharpReplToolsTests
     {
         Assert.True(result.IsError, Text(result));
         var failure = Assert.IsType<ToolExecutionResult.Failure>(result);
+        if (!string.Equals(code, failure.Error.Info?.Code, StringComparison.Ordinal))
+            TestContext.Current.TestOutputHelper?.WriteLine(Text(result));
         Assert.Equal(code, failure.Error.Info?.Code);
     }
 

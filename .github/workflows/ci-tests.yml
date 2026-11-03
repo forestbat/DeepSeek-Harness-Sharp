@@ -92,12 +92,14 @@ jobs:
           fi
 
       - name: Install real C# frontends for standalone tool tests
-        if: inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh'
+        if: (inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh') || (runner.os == 'Windows' && inputs.suite == 'regression-1')
         shell: pwsh
         run: |
           $tools = Join-Path $PWD '.artifacts/csharp-frontends'
-          dotnet tool install dotnet-script --version 2.0.1 --tool-path $tools --allow-roll-forward
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ('${{ inputs.suite }}' -eq 'quick') {
+            dotnet tool install dotnet-script --version 2.0.1 --tool-path $tools --allow-roll-forward
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           dotnet tool install csharprepl --version 0.9.2 --tool-path $tools --allow-roll-forward
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $tools >> $env:GITHUB_PATH
@@ -133,9 +135,17 @@ jobs:
           sudo mkdir -p /run/sshd
 
       - name: Build tests (Debug, plugin fixtures and fault probe)
+        id: build_tests
         run: >
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ inputs.native-cc }}
+
+      - name: Prepare temporary native startup stack capture
+        if: runner.os == 'Windows' && inputs.suite == 'regression-1'
+        shell: pwsh
+        run: |
+          dotnet tool install dotnet-stack --version 10.0.750501 --tool-path .artifacts/native-startup-stack
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate the explicitly installed native Iroh test fixture
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
@@ -263,7 +273,7 @@ jobs:
           "${ARGS[@]}"
 
       - name: Run root-cause regression (${{ inputs.suite }}, no retries)
-        if: startsWith(inputs.suite, 'regression-')
+        if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && startsWith(inputs.suite, 'regression-') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -306,6 +316,42 @@ jobs:
             ARGS+=(-parallelMode none)
           fi
           "$EXE" "${ARGS[@]}"
+
+      - name: Capture temporary native startup consumers
+        if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && inputs.suite == 'regression-1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe"
+          NATIVE_CODE=0
+          for SPEC in \
+            '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.InvalidSyntax_ReturnsFrontendDiagnosticsAsFailure' \
+            '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.MultilineProgram_PreservesStateAndPrintsFinalExpression' \
+            '15|owned-mcp-r10 launch=1 stage=30|Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings' \
+            '5|owned-plugin-r12 call=[0-9]+ stage=4|Dsh.Tests.PluginSandboxIntegrationTests.AddIndependentArtifact_ApprovesBeforeInstall_AndNeverConstructsFileCodeInMain' \
+            '2|owned-pane-r12 stage=0|Dsh.Tests.ChatWindowPaneTests.Overview_Enter_Host_Shell_Pty_Opens_Terminal_Pane'; do
+            IFS='|' read -r SAMPLE MARKER METHOD <<< "$SPEC"
+            set +e
+            python3 tests/ci/observe_native_startup.py \
+              --stack-tool .artifacts/native-startup-stack/dotnet-stack.exe \
+              --sample-after "$SAMPLE" --marker "$MARKER" -- \
+              "$EXE" -noColor -parallelMode none -reporter verbose -method "$METHOD" \
+              -trait- Category=GpuStress -trait- Category=OnlyGpu \
+              -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
+            CODE=$?
+            set -e
+            if [ "$CODE" -ne 0 ]; then NATIVE_CODE=$CODE; fi
+          done
+          exit "$NATIVE_CODE"
+
+      - name: Compare temporary native directory query classes
+        if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && (inputs.suite == 'regression-2' || inputs.suite == 'regression-3') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORDER=full-first
+          if [ "${{ inputs.suite }}" = "regression-3" ]; then ORDER=directory-first; fi
+          python3 -c 'import subprocess,sys; subprocess.run([sys.executable,"tests/ci/diagnose_windows_directory_queries.py","--order",sys.argv[1]], timeout=120, check=True)' "$ORDER"
 
       - name: Check schedule time zones with invariant globalization
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
