@@ -112,6 +112,53 @@ public sealed class FleetLocalForwardEgressTests
     }
 
     [Theory]
+    [InlineData("localForward")]
+    [InlineData("proxyCommand")]
+    public async Task FailedJumpTarget_RetiresOnlyTheOwnedSshAndKeepsTheJumpAvailable(string mode)
+    {
+        FleetSshEndToEndTests.RequireEnvironment();
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
+        await using var forwarding = new TestForwardProxy();
+        var root = TempTree.CreateSocketDirectory("f81e");
+        try
+        {
+            var direct = ssh.Machine("healthy-jump", root);
+            var observed = BorrowedOutboundProxyTests.ObserveSsh(direct, root);
+            // Keep the actual target port owned but non-listening so the authenticated jump's direct-tcpip target must be refused.
+            using var target = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            target.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            var targetPort = ((IPEndPoint)target.LocalEndPoint!).Port;
+            await using var tunnel = new SshOutboundTunnel(observed with
+            {
+                Port = targetPort,
+                OutboundTunnel = new(mode, $"http://127.0.0.1:{forwarding.Port}"),
+            });
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            deadline.CancelAfter(SignalTimeout);
+            await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                await using var unexpected = await tunnel.ConnectAsync(new DnsEndPoint("127.0.0.1", forwarding.Port), deadline.Token);
+            });
+            Assert.Empty(forwarding.Requests);
+            Assert.DoesNotContain(IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners(),
+                endpoint => endpoint.Port == targetPort);
+            if (mode == "localForward")
+                AssertPortCanRebind(Assert.IsType<int>(tunnel.LocalPort));
+            else
+                Assert.Null(tunnel.LocalPort);
+            await tunnel.DisposeAsync();
+            await tunnel.DisposeAsync();
+            await AssertOwnedSshRetiredAsync(root, mode, forwarding.Port);
+            Assert.Equal("jump-still-alive", await new SshTransport(direct).RunAsync("printf 'jump-still-alive'", deadline.Token));
+            Assert.False(deadline.IsCancellationRequested, "The real jump failure and cleanup must complete before the original watchdog.");
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Theory]
     [InlineData("ForkAfterAuthentication=yes")]
     [InlineData("ClearAllForwardings=yes")]
     [InlineData("ForkAfterAuthentication=yes", "ClearAllForwardings=yes")]
