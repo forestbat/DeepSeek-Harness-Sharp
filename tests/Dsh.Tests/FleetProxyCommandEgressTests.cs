@@ -253,10 +253,11 @@ public sealed class FleetProxyCommandEgressTests
     public async Task KillingTheOwnedSsh_AbortsWithoutReplay_AndOnlyANewRequestRebuilds(string mode)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var diagnostics = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
         const int MaximumObservations = 64;
         var observationCount = 0;
         Task Observe(int stage) => Interlocked.Increment(ref observationCount) <= MaximumObservations
-            ? Console.Error.WriteLineAsync(
+            ? diagnostics.WriteLineAsync(
                 $"owned-ssh-r9 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}")
             : Task.CompletedTask;
         await Observe(1);
