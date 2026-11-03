@@ -17,6 +17,8 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     private bool _stopped;
     private int _nativeThread;
     private PluginSandboxWorker.Invocation? _nativeInvocation;
+    private int _activeCalls;
+    private TaskCompletionSource? _drained;
 
     internal CancellationTokenSource Lifetime { get; } = new();
 
@@ -126,6 +128,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     {
         if (native)
             await _nativeGate.WaitAsync(invocation.Cancellation.Token).ConfigureAwait(false);
+        var admitted = false;
         try
         {
             Tool tool;
@@ -134,6 +137,8 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
                 ObjectDisposedException.ThrowIf(_stopped, this);
                 if (!_tools.TryGetValue(id, out tool!))
                     throw new InvalidOperationException("Plugin tool is not registered.");
+                _activeCalls++;
+                admitted = true;
                 if (native)
                 {
                     _nativeThread = Environment.CurrentManagedThreadId;
@@ -160,6 +165,9 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         }
         finally
         {
+            lock (_gate)
+                if (admitted && --_activeCalls == 0)
+                    _drained?.TrySetResult();
             if (native)
                 _nativeGate.Release();
         }
@@ -170,6 +178,14 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         lock (_gate)
             _stopped = true;
         Lifetime.Cancel();
+    }
+
+    internal Task StopAsync()
+    {
+        Stop();
+        lock (_gate)
+            return _activeCalls == 0 ? Task.CompletedTask
+                : (_drained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
     }
 
     internal void ReleaseTools()

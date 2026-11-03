@@ -142,6 +142,10 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Equal(first, await fixture.Instance("beta"));
         Assert.Equal("alpha configuration", (await fixture.Success("alpha", "configuration")).GetProperty("label").GetString());
         Assert.Equal("beta configuration", (await fixture.Success("beta", "configuration")).GetProperty("label").GetString());
+        var identity = await fixture.Identity("alpha");
+        var staged = identity.GetProperty("assemblyPath").GetString()!;
+        var stagingRoot = Directory.GetParent(Path.GetDirectoryName(staged)!)!.Parent!.FullName;
+        var copies = Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray();
 
         var observation = Path.Combine(fixture.Root, "add-observation");
         Directory.CreateDirectory(observation);
@@ -157,6 +161,8 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Equal(first, await fixture.Instance("alpha"));
         Assert.Equal(first, await fixture.Instance("beta"));
         fixture.AssertNoMainExecution();
+        Assert.Equal(copies, Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray());
+        Assert.True(File.Exists(staged));
     }
 
     [Fact]
@@ -179,7 +185,10 @@ public sealed class PluginSandboxIntegrationTests
     {
         using var fixture = new Fixture();
         await fixture.StartAsync();
-        var instance = await fixture.Instance("alpha");
+        var identity = await fixture.Identity("alpha");
+        var instance = identity.GetProperty("instance").GetGuid();
+        var staged = identity.GetProperty("assemblyPath").GetString()!;
+        var stagingRoot = Directory.GetParent(Path.GetDirectoryName(staged)!)!.Parent!.FullName;
         var marker = Path.Combine(fixture.Root, "before-cancellation.txt");
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pending = fixture.ExecuteTool("isolated_alpha", new
@@ -195,6 +204,7 @@ public sealed class PluginSandboxIntegrationTests
         await fixture.WaitForToolsToDisappear();
 
         await fixture.Manager.EnableAsync(Alpha);
+        Assert.False(Directory.Exists(stagingRoot));
 
         var restarted = await fixture.Instance("alpha");
         Assert.NotEqual(instance, restarted);
@@ -203,26 +213,70 @@ public sealed class PluginSandboxIntegrationTests
     }
 
     [Fact]
-    public async Task PermissionChange_RetiresWholeSharedDomain_AndRebuildsSiblingWithItsOwnAuthority()
+    public async Task PermissionChanges_ApplyToNextBrokerOperation_WithoutRebuildingPackages()
     {
         using var fixture = new Fixture();
         await fixture.StartAsync();
-        var previous = await fixture.Instance("alpha");
-        Assert.Equal(previous, await fixture.Instance("beta"));
-
-        await fixture.Manager.SetPermissionAsync(Alpha, PluginPermission.Write, false, TestContext.Current.CancellationToken);
-
-        var changed = await fixture.Instance("alpha");
-        var sibling = await fixture.Instance("beta");
-        Assert.NotEqual(previous, changed);
-        Assert.NotEqual(previous, sibling);
-        Assert.Equal(changed, sibling);
-        Assert.False(HarnessSettings.Load(fixture.Home).Plugins[Alpha].Permissions!.Write);
-        var target = Path.Combine(fixture.Root, "after-permission-change.txt");
-        Assert.True((await fixture.Execute("alpha", "write", WriteArguments(target, "denied"))).IsError);
-        Assert.False(File.Exists(target));
+        var alpha = await fixture.Identity("alpha");
+        var beta = await fixture.Identity("beta");
+        Assert.Equal(1, (await fixture.Success("beta", "increment-state")).GetProperty("state").GetInt32());
+        var source = Path.Combine(fixture.Root, "readable.txt");
+        var target = Path.Combine(fixture.Root, "permission-effects.txt");
+        await File.WriteAllTextAsync(source, "read allowed", TestContext.Current.CancellationToken);
+        await using var server = await PluginSdkHttpServer.StartAsync();
+        var request = new { url = server.Url, method = "POST" };
+        foreach (var allowed in new[] { false, true })
+        {
+            await fixture.Manager.SetPermissionAsync(Alpha, PluginPermission.Read, allowed, TestContext.Current.CancellationToken);
+            await fixture.Manager.SetPermissionAsync(Alpha, PluginPermission.Write, allowed, TestContext.Current.CancellationToken);
+            await fixture.Manager.SetPermissionAsync(Alpha, PluginPermission.Network, allowed, TestContext.Current.CancellationToken);
+            Assert.Equal(!allowed, (await fixture.Execute("alpha", "read", new { path = source })).IsError);
+            Assert.Equal(!allowed, (await fixture.Execute("alpha", "write", WriteArguments(target, "alpha write"))).IsError);
+            Assert.Equal(!allowed, (await fixture.Execute("alpha", "http", request)).IsError);
+            if (allowed)
+                Assert.Equal("alpha write", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+            else
+                Assert.False(File.Exists(target));
+            Assert.Equal(alpha.GetProperty("pluginInstance").GetGuid(), (await fixture.Identity("alpha")).GetProperty("pluginInstance").GetGuid());
+            var sibling = await fixture.Identity("beta");
+            Assert.Equal(beta.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
+            Assert.Equal(beta.GetProperty("instance").GetGuid(), sibling.GetProperty("instance").GetGuid());
+            Assert.Equal(beta.GetProperty("processId").GetInt32(), sibling.GetProperty("processId").GetInt32());
+        }
+        Assert.Equal(1, server.Requests);
+        Assert.Equal(2, (await fixture.Success("beta", "increment-state")).GetProperty("state").GetInt32());
         await fixture.Success("beta", "write", WriteArguments(target, "sibling remains writable"));
         Assert.Equal("sibling remains writable", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task IndependentSchedulerUnload_ReleasesOnlyPackage_AndSiblingRetainsState()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        var alpha = await fixture.Identity("alpha");
+        var beta = await fixture.Identity("beta");
+        Assert.Equal(1, (await fixture.Success("beta", "increment-state")).GetProperty("state").GetInt32());
+
+        var removed = await fixture.App.Composition!.Root.Scheduler.UnloadAsync(Alpha);
+        await fixture.App.Composition.Root.Scheduler.SettleAsync();
+
+        Assert.Equal(ActivationState.Disposed, removed!.State);
+        Assert.Null(fixture.Tools.Get("isolated_alpha"));
+        var sibling = await fixture.Identity("beta");
+        Assert.Equal(beta.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
+        Assert.Equal(beta.GetProperty("instance").GetGuid(), sibling.GetProperty("instance").GetGuid());
+        Assert.Equal(beta.GetProperty("processId").GetInt32(), sibling.GetProperty("processId").GetInt32());
+        Assert.Equal(2, (await fixture.Success("beta", "increment-state")).GetProperty("state").GetInt32());
+        var target = Path.Combine(fixture.Root, "sibling-after-release.txt");
+        await fixture.Success("beta", "write", WriteArguments(target, "still alive"));
+        Assert.Equal("still alive", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
+
+        await fixture.Manager.EnableAsync(Alpha);
+
+        var reloaded = await fixture.Identity("alpha");
+        Assert.NotEqual(alpha.GetProperty("pluginInstance").GetGuid(), reloaded.GetProperty("pluginInstance").GetGuid());
+        Assert.Equal(beta.GetProperty("instance").GetGuid(), reloaded.GetProperty("instance").GetGuid());
     }
 
     [Theory]
@@ -260,7 +314,10 @@ public sealed class PluginSandboxIntegrationTests
     {
         using var fixture = new Fixture();
         await fixture.StartAsync();
-        var previous = await fixture.Instance("alpha");
+        var identity = await fixture.Identity("alpha");
+        var previous = identity.GetProperty("instance").GetGuid();
+        var staged = identity.GetProperty("assemblyPath").GetString()!;
+        var stagingRoot = Directory.GetParent(Path.GetDirectoryName(staged)!)!.Parent!.FullName;
         var sideEffect = Path.Combine(fixture.Root, "before-crash.txt");
         var failed = await fixture.Execute("alpha", "crash-after-write", WriteArguments(sideEffect, "exactly once\n", append: true));
         Assert.True(failed.IsError);
@@ -268,6 +325,7 @@ public sealed class PluginSandboxIntegrationTests
         await fixture.WaitForToolsToDisappear();
 
         await fixture.Manager.EnableAsync(Alpha);
+        Assert.False(Directory.Exists(stagingRoot));
 
         var recovered = await fixture.Instance("alpha");
         Assert.NotEqual(previous, recovered);
@@ -460,24 +518,42 @@ public sealed class PluginSandboxIntegrationTests
     }
 
     [Fact]
-    public async Task CompiledFullContextPlugin_RequiresTheSameExplicitHostRole()
+    public async Task DefaultTemplate_WithOneFullContextCompiledPlugin_StartsWithoutExplicitHostRole()
     {
         const string package = "@deepseek-ai/dsh-core";
-        using var fixture = new Fixture(settings =>
-            settings.Plugins[package] = settings.Plugins[package] with { Execution = null });
-        var error = await Assert.ThrowsAsync<RuntimeException>(() => fixture.StartAsync());
-        Assert.Equal("PLUGIN_HOST_ROLE_REQUIRED", error.Code);
-        Assert.Contains(package, error.Message);
-        Assert.Contains("execution: host", error.Message);
-        fixture.AssertNoMainExecution();
+        var root = TempTree.CreateDirectory("sandbox-default-template");
+        try
+        {
+            var home = HarnessHome.Resolve(Path.Combine(root, "home"));
+            home.Ensure();
+            var settings = HarnessSettings.Load(home);
+            settings.Sandbox = new SandboxSettings { Enabled = true };
+            foreach (var registration in DshPluginCatalogRegistry.Snapshot())
+                settings.Plugins[registration.Package] = (settings.Plugins.GetValueOrDefault(registration.Package) ?? new PluginSetting()) with
+                {
+                    Enabled = registration.Package == package,
+                };
+            settings.Save(home);
+            settings.SavePlugins(home);
+
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: Path.Combine(root, "plugins")));
+
+            Assert.Null(HarnessSettings.Load(home).Plugins[package].Execution);
+            Assert.Equal(ActivationState.Active, app.Composition!.Find(package)!.State);
+            Assert.DoesNotContain(app.Ctx.Get<HarnessPluginManager>("pluginManager")!.LoadFailures,
+                failure => failure.File == package);
+        }
+        finally { TempTree.Delete(root); }
     }
 
     [Fact]
-    public async Task LegacyFileAndCompiledPackage_WithoutHostRoleRefuseStartup_AndNeverLoadFileInMain()
+    public async Task IncompatibleFileAndCompiledPackages_AreSkippedTogether_WhileOtherPluginsRun()
     {
-        using var fixture = new Fixture(settings => settings.Plugins["test/local"] = new PluginSetting
+        const string compiled = "@deepseek-ai/dsh-plugin-manager";
+        using var fixture = new Fixture(settings =>
         {
-            Execution = PluginExecution.Sandbox,
+            settings.Plugins["test/local"] = new PluginSetting();
+            settings.Plugins[compiled] = settings.Plugins[compiled] with { Execution = PluginExecution.Sandbox };
         });
         var legacyDirectory = Path.Combine(fixture.Plugins, "legacy");
         Directory.CreateDirectory(legacyDirectory);
@@ -495,11 +571,135 @@ public sealed class PluginSandboxIntegrationTests
         AppDomain.CurrentDomain.AssemblyLoad += observe;
         try
         {
-            var error = await Assert.ThrowsAsync<RuntimeException>(() => fixture.StartAsync());
-            Assert.Equal("PLUGIN_HOST_ROLE_REQUIRED", error.Code);
+            await fixture.StartAsync();
+            Assert.Contains(fixture.Manager.LoadFailures, failure => failure.File == compiled && failure.Reason.Contains("execution: host", StringComparison.Ordinal));
+            Assert.Contains(fixture.Manager.LoadFailures, failure => failure.File.EndsWith("Dsh.ManagedPluginSample.dll", StringComparison.Ordinal)
+                && failure.Reason.Contains("execution: host", StringComparison.Ordinal));
+            Assert.Null(fixture.App.Composition!.Find(compiled));
+            Assert.Null(fixture.App.Composition.Find("test/local"));
+            await fixture.Identity("alpha");
+            await fixture.Identity("beta");
             Assert.False(loadedInMain);
         }
         finally { AppDomain.CurrentDomain.AssemblyLoad -= observe; }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AddFullContextFile_RequiresHostBeforeApprovalConfigurationOrInstallation(bool initiallyEnabled)
+    {
+        using var fixture = new Fixture(settings => settings.Plugins["test/local"] = new PluginSetting { Enabled = initiallyEnabled });
+        await fixture.StartAsync();
+        var identity = await fixture.Identity("beta");
+        var staged = identity.GetProperty("assemblyPath").GetString()!;
+        var stagingRoot = Directory.GetParent(Path.GetDirectoryName(staged)!)!.Parent!.FullName;
+        var copies = Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray();
+        var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        using var answerer = ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
+        var source = Path.Combine(fixture.Root, "full-context-observation");
+        Directory.CreateDirectory(source);
+        foreach (var suffix in new[] { ".dll", ".deps.json" })
+        {
+            var name = "Dsh.ManagedPluginSample" + suffix;
+            File.Copy(Path.Combine(AppContext.BaseDirectory, name), Path.Combine(source, name));
+        }
+
+        var result = await fixture.ExecuteTool("plugin_manager", new
+        {
+            action = "add", target = Path.Combine(source, "Dsh.ManagedPluginSample.dll"),
+        });
+
+        Assert.Contains("execution: host", Assert.IsType<ToolExecutionResult.Failure>(result).Error.Message);
+        Assert.Equal(before, await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        Assert.Equal(initiallyEnabled, HarnessSettings.Load(fixture.Home).Plugins["test/local"].Enabled);
+        Assert.Empty(Directory.GetFiles(fixture.Plugins, "Dsh.ManagedPluginSample.dll", SearchOption.AllDirectories));
+        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>());
+        Assert.Equal(copies, Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(identity.GetProperty("pluginInstance").GetGuid(), (await fixture.Identity("beta")).GetProperty("pluginInstance").GetGuid());
+    }
+
+    [Fact]
+    public async Task FailedInspectionAndRejectedAdd_ReleaseOnlyTheirCopies_AndSiblingKeepsRunning()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        var identity = await fixture.Identity("beta");
+        var staged = identity.GetProperty("assemblyPath").GetString()!;
+        var stagingRoot = Directory.GetParent(Path.GetDirectoryName(staged)!)!.Parent!.FullName;
+        var copies = Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray();
+        var broken = Path.Combine(fixture.Root, "broken.dll");
+        await File.WriteAllTextAsync(broken, "not a plugin", TestContext.Current.CancellationToken);
+
+        Assert.True((await fixture.ExecuteTool("plugin_manager", new { action = "add", target = broken })).IsError);
+        Assert.Equal(copies, Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray());
+        Assert.True(File.Exists(staged));
+
+        await HarnessSettings.UpdatePluginAsync(fixture.Home, Alpha, existing => existing! with { Enabled = false });
+        var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        using var answerer = ApprovalAnswerers.DenyAll(fixture.App.Ctx);
+
+        Assert.True((await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact })).IsError);
+
+        Assert.Equal(before, await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        Assert.Equal(copies, Directory.GetDirectories(stagingRoot).Order(StringComparer.Ordinal).ToArray());
+        Assert.True(File.Exists(staged));
+        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        var sibling = await fixture.Identity("beta");
+        Assert.Equal(identity.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
+        Assert.Equal(identity.GetProperty("instance").GetGuid(), sibling.GetProperty("instance").GetGuid());
+    }
+
+    [Fact]
+    public async Task InstalledDirectoryAndSharedResources_AreStagedWithLayout_WhileBusinessHomeStaysOutside()
+    {
+        using var fixture = new Fixture();
+        var assets = Path.Combine(Path.GetDirectoryName(fixture.Artifact)!, "assets");
+        Directory.CreateDirectory(assets);
+        await File.WriteAllTextAsync(Path.Combine(assets, "message.txt"), "deployed resource", TestContext.Current.CancellationToken);
+        var shared = Path.Combine(fixture.Plugins, ".shared");
+        Directory.CreateDirectory(shared);
+        await File.WriteAllTextAsync(Path.Combine(shared, "resource.txt"), "shared resource", TestContext.Current.CancellationToken);
+        var business = Path.Combine(fixture.Home.Root, "business-private.txt");
+        await File.WriteAllTextAsync(business, "business data", TestContext.Current.CancellationToken);
+        await fixture.StartAsync();
+        var identity = await fixture.Identity("alpha");
+        var directory = Path.GetDirectoryName(identity.GetProperty("assemblyPath").GetString()!)!;
+        var stagedResource = Path.Combine(directory, "assets", "message.txt");
+        var stagedShared = Path.Combine(Directory.GetParent(directory)!.FullName, ".shared", "resource.txt");
+
+        Assert.True((await fixture.Success("alpha", "direct-read", new { path = stagedResource })).GetProperty("succeeded").GetBoolean());
+        Assert.True((await fixture.Success("alpha", "direct-read", new { path = stagedShared })).GetProperty("succeeded").GetBoolean());
+        Assert.False((await fixture.Success("alpha", "direct-read", new { path = business })).GetProperty("succeeded").GetBoolean());
+        Assert.Equal("deployed resource", await File.ReadAllTextAsync(stagedResource, TestContext.Current.CancellationToken));
+        Assert.Equal("shared resource", await File.ReadAllTextAsync(stagedShared, TestContext.Current.CancellationToken));
+        Assert.Equal("business data", Decode(await fixture.Success("alpha", "read", new { path = business }), "data"));
+    }
+
+    [Fact]
+    public async Task ExecutionOverride_RebuildsBoundary_AndNullRestoresFileSandboxDefault()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        var original = await fixture.Instance("beta");
+        await fixture.Manager.SetExecutionAsync(Alpha, "sandbox", TestContext.Current.CancellationToken);
+        Assert.Equal(PluginExecution.Sandbox, HarnessSettings.Load(fixture.Home).Plugins[Alpha].Execution);
+        Assert.Equal(original, await fixture.Instance("beta"));
+
+        await fixture.Manager.SetExecutionAsync(Alpha, "host", TestContext.Current.CancellationToken);
+
+        Assert.Equal(PluginExecution.Host, HarnessSettings.Load(fixture.Home).Plugins[Alpha].Execution);
+        var host = await fixture.Success("alpha", "identity");
+        Assert.Equal(Environment.ProcessId, host.GetProperty("processId").GetInt32());
+        var sibling = await fixture.Instance("beta");
+        Assert.NotEqual(original, sibling);
+
+        await fixture.Manager.SetExecutionAsync(Alpha, null, TestContext.Current.CancellationToken);
+
+        Assert.Null(HarnessSettings.Load(fixture.Home).Plugins[Alpha].Execution);
+        await fixture.Identity("alpha");
+        Assert.Equal(await fixture.Instance("alpha"), await fixture.Instance("beta"));
     }
 
     private static object WriteArguments(string path, string text, bool append = false)
@@ -556,17 +756,16 @@ public sealed class PluginSandboxIntegrationTests
             settings.GlobalDefaultModel = "sandbox-test/old";
             settings.Sandbox = new SandboxSettings { Enabled = true };
             settings.Safety = new SafetySettings { AutoApprove = false, Blacklist = [], Whitelist = [] };
-            // Host-role test inputs are explicit user configuration, independent of package source.
             foreach (var registration in DshPluginCatalogRegistry.Snapshot())
                 settings.Plugins[registration.Package] = new PluginSetting
                 {
                     Enabled = EnabledImagePackages.Contains(registration.Package),
-                    Execution = PluginExecution.Host, Permissions = PluginPermissions.AllAllowed,
+                    Permissions = PluginPermissions.AllAllowed,
                 };
             foreach (var package in new[] { Alpha, Beta })
                 settings.Plugins[package] = new PluginSetting
                 {
-                    Execution = PluginExecution.Sandbox, Permissions = PluginPermissions.AllAllowed,
+                    Permissions = PluginPermissions.AllAllowed,
                 };
             configure?.Invoke(settings);
             _sandbox = settings.Sandbox?.Enabled == true;

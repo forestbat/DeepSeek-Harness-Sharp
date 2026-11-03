@@ -21,6 +21,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     private readonly Dictionary<(string Package, int Tool), IDisposable> _tools = [];
     private readonly ConcurrentDictionary<string, Invocation> _invocations = new(StringComparer.Ordinal);
     private SandboxProcess? _process;
+    private Task<SandboxProcess>? _launching;
     private JsonRpcPeer? _peer;
     private Task? _stderr;
     private Task? _cleanup;
@@ -47,6 +48,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         PluginSandboxSupervisor.Domain domain, CancellationToken cancellationToken)
     {
         var connection = new PluginSandboxConnection(owner, domain);
+        domain.Connection = connection;
         Task<SandboxProcess>? launching = null;
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connection._lifetime.Token);
         var stage = "launch-options";
@@ -56,7 +58,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
             var code = domain.Runtime.Append(domain.Directory).ToArray();
             var options = PluginSandboxLaunch.Options(code);
             stage = "native-launch";
-            launching = Task.Run(() => SandboxedProcess.StartAsync(options, connection._lifetime.Token), CancellationToken.None);
+            launching = connection._launching = Task.Run(() => SandboxedProcess.StartAsync(options, connection._lifetime.Token), CancellationToken.None);
             connection._process = await launching.WaitAsync(startup.Token).ConfigureAwait(false);
             stage = "protocol-setup";
             var stream = new StandardIoDuplexStream(connection._process.StandardOutput,
@@ -85,19 +87,17 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
                 ? $"The isolated worker startup was cancelled (stage={stage}; launch-status={launching?.Status.ToString() ?? "not-scheduled"}; process-created={connection._process is not null}; startup-cancelled={startup.IsCancellationRequested}; caller-cancelled={cancellationToken.IsCancellationRequested}; lifetime-cancelled={connection._lifetime.IsCancellationRequested})."
                 : null;
             connection.Abort();
-            if (connection._process is null && launching is not null)
-                _ = ReapLateLaunchAsync(launching);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            try { await connection.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception cleanupError)
+            {
+                if (error is OperationCanceledException cancellation)
+                    throw new OperationCanceledException(cancellationDiagnostic, new AggregateException(error, cleanupError), cancellation.CancellationToken);
+                throw new AggregateException("The isolated worker startup and cleanup failed.", error, cleanupError);
+            }
             if (error is OperationCanceledException cancelled)
                 throw new OperationCanceledException(cancellationDiagnostic, cancelled, cancelled.CancellationToken);
             throw new IOException($"The isolated worker could not start: {connection._startupDiagnostic ?? error.Message}", error);
         }
-    }
-
-    private static async Task ReapLateLaunchAsync(Task<SandboxProcess> launching)
-    {
-        try { await (await launching.ConfigureAwait(false)).DisposeAsync().ConfigureAwait(false); }
-        catch (Exception) { /* A failed native launch has no returned process to own. */ }
     }
 
     private ValueTask<JsonElement?>? Prepare(JsonRpcMessage message, CancellationToken cancellationToken)
@@ -184,6 +184,20 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         IDisposable? registration;
         lock (_sync) _tools.Remove((request.Package, request.ToolId), out registration);
         registration?.Dispose();
+    }
+
+    internal void ReleasePackage(string package)
+    {
+        IDisposable[] registrations;
+        lock (_sync)
+        {
+            var keys = _tools.Keys.Where(key => key.Package == package).ToArray();
+            registrations = keys.Select(key => _tools[key]).ToArray();
+            foreach (var key in keys)
+                _tools.Remove(key);
+        }
+        foreach (var registration in registrations)
+            registration.Dispose();
     }
 
     private async ValueTask<JsonElement> InvokeAsync(PluginSandboxSupervisor.Binding binding, int tool,
@@ -291,11 +305,14 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         lock (_sync) _cleanup ??= Task.Run(CleanupAsync);
     }
 
-    public ValueTask DisposeAsync()
+    internal Task ShutdownAsync()
     {
         Abort();
-        lock (_sync) return new ValueTask(_cleanup!);
+        lock (_sync) return _cleanup!;
     }
+
+    public ValueTask DisposeAsync()
+        => new(ShutdownAsync().WaitAsync(PluginSandboxLaunch.ShutdownBudget));
 
     private async Task CleanupAsync()
     {
@@ -308,8 +325,19 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         foreach (var registration in registrations)
             registration.Dispose();
         var peerCleanup = _peer?.DisposeAsync().AsTask() ?? Task.CompletedTask;
-        var processCleanup = _process?.DisposeAsync().AsTask() ?? Task.CompletedTask;
-        await Task.WhenAll(peerCleanup, processCleanup, _stderr ?? Task.CompletedTask)
-            .WaitAsync(PluginSandboxLaunch.ShutdownBudget).ConfigureAwait(false);
+        var processCleanup = ReleaseProcessAsync();
+        await Task.WhenAll(peerCleanup, processCleanup, _stderr ?? Task.CompletedTask).ConfigureAwait(false);
+    }
+
+    private async Task ReleaseProcessAsync()
+    {
+        var process = _process;
+        if (process is null && _launching is not null)
+        {
+            try { process = await _launching.ConfigureAwait(false); }
+            catch (Exception) { return; }
+        }
+        if (process is not null)
+            await process.DisposeAsync().ConfigureAwait(false);
     }
 }

@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Dsh.Sandbox;
 
-/** File capabilities address ordinary files, not the host process, devices or kernel control interfaces. */
+/** File capabilities address ordinary files; the host process, devices and kernel control interfaces remain outside this API. */
 public static class SandboxFileAccess
 {
     public static void DemandOrdinaryFile(string path, bool allowMissing)

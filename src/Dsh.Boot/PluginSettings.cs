@@ -26,6 +26,9 @@ public sealed record PluginSetting
 
     public PluginExecution? Execution { get; init; }
 
+    internal static PluginExecution EffectiveExecution(PluginSetting? setting, PluginForm form)
+        => setting?.Execution ?? (form == PluginForm.CompiledIn ? PluginExecution.Host : PluginExecution.Sandbox);
+
     public static PluginSetting FromRaw(object? raw) => raw switch
     {
         null => new PluginSetting(),
