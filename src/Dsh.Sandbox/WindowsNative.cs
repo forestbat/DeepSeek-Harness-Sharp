@@ -29,6 +29,8 @@ internal static class WindowsNative
     [StructLayout(LayoutKind.Sequential)]
     internal struct SidAndAttributes { public nint Sid; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)]
+    internal struct GenericMapping { public uint Read, Write, Execute, All; }
+    [StructLayout(LayoutKind.Sequential)]
     internal struct JobBasicLimit
     {
         public long PerProcessTime, PerJobTime;
@@ -87,6 +89,13 @@ internal static class WindowsNative
     [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(nint list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateProcess(string executable, StringBuilder commandLine, nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, nint environment, string workingDirectory, ref StartupInfoEx startup, out ProcessInformation information);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool OpenProcessToken(SafeFileHandle process, uint access, out SafeAccessTokenHandle token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool DuplicateTokenEx(SafeAccessTokenHandle token, uint access, nint attributes, int level, int type, out SafeAccessTokenHandle duplicate);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool AccessCheck(nint descriptor, SafeAccessTokenHandle token, uint access,
+        ref GenericMapping mapping, nint privileges, ref uint privilegesLength, out uint granted, [MarshalAs(UnmanagedType.Bool)] out bool allowed);
     internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
         => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
     internal static string PathForNative(string path)
