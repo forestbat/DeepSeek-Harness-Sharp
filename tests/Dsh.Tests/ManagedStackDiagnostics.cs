@@ -7,11 +7,11 @@ internal static partial class ManagedStackDiagnostics
 {
     private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(10);
 
-    internal static async Task ReportAsync(Task pending)
+    internal static async Task ReportAsync(Task? pending = null)
     {
         try
         {
-            await Console.Error.WriteLineAsync($"OWNED_SSH_PROBE_TIMEOUT task={pending.Status} pool-threads={ThreadPool.ThreadCount} pool-pending={ThreadPool.PendingWorkItemCount}");
+            await Console.Error.WriteLineAsync($"OWNED_TIMEOUT_STACK task={pending?.Status.ToString() ?? "not-observed"} pool-threads={ThreadPool.ThreadCount} pool-pending={ThreadPool.PendingWorkItemCount}");
             var (exitCode, output) = await CollectAsync();
             await Console.Error.WriteLineAsync($"OWNED_STACK_CAPTURE exit={exitCode}");
             if (exitCode == 0)
