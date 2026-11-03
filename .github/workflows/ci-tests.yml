@@ -210,14 +210,6 @@ jobs:
             -class Dsh.Tests.TuiRawModeEndToEndTests \
             -trait- "Category=LlmSmoke" -failSkips
 
-      - name: Prepare temporary owned timeout stack capture
-        if: inputs.suite == 'quick' && (runner.os == 'Windows' || (runner.os == 'macOS' && (inputs.quick-cohort == 'fleet-iroh' || inputs.quick-cohort == 'all')))
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet tool install dotnet-stack --tool-path artifacts/ci-diagnostics --version 10.0.750501 --allow-roll-forward
-          printf '%s\n' "$GITHUB_WORKSPACE/artifacts/ci-diagnostics" >> "$GITHUB_PATH"
-
       - name: Run quick tests (excluding GPU, model, and render categories)
         if: inputs.suite == 'quick'
         shell: bash

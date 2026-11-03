@@ -415,16 +415,7 @@ public sealed class FleetProxyProbeTests
             await gate.WaitForBlockedAuthenticationAsync(pending, Ct);
             Assert.NotNull(gate.AskPass);
             Assert.True(File.Exists(gate.AskPass), "The blocked authentication must own its askpass file before the deadline.");
-            ProxyProbeResult result;
-            try
-            {
-                result = await pending.WaitAsync(budget + CancellationProofTimeout, Ct);
-            }
-            catch (TimeoutException)
-            {
-                await ManagedStackDiagnostics.ReportAsync(pending);
-                throw;
-            }
+            var result = await pending.WaitAsync(budget + CancellationProofTimeout, Ct);
             Assert.Equal((layer, ProxyProbeOutcome.Failed, ProxyProbeStage.Ssh, 1), (result.Layer, result.Outcome, result.Stage, result.ExitCode));
             Assert.True(elapsed.Elapsed >= budget - DeadlineTimerTolerance, "The held transport must not fail before the production layer deadline.");
         }
