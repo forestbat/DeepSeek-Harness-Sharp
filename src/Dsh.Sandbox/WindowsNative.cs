@@ -96,6 +96,8 @@ internal static class WindowsNative
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool AccessCheck(nint descriptor, SafeAccessTokenHandle token, uint access,
         ref GenericMapping mapping, nint privileges, ref uint privilegesLength, out uint granted, [MarshalAs(UnmanagedType.Bool)] out bool allowed);
+    [DllImport("advapi32.dll")]
+    internal static extern void MapGenericMask(ref uint access, ref GenericMapping mapping);
     internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
         => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
     internal static string PathForNative(string path)

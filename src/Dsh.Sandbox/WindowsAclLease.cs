@@ -43,17 +43,17 @@ internal sealed class WindowsAclLease : IDisposable
         {
             // Bootstrap grants apply only to the executable and working-directory objects before the suspended token is available.
             var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            GrantObject(policy.Executable);
+            GrantObject(policy.Executable, directory: false);
             if (!StringComparer.OrdinalIgnoreCase.Equals(policy.Executable, policy.WorkingDirectory))
-                GrantObject(policy.WorkingDirectory);
+                GrantObject(policy.WorkingDirectory, directory: true);
             return lease;
 
-            void GrantObject(string path)
+            void GrantObject(string path, bool directory)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (SandboxPolicy.Contains(windows, path))
                     return;
-                var entry = new Entry(path, lease._measurements, 0, bootstrap: true);
+                var entry = new Entry(path, lease._measurements, 0, bootstrap: true, bootstrapDirectory: directory);
                 lease._entries.Add(entry);
                 entry.Grant(lease._sid, ReadExecute, ReadExecute, false, false, policy.AllowNetwork, null, cancellationToken);
             }
@@ -71,7 +71,7 @@ internal sealed class WindowsAclLease : IDisposable
 
     public void Apply(SandboxPolicy policy, SafeFileHandle process, CancellationToken cancellationToken)
     {
-        using var effectiveRead = EffectiveRead.TryCreate(process);
+        using var effectiveRead = EffectiveRead.TryCreate(process, _measurements);
         var paths = new Dictionary<string, (bool Write, bool Directory, int Class)>(StringComparer.OrdinalIgnoreCase);
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
@@ -167,6 +167,11 @@ internal sealed class WindowsAclLease : IDisposable
         private readonly long _id = Interlocked.Increment(ref _nextId);
         private readonly long[] _ticks = new long[3 * Stages];
         private readonly long[] _counts = new long[3 * Stages];
+        // Read checks: token open/duplicate failure, token ready, descriptor query failure, missing owner/group, unstable ACL,
+        // current API failure/denied/allowed, no inheritable grant, label restriction, inherited API failure/denied/allowed,
+        // reused file/directory and handle-open failure. Errors retain only the first native code for each check.
+        private readonly long[] _readChecks = new long[17];
+        private readonly int[] _readErrors = new int[17];
         private readonly long _started = Stopwatch.GetTimestamp();
         private long _stageStarted;
         private int _current = -1;
@@ -183,6 +188,13 @@ internal sealed class WindowsAclLease : IDisposable
                 Interlocked.Increment(ref _counts[current]);
         }
 
+        public void ReadCheck(int check, int error = 0)
+        {
+            Interlocked.Increment(ref _readChecks[check]);
+            if (error != 0)
+                Interlocked.CompareExchange(ref _readErrors[check], error, 0);
+        }
+
         public async Task ReportAsync(int reason)
         {
             try
@@ -196,8 +208,15 @@ internal sealed class WindowsAclLease : IDisposable
                     milliseconds[index] = (long)(Volatile.Read(ref _ticks[index]) * 1000d / Stopwatch.Frequency);
                     counts[index] = Volatile.Read(ref _counts[index]);
                 }
+                var readChecks = new long[_readChecks.Length];
+                var readErrors = new int[_readErrors.Length];
+                for (var index = 0; index < readChecks.Length; index++)
+                {
+                    readChecks[index] = Volatile.Read(ref _readChecks[index]);
+                    readErrors[index] = Volatile.Read(ref _readErrors[index]);
+                }
                 // Numeric snapshots are best-effort; each lease emits its cancellation snapshot and final aggregate.
-                await Console.Error.WriteLineAsync($"SANDBOX_ACL_MEASURE lease={_id} reason={reason} current={current} current-ms={activeMilliseconds} lifetime-ms={(long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds} counts={string.Join(",", counts)} completed-ms={string.Join(",", milliseconds)}").ConfigureAwait(false);
+                await Console.Error.WriteLineAsync($"SANDBOX_ACL_MEASURE lease={_id} reason={reason} current={current} current-ms={activeMilliseconds} lifetime-ms={(long)Stopwatch.GetElapsedTime(_started).TotalMilliseconds} counts={string.Join(",", counts)} completed-ms={string.Join(",", milliseconds)} read-checks={string.Join(",", readChecks)} read-errors={string.Join(",", readErrors)}").ConfigureAwait(false);
             }
             catch (Exception) { }
         }
@@ -226,25 +245,36 @@ internal sealed class WindowsAclLease : IDisposable
         private const uint FileGenericWrite = 0x120116;
         private const uint FileGenericExecute = 0x1200a0;
         private const uint FileAllAccess = 0x1f01ff;
+        private const uint GenericAccessMask = 0xf0000000;
         private const byte MandatoryLabelAceType = 0x11;
         private const int MandatoryReadExecuteUp = 6;
         private static readonly SecurityIdentifier OwnerRights = new("S-1-3-4");
         private static readonly SecurityIdentifier PrincipalSelf = new("S-1-5-10");
         private readonly SafeAccessTokenHandle _token;
+        private readonly AclMeasurements _measurements;
 
-        private EffectiveRead(SafeAccessTokenHandle token) => _token = token;
+        private EffectiveRead(SafeAccessTokenHandle token, AclMeasurements measurements)
+        {
+            _token = token;
+            _measurements = measurements;
+        }
 
-        public static EffectiveRead? TryCreate(SafeFileHandle process)
+        public static EffectiveRead? TryCreate(SafeFileHandle process, AclMeasurements measurements)
         {
             if (!WindowsNative.OpenProcessToken(process, TokenQuery | TokenDuplicate, out var primary))
             {
+                measurements.ReadCheck(0, Marshal.GetLastPInvokeError());
                 primary.Dispose();
                 return null;
             }
             using (primary)
             {
                 if (WindowsNative.DuplicateTokenEx(primary, TokenQuery, 0, SecurityImpersonation, ImpersonationToken, out var duplicate))
-                    return new EffectiveRead(duplicate);
+                {
+                    measurements.ReadCheck(2);
+                    return new EffectiveRead(duplicate, measurements);
+                }
+                measurements.ReadCheck(1, Marshal.GetLastPInvokeError());
                 duplicate.Dispose();
                 return null;
             }
@@ -252,14 +282,18 @@ internal sealed class WindowsAclLease : IDisposable
 
         public void Dispose() => _token.Dispose();
 
-        public unsafe bool CanRead(nint descriptor)
+        public unsafe bool CanRead(nint descriptor, bool inherited = false)
         {
             var mapping = new WindowsNative.GenericMapping { Read = FileGenericRead, Write = FileGenericWrite, Execute = FileGenericExecute, All = FileAllAccess };
             byte* privileges = stackalloc byte[PrivilegeBufferBytes];
             uint length = PrivilegeBufferBytes;
             // The existing SID grant remains the fallback when the native check cannot prove read authority.
-            return WindowsNative.AccessCheck(descriptor, _token, ReadExecute, ref mapping, (nint)privileges, ref length,
-                out var granted, out var allowed) && allowed && (granted & ReadExecute) == ReadExecute;
+            var succeeded = WindowsNative.AccessCheck(descriptor, _token, ReadExecute, ref mapping, (nint)privileges, ref length,
+                out var granted, out var allowed);
+            var error = succeeded ? 0 : Marshal.GetLastPInvokeError();
+            var readable = succeeded && allowed && (granted & ReadExecute) == ReadExecute;
+            _measurements.ReadCheck((inherited ? 11 : 6) + (!succeeded ? 0 : readable ? 2 : 1), error);
+            return readable;
         }
 
         public static bool IsStableAllowAcl(RawAcl acl, SecurityIdentifier sid)
@@ -277,6 +311,7 @@ internal sealed class WindowsAclLease : IDisposable
             var inherited = new RawAcl(acl.Revision, acl.Count + 1);
             // An OWNER RIGHTS entry limits owner rights to explicit ACEs for future creators.
             inherited.InsertAce(0, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, 0, OwnerRights, false, null));
+            var mapping = new WindowsNative.GenericMapping { Read = FileGenericRead, Write = FileGenericWrite, Execute = FileGenericExecute, All = FileAllAccess };
             foreach (CommonAce ace in acl)
             {
                 const AceFlags propagation = AceFlags.ObjectInherit | AceFlags.ContainerInherit;
@@ -284,11 +319,18 @@ internal sealed class WindowsAclLease : IDisposable
                     || ace.SecurityIdentifier.Value.StartsWith("S-1-3-", StringComparison.Ordinal)
                     || ace.SecurityIdentifier == PrincipalSelf)
                     continue;
+                // Real inheritance maps generic rights when the ACE becomes effective on a file or directory.
+                var access = unchecked((uint)ace.AccessMask);
+                if ((access & GenericAccessMask) != 0)
+                    WindowsNative.MapGenericMask(ref access, ref mapping);
                 inherited.InsertAce(inherited.Count, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed,
-                    ace.AccessMask, ace.SecurityIdentifier, false, null));
+                    unchecked((int)access), ace.SecurityIdentifier, false, null));
             }
             if (inherited.Count == 1)
+            {
+                _measurements.ReadCheck(9);
                 return false;
+            }
             if (label != 0)
             {
                 var count = (ushort)Marshal.ReadInt16(label, 4);
@@ -297,7 +339,10 @@ internal sealed class WindowsAclLease : IDisposable
                 {
                     // Mandatory-label ACEs with read/execute-up restrictions retain the normal SID-grant path.
                     if (Marshal.ReadByte(label, offset) != MandatoryLabelAceType || (Marshal.ReadInt32(label, offset + 4) & MandatoryReadExecuteUp) != 0)
+                    {
+                        _measurements.ReadCheck(10);
                         return false;
+                    }
                     offset += (ushort)Marshal.ReadInt16(label, offset + 2);
                 }
             }
@@ -306,11 +351,11 @@ internal sealed class WindowsAclLease : IDisposable
             var bytes = new byte[descriptor.BinaryLength];
             descriptor.GetBinaryForm(bytes, 0);
             fixed (byte* pointer = bytes)
-                return CanRead((nint)pointer);
+                return CanRead((nint)pointer, inherited: true);
         }
     }
 
-    private sealed class Entry(string path, AclMeasurements measurements, int rootClass, bool bootstrap = false)
+    private sealed class Entry(string path, AclMeasurements measurements, int rootClass, bool bootstrap = false, bool bootstrapDirectory = false)
     {
         private const uint BootstrapAclAccess = 0x60000;
         private const uint PolicyAclAccess = 0xe0000;
@@ -327,6 +372,7 @@ internal sealed class WindowsAclLease : IDisposable
             if (!handle.IsInvalid)
                 return handle;
             var error = Marshal.GetLastPInvokeError();
+            measurements.ReadCheck(16, error);
             handle.Dispose();
             throw new Win32Exception(error, "Cannot open an AppContainer filesystem grant.");
         }
@@ -348,8 +394,8 @@ internal sealed class WindowsAclLease : IDisposable
             EffectiveRead? effectiveRead)
         {
             measurements.Set(3, rootClass);
-            // Bootstrap's object-only handle suppresses existing-child propagation through MAXIMUM_ALLOWED.
-            using var handle = Open(propagate: !bootstrap);
+            // Only a bootstrap directory needs propagation suppressed. An executable needs ACL rights, never data-write/delete rights from MAXIMUM_ALLOWED.
+            using var handle = Open(propagate: !bootstrapDirectory);
             measurements.Set(4, rootClass);
             var (acl, protectedDacl, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
             measurements.Set(12, rootClass);
@@ -542,12 +588,19 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private static (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle handle,
+        private (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle handle,
             SecurityIdentifier sid, bool directory, EffectiveRead? effectiveRead)
         {
-            if (effectiveRead is null || WindowsNative.GetSecurityInfo(handle, 1, 0x17, out var owner, out var group,
-                    out var dacl, out var label, out var descriptor) != 0)
+            if (effectiveRead is null)
             {
+                var original = ReadAcl(handle);
+                return (original.Acl, original.Protected, false);
+            }
+            var queryError = WindowsNative.GetSecurityInfo(handle, 1, 0x17, out var owner, out var group,
+                out var dacl, out var label, out var descriptor);
+            if (queryError != 0)
+            {
+                measurements.ReadCheck(3, unchecked((int)queryError));
                 var original = ReadAcl(handle);
                 return (original.Acl, original.Protected, false);
             }
@@ -562,9 +615,16 @@ internal sealed class WindowsAclLease : IDisposable
                 var acl = new RawAcl(bytes, 0);
                 var protectedDacl = (control & DaclProtected) != 0;
                 // Inspect every object, including protected descendants, and retain the narrowing path for this SID's existing ACEs.
-                var reuseRead = owner != 0 && group != 0 && EffectiveRead.IsStableAllowAcl(acl, sid)
-                    && effectiveRead.CanRead(descriptor)
+                var hasPrincipals = owner != 0 && group != 0;
+                var stable = EffectiveRead.IsStableAllowAcl(acl, sid);
+                if (!hasPrincipals)
+                    measurements.ReadCheck(4);
+                else if (!stable)
+                    measurements.ReadCheck(5);
+                var reuseRead = hasPrincipals && stable && effectiveRead.CanRead(descriptor)
                     && (!directory || effectiveRead.CanInheritRead(acl, owner, group, label));
+                if (reuseRead)
+                    measurements.ReadCheck(directory ? 15 : 14);
                 return (acl, protectedDacl, reuseRead);
             }
             finally { WindowsNative.LocalFree(descriptor); }
