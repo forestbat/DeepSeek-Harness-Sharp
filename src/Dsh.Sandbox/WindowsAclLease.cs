@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.IO.Enumeration;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -126,13 +125,11 @@ internal sealed class WindowsAclLease : IDisposable
         try
         {
             if (directory)
-                foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
-                    static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
+                FileSystemTreeTraversal.Collect(root, (path, isDirectory) =>
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    paths[path] = (write, isDirectory);
-                }
+                    lock (paths)
+                        paths[path] = (write, isDirectory);
+                }, cancellationToken);
         }
         catch
         {

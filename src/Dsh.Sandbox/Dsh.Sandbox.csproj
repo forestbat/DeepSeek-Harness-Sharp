@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Dsh.Transport" />
+    <InternalsVisibleTo Include="Dsh.Tests" />
   </ItemGroup>
 </Project>
