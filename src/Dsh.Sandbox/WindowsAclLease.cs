@@ -23,29 +23,32 @@ internal sealed class WindowsAclLease : IDisposable
     private static readonly SecurityIdentifier AllRestrictedApplicationPackages = new("S-1-15-2-2");
     private static readonly SecurityIdentifier[] NetworkCapabilitySids =
         Array.ConvertAll(WindowsNative.NetworkCapabilities, static sid => new SecurityIdentifier(sid));
+    private static readonly Lock AclGate = new();
+    private static readonly Dictionary<string, WritableLabel> WritableLabels = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, TemporaryInheritance> ProtectedInheritance = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<Entry> _entries = [];
     private readonly SecurityIdentifier _sid;
     private bool _disposed;
 
     private WindowsAclLease(SecurityIdentifier sid) => _sid = sid;
 
-    public static WindowsAclLease Create(nint sid, SandboxPolicy policy)
+    public static WindowsAclLease Create(nint sid, SandboxPolicy policy, CancellationToken cancellationToken)
     {
         var lease = new WindowsAclLease(new SecurityIdentifier(sid));
         try
         {
             var paths = new Dictionary<string, (bool Write, bool Directory)>(StringComparer.OrdinalIgnoreCase);
             var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            foreach (var grant in policy.Writable)
+            foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
                 if (!SandboxPolicy.Contains(windows, grant.Source))
-                    AddTree(paths, grant.Source, grant.IsDirectory, true);
-            foreach (var grant in policy.Readable)
+                    AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken);
+            foreach (var grant in policy.Readable.OrderBy(static grant => grant.Source.Length))
                 if (!SandboxPolicy.Contains(windows, grant.Source))
-                    AddTree(paths, grant.Source, grant.IsDirectory, false);
+                    AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken);
             foreach (var denied in policy.Denied)
             {
                 if (File.Exists(denied) || Directory.Exists(denied))
-                    AddTree(paths, denied, Directory.Exists(denied), false);
+                    AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken);
                 else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                     throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
             }
@@ -53,12 +56,14 @@ internal sealed class WindowsAclLease : IDisposable
             foreach (var path in paths.Keys)
                 for (var parent = Path.GetDirectoryName(path); parent is not null; parent = Path.GetDirectoryName(parent))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (paths.ContainsKey(parent) || !checkedAncestors.Add(parent))
                         break;
                     Entry.DemandAmbientAncestorGrant(parent, policy.AllowNetwork);
                 }
             foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var denyWrite = !access.Write;
                 var denyDelete = access.Write && access.Directory && (policy.Denied.Any(denied => SandboxPolicy.Contains(path, denied))
                     || policy.Readable.Any(read => SandboxPolicy.Contains(path, read.Source)));
@@ -68,7 +73,7 @@ internal sealed class WindowsAclLease : IDisposable
                     mask &= ~Delete;
                 var entry = new Entry(path);
                 lease._entries.Add(entry);
-                entry.Grant(lease._sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork);
+                entry.Grant(lease._sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork, cancellationToken);
             }
             return lease;
         }
@@ -83,14 +88,23 @@ internal sealed class WindowsAclLease : IDisposable
         }
     }
 
-    private static void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write)
+    private static void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        // Earlier trees already include every descendant with the same access.
+        // A different access still walks the subtree to narrow all existing children.
+        if (paths.TryGetValue(root, out var existing) && existing == (write, directory))
+            return;
         paths[root] = (write, directory);
         if (directory)
             foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
                 static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
                 new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 paths[path] = (write, isDirectory);
+            }
     }
 
     public void Dispose()
@@ -108,13 +122,23 @@ internal sealed class WindowsAclLease : IDisposable
             throw new AggregateException("Removing the AppContainer filesystem grants failed.", failures);
     }
 
+    private sealed class WritableLabel(byte[]? original)
+    {
+        public byte[]? Original { get; } = original;
+        public int Owners { get; set; } = 1;
+    }
+
+    private sealed class TemporaryInheritance(List<GenericAce> copies)
+    {
+        public List<GenericAce> Copies { get; } = copies;
+        public int Owners { get; set; } = 1;
+    }
+
     private sealed class Entry(string path)
     {
-        private byte[]? _originalLabel;
-        private bool _labelChanged;
+        private WritableLabel? _label;
         private bool _sidGranted;
-        private bool _restoreInheritance;
-        private List<GenericAce>? _inheritanceCopies;
+        private TemporaryInheritance? _inheritance;
 
         private SafeFileHandle Open()
         {
@@ -126,40 +150,64 @@ internal sealed class WindowsAclLease : IDisposable
             throw new Win32Exception(error, "Cannot open an AppContainer filesystem grant.");
         }
 
-        public void Grant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network)
+        public void Grant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network,
+            CancellationToken cancellationToken)
+        {
+            // SetSecurityInfo propagates to descendants; serialize the complete read/modify/write, not just one native write, so another lease cannot overwrite or revoke this SID.
+            lock (AclGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                GrantCore(sid, access, inheritedAccess, directory, restrict, network);
+            }
+        }
+
+        private void GrantCore(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network)
         {
             using var handle = Open();
             var (acl, protectedDacl) = ReadAcl(handle);
-            var inheritedGrant = false;
             if (restrict)
-            {
                 DemandNoAmbientGrant(acl, access, network);
-                if ((access & WriteData) == 0 && inheritedAccess == access && HasInheritedReadOnlyGrant(acl, sid, access, directory))
-                    return;
-                for (var index = acl.Count - 1; index >= 0; index--)
-                    if (acl[index] is CommonAce ace && ace.SecurityIdentifier == sid)
-                    {
-                        inheritedGrant |= (ace.AceFlags & AceFlags.Inherited) != 0 && (ace.AccessMask & ~access) != 0;
-                        acl.RemoveAce(index);
-                    }
+            if (restrict && ProtectedInheritance.TryGetValue(path, out var sharedInheritance))
+            {
+                sharedInheritance.Owners++;
+                _inheritance = sharedInheritance;
             }
-            // AppContainer grants are allow-only: a package deny ACE cannot cancel an inherited writable grant.
-            // Stop re-inheriting this SID's excess access while retaining every other principal's existing ACEs.
-            _restoreInheritance = inheritedGrant && !protectedDacl;
-            if (_restoreInheritance)
-                TrackInheritanceCopies(acl);
-            var inherited = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
-            var insertion = 0;
-            while (insertion < acl.Count && (acl[insertion].AceFlags & AceFlags.Inherited) == 0)
-                insertion++;
-            acl.InsertAce(insertion++, new CommonAce(inheritedAccess == access ? inherited : AceFlags.None, AceQualifier.AccessAllowed, access, sid, false, null));
-            if (directory && inheritedAccess != access)
-                acl.InsertAce(insertion, new CommonAce(inherited | AceFlags.InheritOnly, AceQualifier.AccessAllowed, inheritedAccess, sid, false, null));
-            _sidGranted = true;
-            WriteAcl(handle, acl, _restoreInheritance ? ProtectDacl : 0);
+            if (inheritedAccess != access || !HasInheritedGrant(acl, sid, access, directory))
+            {
+                var inheritedGrant = false;
+                if (restrict)
+                    for (var index = acl.Count - 1; index >= 0; index--)
+                        if (acl[index] is CommonAce ace && ace.SecurityIdentifier == sid)
+                        {
+                            inheritedGrant |= (ace.AceFlags & AceFlags.Inherited) != 0 && (ace.AccessMask & ~access) != 0;
+                            acl.RemoveAce(index);
+                        }
+                // Stop inheriting this SID's excess access, retaining every other principal.
+                var protectDacl = inheritedGrant && !protectedDacl;
+                if (protectDacl)
+                {
+                    _inheritance = new TemporaryInheritance(CaptureInheritanceCopies(acl));
+                    ProtectedInheritance.Add(path, _inheritance);
+                }
+                var inherited = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
+                var insertion = 0;
+                while (insertion < acl.Count && (acl[insertion].AceFlags & AceFlags.Inherited) == 0)
+                    insertion++;
+                acl.InsertAce(insertion++, new CommonAce(inheritedAccess == access ? inherited : AceFlags.None, AceQualifier.AccessAllowed, access, sid, false, null));
+                if (directory && inheritedAccess != access)
+                    acl.InsertAce(insertion, new CommonAce(inherited | AceFlags.InheritOnly, AceQualifier.AccessAllowed, inheritedAccess, sid, false, null));
+                _sidGranted = true;
+                WriteAcl(handle, acl, protectDacl ? ProtectDacl : 0);
+            }
             if ((access & WriteData) == 0)
                 return;
-            _originalLabel = ReadAclBytes(handle, 0x10).Acl;
+            if (WritableLabels.TryGetValue(path, out var shared))
+            {
+                shared.Owners++;
+                _label = shared;
+                return;
+            }
+            var originalLabel = ReadAclBytes(handle, 0x10).Acl;
             if (!WindowsNative.ConvertStringSecurityDescriptorToSecurityDescriptor(directory ? "S:(ML;OICI;NW;;;LW)" : "S:(ML;;NW;;;LW)", 1, out var descriptor, out _))
                 throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot construct the AppContainer writable label.");
             try
@@ -167,12 +215,13 @@ internal sealed class WindowsAclLease : IDisposable
                 if (!WindowsNative.GetSecurityDescriptorSacl(descriptor, out _, out var sacl, out _))
                     throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot read the AppContainer writable label.");
                 Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, sacl));
-                _labelChanged = true;
+                _label = new WritableLabel(originalLabel);
+                WritableLabels.Add(path, _label);
             }
             finally { WindowsNative.LocalFree(descriptor); }
         }
 
-        private static bool HasInheritedReadOnlyGrant(RawAcl acl, SecurityIdentifier sid, int access, bool directory)
+        private static bool HasInheritedGrant(RawAcl acl, SecurityIdentifier sid, int access, bool directory)
         {
             var propagation = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
             for (var index = 0; index < acl.Count; index++)
@@ -210,23 +259,22 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private void TrackInheritanceCopies(RawAcl acl)
+        private static List<GenericAce> CaptureInheritanceCopies(RawAcl acl)
         {
-            _inheritanceCopies = [];
+            List<GenericAce> copies = [];
             foreach (GenericAce ace in acl)
             {
                 if ((ace.AceFlags & AceFlags.Inherited) == 0)
                     continue;
                 var copy = ace.Copy();
                 copy.AceFlags &= ~AceFlags.Inherited;
-                _inheritanceCopies.Add(copy);
+                copies.Add(copy);
             }
+            return copies;
         }
 
-        private void RemoveInheritanceCopies(RawAcl acl)
+        private static void RemoveInheritanceCopies(RawAcl acl, List<GenericAce> copies)
         {
-            if (_inheritanceCopies is not { } copies)
-                return;
             // Protecting the DACL materializes inherited ACEs as explicit copies.
             // Remove only unchanged copies before inheriting the current parent ACL again.
             foreach (var copy in copies)
@@ -238,19 +286,47 @@ internal sealed class WindowsAclLease : IDisposable
                     }
         }
 
-        public unsafe void Remove(SecurityIdentifier sid)
+        public void Remove(SecurityIdentifier sid)
         {
-            if (!_sidGranted || !File.Exists(path) && !Directory.Exists(path))
+            lock (AclGate)
+                RemoveCore(sid);
+        }
+
+        private unsafe void RemoveCore(SecurityIdentifier sid)
+        {
+            var restoreInheritance = false;
+            var copies = _inheritance?.Copies;
+            if (_inheritance is { } inherited)
+            {
+                restoreInheritance = --inherited.Owners == 0;
+                if (restoreInheritance)
+                    ProtectedInheritance.Remove(path);
+                _inheritance = null;
+            }
+            var restoreLabel = false;
+            var originalLabel = _label?.Original;
+            if (_label is { } owned)
+            {
+                restoreLabel = --owned.Owners == 0;
+                if (restoreLabel)
+                    WritableLabels.Remove(path);
+                _label = null;
+            }
+            if ((!_sidGranted && !restoreLabel && !restoreInheritance) || !File.Exists(path) && !Directory.Exists(path))
                 return;
             using var handle = Open();
-            var acl = ReadAcl(handle).Acl;
-            for (var index = acl.Count - 1; index >= 0; index--)
-                if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
-                    acl.RemoveAce(index);
-            RemoveInheritanceCopies(acl);
-            WriteAcl(handle, acl, _restoreInheritance ? UnprotectDacl : 0);
-            if (_labelChanged)
-                fixed (byte* label = _originalLabel)
+            if (_sidGranted || restoreInheritance)
+            {
+                var acl = ReadAcl(handle).Acl;
+                for (var index = acl.Count - 1; index >= 0; index--)
+                    if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
+                        acl.RemoveAce(index);
+                if (restoreInheritance)
+                    RemoveInheritanceCopies(acl, copies!);
+                WriteAcl(handle, acl, restoreInheritance ? UnprotectDacl : 0);
+            }
+            if (restoreLabel)
+                fixed (byte* label = originalLabel)
                     Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, (nint)label));
         }
 

@@ -97,6 +97,56 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         Assert.Equal("host-write-after-disposal", File.ReadAllText(denied));
     }
 
+    [Fact(Timeout = 60000)]
+    [Trait("Category", "SandboxNative")]
+    public async Task OverlappingPathGrants_DisposingOneOwnerPreservesTheOtherConsumer()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
+        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
+        var input = Path.Combine(_root, "readable.txt");
+        var secret = Path.Combine(_root, "not-granted.txt");
+        var settings = Path.Combine(working, "settings.yaml");
+        File.WriteAllText(input, SandboxFileGrantConsumer.Readable);
+        File.WriteAllText(secret, "host-only");
+        File.WriteAllText(settings, "unchanged");
+        var originalDirectoryAcl = ReadDacl(working);
+        var originalInputAcl = ReadDacl(input);
+        var originalSettingsAcl = ReadDacl(settings);
+        var launch = PluginSandboxLaunch.Options(SandboxRuntimePaths.ForCurrentHost());
+        var options = launch with
+        {
+            WorkingDirectory = working,
+            ReadOnlyPaths = [input],
+            WritablePaths = [working],
+            DeniedWritePaths = [settings],
+            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, settings, bool.FalseString],
+        };
+        await using (var first = await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken))
+        await using (var second = await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken))
+        {
+            // Both native processes own the same paths, but neither has received its input.
+            await first.DisposeAsync();
+            var output = new StreamReader(second.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+            var error = new StreamReader(second.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
+            await second.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
+            await second.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
+            await second.StandardInput.DisposeAsync();
+            Assert.Equal(0, await second.WaitForExitAsync(TestContext.Current.CancellationToken)
+                .WaitAsync(Deadline, TestContext.Current.CancellationToken));
+            Assert.Contains(SandboxFileGrantConsumer.Input, await output);
+            Assert.Contains("diagnostic", await error);
+        }
+        Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")));
+        Assert.Equal("unchanged", File.ReadAllText(settings));
+        Assert.Equal("host-only", File.ReadAllText(secret));
+        Assert.Equal(SandboxFileGrantConsumer.Readable, File.ReadAllText(input));
+        AssertDaclRestored(originalDirectoryAcl, working);
+        AssertDaclRestored(originalInputAcl, input);
+        AssertDaclRestored(originalSettingsAcl, settings);
+        AssertInheritanceRestored(working, settings, protectedChild: false);
+    }
+
     [Theory]
     [InlineData("S-1-15-2-1", false)]
     [InlineData("S-1-15-2-2", false)]

@@ -36,8 +36,9 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         Exit = ObserveAsync();
     }
 
-    public static WindowsSandbox Start(SandboxPolicy policy)
+    public static WindowsSandbox Start(SandboxPolicy policy, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var profile = $"Dsh.Sandbox.{Guid.NewGuid():N}";
         var result = WindowsNative.CreateAppContainerProfile(profile, "Dsh sandbox", "Ephemeral isolated process", 0, 0, out var sid);
         if (result < 0)
@@ -48,7 +49,8 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         Stream? inputStream = null, outputStream = null, errorStream = null;
         try
         {
-            acl = WindowsAclLease.Create(sid, policy);
+            acl = WindowsAclLease.Create(sid, policy, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             job = WindowsNative.CreateJobObject(0, null);
             CheckHandle(job, "create the sandbox job");
             ConfigureJob(job, policy);
@@ -72,6 +74,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             WindowsNative.ProcessInformation information;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 // Keep the canonical DOS working directory: cmd treats a forced extended-length prefix as UNC and changes directories.
                 Check(WindowsNative.CreateProcess(WindowsNative.PathForNative(policy.Executable), command, 0, 0, true,
                     0x00000004 | 0x00000400 | 0x00080000 | DetachedProcess, environment, policy.WorkingDirectory, ref startup, out information), "create the suspended AppContainer process");
@@ -88,6 +91,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
                 inputStream = input.TakeParent(FileAccess.Write);
                 outputStream = output.TakeParent(FileAccess.Read);
                 errorStream = error.TakeParent(FileAccess.Read);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (WindowsNative.ResumeThread(thread) == uint.MaxValue)
                     throw NativeError("resume the AppContainer process");
                 return new WindowsSandbox((int)information.ProcessId, process, job, acl, profile,
