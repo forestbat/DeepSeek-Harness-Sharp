@@ -215,7 +215,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
         return (agent, handle);
     }
 
-    private static async Task ResetAsync(HarnessApp app, SharedApp shared)
+    private static Task ResetAsync(HarnessApp app, SharedApp shared)
     {
         var registry = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var store = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
@@ -237,23 +237,11 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
         foreach (var path in new[] { app.Home.SessionsPath })
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
-        await RestoreSettingsAsync(app.Home, shared.Settings!);
+        HarnessSettings.MutateDocument(app.Home.SettingsFile, (_, _) => shared.Settings!);
         Restore(Path.Combine(app.Home.Root, ".agent-presets"), shared.Presets);
+        return Task.CompletedTask;
     }
 
-    /** Publish the baseline transactionally while live readers retain their prior snapshot. */
-    private static async Task RestoreSettingsAsync(HarnessHome home, string snapshot)
-    {
-        var before = "";
-        if (File.Exists(home.SettingsFile))
-        {
-            using var stream = new FileStream(home.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            before = await reader.ReadToEndAsync();
-        }
-        await HarnessSettings.CommitApprovedMutationAsync(home.SettingsFile, before, snapshot,
-            (temporary, signal) => File.WriteAllTextAsync(temporary, snapshot, signal), CancellationToken.None);
-    }
 
     private static IReadOnlyList<(string Path, byte[] Content)> Snapshot(string directory)
         => Directory.Exists(directory)

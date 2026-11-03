@@ -256,7 +256,8 @@ public sealed class HarnessSettings
         MutateDocument(home.SettingsFile, (existing, _) => SettingsDocument.ReplaceMappingChild(existing, "network", "borrowed_outbound_machine", serialized));
     }
 
-    private static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
+    /** Applies a raw document transform while owning the settings writer transaction. */
+    internal static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
     {
         var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
         using var transaction = new SettingsWriteLock(canonical);
