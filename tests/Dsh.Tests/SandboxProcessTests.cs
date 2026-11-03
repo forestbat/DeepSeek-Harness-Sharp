@@ -22,7 +22,7 @@ public sealed class SandboxProcessTests : IDisposable
     public async Task NativeStdio_RoundTripsWithoutProtocolPollution()
     {
         if (OperatingSystem.IsWindows())
-            Assert.Skip("The Windows native batch test covers redirected native IO.");
+            Assert.Skip("The Windows path consumer covers redirected native IO.");
         await using var sandbox = await StartNativeAsync(Options("/") with
         {
             Arguments = ["-c", "IFS= read -r value; printf '%s\\n' \"$value\"; printf '%s\\n' diagnostic >&2"]

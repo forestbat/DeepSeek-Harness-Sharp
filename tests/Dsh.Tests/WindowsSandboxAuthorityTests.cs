@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -45,75 +46,20 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         var originalDirectoryAcl = ReadDacl(working);
         var originalInputAcl = ReadDacl(input);
         var originalDeniedAcl = ReadDacl(denied);
-        var deniedRelative = Path.GetRelativePath(working, denied);
-        var renameAncestor = protectedParent ? """(ren "config" "moved-config") >nul 2>&1 && exit /b 96""" : "";
-        // Named TYPE performs a directory search before reading; a single-file grant does not grant parent enumeration.
-        // Read every fixture line through one native redirected handle and require EOF after the final line.
-        // Keep batch syntax separate from stdin: SET /P redirects stdin to fixture data, not shell commands.
-        var commands = $$"""
-            @echo off
-            setlocal EnableExtensions DisableDelayedExpansion
-            echo stage=read 1>&2
-            set "firstRead="
-            set "secondRead="
-            set "lastRead="
-            set "extraRead="
-            (
-            set /p firstRead=
-            set /p secondRead=
-            set /p lastRead=
-            set /p extraRead=
-            ) <"..\readable.txt"
-            if not errorlevel 1 exit /b 90
-            if not "%firstRead%"=="readable" exit /b 90
-            if not "%secondRead%"=="second-readable-line" exit /b 90
-            if not "%lastRead%"=="last-readable-line" exit /b 90
-            if defined extraRead exit /b 90
-            echo read-complete:%firstRead%/%secondRead%/%lastRead%
-            (dir /b ".." >nul 2>&1) && exit /b 91
-            set "secretRead="
-            (set /p secretRead=<"..\not-granted.txt") 2>nul
-            if defined secretRead exit /b 99
-            (echo forbidden>>"..\readable.txt") 2>nul && exit /b 93
-            echo stage=write 1>&2
-            (echo forbidden>>"{{deniedRelative}}") 2>nul && exit /b 92
-            (ren "{{deniedRelative}}" "moved.yaml") >nul 2>&1 && exit /b 94
-            del /f /q "{{deniedRelative}}" >nul 2>&1
-            if not exist "{{deniedRelative}}" exit /b 95
-            {{renameAncestor}}
-            echo allowed>allowed.txt
-            if not exist allowed.txt exit /b 100
-            echo disposable>rename-before.txt
-            if not exist rename-before.txt exit /b 101
-            echo stage=rename 1>&2
-            ren rename-before.txt rename-after.txt
-            if exist rename-before.txt exit /b 97
-            if not exist rename-after.txt exit /b 97
-            set "renamedRead="
-            set /p renamedRead=<rename-after.txt
-            if not "%renamedRead%"=="disposable" exit /b 102
-            echo stage=delete 1>&2
-            del /q rename-after.txt
-            if exist rename-after.txt exit /b 98
-            echo diagnostic 1>&2
-            exit /b 0
-            """;
-        const string scriptName = "path-consumer.cmd";
-        var script = Path.Combine(working, scriptName);
-        await File.WriteAllTextAsync(script, $"{commands.ReplaceLineEndings("\r\n")}\r\n", System.Text.Encoding.ASCII, TestContext.Current.CancellationToken);
-        await using (var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+        var launch = PluginSandboxLaunch.Options(SandboxRuntimePaths.ForCurrentHost());
+        await using (var consumer = await SandboxedProcess.StartAsync(launch with
         {
-            Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
             WorkingDirectory = working,
             ReadOnlyPaths = [input],
             WritablePaths = [working],
             DeniedWritePaths = [denied],
-            Arguments = ["/D", "/Q", "/E:ON", "/V:OFF", "/C", scriptName],
+            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, protectedParent.ToString()],
         }, TestContext.Current.CancellationToken))
         {
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = new StreamReader(consumer.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-            // The batch file supplies commands; close the data pipe so it cannot become a second command source.
+            await consumer.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
+            await consumer.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
             await consumer.StandardInput.DisposeAsync();
             var code = await consumer.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
             var stdout = await output;
@@ -129,6 +75,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             var failure = $"The real Windows path consumer exited with {code} (0x{unchecked((uint)code):x8}); {consequences}; stdoutLength={stdout.Length}; stderr={diagnostic[..Math.Min(diagnostic.Length, 2048)]}";
             Assert.True(code == 0, failure);
             Assert.True(stdout.Contains("read-complete:readable/second-readable-line/last-readable-line", StringComparison.Ordinal), failure);
+            Assert.Contains(SandboxFileGrantConsumer.Input, stdout);
             Assert.True(stderr.Contains("diagnostic", StringComparison.Ordinal), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-before.txt")), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-after.txt")), failure);
