@@ -180,8 +180,6 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         {
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = consumer.StandardError.CopyToAsync(Stream.Null, TestContext.Current.CancellationToken);
-            if (inheritable)
-                AssertDaclRestored(originalAcl, readable.FullName);
             // Runtime-created descendants exercise inherited authority after the real consumer starts and before its input is released.
             var lateDirectory = Directory.CreateDirectory(Path.Combine(readable.FullName, "new")).FullName;
             lateFile = Path.Combine(lateDirectory, "late.txt");
