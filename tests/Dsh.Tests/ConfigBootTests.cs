@@ -71,13 +71,12 @@ public class ConfigBootTests
     public async Task StartupImageTcb_ActivatesFileRulesAndEnforcesActualProductionTools()
     {
         foreach (var scalarTool in new[] { false, true })
-            await ExerciseStartupPolicyAsync(scalarTool);
+            await ExerciseStartupPolicyAsync(scalarTool, TestContext.Current.CancellationToken);
     }
 
-    private static async Task ExerciseStartupPolicyAsync(bool scalarTool)
+    private static async Task ExerciseStartupPolicyAsync(bool scalarTool, CancellationToken signal)
     {
         var root = TempTree.CreateDirectory("policy-product");
-        var signal = TestContext.Current.CancellationToken;
         try
         {
             var home = new HarnessHome(Path.Combine(root, "home"));

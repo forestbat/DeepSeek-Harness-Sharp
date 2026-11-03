@@ -727,8 +727,8 @@ public sealed class PluginSandboxIntegrationTests
         Assert.True(File.Exists(staged));
 
         await HarnessSettings.UpdatePluginAsync(fixture.Home, Alpha, existing => existing! with { Enabled = false });
+        using var answerer = fixture.AnswerSettingsDiff(allowed: false);
         var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
-        using var answerer = ApprovalAnswerers.DenyAll(fixture.App.Ctx);
 
         Assert.True((await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact }, TestContext.Current.CancellationToken)).IsError);
 
