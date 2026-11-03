@@ -234,27 +234,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
                 backend.Sessions.Remove(session.SessionId);
         if (app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false) is { } persistence)
             foreach (var snapshot in persistence.List())
-            {
-                try
-                {
-                    persistence.Delete(snapshot.Header.Id);
-                }
-                catch (IOException error) when (OperatingSystem.IsWindows())
-                {
-                    try
-                    {
-                        var directory = JsonlLayout.SessionDir(app.Home.SessionsPath, snapshot.Header.Cwd, snapshot.Header.Id);
-                        TestContext.Current.TestOutputHelper?.WriteLine(
-                            $"GUI session deletion failed: hresult={error.HResult:X8} {WindowsSessionDeleteDiagnostics.Capture(directory)}");
-                    }
-                    catch (Exception diagnosticError)
-                    {
-                        TestContext.Current.TestOutputHelper?.WriteLine(
-                            $"GUI session deletion diagnostics failed: type={diagnosticError.GetType().Name} hresult={diagnosticError.HResult:X8}");
-                    }
-                    throw;
-                }
-            }
+                persistence.Delete(snapshot.Header.Id);
         foreach (var path in new[] { app.Home.SessionsPath })
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);

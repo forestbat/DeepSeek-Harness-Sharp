@@ -654,26 +654,7 @@ public sealed class ChatWindowPaneTests : IDisposable
             Assert.DoesNotContain(panes, entry => entry.PtyId == session.Id.Value);
 
             // A computed marker confirms that the shell executed the submitted command.
-            var promptText = await WaitForPaneTextAsync(chat, paneId, HasPrompt);
-            var promptRendered = HasPrompt(promptText);
-            if (!promptRendered && OperatingSystem.IsWindows())
-            {
-                var shellKind = Path.GetFileNameWithoutExtension(shell).ToLowerInvariant() switch
-                {
-                    "cmd" => "cmd",
-                    "powershell" => "powershell",
-                    "pwsh" => "pwsh",
-                    "bash" or "sh" or "zsh" or "dash" or "ksh" => "posix",
-                    _ => "other",
-                };
-                var hostText = session.SnapshotText();
-                var hostHasPrompt = HasPrompt(hostText);
-                await Console.Error.WriteLineAsync($"OWNED_SHELL_PROMPT_TIMEOUT shell={shellKind} status={session.Status} exit={session.ExitCode} host-text-length={hostText.Length} host-has-prompt={hostHasPrompt} pane-text-length={promptText.Length} in-pty-layer={chat.InPtyLayer}");
-                var diagnosticProcessId = !hostHasPrompt && (shellKind is "powershell" or "pwsh")
-                    ? session.ProcessId : null;
-                await ManagedStackDiagnostics.ReportAsync(null, "OWNED_SHELL_PROMPT_TIMEOUT", diagnosticProcessId);
-            }
-            Assert.True(promptRendered, "The shell did not render its prompt before input.");
+            Assert.True(HasPrompt(await WaitForPaneTextAsync(chat, paneId, HasPrompt)), "The shell did not render its prompt before input.");
             var input = Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase)
                 ? "cmd /v:on /c \"set /a m=6*7 & echo STAGE1-!m!\"\r"
                 : "echo STAGE1-$((6*7))\r";
