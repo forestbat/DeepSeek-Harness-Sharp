@@ -24,6 +24,10 @@ public sealed class GuiViewsHeadlessTests
     private const double WindowWidth = 1280;
     private const double WindowHeight = 800;
 
+    // A timed-out dispatch can outlive its caller, so diagnostics use a process-lifetime writer.
+    private static readonly TextWriter Diagnostics = TextWriter.Synchronized(
+        new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+
     [Fact]
     public async Task FilesView_ShowsTheFileWithLineNumbersAndHighlighting_AndSavesWhatWasTyped() => await HeadlessGui.RunAsync(async () =>
     {
@@ -54,6 +58,10 @@ public sealed class GuiViewsHeadlessTests
     [Fact]
     public async Task GitView_RendersOneDiffCardPerFileOfTheSelectedCommit()
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Observe(int stage) => Diagnostics.WriteLine(
+            $"headless-git-r10 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}");
+        Observe(1);
         using var repo = new GitTestRepository();
         repo.Commit(("a.txt", "one\n"), ("b.txt", "two\n"));
         await using var host = await HarnessHostFixture.CreateAsync("gvg", TestContext.Current.CancellationToken);
@@ -61,17 +69,26 @@ public sealed class GuiViewsHeadlessTests
         await HarnessHostFixture.OpenProjectAsync(client, repo.Sandbox, TestContext.Current.CancellationToken);
         var viewModel = new GitViewModel(client.Git, client.Files, repo.Root, RemotePaths.StyleFor((await client.InfoAsync(TestContext.Current.CancellationToken)).Platform));
         Assert.True(await viewModel.RefreshAsync(), viewModel.Status);
+        Observe(2);
         await HeadlessGui.RunAsync(async () =>
         {
+            Observe(3);
             var window = Show(new GitView { DataContext = viewModel });
+            Observe(4);
             viewModel.SelectedCommit = viewModel.Commits.Single();
             await FleetConnectionTests.WaitForAsync(() => viewModel.DiffCards.Count == 2);
+            Observe(5);
             Dispatcher.UIThread.RunJobs();
+            Observe(6);
             window.CaptureRenderedFrame()?.Dispose();
+            Observe(7);
 
             Assert.Equal(["a.txt", "b.txt"], window.GetVisualDescendants().OfType<DiffView>().Select(view => view.Card!.Title));
+            Observe(8);
             window.Close();
+            Observe(9);
         });
+        Observe(10);
     }
 
     [Fact]
@@ -161,32 +178,45 @@ public sealed class GuiViewsHeadlessTests
     });
 
     [Fact]
-    public async Task ChatView_FollowsAppendsAndStreamingLayout_ButPreservesUserScrollUntilReturningToTail() => await HeadlessGui.RunAsync(async () =>
+    public async Task ChatView_FollowsAppendsAndStreamingLayout_ButPreservesUserScrollUntilReturningToTail()
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Observe(int stage) => Diagnostics.WriteLine(
+            $"headless-chat-r10 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}");
+        Observe(1);
+        await HeadlessGui.RunAsync(async () =>
+    {
+        Observe(2);
         await using var environment = await GuiTestEnvironment.CreateAsync();
+        Observe(3);
         var session = environment.Agent.Session;
         for (var index = 0; index < 14; index++)
             session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"History {index}\nSecond line\nThird line")), new SurfaceOp.Append());
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        Observe(4);
         var chat = new ChatView { DataContext = viewModel };
         var window = Show(chat);
+        Observe(5);
         try
         {
-            Render();
+            Render(6);
             var list = chat.FindControl<ListBox>("MessageList")!;
             var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
             Assert.True(scroll.Extent.Height > scroll.Viewport.Height);
             var wheelPoint = scroll.TranslatePoint(new Point(40, 40), window)!.Value;
+            Observe(8);
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
 
-            var assistant = await StreamAsync(Paragraphs(0, 28) + "initial-tail", "initial-tail");
+            var assistant = await StreamAsync(Paragraphs(0, 28) + "initial-tail", "initial-tail", 9);
             AssertVisible("initial-tail");
             Assert.True(scroll.Extent.Height > 2 * scroll.Viewport.Height);
 
+            Observe(10);
             await StreamAsync("\n\n" + Paragraphs(28, 12) + "grown-tail", "grown-tail");
             AssertVisible("grown-tail");
 
+            Observe(11);
             window.Height -= 120;
             Render();
             AssertVisible("grown-tail");
@@ -199,6 +229,7 @@ public sealed class GuiViewsHeadlessTests
             Render();
             AssertVisible("layout-positioned-tail");
 
+            Observe(12);
             var previousOffset = scroll.Offset.Y;
             var readingOffset = previousOffset;
             assistant.SetText($"{assistant.Text}\n\n{Paragraphs(40, 12)}unfollowed-tail");
@@ -209,36 +240,45 @@ public sealed class GuiViewsHeadlessTests
             Assert.True(readingOffset < previousOffset, "The actual keyboard scroll command must move away from the tail.");
             Assert.Equal(readingOffset, scroll.Offset.Y, 3);
 
+            Observe(13);
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
             AssertVisible("unfollowed-tail");
             await StreamAsync("\n\n" + Paragraphs(52, 12) + "rearmed-tail", "rearmed-tail");
             AssertVisible("rearmed-tail");
 
+            Observe(14);
             window.MouseWheel(wheelPoint, new Vector(0, 8));
             Render();
             readingOffset = scroll.Offset.Y;
             await StreamAsync("\n\n" + Paragraphs(64, 12) + "wheel-unfollowed-tail", "wheel-unfollowed-tail");
             Assert.Equal(readingOffset, scroll.Offset.Y, 3);
 
+            Observe(15);
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
             AssertVisible("wheel-unfollowed-tail");
             await StreamAsync("\n\n" + Paragraphs(76, 12) + "wheel-rearmed-tail", "wheel-rearmed-tail");
             AssertVisible("wheel-rearmed-tail");
 
+            Observe(16);
             session.Append(new AssistantMessagePayload(1, 1,
                 MessageFactory.CreateAssistantMessage([new Dsh.Llm.TextBlock(assistant.Text)], "test", "test-model")), new SurfaceOp.Append());
             session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+            Observe(17);
             await GuiTestEnvironment.WaitForAsync(assistant, () => !assistant.IsStreaming);
+            Observe(18);
             session.Append(new AssistantMessagePayload(2, 1,
                 MessageFactory.CreateAssistantMessage([new Dsh.Llm.TextBlock(Paragraphs(88, 8) + "appended-tail")], "test", "test-model")), new SurfaceOp.Append());
+            Observe(19);
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                 () => viewModel.Messages.Any(message => message.Text.EndsWith("appended-tail", StringComparison.Ordinal)));
+            Observe(20);
             Render();
             AssertVisible("appended-tail");
+            Observe(21);
 
-            async Task<MessageViewModel> StreamAsync(string delta, string marker)
+            async Task<MessageViewModel> StreamAsync(string delta, string marker, int projectionStage = 0)
             {
                 session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, delta)));
                 await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
@@ -246,6 +286,8 @@ public sealed class GuiViewsHeadlessTests
                 var message = viewModel.Messages.Last(message => message.IsAssistant);
                 await GuiTestEnvironment.WaitForAsync(message,
                     () => message.Text.EndsWith(marker, StringComparison.Ordinal));
+                if (projectionStage != 0)
+                    Observe(projectionStage);
                 Render();
                 return message;
             }
@@ -261,15 +303,21 @@ public sealed class GuiViewsHeadlessTests
         }
         finally
         {
+            Observe(22);
             window.Close();
             Dispatcher.UIThread.RunJobs();
+            Observe(23);
         }
 
-        void Render()
+        void Render(int captureStage = 0)
         {
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
+            if (captureStage != 0)
+                Observe(captureStage);
             window.CaptureRenderedFrame()?.Dispose();
+            if (captureStage != 0)
+                Observe(captureStage + 1);
             Dispatcher.UIThread.RunJobs();
         }
 
@@ -280,7 +328,9 @@ public sealed class GuiViewsHeadlessTests
                 text.AppendLine($"Streaming paragraph {index}.").AppendLine();
             return text.ToString();
         }
-    });
+        });
+        Observe(24);
+    }
 
     private static void AssertInsideViewport(Control control, Control viewport)
     {
