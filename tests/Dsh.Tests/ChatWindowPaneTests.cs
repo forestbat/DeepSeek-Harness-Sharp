@@ -671,7 +671,7 @@ public sealed class ChatWindowPaneTests : IDisposable
                 await Console.Error.WriteLineAsync($"OWNED_SHELL_PROMPT_TIMEOUT shell={shellKind} status={session.Status} exit={session.ExitCode} host-text-length={hostText.Length} host-has-prompt={hostHasPrompt} pane-text-length={promptText.Length} in-pty-layer={chat.InPtyLayer}");
                 var diagnosticProcessId = !hostHasPrompt && (shellKind is "powershell" or "pwsh")
                     ? session.ProcessId : null;
-                await ManagedStackDiagnostics.ReportAsync(session.WaitForExitAsync(), "OWNED_SHELL_PROMPT_TIMEOUT", diagnosticProcessId);
+                await ManagedStackDiagnostics.ReportAsync(null, "OWNED_SHELL_PROMPT_TIMEOUT", diagnosticProcessId);
             }
             Assert.True(promptRendered, "The shell did not render its prompt before input.");
             var input = Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase)
