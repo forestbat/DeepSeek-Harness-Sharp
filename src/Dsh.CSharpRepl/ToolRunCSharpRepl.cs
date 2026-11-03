@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,6 +14,7 @@ public static class ToolRunCSharpRepl
     public const string ToolName = "run_csharp_repl";
     private const long DefaultTimeoutMs = 120_000;
     private const long MaxTimeoutMs = 600_000;
+    private static int _diagnosticCall;
 
     public static IDisposable Register(Context ctx, CSharpReplConfig? config = null)
     {
@@ -111,7 +113,13 @@ public static class ToolRunCSharpRepl
 
         using var status = new CSharpReplExitStatus();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+        var diagnosticCall = OperatingSystem.IsWindows() ? Interlocked.Increment(ref _diagnosticCall) : 0;
+        var started = OperatingSystem.IsWindows() ? Stopwatch.GetTimestamp() : 0;
+        using var diagnostics = OperatingSystem.IsWindows()
+            ? new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true }
+            : null;
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeout.Token);
+        ObserveWindowsStage(diagnostics, diagnosticCall, started, 0, 0);
         using var handle = await subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = [executable, status.PreloadPath],
@@ -122,14 +130,18 @@ public static class ToolRunCSharpRepl
         });
         try
         {
+            ObserveWindowsStage(diagnostics, diagnosticCall, started, 1, handle.Pid);
             Exception? inputError = null;
             try
             {
                 // CSharpRepl v0.9.2 Program and PipedInputEvaluator collect redirected stdin until EOF.
                 // https://github.com/waf/CSharpRepl/blob/v0.9.2/CSharpRepl/Repls/PipedInputEvaluator.cs
                 await handle.StandardInput.WriteAsync(code.AsMemory(), fused.Token);
+                ObserveWindowsStage(diagnostics, diagnosticCall, started, 2, handle.Pid);
                 await handle.StandardInput.FlushAsync(fused.Token);
+                ObserveWindowsStage(diagnostics, diagnosticCall, started, 3, handle.Pid);
                 handle.StandardInput.Close();
+                ObserveWindowsStage(diagnostics, diagnosticCall, started, 4, handle.Pid);
             }
             catch (Exception error) when (error is IOException or OperationCanceledException)
             {
@@ -138,6 +150,7 @@ public static class ToolRunCSharpRepl
             }
 
             var outcome = await handle.Done;
+            ObserveWindowsStage(diagnostics, diagnosticCall, started, 5, handle.Pid);
             int? managedExitCode = null;
             string? statusError = null;
             if (!fused.IsCancellationRequested)
@@ -181,6 +194,12 @@ public static class ToolRunCSharpRepl
             handle.Terminate();
             await handle.Done;
         }
+    }
+
+    private static void ObserveWindowsStage(TextWriter? diagnostics, int call, long started, int stage, int pid)
+    {
+        diagnostics?.WriteLine(FormattableString.Invariant(
+            $"owned-repl-r12 call={call} stage={stage} ms={(long)Stopwatch.GetElapsedTime(started).TotalMilliseconds} pid={pid}"));
     }
 
     private static long Timeout(JsonElement args)
