@@ -15,6 +15,7 @@ internal sealed class WindowsAclLease : IDisposable
     private const int ReadExecute = 0x1200a9;
     private const int Modify = 0x1301bf;
     private const int Delete = 0x10000;
+    private const int EnumerationBufferBytes = 64 * 1024;
     private const int WriteData = 2;
     private const uint ProtectDacl = 0x80000000;
     private const uint UnprotectDacl = 0x20000000;
@@ -73,14 +74,14 @@ internal sealed class WindowsAclLease : IDisposable
         observeStartup?.Invoke(15, null);
         foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
             if (!SandboxPolicy.Contains(windows, grant.Source))
-                AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken);
+                AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken, observeStartup);
         foreach (var grant in policy.Readable.OrderBy(static grant => grant.Source.Length))
             if (!SandboxPolicy.Contains(windows, grant.Source))
-                AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken);
+                AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken, observeStartup);
         foreach (var denied in policy.Denied)
         {
             if (File.Exists(denied) || Directory.Exists(denied))
-                AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken);
+                AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken, observeStartup);
             else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                 throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
         }
@@ -114,22 +115,32 @@ internal sealed class WindowsAclLease : IDisposable
     }
 
     private void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Action<int, int?>? observeStartup)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Earlier trees already include every descendant with the same access.
         // A different access still walks the subtree to narrow all existing children.
         if (paths.TryGetValue(root, out var existing) && existing.Write == write && existing.Directory == directory)
             return;
+        observeStartup?.Invoke(30, paths.Count);
         paths[root] = (write, directory);
-        if (directory)
-            foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
-                static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                paths[path] = (write, isDirectory);
-            }
+        try
+        {
+            if (directory)
+                foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
+                    static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
+                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, BufferSize = EnumerationBufferBytes }))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    paths[path] = (write, isDirectory);
+                }
+        }
+        catch
+        {
+            observeStartup?.Invoke(32, paths.Count);
+            throw;
+        }
+        observeStartup?.Invoke(31, paths.Count);
     }
 
     public void Dispose()
