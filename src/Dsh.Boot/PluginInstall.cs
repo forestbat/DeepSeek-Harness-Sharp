@@ -7,7 +7,7 @@ namespace Dsh.Boot;
  *  同名文件内容一致则跳过,不一致则拒绝——插件目录是重启后的唯一发现入口,内容分歧必须显式。 */
 public static class PluginInstall
 {
-    public const int MaximumDependencyManifestBytes = 4 * 1024 * 1024;
+    private const int MaximumDependencyManifestBytes = 4 * 1024 * 1024;
     public static string Install(string sourcePath, string pluginsRoot)
     {
         var staging = Path.Combine(pluginsRoot, Path.GetFileNameWithoutExtension(sourcePath));
@@ -17,8 +17,8 @@ public static class PluginInstall
         return Path.Combine(staging, Path.GetFileName(sourcePath));
     }
 
-    /** The same deployment closure is used for installation and explicit host-code grants. */
-    public static IReadOnlyList<string> ArtifactFiles(string sourcePath)
+    /** Selects the artifact and its declared runtime dependencies for installation. */
+    private static IReadOnlyList<string> ArtifactFiles(string sourcePath)
     {
         var hostImage = HostImageNames();
         var files = new List<string> { sourcePath };

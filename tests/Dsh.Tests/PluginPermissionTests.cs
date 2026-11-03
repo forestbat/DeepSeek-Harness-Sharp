@@ -113,6 +113,28 @@ public sealed class PluginPermissionTests
         AssertCommentsKept(home);
     }
 
+    [Theory]
+    [InlineData("read")]
+    [InlineData("network")]
+    public async Task BrokerPermissionCommands_PreserveOtherPermissions_AndComments(string permission)
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
+        var home = environment.App.Home;
+        await RunAsync(environment, $"/plugins ban_write {Todo}");
+
+        Assert.Contains("denied", await RunAsync(environment, $"/plugins ban_{permission} {Todo}"));
+        var denied = HarnessSettings.Load(home).Plugins[Todo];
+        Assert.False(denied.Permissions!.Write);
+        Assert.Equal(permission != "read", denied.Permissions.Read);
+        Assert.Equal(permission != "network", denied.Permissions.Network);
+        Assert.DoesNotContain(PluginSetting.PermissionsKey, denied.Parameters.Keys);
+        AssertCommentsKept(home);
+
+        Assert.Contains("allowed", await RunAsync(environment, $"/plugins enable_{permission} {Todo}"));
+        Assert.Equal(new PluginPermissions { Write = false }, HarnessSettings.Load(home).Plugins[Todo].Permissions);
+        AssertCommentsKept(home);
+    }
+
 
     [Fact]
     public async Task BanWrite_ReportsUnknownPackage_AndUsage()
@@ -125,39 +147,51 @@ public sealed class PluginPermissionTests
         Assert.Contains("ban_write <pkg>", Assert.IsType<CommandResult.Error>(usage!.Result).Text);
     }
 
-    /** The TUI overlay offers ban_write next to the other subcommands and completes the package from the plugin manager. */
-    [Fact]
-    public async Task TuiOverlay_BanWrite_PicksPackage_AndWritesSettings()
+    /** The TUI overlay selects a broker permission command and completes an installed package before submission. */
+    [Theory]
+    [InlineData("ban_read", false, true, true)]
+    [InlineData("ban_write", true, false, true)]
+    [InlineData("ban_network", true, true, false)]
+    [InlineData("enable_read", true, false, false)]
+    [InlineData("enable_write", false, true, false)]
+    [InlineData("enable_network", false, false, true)]
+    public async Task TuiOverlay_PermissionCommand_PicksPackage_AndWritesSettings(string command, bool read, bool write, bool network)
     {
         await using var environment = await GuiTestEnvironment.CreateAsync(SettingsWithComments);
+        if (command.StartsWith("enable_", StringComparison.Ordinal))
+        {
+            await RunAsync(environment, $"/plugins ban_read {Todo}");
+            await RunAsync(environment, $"/plugins ban_write {Todo}");
+            await RunAsync(environment, $"/plugins ban_network {Todo}");
+        }
         using var chat = new ChatWindow(environment.App.Ctx, environment.Agent, environment.App.Home);
 
         Type(chat, "/plugins");
         Press(chat, ConsoleKey.Tab);
         var menu = chat.InputPane.CommandMenu!;
         Assert.Equal(CommandMenuState.MenuStage.Subcommand, menu.Stage);
-        Assert.Equal(["list", "doctor", "add", "remove", "disable", "enable", "ban_write", "enable_write"], menu.Candidates);
+        Assert.Contains(command, menu.Candidates);
 
-        Type(chat, "ban");
+        Type(chat, command);
         Press(chat, ConsoleKey.Tab);
         Assert.Equal(CommandMenuState.MenuStage.Argument, menu.Stage);
         Assert.Contains(Todo, menu.Candidates);
 
         Type(chat, "dsh-tool-todo");
         Press(chat, ConsoleKey.Enter);
-        Assert.Equal($"/plugins ban_write {Todo}", chat.InputPane.Input);
+        Assert.Equal($"/plugins {command} {Todo}", chat.InputPane.Input);
         Press(chat, ConsoleKey.Enter);
-        var permissions = await WaitForPermissionsAsync(environment.App.Home);
-        Assert.Equal(new PluginPermissions { Write = false }, permissions);
+        var permissions = await WaitForPermissionsAsync(environment.App.Home, new PluginPermissions { Read = read, Write = write, Network = network });
+        Assert.Equal(new PluginPermissions { Read = read, Write = write, Network = network }, permissions);
     }
 
-    /** The overlay submits the command asynchronously; CI runners under load need a generous bound. */
-    private static async Task<PluginPermissions?> WaitForPermissionsAsync(HarnessHome home)
+    /** The overlay persists submitted broker settings asynchronously within the original consumer deadline. */
+    private static async Task<PluginPermissions?> WaitForPermissionsAsync(HarnessHome home, PluginPermissions expected)
     {
         var deadline = DateTime.UtcNow + SubmitTimeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (HarnessSettings.Load(home).Plugins.GetValueOrDefault(Todo)?.Permissions is { } permissions)
+            if (HarnessSettings.Load(home).Plugins.GetValueOrDefault(Todo)?.Permissions is { } permissions && permissions == expected)
                 return permissions;
             await Task.Delay(PollInterval, TestContext.Current.CancellationToken);
         }

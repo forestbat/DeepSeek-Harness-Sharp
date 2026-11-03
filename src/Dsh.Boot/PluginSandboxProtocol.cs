@@ -11,6 +11,7 @@ internal static class PluginSandboxMethods
     internal const string Ready = "sandbox/ready";
     internal const string Inspect = "sandbox/inspect";
     internal const string Load = "sandbox/load";
+    internal const string Unload = "sandbox/unload";
     internal const string Invoke = "sandbox/invoke";
     internal const string RegisterTool = "sandbox/registerTool";
     internal const string UnregisterTool = "sandbox/unregisterTool";
@@ -25,8 +26,9 @@ internal sealed record PluginSandboxSource(PluginDescriptor Descriptor, string? 
 internal sealed record PluginSandboxReady(int Version, int Pid);
 internal sealed record PluginSandboxInspectRequest(string? ArtifactPath, string? Package = null);
 internal sealed record PluginSandboxMetadata(string Package, PluginForm Form, string? Entry, bool SupportsCapabilities);
-internal sealed record PluginSandboxInspection(PluginSandboxMetadata[] Packages, string[] Errors);
+internal sealed record PluginSandboxInspection(PluginSandboxMetadata[] Packages, string[] Errors, bool Released = true);
 internal sealed record PluginSandboxLoadRequest(string? ArtifactPath, string Package, JsonElement Configuration);
+internal sealed record PluginSandboxUnloadRequest(string Package);
 internal sealed record PluginSandboxInvokeRequest(string Package, int ToolId, JsonElement Arguments, string Invocation);
 internal sealed record PluginSandboxToolRequest(string Package, int ToolId, string Name, string Description, JsonElement Parameters);
 internal sealed record PluginSandboxUnregisterTool(string Package, int ToolId);
@@ -40,6 +42,7 @@ internal sealed record PluginSandboxAck(bool Success = true);
 [JsonSerializable(typeof(PluginSandboxInspectRequest))]
 [JsonSerializable(typeof(PluginSandboxInspection))]
 [JsonSerializable(typeof(PluginSandboxLoadRequest))]
+[JsonSerializable(typeof(PluginSandboxUnloadRequest))]
 [JsonSerializable(typeof(PluginSandboxInvokeRequest))]
 [JsonSerializable(typeof(PluginSandboxToolRequest))]
 [JsonSerializable(typeof(PluginSandboxUnregisterTool))]

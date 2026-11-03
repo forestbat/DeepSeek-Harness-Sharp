@@ -48,6 +48,18 @@
                     <StackPanel Spacing="2">
                       <TextBlock Text="{Binding Package}" Classes="Mono" />
                       <TextBlock Text="{Binding Description}" Classes="Tertiary" TextWrapping="Wrap" />
+                      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4">
+                        <TextBlock Text="执行方式" Classes="Tertiary" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{x:Static vm:PluginRowViewModel.ExecutionOptions}"
+                                  SelectedItem="{Binding Execution, Mode=TwoWay}"
+                                  IsEnabled="{Binding !IsChangingExecution}" MinWidth="180" ToolTip.Tip="plugins.execution">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PluginExecutionOption">
+                              <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                      </StackPanel>
                       <StackPanel Orientation="Horizontal" Spacing="12">
                         <CheckBox Content="读" IsChecked="{Binding CanRead, Mode=TwoWay}" ToolTip.Tip="permissions.read" />
                         <CheckBox Content="写" IsChecked="{Binding CanWrite, Mode=TwoWay}" ToolTip.Tip="permissions.write" />
@@ -72,7 +84,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Text="启用/禁用、移除与读/写/网络权限会立即写入 settings.yaml（plugins.&quot;包名&quot;.permissions）；权限的强制执行随插件沙箱提供。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
+            <TextBlock Text="设置立即保存到 Host 的 settings.yaml。沙箱开启时，默认在 Host 中运行编译入应用的插件，在 Sandbox 中运行外部插件。Host 在主进程内执行并获得完全信任。沙箱关闭时保留原有进程内执行方式，此处仅保存将来开启沙箱时使用的配置。开启沙箱后，权限开关约束宿主中介操作，不限制 Host 插件的直接进程内访问。选择默认会清除 execution 覆盖。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

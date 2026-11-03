@@ -39,6 +39,30 @@ public sealed class SandboxProcessTests : IDisposable
 
     [Fact]
     [Trait("Category", "SandboxNative")]
+    public async Task LinuxRuntimeDirectoryRoots_RunDynamicShellAndOriginalShebangPath()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/bin/sh"))
+        {
+            Assert.Skip("The runtime directory alias consumer requires Linux and its native shell.");
+            return;
+        }
+        var script = Path.Combine(_root, "runtime-consumer.sh");
+        await File.WriteAllTextAsync(script, "#!/bin/sh\nexec /bin/sh -c 'printf runtime-aliases'\n", TestContext.Current.CancellationToken);
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        await using var sandbox = await StartNativeAsync(Options(_root) with
+        {
+            Executable = script,
+            RuntimePaths = SandboxRuntimePaths.ForExecutable(script),
+        });
+        var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
+        var exitCode = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
+        Assert.True(exitCode == 0, $"The native runtime directory consumer exited with {exitCode}: {await error}");
+        Assert.Equal("runtime-aliases", await output);
+    }
+
+    [Fact]
+    [Trait("Category", "SandboxNative")]
     public async Task LinuxNativeIo_EnforcesDeclaredPathReadsAndWrites()
     {
         RequireLinuxPython();

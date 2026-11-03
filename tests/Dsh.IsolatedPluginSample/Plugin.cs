@@ -39,6 +39,8 @@ internal static class ProcessProbe
 public sealed class Plugin : IDshIsolatedPlugin
 {
     private readonly string _name;
+    private readonly Guid _instance = Guid.NewGuid();
+    private int _state;
     private readonly int _constructorProcessId = Environment.ProcessId;
     private int _initializationProcessId;
     private JsonElement _configuration;
@@ -85,6 +87,8 @@ public sealed class Plugin : IDshIsolatedPlugin
                 return JsonSerializer.SerializeToElement(new
                 {
                     instance = ProcessProbe.Instance,
+                    pluginInstance = _instance,
+                    assemblyPath = typeof(Plugin).Assembly.Location,
                     processId = Environment.ProcessId,
                     constructorProcessId = _constructorProcessId,
                     initializationProcessId = _initializationProcessId,
@@ -92,6 +96,8 @@ public sealed class Plugin : IDshIsolatedPlugin
                 });
             case "configuration":
                 return _configuration;
+            case "increment-state":
+                return JsonSerializer.SerializeToElement(new { state = ++_state });
             case "invalid-registration":
                 try
                 {

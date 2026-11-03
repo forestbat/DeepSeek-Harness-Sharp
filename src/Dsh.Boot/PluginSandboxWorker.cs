@@ -159,6 +159,7 @@ public static class PluginSandboxWorker
                         PluginSandboxJsonContext.Default.PluginSandboxReady);
                 case PluginSandboxMethods.Inspect:
                 case PluginSandboxMethods.Load:
+                case PluginSandboxMethods.Unload:
                     await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
                     try
                     {
@@ -166,8 +167,11 @@ public static class PluginSandboxWorker
                             return Serialize(await InspectAsync(Read(message.Params,
                                 PluginSandboxJsonContext.Default.PluginSandboxInspectRequest)).ConfigureAwait(false),
                                 PluginSandboxJsonContext.Default.PluginSandboxInspection);
-                        await LoadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxLoadRequest),
-                            cancellationToken).ConfigureAwait(false);
+                        if (message.Method == PluginSandboxMethods.Unload)
+                            await UnloadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxUnloadRequest)).ConfigureAwait(false);
+                        else
+                            await LoadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxLoadRequest),
+                                cancellationToken).ConfigureAwait(false);
                         return Ack();
                     }
                     finally
@@ -320,12 +324,37 @@ public static class PluginSandboxWorker
             }
         }
 
+        private async Task UnloadAsync(PluginSandboxUnloadRequest request)
+        {
+            LoadedPackage? package;
+            lock (_gate)
+                _packages.Remove(request.Package, out package);
+            if (package is null)
+                return;
+            await package.Host.StopAsync().ConfigureAwait(false);
+            try
+            {
+                if (package.Lease is not null)
+                    await package.Lease.DisposeAsync().ConfigureAwait(false);
+                await DisposePluginAsync(package.Plugin, package.Lease).ConfigureAwait(false);
+            }
+            finally
+            {
+                package.Host.ReleaseTools();
+                if (package.Artifact is { } artifact && --artifact.References == 0)
+                {
+                    _artifacts.Remove(artifact.Path);
+                    artifact.Release();
+                }
+            }
+        }
+
         private static async Task<PluginSandboxInspection> InspectAsync(PluginSandboxInspectRequest request)
         {
             var result = await ProbeAsync(request).ConfigureAwait(false);
             await Task.Yield();
             if (result.Weak is not null && !PluginUnloader.WaitForCollection(result.Weak, out var report))
-                return result.Inspection with { Errors = [.. result.Inspection.Errors, report!] };
+                return result.Inspection with { Errors = [.. result.Inspection.Errors, report!], Released = false };
             return result.Inspection;
         }
 
@@ -336,6 +365,7 @@ public static class PluginSandboxWorker
             var metadata = new List<PluginSandboxMetadata>();
             var errors = new List<string>();
             WeakReference? weak = null;
+            var released = true;
             try
             {
                 if (request.ArtifactPath is null)
@@ -380,10 +410,14 @@ public static class PluginSandboxWorker
                 if (artifact is not null)
                 {
                     try { weak = artifact.Release(); }
-                    catch (Exception error) { errors.Add(BoundedFailure(error)); }
+                    catch (Exception error)
+                    {
+                        released = false;
+                        errors.Add(BoundedFailure(error));
+                    }
                 }
             }
-            return (new PluginSandboxInspection([.. metadata], [.. errors]), weak);
+            return (new PluginSandboxInspection([.. metadata], [.. errors], released), weak);
         }
 
         private static async Task<PluginSandboxMetadata> ProbePluginAsync(string package, PluginForm form,

@@ -235,6 +235,7 @@ public sealed class RemoteHostCapabilityTests
                 () => client.Git.GitStatusAsync(info.HomeRoot, Ct),
                 () => client.Notifications.ListNotificationsAsync(cancellationToken: Ct),
                 () => client.Plugins.ListPluginsAsync(Ct),
+                () => client.Plugins.SetPluginExecutionAsync("@test/unsupported", null, Ct),
                 () => client.Network.GetOutboundAsync(Ct),
                 () => client.Network.SetOutboundAsync(new RemoteOutboundProxySetRequest("unsupported", new RemoteOutboundProxySettings()), Ct),
                 () => client.Network.ProbeOutboundAsync(new RemoteOutboundProxyProbeRequest(), Ct),

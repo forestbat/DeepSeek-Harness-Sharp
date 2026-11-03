@@ -40,10 +40,13 @@ public sealed class PluginSandboxCatalog : IDisposable
     public bool Enabled => _settings.Sandbox?.Enabled == true;
     public IReadOnlyList<PluginSkip> Failures => [.. Volatile.Read(ref _failures), .. _supervisor.Failures];
     public string? ArtifactPath(string package) => _sources.GetValueOrDefault(package);
+    internal PluginForm? Form(string package)
+        => _metadata.GetValueOrDefault(package)?.Form
+            ?? (_sources.TryGetValue(package, out var artifact) ? artifact is null ? PluginForm.CompiledIn : PluginForm.ManagedAssembly : null);
     public IReadOnlyList<string> DomainPackages(string package) => _supervisor.DomainPackages(package);
     public bool IsFaulted(string package) => _supervisor.IsFaulted(package);
-    public Task RetireAsync(string package, CancellationToken cancellationToken = default)
-        => _supervisor.RetireAsync(package, cancellationToken);
+    public Task RetireDomainAsync(string package, CancellationToken cancellationToken = default)
+        => _supervisor.RetireDomainAsync(package, cancellationToken);
 
     public async Task<IReadOnlyList<string>> InspectPackagesAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -52,6 +55,9 @@ public sealed class PluginSandboxCatalog : IDisposable
         var full = Path.GetFullPath(path);
         var inspection = await _supervisor.InspectAsync(full, null, linked.Token).ConfigureAwait(false);
         Validate(inspection, full);
+        var active = CurrentSettings();
+        foreach (var metadata in inspection.Packages)
+            DemandExecution(metadata, (active.Plugins.GetValueOrDefault(metadata.Package) ?? new PluginSetting()) with { Enabled = true });
         return inspection.Packages.Select(package => package.Package).ToArray();
     }
 
@@ -89,10 +95,13 @@ public sealed class PluginSandboxCatalog : IDisposable
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
+                    foreach (var source in _sources.Where(source => source.Value is not null
+                        && PluginSandboxLaunch.PathComparer.Equals(source.Value, path)))
+                        _host.Catalog.Remove(source.Key);
                     skipped.Add(new PluginSkip(path, error.Message));
                 }
             }
-            await RegisterCompiledAsync(linked.Token).ConfigureAwait(false);
+            await RegisterCompiledAsync(skipped, linked.Token).ConfigureAwait(false);
             Volatile.Write(ref _failures, skipped.ToArray());
             return new PluginScanResult(managed, native, Failures);
         }
@@ -127,51 +136,55 @@ public sealed class PluginSandboxCatalog : IDisposable
                 || extension.Equals(".so", StringComparison.OrdinalIgnoreCase)
                 || extension.Equals(".dylib", StringComparison.OrdinalIgnoreCase));
 
-    private async Task RegisterCompiledAsync(CancellationToken signal)
+    private async Task RegisterCompiledAsync(List<PluginSkip> skipped, CancellationToken signal)
     {
         var active = CurrentSettings();
         foreach (var registration in DshPluginCatalogRegistry.Snapshot())
         {
+            signal.ThrowIfCancellationRequested();
             if (_sources.TryGetValue(registration.Package, out var artifact) && artifact is not null)
                 continue;
-            var setting = active.Plugins.GetValueOrDefault(registration.Package);
-            if (_sources.ContainsKey(registration.Package) && _host.Catalog.PackageNames.Contains(registration.Package, StringComparer.Ordinal))
+            try
             {
-                if (_metadata.TryGetValue(registration.Package, out var known))
-                    DemandExecution(known, setting);
-                if (setting?.Enabled == false || (_hostRoles.Contains(registration.Package) == (setting?.Execution == PluginExecution.Host)
-                    && (setting?.Execution == PluginExecution.Host || _metadata.ContainsKey(registration.Package))))
+                var setting = active.Plugins.GetValueOrDefault(registration.Package);
+                var host = PluginSetting.EffectiveExecution(setting, PluginForm.CompiledIn) == PluginExecution.Host;
+                if (_sources.ContainsKey(registration.Package)
+                    && _host.Catalog.PackageNames.Contains(registration.Package, StringComparer.Ordinal)
+                    && _hostRoles.Contains(registration.Package) == host
+                    && (host || setting?.Enabled == false || _metadata.ContainsKey(registration.Package)))
+                {
+                    if (_metadata.TryGetValue(registration.Package, out var known))
+                        DemandExecution(known, setting);
                     continue;
-            }
-            var descriptor = PluginDescriptor.For(registration.Package, PluginForm.CompiledIn) with { Entry = registration.Entry };
-            if (setting?.Execution == PluginExecution.Host)
-            {
-                if (!_hostRoles.Contains(registration.Package) || !_host.Catalog.PackageNames.Contains(registration.Package, StringComparer.Ordinal))
+                }
+                var descriptor = PluginDescriptor.For(registration.Package, PluginForm.CompiledIn) with { Entry = registration.Entry };
+                if (host)
                 {
                     _host.Catalog.Remove(registration.Package);
                     _host.Catalog.Register(descriptor, registration.Create);
+                    _hostRoles.Add(registration.Package);
                 }
-                _hostRoles.Add(registration.Package);
-            }
-            else
-            {
-                if (setting?.Enabled == false)
+                else
                 {
+                    if (setting?.Enabled != false)
+                    {
+                        var inspection = await _supervisor.InspectAsync(null, registration.Package, signal).ConfigureAwait(false);
+                        Validate(inspection, registration.Package);
+                        var metadata = inspection.Packages.SingleOrDefault(package => package.Package == registration.Package)
+                            ?? throw new RuntimeException("PLUGIN_INSPECTION_MISMATCH", "The compiled plugin inspection did not describe the requested package.");
+                        _metadata[metadata.Package] = metadata;
+                        DemandExecution(metadata, setting);
+                    }
                     _supervisor.Register(_host, new PluginSandboxSource(descriptor, null));
-                    _sources[registration.Package] = null;
                     _hostRoles.Remove(registration.Package);
-                    continue;
                 }
-                var inspection = await _supervisor.InspectAsync(null, registration.Package, signal).ConfigureAwait(false);
-                Validate(inspection, registration.Package);
-                var metadata = inspection.Packages.SingleOrDefault(package => package.Package == registration.Package)
-                    ?? throw new RuntimeException("PLUGIN_INSPECTION_MISMATCH", "The compiled plugin inspection did not describe the requested package.");
-                _metadata[metadata.Package] = metadata;
-                DemandExecution(metadata, setting);
-                _supervisor.Register(_host, new PluginSandboxSource(descriptor, null));
-                _hostRoles.Remove(registration.Package);
+                _sources[registration.Package] = null;
             }
-            _sources[registration.Package] = null;
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                _host.Catalog.Remove(registration.Package);
+                skipped.Add(new PluginSkip(registration.Package, error.Message));
+            }
         }
     }
 
@@ -297,7 +310,7 @@ public sealed class PluginSandboxCatalog : IDisposable
 
     private static void DemandExecution(PluginSandboxMetadata metadata, PluginSetting? setting)
     {
-        if (setting?.Enabled != false && setting?.Execution != PluginExecution.Host
+        if (setting?.Enabled != false && PluginSetting.EffectiveExecution(setting, metadata.Form) != PluginExecution.Host
             && (!metadata.SupportsCapabilities || metadata.Entry is not null))
             throw HostRoleRequired(metadata.Package);
     }

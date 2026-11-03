@@ -84,7 +84,8 @@ sandbox:
 
 # 插件开关:false 关闭;permissions(read/write/network)是保留键
 plugins:
-  # Full-Context plugins require the same explicit host role regardless of source when sandboxing is enabled.
+  # Omitted execution defaults to host for compiled-in plugins and sandbox for external files.
+  # Explicit sandbox requires the capability SDK; host grants full in-process trust.
   # "example/full-context-plugin":
   #   execution: host
   # Debug-only preference for batching independent tool calls in run_code.

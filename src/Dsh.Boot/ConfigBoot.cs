@@ -69,7 +69,7 @@ public static class ConfigBoot
             if (settings.Sandbox?.Enabled == true)
             {
                 sandbox = new PluginSandboxCatalog(home, pluginHost, settings, pluginsDirectory, nativeBridge,
-                    new PluginSandboxSupervisor(ctx, home, settings, capabilities));
+                    new PluginSandboxSupervisor(ctx, home, settings, capabilities, pluginsDirectory));
                 app.Track(sandbox);
             }
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
@@ -116,7 +116,7 @@ public static class ConfigBoot
         host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
         var bridge = ResolveNativeBridge();
         using var sandbox = settings.Sandbox?.Enabled != true ? null : new PluginSandboxCatalog(home, host, settings, directory, bridge,
-            new PluginSandboxSupervisor(context, home, settings, capabilities));
+            new PluginSandboxSupervisor(context, home, settings, capabilities, directory));
         var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
         try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
         finally { PluginSandboxCatalog.ReleaseLoaded(host, discovered); }
