@@ -65,11 +65,12 @@ internal sealed class WindowsAclLease : IDisposable
         }
     }
 
-    public void Apply(SandboxPolicy policy, SafeFileHandle process, CancellationToken cancellationToken)
+    public void Apply(SandboxPolicy policy, SafeFileHandle process, CancellationToken cancellationToken, Action<int, int?>? observeStartup = null)
     {
         using var effectiveRead = EffectiveRead.TryCreate(process);
         var paths = new Dictionary<string, (bool Write, bool Directory)>(StringComparer.OrdinalIgnoreCase);
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        observeStartup?.Invoke(15, null);
         foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
             if (!SandboxPolicy.Contains(windows, grant.Source))
                 AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken);
@@ -83,6 +84,7 @@ internal sealed class WindowsAclLease : IDisposable
             else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                 throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
         }
+        observeStartup?.Invoke(16, paths.Count);
         var checkedAncestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in paths.Keys)
             for (var parent = Path.GetDirectoryName(path); parent is not null; parent = Path.GetDirectoryName(parent))
@@ -92,6 +94,7 @@ internal sealed class WindowsAclLease : IDisposable
                     break;
                 Entry.DemandAmbientAncestorGrant(parent, policy.AllowNetwork);
             }
+        observeStartup?.Invoke(17, checkedAncestors.Count);
         foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -107,6 +110,7 @@ internal sealed class WindowsAclLease : IDisposable
             entry.Grant(_sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork,
                 denyWrite ? effectiveRead : null, cancellationToken);
         }
+        observeStartup?.Invoke(18, _entries.Count);
     }
 
     private void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,

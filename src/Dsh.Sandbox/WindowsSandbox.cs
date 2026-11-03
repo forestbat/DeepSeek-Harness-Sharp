@@ -36,9 +36,10 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         Exit = ObserveAsync();
     }
 
-    public static WindowsSandbox Start(SandboxPolicy policy, CancellationToken cancellationToken)
+    public static WindowsSandbox Start(SandboxPolicy policy, CancellationToken cancellationToken, Action<int, int?>? observeStartup = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        observeStartup?.Invoke(11, null);
         var profile = $"Dsh.Sandbox.{Guid.NewGuid():N}";
         var result = WindowsNative.CreateAppContainerProfile(profile, "Dsh sandbox", "Ephemeral isolated process", 0, 0, out var sid);
         if (result < 0)
@@ -49,7 +50,9 @@ internal sealed class WindowsSandbox : ISandboxLifetime
         Stream? inputStream = null, outputStream = null, errorStream = null;
         try
         {
+            observeStartup?.Invoke(12, null);
             acl = WindowsAclLease.CreateBootstrap(sid, policy, cancellationToken);
+            observeStartup?.Invoke(13, null);
             cancellationToken.ThrowIfCancellationRequested();
             job = WindowsNative.CreateJobObject(0, null);
             CheckHandle(job, "create the sandbox job");
@@ -85,8 +88,9 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             try
             {
                 Check(WindowsNative.AssignProcessToJobObject(job, process), "assign the suspended process to its non-breakaway job");
+                observeStartup?.Invoke(14, null);
                 // Apply the complete filesystem policy using the suspended process's actual token before any application code runs.
-                acl.Apply(policy, process, cancellationToken);
+                acl.Apply(policy, process, cancellationToken, observeStartup);
                 input.Child.Dispose();
                 output.Child.Dispose();
                 error.Child.Dispose();
@@ -96,6 +100,7 @@ internal sealed class WindowsSandbox : ISandboxLifetime
                 cancellationToken.ThrowIfCancellationRequested();
                 if (WindowsNative.ResumeThread(thread) == uint.MaxValue)
                     throw NativeError("resume the AppContainer process");
+                observeStartup?.Invoke(19, null);
                 return new WindowsSandbox((int)information.ProcessId, process, job, acl, profile,
                     inputStream, outputStream, errorStream);
             }
