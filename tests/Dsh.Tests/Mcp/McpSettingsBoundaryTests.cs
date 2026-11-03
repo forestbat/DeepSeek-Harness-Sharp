@@ -22,25 +22,20 @@ public sealed class McpSettingsBoundaryTests
     public async Task OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings()
     {
         using var fixture = ProtectedFixture();
-        fixture.Stage = "backend-probe";
         await SandboxTestBackend.RequireAsync();
-        fixture.Stage = "tool-runtime";
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var output = Path.Combine(fixture.Root, "mcp-output");
         var initialSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
-        await Connect(service, fixture);
-        fixture.Stage = "workspace-write";
+        await Connect(service);
         var permitted = await Execute(tools, "write_file", new { path = output, content = "workspace 中文" }, TestContext.Current.CancellationToken);
         Assert.False(permitted.IsError, Text(permitted));
         Assert.Equal("workspace 中文", Text(permitted));
         Assert.Equal("workspace 中文", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
-        fixture.Stage = "settings-write";
         var denied = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "bad" }, TestContext.Current.CancellationToken);
         var currentSettings = await File.ReadAllBytesAsync(fixture.SettingsPath, TestContext.Current.CancellationToken);
         Assert.Equal(initialSettings, currentSettings);
         Assert.True(denied.IsError, $"The owned MCP server reported success for the protected settings write. Output: {Text(denied)}");
-        fixture.Stage = "service-dispose";
     }
 
     [Fact(Timeout = 60000)]
@@ -48,21 +43,16 @@ public sealed class McpSettingsBoundaryTests
     public async Task OwnedStdio_CrashDoesNotReplay()
     {
         using var fixture = ProtectedFixture();
-        fixture.Stage = "backend-probe";
         await SandboxTestBackend.RequireAsync();
-        fixture.Stage = "tool-runtime";
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var ledger = Path.Combine(fixture.Root, "mcp-once");
-        await Connect(service, fixture);
-        fixture.Stage = "crash-call";
+        await Connect(service);
         var result = await Execute(tools, "mutate_then_exit", new { path = ledger }, TestContext.Current.CancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-        fixture.Stage = "verify-crash";
         Assert.True(result.IsError);
         Assert.Equal("once\n", await File.ReadAllTextAsync(ledger, TestContext.Current.CancellationToken));
         Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-        fixture.Stage = "service-dispose";
     }
 
     [Fact(Timeout = 60000)]
@@ -70,14 +60,11 @@ public sealed class McpSettingsBoundaryTests
     public async Task OwnedStdio_CancellationDoesNotRestart()
     {
         using var fixture = ProtectedFixture();
-        fixture.Stage = "backend-probe";
         await SandboxTestBackend.RequireAsync();
-        fixture.Stage = "tool-runtime";
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
         var marker = Path.Combine(fixture.Root, "mcp-ready");
-        await Connect(service, fixture);
-        fixture.Stage = "waiting-call";
+        await Connect(service);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var running = Execute(tools, "wait_file", new { path = marker }, cancellation.Token);
         using var readiness = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -88,18 +75,15 @@ public sealed class McpSettingsBoundaryTests
                 Assert.Fail("The owned MCP server did not enter its real waiting operation.");
             await Task.Delay(10, readiness.Token);
         }
-        fixture.Stage = "cancel-call";
         cancellation.Cancel();
         var cancelled = await running.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Assert.True(cancelled.IsError);
         var after = Path.Combine(fixture.Root, "mcp-after-cancel");
-        fixture.Stage = "post-cancel-call";
         var subsequent = await Execute(tools, "write_file", new { path = after, content = "must not restart" }, TestContext.Current.CancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Assert.True(subsequent.IsError);
         Assert.False(File.Exists(after));
         Assert.Equal(fixture.InitialSettings, await File.ReadAllTextAsync(fixture.SettingsPath, TestContext.Current.CancellationToken));
-        fixture.Stage = "service-dispose";
     }
 
     [Fact(Timeout = 60000)]
@@ -130,7 +114,7 @@ public sealed class McpSettingsBoundaryTests
         using var fixture = new Fixture();
         var tools = Tools(fixture);
         await using var service = new McpService(fixture.Context, workingDirectory: fixture.Root);
-        await Connect(service, fixture);
+        await Connect(service);
         var result = await Execute(tools, "write_file", new { path = fixture.SettingsPath, content = "stdio 中文" }, TestContext.Current.CancellationToken);
         Assert.False(result.IsError, Text(result));
         Assert.Equal("stdio 中文", Text(result));
@@ -204,9 +188,8 @@ public sealed class McpSettingsBoundaryTests
         return new ToolRuntime(fixture.Context);
     }
 
-    private static async Task Connect(McpService service, Fixture fixture)
+    private static async Task Connect(McpService service)
     {
-        fixture.Stage = "connect";
         await service.ConnectAsync([McpResourceServerFixture.ServerConfig("owned", false, "--file-tools")], TestContext.Current.CancellationToken);
         var status = Assert.Single(service.Status());
         Assert.True(status.Connected, status.Error);
@@ -225,7 +208,7 @@ public sealed class McpSettingsBoundaryTests
     {
         if (OperatingSystem.IsMacOS())
             Assert.Skip("The macOS backend does not support owned child-spawning stdio processes.");
-        return new Fixture(sandboxEnabled: true, diagnoseOwnedStdio: true);
+        return new Fixture(sandboxEnabled: true);
     }
 
     private sealed class Fixture : IDisposable
@@ -235,15 +218,8 @@ public sealed class McpSettingsBoundaryTests
         public string SettingsPath { get; }
         public string InitialSettings { get; }
         private readonly SubprocessService _processes;
-        private readonly CancellationTokenRegistration _timeoutDiagnostics;
 
-        public string Stage
-        {
-            get => Volatile.Read(ref field);
-            set => Volatile.Write(ref field, value);
-        } = "fixture";
-
-        public Fixture(bool sandboxEnabled = false, bool diagnoseOwnedStdio = false)
+        public Fixture(bool sandboxEnabled = false)
         {
             var home = new HarnessHome(Path.Combine(Root, "config"));
             Directory.CreateDirectory(home.Root);
@@ -252,27 +228,12 @@ public sealed class McpSettingsBoundaryTests
             File.WriteAllText(SettingsPath, InitialSettings);
             Context.SetOwn("dshHomePath", home.Root);
             _processes = new SubprocessService(Context);
-            if (diagnoseOwnedStdio && OperatingSystem.IsWindows())
-                _timeoutDiagnostics = TestContext.Current.CancellationToken.Register(() =>
-                {
-                    // The original test cancellation is the trigger, not an earlier diagnostic deadline.
-                    Console.Error.WriteLineAsync($"OWNED_MCP_TEST_CANCELLED stage={Stage}").GetAwaiter().GetResult();
-                    ManagedStackDiagnostics.ReportAsync(null, "OWNED_MCP_TEST_CANCELLED").GetAwaiter().GetResult();
-                });
         }
 
         public void Dispose()
         {
-            Stage = "subprocess-dispose";
-            try
-            {
-                _processes.Dispose();
-                TempTree.Delete(Root);
-            }
-            finally
-            {
-                _timeoutDiagnostics.Dispose();
-            }
+            _processes.Dispose();
+            TempTree.Delete(Root);
         }
     }
 
