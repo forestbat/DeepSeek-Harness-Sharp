@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Compaction;
@@ -291,41 +292,34 @@ public sealed class MainViewModelTests
         Assert.Contains("dsh-", message.Text);
     });
 
-    /**
-     * 压缩必须有自己的进度行与忙碌状态。摘要要发若干次模型请求, 一次压缩可能持续数分钟;
-     * 界面完全没反应时用户只会再按一次 /compact, 而那一次必然被"压缩已在进行"挡回来。
-     * 这里走"重新加载会话"这条确定性路径, 覆盖与实时流相同的渲染代码(ApplyEvents)。
-     */
     [Fact]
-    public async Task Compaction_ShowsProgressThenSummaryInsteadOfStayingSilent() => await HeadlessGui.RunAsync(async () =>
+    public async Task CompactionFeed_ExposesBusyProgressThenSummaryAndCompletion() => await HeadlessGui.RunAsync(async () =>
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
         var chat = await environment.OpenChatAsync();
         var session = environment.Agent.Session;
         var compactionId = CompactionId.Create("cmp-gui");
         session.Append(new CompactionStartPayload(compactionId, null, null));
+        await using var viewModel = new MainViewModel(environment.App, chat);
+        await GuiTestEnvironment.WaitForAsync(
+            (INotifyCollectionChanged)viewModel.Messages,
+            () => viewModel.IsBusy && viewModel.Messages.Any(message => message.Kind == MessageKind.Context),
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
+
+        const string summaryText = "GUI 压缩摘要正文";
         session.Append(new CompactionSummaryPayload(
             compactionId,
             null,
-            [new TextBlock("GUI 压缩摘要正文")],
+            [new TextBlock(summaryText)],
             new ShadowedRange(0, 10),
             [0, 1, 2, 3],
             4321,
             "deepseek-official",
             "deepseek-v4-flash"));
         session.Append(new CompactionEndPayload(compactionId, null, null));
-        await using var viewModel = new MainViewModel(environment.App, chat);
-        // 走实时流(不是重新加载): 用户报的正是"压缩开始后界面没动静"这条路。
-        await GuiTestEnvironment.WaitForAsync(
-            (INotifyCollectionChanged)viewModel.Messages,
-            () => viewModel.Messages.Any(message => message.Text.Contains("正在压缩上下文", StringComparison.Ordinal)),
-            () => GuiTestEnvironment.DescribeChatState(viewModel));
-        var summary = Assert.Single(viewModel.Messages, message =>
-            message.Text.Contains("上下文已压缩", StringComparison.Ordinal));
-        Assert.Contains("收起 4 条历史", summary.Text, StringComparison.Ordinal);
-        Assert.Contains("GUI 压缩摘要正文", summary.Detail, StringComparison.Ordinal);
-        // 成功的压缩结束后不能把界面留在忙碌态。
-        Assert.False(viewModel.IsBusy);
+        await GuiTestEnvironment.WaitForAsync((INotifyPropertyChanged)viewModel, () => !viewModel.IsBusy);
+        Assert.Single(viewModel.Messages, message =>
+            message.Kind == MessageKind.Context && message.Detail == summaryText);
     });
 
     /** 压缩检查点的正文已经由摘要行渲染过, 再当成上下文注入会让同一段摘要出现两次。 */

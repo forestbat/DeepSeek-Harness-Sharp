@@ -46,6 +46,8 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         var originalDirectoryAcl = ReadDacl(working);
         var originalInputAcl = ReadDacl(input);
         var originalDeniedAcl = ReadDacl(denied);
+        (string Parent, string File) startedAcl, completedAcl;
+        string expectedDeniedAcl, hostUpdatedAcl;
         var launch = PluginSandboxLaunch.Options(SandboxRuntimePaths.ForCurrentHost());
         await using (var consumer = await SandboxedProcess.StartAsync(launch with
         {
@@ -56,6 +58,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, protectedParent.ToString()],
         }, TestContext.Current.CancellationToken))
         {
+            startedAcl = (ReadDacl(protectedDirectory), ReadDacl(denied));
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = new StreamReader(consumer.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
             await consumer.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
@@ -79,17 +82,33 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             Assert.True(stderr.Contains("diagnostic", StringComparison.Ordinal), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-before.txt")), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-after.txt")), failure);
+            completedAcl = (ReadDacl(protectedDirectory), ReadDacl(denied));
+            expectedDeniedAcl = AddConcurrentReadAttributeGrant(denied, originalDeniedAcl);
+            hostUpdatedAcl = ReadDacl(denied);
         }
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")).Trim());
         Assert.Equal(settingsBytes, File.ReadAllBytes(denied));
         Assert.Equal(readable, File.ReadAllText(input));
         Assert.Equal("host-only", File.ReadAllText(secret));
-        AssertDaclRestored(originalParentAcl, _root);
-        AssertDaclRestored(originalProtectedDirectoryAcl, protectedDirectory);
-        AssertDaclRestored(originalSecretAcl, secret);
-        AssertDaclRestored(originalDirectoryAcl, working);
-        AssertDaclRestored(originalInputAcl, input);
-        AssertDaclRestored(originalDeniedAcl, denied);
+        try
+        {
+            AssertDaclRestored(originalParentAcl, _root);
+            AssertDaclRestored(originalProtectedDirectoryAcl, protectedDirectory);
+            AssertDaclRestored(originalSecretAcl, secret);
+            AssertDaclRestored(originalDirectoryAcl, working);
+            AssertDaclRestored(originalInputAcl, input);
+            AssertDaclRestored(expectedDeniedAcl, denied);
+        }
+        catch (Exception)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(FormatDaclPhases(
+                ("original-parent", originalProtectedDirectoryAcl), ("original-file", originalDeniedAcl),
+                ("startup-parent", startedAcl.Parent), ("startup-file", startedAcl.File),
+                ("completed-parent", completedAcl.Parent), ("completed-file", completedAcl.File),
+                ("host-update-file", hostUpdatedAcl),
+                ("released-parent", ReadDacl(protectedDirectory)), ("released-file", ReadDacl(denied))));
+            throw;
+        }
         AssertInheritanceRestored(working, denied, protectedParent);
         File.WriteAllText(denied, "host-write-after-disposal");
         Assert.Equal("host-write-after-disposal", File.ReadAllText(denied));
@@ -161,6 +180,36 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         });
 
         Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+    }
+
+    private static string AddConcurrentReadAttributeGrant(string path, string original)
+    {
+        // This synthetic SID is a test-only principal, not a real account.
+        var principal = new SecurityIdentifier("S-1-5-21-0-0-0-271828");
+        var rule = new FileSystemAccessRule(principal, FileSystemRights.ReadAttributes, AccessControlType.Allow);
+        var expected = new FileSecurity();
+        expected.SetSecurityDescriptorSddlForm(original, AccessControlSections.Access);
+        expected.AddAccessRule(rule);
+        var file = new FileInfo(path);
+        var current = file.GetAccessControl(AccessControlSections.Access);
+        current.AddAccessRule(rule);
+        file.SetAccessControl(current);
+        return expected.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+    }
+
+    private static string FormatDaclPhases(params (string Stage, string Acl)[] phases)
+    {
+        var principals = new Dictionary<string, string>(StringComparer.Ordinal);
+        return string.Join(Environment.NewLine, phases.Select(phase =>
+            $"{phase.Stage}={System.Text.RegularExpressions.Regex.Replace(phase.Acl, "S-[0-9]+(?:-[0-9]+)+", match =>
+            {
+                if (!principals.TryGetValue(match.Value, out var name))
+                {
+                    name = $"principal-{principals.Count}";
+                    principals.Add(match.Value, name);
+                }
+                return name;
+            })}"));
     }
 
     private static void AssertDaclRestored(string expected, string path)
