@@ -1,15 +1,17 @@
 using System.ComponentModel;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
-/// <summary>Collects non-reparse descendants using parent-relative directory opens and one native buffer.</summary>
+/// <summary>Collects non-reparse descendants using bounded root-relative native directory reads.</summary>
 [SupportedOSPlatform("windows")]
 internal static class WindowsDirectoryCollector
 {
     private const int BufferSize = 16 * 1024;
+    private const int WorkerCount = 4;
     private const uint ListDirectory = 1;
     private const uint Synchronize = 0x00100000;
     private const uint BackupSemantics = 0x02000000;
@@ -34,11 +36,13 @@ internal static class WindowsDirectoryCollector
     /// Callers must finish collecting all roots before modifying any ACL.
     /// </summary>
     /// <remarks>
-    /// Each directory is fully read before its children are opened relative to its retained handle.
-    /// An explicit DFS stack retains only the root and active ancestor handles, O(depth), not pending siblings.
-    /// Per-call paths and entry topology cost O(entries), plus a FIFO directory queue for publication.
-    /// Root entries are published before opening children; descendant entries only after all descendants are read.
-    /// Native calls are synchronous, with cancellation checked before directory opens, between entries and after completion.
+    /// Root entries are read and published before any descendant is opened.
+    /// Four dedicated workers each own one 16 KiB buffer and normally one descendant handle.
+    /// Root-relative names exceeding the native counted-name limit are split at directory separators.
+    /// Such opens transiently own two descendant handles per worker; queued directories own none.
+    /// Paths, entry topology and discovery/publication queues cost O(entries).
+    /// All workers join before descendant publication; callbacks retain native entry and FIFO directory order.
+    /// Native calls are synchronous, with cancellation checked before opens, between entries and after completion.
     /// </remarks>
     public static unsafe void Collect(string root, Action<string, bool> accept, CancellationToken cancellationToken)
     {
@@ -55,63 +59,74 @@ internal static class WindowsDirectoryCollector
             throw DirectoryError(Marshal.GetLastPInvokeError(), rootPath, openingDirectory: true);
         var rootDirectory = new DirectoryWork(rootPath);
         var pending = new Queue<DirectoryWork>();
-        var stack = new List<TraversalFrame>();
         var buffer = Marshal.AllocHGlobal(BufferSize);
         try
         {
             CollectDirectory(rootHandle, rootDirectory, buffer, cancellationToken);
-            PublishDirectory(rootDirectory, pending, accept, cancellationToken);
-            stack.Add(new TraversalFrame(rootDirectory, rootHandle));
-            while (stack.Count != 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var current = stack[^1];
-                if (current.NextEntry == current.Directory.Entries.Count)
-                {
-                    stack.RemoveAt(stack.Count - 1);
-                    if (stack.Count != 0)
-                        current.Handle.Dispose();
-                    continue;
-                }
-                var entry = current.Directory.Entries[current.NextEntry++];
-                stack[^1] = current;
-                if (entry.Directory is not { } child)
-                    continue;
-                var relativeStart = current.Directory.Path.Length
-                    + (Path.EndsInDirectorySeparator(current.Directory.Path) ? 0 : 1);
-                var childHandle = OpenRelativeDirectory(current.Handle, child.Path.AsSpan(relativeStart), child.Path);
-                try
-                {
-                    stack.Add(new TraversalFrame(child, childHandle));
-                }
-                catch
-                {
-                    childHandle.Dispose();
-                    throw;
-                }
-                CollectDirectory(childHandle, child, buffer, cancellationToken);
-            }
-            while (pending.TryDequeue(out var directory))
-            {
-                PublishDirectory(directory, pending, accept, cancellationToken);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
         }
         finally
         {
-            // The root has its own using scope; every other active frame owns one child handle.
-            for (var index = stack.Count - 1; index > 0; index--)
-                stack[index].Handle.Dispose();
             Marshal.FreeHGlobal(buffer);
         }
+        PublishDirectory(rootDirectory, pending, accept, cancellationToken);
+        if (pending.Count != 0)
+        {
+            var work = new WorkQueue(rootHandle, rootPath, pending, cancellationToken);
+            var workers = new Thread[WorkerCount];
+            var started = 0;
+            using var registration = cancellationToken.UnsafeRegister(static state =>
+            {
+                var queue = (WorkQueue)state!;
+                queue.Fail(new OperationCanceledException(queue.CancellationToken));
+            }, work);
+            try
+            {
+                for (; started < workers.Length; started++)
+                {
+                    work.ThrowIfStopped();
+                    var worker = new Thread(work.Run) { IsBackground = true };
+                    workers[started] = worker;
+                    worker.Start();
+                }
+            }
+            catch (Exception error)
+            {
+                work.Fail(error);
+            }
+            finally
+            {
+                for (var index = 0; index < started; index++)
+                {
+                    while (true)
+                    {
+                        try
+                        {
+                            workers[index].Join();
+                            break;
+                        }
+                        catch (ThreadInterruptedException error)
+                        {
+                            work.Fail(error);
+                        }
+                    }
+                }
+            }
+            work.ThrowIfStopped();
+        }
+        while (pending.TryDequeue(out var directory))
+        {
+            PublishDirectory(directory, pending, accept, cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static unsafe void CollectDirectory(SafeFileHandle handle, DirectoryWork directory, nint buffer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, WorkQueue? work = null)
     {
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            work?.ThrowIfStopped();
             var status = NtQueryDirectoryFile(handle, 0, 0, 0, out var ioStatus, buffer, BufferSize,
                 FileFullDirectoryInformation, 0, 0, 0);
             if (status is NoMoreFiles or NoSuchFile)
@@ -124,6 +139,7 @@ internal static class WindowsDirectoryCollector
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                work?.ThrowIfStopped();
                 var name = new ReadOnlySpan<char>(&entry->FileName, checked((int)entry->FileNameLength / sizeof(char)));
                 if ((entry->Attributes & FileAttributes.ReparsePoint) == 0 && !name.SequenceEqual(".") && !name.SequenceEqual(".."))
                 {
@@ -159,17 +175,136 @@ internal static class WindowsDirectoryCollector
 
     private readonly record struct Entry(string Path, DirectoryWork? Directory);
 
-    private struct TraversalFrame(DirectoryWork directory, SafeFileHandle handle)
+    private sealed class WorkQueue
     {
-        public DirectoryWork Directory = directory;
-        public SafeFileHandle Handle = handle;
-        public int NextEntry;
+        private readonly object _gate = new();
+        private readonly SafeFileHandle _root;
+        private readonly int _relativeStart;
+        private readonly Queue<DirectoryWork> _pending;
+        private int _outstanding;
+        private ExceptionDispatchInfo? _failure;
+
+        public CancellationToken CancellationToken { get; }
+
+        public WorkQueue(SafeFileHandle root, string rootPath, Queue<DirectoryWork> directories,
+            CancellationToken cancellationToken)
+        {
+            _root = root;
+            _relativeStart = rootPath.Length + (Path.EndsInDirectorySeparator(rootPath) ? 0 : 1);
+            _pending = new Queue<DirectoryWork>(directories);
+            _outstanding = _pending.Count;
+            CancellationToken = cancellationToken;
+        }
+
+        public void Run()
+        {
+            nint buffer = 0;
+            try
+            {
+                buffer = Marshal.AllocHGlobal(BufferSize);
+                while (Take() is { } directory)
+                {
+                    ThrowIfStopped();
+                    CancellationToken.ThrowIfCancellationRequested();
+                    using (var handle = OpenRelativeDirectory(_root, directory.Path.AsSpan(_relativeStart), directory.Path, this))
+                    {
+                        CollectDirectory(handle, directory, buffer, CancellationToken, this);
+                    }
+                    Complete(directory);
+                }
+            }
+            catch (Exception error)
+            {
+                Fail(error);
+            }
+            finally
+            {
+                if (buffer != 0)
+                    Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        public void ThrowIfStopped() => Volatile.Read(ref _failure)?.Throw();
+
+        public void Fail(Exception error)
+        {
+            lock (_gate)
+            {
+                if (_failure is not null)
+                    return;
+                Volatile.Write(ref _failure, ExceptionDispatchInfo.Capture(error));
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        private DirectoryWork? Take()
+        {
+            lock (_gate)
+            {
+                while (_failure is null && _pending.Count == 0 && _outstanding != 0)
+                    Monitor.Wait(_gate);
+                return _failure is not null || _outstanding == 0 ? null : _pending.Dequeue();
+            }
+        }
+
+        private void Complete(DirectoryWork directory)
+        {
+            lock (_gate)
+            {
+                if (_failure is not null)
+                    return;
+                // Outstanding counts queued plus active nodes. Publish children before retiring their parent.
+                foreach (var entry in directory.Entries)
+                {
+                    if (entry.Directory is not { } child)
+                        continue;
+                    _pending.Enqueue(child);
+                    _outstanding = checked(_outstanding + 1);
+                }
+                _outstanding--;
+                Monitor.PulseAll(_gate);
+            }
+        }
     }
 
-    private static unsafe SafeFileHandle OpenRelativeDirectory(SafeFileHandle parent, ReadOnlySpan<char> relativePath, string path)
+    private static SafeFileHandle OpenRelativeDirectory(SafeFileHandle root, ReadOnlySpan<char> relativePath,
+        string path, WorkQueue work)
     {
-        if (relativePath.Length > ushort.MaxValue / sizeof(char))
-            throw new PathTooLongException($"Unable to open directory '{path}'.");
+        const int maximumNameLength = ushort.MaxValue / sizeof(char);
+        if (relativePath.Length <= maximumNameLength)
+            return OpenDirectorySegment(root, relativePath, path);
+
+        SafeFileHandle? current = null;
+        try
+        {
+            while (true)
+            {
+                work.CancellationToken.ThrowIfCancellationRequested();
+                work.ThrowIfStopped();
+                var segmentLength = relativePath.Length;
+                if (segmentLength > maximumNameLength)
+                {
+                    segmentLength = relativePath[..(maximumNameLength + 1)].LastIndexOfAny('\\', '/');
+                    if (segmentLength <= 0)
+                        throw new PathTooLongException($"Unable to open directory '{path}'.");
+                }
+                var next = OpenDirectorySegment(current ?? root, relativePath[..segmentLength], path);
+                if (segmentLength == relativePath.Length)
+                    return next;
+                var previous = current;
+                current = next;
+                previous?.Dispose();
+                relativePath = relativePath[(segmentLength + 1)..];
+            }
+        }
+        finally
+        {
+            current?.Dispose();
+        }
+    }
+
+    private static unsafe SafeFileHandle OpenDirectorySegment(SafeFileHandle parent, ReadOnlySpan<char> relativePath, string path)
+    {
         fixed (char* text = relativePath)
         {
             var nativeName = new UnicodeString

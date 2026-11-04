@@ -170,6 +170,32 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
     }
 
     [Fact]
+    public void RootVisitorFailure_IsPreservedBeforeDescendantIo()
+    {
+        RequireWindows();
+        var child = Directory.CreateDirectory(Path.Combine(_root, "locked")).FullName;
+        var failure = new InvalidOperationException("Visitor rejected the root entry.");
+        var visits = 0;
+        using (var handle = WindowsNative.CreateFile(child, 1, 0, 0, 3, 0x02000000, 0))
+        {
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive directory fixture could not open its directory.");
+
+            var observed = Assert.Throws<InvalidOperationException>(() => WindowsDirectoryCollector.Collect(_root, (path, directory) =>
+            {
+                Assert.Equal(child, path);
+                Assert.True(directory);
+                visits++;
+                throw failure;
+            }, TestContext.Current.CancellationToken));
+
+            Assert.Same(failure, observed);
+            Assert.Equal(1, visits);
+        }
+        AssertDirectoriesReleased();
+    }
+
+    [Fact]
     public void MissingRoot_IsReportedWithoutPublishingEntries()
     {
         RequireWindows();
