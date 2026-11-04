@@ -655,7 +655,8 @@ public sealed class ChatWindowPaneTests : IDisposable
 
             // A computed marker confirms that the shell executed the submitted command.
             var promptText = await WaitForPaneTextAsync(chat, paneId, HasPrompt);
-            Assert.True(HasPrompt(promptText), "The shell did not render its prompt before input.");
+            if (!HasPrompt(promptText))
+                Assert.Fail(DescribeMissingPrompt(session, promptText));
             var input = Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase)
                 ? "cmd /v:on /c \"set /a m=6*7 & echo STAGE1-!m!\"\r"
                 : "echo STAGE1-$((6*7))\r";
@@ -768,6 +769,14 @@ public sealed class ChatWindowPaneTests : IDisposable
     {
         var text = paneText.AsSpan().TrimEnd();
         return !text.IsEmpty && text[^1] is '>' or '$' or '#' or '%';
+    }
+
+    private static string DescribeMissingPrompt(PtySession session, string paneText)
+    {
+        var hostText = session.SnapshotText();
+        var conPtyField = typeof(PtySession).GetField("_conPty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        bool? conPty = conPtyField is null ? null : conPtyField.GetValue(session) is not null;
+        return $"The shell did not render its prompt before input (conPty={conPty?.ToString() ?? "unknown"}, status={session.Status}, exit={session.ExitCode?.ToString() ?? "none"}, hostPrompt={HasPrompt(hostText)}, hostChars={hostText.Length}, paneChars={paneText.AsSpan().TrimEnd().Length}).";
     }
 
     /**
