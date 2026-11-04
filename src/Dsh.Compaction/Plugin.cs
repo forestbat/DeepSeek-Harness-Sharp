@@ -84,7 +84,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         return new BasicCompactionConfig
         {
             ThresholdRatio = DoubleOf(dict, "thresholdRatio"),
-            RetainRatio = DoubleOf(dict, "retainRatio"),
             RetainTokens = IntOf(dict, "retainTokens"),
             TailTurns = IntOf(dict, "tailTurns"),
             SummarizationProvider = dict?.GetValueOrDefault("summarizationProvider") as string,
@@ -92,6 +91,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
             MaxTokens = IntOf(dict, "maxTokens"),
             CompactionRetries = IntOf(dict, "compactionRetries"),
             MaxOverflowRetries = IntOf(dict, "maxOverflowRetries"),
+            DegradedRetainTurns = IntOf(dict, "degradedRetainTurns"),
             ModelPolicies = ModelPoliciesFrom(dict?.GetValueOrDefault("modelPolicies")),
             Auto = dict?.GetValueOrDefault("auto") as bool?,
         };
@@ -111,7 +111,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 Provider = dict.GetValueOrDefault("provider") as string ?? "",
                 Model = dict.GetValueOrDefault("model") as string ?? "",
                 ThresholdRatio = DoubleOf(dict, "thresholdRatio"),
-                RetainRatio = DoubleOf(dict, "retainRatio"),
                 RetainTokens = IntOf(dict, "retainTokens"),
                 TailTurns = IntOf(dict, "tailTurns"),
                 SummarizationProvider = dict.GetValueOrDefault("summarizationProvider") as string,
@@ -119,6 +118,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 MaxTokens = IntOf(dict, "maxTokens"),
                 CompactionRetries = IntOf(dict, "compactionRetries"),
                 MaxOverflowRetries = IntOf(dict, "maxOverflowRetries"),
+                DegradedRetainTurns = IntOf(dict, "degradedRetainTurns"),
             });
         }
         return policies;

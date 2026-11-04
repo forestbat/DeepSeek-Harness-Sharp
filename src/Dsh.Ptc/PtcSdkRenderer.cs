@@ -1,23 +1,24 @@
-﻿using System.Text;
-using System.Text.Json.Nodes;
+using System.Text;
 using Dsh.Llm;
 using Dsh.ScriptHost;
 
 namespace Dsh.Ptc;
 
-/** Renders scope-visible tool schemas as deterministic C# SDK declarations. */
+/**
+ * Renders scope-visible tools as deterministic C# method declarations.
+ * 参数名与参数描述已经在每个工具自己的 schema 里(每次请求都随工具定义发出), 这里只声明"有哪些方法、什么形状"。
+ * 真正的约束来自脚本宿主: 程序由 Roslyn 针对生成的 tools 类编译, 方法名写错会以编译错误回到模型, 而不是靠提示词保证。
+ */
 public static class PtcSdkRenderer
 {
-    private const int MaxTypeDepth = 4;
-
     private const string Instructions = """
         Programmatic tool calling: `run_code` executes a C# program statement body.
         Native tools remain directly callable; use `run_code` when a program is useful for composing tool calls.
         The body may use `await` and may `return` a `JsonNode`; print with `Console.WriteLine`.
         Printed output and returned values form the program result; image outputs from tool calls are delivered separately for you to inspect.
-        Call a listed tool with `await tools.<name>(new JsonObject { ... })`; it returns `JsonNode?` and throws `ToolCallError` (with a `ToolName` property) when the tool fails.
-        Tools whose names are not valid C# identifiers have no method; call them as `await tools.call("<name>", new JsonObject { ... })`.
-        The program runs under a wall-clock timeout; an unhandled exception is reported back to you as a failure so you can correct the program.
+        Every tool in scope is declared below; pass its arguments as a `JsonObject` whose keys are that tool's own schema properties.
+        Tools whose names are not valid C# identifiers have no declaration: call them as `await tools.call("<name>", new JsonObject { ... })`.
+        The program runs under a wall-clock timeout; a compile or runtime error is reported back to you so you can correct the program.
         """;
 
     internal const string BatchingInstructions = """
@@ -48,20 +49,6 @@ public static class PtcSdkRenderer
 
     private static void AppendDeclaration(StringBuilder builder, ToolSchema schema)
     {
-        builder.Append('\n');
-        builder.Append("    // ").Append(schema.Name).Append(" — ").Append(OneLine(schema.Description)).Append('\n');
-        if (schema.Parameters["properties"] is JsonObject properties)
-        {
-            var required = RequiredNames(schema.Parameters);
-            foreach (var (name, value) in properties.OrderBy(entry => entry.Key, StringComparer.Ordinal))
-            {
-                var optional = required.Contains(name) ? "" : "?";
-                builder.Append("    //   ").Append(name).Append(optional).Append(": ").Append(Project(value, MaxTypeDepth));
-                if (value is JsonObject property && Text(property["description"]) is { Length: > 0 } description)
-                    builder.Append(" — ").Append(OneLine(description));
-                builder.Append('\n');
-            }
-        }
         if (PtcToolNaming.IsCallable(schema.Name))
         {
             builder.Append("    public static Task<JsonNode?> ").Append(schema.Name).Append("(JsonObject args);\n");
@@ -71,58 +58,4 @@ public static class PtcSdkRenderer
             builder.Append("    // not a C# identifier — call as await tools.call(\"").Append(schema.Name).Append("\", args)\n");
         }
     }
-
-    private static string Project(JsonNode? schema, int depth)
-    {
-        if (schema is not JsonObject node || depth <= 0)
-            return "JsonNode";
-        if (node["const"] is { } constant)
-            return constant.ToJsonString();
-        if (node["enum"] is JsonArray values)
-            return Join(values.Select(value => value?.ToJsonString() ?? "null"));
-        if (node["oneOf"] is JsonArray oneOf)
-            return Join(oneOf.Select(value => Project(value, depth - 1)));
-        if (node["anyOf"] is JsonArray anyOf)
-            return Join(anyOf.Select(value => Project(value, depth - 1)));
-        if (node["type"] is JsonArray types)
-        {
-            var projected = types.Select(value => ProjectType(Text(value), node, depth)).ToList();
-            return projected.Count == 0 ? "JsonNode" : Join(projected);
-        }
-        return ProjectType(Text(node["type"]), node, depth);
-    }
-
-    private static string ProjectType(string? type, JsonObject node, int depth) => type switch
-    {
-        "string" => "string",
-        "integer" => "int",
-        "number" => "double",
-        "boolean" => "bool",
-        "null" => "null",
-        "array" => $"{Project(node["items"], depth - 1)}[]",
-        "object" => ProjectObject(node, depth - 1),
-        _ => "JsonNode",
-    };
-
-    private static string ProjectObject(JsonObject node, int depth)
-    {
-        if (node["properties"] is not JsonObject properties)
-            return "JsonObject";
-        var required = RequiredNames(node);
-        var members = properties
-            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
-            .Select(entry => $"{entry.Key}{(required.Contains(entry.Key) ? "" : "?")}: {Project(entry.Value, depth)}");
-        return $"{{ {string.Join(", ", members)} }}";
-    }
-
-    private static HashSet<string> RequiredNames(JsonObject schema)
-        => (schema["required"] as JsonArray)?
-            .Select(Text).OfType<string>().ToHashSet(StringComparer.Ordinal) ?? [];
-
-    private static string? Text(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-
-    private static string Join(IEnumerable<string> parts) => string.Join(" | ", parts);
-
-    private static string OneLine(string text) => text.Replace('\r', ' ').Replace('\n', ' ').Trim();
 }
