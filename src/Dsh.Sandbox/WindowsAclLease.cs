@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO.Enumeration;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -13,6 +14,8 @@ namespace Dsh.Sandbox;
 internal sealed class WindowsAclLease : IDisposable
 {
     private const int EnumerationBufferSize = 16 * 1024;
+    private const int ReadProbeParallelism = 4;
+    private const int ReadProbeBatchSize = 128;
     private const int ReadExecute = 0x1200a9;
     private const int Modify = 0x1301bf;
     private const int Delete = 0x10000;
@@ -93,21 +96,87 @@ internal sealed class WindowsAclLease : IDisposable
                     break;
                 Entry.DemandAmbientAncestorGrant(parent, policy.AllowNetwork);
             }
-        foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
+        ApplyGrants(policy, paths, effectiveRead, cancellationToken);
+    }
+
+    private void ApplyGrants(SandboxPolicy policy, Dictionary<string, (bool Write, bool Directory)> paths,
+        EffectiveRead? effectiveRead, CancellationToken cancellationToken)
+    {
+        var ordered = paths.OrderBy(static entry => entry.Key.Length).ToArray();
+        var offset = _entries.Count;
+        _entries.EnsureCapacity(offset + ordered.Length);
+        foreach (var item in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var denyWrite = !access.Write;
-            var denyDelete = access.Write && access.Directory && (policy.Denied.Any(denied => SandboxPolicy.Contains(path, denied))
-                || policy.Readable.Any(read => SandboxPolicy.Contains(path, read.Source)));
-            var mask = access.Write ? Modify : ReadExecute;
-            var inheritedMask = mask;
-            if (denyDelete)
-                mask &= ~Delete;
-            var entry = new Entry(path);
-            _entries.Add(entry);
-            entry.Grant(_sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork,
-                denyWrite ? effectiveRead : null, cancellationToken);
+            _entries.Add(new Entry(item.Key));
         }
+        Action<int> grant = index =>
+        {
+            var (path, access) = ordered[index];
+            var denyWrite = !access.Write;
+            var denyDelete = access.Write && access.Directory && ContainsProtectedDescendant(policy, path);
+            var inheritedMask = access.Write ? Modify : ReadExecute;
+            var mask = denyDelete ? inheritedMask & ~Delete : inheritedMask;
+            _entries[offset + index].Grant(_sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete,
+                policy.AllowNetwork, denyWrite ? effectiveRead : null, cancellationToken);
+        };
+        var options = new ParallelOptions { MaxDegreeOfParallelism = ReadProbeParallelism, CancellationToken = cancellationToken };
+        var reusable = 1;
+        Action<int, ParallelLoopState> probe = (index, state) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_entries[offset + index].CanReuseReadGrant(_sid, ReadExecute, ReadExecute, ordered[index].Value.Directory,
+                    true, policy.AllowNetwork, effectiveRead))
+            {
+                Interlocked.Exchange(ref reusable, 0);
+                state.Stop();
+            }
+        };
+        try
+        {
+            // The caller holds the gate until every pure probe finishes; mutations keep their stable serial order.
+            for (var start = 0; start < ordered.Length;)
+            {
+                var end = start + Math.Min(ReadProbeBatchSize, ordered.Length - start);
+                var readOnly = effectiveRead is not null;
+                for (var index = start; readOnly && index < end; index++)
+                    readOnly = !ordered[index].Value.Write;
+                lock (AclGate)
+                {
+                    if (readOnly)
+                    {
+                        reusable = 1;
+                        Parallel.For(start, end, options, probe);
+                    }
+                    if (!readOnly || reusable == 0)
+                        for (var index = start; index < end; index++)
+                            grant(index);
+                }
+                start = end;
+            }
+        }
+        catch (AggregateException failure)
+        {
+            var original = failure.InnerExceptions[0];
+            foreach (var exception in failure.InnerExceptions)
+                if (exception is not OperationCanceledException)
+                {
+                    original = exception;
+                    break;
+                }
+            ExceptionDispatchInfo.Throw(original);
+        }
+    }
+
+    private static bool ContainsProtectedDescendant(SandboxPolicy policy, string path)
+    {
+        foreach (var denied in policy.Denied)
+            if (SandboxPolicy.Contains(path, denied))
+                return true;
+        foreach (var readable in policy.Readable)
+            if (SandboxPolicy.Contains(path, readable.Source))
+                return true;
+        return false;
     }
 
     private void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,
@@ -290,13 +359,13 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private bool CanReuseReadGrant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory,
+        public bool CanReuseReadGrant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory,
             bool restrict, bool network, EffectiveRead? effectiveRead)
         {
             if (_inheritance is not null || restrict && ProtectedInheritance.ContainsKey(path))
                 return false;
-            // Read-only probes query names; edits retain the policy handle for revalidation.
-            var (acl, _, reuseRead) = ReadGrantAcl(null, sid, directory, effectiveRead);
+            using var handle = Open(readOnly: true);
+            var (acl, _, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
             if (restrict)
                 DemandNoAmbientGrant(acl, access, network);
             return reuseRead || inheritedAccess == access && HasInheritedGrant(acl, sid, access, directory);
@@ -481,24 +550,19 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle? handle,
+        private (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle handle,
             SecurityIdentifier sid, bool directory, EffectiveRead? effectiveRead)
         {
             if (effectiveRead is null)
             {
-                using var readHandle = handle is null ? Open(readOnly: true) : null;
-                var original = ReadAcl(handle ?? readHandle!);
+                var original = ReadAcl(handle);
                 return (original.Acl, original.Protected, false);
             }
-            var queryError = handle is null
-                ? WindowsNative.GetNamedSecurityInfo(path, 1, 0x17, out var owner, out var group,
-                    out var dacl, out var label, out var descriptor)
-                : WindowsNative.GetSecurityInfo(handle, 1, 0x17, out owner, out group,
-                    out dacl, out label, out descriptor);
+            var queryError = WindowsNative.GetSecurityInfo(handle, 1, 0x17, out var owner, out var group,
+                out var dacl, out var label, out var descriptor);
             if (queryError != 0)
             {
-                using var readHandle = handle is null ? Open(readOnly: true) : null;
-                var original = ReadAcl(handle ?? readHandle!);
+                var original = ReadAcl(handle);
                 return (original.Acl, original.Protected, false);
             }
             try

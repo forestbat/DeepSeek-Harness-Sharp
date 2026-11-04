@@ -105,8 +105,6 @@ internal static class WindowsNative
     private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
-    internal static extern uint GetNamedSecurityInfo(string path, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern uint SetSecurityInfo(SafeFileHandle handle, int type, uint information, nint owner, nint group, nint dacl, nint sacl);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
