@@ -113,6 +113,8 @@ internal static class WindowsNative
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetSecurityDescriptorSacl(nint descriptor, [MarshalAs(UnmanagedType.Bool)] out bool present, out nint sacl, [MarshalAs(UnmanagedType.Bool)] out bool defaulted);
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetSecurityDescriptorControl(nint descriptor, out ushort control, out uint revision);
+    [DllImport("advapi32.dll")]
+    internal static extern uint GetSecurityDescriptorLength(nint descriptor);
     [DllImport("ntdll.dll")]
     internal static extern int RtlGetLastNtStatus();
 }
