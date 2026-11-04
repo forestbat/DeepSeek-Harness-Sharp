@@ -307,14 +307,16 @@ jobs:
           fi
           "$EXE" "${ARGS[@]}"
 
-      - name: Run original owned MCP sandbox regression (Windows, temporary stack observer)
+      - name: Run original owned MCP sandbox regression (Windows)
         if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && inputs.suite == 'regression-1' }}
-        shell: pwsh
+        shell: bash
         run: |
-          # Temporary observer only: same standalone consumer/stdio/arguments and original 60000ms Fact.
-          # Samples add overhead and cannot establish clean performance; remove after phase diagnosis.
-          & ./scripts/observe-owned-mcp-windows.ps1
-          exit $LASTEXITCODE
+          set -euo pipefail
+          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe"
+          "$EXE" -noColor -parallelMode none -reporter verbose \
+            -method Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings \
+            -trait- Category=GpuStress -trait- Category=OnlyGpu \
+            -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
 
       - name: Check schedule time zones with invariant globalization
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
