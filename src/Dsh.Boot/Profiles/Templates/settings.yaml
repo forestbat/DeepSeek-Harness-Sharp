@@ -14,7 +14,7 @@ subagent:
 # LLM 提供方；未配置 key 的 provider 会被跳过
 providers:
   deepseek-official:
-    # openai-compatible | openai-responses | anthropic | deepseek
+    # openai-compatible | openai-compatible(response) | anthropic | deepseek
     type: openai-compatible
     options:
       # 接口地址
@@ -473,7 +473,7 @@ plugins:
 #   default_model:
 # LLM 提供方
 # providers:
-#   适配器类型:openai-compatible | openai-responses | anthropic | deepseek
+#   适配器类型:openai-compatible | openai-compatible(response) | anthropic | deepseek
 #   type:
 #   适配器选项
 #   options:
