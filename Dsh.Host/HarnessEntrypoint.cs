@@ -179,7 +179,7 @@ public static class HarnessEntrypoint
                     return 1;
                 }
             case "headless":
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)));
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId);
             case "storage":
                 return await RunStorageCommandAsync(harnessHome, positional.Skip(1).ToList());
             case "config":
@@ -195,15 +195,7 @@ public static class HarnessEntrypoint
 
     private static async Task<int> RunHostServeAsync(HarnessHome home, bool useStdio, string? token, string? listen)
     {
-
-        if (useStdio)
-        {
-            // stdio-over-SSH: 桥接到常驻 daemon; 没有就 detached 起一个。断开只断这条桥, 会话留在远端(脱钩/重连)。
-            await HostAutostart.EnsureRunningAsync(home, token);
-            using var duplex = Dsh.Transport.TransportConnection.FromStandardIo();
-            await HostBridge.RunAsync(duplex, home.Root, CancellationToken.None);
-            return 0;
-        }
+        if (useStdio) return await HostStdio.RunAsync(home, token).ConfigureAwait(false);
 
         if (listen is not null)
             return await RunHostListenAsync(home, listen, token);
@@ -289,7 +281,9 @@ public static class HarnessEntrypoint
             if (arguments.Contains("--write-template"))
             {
                 var changed = SettingsTemplate.Write(path);
-                await Console.Out.WriteLineAsync(changed ? $"settings.yaml 模板已更新: {path}" : $"settings.yaml 模板已是最新: {path}");
+                await Console.Out.WriteLineAsync(changed
+                    ? $"settings.yaml 生成块已更新（说明注释已保留）: {path}"
+                    : $"settings.yaml 生成块已是最新: {path}");
                 return 0;
             }
             if (arguments.Contains("--verify"))
@@ -297,13 +291,13 @@ public static class HarnessEntrypoint
                 var problem = SettingsTemplate.Verify(path);
                 if (problem is null)
                 {
-                    await Console.Out.WriteLineAsync($"settings.yaml 模板与配置面一致: {path}");
+                    await Console.Out.WriteLineAsync($"settings.yaml 生成块与配置面一致（说明注释未参与比较）: {path}");
                     return 0;
                 }
                 await Console.Error.WriteLineAsync(problem);
                 return 1;
             }
-            var format = arguments.Contains("--json") ? "json" : arguments.Contains("--markdown") || arguments.Contains("--md") ? "markdown" : "yaml";
+            var format = arguments.Contains("--json") ? "json" : "markdown";
             await Console.Out.WriteAsync(SettingsSchemaCatalog.Render(format));
             return 0;
         }
@@ -383,14 +377,14 @@ public static class HarnessEntrypoint
                    dsharp gui [--session <id>]
                    dsharp web [--port N] [--print-token]   (启动独立安装的 dsharp-web，不在本进程加载 Web 框架)
                    dsharp headless "task"
-                   dsharp host serve [--stdio] [--token <t>] [--listen <addr:port>]   (后台工作区宿主: --stdio 通过 ssh 桥接; --listen 供手机等外部客户端直连)
+                   dsharp host serve [--stdio] [--token <t>] [--listen <addr:port>]   (后台工作区宿主: --stdio 通过 ssh 桥接并承载 Host 帧及已启用的 LSP 协议能力; --listen 供手机等外部客户端直连)
                    dsharp host web [--port N] [--print-token]   (同上；只监听 127.0.0.1，跨设备用 ssh -L 转发)
                    dsharp register-terminal    (Linux: 注册为桌面环境的默认终端)
                    dsharp storage paths        (打印 storage.root 与各分区解析结果)
                    dsharp storage migrate <old> <new>   (手动搬运旧根数据)
                    dsharp config schema [--json | --markdown]   (列出所有可配置项: 顶层 settings + 各插件参数)
-                   dsharp config schema --verify [--path <模板>]        (校验 settings.yaml 模板是否与配置面同步)
-                   dsharp config schema --write-template [--path <模板>] (用配置面重写模板生成块)
+                   dsharp config schema --verify [--path <模板>]        (校验 settings.yaml 模板存在)
+                   dsharp config schema --write-template [--path <模板>] (兼容旧命令;模板由人工维护,不再自动改写)
             """);
         Console.WriteLine(FleetCli.Usage);
         Console.WriteLine("""

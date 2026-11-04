@@ -42,7 +42,7 @@
               IsVisible="{Binding IsSidebarVisible}" />
 
       <Grid Grid.Column="2" RowDefinitions="Auto,*">
-        <Grid Grid.Row="0" Name="WorkspaceBar" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8" Margin="56,8,16,0">
+        <Grid Grid.Row="0" Name="WorkspaceBar" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8" Margin="56,8,16,0">
           <TextBlock Text="工作台" Classes="Title" VerticalAlignment="Center" IsVisible="{Binding IsDashboardPage}" />
           <Button Grid.Column="1" Classes="Chip" Command="{Binding OpenTerminalCommand}" ToolTip.Tip="打开当前机器的终端">
             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -56,6 +56,9 @@
               <TextBlock Text="跳转到会话…" />
               <TextBlock Text="Ctrl+K" Classes="Tertiary" VerticalAlignment="Center" />
             </StackPanel>
+          </Button>
+          <Button Grid.Column="4" Classes="Chip" Content="IDE…" Command="{Binding PrepareEditorPickerCommand}" ToolTip.Tip="在本机或远端 Host 中打开当前工作区">
+            <Button.Flyout><Flyout><views:EditorOpenWithView DataContext="{Binding EditorPicker}" /></Flyout></Button.Flyout>
           </Button>
           <Button Grid.Column="3" Name="BellButton" Classes="Icon" Width="34" Height="30" ToolTip.Tip="通知">
             <Panel>

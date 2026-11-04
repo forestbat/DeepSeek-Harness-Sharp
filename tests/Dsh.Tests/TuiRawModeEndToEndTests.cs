@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Persistence;
+using Dsh.Ptc;
 using Dsh.Tui;
 
 namespace Dsh.Tests;
@@ -49,6 +50,41 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
                 && scenario.ContainsVisible(reply, ignoreCase: true),
             TimeSpan.FromSeconds(5), "The real assistant answer did not complete in the visible TUI.");
         scenario.ExitAndAssertRestored(output, "real model turn");
+    }
+
+    [Fact(Explicit = true)]
+    [Trait("Category", "LlmSmoke")]
+    public async Task RealCli_CodeAndNativeToolsComposeWithoutSelectingAMode()
+    {
+        RequireUnix();
+        using var terminal = await PtyTuiHarness.StartOwnedTerminalAsync(copyRealConfiguration: true);
+        var scenario = new Scenario(terminal);
+        scenario.WaitForRawInput();
+        var resultPath = Path.Combine(terminal.Home, "capability-result.txt");
+        var prompt = $"Use run_code to compute 17 * 19 in C#, then use write directly to save only the computed integer to {resultPath}; do not write files inside run_code and report the result after both calls.";
+        scenario.Write($"{prompt}\r");
+        scenario.WaitFor(() => File.Exists(resultPath)
+                && ReadCompletedAssistantReply(terminal.Home) is not null
+                && scenario.ContainsVisible("323"),
+            TimeSpan.FromSeconds(90), "The real TUI did not complete the tool turn and display the computed result.");
+        Assert.Equal("323", (await File.ReadAllTextAsync(resultPath, TestContext.Current.CancellationToken)).Trim());
+        using var persistence = new JsonlSessionPersistence(new HarnessHome(terminal.Home).SessionsPath);
+        var history = new List<SessionEventPayload>();
+        foreach (var stored in persistence.List())
+        {
+            using var handle = persistence.Open(stored.Header.Id, SessionAccess.Read);
+            history.AddRange(handle.Read().Select(item => item.Data));
+        }
+        var calls = history.OfType<ToolCallPayload>().ToArray();
+        var results = history.OfType<ToolResultPayload>().ToArray();
+        Assert.Contains(calls, call => call.Name == ToolRunCode.ToolName
+            && results.Any(result => result.Message.Block.ToolCallId == call.CallId
+                && result.Error is null && result.Message.Block.IsError is not true
+                && MessageText.Flatten(result.Message.Content).Contains("323", StringComparison.Ordinal)));
+        Assert.Contains(calls, call => call.Name == "write"
+            && results.Any(result => result.Message.Block.ToolCallId == call.CallId
+                && result.Error is null && result.Message.Block.IsError is not true));
+        scenario.ExitAndAssertRestored(output, "real code/native capability turn");
     }
 
     private static string? ReadCompletedAssistantReply(string home)

@@ -1,8 +1,5 @@
 # DeepSeek Harness 配置文件模板（settings.yaml v2）
-# 编辑此文件会影响全新安装首次启动时生成的默认 settings.yaml。
-
-# DeepSeek Harness 配置文件（settings.yaml v2）
-# 本文件由 DSH 首次启动时自动生成，可手动编辑。
+# 首次启动时生成；可手动编辑，注释不会影响运行。
 
 # 全局默认模型，格式为 provider/model
 global_default_model: deepseek-official/deepseek-v4-flash
@@ -10,26 +7,23 @@ global_default_model: deepseek-official/deepseek-v4-flash
 # 压缩（compaction）使用的模型，格式为 provider/model
 compaction_model: deepseek-official/deepseek-v4-flash
 
-# 子代理默认模型，格式为 provider/model
-# subagent 工具调用与插件参数 agentOptions 都未指定 provider/model 时使用；该 provider 需已配置 key，删掉此项则子代理跟随当前会话模型。
+# 子代理默认模型；未指定 provider/model 时使用，删掉则跟随当前会话
 subagent:
   default_model: deepseek-official/deepseek-v4-flash
 
-# LLM 提供方配置:type 缺省即 openai-compatible;要用 DeepSeek 专属行为(缓存 token 统计等)需显式 type: deepseek
-# 适配器由插件提供:@deepseek-ai/dsh-llm-openai(openai-compatible/openai-responses)、-anthropic、-deepseek
-# 未配置 key 的 provider 会被跳过并记 WARN;完全不配 provider 也能启动,首次发起请求时才报错
-# models 只写 models.dev 之外的模型(自建端点、中转站、或刚发布还没进目录的 id):目录已收录的模型写了只是重复,
-# 也不会列得更全——菜单/列表一律按"本文件声明 ∪ models.dev 目录"算,推理强度按目录解析。
+# LLM 提供方；未配置 key 的 provider 会被跳过
 providers:
   deepseek-official:
+    # openai-compatible | openai-compatible(response) | anthropic | deepseek
     type: openai-compatible
     options:
+      # 接口地址
       baseUrl: https://api.deepseek.com
-      # 也可以用 apiKey 直接内联;留空或未设置环境变量时该 provider 会被跳过并记 WARN
+      # API key 环境变量；也可直接写 apiKey
       apiKeyEnv: DEEPSEEK_API_KEY
-    # models.dev 已收录该 provider(deepseek) → 模型不必列;要覆盖某个模型的显示名/系统提示,才在这里补条目。
+    # 目录已收录的模型不用列；这里只覆盖显示名/系统提示
     models: {}
-  # 中转站/私有部署这类 models.dev 里没有的 provider 才需要把模型列全(目录无从补充):
+  # 私有/中转 provider 示例:
   # "@deepseek-ai/dsh-relay":
   #   type: openai-compatible
   #   options:
@@ -40,89 +34,420 @@ providers:
   #       name: My Model
   #       tool_call: true
 
-# 技能目录
+# 技能目录：一个技能是一个含 SKILL.md 的子目录，或根目录下直接的 *.md
+# 内置扫描顺序如下，同名技能按此顺序取第一个：
+#   1. <项目根>/.dsh/skills       项目根 = 从会话 cwd 向上第一个含 .git 的目录
+#   2. <项目根>/.agents/skills
+#   3. paths 里列出的目录（本项），以及插件参数 customSkillDirs
+#   4. ~/.dsh/skills              用户级
+#   5. ~/.agents/skills           用户级
+#   6. 随包技能目录 bundledSkillDir / DSH_BUNDLED_SKILL_DIR
+# 想加自己的目录就写在 paths 里；写绝对路径，这里不展开 ~
+# urls 是远程技能源：每个 URL 返回 {"skills":[{"name","description","whenToUse","content"}]}
+# 远程技能默认一个都不上架（防止远端的提示词注入），只有 enabled 里点名的名字才会进入技能目录
 skills:
+  # 额外的技能目录列表
   paths: []
+  # 远程技能源 URL 列表
   urls: []
+  # 允许使用的远程技能名；留空表示全部禁用
+  enabled: []
 
-# 全局规则
+# 全局规则文本
 rules: []
 
-# 本机统一 HTTP 出口由 network.outbound_proxy 配置；fleet.deploy.serverProxy 只用于远端下载部署包，不设置远端机器的一般网络出口。
-# outbound_proxy 是本机出口代理:web_search/web_fetch、LLM 请求、models.dev 目录、MCP(HTTP)、A2A、账号、E2B 与本机下载远端 dsharp 都经它访问外网。
-# url 留空(或不写本段)跟随系统代理;支持 http/https/socks4/socks4a/socks5,可带 user:pass@(日志与报错会脱敏)。
-# bypass 是直连的主机(含子域),回环地址、不带点的主机名与私网 IP 总是直连;probe_url 是 GUI 设置页与 /proxy test 自检的探测地址。
+# 本机 HTTP 出口代理；留空跟随系统代理
 # network:
-#   borrowed_outbound_machine: null  # Select one machine's proxyCommand tunnel; null uses the baseline below.
+#   # 借用某台机器的出口隧道；null 表示不用
+#   borrowed_outbound_machine: null
+#   # 代理 URL:http/https/socks4/socks4a/socks5,可带 user:pass@
 #   outbound_proxy:
 #     url: http://127.0.0.1:7890
+#     # 直连主机(含子域)
 #     bypass: [example.com, "*.example.org"]
+#     # 连通性探测地址
 #     probe_url: https://www.gstatic.com/generate_204
 
-# 机器清单与远端自动部署偏好: GUI 的“机器”页、`dsharp machine` 与 `dsharp host web` 共用, 也会改写本段。
-# 本机(local)是隐式的, 不用写; 省略的字段取默认值。密码认证的 password 以明文保存(本文件仅属主可读写)。
+# 机器清单；本机(local)隐式存在，不用写
 # fleet:
 #   machines:
 #     - name: build
+#       # ssh | local
 #       kind: ssh
 #       host: build.internal
 #       user: dev
-#       auth: key            # agent | key | password
+#       # agent | key | password
+#       auth: key
 #       keyPath: ~/.ssh/id_ed25519
 #       harnessHome: ~/.dsh-build
-#     - name: second
-#       kind: local
-#       harnessHome: /srv/second-home
 #   deploy:
-#     autoDeploy: false      # 默认 true: 连接前在远端安装/升级 dsharp
+#     # 连接前自动安装/升级远端 dsharp
+#     autoDeploy: true
 #     releaseVersion: latest
-#     via: auto              # auto | client | server
-#     serverProxy: http://127.0.0.1:7890  # 仅供远端 curl/wget 下载部署包，在远端解析；留空跟随远端自身代理或直连。
+#     # auto | client | server
+#     via: auto
+#     # 仅远端下载部署包时使用；留空跟随远端代理或直连
+#     serverProxy: http://127.0.0.1:7890
 
-# 插件沙箱开关:默认 false;关闭时插件的装载与运行方式不变。
-# 单个插件的读/写/网络权限写在 plugins."<包名>".permissions(见下方插件段说明);权限的强制执行随插件沙箱提供。
+# 插件沙箱；false 时保持现有加载/执行方式
 sandbox:
+  # 是否启用插件沙箱
   enabled: false
 
-# 插件开关:true/false 或 {enabled: true, permissions: {...}, ...插件参数}
-# 插件发现即启用;只有这里显式禁用的插件才会关闭。/plugins 命令会改写本段(GUI 插件市场同样写这里)。
-# permissions 是与 enabled 并列的保留键,不会作为参数交给插件:read/write/network 三项布尔值,未写的项与未写 permissions 时均为允许;
-# /plugins ban_write <包名> 与 /plugins enable_write <包名> 切换 write;enable/disable 保留 permissions,remove 连同参数一并清除。
-# 项目记忆 @deepseek-ai/dsh-memory 默认关闭,用 /memory on 开启;
-# 参数:file(记忆文件路径)、backend(file|mongo)、capture(回合末自动捕获,默认 true)、mongo(connectionString/database/collection/key)。
-# 快照恢复点 @deepseek-ai/dsh-checkpoints 默认关闭,改 true 开启;参数:max_points、keep_days。
-# TOON 编码面 @deepseek-ai/dsh-toon 默认关闭(实验性:工具结果/调用改用 TOON 文本,输出侧会缓冲流式渲染);
-# 参数:output(默认 true)、input(逗号分隔的工具名白名单,这些工具的结果以 TOON 进上下文)。
-# IDE 本地历史 @deepseek-ai/dsh-ide-history: 只有工作区带对应标记(.vscode/*.code-workspace、.idea/*.iml、.zed)时才查该来源;
-# 参数:providers(默认 [vscode, jetbrains, zed])、timeline(是否把 IDE 历史并进 /timestamp 时间线供 jump/revert/fork,默认 false,避免自动保存噪声)、
-#       timeline_limit(开启后合并的条目上限,默认 50)。
-# TUI @deepseek-ai/dsh-tui: 参数 highlightColor/arrowColor/dividerColor/statusColor/errorColor 可配色(取 "#rrggbb" 真彩或 16 色名如 BrightCyan;
-# arrowColor 缺省跟随 highlightColor, 其余缺省不留痕; 示例见下)。sidebarWidth/inputHeight/gpuBackend 亦在此配。
-# keys 改快捷键:动作名: 按键串(修饰键 Ctrl/Alt 用 + 连接, 多键序列用空格分隔, 如 "Ctrl+X W");未写的动作用默认键位,TUI 内 /keys 列出全部动作与当前绑定;
-# 首键须带 Ctrl/Alt 或为 F 键, 冲突(同一按键串多个动作/一个是另一个的前缀)记 WARN 并回退默认。keySequenceTimeoutMs 为前缀等待超时(毫秒, 缺省 0 = 一直等)。
-# web_search 搜索引擎: 模型用 engine 参数选引擎; 省略 engine 时走通用网页搜索 @deepseek-ai/dsh-web-search-deepseek(需在其参数里配 apiKey)。
-# GitHub @deepseek-ai/dsh-web-search-github 提供 github-repos(搜仓库)与 github-code(搜代码, 需 token); 参数 token 可选, 不配时仓库搜索每 IP 每分钟 10 次, 配了是 30 次。
-# Stack Overflow @deepseek-ai/dsh-web-search-stackoverflow 提供 stackoverflow(搜问题); 参数 key 可选(在 stackapps.com 注册应用获得), 不配时每 IP 每天 300 次, 配了是 10000 次。
-# Baidu @deepseek-ai/dsh-web-search-baidu: apiKey 为开通搜索权限的 AppBuilder API Key,最多 50 条网页引用,额度以控制台为准。
-# Google @deepseek-ai/dsh-web-search-google: apiKey 与 searchEngineId(cx)均必填;仅既有客户可用至 2027-01-01,每天 100 次免费,单次最多 10 条。
-# Bing @deepseek-ai/dsh-web-search-bing: 无 key 的公共 RSS 入口,market 默认不传(由站点选地区);RSS 条款仅限个人非商业阅读,其他用途需 Microsoft 许可。
-# DuckDuckGo @deepseek-ai/dsh-web-search-duckduckgo: 无 key 的公共 HTML 入口,region 默认 wt-wt;可能限流或要求人工验证,不会自动解验证码。
-# 四个新增引擎均需用 engine 参数点名(或显式设 web.searchProvider),不抢占默认 DeepSeek;均读取 network.outbound_proxy。
-# 各插件写 false 即单独关闭;凭据只从本文件读取,不会写进搜索日志或错误信息。
+# 插件开关:false 关闭;permissions(read/write/network)是保留键
 plugins:
+  # Debug-only preference for batching independent tool calls in run_code.
+  "@deepseek-ai/dsh-ptc":
+    debug_batching: false
+  # Optional .csx execution requires an installed dotnet-script frontend.
+  "@deepseek-ai/dsh-csx":
+    executable: dotnet-script
+  # Optional C# stdin evaluation requires an installed CSharpRepl frontend.
+  "@deepseek-ai/dsh-csharprepl":
+    executable: csharprepl
+  # 项目记忆；参数 file/backend/capture/mongo
   "@deepseek-ai/dsh-memory": false
+  # TOON 编码；参数 output/input
   "@deepseek-ai/dsh-toon": false
+  # 快照恢复点；参数 max_points/keep_days
   "@deepseek-ai/dsh-checkpoints": false
+  # IDE 集成
+  "@deepseek-ai/dsh-ide":
+    # 默认编辑器:auto 或编辑器 id
+    default_editor: auto
+    # 无匹配编辑器时是否失败
+    strict_match: false
+    # 复用窗口:auto | always | never
+    reuse_window: auto
+    # 打开后聚焦:never | if_running | always
+    focus: never
+    # 找不到编辑器时:none | os-default
+    fallback: none
+    # 允许打开工作区外文件
+    allow_outside_workspace: false
+    # 事件触发的编辑器规则
+    triggers: []
+    # 远端工作区到本机目录的映射；留空则不启用 client 打开
+    client_mappings: []
+    # 编辑器列表;executables 是本机候选,remote_executables 是远端 host 候选
+    editors:
+      - id: vscode
+        display_name: Visual Studio Code
+        command: code
+        executables: [code, code.exe, code.cmd]
+        bundles: [Visual Studio Code]
+        history_provider: vscode
+        remote: true
+        when: {workspace: [.vscode, "*.code-workspace"], extensions: [.cs, .ts, .tsx, .js, .json, .md, .py, .go, .rs, .c, .cpp]}
+        actions: {open_file: ["{path}"], open_at_position: ["--goto", "{path}:{line}:{column}"], open_workspace: ["{workspace}"], open_diff: ["--diff", "{left}", "{right}"]}
+        remote_actions: {open_file: ["--file-uri", "{remote_uri}"], open_at_position: ["--goto", "--file-uri", "{remote_uri}:{line}:{column}"], open_workspace: ["--folder-uri", "{remote_uri}"]}
+        reuse_args: [--reuse-window]
+        new_window_args: [--new-window]
+      - id: vscode-insiders
+        display_name: Visual Studio Code - Insiders
+        command: code-insiders
+        executables: [code-insiders, code-insiders.exe, code-insiders.cmd]
+        bundles: [Visual Studio Code - Insiders]
+        history_provider: vscode
+        remote: true
+        when: {workspace: [.vscode, "*.code-workspace"], extensions: [.cs, .ts, .tsx, .js, .json, .md, .py, .go, .rs, .c, .cpp]}
+        actions: {open_file: ["{path}"], open_at_position: ["--goto", "{path}:{line}:{column}"], open_workspace: ["{workspace}"], open_diff: ["--diff", "{left}", "{right}"]}
+        remote_actions: {open_file: ["--file-uri", "{remote_uri}"], open_at_position: ["--goto", "--file-uri", "{remote_uri}:{line}:{column}"], open_workspace: ["--folder-uri", "{remote_uri}"]}
+        reuse_args: [--reuse-window]
+        new_window_args: [--new-window]
+      - id: vscodium
+        display_name: VSCodium
+        command: codium
+        executables: [codium, codium.exe, codium.cmd]
+        bundles: [VSCodium]
+        history_provider: vscode
+        remote: true
+        when: {workspace: [.vscode, "*.code-workspace"], extensions: [.cs, .ts, .tsx, .js, .json, .md, .py, .go, .rs, .c, .cpp]}
+        actions: {open_file: ["{path}"], open_at_position: ["--goto", "{path}:{line}:{column}"], open_workspace: ["{workspace}"], open_diff: ["--diff", "{left}", "{right}"]}
+        remote_actions: {open_file: ["--file-uri", "{remote_uri}"], open_at_position: ["--goto", "--file-uri", "{remote_uri}:{line}:{column}"], open_workspace: ["--folder-uri", "{remote_uri}"]}
+        reuse_args: [--reuse-window]
+        new_window_args: [--new-window]
+      - id: cursor
+        display_name: Cursor
+        command: cursor
+        executables: [cursor, cursor.exe, cursor.cmd]
+        bundles: [Cursor]
+        history_provider: vscode
+        remote: true
+        when: {workspace: [.vscode, "*.code-workspace"], extensions: [.cs, .ts, .tsx, .js, .json, .md, .py, .go, .rs, .c, .cpp]}
+        actions: {open_file: ["{path}"], open_at_position: ["--goto", "{path}:{line}:{column}"], open_workspace: ["{workspace}"], open_diff: ["--diff", "{left}", "{right}"]}
+        remote_actions: {open_file: ["--file-uri", "{remote_uri}"], open_at_position: ["--goto", "--file-uri", "{remote_uri}:{line}:{column}"], open_workspace: ["--folder-uri", "{remote_uri}"]}
+        reuse_args: [--reuse-window]
+        new_window_args: [--new-window]
+      - id: windsurf
+        display_name: Windsurf
+        command: windsurf
+        executables: [windsurf, windsurf.exe, windsurf.cmd]
+        bundles: [Windsurf]
+        history_provider: vscode
+        remote: true
+        when: {workspace: [.vscode, "*.code-workspace"], extensions: [.cs, .ts, .tsx, .js, .json, .md, .py, .go, .rs, .c, .cpp]}
+        actions: {open_file: ["{path}"], open_at_position: ["--goto", "{path}:{line}:{column}"], open_workspace: ["{workspace}"], open_diff: ["--diff", "{left}", "{right}"]}
+        remote_actions: {open_file: ["--file-uri", "{remote_uri}"], open_at_position: ["--goto", "--file-uri", "{remote_uri}:{line}:{column}"], open_workspace: ["--folder-uri", "{remote_uri}"]}
+        reuse_args: [--reuse-window]
+        new_window_args: [--new-window]
+      - id: rider
+        display_name: Rider
+        command: rider
+        executables: [rider, rider64.exe, rider.exe, rider.sh]
+        bundles: [Rider, Rider CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.cs, .xaml, .csproj, .fs]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: idea
+        display_name: IntelliJ IDEA
+        command: idea
+        executables: [idea, idea64.exe, idea.exe, idea.sh]
+        bundles: [IntelliJ IDEA, IntelliJ IDEA CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.java, .kt, .scala]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: pycharm
+        display_name: PyCharm
+        command: pycharm
+        executables: [pycharm, pycharm64.exe, pycharm.exe, pycharm.sh]
+        bundles: [PyCharm, PyCharm CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.py]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: webstorm
+        display_name: WebStorm
+        command: webstorm
+        executables: [webstorm, webstorm64.exe, webstorm.exe, webstorm.sh]
+        bundles: [WebStorm, WebStorm CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.ts, .js, .tsx]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: clion
+        display_name: CLion
+        command: clion
+        executables: [clion, clion64.exe, clion.exe, clion.sh]
+        bundles: [CLion, CLion CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.c, .cpp, .h, .hpp]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: goland
+        display_name: GoLand
+        command: goland
+        executables: [goland, goland64.exe, goland.exe, goland.sh]
+        bundles: [GoLand, GoLand CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.go]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: rubymine
+        display_name: RubyMine
+        command: rubymine
+        executables: [rubymine, rubymine64.exe, rubymine.exe, rubymine.sh]
+        bundles: [RubyMine, RubyMine CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.rb]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: phpstorm
+        display_name: PhpStorm
+        command: phpstorm
+        executables: [phpstorm, phpstorm64.exe, phpstorm.exe, phpstorm.sh]
+        bundles: [PhpStorm, PhpStorm CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.php]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: rustrover
+        display_name: RustRover
+        command: rustrover
+        executables: [rustrover, rustrover64.exe, rustrover.exe, rustrover.sh]
+        bundles: [RustRover, RustRover CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.rs]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: datagrip
+        display_name: DataGrip
+        command: datagrip
+        executables: [datagrip, datagrip64.exe, datagrip.exe, datagrip.sh]
+        bundles: [DataGrip, DataGrip CE]
+        history_provider: jetbrains
+        when: {workspace: [.idea, "*.sln", "*.slnx", "*.iml"], extensions: [.sql]}
+        actions: {open_file: ["--line", "{line}", "--column", "{column}", "{path}"], open_at_position: ["--line", "{line}", "--column", "{column}", "{path}"], open_workspace: ["{workspace}"]}
+      - id: zed
+        display_name: Zed
+        command: zed
+        executables: [zed, zed.exe, zed.cmd]
+        bundles: [Zed]
+        when: {workspace: [.zed]}
+        actions: {open_file: ["{path}:{line}:{column}"], open_at_position: ["{path}:{line}:{column}"], open_workspace: ["{workspace}"]}
+        reuse_args: [--reuse]
+        new_window_args: [--new]
+        background_args: [--background]
+      - id: eclipse
+        display_name: Eclipse
+        command: eclipse
+        executables: [eclipse, eclipse.exe, eclipse.cmd]
+        bundles: [Eclipse]
+        when: {workspace: [.project, .classpath], extensions: [.java]}
+        actions: {open_file: ["{path}"], open_workspace: [-data, "{workspace}"]}
+      - id: codeblocks
+        display_name: CodeBlocks
+        command: codeblocks
+        executables: [codeblocks, codeblocks.exe, codeblocks.cmd]
+        bundles: [CodeBlocks]
+        when: {workspace: ["*.cbp"], extensions: [.c, .cpp, .h, .hpp]}
+        actions: {open_file: ["{path}"], open_workspace: ["{workspace}"]}
+      - id: vim
+        display_name: vim
+        kind: terminal
+        command: vim
+        executables: [vim, vim.exe, vim.cmd]
+        when: {extensions: [.vim]}
+        actions: {open_file: ["+call cursor({line},{column})", "{path}"], open_at_position: ["+call cursor({line},{column})", "{path}"], open_workspace: ["{workspace}"]}
+      - id: nvim
+        display_name: nvim
+        kind: terminal
+        command: nvim
+        executables: [nvim, nvim.exe, nvim.cmd]
+        when: {extensions: [.vim, .lua]}
+        actions: {open_file: ["+call cursor({line},{column})", "{path}"], open_at_position: ["+call cursor({line},{column})", "{path}"], open_workspace: ["{workspace}"]}
+      - id: emacs
+        display_name: Emacs
+        command: emacsclient
+        executables: [emacsclient, emacsclient.exe]
+        bundles: [Emacs]
+        when: {extensions: [.el]}
+        actions: {open_file: [-c, "--alternate-editor=", "+{line}:{column}", "{path}"], open_at_position: [-c, "--alternate-editor=", "+{line}:{column}", "{path}"], open_workspace: [-c, "--alternate-editor=", "{workspace}"]}
+      - id: emacs-terminal
+        display_name: emacs-terminal
+        kind: terminal
+        command: emacsclient
+        executables: [emacsclient, emacsclient.exe, emacsclient.cmd]
+        when: {extensions: [.el]}
+        actions: {open_file: [-t, "--alternate-editor=", "+{line}:{column}", "{path}"], open_at_position: [-t, "--alternate-editor=", "+{line}:{column}", "{path}"], open_workspace: [-t, "--alternate-editor=", "{workspace}"]}
+      - id: sublime
+        display_name: Sublime Text
+        command: subl
+        executables: [subl, subl.exe, subl.cmd]
+        bundles: [Sublime Text]
+        when: {workspace: ["*.sublime-project"]}
+        actions: {open_file: ["{path}:{line}:{column}"], open_at_position: ["{path}:{line}:{column}"], open_workspace: ["{workspace}"]}
+        reuse_args: [--add]
+        new_window_args: [--new-window]
+        background_args: [--background]
+      - id: visualstudio
+        display_name: visualstudio
+        command: devenv.exe
+        executables: [devenv.exe]
+        when: {workspace: ["*.sln", "*.slnx"], extensions: [.cs, .cpp, .vb, .fs]}
+        actions: {open_file: [/Edit, "{path}"], open_workspace: ["{workspace}"]}
+        discovery_commands:
+          - platform: windows
+            command: "{program_files_x86}/Microsoft Visual Studio/Installer/vswhere.exe"
+            args: [-latest, -products, "*", -property, productPath]
+    # 进程环境变量到编辑器的识别规则；第一条匹配生效
+    host_detection:
+      - {editor: cursor, variable: VSCODE_IPC_HOOK_CLI, pattern: "*Cursor*"}
+      - {editor: windsurf, variable: VSCODE_IPC_HOOK_CLI, pattern: "*Windsurf*"}
+      - {editor: vscodium, variable: VSCODE_IPC_HOOK_CLI, pattern: "*VSCodium*"}
+      - {editor: vscode-insiders, variable: VSCODE_IPC_HOOK_CLI, pattern: "*Code - Insiders*"}
+      - {editor: vscode, variable: VSCODE_PID}
+      - {editor: vscode, variable: TERM_PROGRAM, pattern: vscode}
+      - {editor: zed, variable: ZED_TERM}
+      - {editor: zed, variable: TERM_PROGRAM, pattern: zed}
+      - {editor: rider, variable: JETBRAINS_IDE, pattern: "*rider*"}
+      - {editor: idea, variable: JETBRAINS_IDE, pattern: "*idea*"}
+      - {editor: pycharm, variable: JETBRAINS_IDE, pattern: "*pycharm*"}
+      - {editor: webstorm, variable: JETBRAINS_IDE, pattern: "*webstorm*"}
+      - {editor: clion, variable: JETBRAINS_IDE, pattern: "*clion*"}
+      - {editor: goland, variable: JETBRAINS_IDE, pattern: "*goland*"}
+      - {editor: rustrover, variable: JETBRAINS_IDE, pattern: "*rustrover*"}
+      - {editor: phpstorm, variable: JETBRAINS_IDE, pattern: "*phpstorm*"}
+      - {editor: rubymine, variable: JETBRAINS_IDE, pattern: "*rubymine*"}
+      - {editor: datagrip, variable: JETBRAINS_IDE, pattern: "*datagrip*"}
+    # 额外的编辑器安装目录；{id}/{display_name}/{home}/{program_files} 等占位符
+    installation_roots:
+      linux:
+        - /usr/bin
+        - /usr/local/bin
+        - /snap/bin
+        - "/opt/{id}"
+        - "/opt/{id}/bin"
+        - "/opt/jetbrains/{id}/bin"
+        - "{home}/.local/bin"
+        - "{home}/.local/share/JetBrains/Toolbox/scripts"
+        - "{home}/.local/share/JetBrains/Toolbox/apps/*{id}*/bin"
+        - "{home}/.local/share/JetBrains/Toolbox/apps/*{id}*/*/bin"
+        - "{home}/.local/share/JetBrains/Toolbox/apps/*{id}*/*/*/bin"
+      macos:
+        - /usr/bin
+        - /usr/local/bin
+        - "/opt/{id}/bin"
+        - "{home}/.local/bin"
+        - "{home}/Library/Application Support/JetBrains/Toolbox/scripts"
+        - "{home}/Library/Application Support/JetBrains/Toolbox/apps/*{id}*/bin"
+        - "{home}/Library/Application Support/JetBrains/Toolbox/apps/*{id}*/*/bin"
+        - "{home}/Library/Application Support/JetBrains/Toolbox/apps/*{id}*/*/*/bin"
+      windows:
+        - "{local_app_data}/Programs/{display_name}/bin"
+        - "{local_app_data}/Programs/{display_name}"
+        - "{local_app_data}/JetBrains/Toolbox/scripts"
+        - "{local_app_data}/JetBrains/Toolbox/apps/*{id}*/bin"
+        - "{local_app_data}/JetBrains/Toolbox/apps/*{id}*/*/bin"
+        - "{local_app_data}/JetBrains/Toolbox/apps/*{id}*/*/*/bin"
+        - "{program_files}/{display_name}"
+        - "{program_files_x86}/{display_name}"
+        - "{program_files}/JetBrains/{display_name}*/bin"
+        - "{program_files}/CodeBlocks"
+        - "{program_files}/Eclipse"
+        - "{program_files}/Neovim/bin"
+        - "{program_files}/Vim/*"
+        - "{program_files}/Emacs/*/bin"
+        - "{program_files}/Sublime Text"
+        - "{local_app_data}/Programs/Microsoft VS Code/bin"
+        - "{local_app_data}/Programs/Microsoft VS Code Insiders/bin"
+        - "{program_files}/Microsoft VS Code/bin"
+    # macOS 应用包目录
+    bundle_roots: ["/Applications", "{home}/Applications"]
+    # Linux .desktop 目录
+    desktop_roots: ["/usr/share/applications", "/usr/local/share/applications", "{home}/.local/share/applications"]
+    # IDE 历史来源
+    history:
+      # 启用的历史提供方
+      providers: [vscode, jetbrains, zed]
+      # 是否读取时间线
+      timeline: false
+      # 时间线条目上限
+      timeline_limit: 50
+      # 时间线窗口秒数
+      window_seconds: 60
+      # 各提供方的存储位置
+      discovery:
+        vscode:
+          # 用户配置目录
+          roots:
+            linux: ["{home}/.config/Code/User", "{home}/.config/Code - Insiders/User", "{home}/.config/Code - OSS/User", "{home}/.config/VSCodium/User", "{home}/.vscode-server/data/User"]
+            macos: ["{home}/Library/Application Support/Code/User", "{home}/Library/Application Support/Code - Insiders/User", "{home}/Library/Application Support/Code - OSS/User", "{home}/Library/Application Support/VSCodium/User"]
+            windows: ["{app_data}/Code/User", "{app_data}/Code - Insiders/User", "{app_data}/Code - OSS/User", "{app_data}/VSCodium/User"]
+          # 历史存储子目录
+          store_paths: [History]
+          # 设置文件名
+          settings_file: settings.json
+        jetbrains:
+          # 用户配置目录
+          roots:
+            linux: ["{home}/.cache/JetBrains"]
+            macos: ["{home}/Library/Caches/JetBrains"]
+            windows: ["{local_app_data}/JetBrains"]
+          # 历史存储子目录
+          store_paths: [LocalHistory/changes.storageData, LocalHistory/changes/changes.storageData]
   # 下面几段是示例, 默认不打开:
-  # "@deepseek-ai/dsh-ide-history":
-  #   timeline: true    # 支持IDE(JetBrains/VSCode)历史记录进入timestamp fork/revert/jump时间线，默认为false
-  #   timeline_limit: 30
+  # 自定义插件示例:
   # "@acme/foo":
   #   enabled: true
   #   permissions:
   #     read: true
   #     write: false
   #     network: true
+  # TUI 配色与快捷键示例:
   # "@deepseek-ai/dsh-tui":
   #   highlightColor: "#7fd1ff"
   #   dividerColor: BrightBlack
@@ -131,6 +456,7 @@ plugins:
   #   keys:
   #     overview: F5
   #     newSession: "Ctrl+X Ctrl+N"
+  # 搜索插件凭据示例:
   # "@deepseek-ai/dsh-web-search-github":
   #   token: <GitHub token>    # 可选; 开启 github-code 并提高限流, 只需公开仓库的只读权限
   # "@deepseek-ai/dsh-web-search-stackoverflow":
@@ -147,239 +473,480 @@ plugins:
   #   region: cn-zh
   # "@deepseek-ai/dsh-web-search-duckduckgo": false
 
-# 下面这块由 `dsharp config schema --write-template` 从各插件声明生成(编译期 schema, 不靠反射):
-# 顶层 settings 与每个插件支持的参数都会列在这里, 全部是注释, 不会改变默认行为。
-# >>> generated: settings-schema (do not edit; run: dsharp config schema --write-template)
+# >>> generated: settings-schema (配置项由 dsharp config schema --write-template 生成;键上方的说明注释会保留)
 # 顶层 settings(默认值来自 HarnessSettings, 取消注释即可覆盖):
+# 全局默认模型,格式 provider/model
 # global_default_model:
+# 压缩使用的模型,格式 provider/model
 # compaction_model:
-# subagent:  # 映射(见子项)
+# 子代理设置
+# subagent:
+#   子代理默认模型
 #   default_model:
-# providers:  # 映射(见子项)
+# LLM 提供方
+# providers:
+#   适配器类型:openai-compatible | openai-compatible(response) | anthropic | deepseek
 #   type:
-#   options:  # 映射(见子项)
+#   适配器选项
+#   options:
+#     接口地址
 #     baseUrl:
+#     API key(明文)
 #     apiKey:
+#     API key 环境变量
 #     apiKeyEnv:
-#   models:  # 映射(见子项)
+#   模型覆盖(显示名/系统提示等)
+#   models:
+#     显示名
 #     name:
+#     是否支持工具调用
 #     tool_call:
+#     系统提示覆盖
 #     system_prompt_update:
-# skills:  # 映射(见子项)
-#   paths:  # 列表
-#   urls:  # 列表
-# rules:  # 列表
-# mcp:  # 映射(见子项)
+# 技能目录：扫描顺序 <项目根>/.dsh/skills -> <项目根>/.agents/skills -> paths/customSkillDirs
+# -> ~/.dsh/skills -> ~/.agents/skills -> bundledSkillDir(DSH_BUNDLED_SKILL_DIR)；同名先到先得
+# skills:
+#   额外的本地目录列表(写绝对路径, 不展开 ~)
+#   paths: []
+#   远程技能源 URL 列表
+#   urls: []
+#   允许使用的远程技能名(留空 = 全部禁用)
+#   enabled: []
+# 全局规则文本列表
+# rules: []
+# MCP 服务器
+# mcp:
+#   stdio | streamable-http | sse
 #   transport:
-#   command:  # 列表
-#   args:  # 列表
+#   stdio 启动命令
+#   command: []
+#   额外参数
+#   args: []
+#   HTTP 端点(transport: streamable-http 或 sse 时使用)
 #   url:
+#   是否启用
 #   enabled: true
-# a2a:  # 映射(见子项)
+# 工具集行为
+# tools:
+#   是否启用工具渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开
+#   progressive_disclosure:
+#   工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返
+#   disclosure_threshold:
+# A2A 服务
+# a2a:
+#   是否启用
 #   enabled:
+#   监听地址
 #   host:
+#   监听端口
 #   port:
+#   对外公开 URL
 #   publicUrl:
+#   鉴权 token
 #   authToken:
+#   技能 id
 #   skill_id:
+#   技能名称
 #   skill_name:
+#   技能描述
 #   skill_description:
-#   skill_tags:  # 列表
-#   remotes:  # 映射(见子项)
+#   技能标签
+#   skill_tags: []
+#   远端 A2A 服务
+#   remotes:
+#     远端 URL
 #     url:
+#     鉴权 token
 #     token:
-#     headers:  # 映射(见子项)
-# compaction:  # 映射(见子项)
+#     额外请求头
+#     headers: {}
+# 自动压缩
+# compaction:
+#   上下文超限时自动压缩
 #   auto: true
+#   压缩时裁剪旧工具结果
 #   prune: true
-# safety:  # 映射(见子项)
+# 安全设置
+# safety:
+#   自动批准所有工具调用
 #   autoApprove:
-#   blacklist:  # 列表
-# logging:  # 映射(见子项)
+#   拒绝的工具/命令模式
+#   blacklist: []
+# 日志
+# logging:
+#   最低级别:trace | debug | info | warn | error | off
 #   level:
+#   内存缓冲条数
 #   buffer_size:
+#   是否同时输出到控制台(TUI 下强制关闭)
 #   console:
+#   写入 <home>/logs/dsh-YYYYMMDD.log
 #   file: true
+#   单文件上限(MB),超出后切分 .1/.2…
 #   file_max_mb:
-#   keep_days:  # 天数
-# storage:  # 映射(见子项)
-#   root:  # 统一持久化根; 留空则用 $DSH_HOME 或 ~/.dsh
-#   tool_results:  # 映射(见子项)
-#     max_bytes:  # 超过该字节数的工具结果落盘, 会话里只留头部/尾部与路径
-#     retain_days:  # 落盘结果的保留天数
-#   sessions:  # 各分区目录(相对根 / 绝对路径 / ~ 展开); 留空用同名默认目录
+#   文件保留天数
+#   keep_days:
+# 持久化
+# storage:
+#   持久化根;留空用 $DSH_HOME 或 ~/.dsh
+#   root:
+#   工具结果落盘
+#   tool_results:
+#     超过该字节数落盘
+#     max_bytes:
+#     落盘结果保留天数
+#     retain_days:
+#   会话目录
+#   sessions:
+#   日志目录
 #   logs:
+#   缓存目录
 #   cache:
+#   快照目录
 #   checkpoints:
+#   附件目录
 #   attachments:
+#   遥测文件
 #   telemetry:
+#   运行目录
 #   run:
-# fleet:  # 映射(见子项)
-#   machines:  # 列表
-#   deploy:  # 映射(见子项)
+# 机器清单
+# fleet:
+#   机器列表
+#   machines: []
+#   远端部署
+#   deploy:
+#     连接前自动安装/升级远端 dsharp
 #     autoDeploy:
+#     发布包下载地址
 #     releaseBaseUrl:
-#     releaseVersion:  # latest 或发布标签(带不带 v 前缀均可)
-#     via:  # auto / client / server: 发布包在哪里下载
-#     serverProxy:  # 远端下载发布包时用的代理
-# network:  # 映射(见子项)
-#   outbound_proxy:  # 映射(见子项)
-#     url:  # http://、https://、socks4://、socks4a://、socks5:// 代理 URL, 可带 user:pass@; 留空跟随系统代理
-#     bypass:  # 不走代理的主机(含其子域), 只在 url 非空时生效; 回环地址、不带点的主机名与私网 IP 始终直连
-#     probe_url:  # 连通性自检的探测地址; 留空用 https://www.gstatic.com/generate_204
+#     latest 或发布标签
+#     releaseVersion:
+#     auto | client | server
+#     via:
+#     远端下载部署包时的代理
+#     serverProxy:
+# 本机 HTTP 出口
+# network:
+#   出口代理
+#   outbound_proxy:
+#     代理 URL:http/https/socks4/socks4a/socks5
+#     url:
+#     直连主机(含子域)
+#     bypass: []
+#     连通性探测地址
+#     probe_url:
+#   借用某台机器的出口;null 表示不用
 #   borrowed_outbound_machine:
-# sandbox:  # 映射(见子项)
-#   enabled:  # Plugin sandbox switch; false (the default) keeps plugin loading and execution unchanged.
-# plugins:  # 映射(见子项)
+# 插件沙箱
+# sandbox:
+#   是否启用
+#   enabled:
+# 插件开关
+# plugins:
+#   是否启用
 #   enabled: true
-#   parameters:  # 映射(见子项)
-#   permissions:  # Reserved key beside enabled with read/write/network booleans; null (key omitted) allows everything.
+#   插件参数
+#   parameters: {}
+#   权限(read/write/network)
+#   permissions:
+#     允许读取
 #     read: true
+#     允许写入
 #     write: true
+#     允许网络
 #     network: true
 #
 # 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
-#
+# 账号服务
 # @deepseek-ai/dsh-account:
+#   账号平台地址
 #   platformOrigin:
+#   推理服务地址
 #   inferenceOrigin:
+#   允许回环 HTTP
 #   allowLoopbackHttp:
+#   是否启用
 #   enabled:
-#   requestTimeoutMs:  # 毫秒
-#   attemptTimeoutMs:  # 毫秒
-#   logoutMaxRetries:  # 重试次数
-#   logoutRetryDelayMs:  # 毫秒
+#   请求超时(毫秒)
+#   requestTimeoutMs:
+#   单次尝试超时(毫秒)
+#   attemptTimeoutMs:
+#   登出重试次数
+#   logoutMaxRetries:
+#   登出重试间隔(毫秒)
+#   logoutRetryDelayMs:
+#   语言
 #   locale: "zh_CN"
+#   客户端平台
 #   clientPlatform: "web"
-#
+# 快照恢复点
 # @deepseek-ai/dsh-checkpoints:
-#   maxPoints:  # 数量上限
-#   keepDays:  # 天数
-#
+#   快照数量上限
+#   maxPoints:
+#   保留天数
+#   keepDays:
+# @deepseek-ai/dsh-csharprepl:
+#   executable: "csharprepl"
+# @deepseek-ai/dsh-csx:
+#   executable: "dotnet-script"
+# 目标模式
 # @deepseek-ai/dsh-goal:
-#   defaultMaxGoalRounds:  # 轮数
-#   blockedAfterConsecutiveRounds:  # 轮数
-#
-# @deepseek-ai/dsh-ide-history:
-#   providers:  # 列表
-#   timeline:  # 是否把 IDE 历史并进 `/timestamp` 时间线(供 jump/revert/fork)
-#   timelineLimit:
-#
+#   默认最大轮数
+#   defaultMaxGoalRounds:
+#   连续阻塞轮数后停止
+#   blockedAfterConsecutiveRounds:
+# IDE 集成
+# @deepseek-ai/dsh-ide:
+#   编辑器列表
+#   editors: []
+#   进程环境变量识别规则
+#   host_detection: []
+#   安装目录
+#   installation_roots: {}
+#   macOS 应用包目录
+#   bundle_roots: []
+#   Linux .desktop 目录
+#   desktop_roots: []
+#   默认编辑器:auto 或 id
+#   default_editor: "auto"
+#   无匹配编辑器时是否失败
+#   strict_match:
+#   复用窗口:auto | always | never
+#   reuse_window:
+#   打开后聚焦:never | if_running | always
+#   focus:
+#   找不到编辑器时:none | os-default
+#   fallback:
+#   允许打开工作区外文件
+#   allow_outside_workspace:
+#   IDE 历史
+#   history:
+#     启用的历史提供方
+#     providers: []
+#     各提供方存储位置
+#     discovery:
+#       用户配置目录
+#       roots: {}
+#       历史存储子目录
+#       store_paths: []
+#       设置文件名
+#       settings_file:
+#     是否读取时间线
+#     timeline:
+#     时间线条目上限
+#     timeline_limit:
+#     时间线窗口秒数
+#     window_seconds:
+#   事件触发规则
+#   triggers: []
+#   远端工作区到本机目录的映射
+#   client_mappings: []
+# 本地任务
 # @deepseek-ai/dsh-jobs-local:
+#   每个所有者最大并发任务数
 #   maxConcurrentJobsPerOwner:
+#   bash 路径
 #   bashPath:
-#   timeoutMs:  # 毫秒
-#   maxOutputChars:  # 字符数
+#   任务超时(毫秒)
+#   timeoutMs:
+#   最大输出字符数
+#   maxOutputChars:
+#   工具描述
 #   description:
-#   waitTimeoutMs:  # 毫秒
-#   maxWaitTimeoutMs:  # 毫秒
+#   等待超时(毫秒)
+#   waitTimeoutMs:
+#   最大等待超时(毫秒)
+#   maxWaitTimeoutMs:
+#   完成结果投递方式
 #   completionDelivery:
+#   最大连续唤醒次数
 #   maxConsecutiveWakes: 3
-#
+# 项目记忆
 # @deepseek-ai/dsh-memory:
+#   存储后端:file | mongo
 #   backend:
+#   记忆文件路径
 #   file:
+#   回合末自动捕获
 #   capture: true
-#   mongo:  # 映射(见子项)
+#   MongoDB 连接
+#   mongo:
+#     连接字符串
 #     connectionString: "mongodb://localhost:27017"
+#     数据库名
 #     database: "dsh_memory"
+#     集合名
 #     collection: "memory"
+#     加密 key
 #     key:
-#
+# 计划模式
 # @deepseek-ai/dsh-plan-mode:
+#   计划模式提示词段
 #   section:
-#
+# @deepseek-ai/dsh-ptc:
+#   debug_batching: false
+# 技能加载
 # @deepseek-ai/dsh-skill:
+#   技能提供方名称
 #   providerName:
+#   包含默认目录
 #   includeDefaultRoots: true
+#   DSH 目录
 #   dshHome:
+#   agents 目录
 #   agentsHome:
-#   customSkillDirs:  # 列表
+#   自定义技能目录
+#   customSkillDirs: []
+#   监视目录变化
 #   watch: true
+#   使用轮询监视
 #   watchUsePolling:
-#   watchStabilityThresholdMs:  # 毫秒
-#   watchPollIntervalMs:  # 毫秒
+#   稳定性阈值(毫秒)
+#   watchStabilityThresholdMs:
+#   轮询间隔(毫秒)
+#   watchPollIntervalMs:
+#   最大监视项目数
 #   watchMaxProjects:
+#   跟随符号链接
 #   watchFollowSymlinks: true
+#   内置技能目录
 #   bundledSkillDir:
+#   收集缓存上限
 #   collectCacheMaxEntries:
-#
+# 子代理
 # @deepseek-ai/dsh-subagent:
+#   子代理提供方
 #   provider:
+#   子代理工具名
 #   toolName:
+#   允许后台运行
 #   enableRunInBackground: true
+#   后台模式
 #   backgroundMode: "one-shot"
-#   agentOptions:  # 映射(见子项)
+#   子代理模型选项
+#   agentOptions:
+#     提供方
 #     provider:
+#     模型
 #     model:
-#     reasoningEffort:  # 映射(见子项)
+#     推理强度
+#     reasoningEffort: {}
+#     最大 token
 #     maxTokens:
+#   子代理人格
 #   persona:
-#   toolFilter:  # 映射(见子项)
-#     allow:  # 列表
-#     deny:  # 列表
+#   工具过滤
+#   toolFilter:
+#     允许的工具
+#     allow: []
+#     拒绝的工具
+#     deny: []
+#   最大深度
 #   maxDepth: 3
-#
+# 终端工具
 # @deepseek-ai/dsh-terminal:
+#   终端命令
 #   command:
-#   args:  # 列表
+#   命令参数
+#   args: []
+#   行数
 #   rows:
+#   列数
 #   cols:
+#   回滚行数
 #   scrollbackLines:
-#   scrollbackMaxBytes:  # 字节
-#   maxReadBytes:  # 字节
-#   pollIntervalMs:  # 毫秒
-#   idleSilenceMs:  # 毫秒
-#   handoffGraceMs:  # 毫秒
-#   timeoutMs:  # 毫秒
-#   disposeGraceMs:  # 毫秒
+#   回滚字节上限
+#   scrollbackMaxBytes:
+#   单次读取字节上限
+#   maxReadBytes:
+#   轮询间隔(毫秒)
+#   pollIntervalMs:
+#   空闲静默(毫秒)
+#   idleSilenceMs:
+#   交接宽限(毫秒)
+#   handoffGraceMs:
+#   超时(毫秒)
+#   timeoutMs:
+#   释放宽限(毫秒)
+#   disposeGraceMs:
+#   允许后台运行
 #   enableRunInBackground: true
-#   maxResultBytes:  # 字节
-#
+#   结果字节上限
+#   maxResultBytes:
+# token 计量
 # @deepseek-ai/dsh-token-meter:
-#   modelPolicies:  # 列表
+#   模型策略
+#   modelPolicies: []
+#   自动裁剪
 #   auto:
-#   thresholdChars:  # 字符数
-#   headChars:  # 字符数
-#   tailChars:  # 字符数
-#
+#   触发字符数
+#   thresholdChars:
+#   头部保留字符数
+#   headChars:
+#   尾部保留字符数
+#   tailChars:
+# bash 工具
 # @deepseek-ai/dsh-tool-bash:
+#   工作目录
 #   cwd:
-#   timeoutMs:  # 毫秒
-#   maxTimeoutMs:  # 毫秒
-#   maxOutputBytes:  # 字节
-#   maxSpillBytes:  # 字节
-#   maxOutputChars:  # 字符数
+#   超时(毫秒)
+#   timeoutMs:
+#   最大超时(毫秒)
+#   maxTimeoutMs:
+#   输出字节上限
+#   maxOutputBytes:
+#   落盘字节上限
+#   maxSpillBytes:
+#   输出字符上限
+#   maxOutputChars:
+#   工具描述
 #   description:
-#
+# TOON 编码
 # @deepseek-ai/dsh-toon:
+#   启用 TOON 输出
 #   output: true
-#   input:  # 列表
-#
+#   使用 TOON 的工具名列表
+#   input: []
+# 网页工具
 # @deepseek-ai/dsh-web:
+#   搜索提供方
 #   searchProvider:
+#   抓取提供方
 #   fetchProvider:
-#
+# 工作流 worker
 # @deepseek-ai/dsh-workflow-worker-thread:
+#   子代理提供方
 #   subagentProvider: "spawn"
-#   maxRounds:  # 轮数
-#   maxHandoffChars:  # 字符数
-#   maxResultChars:  # 字符数
+#   最大轮数
+#   maxRounds: 256
+#   交接字符上限
+#   maxHandoffChars:
+#   结果字符上限
+#   maxResultChars:
+#   工具名
 #   toolName: "workflow"
 # <<< generated
 
 # MCP 服务器
 mcp:
   filesystem:
+    # stdio | streamable-http | sse（必填）
     transport: stdio
+    # stdio 启动命令
     command: ["npx", "-y", "@modelcontextprotocol/server-filesystem"]
+    # 额外参数(transport: stdio 时使用)
     args: []
+    # HTTP 端点(transport: streamable-http 或 sse 时使用)
     url: null
+    # 是否启用（必填）
     enabled: true
 
 # 自动压缩选项
 compaction:
+  # 上下文超限时自动压缩
   auto: true
+  # 压缩时裁剪旧工具结果
   prune: true
 
 # 日志
@@ -417,5 +984,7 @@ storage:
 
 # 安全设置
 safety:
+  # 自动批准所有工具调用
   autoApprove: false
+  # 拒绝的工具/命令模式
   blacklist: []

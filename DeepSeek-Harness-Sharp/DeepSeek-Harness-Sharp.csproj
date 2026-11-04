@@ -37,12 +37,11 @@
     </ItemGroup>
 
     <!--
-      settings.yaml 模板同步钩子(与 Dsh.Plugins 生成器同源的编译期配置面):
-      - 默认 verify: 校验模板生成块与配置面一致, 不一致就失败并给出修复命令;
-      - -p:UpdateSettingsTemplate=true: 直接重写生成块(开发用, 会改工作区文件)。
-      跑的是 SDK 生成的 apphost/原生可执行文件(Windows 为 dsharp.exe, Unix 为 dsharp):
-      $(TargetPath) 是托管 dll, 直接执行会崩; 而 AOT 发布的原生可执行文件要到 Publish 阶段才产出,
-      所以 Build 与 Publish 各挂一次, 且都要求可执行文件确实存在才跑(否则该阶段本就没有可执行文件)。
+      settings.yaml 模板同步钩子:
+      - 默认 verify: 校验生成块的键/默认值是否与配置面一致（说明注释不参与比较）;
+      - -p:UpdateSettingsTemplate=true: 重写生成块（保留键上方的说明注释）。
+      跑的是 SDK 生成的 apphost（Windows 为 dsharp.exe, Unix 为 dsharp）:
+      $(TargetPath) 是托管 dll, 直接执行会崩; 所以 Build 与 Publish 各挂一次, 且要求可执行文件存在。
     -->
     <PropertyGroup>
       <SettingsTemplateFile>$(MSBuildThisFileDirectory)..\src\Dsh.Boot\Profiles\Templates\settings.yaml</SettingsTemplateFile>
@@ -61,7 +60,6 @@
     <Target Name="SettingsTemplateHookPublish" AfterTargets="Publish"
             Condition="'$(DesignTimeBuild)' != 'true' and '$(PublishDir)' != ''">
       <PropertyGroup>
-        <!-- $(PublishDir) 是相对路径, 且只有在目标执行时才确定: 这里归一化成绝对路径再执行。 -->
         <_SettingsTemplatePublishHost>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(PublishDir)', '$(AssemblyName)$(SettingsTemplateExe)'))</_SettingsTemplatePublishHost>
       </PropertyGroup>
       <Exec Condition="Exists('$(_SettingsTemplatePublishHost)')"

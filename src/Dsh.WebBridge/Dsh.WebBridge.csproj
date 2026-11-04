@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
+    <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\Dsh.Fleet\Dsh.Fleet.csproj" />
     <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />

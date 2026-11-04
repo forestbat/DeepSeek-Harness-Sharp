@@ -1,19 +1,19 @@
 using Avalonia.Threading;
 using Dsh.Boot;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Runtime;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.Services;
 
 /**
- * The GUI's one connection to every machine: owns the FleetClient and re-raises its background events on the UI thread.
+ * The GUI's one connection to every machine: owns the IWorkspaceClient and re-raises its background events on the UI thread.
  * Changed is coalesced (one UI callback per burst of state, session or pending updates); notification events are delivered one by one in arrival order.
  * Reload replaces the client after the machine list was saved, so the views always show the stored machines.
  */
 public sealed class FleetWorkspace : IAsyncDisposable
 {
-    private readonly Func<FleetClient> _factory;
+    private readonly Func<IWorkspaceClient> _factory;
     private readonly DispatcherBridge<bool> _changes;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -21,63 +21,32 @@ public sealed class FleetWorkspace : IAsyncDisposable
     private Task? _disposal;
     private bool _disposed;
 
-    /** store is the machine list the client is built from (the machine management page edits it); options are the connection options before the stored deployment preferences apply. */
-    public FleetWorkspace(MachineStore store, FleetOptions options, Func<FleetClient> factory)
+    /** Each workspace owns its connections; the configured services own backend construction and administration. */
+    public FleetWorkspace(IWorkspaceServices services)
     {
-        (Store, Options, _factory) = (store, options, factory);
+        Services = services;
+        _factory = services.CreateClient;
         _changes = new DispatcherBridge<bool>(_ => Changed?.Invoke());
-        Client = Attach(factory());
+        Client = Attach(_factory());
     }
 
-    public MachineStore Store { get; }
+    public IWorkspaceServices Services { get; }
 
-    public FleetOptions Options { get; }
+    public IMachineCatalog Store => Services.Store;
 
-    public FleetClient Client { get; private set; }
+    public IWorkspaceClient Client { get; private set; }
 
     /** Raised on the UI thread after any machine's state, sessions or pending requests changed, and after a reload. */
     public event Action? Changed;
 
-    public event Action<MachineConnection, RemoteNotificationChange?>? NotificationsChanged;
+    public event Action<IWorkspaceMachine, RemoteNotificationChange?>? NotificationsChanged;
 
-    /**
-     * This computer's harness home first (it is also the home the GUI itself runs on), then every machine of its store.
-     * startLocalHost launches `host serve` for a local machine whose endpoint is not reachable; without it local machines are only connected when their host already runs.
-     */
-    public static FleetWorkspace ForHome(HarnessHome home, Func<string, CancellationToken, Task>? startLocalHost)
-    {
-        var store = new MachineStore(home);
-        var options = new FleetOptions
-        {
-            ClientName = GuiSettings.RemoteClientName,
-            LocalHome = home,
-            SshTransportAdapter = FleetService.DefaultSshTransportAdapter,
-            StartLocalHost = startLocalHost is null ? null : (machine, token) => startLocalHost(machine.HarnessHome ?? home.Root, token),
-        };
-        return new FleetWorkspace(store, options, () =>
-        {
-            var config = store.Load();
-            return new FleetClient([MachineSpec.Local(home.Root), .. config.Machines], options with { Deploy = config.Deploy });
-        });
-    }
-
-    /** GUI production connections are created and tracked by the configured Fleet plugin. */
+    /** Resolve the configured backend capability without choosing its transport or implementation. */
     public static FleetWorkspace ForContext(Context context, HarnessHome home, Func<string, CancellationToken, Task>? startLocalHost)
-    {
-        var service = context.Get<FleetService>(FleetService.ServiceName)!;
-        var options = new FleetOptions
-        {
-            ClientName = GuiSettings.RemoteClientName,
-            LocalHome = service.Home,
-            LocalProxy = service.OutboundRoute.Proxy,
-            AcquireOutboundRoute = service.OutboundRoute.AcquireAsync,
-            SshTransportAdapter = service.SshTransportAdapter,
-            StartLocalHost = startLocalHost is null ? null : (machine, token) => startLocalHost(machine.HarnessHome ?? home.Root, token),
-        };
-        return new FleetWorkspace(service.Store, options, () => service.CreateClient(options));
-    }
+        => new(context.Get<IWorkspaceProvider>(IWorkspaceProvider.ServiceName)!
+            .Create(home, GuiSettings.RemoteClientName, startLocalHost));
 
-    public MachineConnection? Find(string machine) => Client.Find(machine);
+    public IWorkspaceMachine? Find(string machine) => Client.Find(machine);
 
     public void Start() => Client.Start();
 
@@ -118,7 +87,7 @@ public sealed class FleetWorkspace : IAsyncDisposable
                     || connection.Info?.HomeRoot is not { } actual)
                     continue;
                 if (string.Equals(canonical, Path.TrimEndingDirectorySeparator(Path.GetFullPath(actual)), comparison))
-                    await new FleetNetwork(connection).ReloadLocalAsync(canonical, operation.Token);
+                    await connection.Network.ReloadLocalAsync(canonical, operation.Token);
             }
         }
         finally
@@ -151,7 +120,7 @@ public sealed class FleetWorkspace : IAsyncDisposable
         }
     }
 
-    private FleetClient Attach(FleetClient client)
+    private IWorkspaceClient Attach(IWorkspaceClient client)
     {
         client.Changed += OnFleetChanged;
         foreach (var machine in client.Machines)
@@ -161,7 +130,7 @@ public sealed class FleetWorkspace : IAsyncDisposable
         return client;
     }
 
-    private void Detach(FleetClient client)
+    private void Detach(IWorkspaceClient client)
     {
         client.Changed -= OnFleetChanged;
         foreach (var machine in client.Machines)
@@ -172,6 +141,6 @@ public sealed class FleetWorkspace : IAsyncDisposable
 
     private void OnFleetChanged() => _changes.Enqueue(true);
 
-    private void OnNotificationsChanged(MachineConnection machine, RemoteNotificationChange? change)
+    private void OnNotificationsChanged(IWorkspaceMachine machine, RemoteNotificationChange? change)
         => Dispatcher.UIThread.Post(() => NotificationsChanged?.Invoke(machine, change));
 }

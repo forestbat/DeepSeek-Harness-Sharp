@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Dsh.Acp;
+using Dsh.Interaction;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -23,6 +24,7 @@ internal sealed class AcpTranscript : IAsyncDisposable
     private readonly string _agentKind;
     private int _turn;
     private int _step;
+    private bool _turnOpen;
 
     private AcpTranscript(Session session, string agentKind, SessionStore store)
     {
@@ -79,10 +81,33 @@ internal sealed class AcpTranscript : IAsyncDisposable
     {
         lock (_gate)
         {
+            _turnOpen = true;
             _step = 0;
             Append(new TurnStartPayload(++_turn));
             Append(new UserMessagePayload(MessageFactory.CreateUserText(text)), new SurfaceOp.Append());
         }
+    }
+
+    public bool TryCompletePermissionWithoutPrompt(AcpPermissionRequest permission, string? toolName, string? arguments, AcpPermissionOption? allowOnce)
+    {
+        lock (_gate)
+        {
+            if (!_turnOpen || permission.IsResolved)
+            {
+                permission.TryCancel();
+                return true;
+            }
+            if (toolName is null || allowOnce is null || !ApprovalService.HasGrant(Session, toolName))
+                return false;
+            CompletePermissionLocked(permission, toolName, arguments, allowOnce, ApprovalOutcome.AllowedOnce);
+            return true;
+        }
+    }
+
+    public void CompletePermission(AcpPermissionRequest permission, string toolName, string? arguments, AcpPermissionOption? option, ApprovalOutcome outcome)
+    {
+        lock (_gate)
+            CompletePermissionLocked(permission, toolName, arguments, option, outcome);
     }
 
     public void Apply(AcpSessionUpdate update)
@@ -134,9 +159,30 @@ internal sealed class AcpTranscript : IAsyncDisposable
     {
         lock (_gate)
         {
+            _turnOpen = false;
             CloseText();
             Append(new TurnEndPayload(_turn, reason));
         }
+    }
+
+    /** Selection, audit events and grant visibility share the same gate as turn completion. */
+    private void CompletePermissionLocked(AcpPermissionRequest permission, string toolName, string? arguments, AcpPermissionOption? option, ApprovalOutcome outcome)
+    {
+        if (!_turnOpen)
+        {
+            permission.TryCancel();
+            return;
+        }
+        if (!(option is null ? permission.TryCancel() : permission.TrySelect(option.OptionId)))
+            return;
+        if (option is null)
+            outcome = ApprovalOutcome.Cancelled;
+        Append(new ApprovalAskedPayload(permission.RequestId, toolName,
+            permission.ToolCall.ToolCallId.Length == 0 ? null : ToolCallId.Create(permission.ToolCall.ToolCallId),
+            permission.ToolCall.Title, arguments));
+        Append(new ApprovalDecidedPayload(permission.RequestId, outcome));
+        if (outcome == ApprovalOutcome.AllowedForSession)
+            Append(new ApprovalGrantedPayload(toolName));
     }
 
     private void AppendToolResult(AcpSessionUpdate update)

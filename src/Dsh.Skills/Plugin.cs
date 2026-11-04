@@ -23,14 +23,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
     public IDisposable Apply(Context ctx, object? config) => packageName switch
     {
         Skill => RegisterSkillRegistry(ctx, config),
-        SkillFilesystem => global::Dsh.Skills.SkillFilesystem.Apply(ctx, SkillFilesystemConfigFrom(config, ctx)),
+        // SettingsSkillPaths 让顶层 skills.paths 与 skills.urls 都能生效, 两个提供者各管一摊。
+        SkillFilesystem => global::Dsh.Skills.SkillFilesystem.Apply(ctx, SkillFilesystemConfigFrom(config, ctx), RemoteConfig(ctx, config)),
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
     private static IDisposable RegisterSkillRegistry(Context ctx, object? config)
     {
-        _ = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
-        return new DisposableBundle(new NoopDisposable(), SkillCommand.Register(ctx));
+        var registry = new SkillRegistry(ctx, SkillRegistryConfigFrom(config));
+        return new DisposableBundle(new SkillCatalog(ctx, registry), SkillCommand.Register(ctx));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)
@@ -86,6 +87,32 @@ public sealed class Plugin(string packageName) : IDshPlugin
         }
     }
 
+    /** skills.urls 下发的远程技能默认不启用: 只有 skills.enabled 里点名的名字才会进入技能目录。 */
+    private static SkillRemoteConfig RemoteConfig(Context ctx, object? config)
+    {
+        var dict = ConfigOf(config);
+        var urls = (StringListOf(dict?.GetValueOrDefault("remoteUrls")) ?? []).ToList();
+        var enabled = (StringListOf(dict?.GetValueOrDefault("enabledRemoteSkills")) ?? []).ToList();
+        if (ctx.GetProp("dshHomePath") is string homePath)
+        {
+            try
+            {
+                var skills = HarnessSettings.Load(new HarnessHome(homePath)).Skills;
+                urls.AddRange(skills?.Urls ?? []);
+                enabled.AddRange(skills?.Enabled ?? []);
+            }
+            catch (Exception error)
+            {
+                ctx.LoggerFor(SkillFilesystem).Warn($"failed to read skills.urls from settings: {error.Message}");
+            }
+        }
+        return new SkillRemoteConfig
+        {
+            Urls = [.. urls.Distinct(StringComparer.OrdinalIgnoreCase)],
+            Enabled = [.. enabled.Distinct(StringComparer.Ordinal)],
+        };
+    }
+
     private static int? IntOf(IReadOnlyDictionary<string, object?>? dict, string key)
         => dict?.GetValueOrDefault(key) switch
         {
@@ -98,13 +125,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         => value is IEnumerable<object?> items
             ? items.OfType<string>().ToList()
             : null;
-
-    private sealed class NoopDisposable : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
 
     private sealed class DisposableBundle(params IDisposable[] disposables) : IDisposable
     {

@@ -8,6 +8,10 @@ public sealed partial class ComposerViewModel : ObservableObject
     [ObservableProperty]
     private string _input = "";
 
+    /** 输入框光标位置, 由视图回填; 补全只在光标处有未完成的 token 时才弹菜单。 */
+    [ObservableProperty]
+    private int _caretIndex;
+
     [ObservableProperty]
     private bool _isBusy;
 
@@ -39,7 +43,13 @@ public sealed partial class ComposerViewModel : ObservableObject
         IsRefreshMenuOpen = false;
     }
 
-    partial void OnInputChanged(string value) => CanSubmit = !IsBusy && value.Trim().Length > 0;
+    partial void OnInputChanged(string value)
+    {
+        // 文本被替换后旧光标可能越界; 只做收敛, 不动用户/视图回填的真实位置。
+        if (CaretIndex > value.Length)
+            CaretIndex = value.Length;
+        CanSubmit = !IsBusy && value.Trim().Length > 0;
+    }
 
     partial void OnIsBusyChanged(bool value) => CanSubmit = !value && Input.Trim().Length > 0;
 }

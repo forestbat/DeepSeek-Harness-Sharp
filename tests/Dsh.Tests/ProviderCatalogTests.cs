@@ -116,6 +116,33 @@ public sealed class ProviderCatalogTests
             ProviderCatalog.EffectiveModels(catalog, "boomfirst", "https://www.boomfirst.cc/v1", ["my-model"]));
     }
 
+    /** 上下文窗口取 models.dev 的 limit.context: 缺失、非正数与未收录的模型都按"未知"处理。 */
+    [Fact]
+    public void ContextWindowFor_Reads_Limit_Context()
+    {
+        const string json = """
+            {
+              "deepseek": {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "env": ["DEEPSEEK_API_KEY"],
+                "api": "https://api.deepseek.com",
+                "models": {
+                  "deepseek-v4-flash": { "name": "DeepSeek V4 Flash", "limit": { "context": 1000000, "output": 393216 } },
+                  "no-limit": { "name": "No Limit" },
+                  "zero-limit": { "name": "Zero", "limit": { "context": 0 } }
+                }
+              }
+            }
+            """;
+        var catalog = ModelsDevCatalog.FromJson(json);
+
+        Assert.Equal(1_000_000, catalog.ContextWindowFor("deepseek", "deepseek-v4-flash"));
+        Assert.Null(catalog.ContextWindowFor("deepseek", "no-limit"));
+        Assert.Null(catalog.ContextWindowFor("deepseek", "zero-limit"));
+        Assert.Null(catalog.ContextWindowFor("relay", "deepseek-v4-flash"));
+    }
+
     /** 内置快照随程序发布: 没有缓存也保证目录可用(离线), 且 DeepSeek 走专有类型。 */
     [Fact]
     public void Embedded_Snapshot_Is_Available_Without_Cache()

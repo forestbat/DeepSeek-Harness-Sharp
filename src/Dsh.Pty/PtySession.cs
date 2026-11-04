@@ -153,7 +153,7 @@ public sealed class PtySession : IDisposable, ITerminalConnection
     internal byte[] ConsoleSnapshot()
     {
         lock (_gate)
-            return Encoding.UTF8.GetBytes(_screen.ConsoleSnapshot());
+            return Encoding.UTF8.GetBytes(_screen.ConsoleSnapshot(_startInfo.WantsMouse));
     }
 
 

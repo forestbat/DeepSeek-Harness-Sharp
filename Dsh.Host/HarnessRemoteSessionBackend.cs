@@ -17,13 +17,15 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         var byId = new Dictionary<string, RemoteSessionSummary>(StringComparer.Ordinal);
         foreach (var snapshot in runtime.Persistence?.List() ?? [])
         {
-            if (snapshot.Header.IsSubagent)
+            // 空会话(还没有事件)不落盘, 但内存里可能存在: 只有写过事件的会话才出现在列表里。
+            // EventCount 为 null 表示磁盘上的日志(实现不为此数事件), 不能当作空会话丢掉。
+            if (snapshot.Header.IsSubagent || snapshot.EventCount == 0)
                 continue;
             byId[snapshot.Header.Id.Value] = Describe(snapshot.Header);
         }
         foreach (var agent in runtime.Registry.List())
         {
-            if (agent.Session.Header.IsSubagent)
+            if (agent.Session.Header.IsSubagent || agent.Session.SnapshotEvents().Count == 0)
                 continue;
             byId[agent.Id.Value] = Describe(agent);
         }
@@ -33,7 +35,7 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
     public async Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken cancellationToken)
     {
         var resolved = HostPathPolicy.Expand(cwd);
-        var handle = await runtime.Registry.Create(new CreateAgentOptions(Cwd: resolved), cancellationToken).ConfigureAwait(false);
+        var handle = await runtime.Registry.Create(new CreateAgentOptions(Cwd: resolved, AgentOptions: runtime.DefaultAgentOptions), cancellationToken).ConfigureAwait(false);
         runtime.Own(handle);
         runtime.Track(handle.Agent);
         return Describe(handle.Agent);
@@ -47,24 +49,29 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
             runtime.Track(live);
             return Describe(live);
         }
-        var handle = await runtime.Registry.Resume(new ResumeAgentOptions(id), cancellationToken).ConfigureAwait(false);
+        var handle = await runtime.Registry.Resume(new ResumeAgentOptions(id, runtime.DefaultAgentOptions), cancellationToken).ConfigureAwait(false);
         runtime.Own(handle);
         runtime.Track(handle.Agent);
         return Describe(handle.Agent);
     }
 
+    /** 返回整段历史; 分页由 RemoteHostServer 按帧预算切, 所以这里的 TotalEventCount 就是整段条数。 */
     public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken)
     {
         var id = SessionId.Create(sessionId);
         var approvals = runtime.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false);
         if (runtime.Store.Get(id) is { } session)
-            return Task.FromResult(new RemoteSessionSnapshot(session.Header, session.SnapshotEvents(),
+        {
+            var live = session.SnapshotEvents();
+            return Task.FromResult(new RemoteSessionSnapshot(session.Header, live, live.Count,
                 approvals?.EffectivePolicy(session).ToString()));
+        }
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read)
             ?? throw new InvalidOperationException($"unknown session: {sessionId}");
         var events = handle.Read();
         var restored = Session.FromRestore(id, events, handle.Header, handle.InheritedEventCount);
-        return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, approvals?.EffectivePolicy(restored).ToString()));
+        return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, events.Count,
+            approvals?.EffectivePolicy(restored).ToString()));
     }
 
     public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
@@ -92,6 +99,7 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         if (agents.IsAcp(sessionId))
             return agents.CancelAsync(sessionId, cancellationToken);
         runtime.Require(sessionId).Cancel(new AgentCancelCause.User());
+        runtime.App.Ctx.LoggerFor("host").Info($"session stop: session={sessionId} cause=user");
         runtime.Pending.CancelSession(sessionId);
         return Task.CompletedTask;
     }

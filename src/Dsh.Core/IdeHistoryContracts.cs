@@ -1,4 +1,4 @@
-namespace Dsh.Core;
+namespace Dsh.Ide.History;
 
 /** 工作区里检测到的 IDE 项目特征(可多选: 一个仓库可能同时有 .vscode/ 与 .idea/)。 */
 [Flags]
@@ -18,6 +18,8 @@ public sealed record IdeHistoryEntry
     public required string Kind { get; init; }
     public string? ContentId { get; init; }
     public string? EntryFile { get; init; }
+    public string? StoreLocation { get; init; }
+    public bool? MatchesGitHead { get; init; }
     public bool HasContent => ContentId is not null || EntryFile is not null;
 
     public DateTimeOffset Time => DateTimeOffset.FromUnixTimeMilliseconds(Timestamp);
@@ -50,4 +52,30 @@ public interface IIdeHistoryService
 
     /** 读某个条目的内容(供 revert 写回工作区)。 */
     IdeHistoryContent? Read(IdeHistoryEntry entry);
+}
+
+/** A bounded time window retaining every independently readable source revision. */
+public sealed record IdeHistoryMoment(long Timestamp, IReadOnlyList<IdeHistoryEntry> Entries);
+
+public interface IIdeHistoryTimeline
+{
+    IReadOnlyList<IdeHistoryMoment> QueryTimeline(string workspaceRoot, long? from = null, long? to = null);
+}
+
+public sealed record IdeRestorePreview(
+    string WorkspaceRoot,
+    IdeHistoryEntry Entry,
+    IdeHistoryContent Content,
+    bool TargetExists,
+    string CurrentDigest,
+    bool ModifiedSinceEntry,
+    string Diff);
+
+public sealed record IdeRestoreResult(bool Restored, string? BackupPath = null, string? Failure = null);
+
+/** Preview and restore are separate so every surface can obtain explicit user consent. */
+public interface IIdeHistoryRestore
+{
+    IdeRestorePreview PreviewRestore(string workspaceRoot, IdeHistoryEntry entry);
+    IdeRestoreResult Restore(IdeRestorePreview preview, bool confirmModified);
 }

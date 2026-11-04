@@ -33,28 +33,33 @@
     <Setter Property="TextTrimming" Value="CharacterEllipsis" />
   </Style>
 
-  <Style Selector="TextBlock.Body">
+  <Style Selector=":is(TextBlock).Body">
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Body}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Primary}" />
     <Setter Property="TextWrapping" Value="Wrap" />
   </Style>
 
-  <Style Selector="TextBlock.Secondary">
+  <Style Selector=":is(TextBlock).Secondary">
     <Setter Property="FontSize" Value="{DynamicResource FontSize.List}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Secondary}" />
     <Setter Property="TextTrimming" Value="CharacterEllipsis" />
   </Style>
 
-  <Style Selector="TextBlock.Tertiary">
+  <Style Selector=":is(TextBlock).Tertiary">
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Status}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Tertiary}" />
   </Style>
 
-  <Style Selector="TextBlock.Mono">
+  <Style Selector=":is(TextBlock).Mono">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Body}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Primary}" />
     <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+
+  <Style Selector="SelectableTextBlock">
+    <Setter Property="SelectionBrush" Value="{DynamicResource Brush.Accent}" />
+    <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Brush.Text.OnAccent}" />
   </Style>
 
   <Style Selector="Button.Ghost">

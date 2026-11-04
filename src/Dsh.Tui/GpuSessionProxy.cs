@@ -215,9 +215,11 @@ internal sealed class GpuSessionProxy : IGpuHostClient
 
     public void OnMouseMove(float x, float y)
     {
+        var previousX = _mouseCellX;
+        var previousY = _mouseCellY;
         UpdateMouseCell(x, y);
-        if (_leftDown)
-            EnqueueMouse(_mouseCellX, _mouseCellY, button: 32, release: false);
+        if (_leftDown || _mouseCellX != previousX || _mouseCellY != previousY)
+            EnqueueMouse(_mouseCellX, _mouseCellY, button: _leftDown ? 32 : 35, release: false);
     }
 
     public void OnMouseButton(GpuMouseButton button, bool pressed, float x, float y)

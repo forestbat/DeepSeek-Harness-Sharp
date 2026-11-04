@@ -5,7 +5,7 @@ using Dsh.Llm;
 
 namespace Dsh.Interaction;
 
-public sealed record AskUserQuestionOption(string Label, string? Description = null);
+public sealed record AskUserQuestionOption(string Label, string? Description = null, string? Value = null, bool Disabled = false, bool Default = false);
 
 public enum AskUserQuestionIntentKind
 {
@@ -21,11 +21,16 @@ public sealed record AskUserQuestionItem(
     string? Header = null,
     IReadOnlyList<AskUserQuestionOption>? Options = null,
     bool MultiSelect = false,
-    AskUserQuestionIntent? Intent = null);
+    AskUserQuestionIntent? Intent = null,
+    bool AllowCustom = true);
 
 public sealed record AskUserQuestionAnswerItem(string Id, IReadOnlyList<string> Selected, string? Custom = null);
 
-public sealed record AskUserQuestionAnswer(IReadOnlyList<AskUserQuestionAnswerItem> Answers);
+public sealed record AskUserQuestionAnswer(IReadOnlyList<AskUserQuestionAnswerItem> Answers, string Status = "answered", string? Reason = null)
+{
+    public static AskUserQuestionAnswer Dismissed => new([], "dismissed", "user_cancelled");
+    public bool IsDismissed => Status == "dismissed";
+}
 
 public sealed record AskUserQuestionRequest(IReadOnlyList<AskUserQuestionItem> Questions, IAgent? Agent = null);
 
@@ -58,12 +63,17 @@ public sealed class UserQuestionService(Context ctx) : Service(ctx, ServiceName)
         try
         {
             var carrier = request.Agent is { } agent ? DshScope.ScopeTarget(Ctx, agent.ScopeKey) : Ctx;
-            var result = await Ctx.Events.Waterfall(
-                carrier, new UserQuestionsRequestNotification(request),
+            var pending = Ctx.Events.Waterfall(
+                carrier, new UserQuestionsRequestNotification(request, signal),
                 static () => throw new UserQuestionException(
                     "no user-questions answerer accepted the request", UserQuestionException.NoProvider));
-            return result as AskUserQuestionAnswer
-                ?? throw new UserQuestionException(
+            var result = pending.IsCompletedSuccessfully || !signal.CanBeCanceled
+                ? await pending
+                : await pending.AsTask().WaitAsync(signal);
+            signal.ThrowIfCancellationRequested();
+            return result is AskUserQuestionAnswer answer
+                ? answer.IsDismissed ? AskUserQuestionAnswer.Dismissed : answer
+                : throw new UserQuestionException(
                     "no user-questions answerer accepted the request", UserQuestionException.NoProvider);
         }
         catch (Exception error) when (error is not UserQuestionException)
@@ -119,18 +129,20 @@ public sealed class UserQuestionService(Context ctx) : Service(ctx, ServiceName)
 
 public static class UserQuestionAnswerers
 {
-    // Headless stance: each question resolves to its first option when it declares options, otherwise an empty selection.
+    // Headless answers honor enabled defaults, then choose the first enabled option when needed.
     public static IDisposable Headless(Context ctx)
     {
         var remove = ctx.OnWaterfall<UserQuestionsRequestNotification>(
             (notification, _) =>
             {
                 var request = notification.Request;
-                var answers = request.Questions
-                    .Select(question => new AskUserQuestionAnswerItem(
-                        question.Id,
-                        question.Options is { Count: > 0 } options ? [options[0].Label] : []))
-                    .ToList();
+                var answers = request.Questions.Select(question =>
+                {
+                    var state = new ChoicePromptState(ChoicePrompt.FromQuestion(question));
+                    if (!state.CanSubmit && state.FocusedIndex >= 0)
+                        state.Select(state.FocusedIndex);
+                    return state.BuildAnswer(question.Id);
+                }).ToList();
                 return ValueTask.FromResult<object?>(new AskUserQuestionAnswer(answers));
             },
             new EventOptions { Global = true });

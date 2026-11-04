@@ -106,8 +106,11 @@ public sealed class PluginPermissionTests
         AssertCommentsKept(home);
 
         await RunAsync(environment, $"/plugins remove {Todo}");
-        Assert.Null(HarnessSettings.Load(home).Plugins[Todo].Permissions);
+        var removed = HarnessSettings.Load(home).Plugins[Todo];
+        Assert.Null(removed.Permissions);
+        Assert.Empty(removed.Parameters);
         Assert.Contains($"\"{Todo}\": false", await File.ReadAllTextAsync(SettingsPath(home), TestContext.Current.CancellationToken));
+        AssertCommentsKept(home);
     }
 
     [Fact]

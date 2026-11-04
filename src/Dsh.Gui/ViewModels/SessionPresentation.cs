@@ -1,5 +1,5 @@
-using Dsh.AgentAdapters;
-using Dsh.Fleet;
+
+using Dsh.Workspace;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 
@@ -18,6 +18,7 @@ public static class SessionPresentation
     private static readonly AgentBadge CodexBadge = new("CX", "#10A37F");
     private static readonly AgentBadge ClaudeBadge = new("CC", "#D97757");
     private static readonly AgentBadge OpenCodeBadge = new("OC", "#8B5CF6");
+    private static readonly AgentBadge KiloCodeBadge = new("KC", "#F8E750");
     private static readonly AgentBadge AcpBadge = new("AC", "#0EA5E9");
     private static readonly AgentBadge TerminalBadge = new(">_", "#6B7280");
     private static readonly AgentBadge CustomBadgeColor = new("", "#9CA3AF");
@@ -28,6 +29,7 @@ public static class SessionPresentation
         AgentKinds.Codex => "Codex",
         AgentKinds.ClaudeCode => "Claude Code",
         AgentKinds.OpenCode => "OpenCode",
+        AgentKinds.KiloCode => "Kilo Code",
         AgentKinds.Acp => "ACP Agent",
         AgentKinds.Terminal => "自定义命令",
         null when sessionKind == HostSessionKinds.Terminal => "终端",
@@ -41,6 +43,7 @@ public static class SessionPresentation
         AgentKinds.Codex => CodexBadge,
         AgentKinds.ClaudeCode => ClaudeBadge,
         AgentKinds.OpenCode => OpenCodeBadge,
+        AgentKinds.KiloCode => KiloCodeBadge,
         AgentKinds.Acp => AcpBadge,
         AgentKinds.Terminal => TerminalBadge,
         null when sessionKind == HostSessionKinds.Terminal => TerminalBadge,

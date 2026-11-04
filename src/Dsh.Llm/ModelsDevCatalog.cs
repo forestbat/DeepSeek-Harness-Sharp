@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 
 namespace Dsh.Llm;
@@ -22,7 +22,7 @@ public sealed record ModelsDevProvider(
 
 /**
  * models.dev 快照的低层能力源(快照内置于 Dsh.Llm, 上层 ProviderCatalog 复用同一份解析):
- * provider 列表 + 逐模型的推理强度; 快照只解析一次, 不落中间字符串对象。
+ * provider 列表 + 逐模型的推理强度、输入模态与上下文窗口; 快照只解析一次, 不落中间字符串对象。
  */
 public sealed class ModelsDevCatalog
 {
@@ -31,15 +31,18 @@ public sealed class ModelsDevCatalog
     private readonly IReadOnlyList<ModelsDevProvider> _providers;
     private readonly Dictionary<string, LlmModelReasoningInfo> _reasoning;
     private readonly Dictionary<string, IReadOnlyList<string>> _inputModalities;
+    private readonly Dictionary<string, int> _contextWindows;
 
     private ModelsDevCatalog(
         IReadOnlyList<ModelsDevProvider> providers,
         Dictionary<string, LlmModelReasoningInfo> reasoning,
-        Dictionary<string, IReadOnlyList<string>> inputModalities)
+        Dictionary<string, IReadOnlyList<string>> inputModalities,
+        Dictionary<string, int> contextWindows)
     {
         _providers = providers;
         _reasoning = reasoning;
         _inputModalities = inputModalities;
+        _contextWindows = contextWindows;
     }
 
     public IReadOnlyList<ModelsDevProvider> Providers => _providers;
@@ -51,6 +54,10 @@ public sealed class ModelsDevCatalog
     /** 输入模态(models.dev 的 modalities.input, 如 text/image/pdf): 键同 ReasoningFor; 目录未声明返回 null。 */
     public IReadOnlyList<string>? InputModalitiesFor(string provider, string model)
         => _inputModalities.GetValueOrDefault($"{provider}/{model}");
+
+    /** 上下文窗口 token 数(models.dev 的 limit.context): 键同 ReasoningFor; 目录未声明返回 null(未知)。 */
+    public int? ContextWindowFor(string provider, string model)
+        => _contextWindows.TryGetValue($"{provider}/{model}", out var contextWindow) ? contextWindow : null;
 
     /**
      * 把端点的 baseUrl 映射到 models.dev 的 provider 键(models.dev 的 provider.api);
@@ -95,7 +102,7 @@ public sealed class ModelsDevCatalog
         using var stream = typeof(ModelsDevCatalog).Assembly
             .GetManifestResourceStream("Dsh.Llm.Resources.models-dev.json");
         if (stream is null)
-            return new ModelsDevCatalog([], [], []);
+            return new ModelsDevCatalog([], [], [], []);
         using var buffer = new MemoryStream(stream.CanSeek ? (int)stream.Length : 0);
         stream.CopyTo(buffer);
         return Parse(buffer.GetBuffer().AsMemory(0, (int)buffer.Length));
@@ -105,10 +112,11 @@ public sealed class ModelsDevCatalog
     {
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
-            return new ModelsDevCatalog([], [], []);
+            return new ModelsDevCatalog([], [], [], []);
         var providers = new List<ModelsDevProvider>();
         var reasoning = new Dictionary<string, LlmModelReasoningInfo>(StringComparer.Ordinal);
         var inputModalities = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        var contextWindows = new Dictionary<string, int>(StringComparer.Ordinal);
         var modalitySets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         foreach (var property in document.RootElement.EnumerateObject())
         {
@@ -128,6 +136,8 @@ public sealed class ModelsDevCatalog
                         reasoning[$"{id}/{model.Name}"] = info;
                     if (InputModalitiesOf(model.Value, modalitySets) is { } modalities)
                         inputModalities[$"{id}/{model.Name}"] = modalities;
+                    if (ContextWindowOf(model.Value) is { } contextWindow)
+                        contextWindows[$"{id}/{model.Name}"] = contextWindow;
                 }
             }
             providers.Add(new ModelsDevProvider(
@@ -139,7 +149,7 @@ public sealed class ModelsDevCatalog
                 modelIndex.ToString()));
         }
         providers.Sort((left, right) => string.CompareOrdinal(left.Id, right.Id));
-        return new ModelsDevCatalog(providers, reasoning, inputModalities);
+        return new ModelsDevCatalog(providers, reasoning, inputModalities, contextWindows);
     }
 
     /** 同一组模态在目录里反复出现, 按内容共享同一个列表实例。 */
@@ -157,6 +167,18 @@ public sealed class ModelsDevCatalog
             shared[key] = list = input;
         return list;
     }
+
+    /** limit.context 是模型的上下文窗口 token 数; 缺失或非正数按未知处理。 */
+    private static int? ContextWindowOf(JsonElement model)
+        => model.ValueKind == JsonValueKind.Object
+            && model.TryGetProperty("limit", out var limit)
+            && limit.ValueKind == JsonValueKind.Object
+            && limit.TryGetProperty("context", out var context)
+            && context.ValueKind == JsonValueKind.Number
+            && context.TryGetInt32(out var tokens)
+            && tokens > 0
+            ? tokens
+            : null;
 
     private static LlmModelReasoningInfo? ReasoningOf(JsonElement model)
     {

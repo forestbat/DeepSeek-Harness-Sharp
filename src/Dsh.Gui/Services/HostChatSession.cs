@@ -1,6 +1,5 @@
 using Avalonia.Threading;
 using Dsh.Core;
-using Dsh.Fleet;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 
@@ -15,7 +14,7 @@ public sealed class HostChatSession : IDisposable
     private long _generation;
     private long _navigationGeneration;
     private long _reloadGeneration;
-    private MachineConnection? _followingMachine;
+    private IWorkspaceMachine? _followingMachine;
     private string _machine = MachineSpec.LocalName;
     private string _kind = HostSessionKinds.Harness;
 
@@ -55,12 +54,58 @@ public sealed class HostChatSession : IDisposable
             || !lease.Client.Supports(PluginsProtocol.Capability))
             throw new InvalidOperationException("本机 Host 版本不支持完整 Chat；请升级 dsharp 并重启 Host");
         var info = sessionId is null
-            ? await lease.Client.CreateSessionAsync(cwd, cancellationToken)
+            ? await OpenRecentOrCreateAsync(lease.Client, cwd, cancellationToken)
             : await lease.Client.ResumeSessionAsync(sessionId, cancellationToken);
         var snapshot = await lease.Client.GetSessionSnapshotAsync(info.Id, cancellationToken);
         var chat = new HostChatSession(fleet, MachineSpec.LocalName, HostSessionKinds.Harness, info, snapshot);
         chat.Commands = await lease.Client.SessionEditing.ListSessionCommandsAsync(info.Id, cancellationToken);
         return chat;
+    }
+
+    /**
+     * 未显式指定会话时恢复同工作区最近一次会话, 没有可恢复的才新建。
+     * 只看目录不看 Summary: 磁盘上的会话由 Host 用 SessionHeader 投影, Summary 恒为 null,
+     * 只有活着且已有用户消息的会话才有摘要 —— 拿摘要当筛选条件, Host 一重启就永远选不中,
+     * 于是每次启动都新建会话(空会话又因为没事件而不在列表里, 下次启动照样新建)。
+     */
+    private static async Task<RemoteSessionSummary> OpenRecentOrCreateAsync(
+        IWorkspaceHost client,
+        string cwd,
+        CancellationToken cancellationToken)
+    {
+        var recent = (await client.ListSessionsAsync(cancellationToken))
+            .Where(session => SameDirectory(session.Cwd, cwd))
+            .OrderByDescending(session => session.UpdatedAt)
+            .FirstOrDefault();
+        if (recent is not null)
+            return await client.ResumeSessionAsync(recent.SessionId, cancellationToken);
+        // 还没写过事件的新会话不落盘也不进 ListSessionsAsync, 但它仍是 Host 里活着的那一个: 复用它, 不再新建。
+        var pending = (await client.ListHostSessionsAsync(cancellationToken))
+            .Where(session => session.Kind == HostSessionKinds.Harness
+                && session.Status != HostSessionStatuses.Exited
+                && SameDirectory(session.Cwd, cwd))
+            .OrderByDescending(session => session.UpdatedAt)
+            .FirstOrDefault();
+        return pending is not null
+            ? await client.ResumeSessionAsync(pending.SessionId, cancellationToken)
+            : await client.CreateSessionAsync(cwd, cancellationToken);
+    }
+
+    private static bool SameDirectory(string? path, string cwd)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(path),
+                Path.GetFullPath(cwd),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     public void Follow()
@@ -78,7 +123,7 @@ public sealed class HostChatSession : IDisposable
             Follow();
     }
 
-    private async Task FollowAsync(MachineConnection machine, string id, long generation, CancellationToken cancellationToken)
+    private async Task FollowAsync(IWorkspaceMachine machine, string id, long generation, CancellationToken cancellationToken)
     {
         var events = new DispatcherBridge<SessionEvent>(batch =>
         {
@@ -109,7 +154,7 @@ public sealed class HostChatSession : IDisposable
         }
     }
 
-    public async Task<RemoteHostClient> ClientAsync(CancellationToken cancellationToken = default)
+    public async Task<IWorkspaceHost> ClientAsync(CancellationToken cancellationToken = default)
         => (await Fleet.Find(_machine)!.WaitConnectedAsync(cancellationToken)).Client;
 
     public async Task SwitchAsync(string id, CancellationToken cancellationToken = default)
@@ -154,7 +199,10 @@ public sealed class HostChatSession : IDisposable
         });
     }
 
-    public async Task ReloadAsync(CancellationToken cancellationToken = default)
+    public Task ReloadAsync(CancellationToken cancellationToken = default)
+        => ReloadAsync(false, cancellationToken);
+
+    public async Task ReloadAsync(bool forceReset, CancellationToken cancellationToken = default)
     {
         var id = Info.Id;
         var generation = _generation;
@@ -171,7 +219,7 @@ public sealed class HostChatSession : IDisposable
             Header = header;
             // 命令通常只在尾部追加事件(例如 /model、/reasoning、/preset)。全量 ReplaceEvents + Reset 会清空并重建
             // 整个消息/视觉树, 长会话每次选择都要付一遍 O(历史) 的布局与样式分配。
-            if (titleChanged || !TryAppend(replacement, out var appended))
+            if (forceReset || titleChanged || !TryAppend(replacement, out var appended))
             {
                 ReplaceEvents(snapshot);
                 Reset?.Invoke();
@@ -248,8 +296,8 @@ public sealed class HostChatSession : IDisposable
     }
 
     private static async Task<RemoteSessionSummary> ResumeAgentAsync(
-        MachineConnection connection,
-        RemoteHostClient client,
+        IWorkspaceMachine connection,
+        IWorkspaceHost client,
         string id,
         CancellationToken cancellationToken)
     {
@@ -276,7 +324,5 @@ public sealed class HostChatSession : IDisposable
         _subscription?.Cancel();
     }
 }
-
-
 
 

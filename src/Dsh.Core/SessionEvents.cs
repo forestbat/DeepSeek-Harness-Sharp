@@ -104,6 +104,12 @@ public sealed record ToolCallPayload(int Turn, int Step, ToolCallId CallId, stri
 
 public sealed record ToolResultErrorInfo(string Name, string Code);
 
+/** 模型展开了某个工具分组(路由工具); 落盘后重启进程仍能恢复同一会话的可见工具集, 上下文不会断裂。 */
+public sealed record ToolDisclosedPayload(string Group) : SessionEventPayload
+{
+    public override string Type => SessionEventTypes.ToolDisclosed;
+}
+
 public sealed record ToolResultPayload(
     int Turn,
     int Step,
@@ -112,6 +118,12 @@ public sealed record ToolResultPayload(
     JsonElement? Meta = null) : SessionEventPayload
 {
     public override string Type => SessionEventTypes.ToolResult;
+}
+
+/** A successful file mutation, recorded at the business boundary without file contents. */
+public sealed record FileChangedPayload(string Path) : SessionEventPayload
+{
+    public override string Type => SessionEventTypes.FileChanged;
 }
 
 public sealed record EpochHeader(
@@ -161,6 +173,8 @@ public static class SessionEventTypes
     public const string AssistantMessage = "assistant/message";
     public const string ToolCall = "tool/call";
     public const string ToolResult = "tool/result";
+    public const string ToolDisclosed = "tool/disclosed";
+    public const string FileChanged = "file/changed";
     public const string RequestHeader = "request/header";
     public const string RequestContext = "request/context";
     public const string SessionEndSeed = "session/end-seed";

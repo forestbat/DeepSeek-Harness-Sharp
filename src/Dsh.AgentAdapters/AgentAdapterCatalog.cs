@@ -2,8 +2,8 @@ namespace Dsh.AgentAdapters;
 
 /**
  * Built-in adapters plus factories for user-defined agents.
- * Every command line below was checked on 2026-10-15 against the installed CLI (`--help`)
- * and the vendor sources:
+ * Codex, Claude Code and OpenCode command lines were checked on 2026-10-15 against the installed CLI (`--help`)
+ * and these vendor sources:
  * https://learn.chatgpt.com/docs/developer-commands?surface=cli, https://code.claude.com/docs/en/cli-reference,
  * https://opencode.ai/docs/cli/, https://opencode.ai/docs/acp/, https://github.com/agentclientprotocol (codex-acp, claude-agent-acp).
  */
@@ -51,7 +51,18 @@ public static class AgentAdapterCatalog
             ResumeById: ["--session", AgentLaunchSyntax.SessionIdToken],
             ResumeLatest: ["--continue"]));
 
-    public static IReadOnlyList<AgentAdapter> BuiltIn { get; } = [Codex, ClaudeCode, OpenCode];
+    /** Kilo Code 7.8: native TUI and ACP, with --prompt, --session and --continue (https://kilo.ai/docs/code-with-ai/platforms/cli-reference). */
+    public static AgentAdapter KiloCode { get; } = new(
+        AgentKinds.KiloCode,
+        "Kilo Code",
+        new AgentCommand("kilo", []),
+        new AgentCommand("kilo", ["acp"]),
+        new AgentLaunchSyntax(
+            Prompt: ["--prompt", AgentLaunchSyntax.PromptToken],
+            ResumeById: ["--session", AgentLaunchSyntax.SessionIdToken],
+            ResumeLatest: ["--continue"]));
+
+    public static IReadOnlyList<AgentAdapter> BuiltIn { get; } = [Codex, ClaudeCode, OpenCode, KiloCode];
 
     public static AgentAdapter? Find(string kind) => BuiltIn.FirstOrDefault(adapter => adapter.Kind == kind);
 

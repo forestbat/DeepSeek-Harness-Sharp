@@ -92,7 +92,7 @@ public sealed class ApprovalService : Service, IApprovalService
     /** 会话级授权: 只要该工具在本会话被「总是允许」过, 后续调用不再询问。 */
     public static bool HasGrant(Session session, string toolName)
     {
-        for (var seq = session.Seq - 1; seq >= 0; seq--)
+        for (var seq = session.Seq - 1; seq >= session.InheritedEventCount; seq--)
         {
             if (session.EventAt(seq)?.Data is ApprovalGrantedPayload payload
                 && string.Equals(payload.ToolName, toolName, StringComparison.Ordinal))
@@ -143,7 +143,7 @@ public sealed class ApprovalService : Service, IApprovalService
             return ApprovalOutcome.Rejected;
         if (EffectivePolicy(session) == ApprovalPolicy.Auto || HasGrant(session, request.ToolName))
             return ApprovalOutcome.AllowedOnce;
-        var answer = DispatchAnswerers(request);
+        var answer = DispatchAnswerers(request, signal);
         if (!signal.CanBeCanceled)
             return await answer;
         var cancelled = new TaskCompletionSource<ApprovalOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -154,13 +154,13 @@ public sealed class ApprovalService : Service, IApprovalService
         return completed == answer ? await answer : ApprovalOutcome.Cancelled;
     }
 
-    private async Task<ApprovalOutcome> DispatchAnswerers(ApprovalRequest request)
+    private async Task<ApprovalOutcome> DispatchAnswerers(ApprovalRequest request, CancellationToken signal)
     {
         try
         {
             var carrier = DshScope.ScopeTarget(Ctx, request.Agent.ScopeKey);
             var result = await Ctx.Events.Waterfall(
-                carrier, new ApprovalRequestNotification(request),
+                carrier, new ApprovalRequestNotification(request, signal),
                 () => new ValueTask<object?>(ApprovalOutcome.Unavailable));
             return result is ApprovalOutcome outcome ? outcome : ApprovalOutcome.Unavailable;
         }

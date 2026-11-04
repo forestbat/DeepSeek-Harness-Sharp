@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
 
@@ -103,8 +103,13 @@ public sealed class JsonRpcPeer : IAsyncDisposable
     }
 
     private async Task SendAsync(JsonRpcMessage message, CancellationToken cancellationToken)
+        => await WriteAsync(Serialize(message), cancellationToken).ConfigureAwait(false);
+
+    private static byte[] Serialize(JsonRpcMessage message)
+        => JsonSerializer.SerializeToUtf8Bytes(message, JsonRpcJsonContext.Default.JsonRpcMessage);
+
+    private async Task WriteAsync(byte[] payload, CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(message, JsonRpcJsonContext.Default.JsonRpcMessage);
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -257,7 +262,23 @@ public sealed class JsonRpcPeer : IAsyncDisposable
             }
 
             if (!cancellationToken.IsCancellationRequested)
-                await SendAsync(response, cancellationToken).ConfigureAwait(false);
+            {
+                var payload = Serialize(response);
+                // 一帧装不下的应答回错误帧: 写不出去就断连会让调用方看到"连接已关闭", 与真实原因无关。
+                if (payload.Length > _maxFrameBytes)
+                {
+                    payload = Serialize(new JsonRpcMessage
+                    {
+                        Id = requestId,
+                        Error = new JsonRpcError
+                        {
+                            Code = InternalError,
+                            Message = $"response payload ({payload.Length} bytes) exceeds the maximum frame size ({_maxFrameBytes} bytes)",
+                        },
+                    });
+                }
+                await WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

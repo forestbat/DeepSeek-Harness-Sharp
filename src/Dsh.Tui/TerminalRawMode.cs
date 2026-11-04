@@ -29,8 +29,8 @@ public sealed class TerminalRawMode : IDisposable
     private const ulong MacIexten = 0x00000400;
     private const ulong MacOpost = 0x00000001;
 
-    /** ?1002 = 拖动(button-event)跟踪, 文本选择需要; ?1006 = SGR 扩展坐标。 */
-    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+    /** Track pointer hover and dragging using SGR cell coordinates. */
+    internal const string MouseEnableSequence = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 
     /** 关闭时把被桥接/常驻进程可能开过的 ?1003(全量移动)/?1015(urxvt) 一并复位, 否则退出后终端仍刷鼠标上报。 */
     internal const string MouseDisableSequence = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1015l";

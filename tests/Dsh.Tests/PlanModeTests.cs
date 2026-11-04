@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Runtime;
+using Dsh.Runtime.Events;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -140,6 +141,83 @@ public class PlanModeTests
 
         Assert.True(result.IsError);
         Assert.Contains(PlanModeController.ExitPlanMode, ((ToolExecutionResult.Failure)result).Error.Message);
+    }
+
+    [Theory]
+    [InlineData("dismissed")]
+    [InlineData("aborted")]
+    [InlineData("unavailable")]
+    public async Task ExitTool_Distinguishes_Dismissal_From_Abort_And_Missing_Provider(string outcome)
+    {
+        using var harness = new Harness();
+        var agent = new FakeAgent(harness.Ctx);
+        var agents = new AgentRegistry(harness.Ctx);
+        agents.Register(agent);
+        UserQuestionService.Register(harness.Ctx);
+        var controller = harness.Ctx.Get<PlanModeController>(PlanModeController.ServiceName)!;
+        controller.Set(agent, true);
+        if (outcome != "unavailable")
+            harness.Ctx.OnWaterfall<UserQuestionsRequestNotification>((_, _) => outcome == "dismissed"
+                ? ValueTask.FromResult<object?>(AskUserQuestionAnswer.Dismissed)
+                : throw new UserQuestionException("host stopped waiting", UserQuestionException.AskAborted),
+                new EventOptions { Global = true });
+
+        var result = await harness.Tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-review"),
+            Name = PlanModeController.ExitPlanMode,
+            Arguments = System.Text.Json.JsonDocument.Parse("""{"plan":"# Keep data safe\nReview changes."}""").RootElement,
+            Agent = agent,
+            Signal = TestContext.Current.CancellationToken,
+        });
+
+        var failure = Assert.IsType<ToolExecutionResult.Failure>(result);
+        Assert.True(controller.Get(agent).Active);
+        Assert.False(controller.Get(agent).Pending);
+        Assert.DoesNotContain(agent.Session.SnapshotEvents(), item => item.Data is PlanModePayload { Active: false });
+        if (outcome == "dismissed")
+        {
+            Assert.Contains("user dismissed the plan review", failure.Error.Message);
+            Assert.Contains("stay in plan mode", failure.Error.Message);
+            Assert.Contains("wait for their message", failure.Error.Message);
+        }
+        else
+        {
+            Assert.Equal(outcome == "aborted" ? UserQuestionException.AskAborted : UserQuestionException.NoProvider,
+                failure.Error.Info?.Code);
+            Assert.DoesNotContain("user dismissed", failure.Error.Message);
+        }
+    }
+
+    [Fact]
+    public async Task ExitTool_Queues_Exit_Only_For_Explicit_Approval()
+    {
+        using var harness = new Harness();
+        var agent = new FakeAgent(harness.Ctx);
+        var agents = new AgentRegistry(harness.Ctx);
+        agents.Register(agent);
+        UserQuestionService.Register(harness.Ctx);
+        var controller = harness.Ctx.Get<PlanModeController>(PlanModeController.ServiceName)!;
+        controller.Set(agent, true);
+        harness.Ctx.OnWaterfall<UserQuestionsRequestNotification>((notification, _) =>
+        {
+            var question = Assert.Single(notification.Request.Questions);
+            return ValueTask.FromResult<object?>(new AskUserQuestionAnswer(
+                [new AskUserQuestionAnswerItem(question.Id, [question.Intent!.Approve])]));
+        }, new EventOptions { Global = true });
+
+        var result = await harness.Tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create("call-approved-review"),
+            Name = PlanModeController.ExitPlanMode,
+            Arguments = System.Text.Json.JsonDocument.Parse("""{"plan":"# Approved work\nImplement it."}""").RootElement,
+            Agent = agent,
+            Signal = TestContext.Current.CancellationToken,
+        });
+
+        Assert.True(Assert.IsType<ToolExecutionResult.Success>(result).Value.GetProperty("approved").GetBoolean());
+        Assert.True(controller.Get(agent).Active);
+        Assert.True(controller.Get(agent).Pending);
     }
 
     /** 运行期禁用插件后 /plan 命令和 exit_plan_mode 工具都要消失, 重新启用后能再次注册。 */

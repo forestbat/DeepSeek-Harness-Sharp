@@ -651,8 +651,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
             LocalProxy = service.OutboundRoute.Proxy,
             AcquireOutboundRoute = service.OutboundRoute.AcquireAsync,
         };
-        await using var workspace = new FleetWorkspace(store, workspaceOptions,
-            () => new FleetClient([MachineSpec.Local(host.Root)], workspaceOptions));
+        await using var workspace = new FleetWorkspace(new FleetWorkspaceServices(store, workspaceOptions, () => new FleetClient([MachineSpec.Local(host.Root)], workspaceOptions), service.OutboundRoute));
         workspace.Start();
         await workspace.Client.WaitSettledAsync(Ct);
         Assert.Equal(MachineConnectionState.Connected, workspace.Find(MachineSpec.LocalName)!.State);
@@ -703,7 +702,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
         => new(app.Ctx, app.Home,
             _ => throw new InvalidOperationException("Network settings must not execute session commands."),
             new GuiSettings(app.Home), new SettingsFacade(app.Ctx, app.Home, workspace),
-            () => Task.FromResult(client.Plugins));
+            () => Task.FromResult<IWorkspacePlugins>(client.Plugins));
 
     private static void SelectSection(SettingsViewModel vm, SettingsSection section)
     {
@@ -725,7 +724,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
         var nonexistentHome = Path.Combine(ssh.Root, "not-created");
         var machine = ssh.Machine("ssh-only", nonexistentHome) with { RemotePath = "/not-installed" };
         var store = Store([machine]);
-        var vm = new MachinesViewModel(store, Options);
+        var vm = new MachinesViewModel(new FleetWorkspaceServices(store, Options));
         vm.Load(machine.Name);
         var before = await File.ReadAllTextAsync(store.FilePath, Ct);
         try
@@ -1011,7 +1010,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
 
     private static async Task<MachinesViewModel> MachineViewModelAsync(MachineStore store, FleetClient fleet, string selected)
     {
-        var vm = new MachinesViewModel(store, Options);
+        var vm = new MachinesViewModel(new FleetWorkspaceServices(store, Options));
         vm.Load(selected);
         vm.AttachFleet(fleet);
         await vm.WaitForNetworkOperationsAsync().WaitAsync(CompletionTimeout, Ct);

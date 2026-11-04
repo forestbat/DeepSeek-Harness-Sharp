@@ -27,6 +27,12 @@ public static class HostProtocol
     public const string PendingBroadcastCapability = "pending.broadcast";
     public const string SessionRegistryCapability = "sessions.registry";
 
+    /**
+     * 一页会话历史的字节预算: 必须明显低于传输层单帧上限(FrameCodec, 16 MB), 才能给 JSON-RPC 外壳与头部字段留余量。
+     * 超长会话的历史按它切页, 客户端凭 TotalEventCount 取完整段历史。
+     */
+    public const int SnapshotPageBytes = 12 * 1024 * 1024;
+
     public const string MethodHello = "host.hello";
     public const string MethodPing = "host.ping";
     public const string MethodInfo = "host.info";
@@ -91,6 +97,7 @@ public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Pl
 [JsonSerializable(typeof(SessionHeader))]
 [JsonSerializable(typeof(SessionEvent))]
 [JsonSerializable(typeof(RemoteSessionSnapshot))]
+[JsonSerializable(typeof(RemoteSessionSnapshotRequest))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(RemoteApprovalRequest))]
 [JsonSerializable(typeof(RemoteApprovalResponse))]
@@ -365,6 +372,7 @@ public static class HostProtocolCatalog
         new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["PendingBroadcast"] = HostProtocol.PendingBroadcastCapability,
+            ["DecisionCancellation"] = DecisionProtocol.Capability,
             ["SessionRegistry"] = HostProtocol.SessionRegistryCapability,
             ["PtyDaemon"] = PtyProtocol.Capability,
             ["PtyResize"] = PtyProtocol.ResizeCapability,

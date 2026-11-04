@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Dsh.Ide.Bridge;
 using Dsh.Transport;
 using static Dsh.RemoteHost.HostRpc;
 
@@ -39,7 +40,7 @@ public sealed class RemoteHostServer(
     {
         if (backend is null)
             return [];
-        List<string> capabilities = [HostProtocol.PendingBroadcastCapability, HostProtocol.SessionRegistryCapability];
+        List<string> capabilities = [HostProtocol.PendingBroadcastCapability, HostProtocol.SessionRegistryCapability, DecisionProtocol.Capability];
         if (backend.Agent is not null) capabilities.Add(AgentProtocol.Capability);
         if (backend.Pty is not null) capabilities.AddRange([PtyProtocol.Capability, PtyProtocol.ResizeCapability]);
         if (backend.Files is not null) capabilities.Add(FilesProtocol.Capability);
@@ -49,6 +50,8 @@ public sealed class RemoteHostServer(
         if (backend.Plugins is not null) capabilities.Add(PluginsProtocol.Capability);
         if (backend.Network is not null) capabilities.AddRange([NetworkProtocol.Capability, NetworkProtocol.CancellableProbeCapability]);
         if (backend.Network is IRemoteNetworkReloadBackend) capabilities.Add(NetworkProtocol.ReloadCapability);
+        if (backend.Editor is not null) capabilities.Add(EditorProtocol.Capability);
+        if (backend.Editor?.Clients is not null) capabilities.Add(EditorProtocol.ClientCapability);
         return capabilities;
     }
 
@@ -98,7 +101,7 @@ public sealed class RemoteHostServer(
                 {
                     try
                     {
-                        await connection.DisposeNetworkAsync().ConfigureAwait(false);
+                        await connection.DisposeDomainsAsync().ConfigureAwait(false);
                     }
                     finally
                     {
@@ -133,6 +136,7 @@ public sealed class RemoteHostServer(
         private bool _stopped;
         private Task? _hostPushes;
         private HostNetworkMethods? _network;
+        private HostEditorMethods? _editor;
 
         private PendingResolver Resolver => new(_clientName ?? id, id);
 
@@ -160,7 +164,11 @@ public sealed class RemoteHostServer(
             }
         }
 
-        public ValueTask DisposeNetworkAsync() => _network?.DisposeAsync() ?? ValueTask.CompletedTask;
+        public async ValueTask DisposeDomainsAsync()
+        {
+            try { if (_editor is not null) await _editor.DisposeAsync().ConfigureAwait(false); }
+            finally { if (_network is not null) await _network.DisposeAsync().ConfigureAwait(false); }
+        }
 
         /** Ownership changes run in frame order, before concurrent backend work can overtake a preceding subscribe. */
         public ValueTask<JsonElement?>? PrepareRequest(JsonRpcMessage message, CancellationToken cancellationToken)
@@ -208,6 +216,7 @@ public sealed class RemoteHostServer(
                     return Serialize(await InfoAsync(cancellationToken).ConfigureAwait(false), HostProtocolJsonContext.Default.HostInfo);
             }
             var backend = server._backend ?? throw MethodNotFound(name);
+            using var editorClientScope = backend.Editor?.Clients?.EnterClientScope(id);
             if (_domainHandlers.TryGetValue(name, out var handler))
                 return await handler.Handle(name, message, cancellationToken).ConfigureAwait(false);
             return await HandleBackendAsync(backend, name, message, cancellationToken).ConfigureAwait(false);
@@ -241,6 +250,11 @@ public sealed class RemoteHostServer(
             }
             if (backend.Network is IRemoteNetworkReloadBackend reload)
                 Register([NetworkProtocol.MethodReload], (_, message, ct) => HostNetworkMethods.ReloadAsync(reload, message, ct));
+            if (backend.Editor is { } editor)
+            {
+                _editor = new HostEditorMethods(editor, peer, id, lifetime);
+                Register(EditorProtocol.Methods, _editor.HandleAsync, _editor.Prepare);
+            }
         }
 
         private void Register(IReadOnlyList<string> methods, DomainHandler handler, DomainPreparation? prepare = null)
@@ -306,8 +320,9 @@ public sealed class RemoteHostServer(
                 }
                 case HostProtocol.MethodSessionSnapshot:
                 {
-                    var request = Require(message, HostProtocolJsonContext.Default.RemoteSessionRef, "snapshot requires sessionId");
-                    return Serialize(await backend.Session.GetSessionSnapshotAsync(request.SessionId, cancellationToken).ConfigureAwait(false), HostProtocolJsonContext.Default.RemoteSessionSnapshot);
+                    var request = Require(message, HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest, "snapshot requires sessionId");
+                    var snapshot = await backend.Session.GetSessionSnapshotAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+                    return Serialize(RemoteSnapshotPage.Slice(snapshot, request.FromEvent, request.MaxBytes), HostProtocolJsonContext.Default.RemoteSessionSnapshot);
                 }
                 case HostProtocol.MethodSessionMessage:
                 {

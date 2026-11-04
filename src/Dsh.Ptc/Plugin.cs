@@ -6,7 +6,7 @@ using Dsh.Runtime;
 
 namespace Dsh.Ptc;
 
-/** PTC 插件: 注册 toolPresentation 服务与 tools:sdk / tools:ptc-only 动态提示词段。 */
+/** Registers run_code alongside native tools and describes the scope-visible SDK. */
 public sealed class Plugin : IDshPlugin
 {
     public string[] Inject =>
@@ -14,28 +14,26 @@ public sealed class Plugin : IDshPlugin
 
     public IDisposable Apply(Context ctx, object? config)
     {
+        var resolved = PtcPluginConfig.Resolve(config);
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("the PTC plugin requires the tools service");
-        tools.ReserveName(PtcTransport.RunCodeName, "the presentation transport tool");
-        var transport = new PtcTransport(ctx, Environment.CurrentDirectory);
+        var registration = ToolRunCode.Register(ctx, Environment.CurrentDirectory, resolved.DebugBatching);
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var sdk = systemPrompt.Section(new PromptSection(
             "tools:sdk",
-            context => transport.SdkSection(context.Scope),
+            context => tools.Get(ToolRunCode.ToolName, context.Scope) is null
+                ? ""
+                : PtcSdkRenderer.Render(tools.Schemas(context.Scope), resolved.DebugBatching),
             Dynamic: true));
-        var ptcOnly = systemPrompt.Section(new PromptSection(
-            "tools:ptc-only",
-            context => transport.TransportOnlySection(context.Scope),
-            Dynamic: true));
-        return new Bundle(sdk, ptcOnly);
+        return new Bundle(registration, sdk);
     }
 
-    private sealed class Bundle(IDisposable sdk, IDisposable ptcOnly) : IDisposable
+    private sealed class Bundle(IDisposable registration, IDisposable sdk) : IDisposable
     {
         public void Dispose()
         {
             sdk.Dispose();
-            ptcOnly.Dispose();
+            registration.Dispose();
         }
     }
 }

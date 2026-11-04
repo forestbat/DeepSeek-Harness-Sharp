@@ -27,11 +27,14 @@ public static class MemorySaveTool
         + "or skip (decline out-of-scope content). "
         + "Records are timestamped automatically; the injected index is capped at 8192 bytes, so read the memory file directly when you need full content.";
 
-    public static IDisposable Register(Context ctx, Func<ToolRunContext, ProjectMemory> resolve)
+    public static IDisposable Register(Context ctx, Func<string?, ProjectMemory> resolve)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
-        var section = systemPrompt.Section(PromptSection.Literal("tool:memory_save", SectionText));
+        var section = systemPrompt.Section(new PromptSection(
+            "tool:memory_save",
+            context => resolve(context.Agent?.Session.Header.Cwd).IsEnabled ? SectionText : "",
+            Dynamic: true));
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
@@ -75,7 +78,7 @@ public static class MemorySaveTool
                     }
                     """)!.AsObject(),
                 (_, value) => RenderResult(value)),
-            Execute = (args, exec) => Execute(args, exec, resolve(exec)),
+            Execute = (args, exec) => Execute(args, exec, resolve(exec.Agent?.Session.Header.Cwd)),
         });
         return new Registration(registration, section);
     }
@@ -85,6 +88,8 @@ public static class MemorySaveTool
         ToolRunContext exec,
         ProjectMemory memory)
     {
+        if (!memory.IsEnabled)
+            return new MemorySaveResult("skip", [], [], 0, false, false, "project memory is off; run /memory on");
         var action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
         var key = GetString(args, "key");
         var text = GetString(args, "text");

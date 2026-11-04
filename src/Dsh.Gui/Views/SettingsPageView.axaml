@@ -31,6 +31,9 @@
       <ScrollViewer Grid.Column="1" Classes="Slim" Padding="8,0,20,16">
         <StackPanel Spacing="14">
 
+          <StackPanel IsVisible="{Binding Preferences.IsIdeSection}">
+            <views:EditorSettingsView DataContext="{Binding Preferences.Ide}" />
+          </StackPanel>
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsAppearanceSection}">
             <TextBlock Text="外观" Classes="Title" />
 

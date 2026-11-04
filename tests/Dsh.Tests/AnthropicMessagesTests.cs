@@ -133,6 +133,16 @@ public class AnthropicMessagesTests
         Assert.Null(adapter.ResolveModel("not-in-models-dev").InputModalities);
     }
 
+    /** 上下文窗口是自动压缩的阈值来源: 目录里有 limit.context 就报出来, 没有则留未知。 */
+    [Fact]
+    public void ResolveModel_Reports_ModelsDev_ContextWindow()
+    {
+        var adapter = Adapter(new ScriptedHandler(ToolTurnSse));
+
+        Assert.Equal(200_000, adapter.ResolveModel("claude-haiku-4-5").ContextWindow);
+        Assert.Null(adapter.ResolveModel("not-in-models-dev").ContextWindow);
+    }
+
     private static AnthropicAdapter Adapter(HttpMessageHandler handler)
         => new("anthropic", "https://example.invalid", "sk-test", [Model], new HttpClient(handler));
 

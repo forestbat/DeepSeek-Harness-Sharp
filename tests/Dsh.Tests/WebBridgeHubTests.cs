@@ -137,12 +137,14 @@ public sealed class WebBridgeHubTests
     internal sealed class HubFixture : IAsyncDisposable
     {
         private readonly WebBridgeServer _bridge;
+        private readonly FleetClient _fleet;
 
-        private HubFixture(HarnessHostFixture local, HarnessHostFixture second, int closedPort, WebBridgeServer bridge)
+        private HubFixture(HarnessHostFixture local, HarnessHostFixture second, int closedPort, FleetClient fleet, WebBridgeServer bridge)
         {
             Local = local;
             Second = second;
             ClosedPort = closedPort;
+            _fleet = fleet;
             _bridge = bridge;
             Access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(local.Root)) ?? throw new InvalidOperationException("bridge issued no token"));
         }
@@ -159,19 +161,26 @@ public sealed class WebBridgeHubTests
         {
             var local = await HarnessHostFixture.CreateAsync("hl", Ct);
             HarnessHostFixture? second = null;
+            FleetClient? fleet = null;
+            WebBridgeServer? bridge = null;
             try
             {
                 second = await HarnessHostFixture.CreateAsync("hs", Ct);
                 var closedPort = ClosedLoopbackPort();
                 MachineSpec[] machines = [MachineSpec.Local(local.Root), MachineSpec.Local(second.Root, SecondMachine), SecretBearingMachine(closedPort)];
-                var options = FleetConnectionTests.TestOptions with { Deploy = new DeploySettings { AutoDeploy = false } };
-                return new HubFixture(local, second, closedPort, WebBridgeServer.Start(new WebBridgeOptions(local.Root, 0, machines, options)));
+                var options = FleetConnectionTests.TestOptions with { AutoReconnect = false, Deploy = new DeploySettings { AutoDeploy = false } };
+                fleet = new FleetClient(machines, options);
+                bridge = WebBridgeServer.Start(new WebBridgeOptions(local.Root, 0), fleet);
+                await fleet.WaitSettledAsync(Ct);
+                return new HubFixture(local, second, closedPort, fleet, bridge);
             }
             catch
             {
-                if (second is not null)
-                    await second.DisposeAsync();
-                await local.DisposeAsync();
+                await using var localCleanup = local;
+                await using var secondCleanup = second;
+                await using var fleetCleanup = fleet;
+                if (bridge is not null)
+                    await bridge.DisposeAsync();
                 throw;
             }
         }
@@ -182,21 +191,10 @@ public sealed class WebBridgeHubTests
         /** Release the real host/PTY resources even when bridge shutdown fails. */
         public async ValueTask DisposeAsync()
         {
-            try
-            {
-                await _bridge.DisposeAsync();
-            }
-            finally
-            {
-                try
-                {
-                    await Second.DisposeAsync();
-                }
-                finally
-                {
-                    await Local.DisposeAsync();
-                }
-            }
+            await using var localCleanup = Local;
+            await using var secondCleanup = Second;
+            await using var fleetCleanup = _fleet;
+            await _bridge.DisposeAsync();
         }
 
         private static MachineSpec SecretBearingMachine(int closedPort)

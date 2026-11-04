@@ -12,218 +12,212 @@ public enum DecisionKind
     Question,
 }
 
-/** 统一「需要你决定」窗口的状态: 审批与 ask_user_question 共用同一套交互。 */
+/** Presentation adapters over the shared choice state; a decision resolves at most once. */
 public sealed partial class DecisionViewModel : ObservableObject
 {
-    private DecisionViewModel(DecisionKind kind)
+    private DecisionViewModel(DecisionKind kind, string? requestId)
     {
         Kind = kind;
-        SubmitCommand = new RelayCommand(() => Resolve(BuildAnswerOrNull()), () => CanSubmit);
-        AllowOnceCommand = new RelayCommand(() => Resolve(ApprovalOutcome.AllowedOnce));
-        AllowAlwaysCommand = new RelayCommand(() => Resolve(ApprovalOutcome.AllowedForSession));
-        RejectCommand = new RelayCommand(() => Resolve(ApprovalOutcome.Rejected));
-        CancelCommand = new RelayCommand(() => Resolve(null));
+        RequestId = requestId;
+        SubmitCommand = new RelayCommand(() => Resolve(BuildAnswer()), () => CanSubmit);
+        AllowOnceCommand = new RelayCommand(() => ResolveApproval(0), () => CanResolveApproval(0));
+        AllowAlwaysCommand = new RelayCommand(() => ResolveApproval(1), () => CanResolveApproval(1));
+        RejectCommand = new RelayCommand(() => ResolveApproval(2), () => CanResolveApproval(2));
+        CancelCommand = new RelayCommand(() => Resolve(null), () => !IsClosed && SupportsCancellation);
     }
 
     public DecisionKind Kind { get; }
-
-    public ApprovalRequest? Approval { get; init; }
-
-    public IReadOnlyList<DecisionQuestionViewModel> Questions { get; init; } = [];
-
+    public string? RequestId { get; }
+    public ApprovalRequest? Approval { get; private init; }
+    public ChoicePromptState? ApprovalState { get; private init; }
+    public IReadOnlyList<DecisionQuestionViewModel> Questions { get; private set; } = [];
     public RelayCommand SubmitCommand { get; }
-
     public RelayCommand AllowOnceCommand { get; }
-
     public RelayCommand AllowAlwaysCommand { get; }
-
     public RelayCommand RejectCommand { get; }
-
     public RelayCommand CancelCommand { get; }
-
-    /** 弹窗结论: 审批为 ApprovalOutcome, 问题为 AskUserQuestionAnswer, 取消为 null。 */
     public object? Result { get; private set; }
-
+    public bool IsClosed { get; private set; }
+    public bool IsSuperseded { get; private set; }
+    public bool SupportsCancellation { get; private set; } = true;
+    public string CancellationSupportMessage => "Unsupported：此 Host 不支持取消，请先升级 Host；请求仍未决。";
     public event Action<DecisionViewModel>? Closed;
-
     public bool IsApproval => Kind == DecisionKind.Approval;
-
     public bool IsQuestion => Kind == DecisionKind.Question;
-
     public string Heading => IsApproval ? "需要审批" : "需要你决定";
-
     public string QuestionSummary => IsApproval ? "智能体请求执行工具" : "智能体向你提问";
+    public string ToolName { get; private init; } = "";
+    public string Command { get; private init; } = "";
+    public string Reason { get; private init; } = "";
+    public string Impact { get; private init; } = "";
+    public bool HasImpact => Impact.Length > 0;
+    public bool CanSubmit => !IsClosed && Questions.Count > 0 && Questions.All(question => question.IsAnswered);
+    public string Arguments { get; private init; } = "";
 
-    [ObservableProperty]
-    private string _toolName = "";
-
-    [ObservableProperty]
-    private string _command = "";
-
-    [ObservableProperty]
-    private string _reason = "";
-
-    [ObservableProperty]
-    private string _impact = "";
-
-    [ObservableProperty]
-    private bool _hasImpact;
-
-    [ObservableProperty]
-    private bool _rememberForSession;
-
-    [ObservableProperty]
-    private bool _canSubmit;
-
-    public static DecisionViewModel ForApproval(ApprovalRequest request)
-    {
-        var command = ApprovalHints.PrimaryArgument(request.ToolName, request.Arguments);
-        var impact = ApprovalHints.Impact(request.ToolName, request.Arguments);
-        return new DecisionViewModel(DecisionKind.Approval)
+    public static DecisionViewModel ForApproval(ApprovalRequest request, string? requestId = null)
+        => new(DecisionKind.Approval, requestId)
         {
             Approval = request,
+            ApprovalState = new(ChoicePrompt.ForApproval(request.ToolName, request.Arguments, request.Reason, requestId)),
             ToolName = request.ToolName,
-            Command = command,
+            Command = ApprovalHints.PrimaryArgument(request.ToolName, request.Arguments),
+            Arguments = request.Arguments ?? "",
             Reason = request.Reason ?? "",
-            Impact = impact,
-            HasImpact = impact.Length > 0,
+            Impact = ApprovalHints.Impact(request.ToolName, request.Arguments),
         };
-    }
 
-    /** 远端审批没有本地 ApprovalRequest(无 IAgent): 用工具名/参数/理由构造同一个弹窗。 */
-    public static DecisionViewModel ForApproval(string toolName, string? arguments, string? reason)
-    {
-        var impact = ApprovalHints.Impact(toolName, arguments);
-        return new DecisionViewModel(DecisionKind.Approval)
+    public static DecisionViewModel ForApproval(string toolName, string? arguments, string? reason, string? requestId = null, bool allowOnce = true, bool allowForSession = true, bool reject = true)
+        => new(DecisionKind.Approval, requestId)
         {
+            ApprovalState = new(ChoicePrompt.ForApproval(toolName, arguments, reason, requestId, allowOnce, allowForSession, reject)),
             ToolName = toolName,
             Command = ApprovalHints.PrimaryArgument(toolName, arguments),
+            Arguments = arguments ?? "",
             Reason = reason ?? "",
-            Impact = impact,
-            HasImpact = impact.Length > 0,
+            Impact = ApprovalHints.Impact(toolName, arguments),
         };
-    }
 
-    public static DecisionViewModel ForQuestion(AskUserQuestionRequest request)
+    public static DecisionViewModel ForQuestion(AskUserQuestionRequest request, string? requestId = null)
     {
-        var viewModel = new DecisionViewModel(DecisionKind.Question)
-        {
-            Questions = [.. request.Questions.Select(question => new DecisionQuestionViewModel(question))],
-        };
+        var viewModel = new DecisionViewModel(DecisionKind.Question, requestId);
+        viewModel.Questions = [.. request.Questions.Select(question => new DecisionQuestionViewModel(question, requestId, () => !viewModel.IsClosed))];
         foreach (var question in viewModel.Questions)
             question.Changed += viewModel.RefreshCanSubmit;
-        viewModel.RefreshCanSubmit();
         return viewModel;
     }
 
     public AskUserQuestionAnswer? BuildAnswer()
-        => Questions.Count == 0 ? null : new AskUserQuestionAnswer([.. Questions.Select(question => question.BuildAnswer())]);
+        => Questions.Count == 0 || Questions.Any(question => !question.IsAnswered)
+            ? null : new([.. Questions.Select(question => question.BuildAnswer())]);
 
-    /** 键盘 n/y/a/c 与按钮共用的收口点。 */
+    public void SetCancellationSupported(bool supported)
+    {
+        if (SupportsCancellation == supported)
+            return;
+        SupportsCancellation = supported;
+        OnPropertyChanged(nameof(SupportsCancellation));
+        CancelCommand.NotifyCanExecuteChanged();
+    }
+
+    /** Host resolution invalidates the dialog without submitting a new answer. */
+    public void Invalidate()
+    {
+        IsSuperseded = true;
+        Resolve(null);
+    }
+
     public void Resolve(object? result)
     {
-        if (Kind == DecisionKind.Approval && result is null)
-            result = ApprovalOutcome.Cancelled;
+        if (IsClosed)
+            return;
+        if (!SupportsCancellation && !IsSuperseded
+            && (result is null or ApprovalOutcome.Cancelled || result is AskUserQuestionAnswer { IsDismissed: true }))
+            return;
+        if (result is null)
+        {
+            if (IsApproval)
+                ApprovalState?.Select(3);
+            result = IsApproval ? ApprovalOutcome.Cancelled : AskUserQuestionAnswer.Dismissed;
+        }
         Result = result;
+        IsClosed = true;
+        OnPropertyChanged(nameof(IsClosed));
+        RefreshCanSubmit();
+        AllowOnceCommand.NotifyCanExecuteChanged();
+        AllowAlwaysCommand.NotifyCanExecuteChanged();
+        RejectCommand.NotifyCanExecuteChanged();
+        CancelCommand.NotifyCanExecuteChanged();
         Closed?.Invoke(this);
     }
 
-    private object? BuildAnswerOrNull() => BuildAnswer();
+    private bool CanResolveApproval(int index)
+        => !IsClosed && ApprovalState is { } state && !state.Prompt.Options[index].Disabled;
+
+    private void ResolveApproval(int index)
+    {
+        if (!CanResolveApproval(index) || ApprovalState is not { } state)
+            return;
+        state.Select(index);
+        Resolve(state.SelectedValues().Single() switch
+        {
+            "once" => ApprovalOutcome.AllowedOnce,
+            "session" => ApprovalOutcome.AllowedForSession,
+            "reject" => ApprovalOutcome.Rejected,
+            "cancel" => ApprovalOutcome.Cancelled,
+            _ => throw new InvalidOperationException("Unknown approval choice."),
+        });
+    }
 
     private void RefreshCanSubmit()
-        => CanSubmit = Questions.Count > 0 && Questions.All(question => question.IsAnswered);
+    {
+        OnPropertyChanged(nameof(CanSubmit));
+        SubmitCommand.NotifyCanExecuteChanged();
+    }
 }
 
-/** 单个问题的选择状态: 单选/多选/自由输入。 */
+/** Adapts choice state for bindings without maintaining another selection implementation. */
 public sealed partial class DecisionQuestionViewModel : ObservableObject
 {
-    public DecisionQuestionViewModel(AskUserQuestionItem question)
+    private readonly Func<bool> _isActive;
+
+    public DecisionQuestionViewModel(AskUserQuestionItem question, string? requestId = null, Func<bool>? isActive = null)
     {
         Item = question;
-        Options = [.. (question.Options ?? []).Select(option => new DecisionOptionViewModel(option))];
+        State = new(ChoicePrompt.FromQuestion(question, requestId));
+        _isActive = isActive ?? (() => true);
+        Options = [.. State.Prompt.Options.Select((option, index) => new DecisionOptionViewModel(option, State, index))];
         foreach (var option in Options)
-        {
             option.SelectCommand = new RelayCommand(() => Select(option));
-            option.Changed += () => Notify();
-        }
     }
 
     public AskUserQuestionItem Item { get; }
-
+    public ChoicePromptState State { get; }
     public ObservableCollection<DecisionOptionViewModel> Options { get; }
-
     public event Action? Changed;
-
     public string Question => Item.Question;
-
     public string Detail => Item.Detail ?? "";
-
     public bool HasDetail => Detail.Length > 0;
-
     public string Header => Item.Header ?? "";
-
     public bool HasHeader => Header.Length > 0;
-
-    public bool MultiSelect => Item.MultiSelect;
-
-    public bool AllowCustom => true;
-
+    public bool MultiSelect => State.Prompt.MultiSelect;
+    public bool AllowCustom => State.Prompt.AllowCustom;
     public string ApproveLabel => Item.Intent?.Approve ?? "";
-
-    [ObservableProperty]
-    private string _customText = "";
-
-    public bool IsAnswered => Options.Any(option => option.IsSelected) || CustomText.Trim().Length > 0;
+    public string CustomText
+    {
+        get => State.CustomText;
+        set
+        {
+            if (!_isActive())
+                return;
+            State.CustomText = value ?? "";
+            OnPropertyChanged();
+            Changed?.Invoke();
+        }
+    }
+    public bool IsAnswered => State.CanSubmit;
 
     [RelayCommand]
     private void Select(DecisionOptionViewModel? option)
     {
-        if (option is null)
+        if (option is null || !_isActive())
             return;
-        if (MultiSelect)
-        {
-            option.IsSelected = !option.IsSelected;
-        }
-        else
-        {
-            foreach (var candidate in Options)
-                candidate.IsSelected = ReferenceEquals(candidate, option);
-        }
-        Notify();
+        var index = Options.IndexOf(option);
+        State.Select(index);
+        foreach (var candidate in Options)
+            candidate.Refresh();
+        Changed?.Invoke();
     }
 
-    public AskUserQuestionAnswerItem BuildAnswer()
-    {
-        var selected = Options.Where(option => option.IsSelected).Select(option => option.Label).ToList();
-        var custom = CustomText.Trim();
-        return new AskUserQuestionAnswerItem(Item.Id, selected, custom.Length > 0 ? custom : null);
-    }
-
-    private void Notify() => Changed?.Invoke();
-
-    partial void OnCustomTextChanged(string value) => Notify();
+    public AskUserQuestionAnswerItem BuildAnswer() => State.BuildAnswer(Item.Id);
 }
 
-public sealed partial class DecisionOptionViewModel : ObservableObject
+public sealed class DecisionOptionViewModel(ChoicePromptOption option, ChoicePromptState state, int index) : ObservableObject
 {
-    public DecisionOptionViewModel(AskUserQuestionOption option)
-    {
-        Label = option.Label;
-        Description = option.Description ?? "";
-    }
-
-    public string Label { get; }
-
-    public string Description { get; }
-
+    public string Label => option.Label;
+    public string Description => option.Description ?? "";
     public bool HasDescription => Description.Length > 0;
-
-    public event Action? Changed;
-
-    [ObservableProperty]
-    private bool _isSelected;
-
-    public RelayCommand? SelectCommand { get; set; }
-
-    partial void OnIsSelectedChanged(bool value) => Changed?.Invoke();
+    public bool IsEnabled => !option.Disabled;
+    public bool IsSelected => state.IsSelected(index);
+    public RelayCommand? SelectCommand { get; internal set; }
+    internal void Refresh() => OnPropertyChanged(nameof(IsSelected));
 }

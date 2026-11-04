@@ -148,6 +148,43 @@ public sealed class AcpDuplexClientTests : IAsyncDisposable
         Assert.Equal(AcpMethods.StopEndTurn, await next.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PromptEnd_CancelsOnlyItsPermissions_BeforeNextTurn(bool failed)
+    {
+        var prompt = _client.PromptAsync("s1", "first turn", TestContext.Current.CancellationToken);
+        var request = await AgentReadAsync();
+        await AgentSendAsync(PermissionRequestLine("old-permission"));
+        var old = await _client.PermissionRequests.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(StepTimeout, TestContext.Current.CancellationToken);
+        await AgentSendAsync(PermissionRequestLine("other-session", "s2"));
+        var other = await _client.PermissionRequests.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(StepTimeout, TestContext.Current.CancellationToken);
+        if (failed)
+        {
+            await AgentSendAsync($$$"""{"jsonrpc":"2.0","id":{{{request.GetProperty("id").GetRawText()}}},"error":{"code":{{{JsonRpcPeer.MethodNotFound}}},"message":"prompt is no longer available"}}""");
+            await Assert.ThrowsAsync<JsonRpcResponseError>(() => prompt.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            await AgentReplyAsync(request, """{"stopReason":"end_turn"}""");
+            Assert.Equal(AcpMethods.StopEndTurn, await prompt.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
+        }
+        Assert.True(old.IsResolved);
+        Assert.False(other.IsResolved);
+        Assert.Equal(AcpMethods.OutcomeCancelled, (await AgentReadAsync()).GetProperty("result").GetProperty("outcome").GetProperty("outcome").GetString());
+        var next = _client.PromptAsync("s1", "next turn", TestContext.Current.CancellationToken);
+        var nextRequest = await AgentReadAsync();
+        Assert.False(old.TrySelect("allow"));
+        await AgentSendAsync(PermissionRequestLine("next-permission"));
+        var current = await _client.PermissionRequests.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(StepTimeout, TestContext.Current.CancellationToken);
+        Assert.True(current.TrySelect("deny"));
+        Assert.Equal("next-permission", (await AgentReadAsync()).GetProperty("id").GetString());
+        await AgentReplyAsync(nextRequest, """{"stopReason":"end_turn"}""");
+        Assert.Equal(AcpMethods.StopEndTurn, await next.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
+        Assert.True(other.TrySelect("allow"));
+        Assert.Equal("other-session", (await AgentReadAsync()).GetProperty("id").GetString());
+    }
+
     [Fact]
     public async Task UnsupportedAgentRequest_GetsMethodNotFound()
     {
@@ -266,8 +303,8 @@ public sealed class AcpDuplexClientTests : IAsyncDisposable
         Assert.Null(await _client.Closed.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
     }
 
-    private static string PermissionRequestLine(string id)
-        => $$$"""{"jsonrpc":"2.0","id":"{{{id}}}","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"call_1","title":"touch x","kind":"execute","status":"pending"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Reject","kind":"reject_once"}]}}""";
+    private static string PermissionRequestLine(string id, string sessionId = "s1")
+        => $$$"""{"jsonrpc":"2.0","id":"{{{id}}}","method":"session/request_permission","params":{"sessionId":"{{{sessionId}}}","toolCall":{"toolCallId":"call_1","title":"touch x","kind":"execute","status":"pending"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Reject","kind":"reject_once"}]}}""";
 
     private async Task<JsonElement> AgentReadAsync()
     {

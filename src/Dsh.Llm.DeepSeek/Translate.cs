@@ -37,7 +37,8 @@ public static class WireTranslate
             && IsSafeInteger(combined)
             && (usage.TotalTokens is null || (IsSafeInteger(usage.TotalTokens.Value) && (long)usage.TotalTokens.Value == combinedValue));
         return new TokenUsage(
-            usage.PromptTokens - (cacheRead ?? 0),
+            // 契约是"完整提示词": prompt_tokens 本身已含缓存命中, 不能再减; 命中量单独给出作为子集。
+            usage.PromptTokens,
             usage.CompletionTokens,
             hasExactTotal ? combined : null,
             cacheRead,

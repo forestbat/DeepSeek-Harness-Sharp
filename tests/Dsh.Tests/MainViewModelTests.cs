@@ -1,11 +1,12 @@
+using System.Collections.Specialized;
 using Avalonia.Threading;
 using Dsh.Boot;
+using Dsh.Compaction;
 using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Presets;
 
 namespace Dsh.Tests;
 
@@ -289,6 +290,71 @@ public sealed class MainViewModelTests
         Assert.Contains("dsh-", message.Text);
     });
 
+    /**
+     * 压缩必须有自己的进度行与忙碌状态。摘要要发若干次模型请求, 一次压缩可能持续数分钟;
+     * 界面完全没反应时用户只会再按一次 /compact, 而那一次必然被"压缩已在进行"挡回来。
+     * 这里走"重新加载会话"这条确定性路径, 覆盖与实时流相同的渲染代码(ApplyEvents)。
+     */
+    [Fact]
+    public async Task Compaction_ShowsProgressThenSummaryInsteadOfStayingSilent() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var chat = await environment.OpenChatAsync();
+        var session = environment.Agent.Session;
+        var compactionId = CompactionId.Create("cmp-gui");
+        session.Append(new CompactionStartPayload(compactionId, null, null));
+        session.Append(new CompactionSummaryPayload(
+            compactionId,
+            null,
+            [new TextBlock("GUI 压缩摘要正文")],
+            new ShadowedRange(0, 10),
+            [0, 1, 2, 3],
+            4321,
+            "deepseek-official",
+            "deepseek-v4-flash"));
+        session.Append(new CompactionEndPayload(compactionId, null, null));
+        await using var viewModel = new MainViewModel(environment.App, chat);
+        // 走实时流(不是重新加载): 用户报的正是"压缩开始后界面没动静"这条路。
+        await GuiTestEnvironment.WaitForAsync(
+            (INotifyCollectionChanged)viewModel.Messages,
+            () => viewModel.Messages.Any(message => message.Text.Contains("正在压缩上下文", StringComparison.Ordinal)),
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
+        var summary = Assert.Single(viewModel.Messages, message =>
+            message.Text.Contains("上下文已压缩", StringComparison.Ordinal));
+        Assert.Contains("收起 4 条历史", summary.Text, StringComparison.Ordinal);
+        Assert.Contains("GUI 压缩摘要正文", summary.Detail, StringComparison.Ordinal);
+        // 成功的压缩结束后不能把界面留在忙碌态。
+        Assert.False(viewModel.IsBusy);
+    });
+
+    /** 压缩检查点的正文已经由摘要行渲染过, 再当成上下文注入会让同一段摘要出现两次。 */
+    [Fact]
+    public async Task CompactionCheckpointMessage_IsNotRenderedTwiceAsContextInjection() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var chat = await environment.OpenChatAsync();
+        var session = environment.Agent.Session;
+        var compactionId = CompactionId.Create("cmp-gui-dupe");
+        session.Append(new CompactionStartPayload(compactionId, null, null));
+        session.Append(new CompactionSummaryPayload(
+            compactionId, null, [new TextBlock("唯一摘要戊")], new ShadowedRange(0, 5), [0, 1], 100,
+            "deepseek-official", "deepseek-v4-flash"));
+        session.Append(
+            new UserMessagePayload(new UserMessage
+            {
+                Id = MessageFactory.NewId(),
+                Content = [new TextBlock("唯一摘要戊")],
+                Source = CompactionCheckpoint.Source(compactionId),
+            }),
+            new SurfaceOp.Append());
+        session.Append(new CompactionEndPayload(compactionId, null, null));
+        await GuiTestEnvironment.PumpAsync(chat.ReloadAsync());
+        await using var viewModel = new MainViewModel(environment.App, chat);
+
+        Assert.Single(viewModel.Messages, message =>
+            message.Text.Contains("唯一摘要戊", StringComparison.Ordinal)
+            || message.Detail.Contains("唯一摘要戊", StringComparison.Ordinal));
+    });
     [Fact]
     public async Task Submit_TextMessage_IsRenderedOnceFromSessionEvent() => await HeadlessGui.RunAsync(async () =>
         {
@@ -353,21 +419,6 @@ public sealed class MainViewModelTests
         Assert.True(node.IsLive);
     });
 
-    [Fact]
-    public async Task PresetLabel_FollowsPresetModeEvent() => await HeadlessGui.RunAsync(async () =>
-    {
-        var environment = await GuiTestEnvironment.CreateAsync();
-        await using var environmentScope = environment;
-        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
-        Assert.Equal("标准", viewModel.PresetLabel);
-        Assert.Single(viewModel.PresetItems, item => item.Id == "standard" && item.IsCurrent);
-
-        environment.Agent.Session.Append(new PresetModePayload("minimal"));
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.PresetLabel == "极简");
-
-        Assert.Equal("极简", viewModel.PresetLabel);
-        Assert.Single(viewModel.PresetItems, item => item.Id == "minimal" && item.IsCurrent);
-    });
 
     /** 内容命中: 标题/workspace 不匹配时靠 FTS 命中, 并带出摘要; 关闭搜索后复位。 */
     [Fact]
@@ -491,10 +542,90 @@ public sealed class MainViewModelTests
         Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/model");
 
         viewModel.Composer.Input = $"@{environment.Agent.Id.Value[..6]}";
+        viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}"));
 
         Assert.True(viewModel.IsSuggestionOpen);
-        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.InsertText == $"@{environment.Agent.Id.Value}");
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}");
     });
+
+    /** 引用补全只看光标处的未完成 @token: 引用之后继续打提示词, 菜单必须收起。 */
+    [Fact]
+    public async Task MentionSuggestions_CloseOncePromptFollowsTheReference() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await WriteReferencedFileAsync(environment, "notes.md", "见附图说明");
+
+        viewModel.Composer.Input = "@notes";
+        viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
+
+        Assert.True(viewModel.IsSuggestionOpen);
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
+
+        viewModel.Composer.Input = "@notes.md 请修改这个文件";
+        viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+
+        Assert.False(viewModel.IsSuggestionOpen);
+        Assert.Empty(viewModel.Suggestions);
+    });
+
+    /** 选中引用候选只替换光标处的 token, 用户已经打在 token 之后的提示词必须保留。 */
+    [Fact]
+    public async Task ConfirmMention_KeepsPromptTypedAfterToken() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await WriteReferencedFileAsync(environment, "notes.md", "见附图说明");
+
+        viewModel.Composer.Input = "@notes 请修改这个文件";
+        viewModel.Composer.CaretIndex = "@notes".Length;
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
+
+        var candidate = Assert.Single(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
+        viewModel.ConfirmSuggestionCommand.Execute(candidate);
+
+        Assert.Equal("@notes.md  请修改这个文件", viewModel.Composer.Input);
+        Assert.Equal("@notes.md ".Length, viewModel.Composer.CaretIndex);
+        Assert.False(viewModel.IsSuggestionOpen);
+    });
+
+    /** 引用之后接着打的提示词必须能整段发出, 不能被补全菜单吞掉。 */
+    [Fact]
+    public async Task Submit_KeepsPromptTypedAfterReference() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await WriteReferencedFileAsync(environment, "notes.md", "见附图说明");
+
+        viewModel.Composer.Input = "参考 @notes.md 请修改这个文件";
+        viewModel.Composer.CaretIndex = viewModel.Composer.Input.Length;
+        Assert.False(viewModel.IsSuggestionOpen);
+
+        await viewModel.SubmitCommand.ExecuteAsync(null);
+
+        static bool HasPrompt(UserMessagePayload payload)
+            => payload.Message.Content.Any(block =>
+                block is TextBlock text && text.Text.Contains("请修改这个文件", StringComparison.Ordinal));
+        await GuiTestEnvironment.WaitForAsync(
+            viewModel.Messages,
+            () => environment.Agent.Session.SnapshotEvents()
+                .Select(sessionEvent => sessionEvent.Data)
+                .OfType<UserMessagePayload>()
+                .Any(HasPrompt),
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
+        Assert.Equal("", viewModel.Composer.Input);
+    });
+
+    private static Task WriteReferencedFileAsync(GuiTestEnvironment environment, string name, string content)
+    {
+        var cwd = environment.Agent.Session.Header.Cwd ?? throw new InvalidOperationException("session has no cwd");
+        return File.WriteAllTextAsync(Path.Combine(cwd, name), content, TestContext.Current.CancellationToken);
+    }
 
     [Fact]
     public async Task ConfirmSuggestion_PrefersClickedItem_OverKeyboardIndex() => await HeadlessGui.RunAsync(async () =>

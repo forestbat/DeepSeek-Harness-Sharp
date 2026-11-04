@@ -26,6 +26,10 @@ public sealed class ModelsDevReasoningSource : IModelReasoningSource
     public IReadOnlyList<string>? InputModalitiesFor(string model)
         => ProviderKey() is { } key ? ModelsDevCatalog.Embedded.InputModalitiesFor(key, model) : null;
 
+    /** 模型的上下文窗口 token 数; provider 或模型不在目录里时返回 null(未知, 由上层决定是否可以压缩)。 */
+    public int? ContextWindowFor(string model)
+        => ProviderKey() is { } key ? ModelsDevCatalog.Embedded.ContextWindowFor(key, model) : null;
+
     private string? ProviderKey()
     {
         if (!_resolved)

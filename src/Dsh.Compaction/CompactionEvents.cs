@@ -19,7 +19,12 @@ public enum CompactionTrigger
 
 public enum ManualCompactionErrorCode
 {
+    /** 同一会话上已有一次压缩在进行(可能是另一个窗口/进程发起的)。 */
     Busy,
+
+    /** 会话里还有回合没结束: 压缩必须落在回合之间, 否则会把正在进行的请求的上下文换掉。 */
+    BusyTurn,
+
     Cancelled,
     Changed,
     Summary,
@@ -38,6 +43,11 @@ public sealed class ManualCompactionError : Exception
     }
 }
 
+/**
+ * 被压缩/剪枝覆盖的那段历史: Start 是表面上第一个被覆盖节点的 seq, End 是最后一个。
+ * 压缩会在表面中间插入新 seq, 之后表面的 seq 不再单调递增, 所以 Start 可能大于 End ——
+ * 它们标识"首尾两个节点"而不是"数值区间", 判定范围请按表面位置, 不要比较大小。
+ */
 public sealed record ShadowedRange(long Start, long End);
 
 public sealed record CompactionResult(

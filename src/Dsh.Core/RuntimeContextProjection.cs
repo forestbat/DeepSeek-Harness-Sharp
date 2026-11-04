@@ -6,7 +6,8 @@ namespace Dsh.Core;
 
 public sealed class RuntimeContextProjection : IDisposable
 {
-    private const string Source = "@deepseek-ai/dsh-system-prompt";
+    /** 运行期上下文快照的消息来源; agent loop 在请求投影里按这个来源把快照并回用户消息。 */
+    public const string Source = "@deepseek-ai/dsh-system-prompt";
     private const string Cleared = "Current runtime context: none. Earlier runtime-context snapshots no longer apply.";
 
     private (long Seq, string? Text)? _retained;

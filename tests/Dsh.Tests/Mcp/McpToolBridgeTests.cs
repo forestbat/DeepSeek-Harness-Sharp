@@ -153,6 +153,43 @@ public sealed class McpServiceTests
         Assert.Contains("echo:hello", rendered.Text);
     }
 
+    /** 成组需要两个条件: 打开 tools.progressive_disclosure, 且服务器工具数达到 tools.disclosure_threshold。 */
+    [Theory]
+    [InlineData(1, true, false)]
+    [InlineData(8, true, true)]
+    [InlineData(1, false, true)]
+    public async Task GroupingNeedsTheSwitchAndTheThreshold(int threshold, bool progressive, bool expectVisible)
+    {
+        using var serverOut = new AnonymousPipeServerStream(PipeDirection.Out);
+        using var serverIn = new AnonymousPipeServerStream(PipeDirection.In);
+        using var clientOut = new AnonymousPipeClientStream(PipeDirection.Out, serverIn.ClientSafePipeHandle);
+        using var clientIn = new AnonymousPipeClientStream(PipeDirection.In, serverOut.ClientSafePipeHandle);
+        var echo = McpServerTool.Create((string text) => $"echo:{text}",
+            new McpServerToolCreateOptions { Name = "echo", Description = "Echoes text." });
+        var server = McpServer.Create(
+            new StreamServerTransport(serverIn, serverOut, "loopback"),
+            new McpServerOptions
+            {
+                ServerInfo = new Implementation { Name = "loopback", Version = "1.0" },
+                ToolCollection = [echo],
+            });
+        await using var serverLifetime = server;
+        _ = server.RunAsync(TestContext.Current.CancellationToken);
+
+        var ctx = new Context();
+        ctx.SetOwn(ToolDisclosureSwitch.PropName, progressive);
+        var prompt = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        await using var service = new McpService(ctx, threshold);
+        await service.ConnectAsync(new McpServerConfig("loopback", "stdio"),
+            new StreamClientTransport(clientOut, clientIn), TestContext.Current.CancellationToken);
+
+        var names = (await prompt.Assemble(new AssembleContext())).Tools.Select(tool => tool.Name).ToList();
+        Assert.Equal(expectVisible, names.Contains("mcp_loopback_echo"));
+        // 隐藏只影响给模型看的清单; 工具本身仍然注册可执行。
+        Assert.NotNull(tools.Get("mcp_loopback_echo"));
+    }
+
     [Fact]
     public async Task ResourceTools_LiveExactlyAsLongAsAnyServerIsTracked()
     {

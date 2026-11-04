@@ -1,5 +1,5 @@
 using Dsh.Boot;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Runtime;
 
 namespace Dsh.Gui.Services;
@@ -8,6 +8,8 @@ namespace Dsh.Gui.Services;
 public sealed class SettingsFacade(Context ctx, HarnessHome home, FleetWorkspace? workspace = null)
 {
     private string?[] _networkSecrets = [];
+    private IWorkspaceServices Services => ctx.Get<IWorkspaceProvider>(IWorkspaceProvider.ServiceName)!
+            .Create(home, GuiSettings.RemoteClientName);
 
     public event Action? Changed;
 
@@ -54,32 +56,24 @@ public sealed class SettingsFacade(Context ctx, HarnessHome home, FleetWorkspace
     }
 
     public IReadOnlyList<string> BorrowedOutboundMachines()
-        => new MachineStore(home).Load().Machines
+        => Services.Store.Load().Machines
             .Where(machine => !machine.IsLocal && machine.OutboundTunnel is not null)
             .Select(machine => machine.Name).Order(StringComparer.Ordinal).ToArray();
 
     internal string RedactNetworkError(string detail) => OutboundProxy.Redact(detail, _networkSecrets);
 
-    public FleetProxyProbe CreateProxyProbe() => new(workspace?.Options ?? new FleetOptions
-    {
-        LocalHome = home,
-        LocalProxy = OutboundProxy.FromContext(ctx),
-        SshTransportAdapter = ctx.Get<FleetService>(FleetService.ServiceName, false)?.SshTransportAdapter,
-    });
+    public IWorkspaceProxyProbe CreateProxyProbe()
+        => (workspace?.Services ?? Services).CreateProxyProbe();
 
     public async Task SelectBorrowedOutboundAsync(string? machine, CancellationToken cancellationToken)
     {
-        await OutboundRoute.SelectAsync(machine, cancellationToken);
+        await Services.SelectBorrowedOutboundAsync(machine, cancellationToken);
         Changed?.Invoke();
         await ReloadLocalHostsAsync(cancellationToken);
     }
 
     public Task<ProxyProbeResult> ProbeBorrowedOutboundAsync(string machine, Guid operationId, CancellationToken cancellationToken)
-        => OutboundRoute.ProbeAsync(machine, operationId, cancellationToken);
-
-    private BorrowedOutboundRoute OutboundRoute
-        => ctx.Get<FleetService>(FleetService.ServiceName, false)?.OutboundRoute
-            ?? throw new InvalidOperationException("The Fleet outbound route service is unavailable.");
+        => Services.ProbeBorrowedOutboundAsync(machine, operationId, cancellationToken);
 
     private Task ReloadLocalHostsAsync(CancellationToken cancellationToken)
         => workspace?.ReloadLocalOutboundAsync(home.Root, cancellationToken) ?? Task.CompletedTask;

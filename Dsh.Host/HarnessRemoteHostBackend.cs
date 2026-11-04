@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Ide.Bridge;
 using Dsh.Plugins;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
@@ -40,6 +41,10 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
             Plugins = new HarnessRemotePluginsBackend(app, plugins);
         if (app.Ctx.GetProp(OutboundProxy.PropName) is OutboundProxy proxy)
             Network = new HarnessRemoteNetworkBackend(app.Home, proxy, app.Ctx.Get<IOutboundRouteController>(IOutboundRouteController.ServiceName, false));
+        if (app.Ctx.Get<EditorExecutionContext>(EditorExecutionContext.ServiceName, false) is { } editorContext)
+            editorContext.IsRemoteHost = true;
+        if (app.Ctx.Get<IEditorService>(IEditorService.ServiceName, false) is { } editor)
+            Editor = new HarnessRemoteEditorBackend(editor, app.Ctx.Get<EditorClientDispatcher>(EditorClientDispatcher.ServiceName, false), Files.Policy);
         var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
         _info = new HostInfo(HostProtocol.Version, HostProtocol.ReleaseVersion, platform, app.Home.Root);
     }
@@ -68,6 +73,7 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
     public IRemoteSessionEditingBackend SessionEditing { get; }
     public IRemotePluginsBackend? Plugins { get; }
     public IRemoteNetworkBackend? Network { get; }
+    public IRemoteEditorBackend? Editor { get; }
 
     public Task<HostInfo> InfoAsync(CancellationToken cancellationToken) => Task.FromResult(_info);
 

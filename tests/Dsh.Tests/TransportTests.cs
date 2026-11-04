@@ -303,6 +303,25 @@ public sealed class JsonRpcPeerTests
         Assert.True(after!.Value.GetProperty("ok").GetBoolean());
     }
 
+    /** 一帧装不下的应答回错误帧而不是扯断连接: 调用方看到"太大", 后续请求照常。 */
+    [Fact]
+    public async Task OversizedResponse_BecomesErrorAndKeepsTheConnection()
+    {
+        await using var fixture = await DuplexFixture.CreateAsync(Ct, maxFrameBytes: 256 * 1024);
+        var blob = new string('x', 512 * 1024);
+        fixture.Server.RequestHandler = (_, _) => ValueTask.FromResult<JsonElement?>(Parse($$"""{"blob":"{{blob}}"}"""));
+
+        var error = await Assert.ThrowsAsync<JsonRpcException>(
+            async () => await fixture.Client.RequestAsync("big", cancellationToken: Ct));
+
+        Assert.Equal(JsonRpcPeer.InternalError, error.Code);
+        Assert.Contains("maximum frame size", error.Message);
+        Assert.False(fixture.Client.IsClosed);
+        fixture.Server.RequestHandler = (_, _) => ValueTask.FromResult<JsonElement?>(Parse("""{"ok":true}"""));
+        var after = await fixture.Client.RequestAsync("ping", cancellationToken: Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        Assert.True(after!.Value.GetProperty("ok").GetBoolean());
+    }
+
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     /** 一对经 TCP loopback 相连的 peer, 保证真实双工流(非同进程回调)。 */
@@ -325,7 +344,7 @@ public sealed class JsonRpcPeerTests
 
         public JsonRpcPeer Server { get; }
 
-        public static async Task<DuplexFixture> CreateAsync(CancellationToken cancellationToken, bool startServer = true)
+        public static async Task<DuplexFixture> CreateAsync(CancellationToken cancellationToken, bool startServer = true, int? maxFrameBytes = null)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
@@ -336,7 +355,7 @@ public sealed class JsonRpcPeerTests
             var server = await acceptTask;
 
             var clientPeer = new JsonRpcPeer(client.GetStream());
-            var serverPeer = new JsonRpcPeer(server.GetStream());
+            var serverPeer = new JsonRpcPeer(server.GetStream(), maxFrameBytes ?? FrameCodec.DefaultMaxFrameBytes);
             clientPeer.Start();
             if (startServer)
                 serverPeer.Start();

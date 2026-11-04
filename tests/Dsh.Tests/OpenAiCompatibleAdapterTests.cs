@@ -94,6 +94,17 @@ public class OpenAiCompatibleAdapterTests
         Assert.Null(relay.ResolveModel("deepseek-flash").InputModalities);
     }
 
+    /** 上下文窗口是自动压缩的阈值来源: 目录里有 limit.context 就报出来, 中转站两路都命中不了则留未知。 */
+    [Fact]
+    public void ResolveModel_Reports_ModelsDev_ContextWindow()
+    {
+        var known = new OpenAiCompatibleAdapter("deepseek", "https://api.deepseek.com", "sk-test", metadataSource: new NoReasoningSource());
+        var relay = new OpenAiCompatibleAdapter("relay", "https://example.invalid/v1", "sk-test", metadataSource: new NoReasoningSource());
+
+        Assert.Equal(1_000_000, known.ResolveModel("deepseek-v4-flash").ContextWindow);
+        Assert.Null(relay.ResolveModel("deepseek-v4-flash").ContextWindow);
+    }
+
     [Fact]
     public async Task ChatCompletions_Relays_Tool_Result_Images_In_A_Following_User_Message()
     {

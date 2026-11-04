@@ -67,7 +67,7 @@ public sealed class SessionActions(FleetWorkspace fleet, HarnessHome home, Func<
             && active.Machine == session.Machine
             && active.SessionId == session.SessionId;
 
-    private Task<HostLease> LeaseAsync(string machine, CancellationToken cancellationToken)
+    private Task<WorkspaceHostLease> LeaseAsync(string machine, CancellationToken cancellationToken)
         => (fleet.Find(machine) ?? throw new InvalidOperationException($"no machine named \"{machine}\""))
             .WaitConnectedAsync(cancellationToken);
 }

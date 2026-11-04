@@ -10,7 +10,7 @@ public sealed partial class DecisionDialog : Window
 {
     private bool _closing;
 
-    /** XAML 编译器要求存在无参构造, 实际启动路径走下面的带参构造。 */
+    /** The XAML loader requires a parameterless constructor. */
     public DecisionDialog() => InitializeComponent();
 
     public DecisionDialog(DecisionViewModel decision) : this()
@@ -18,6 +18,11 @@ public sealed partial class DecisionDialog : Window
         Decision = decision;
         DataContext = decision;
         decision.Closed += OnDecisionClosed;
+        Opened += (_, _) =>
+        {
+            if (decision.IsClosed)
+                OnDecisionClosed(decision);
+        };
         AddHandler(KeyDownEvent, OnDecisionKeyDown, RoutingStrategies.Tunnel);
     }
 
@@ -27,9 +32,16 @@ public sealed partial class DecisionDialog : Window
     {
         if (!_closing && Decision is { } decision)
         {
-            _closing = true;
-            decision.Closed -= OnDecisionClosed;
-            decision.Resolve(null);
+            if (!decision.SupportsCancellation)
+            {
+                e.Cancel = true;
+            }
+            else
+            {
+                _closing = true;
+                decision.Closed -= OnDecisionClosed;
+                decision.Resolve(null);
+            }
         }
         base.OnClosing(e);
     }

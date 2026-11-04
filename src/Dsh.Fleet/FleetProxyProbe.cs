@@ -8,58 +8,12 @@ using Dsh.Transport;
 
 namespace Dsh.Fleet;
 
-public enum ProxyProbeLayer
-{
-    [JsonStringEnumMemberName("ssh")] Ssh,
-    [JsonStringEnumMemberName("local_outbound")] LocalOutbound,
-    [JsonStringEnumMemberName("remote_outbound")] RemoteOutbound,
-}
-
-public enum ProxyProbeOutcome
-{
-    Passed,
-    Failed,
-    Cancelled,
-    Unsupported,
-}
-
-public enum ProxyProbeStage
-{
-    [JsonStringEnumMemberName("configuration")] Configuration,
-    [JsonStringEnumMemberName("ssh")] Ssh,
-    [JsonStringEnumMemberName("proxy_connect")] ProxyConnect,
-    [JsonStringEnumMemberName("proxy_auth")] ProxyAuth,
-    [JsonStringEnumMemberName("http_target")] HttpTarget,
-    [JsonStringEnumMemberName("tunnel")] Tunnel,
-}
-
-public sealed record ProxyProbeResult(ProxyProbeLayer Layer, ProxyProbeOutcome Outcome, ProxyProbeStage Stage,
-    string Detail, int? HttpStatus, string Machine, string? Home, Guid OperationId)
-{
-    private const int InterruptedExitCode = 130;
-
-    public int ExitCode => Outcome switch
-    {
-        ProxyProbeOutcome.Passed => 0,
-        ProxyProbeOutcome.Cancelled => InterruptedExitCode,
-        _ => 1,
-    };
-
-    public string Label => Layer switch
-    {
-        ProxyProbeLayer.Ssh => "SSH 连接代理",
-        ProxyProbeLayer.LocalOutbound => "本机出口代理",
-        ProxyProbeLayer.RemoteOutbound => "远端服务器出口代理",
-        _ => throw new ArgumentOutOfRangeException(nameof(Layer)),
-    };
-}
-
 [JsonSourceGenerationOptions(UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ProxyProbeResult))]
 public partial class FleetProxyProbeJsonContext : JsonSerializerContext;
 
 /** User-triggered diagnostics reuse the existing SSH transport and local or target-Host HTTP probe. */
-public sealed class FleetProxyProbe(FleetOptions options)
+public sealed class FleetProxyProbe(FleetOptions options) : IWorkspaceProxyProbe
 {
     public static readonly TimeSpan SshTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan LocalTimeout = TimeSpan.FromSeconds(20);
@@ -78,7 +32,7 @@ public sealed class FleetProxyProbe(FleetOptions options)
         => RunAsync(new Operation(ProxyProbeLayer.LocalOutbound, MachineSpec.LocalName, home, operationId),
             (operation, token) => ProbeLocalCoreAsync(operation, settings, token), cancellationToken);
 
-    public Task<ProxyProbeResult> ProbeRemoteAsync(MachineConnection connection, RemoteOutboundProxyProbeRequest request,
+    public Task<ProxyProbeResult> ProbeRemoteAsync(IWorkspaceMachine connection, RemoteOutboundProxyProbeRequest request,
         Guid operationId, CancellationToken cancellationToken)
         => RunAsync(new Operation(ProxyProbeLayer.RemoteOutbound, connection.Machine.Name,
                 connection.Machine.HarnessHome, operationId, connection.Machine),
@@ -108,12 +62,12 @@ public sealed class FleetProxyProbe(FleetOptions options)
         operation.SetResult(result.Reachable ? ProxyProbeOutcome.Passed : ProxyProbeOutcome.Failed, result.Message, result.HttpStatus);
     }
 
-    private static async Task ProbeRemoteCoreAsync(Operation operation, MachineConnection connection,
+    private static async Task ProbeRemoteCoreAsync(Operation operation, IWorkspaceMachine connection,
         RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken)
     {
         operation.Stage = ProxyProbeStage.Ssh;
-        var result = await new FleetNetwork(connection, operation.BeginHttpProbe).ProbeOutboundAsync(
-            request with { OperationId = operation.OperationId }, cancellationToken).ConfigureAwait(false);
+        var result = await connection.Network.ProbeOutboundAsync(
+            request with { OperationId = operation.OperationId }, cancellationToken, operation.BeginHttpProbe).ConfigureAwait(false);
         if (result.Stage is null || result.HostHome is null || result.Reachable && result.HttpStatus is null)
             throw new NotSupportedException("The target Host does not provide structured proxy diagnostics; upgrade the target Host.");
         operation.Home = result.HostHome;

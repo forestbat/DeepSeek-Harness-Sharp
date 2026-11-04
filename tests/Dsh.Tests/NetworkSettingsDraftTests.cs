@@ -93,7 +93,7 @@ public sealed class NetworkSettingsDraftTests : IDisposable
         await using var gate = new SshAuthenticationGate();
         var machine = gate.Wrap(ssh.Machine("ssh-draft", _root));
         var store = Store(machine);
-        var vm = new MachinesViewModel(store, Options);
+        var vm = new MachinesViewModel(new FleetWorkspaceServices(store, Options));
         vm.Load(machine.Name);
         try
         {
@@ -119,7 +119,7 @@ public sealed class NetworkSettingsDraftTests : IDisposable
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var gate = new SshAuthenticationGate();
         var machine = gate.Wrap(ssh.Machine("ssh-editor", _root));
-        var vm = new MachinesViewModel(Store(machine), Options);
+        var vm = new MachinesViewModel(new FleetWorkspaceServices(Store(machine), Options));
         vm.Load(machine.Name);
         try
         {
@@ -219,7 +219,7 @@ public sealed class NetworkSettingsDraftTests : IDisposable
 
     private async Task<MachinesViewModel> CreateViewModelAsync(MachineSpec machine, FleetClient fleet)
     {
-        var vm = new MachinesViewModel(Store(machine), Options);
+        var vm = new MachinesViewModel(new FleetWorkspaceServices(Store(machine), Options));
         vm.Load(machine.Name);
         vm.AttachFleet(fleet);
         await vm.WaitForNetworkOperationsAsync().WaitAsync(CompletionTimeout, Ct);

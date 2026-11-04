@@ -173,6 +173,35 @@ public class PtyDaemonTests(ITestOutputHelper output)
         return text.ToString();
     }
 
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConsoleSnapshot_RestoresOwnedMouseInputWithoutChangingTheChild(bool wantsMouse)
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Uses a POSIX PTY child.");
+        const int columns = 80;
+        const int rows = 24;
+        using var host = new PtyHost();
+        var session = await host.StartAsync(new PtyStartInfo
+        {
+            FileName = "/bin/sh",
+            Arguments = ["-c", """printf '\033[?1006l\033[?1003l\033[?1002l\033[?1000lATTACH-READY\n'; read hold"""],
+            Columns = columns,
+            Rows = rows,
+            WantsMouse = wantsMouse,
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("ATTACH-READY", await ReadUntilAsync(session, "ATTACH-READY", ReadReleaseTimeout));
+        var terminal = new VtScreen(columns, rows);
+        terminal.Feed(session.ConsoleSnapshot());
+        Assert.Equal(wantsMouse, terminal.SgrMouse);
+        Assert.Equal(wantsMouse, terminal.MouseTracking != TerminalMouseTracking.None);
+        var child = new VtScreen(columns, rows);
+        child.Feed(session.Snapshot());
+        Assert.False(child.SgrMouse);
+        Assert.Equal(TerminalMouseTracking.None, child.MouseTracking);
+    }
+
     [Fact(Timeout = 5000)]
     public async Task Attach_RelaysSessionInputAndOutput()
     {

@@ -200,12 +200,8 @@ public static class PtyDaemonClient
 
         using var raw = PtyRawMode.TryEnable();
 
-        // 只有吃鼠标的会话(常驻 TUI)才打开宿主终端上报: 会话启动时写的开启序列早于本次 attach, 已被
-        // daemon 排空(见 DrainPendingOutput), 终端不收到它就永远不会上报。
-        // 别的会话(如 shell pane)必须保持关闭 —— Unix 上代理是原样透传字节, 上报会直接敲进 shell 的命令行。
-        var wantsMouse = response.Session?.WantsMouse == true;
-        var initialMode = wantsMouse ? PtyConsoleBridge.MouseEnableSequence : PtyConsoleBridge.MouseDisableSequence;
-        await output.WriteAsync(Encoding.UTF8.GetBytes(initialMode), cancellationToken);
+        // Reset client-owned mouse state before the daemon restores the attachment's input modes.
+        await output.WriteAsync(Encoding.UTF8.GetBytes(PtyConsoleBridge.MouseDisableSequence), cancellationToken);
         await output.FlushAsync(cancellationToken);
 
         try

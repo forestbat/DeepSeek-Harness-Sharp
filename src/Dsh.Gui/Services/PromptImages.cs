@@ -17,7 +17,7 @@ public static partial class PromptImages
     public static partial Regex PathPattern();
 
     public static async Task<(string Text, IReadOnlyList<RemoteImageBlock> Images)> ExtractRemoteAsync(
-        RemoteFilesClient files, string cwd, RemotePathStyle style, string text, CancellationToken cancellationToken)
+        IWorkspaceFiles files, string cwd, RemotePathStyle style, string text, CancellationToken cancellationToken)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var images = new List<RemoteImageBlock>();
@@ -35,7 +35,7 @@ public static partial class PromptImages
 
     /** Attaches the readable image (media type by extension) and returns whether it was added. */
     private static async Task<bool> TryAddAsync(
-        RemoteFilesClient files, string path, RemotePathStyle style, HashSet<string> seen, List<RemoteImageBlock> images, CancellationToken cancellationToken)
+        IWorkspaceFiles files, string path, RemotePathStyle style, HashSet<string> seen, List<RemoteImageBlock> images, CancellationToken cancellationToken)
     {
         if (ImageAttachments.MediaTypeForExtension(RemotePaths.Extension(path, style)) is not { } mediaType || !seen.Add(path))
             return false;

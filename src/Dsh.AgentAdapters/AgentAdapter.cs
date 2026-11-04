@@ -1,19 +1,5 @@
 namespace Dsh.AgentAdapters;
 
-/** Stable identifiers of agent adapters; they travel in session records, so never rename them. */
-public static class AgentKinds
-{
-    public const string Codex = "codex";
-    public const string ClaudeCode = "claude-code";
-    public const string OpenCode = "opencode";
-
-    /** Any agent that speaks ACP over stdio, launched with a user-supplied command. */
-    public const string Acp = "acp";
-
-    /** Unknown agent: a user-supplied command run as a raw terminal session. */
-    public const string Terminal = "terminal";
-}
-
 /** An executable plus its arguments; the working directory is always set on the process, never passed as an argument. */
 public sealed record AgentCommand(string Executable, IReadOnlyList<string> Arguments)
 {

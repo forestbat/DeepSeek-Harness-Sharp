@@ -16,6 +16,7 @@ using Dsh.Transport;
 using Dsh.Core;
 using Dsh.Persistence;
 using Dsh.RemoteHost;
+using Dsh.Workspace;
 using Dsh.Web;
 using Dsh.Llm;
 using System.Diagnostics;
@@ -1697,18 +1698,10 @@ internal static class NetworkGuiObservation
     /** Observes the production client's completed disposal, including its outbound lease; never initiates disposal. */
     private sealed class FleetReloadObservation : IDisposable
     {
-        private const System.Reflection.BindingFlags PrivateInstance =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        private static readonly System.Reflection.EventInfo DisposedEvent =
-            typeof(FleetClient).GetEvent("Disposed", PrivateInstance)
-            ?? throw new MissingMemberException(nameof(FleetClient), "Disposed");
-        private static readonly System.Reflection.FieldInfo DisposalTask =
-            typeof(FleetClient).GetField("_disposeTask", PrivateInstance)
-            ?? throw new MissingFieldException(nameof(FleetClient), "_disposeTask");
         private readonly TaskCompletionSource _swapped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _retired = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private FleetWorkspace? _workspace;
-        private FleetClient? _previous;
+        private IWorkspaceClient? _previous;
 
         public void Arm(FleetWorkspace workspace)
         {
@@ -1717,7 +1710,7 @@ internal static class NetworkGuiObservation
             _workspace = workspace;
             _previous = workspace.Client;
             workspace.Changed += OnChanged;
-            DisposedEvent.GetAddMethod(nonPublic: true)!.Invoke(_previous, [new Action<FleetClient>(OnDisposed)]);
+            _ = ObserveDisposalAsync(_previous);
         }
 
         private void OnChanged()
@@ -1726,23 +1719,17 @@ internal static class NetworkGuiObservation
                 _swapped.TrySetResult();
         }
 
-        private void OnDisposed(FleetClient previous)
+        private async Task ObserveDisposalAsync(IWorkspaceClient previous)
         {
-            // The event is in DisposeMachinesAsync's finally. Its task becomes completed only after that finally returns.
-            Dispatcher.UIThread.Post(async () =>
+            try
             {
-                try
-                {
-                    var completion = DisposalTask.GetValue(previous) as Task
-                        ?? throw new InvalidOperationException("The production client has no disposal completion task.");
-                    await completion;
-                    _retired.TrySetResult();
-                }
-                catch (Exception error)
-                {
-                    _retired.TrySetException(error);
-                }
-            });
+                await previous.WhenDisposed.ConfigureAwait(false);
+                _retired.TrySetResult();
+            }
+            catch (Exception error)
+            {
+                _retired.TrySetException(error);
+            }
         }
 
         public Task WaitAsync(CancellationToken token) => Task.WhenAll(_swapped.Task, _retired.Task).WaitAsync(token);
@@ -1757,8 +1744,6 @@ internal static class NetworkGuiObservation
         {
             if (_workspace is not null)
                 _workspace.Changed -= OnChanged;
-            if (_previous is not null)
-                DisposedEvent.GetRemoveMethod(nonPublic: true)!.Invoke(_previous, [new Action<FleetClient>(OnDisposed)]);
             _workspace = null;
             _previous = null;
         }

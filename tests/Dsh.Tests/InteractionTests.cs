@@ -139,6 +139,32 @@ public class InteractionTests
         }
 
         [Fact]
+        public async Task AlwaysGrant_DoesNotCrossForkBoundary_ButSurvivesSameSessionResume()
+        {
+            using var harness = new Harness();
+            var approval = ApprovalService.Register(harness.Ctx);
+            harness.Ctx.OnWaterfall<ApprovalRequestNotification>(
+                (_, _) => ValueTask.FromResult<object?>(ApprovalOutcome.AllowedForSession),
+                new EventOptions { Global = true });
+            var agent = CreateAgent(harness);
+            Assert.Equal(ApprovalOutcome.AllowedForSession,
+                await approval.Request(new(agent, "bash", ToolCallId.Create("grant-original")), TestContext.Current.CancellationToken));
+            agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+            var seed = agent.Session.SnapshotEvents();
+            var forkId = SessionId.Create($"fork-{Guid.NewGuid():N}");
+            var fork = Session.Create(forkId, seed,
+                agent.Session.Header with { Id = forkId, ParentSession = agent.Id, IsSeeded = true }, seed.Count);
+            Assert.True(ApprovalService.HasGrant(agent.Session, "bash"));
+            Assert.False(ApprovalService.HasGrant(fork, "bash"));
+            var resumed = Session.FromRestore(agent.Id, seed, agent.Session.Header, agent.Session.InheritedEventCount);
+            Assert.True(ApprovalService.HasGrant(resumed, "bash"));
+            fork.Append(new TurnStartPayload(2));
+            fork.Append(new ApprovalGrantedPayload("bash"));
+            var resumedFork = Session.FromRestore(fork.Id, fork.SnapshotEvents(), fork.Header, fork.InheritedEventCount);
+            Assert.True(ApprovalService.HasGrant(resumedFork, "bash"));
+        }
+
+        [Fact]
         public async Task NoAnswerer_Fails_Closed_Unavailable()
         {
             using var harness = new Harness();

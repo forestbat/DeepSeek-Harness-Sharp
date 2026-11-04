@@ -1,16 +1,20 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Dsh.Interaction;
 using Dsh.Llm;
 
 namespace Dsh.Gui.ViewModels;
 
 /**
- * 底部状态行的统计: 轮/步、LLM 耗时、首 token 延迟、tok/s、缓存命中与累计 token。
+ * 底部状态行的统计: 上下文占用、轮/步、LLM 耗时、首 token 延迟、tok/s、缓存命中与累计 token。
  * The clock is injectable so elapsed-time rules can be checked without depending on how fast the machine runs.
  */
 public sealed partial class TokenStatsViewModel(TimeProvider clock) : ObservableObject
 {
     public const string Empty = "—";
     private const double MinimumMeasurableSeconds = 0.1;
+
+    /** 上下文占用(最近一次请求的提示词 vs 模型窗口), 与累计统计分开维护。 */
+    private readonly ContextUsage _context = new();
 
     /** Start timestamp of the running request; null when no request is being timed. */
     private long? _requestStartedAt;
@@ -20,6 +24,9 @@ public sealed partial class TokenStatsViewModel(TimeProvider clock) : Observable
     private double _inputTokens;
     private double _outputTokens;
     private double _cacheReadTokens;
+
+    [ObservableProperty]
+    private string _contextText = Empty;
 
     [ObservableProperty]
     private string _rounds = Empty;
@@ -55,12 +62,21 @@ public sealed partial class TokenStatsViewModel(TimeProvider clock) : Observable
         _requestStartedAt = null;
         _finishedElapsed = TimeSpan.Zero;
         _firstTokenSeen = false;
+        _context.Reset();
+        ContextText = Empty;
         Rounds = Empty;
         Latency = Empty;
         FirstToken = Empty;
         TokensPerSecond = Empty;
         Cache = Empty;
         Totals = Empty;
+    }
+
+    /** 请求上下文到达: 记录当前模型窗口容量, 供上下文占用显示分母。 */
+    public void ObserveRequestContext(int? contextWindow)
+    {
+        _context.ObserveRequest(contextWindow);
+        ContextText = _context.Label;
     }
 
     public void ObserveTurn(int turn, int step)
@@ -97,10 +113,13 @@ public sealed partial class TokenStatsViewModel(TimeProvider clock) : Observable
         var total = usage.InputTokens + usage.OutputTokens;
         if (total <= 0)
             return;
+        // 上下文占用只认最近一次请求的提示词, 与下面的累计统计是两回事。
+        _context.ObserveUsage(usage);
+        ContextText = _context.Label;
         _inputTokens += usage.InputTokens;
         _outputTokens += usage.OutputTokens;
         _cacheReadTokens += usage.CacheReadTokens ?? 0;
-        Totals = $"in {Compact(_inputTokens)} / out {Compact(_outputTokens)}";
+        Totals = $"in {TokenText.Compact(_inputTokens)} / out {TokenText.Compact(_outputTokens)}";
         Cache = _inputTokens > 0
             ? $"缓存命中 {_cacheReadTokens / _inputTokens * 100:0}%"
             : Empty;
@@ -109,11 +128,4 @@ public sealed partial class TokenStatsViewModel(TimeProvider clock) : Observable
         if (usage.OutputTokens > 0 && seconds >= MinimumMeasurableSeconds)
             TokensPerSecond = $"{usage.OutputTokens / seconds:0.0} tok/s";
     }
-
-    private static string Compact(double value) => value switch
-    {
-        >= 1_000_000 => $"{value / 1_000_000:0.0}M",
-        >= 1_000 => $"{value / 1_000:0.0}k",
-        _ => value.ToString("0"),
-    };
 }

@@ -6,6 +6,7 @@
     Shared capability library without a plugin entry; command lines are verified against each installed CLI and its vendor documentation.
   -->
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Acp\Dsh.Acp.csproj" />
   </ItemGroup>
 

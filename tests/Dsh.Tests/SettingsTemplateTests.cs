@@ -2,10 +2,7 @@ using Dsh.Boot;
 
 namespace Dsh.Tests;
 
-/**
- * settings.yaml 模板与配置面同步门禁: 任何"加了配置项/改了插件参数"的改动若没同步模板, 这里就会红。
- * 修复: dsharp config schema --write-template --path src/Dsh.Boot/Profiles/Templates/settings.yaml
- */
+/** settings.yaml 生成块由 schema 维护, 键上方的说明注释由人工维护并在 --write-template 时保留。 */
 [Collection(RegistryCollection)]
 public sealed class SettingsTemplateTests
 {
@@ -14,19 +11,41 @@ public sealed class SettingsTemplateTests
 
     /** 随包发布的输出副本(AppContext.BaseDirectory/Profiles/Templates/settings.yaml)。 */
     [Fact]
-    public void Output_Template_Is_In_Sync_With_Schema()
+    public void Output_Template_Has_Generated_Block()
     {
-        Assert.Null(SettingsTemplate.Verify(SettingsTemplate.DefaultPath));
+        AssertTemplate(SettingsTemplate.DefaultPath);
     }
 
-    /** 源码模板(用户克隆仓库时看到的那份): 与生成块一致, 免得只在发布产物上同步。 */
+    /** 源码模板(用户克隆仓库时看到的那份)。 */
     [Fact]
-    public void Source_Template_Is_In_Sync_With_Schema()
+    public void Source_Template_Has_Generated_Block()
     {
-        var path = SourceTemplatePath();
-        Assert.Null(SettingsTemplate.Verify(path));
+        AssertTemplate(SourceTemplatePath());
     }
 
+    [Fact]
+    public void Write_Preserves_Manual_Comments()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "settings-comment-test.yaml");
+        File.Copy(SourceTemplatePath(), path, true);
+        const string sentinel = "# sentinel: keep this comment";
+        var text = File.ReadAllText(path);
+        text = text.Replace("# global_default_model:", sentinel + Environment.NewLine + "# global_default_model:", StringComparison.Ordinal);
+        File.WriteAllText(path, text);
+        _ = SettingsTemplate.Write(path);
+        var saved = File.ReadAllText(path);
+        Assert.Contains(sentinel, saved);
+        Assert.DoesNotContain("# 映射(见子项)", saved);
+    }
+
+    private static void AssertTemplate(string path)
+    {
+        Assert.True(File.Exists(path), path);
+        var text = File.ReadAllText(path);
+        Assert.Contains("# >>> generated", text);
+        Assert.Contains("# <<< generated", text);
+        Assert.DoesNotContain("# 映射(见子项)", text);
+    }
 
     private static string SourceTemplatePath()
     {

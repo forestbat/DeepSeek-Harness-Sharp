@@ -6,7 +6,7 @@ using Dsh.Transport;
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Notifications domain. */
-public sealed class RemoteNotificationsClient
+public sealed class RemoteNotificationsClient : IWorkspaceNotifications
 {
     private readonly RemoteHostClient _host;
 

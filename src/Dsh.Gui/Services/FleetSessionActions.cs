@@ -1,4 +1,4 @@
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.Services;
@@ -9,10 +9,10 @@ namespace Dsh.Gui.Services;
  */
 public sealed class FleetSessionActions(FleetWorkspace fleet)
 {
-    public async Task<HostLease> LeaseAsync(string machine, CancellationToken cancellationToken)
+    public async Task<WorkspaceHostLease> LeaseAsync(string machine, CancellationToken cancellationToken)
         => await Connection(machine).WaitConnectedAsync(cancellationToken);
 
-    private MachineConnection Connection(string machine)
+    private IWorkspaceMachine Connection(string machine)
         => fleet.Find(machine) ?? throw new InvalidOperationException($"no machine named \"{machine}\"");
 
     /** Harness sessions release their agent, terminals and external agents end their process, ACP agents end their adapter. */

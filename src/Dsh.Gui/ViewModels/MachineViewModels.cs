@@ -1,7 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Runtime;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.ViewModels;
@@ -235,7 +235,7 @@ public sealed partial class MachineEditorViewModel(bool allowIroh = false) : Obs
         return editor;
     }
 
-    /** 表单 → 机器记录; 字段不完整时抛 ArgumentException(名称规则由 MachineStore 保存时再校验)。 */
+    /** Convert the form to a machine specification; the catalog validates persisted name rules. */
     public MachineSpec ToSpec()
     {
         var name = Name.Trim();

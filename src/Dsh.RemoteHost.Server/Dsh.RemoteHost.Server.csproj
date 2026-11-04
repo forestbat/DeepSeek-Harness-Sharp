@@ -14,6 +14,7 @@
     <ProjectReference Include="..\Dsh.Pty\Dsh.Pty.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Ide\Dsh.Ide.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
   </ItemGroup>

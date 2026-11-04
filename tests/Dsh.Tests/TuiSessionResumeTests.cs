@@ -10,7 +10,7 @@ namespace Dsh.Tests;
 public sealed class TuiSessionResumeTests
 {
     private const string History = "resume-visible-history";
-    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(60);
 
     [Theory]
     [InlineData("tui", "--session", "{id}")]

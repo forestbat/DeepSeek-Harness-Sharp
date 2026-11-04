@@ -8,8 +8,10 @@ namespace Dsh.Fleet;
  * Reading never creates settings.yaml; saving rewrites only the fleet section and keeps comments, the other sections and the file's line endings.
  * Only settings.yaml is read or written; configurations from experimental layouts must be added explicitly.
  */
-public sealed class MachineStore(HarnessHome home)
+public sealed class MachineStore(HarnessHome home) : IMachineCatalog
 {
+    void IMachineCatalog.Validate(IReadOnlyList<MachineSpec> machines) => Validate(machines);
+
     public string FilePath => home.SettingsFile;
 
     public FleetConfig Load()

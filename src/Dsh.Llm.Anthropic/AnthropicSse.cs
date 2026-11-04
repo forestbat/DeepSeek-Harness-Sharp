@@ -231,10 +231,11 @@ internal static class AnthropicSse
         static double? Read(JsonElement element, string name)
             => element.TryGetProperty(name, out var property) ? property.GetDouble() : null;
 
-        var input = Read(usage, "input_tokens") ?? 0;
-        var output = Read(usage, "output_tokens") ?? 0;
+        // Anthropic 的 input_tokens 只算未命中缓存的部分, 缓存读写分开报; 契约是"完整提示词", 所以三者相加。
         var cacheRead = Read(usage, "cache_read_input_tokens");
         var cacheWrite = Read(usage, "cache_creation_input_tokens");
+        var input = (Read(usage, "input_tokens") ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+        var output = Read(usage, "output_tokens") ?? 0;
         double? total = input is not 0 || output is not 0 ? input + output : null;
 
         return new TokenUsage(input, output, total, cacheRead, cacheWrite);

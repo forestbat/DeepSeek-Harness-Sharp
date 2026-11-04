@@ -5,7 +5,7 @@ using Dsh.Transport;
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Files domain. */
-public sealed class RemoteFilesClient
+public sealed class RemoteFilesClient : IWorkspaceFiles
 {
     private readonly RemoteHostClient _host;
 

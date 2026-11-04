@@ -4,7 +4,7 @@ using Dsh.Runtime;
 namespace Dsh.Fleet;
 
 /** Plugin-lifetime owner of frontend clients and this Context's outbound route, never target Host sessions. */
-public sealed class FleetService : IDisposable
+public sealed class FleetService : IDisposable, IWorkspaceProvider
 {
     public const string ServiceName = "fleet";
 
@@ -39,6 +39,20 @@ public sealed class FleetService : IDisposable
     public static ISshTransportAdapter? DefaultSshTransportAdapter { get; set; }
 
     public ISshTransportAdapter? SshTransportAdapter => _adapter ?? DefaultSshTransportAdapter;
+
+    public IWorkspaceServices Create(HarnessHome home, string clientName, Func<string, CancellationToken, Task>? startLocalHost = null)
+    {
+        var options = new FleetOptions
+        {
+            ClientName = clientName,
+            LocalHome = Home,
+            LocalProxy = OutboundRoute.Proxy,
+            AcquireOutboundRoute = OutboundRoute.AcquireAsync,
+            SshTransportAdapter = SshTransportAdapter,
+            StartLocalHost = startLocalHost is null ? null : (machine, token) => startLocalHost(machine.HarnessHome ?? home.Root, token),
+        };
+        return new FleetWorkspaceServices(Store, options, () => CreateClient(options), OutboundRoute);
+    }
 
     public FleetClient CreateClient(FleetOptions options)
     {

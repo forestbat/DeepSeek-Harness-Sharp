@@ -8,11 +8,11 @@
     <Border Classes="Msg" Classes.user="{Binding IsUser}" HorizontalAlignment="{Binding Align}">
       <StackPanel Spacing="3">
         <TextBlock Text="{Binding Role}" Classes="Tertiary" IsVisible="{Binding HasRole}" />
-        <TextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
+        <SelectableTextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
         <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding ShowMarkdown}" />
-        <TextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
-        <TextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
-                   FontFamily="{DynamicResource Font.Mono}" />
+        <SelectableTextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
+        <SelectableTextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
+                             FontFamily="{DynamicResource Font.Mono}" />
       </StackPanel>
     </Border>
   </DataTemplate>

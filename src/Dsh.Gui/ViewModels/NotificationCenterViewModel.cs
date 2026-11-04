@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Gui.Services;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
@@ -97,6 +97,8 @@ public sealed partial class NotificationCenterViewModel : ObservableObject, IDis
     {
         _fleet.Changed -= OnFleetChanged;
         _fleet.NotificationsChanged -= OnNotificationsChanged;
+        foreach (var pending in _pending.Values)
+            pending.Invalidate();
     }
 
     partial void OnUnreadTotalChanged(int value)
@@ -176,14 +178,14 @@ public sealed partial class NotificationCenterViewModel : ObservableObject, IDis
         }
     }
 
-    private void ReplaceHistory(MachineConnection machine)
+    private void ReplaceHistory(IWorkspaceMachine machine)
     {
         _all.RemoveAll(item => item.Machine == machine.Machine.Name);
         if (machine.Notifications is { } page)
             _all.AddRange(page.Items.Select(record => Describe(new NotificationItemViewModel(machine.Machine.Name, record))));
     }
 
-    private void OnNotificationsChanged(MachineConnection machine, RemoteNotificationChange? change)
+    private void OnNotificationsChanged(IWorkspaceMachine machine, RemoteNotificationChange? change)
     {
         ReplaceHistory(machine);
         RefreshAll();
@@ -217,10 +219,14 @@ public sealed partial class NotificationCenterViewModel : ObservableObject, IDis
             if (!_pending.TryGetValue(key, out var pending))
                 _pending[key] = pending = CreatePending(item);
             pending.SessionTitle = _sessionTitle(item.Machine, item.SessionId) ?? item.SessionId;
+            pending.RefreshCapabilities();
             current.Add(pending);
         }
         foreach (var gone in _pending.Keys.Except(current.Select(item => (item.Machine, item.RequestId))).ToList())
+        {
+            _pending[gone].Invalidate();
             _pending.Remove(gone);
+        }
         CollectionSync.Sync(Pending, current);
         OnPropertyChanged(nameof(HasPending));
     }

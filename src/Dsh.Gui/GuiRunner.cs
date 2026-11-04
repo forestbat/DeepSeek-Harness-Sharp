@@ -9,7 +9,7 @@ namespace Dsh.Gui;
 
 public static class GuiRunner
 {
-    /** startLocalHost launches `host serve` for this computer's machine when its host is not running yet (see FleetOptions.StartLocalHost). */
+    /** startLocalHost launches the local Host on demand; the configured workspace provider owns its connections. */
     public static async Task<int> Run(
         HarnessApp app,
         string cwd,

@@ -1,3 +1,4 @@
+using Dsh.RemoteHost;
 using Dsh.AgentAdapters;
 
 namespace Dsh.Tests;
@@ -24,8 +25,10 @@ public sealed class AgentAdapterTests
         Assert.Equal(["--continue"], AgentAdapterCatalog.ClaudeCode.ResumeCommand()!.Arguments);
         Assert.Equal(["--prompt", "fix the tests"], AgentAdapterCatalog.OpenCode.InteractiveCommand("fix the tests")!.Arguments);
         Assert.Equal(["--session", "ses_1"], AgentAdapterCatalog.OpenCode.ResumeCommand("ses_1")!.Arguments);
-        Assert.Equal(new AgentCommand("opencode", ["acp"]), AgentAdapterCatalog.OpenCode.Acp);
-        Assert.Empty(AgentAdapterCatalog.OpenCode.InteractiveCommand()!.Arguments);
+        var prompt = "fix the tests\n--session is prompt text, not an option";
+        Assert.Equal(["--prompt", prompt], AgentAdapterCatalog.KiloCode.InteractiveCommand(prompt)!.Arguments);
+        Assert.Equal(["--session", "ses_kilo"], AgentAdapterCatalog.KiloCode.ResumeCommand("ses_kilo")!.Arguments);
+        Assert.Equal(["--continue"], AgentAdapterCatalog.KiloCode.ResumeCommand()!.Arguments);
     }
 
     [Fact]
@@ -45,13 +48,16 @@ public sealed class AgentAdapterTests
         Assert.Null(AgentExecutableLocator.Resolve(Path.Combine(AppContext.BaseDirectory, "missing", "agent")));
     }
 
-    [Fact]
-    public async Task Locator_ProbesInstalledAgentVersion()
+    [Theory]
+    [InlineData(AgentKinds.OpenCode)]
+    [InlineData(AgentKinds.KiloCode)]
+    public async Task Locator_ProbesInstalledAgentVersion(string agentKind)
     {
-        if (AgentExecutableLocator.Resolve("opencode") is null)
-            Assert.Skip("opencode is not installed on this machine");
+        var adapter = Assert.IsType<AgentAdapter>(AgentAdapterCatalog.Find(agentKind));
+        if (AgentExecutableLocator.Resolve(adapter.Interactive!.Executable) is null)
+            Assert.Skip($"{adapter.DisplayName} is not installed on this machine");
 
-        var availability = await AgentExecutableLocator.ProbeAsync(AgentAdapterCatalog.OpenCode, TestContext.Current.CancellationToken);
+        var availability = await AgentExecutableLocator.ProbeAsync(adapter, TestContext.Current.CancellationToken);
 
         Assert.True(availability.CanRunInteractive && availability.CanRunAcp);
         Assert.Matches(@"^\d+\.\d+", availability.Version);

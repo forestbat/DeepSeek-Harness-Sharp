@@ -736,7 +736,7 @@ internal sealed record FleetCliContext(
     private static Task StartLocalHostAsync(MachineSpec machine, CancellationToken cancellationToken)
         => HostAutostart.EnsureRunningAsync(HarnessHome.Resolve(machine.HarnessHome), token: null, cancellationToken);
 
-    private static void ReportDeployment(MachineConnection machine)
+    private static void ReportDeployment(IWorkspaceMachine machine)
     {
         if (machine.State == MachineConnectionState.Deploying && machine.Detail is { } step)
             Console.Error.WriteLine($"{machine.Machine.Name}: {step}");

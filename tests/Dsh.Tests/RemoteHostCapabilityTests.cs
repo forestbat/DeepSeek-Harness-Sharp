@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading.Channels;
 using System.Text.Json;
+using System.Threading.Channels;
 using Dsh.Boot;
 using Dsh.Runtime;
 using Dsh.Core;
@@ -83,7 +83,7 @@ public sealed class RemoteHostCapabilityTests
             }
         }, Ct);
 
-        var decision = backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("req-1", "session-1", "bash", null, "allow?"));
+        var decision = backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("req-1", "session-1", "bash", null, "allow?"), cancellationToken: Ct);
         var approval = await received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         Assert.True(await fixture.Client.RespondApprovalAsync(approval.RequestId, true, "ok", Ct));
         Assert.True((await decision.WaitAsync(TimeSpan.FromSeconds(5), Ct))?.Allow);
@@ -136,7 +136,7 @@ public sealed class RemoteHostCapabilityTests
         }, Ct);
 
         var answer = backend.Pending.AskQuestionAsync(new RemoteQuestionRequest("q-1", "session-1",
-        [new RemoteQuestionItem("q1", "pick?", null, null, [new RemoteQuestionOption("A", null)], false, null)]));
+            [new RemoteQuestionItem("q1", "pick?", null, null, [new RemoteQuestionOption("A", null)], false, null)]), cancellationToken: TestContext.Current.CancellationToken);
         var question = await received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         Assert.True(await fixture.Client.RespondQuestionAsync(question.RequestId, [new RemoteQuestionAnswerItem("q1", ["A"], null)], Ct));
         Assert.Equal(["A"], (await answer.WaitAsync(TimeSpan.FromSeconds(5), Ct))!.Answers[0].Selected);
@@ -148,6 +148,47 @@ public sealed class RemoteHostCapabilityTests
         catch (OperationCanceledException)
         {
         }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task GenericApprovalCancellationKeepsOldHostPendingUntilOrdinaryReject()
+    {
+        await using var backend = await FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
+        await using var origin = await HostFixture.CreateAsync(backend, TestContext.Current.CancellationToken);
+        await using var fixture = await MissingDecisionCapabilityRelay.CreateAsync(origin.Client, TestContext.Current.CancellationToken);
+        Assert.False(fixture.Client.Supports(DecisionProtocol.Capability));
+        var waiting = backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("legacy-approval", "session-1", "bash", null, "Approve?"), cancellationToken: Ct);
+        var parameters = JsonSerializer.SerializeToElement(
+            new RemoteApprovalResponse("legacy-approval", false, null, Cancelled: true),
+            HostProtocolJsonContext.Default.RemoteApprovalResponse);
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.RequestAsync(HostProtocol.MethodApprovalRespond, parameters, Ct));
+        Assert.False(waiting.IsCompleted);
+        Assert.Contains((await fixture.Client.ListPendingAsync(Ct)).Approvals, request => request.RequestId == "legacy-approval");
+        Assert.True(await fixture.Client.RespondApprovalAsync("legacy-approval", false, cancellationToken: Ct));
+        var result = Assert.IsType<RemoteApprovalResponse>(await waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+        Assert.False(result.Allow);
+        Assert.False(result.Cancelled);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task GenericQuestionDismissalKeepsOldHostPendingUntilOrdinaryAnswer()
+    {
+        await using var backend = await FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
+        await using var origin = await HostFixture.CreateAsync(backend, TestContext.Current.CancellationToken);
+        await using var fixture = await MissingDecisionCapabilityRelay.CreateAsync(origin.Client, TestContext.Current.CancellationToken);
+        Assert.False(fixture.Client.Supports(DecisionProtocol.Capability));
+        var waiting = backend.Pending.AskQuestionAsync(new RemoteQuestionRequest("legacy-question", "session-1",
+            [new RemoteQuestionItem("choice", "Choose.", null, null, [new RemoteQuestionOption("A", null), new RemoteQuestionOption("B", null)], false, null)]), cancellationToken: TestContext.Current.CancellationToken);
+        var parameters = JsonSerializer.SerializeToElement(
+            new RemoteQuestionResponse("legacy-question", [], "dismissed", "user_cancelled"),
+            HostProtocolJsonContext.Default.RemoteQuestionResponse);
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.RequestAsync(HostProtocol.MethodQuestionRespond, parameters, Ct));
+        Assert.False(waiting.IsCompleted);
+        Assert.Contains((await fixture.Client.ListPendingAsync(Ct)).Questions, request => request.RequestId == "legacy-question");
+        Assert.True(await fixture.Client.RespondQuestionAsync("legacy-question", [new RemoteQuestionAnswerItem("choice", ["B"], null)], Ct));
+        var result = Assert.IsType<RemoteQuestionResponse>(await waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+        Assert.Equal("answered", result.Status);
+        Assert.Equal(["B"], Assert.Single(result.Answers).Selected);
     }
 
     [Theory(Timeout = 5000)]
@@ -183,7 +224,6 @@ public sealed class RemoteHostCapabilityTests
         }
         else
         {
-            Assert.Equal(2, info.Capabilities!.Count);
             var denied = await Assert.ThrowsAsync<JsonRpcException>(() => client.Files.WriteFileAsync(file, "denied"u8.ToArray(), Ct));
             Assert.Equal(JsonRpcPeer.MethodNotFound, denied.Code);
             Assert.False(File.Exists(file));
@@ -433,6 +473,40 @@ public sealed class RemoteHostCapabilityTests
             Pending.Dispose();
             await Sessions.DisposeAsync();
             TempTree.Delete(_directory);
+        }
+    }
+
+    private sealed class MissingDecisionCapabilityRelay(TcpClient socket, TcpClient serverSocket, JsonRpcPeer peer, RemoteHostClient client) : IAsyncDisposable
+    {
+        public RemoteHostClient Client { get; } = client;
+
+        public static async Task<MissingDecisionCapabilityRelay> CreateAsync(RemoteHostClient upstream, CancellationToken cancellationToken)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var accept = listener.AcceptTcpClientAsync(cancellationToken);
+            var socket = new TcpClient();
+            await socket.ConnectAsync(IPAddress.Loopback, port, cancellationToken);
+            var serverSocket = await accept;
+            listener.Stop();
+            var hello = upstream.Hello with { Capabilities = upstream.Hello.Capabilities?.Where(capability => capability != DecisionProtocol.Capability).ToArray() };
+            var peer = new JsonRpcPeer(serverSocket.GetStream());
+            // Only handshake metadata is downgraded; the real Host server handles every decision.
+            peer.RequestHandler = async (request, token) => request.Method == HostProtocol.MethodHello
+                ? JsonSerializer.SerializeToElement(hello, HostProtocolJsonContext.Default.HostHelloResponse)
+                : await upstream.RequestAsync(request.Method!, request.Params, token);
+            peer.Start();
+            var client = await RemoteHostClient.ConnectAsync(socket.GetStream(), cancellationToken: cancellationToken);
+            return new MissingDecisionCapabilityRelay(socket, serverSocket, peer, client);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Client.DisposeAsync();
+            await peer.DisposeAsync();
+            socket.Dispose();
+            serverSocket.Dispose();
         }
     }
 

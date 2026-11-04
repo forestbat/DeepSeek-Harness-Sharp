@@ -29,12 +29,19 @@ public static class OwnerOnlyFiles
         File.SetUnixFileMode(path, OwnerAll);
     }
 
+    /** Atomically creates an owner-only file; an existing path is never replaced. */
+    public static FileStream Create(string path)
+        => OperatingSystem.IsWindows() ? CreateWindows(path) : CreateUnix(path);
+
     /** Writes a new owner-only file, replacing whatever was at the path. */
     public static void Write(string path, string contents)
+        => Write(path, Encoding.UTF8.GetBytes(contents));
+
+    public static void Write(string path, ReadOnlySpan<byte> contents)
     {
         File.Delete(path);
-        using var stream = OperatingSystem.IsWindows() ? CreateWindows(path) : CreateUnix(path);
-        stream.Write(Encoding.UTF8.GetBytes(contents));
+        using var stream = Create(path);
+        stream.Write(contents);
     }
 
     /**

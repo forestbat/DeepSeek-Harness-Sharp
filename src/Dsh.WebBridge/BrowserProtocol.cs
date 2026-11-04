@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Dsh.Core;
 using Dsh.Fleet;
+using Dsh.Interaction;
+using Dsh.Ide.Bridge;
 using Dsh.Llm;
 using Dsh.Notifications;
 using Dsh.GitInspect;
@@ -35,7 +37,11 @@ internal static class BrowserProtocol
             [nameof(HostSessionKinds.Acp)] = HostSessionKinds.Acp,
             [nameof(HostSessionKinds.Terminal)] = HostSessionKinds.Terminal,
         });
-        Export(script, "Capability", HostProtocolCatalog.KnownCapabilities);
+        Export(script, "Capability", new Dictionary<string, string>(HostProtocolCatalog.KnownCapabilities, StringComparer.Ordinal)
+        {
+            ["Editor"] = EditorProtocol.Capability,
+            ["EditorClient"] = EditorProtocol.ClientCapability,
+        });
         Export(script, "AgentMode", new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [nameof(RemoteAgentModes.Terminal)] = RemoteAgentModes.Terminal,
@@ -97,6 +103,14 @@ internal static class BrowserProtocol
         {
             [nameof(PendingKinds.Approval)] = PendingKinds.Approval,
             [nameof(PendingKinds.Question)] = PendingKinds.Question,
+        });
+        Export(script, "ApprovalChoice", ChoicePrompt.ForApproval("", null, null).Options
+            .ToDictionary(option => option.Value, option => option.Label, StringComparer.Ordinal));
+        Export(script, "QuestionResult", new Dictionary<string, string>
+        {
+            ["Answered"] = new AskUserQuestionAnswer([]).Status,
+            ["Dismissed"] = AskUserQuestionAnswer.Dismissed.Status,
+            ["UserCancelled"] = AskUserQuestionAnswer.Dismissed.Reason!,
         });
         ExportEnum(script, "MachineConnectionState", WebBridgeJsonContext.Default.MachineConnectionState);
         ExportEnum(script, "NotificationKind", WebBridgeJsonContext.Default.NotificationKind);

@@ -2,31 +2,17 @@ using Dsh.RemoteHost;
 
 namespace Dsh.Fleet;
 
-/** A session together with the machine it runs on. */
-public sealed record FleetSession(string Machine, RemoteSessionSummary Session);
-
-/** Sessions of one project directory on one machine; ProjectPath is null for sessions without a project. */
-public sealed record FleetProjectGroup(string? ProjectPath, IReadOnlyList<RemoteSessionSummary> Sessions);
-
-/** All sessions of one machine, grouped by project. */
-public sealed record FleetMachineGroup(string Machine, IReadOnlyList<FleetProjectGroup> Projects);
-
-/** An approval or question waiting for an answer: exactly one of Approval and Question is set. */
-public sealed record FleetPendingItem(string Machine, string RequestId, string SessionId, string Kind, RemoteApprovalRequest? Approval, RemoteQuestionRequest? Question);
-
-/** What a client shows for a machine: its connection state, the host's release and the last failure or deployment step. */
-public sealed record FleetMachineStatus(string Machine, string Kind, string Target, MachineConnectionState State, string? HostVersion, string? Detail);
-
 /**
  * The aggregated view of every machine, independent of any UI framework.
  * It owns one MachineConnection per machine and folds their sessions, pending requests and states into flat and grouped snapshots.
  * Changed is raised from background threads whenever any machine's state, sessions or pending requests change; UIs marshal it themselves and re-read the snapshots.
  */
-public sealed class FleetClient : IAsyncDisposable
+public sealed class FleetClient : IWorkspaceClient
 {
     private readonly List<MachineConnection> _machines;
     private readonly object _disposeSync = new();
     private Task? _disposeTask;
+    private readonly TaskCompletionSource _disposalCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task<IAsyncDisposable>? _outboundLease;
     private Task? _startTask;
     private bool _disposed;
@@ -43,12 +29,18 @@ public sealed class FleetClient : IAsyncDisposable
         }
     }
 
+    public Task WhenDisposed => _disposalCompletion.Task;
+
     public event Action? Changed;
     internal event Action<FleetClient>? Disposed;
 
     public IReadOnlyList<MachineConnection> Machines => _machines;
 
     public MachineConnection? Find(string name) => _machines.FirstOrDefault(machine => string.Equals(machine.Machine.Name, name, StringComparison.Ordinal));
+
+    IReadOnlyList<IWorkspaceMachine> IWorkspaceClient.Machines => _machines;
+
+    IWorkspaceMachine? IWorkspaceClient.Find(string name) => Find(name);
 
     public void Start()
     {
@@ -111,7 +103,21 @@ public sealed class FleetClient : IAsyncDisposable
         lock (_disposeSync)
         {
             _disposed = true;
-            return new ValueTask(_disposeTask ??= DisposeMachinesAsync());
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        try
+        {
+            await DisposeMachinesAsync().ConfigureAwait(false);
+            _disposalCompletion.TrySetResult();
+        }
+        catch (Exception error)
+        {
+            _disposalCompletion.TrySetException(error);
+            throw;
         }
     }
 
@@ -156,6 +162,6 @@ public sealed class FleetClient : IAsyncDisposable
             .Select(approval => new FleetPendingItem(machine, approval.RequestId, approval.SessionId, PendingKinds.Approval, approval, null))
             .Concat(pending.Questions.Select(question => new FleetPendingItem(machine, question.RequestId, question.SessionId, PendingKinds.Question, null, question)));
 
-    private void OnMachineChanged(MachineConnection machine) => Changed?.Invoke();
+    private void OnMachineChanged(IWorkspaceMachine machine) => Changed?.Invoke();
 }
 

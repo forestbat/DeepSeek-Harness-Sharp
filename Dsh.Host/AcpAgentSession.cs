@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Dsh.Acp;
+using Dsh.Core;
 using Dsh.AgentAdapters;
 using Dsh.AgentAdapters.Acp;
+using Dsh.Interaction;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
@@ -12,11 +14,11 @@ namespace Dsh.Host;
 internal sealed record AcpSessionServices(HostSessionRegistry Registry, HostPendingDecisions Pending, HostNotificationCenter Notifications);
 
 /**
- * One external agent driven over ACP and owned by the host (acp session): the process outlives client connections.
- * Turns run in the background (prompt returns once the turn started); updates feed the transcript; permission requests go through
- * HostPendingDecisions, so every client sees them and the first answer wins. Allow selects the agent's allow-once option and
- * reject its reject-once option (the always-variant only when the agent offers no once-variant); a cancelled request answers "cancelled".
- * Its transcript owns a shared SessionStore entry while this process runs; persisted history remains readable after it exits.
+ * One external agent driven over ACP and owned by the Host; the process outlives client connections.
+ * Turns run in the background and updates feed the shared transcript.
+ * Pending decisions are shared across clients with first-winner semantics and only the provider's once options are selected.
+ * Remembered approvals reuse the existing logical Session journal for an exact stable tool name.
+ * A cancelled request answers "cancelled", and persisted history remains readable after the process exits.
  */
 internal sealed class AcpAgentSession : IAsyncDisposable
 {
@@ -146,7 +148,17 @@ internal sealed class AcpAgentSession : IAsyncDisposable
             return;
         var toolCall = permission.ToolCall;
         var arguments = toolCall.Raw.ValueKind == JsonValueKind.Object && toolCall.Raw.TryGetProperty("rawInput", out var input) ? input.GetRawText() : null;
-        var request = new RemoteApprovalRequest(permission.RequestId, SessionId, toolCall.Kind ?? toolCall.Title ?? "tool", arguments, toolCall.Title);
+        var stableName = toolCall.Raw.ValueKind == JsonValueKind.Object && toolCall.Raw.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String
+            ? name.GetString() : null;
+        if (string.IsNullOrWhiteSpace(stableName))
+            stableName = null;
+        var (allowOnce, rejectOnce) = OnceOptions(permission.Options);
+        if (_transcript.TryCompletePermissionWithoutPrompt(permission, stableName, arguments, allowOnce))
+            return;
+        var toolName = stableName ?? toolCall.Kind ?? toolCall.Title ?? "tool";
+        var request = new RemoteApprovalRequest(permission.RequestId, SessionId, toolName, arguments, toolCall.Title,
+            ApprovalHints.Impact(toolName, arguments), new RemoteApprovalAvailability(allowOnce is not null,
+                allowOnce is not null && stableName is not null, rejectOnce is not null));
         var answer = _services.Pending.AskApprovalAsync(request, permission.RequestId);
         if (await Task.WhenAny(answer, permission.Outcome).ConfigureAwait(false) != answer)
         {
@@ -154,12 +166,37 @@ internal sealed class AcpAgentSession : IAsyncDisposable
             return;
         }
         var response = await answer.ConfigureAwait(false);
-        string[] wanted = response?.Allow == true
-            ? [AcpMethods.PermissionAllowOnce, AcpMethods.PermissionAllowAlways]
-            : [AcpMethods.PermissionRejectOnce, AcpMethods.PermissionRejectAlways];
-        var option = response is null ? null : wanted.Select(kind => permission.Options.FirstOrDefault(candidate => candidate.Kind == kind)).FirstOrDefault(found => found is not null);
-        if (option is null || !permission.TrySelect(option.OptionId))
-            permission.TryCancel();
+        var outcome = response switch
+        {
+            null or { Cancelled: true } => ApprovalOutcome.Cancelled,
+            { Allow: true, RememberForSession: true } => ApprovalOutcome.AllowedForSession,
+            { Allow: true } => ApprovalOutcome.AllowedOnce,
+            _ => ApprovalOutcome.Rejected,
+        };
+        var option = outcome switch
+        {
+            ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession => allowOnce,
+            ApprovalOutcome.Rejected => rejectOnce,
+            _ => null,
+        };
+        _transcript.CompletePermission(permission, toolName, arguments, option, outcome);
+    }
+
+    private static (AcpPermissionOption? Allow, AcpPermissionOption? Reject) OnceOptions(IReadOnlyList<AcpPermissionOption> options)
+    {
+        AcpPermissionOption? allow = null;
+        AcpPermissionOption? reject = null;
+        for (var index = 0; index < options.Count; index++)
+        {
+            var option = options[index];
+            if (option.Kind == AcpMethods.PermissionAllowOnce)
+                allow ??= option;
+            else if (option.Kind == AcpMethods.PermissionRejectOnce)
+                reject ??= option;
+            if (allow is not null && reject is not null)
+                break;
+        }
+        return (allow, reject);
     }
 
     /** Ends the agent process: stdin closed, then killed after a grace period. */

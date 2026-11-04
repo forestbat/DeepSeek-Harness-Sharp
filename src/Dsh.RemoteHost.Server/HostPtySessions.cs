@@ -38,7 +38,7 @@ public sealed class HostPtySessions(HostSessionRegistry registry, HostPtyDaemon 
 
 
     public Task<string> StartAsync(RemotePtyStartRequest request, string workingDirectory, CancellationToken cancellationToken)
-        => LaunchAsync(request, workingDirectory, HostSessionKinds.Terminal, null, null, cancellationToken);
+        => LaunchAsync(request, workingDirectory, HostSessionKinds.Terminal, null, request.Environment, cancellationToken);
 
     /** Starts an external agent's TUI; status reflects the process, not guesses from screen text. */
     public Task<string> StartAgentAsync(

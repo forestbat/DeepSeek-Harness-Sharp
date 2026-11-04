@@ -3,6 +3,7 @@ using Dsh.Runtime.Events;
 using System.Globalization;
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Ide.History;
 using Dsh.GitInspect;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -15,7 +16,7 @@ namespace Dsh.Tui;
  * 单 pane 时绘制路径与历史行为一致 (Main + RightPanel + Input + Status)。
  * Ctrl+X 组合键走 TerminalRawMode 的进程级原始输入捕获, 不经过宿主编辑控件, 因此 Windows 上不会触发"剪切"。
  */
-public sealed class ChatWindow : IDisposable
+public sealed partial class ChatWindow : IDisposable
 {
     private const long ExitConfirmWindowMs = 2000;
 
@@ -32,6 +33,9 @@ public sealed class ChatWindow : IDisposable
     private readonly List<SubagentNode> _agentItems = [];
     private IReadOnlyList<MentionSessionInfo>? _sessionInfos;
     private IReadOnlyList<string> _skillCandidates = [];
+    private readonly Dictionary<string, IdeHistoryMoment> _ideTimelineMoments = new(StringComparer.Ordinal);
+    private (SessionId Session, string Target, IReadOnlyList<IdeRestorePreview> Previews)? _ideRestorePreview;
+    private SessionId? _ideTimelineSession;
     private IReadOnlyList<string> _providerCatalogCandidates = [];
     private ProviderCatalogSnapshot? _providerCatalog;
     /** Cancelled by Dispose: background work started by this window must not outlive it. */
@@ -72,6 +76,7 @@ public sealed class ChatWindow : IDisposable
     public ChatWindow(Context ctx, AgentLoopAgent agent, HarnessHome home, ISessionPersistence? persistence = null, TuiSettings? settings = null)
     {
         _ctx = ctx;
+        MaintenancePresenter = ctx.Get<IContextMaintenancePresenter>(IContextMaintenancePresenter.ServiceName, false);
         _home = home;
         _persistence = persistence;
         _settings = settings;
@@ -102,27 +107,49 @@ public sealed class ChatWindow : IDisposable
             QueueSessionEvent(target, notification.Event);
         });
 
-        _approvalSubscription = ctx.OnWaterfall<ApprovalRequestNotification>((notification, _) =>
+        _approvalSubscription = ctx.OnWaterfall<ApprovalRequestNotification>(async (notification, _) =>
         {
             var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var registration = notification.Signal.UnsafeRegister(
+                static state => ((TaskCompletionSource<object?>)state!).TrySetResult(ApprovalOutcome.Cancelled), answer);
             QueueAction(() =>
             {
+                if (answer.Task.IsCompleted)
+                    return;
                 var target = FindPaneByAgent(notification.Request.Agent) ?? InputPane;
                 target.ShowApprovalPrompt(notification.Request, answer);
             });
-            return new ValueTask<object?>(answer.Task);
+            try
+            {
+                return await answer.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                WakeHook?.Invoke();
+            }
         }, new EventOptions { Global = true });
 
-        _questionsSubscription = ctx.OnWaterfall<UserQuestionsRequestNotification>((notification, _) =>
+        _questionsSubscription = ctx.OnWaterfall<UserQuestionsRequestNotification>(async (notification, _) =>
         {
             var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var registration = notification.Signal.UnsafeRegister(
+                static state => ((TaskCompletionSource<object?>)state!).TrySetCanceled(), answer);
             QueueAction(() =>
             {
+                if (answer.Task.IsCompleted)
+                    return;
                 var requested = notification.Request.Agent;
                 var target = (requested is not null ? FindPaneByAgent(requested) : null) ?? InputPane;
                 target.ShowQuestionPrompt(notification.Request, answer);
             });
-            return new ValueTask<object?>(answer.Task);
+            try
+            {
+                return await answer.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                WakeHook?.Invoke();
+            }
         }, new EventOptions { Global = true });
 
         _skillChangeSubscription = ctx.On<SkillsChangedNotification>(_ =>
@@ -158,6 +185,9 @@ public sealed class ChatWindow : IDisposable
 
     internal Context Ctx => _ctx;
 
+    /** 上下文整理的中立呈现接缝; 未安装提供该能力的插件时为 null。 */
+    internal IContextMaintenancePresenter? MaintenancePresenter { get; }
+
     internal HarnessHome Home => _home;
 
     internal IReadOnlyList<string> SkillCandidates => _skillCandidates;
@@ -187,6 +217,7 @@ public sealed class ChatWindow : IDisposable
     internal ChatPane InputPane => (ChatPane)_panes[_inputPaneId];
 
     private ITuiPane FocusedPane => _panes[_focusedPaneId];
+    private ChatPane? ChoicePane => _panes.Values.OfType<ChatPane>().FirstOrDefault(pane => pane.HasChoicePrompt);
 
     public void DrainUi()
     {
@@ -199,6 +230,9 @@ public sealed class ChatWindow : IDisposable
 
         foreach (var action in actions)
             action();
+        foreach (var pane in _panes.Values.OfType<ChatPane>())
+            if (pane.SynchronizeChoicePrompt())
+                RenderVersion++;
 
         List<(ITuiPane Pane, SessionEvent Event)> sessionEvents = [];
         lock (_gate)
@@ -221,7 +255,7 @@ public sealed class ChatWindow : IDisposable
     public void HandlePaste(string text)
     {
         RenderVersion++;
-        InputPane.HandlePaste(text);
+        (ChoicePane ?? InputPane).HandlePaste(text);
     }
 
     /** 切窗格的一组动作: 提示里合写成 `方向键/O`。 */
@@ -269,6 +303,11 @@ public sealed class ChatWindow : IDisposable
         // 无键名也无字符的事件(纯修饰键按下等)不携带任何意图, 放行会误消费等待中的前缀与审批态。
         if (key.Key == ConsoleKey.NoName && key.KeyChar == '\0')
             return;
+        if (ChoicePane is { } choice)
+        {
+            choice.HandleKey(key);
+            return;
+        }
         if (_overviewActive)
         {
             HandleOverviewKey(key);
@@ -289,19 +328,12 @@ public sealed class ChatWindow : IDisposable
             return;
         }
 
-        var input = InputPane;
-        if (input.PendingApproval is not null || input.PendingQuestions is not null)
-        {
-            input.HandleKey(key);
-            return;
-        }
-
         if (TryDispatchKey(key, KeyContext.Chat))
             return;
         ClearExitConfirm();
         if (FocusedPane is SubagentPane subagent && subagent.HandleKey(key))
             return;
-        input.HandleKey(key);
+        InputPane.HandleKey(key);
     }
 
     /** 前缀等待超时则收起提示; 主循环空闲时调用(超时为 0 时什么也不做)。 */
@@ -474,6 +506,11 @@ public sealed class ChatWindow : IDisposable
     public void InsertText(string text)
     {
         RenderVersion++;
+        if (ChoicePane is { } choice)
+        {
+            choice.InsertText(text);
+            return;
+        }
         // 焦点在 shell 窗格时粘贴内容直达 PTY(对齐终端行为), 不进 AI 输入行。
         if (FocusedPane is ShellPane shell)
         {
@@ -486,6 +523,11 @@ public sealed class ChatWindow : IDisposable
     public void HandleMouseWheel(float delta)
     {
         RenderVersion++;
+        if (ChoicePane is { } choice)
+        {
+            choice.HandleMouseWheel(delta);
+            return;
+        }
         FocusedPane.HandleMouseWheel(delta);
     }
 
@@ -493,6 +535,11 @@ public sealed class ChatWindow : IDisposable
     public void HandleMouseWheel(float delta, int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        if (ChoicePane is { } choice)
+        {
+            choice.HandleMouseWheel(delta);
+            return;
+        }
         layout = Effective(layout);
         // pty 层视图: 整屏就是那一层, 滚轮只滚它(不命中窗格树, 也不滚侧栏/浮层)。
         if (_ptyLayer is { } layer)
@@ -506,6 +553,10 @@ public sealed class ChatWindow : IDisposable
         // 指针落在右栏上: 滚右栏内容(窄终端里才看得到下面的段落), 不再滚正文。分屏时右栏同样在正文区之外。
         if (layout.RightPanel.Contains(cellX, cellY) && InputPane.ScrollRightPanel(delta))
             return;
+        // 指针落在已展开的长折叠(工具结果/diff)上: 滚轮先滚折叠内容, 不带动整篇记录。
+        if (TryResolveTranscript(cellX, cellY, layout, out var transcriptPane, out var transcriptRect)
+            && transcriptPane.ScrollFoldAt(delta, cellY, transcriptRect))
+            return;
         var target = _panes.Count > 1 ? _paneLayout.HitTest(cellX, cellY) : null;
         if (target is { } id && _panes.TryGetValue(id, out var pane))
             pane.HandleMouseWheel(delta);
@@ -516,13 +567,16 @@ public sealed class ChatWindow : IDisposable
     public void HandleMouseClick(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        if (ChoicePane is { } choice)
+        {
+            choice.HandleChoicePointer(cellX, cellY, click: true);
+            return;
+        }
         layout = Effective(layout);
         // pty 层视图整屏就是那一层: 点击不碰窗格树/分隔线(拖拽也没有意义)。
         if (_ptyLayer is not null)
             return;
         var input = InputPane;
-        if (input.PendingApproval is not null)
-            return;
         if (input.TryBeginMentionScrollDrag(cellX, cellY))
             return;
         if (_panes.Count > 1 && FindDividerAt(cellX, cellY) is { } divider)
@@ -584,10 +638,24 @@ public sealed class ChatWindow : IDisposable
         FocusedPane.StickToBottom = false;
     }
 
-    /** 指针拖动: 分隔线上按下则调整窗格比例, 否则扩展文本选择(阶段 3.2)。 */
+    /** Hover belongs only to the active prompt and never extends transcript selection. */
+    public void HandleMouseMove(int cellX, int cellY)
+    {
+        if (ChoicePane is not { } choice)
+            return;
+        if (choice.HandleChoicePointer(cellX, cellY, click: false))
+            RenderVersion++;
+    }
+
+    /** Drag a divider or extend transcript selection unless a prompt owns the pointer. */
     public void HandleMouseDrag(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        if (ChoicePane is { } choice)
+        {
+            choice.HandleChoicePointer(cellX, cellY, click: false);
+            return;
+        }
         layout = Effective(layout);
         if (InputPane.DragMentionScrollDrag(cellY))
             return;
@@ -614,6 +682,11 @@ public sealed class ChatWindow : IDisposable
     public string? HandleMouseRelease(int cellX, int cellY, UiLayout layout)
     {
         RenderVersion++;
+        if (ChoicePane is not null)
+        {
+            CancelPointerGestures();
+            return null;
+        }
         layout = Effective(layout);
         if (InputPane.EndMentionScrollDrag())
             return null;
@@ -640,6 +713,20 @@ public sealed class ChatWindow : IDisposable
         if (text is not null)
             _ = Clipboard.TrySetTextAsync(text);
         return text;
+    }
+
+    internal void CancelPointerGestures()
+    {
+        _inputDrag = false;
+        _rightPanelDrag = false;
+        _dividerDrag = null;
+        foreach (var pane in _panes.Values)
+        {
+            if (pane is not ChatPane chat)
+                continue;
+            chat.EndMentionScrollDrag();
+            chat.ClearSelection();
+        }
     }
 
     /** 控制台总列数: 正文宽 + 竖分割线 + 右栏宽(没有右栏就没有竖线)。 */
@@ -786,6 +873,7 @@ public sealed class ChatWindow : IDisposable
                 DrawOverview(grid);
             if (_agentsActive)
                 DrawAgentList(grid);
+            ChoicePane?.DrawChoicePrompt(grid);
             return;
         }
 
@@ -818,6 +906,7 @@ public sealed class ChatWindow : IDisposable
         if (_agentsActive)
             DrawAgentList(grid);
         DrawPaneOverlays(grid, layout);
+        ChoicePane?.DrawChoicePrompt(grid);
     }
 
     /**
@@ -853,6 +942,7 @@ public sealed class ChatWindow : IDisposable
         _lifetime.Cancel();
         _providerCatalogRefresh.GetAwaiter().GetResult();
         _paneTools?.Dispose();
+        _editorTerminalRegistration?.Dispose();
         foreach (var pane in _panes.Values)
             pane.Dispose();
         _unsubscribe.Invoke();
@@ -919,7 +1009,10 @@ public sealed class ChatWindow : IDisposable
 
     /** 读取工具挂载: 交互形态由 TuiRunner 调用一次, 随 ChatWindow.Dispose 一并注销。 */
     internal void RegisterPaneTools()
-        => _paneTools ??= PaneReadTools.Apply(_ctx, this);
+    {
+        _paneTools ??= PaneReadTools.Apply(_ctx, this);
+        _editorTerminalRegistration ??= _ctx.Provide("editorTerminalHost", new EditorTerminalHost(this));
+    }
 
     private IDisposable? _paneTools;
 
@@ -1001,7 +1094,7 @@ public sealed class ChatWindow : IDisposable
         var session = _subagents.FindSession(id);
         if (session is null)
             return null;
-        var renderer = new TranscriptRenderer();
+        var renderer = new TranscriptRenderer(MaintenancePresenter);
         foreach (var sessionEvent in session.SnapshotEvents())
             renderer.AppendSessionEvent(sessionEvent, replay: true);
         return renderer.SnapshotLines();
@@ -1020,8 +1113,8 @@ public sealed class ChatWindow : IDisposable
             {
                 foreach (var snapshot in _persistence.List())
                 {
-                    // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致)。
-                    if (snapshot.Header.IsSubagent)
+                    // 子代理会话不出现在会话选择浮层里(与 GUI 侧栏一致); 没写过任何事件的空会话同样不算历史。
+                    if (snapshot.Header.IsSubagent || snapshot.EventCount == 0)
                         continue;
                     var info = MentionSessionInfo.FromSnapshot(snapshot);
                     if (seen.Add(info.Id))
@@ -1293,26 +1386,37 @@ public sealed class ChatWindow : IDisposable
      */
     internal IReadOnlyList<CommandCandidate> TimestampCandidates()
     {
-        var candidates = new List<CommandCandidate>();
+        var candidates = new List<(long Timestamp, CommandCandidate Candidate)>();
+        _ideTimelineMoments.Clear();
+        _ideTimelineSession = null;
         foreach (var (seq, time, text) in UserMessages(InputPane.Agent.Session))
         {
             var token = $"#{seq.ToString(CultureInfo.InvariantCulture)}";
-            candidates.Add(new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time)));
+            candidates.Add((time, new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time))));
         }
 
         var service = _ctx.Get<IIdeHistoryService>(IIdeHistoryService.ServiceName, false);
         // 默认不并进时间线(插件参数 timeline=false): IDE 自动保存很密, 会淹掉用户消息。
         if (service is null || !service.TimelineEnabled)
-            return candidates;
+            return [.. candidates.Select(item => item.Candidate)];
         var workspace = InputPane.CurrentCwd();
-        foreach (var entry in service.Query(workspace, from: null, to: null))
+        _ideTimelineSession = InputPane.Agent.Session.Id;
+        if (workspace is not null && service is IIdeHistoryTimeline timeline)
         {
-            candidates.Add(new CommandCandidate(
-                IdeTargetValue(entry),
-                IdeEntryLabel(workspace, entry),
-                entry.Kind));
+            foreach (var moment in timeline.QueryTimeline(workspace))
+            {
+                var token = $"ide-group|{moment.Timestamp.ToString(CultureInfo.InvariantCulture)}";
+                _ideTimelineMoments[token] = moment;
+                var first = moment.Entries[0];
+                candidates.Add((moment.Timestamp, new CommandCandidate(token,
+                    $"{IdeEntryLabel(workspace, first)}{(moment.Entries.Count > 1 ? $" +{moment.Entries.Count - 1} revisions" : "")}",
+                    $"history window; {moment.Entries.Count(entry => entry.MatchesGitHead is true)} match git HEAD")));
+            }
         }
-        return candidates;
+        else
+            foreach (var entry in service.Query(workspace, from: null, to: null))
+                candidates.Add((entry.Timestamp, new CommandCandidate(IdeTargetValue(entry), IdeEntryLabel(workspace, entry), entry.Kind)));
+        return [.. candidates.OrderByDescending(item => item.Timestamp).Select(item => item.Candidate)];
     }
 
     /** IDE 历史项在选单里的值编码(可被 `/timestamp` 解析回条目)。 */
@@ -1338,7 +1442,7 @@ public sealed class ChatWindow : IDisposable
             if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative))
                 path = relative;
         }
-        return $"{path} @ {entry.Time.ToLocalTime():HH:mm:ss} ({entry.Provider})";
+        return $"{path} @ {entry.Time.ToLocalTime():HH:mm:ss} ({entry.Provider}){(entry.MatchesGitHead is true ? " [git HEAD]" : "")}";
     }
 
     /** `/timestamp [jump|revert|fork] <#seq|ide|...>`: 无参数列出时间线; revert 回退文件+会话, fork 派生新会话。 */
@@ -1350,11 +1454,8 @@ public sealed class ChatWindow : IDisposable
         var parts = arguments.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
-            if (messages.Count == 0)
-                pane.AppendRaw("  (没有用户消息)\n");
-            else
-                foreach (var (messageSeq, _, messageText) in messages)
-                    pane.AppendRaw($"  #{messageSeq} {Preview(messageText)}\n");
+            foreach (var candidate in TimestampCandidates())
+                pane.AppendRaw($"  {candidate.Value} {candidate.Label}\n");
             return;
         }
 
@@ -1366,9 +1467,26 @@ public sealed class ChatWindow : IDisposable
         }
 
         var target = parts[1];
+        var confirm = target.StartsWith("--confirm ", StringComparison.Ordinal);
+        if (confirm)
+            target = target["--confirm ".Length..];
+        if (target.StartsWith("ide-group|", StringComparison.Ordinal))
+        {
+            if (_ideTimelineSession == pane.Agent.Session.Id && _ideTimelineMoments.TryGetValue(target, out var moment))
+                await IdeTimestampMomentActionAsync(pane, action, target, moment, messages, confirm);
+            else
+                pane.AppendRaw("  History window expired; open /timestamp again.\n");
+            return;
+        }
         if (ParseIdeTarget(target) is { } ide)
         {
-            await IdeTimestampActionAsync(pane, action, ide, messages);
+            var service = _ctx.Get<IIdeHistoryService>(IIdeHistoryService.ServiceName, false);
+            var entry = service?.Query(pane.CurrentCwd(), ide.Timestamp, ide.Timestamp, ide.Path)
+                .FirstOrDefault(candidate => candidate.Provider == ide.Provider && candidate.Timestamp == ide.Timestamp);
+            if (entry is null)
+                pane.AppendRaw("  History revision is unavailable.\n");
+            else
+                await IdeTimestampMomentActionAsync(pane, action, target, new IdeHistoryMoment(ide.Timestamp, [entry]), messages, confirm);
             return;
         }
 
@@ -1397,58 +1515,86 @@ public sealed class ChatWindow : IDisposable
         }
     }
 
-    /** IDE 时间点的三种动作: jump 只报位置; revert 写回该版本再按时间截断会话; fork 映射到该时间之前的最近消息。 */
-    private async Task IdeTimestampActionAsync(
+    /** A grouped revision previews every affected file and keeps the selected IDE content authoritative over checkpoints. */
+    private async Task IdeTimestampMomentActionAsync(
         ChatPane pane,
         string action,
-        (string Provider, long Timestamp, string Path) ide,
-        IReadOnlyList<(long Seq, long Time, string Text)> messages)
+        string target,
+        IdeHistoryMoment moment,
+        IReadOnlyList<(long Seq, long Time, string Text)> messages,
+        bool confirm)
     {
-        switch (action)
+        if (action == "jump")
         {
-            case "jump":
-                pane.AppendRaw($"  定位: {ide.Path} @ {TimeOf(ide.Timestamp)} ({ide.Provider})\n");
-                return;
-            case "revert":
-                var service = _ctx.Get<IIdeHistoryService>(IIdeHistoryService.ServiceName, false);
-                var entry = service?.Query(pane.CurrentCwd(), from: null, to: null, path: ide.Path)
-                    .FirstOrDefault(candidate => candidate.Timestamp == ide.Timestamp);
-                var content = entry is null ? null : service!.Read(entry);
-                if (content is null)
-                {
-                    pane.AppendRaw($"  revert 失败: 读不到 {ide.Path} @ {TimeOf(ide.Timestamp)} 的 IDE 历史内容\n");
-                    return;
-                }
-
-                if (WriteBackIdeRevision(ide.Path, content) is { } failure)
-                {
-                    pane.AppendRaw($"  文件写回被拒绝({failure}); 会话未截断\n");
-                    return;
-                }
-
-                pane.AppendRaw($"  文件已回退到 {ide.Path} @ {TimeOf(ide.Timestamp)} ({ide.Provider})\n");
-                var nearest = NearestMessageSeq(messages, ide.Timestamp);
-                if (nearest is not { } seq)
-                {
-                    pane.AppendRaw("  会话未截断: 该时间点之前没有用户消息\n");
-                    return;
-                }
-
-                await RevertToAsync(pane, seq, messages.First(entry => entry.Seq == seq).Text);
-                return;
-            case "fork":
-                if (NearestMessageSeq(messages, ide.Timestamp) is not { } forkFrom)
-                {
-                    pane.AppendRaw("  fork 失败: 该时间点之前没有用户消息(无从映射会话前缀)\n");
-                    return;
-                }
-
-                await ForkAtAsync(pane, forkFrom);
-                return;
-            default:
-                pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide 项>\n");
-                return;
+            foreach (var entry in moment.Entries)
+                pane.AppendRaw($"  {IdeEntryLabel(pane.CurrentCwd(), entry)}\n");
+            return;
         }
+        var nearest = NearestMessageSeq(messages, moment.Timestamp);
+        if (action == "fork")
+        {
+            if (nearest is { } seq)
+                await ForkAtAsync(pane, seq);
+            else
+                pane.AppendRaw("  No user message exists before this history window.\n");
+            return;
+        }
+        if (action != "revert")
+        {
+            pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide revision>\n");
+            return;
+        }
+        if (_ctx.Get<IIdeHistoryRestore>(IIdeHistoryService.ServiceName, false) is not { } restore
+            || pane.CurrentCwd() is not { } workspace)
+        {
+            pane.AppendRaw("  Safe history restore is unavailable.\n");
+            return;
+        }
+        var session = pane.Agent.Session.Id;
+        if (!confirm)
+        {
+            try
+            {
+                var previews = moment.Entries
+                    .GroupBy(entry => entry.Path, OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                    .Select(group => restore.PreviewRestore(workspace, group.OrderByDescending(entry => entry.Timestamp).First()))
+                    .ToArray();
+                _ideRestorePreview = (session, target, previews);
+                foreach (var preview in previews)
+                {
+                    pane.AppendRaw($"  {IdeEntryLabel(workspace, preview.Entry)}\n{preview.Diff}\n");
+                    if (preview.ModifiedSinceEntry)
+                        pane.AppendRaw("  This file changed after the revision; confirmation will overwrite those changes.\n");
+                }
+                pane.AppendRaw($"  Preview only; no files changed. Confirm: /timestamp revert --confirm {target}\n");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                _ideRestorePreview = null;
+                pane.AppendRaw("  History preview failed; no files changed.\n");
+            }
+            return;
+        }
+        if (_ideRestorePreview is not { } pending || pending.Session != session || pending.Target != target)
+        {
+            pane.AppendRaw("  Request a preview for this history revision before confirming.\n");
+            return;
+        }
+        _ideRestorePreview = null;
+        foreach (var preview in pending.Previews)
+        {
+            var result = restore.Restore(preview, confirmModified: true);
+            if (!result.Restored)
+            {
+                pane.AppendRaw($"  Restore stopped: {result.Failure}; session unchanged. Backups for completed files remain in DSH storage.\n");
+                return;
+            }
+            pane.AppendRaw($"  Restored {IdeEntryLabel(workspace, preview.Entry)}; backup: {result.BackupPath}\n");
+        }
+        if (nearest is { } messageSeq)
+            await RevertToAsync(pane, messageSeq, messages.First(entry => entry.Seq == messageSeq).Text, restoreFiles: false);
+        else
+            pane.AppendRaw("  Files restored; no earlier user message exists to truncate.\n");
     }
 
     /** 时间 ≤ 目标时刻的最近一条用户消息(消息按时间递增, 取最后一个满足的就是它)。 */
@@ -1463,34 +1609,6 @@ public sealed class ChatWindow : IDisposable
         return nearest;
     }
 
-    /**
-     * §6.5: revert 的 IDE 分支 = 把该 revision 的整份内容写回工作区(复刻 IDE 还原语义, 不做 diff/文档级操作)。
-     * 写前用独占打开探一次: 编辑器正持有该文件时拒绝覆盖(IDE 的 restore 会丢未保存改动, 我们不擅自动手)。
-     */
-    private static string? WriteBackIdeRevision(string path, IdeHistoryContent content)
-    {
-        try
-        {
-            if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
-                Directory.CreateDirectory(directory);
-            using (new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
-            {
-            }
-            File.WriteAllBytes(path, content.Bytes);
-            return null;
-        }
-        catch (IOException error)
-        {
-            return error.Message;
-        }
-        catch (UnauthorizedAccessException error)
-        {
-            return error.Message;
-        }
-    }
-
-    private static string TimeOf(long timestamp)
-        => DateTimeOffset.FromUnixTimeMilliseconds(timestamp).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
     /** 本会话里用户自己发的消息(seq / 事件时间 / 文本), 供时间线与"IDE 时间点 → 最近消息"映射。 */
     private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
@@ -1500,7 +1618,8 @@ public sealed class ChatWindow : IDisposable
         {
             if (sessionEvent.Data is not UserMessagePayload user || user.Message.Source is not UserMessageSource)
                 continue;
-            var text = string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)).Trim();
+            var text = UserFacingText.StripSystemReminders(
+                string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)));
             if (text.Length > 0)
                 messages.Add((sessionEvent.Seq, sessionEvent.Time, text));
         }
@@ -1524,10 +1643,10 @@ public sealed class ChatWindow : IDisposable
     }
 
     /** 会话截断到该消息之前并把消息回填输入区; 文件侧先按检查点恢复到 <= seq。 */
-    private async Task RevertToAsync(ChatPane pane, long seq, string targetText)
+    private async Task RevertToAsync(ChatPane pane, long seq, string targetText, bool restoreFiles = true)
     {
         var restore = _ctx.Get<ICheckpointRestore>(ICheckpointRestore.ServiceName, false);
-        if (restore is not null && pane.CurrentCwd() is { Length: > 0 } cwd)
+        if (restoreFiles && restore is not null && pane.CurrentCwd() is { Length: > 0 } cwd)
         {
             try
             {
@@ -2904,4 +3023,3 @@ public sealed class ChatWindow : IDisposable
 
     private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId, string? PtyId = null);
 }
-

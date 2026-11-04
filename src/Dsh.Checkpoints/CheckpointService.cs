@@ -34,7 +34,7 @@ public sealed record CheckpointPolicy
     }
 }
 
-public sealed class CheckpointService : Service, ICheckpointRestore, IDisposable
+public sealed class CheckpointService : Service, ICheckpointRestore, IEditorCheckpointReview, IDisposable
 {
     public const string ServiceName = "checkpoints";
 
@@ -69,6 +69,13 @@ public sealed class CheckpointService : Service, ICheckpointRestore, IDisposable
 
     public IReadOnlyList<CheckpointPoint> PointsFor(string cwd)
         => RepoForOrNull(cwd)?.Log.Points ?? [];
+
+    public EditorCheckpointSnapshot? FindSnapshot(string workspaceRoot, string sessionId, long beforeSeq)
+    {
+        var repo = RepoForOrNull(workspaceRoot);
+        var point = repo?.Log.Points.LastOrDefault(point => point.Session == sessionId && point.Seq <= beforeSeq);
+        return point is null ? null : new(repo!.Git.GitDir, repo.Git.WorkTree, point.Commit);
+    }
 
     public async Task<string> RestoreFilesAsync(string cwd, int index, CancellationToken signal)
     {

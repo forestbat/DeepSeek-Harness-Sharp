@@ -143,47 +143,15 @@ public sealed partial class DshPluginCatalogGenerator
                 DefaultLiteralOf(property),
                 children.Count == 0 ? null : children)
             {
-                Description = DescriptionOf(property, kind),
+                Description = DescriptionOf(property),
             });
         }
         return entries;
     }
 
-    /**
-     * 配置项说明(不用 LLM, 全部来自代码):
-     *  1) 首选声明处的 XML 注释 `/// <summary>…`: 生成器读语法, 不需要生成文档文件;
-     *  2) 没写注释就按名字与类型派生最小提示(毫秒/字节/字符/次数/天数/列表/映射…), 保证模板不留白;
-     *  3) 都没命中就为空, 由模板只显示键名与默认值。
-     */
-    private static string? DescriptionOf(IPropertySymbol property, SchemaKind kind)
-    {
-        if (SummaryOf(property) is { Length: > 0 } summary)
-            return summary;
-        var name = property.Name;
-        if (kind == SchemaKind.List)
-            return "列表";
-        if (kind == SchemaKind.Mapping)
-            return "映射(见子项)";
-        if (kind == SchemaKind.Boolean)
-            return null;
-        if (name.EndsWith("Ms", StringComparison.Ordinal))
-            return "毫秒";
-        if (name.EndsWith("Bytes", StringComparison.Ordinal))
-            return "字节";
-        if (name.EndsWith("Chars", StringComparison.Ordinal))
-            return "字符数";
-        if (name.EndsWith("Rounds", StringComparison.Ordinal))
-            return "轮数";
-        if (name.EndsWith("Retries", StringComparison.Ordinal))
-            return "重试次数";
-        if (name.EndsWith("Days", StringComparison.Ordinal))
-            return "天数";
-        if (name.EndsWith("Points", StringComparison.Ordinal))
-            return "数量上限";
-        if (name.EndsWith("Timeout", StringComparison.Ordinal))
-            return "超时";
-        return null;
-    }
+    /** 只使用声明处的 XML 注释。*/
+    private static string? DescriptionOf(IPropertySymbol property)
+        => SummaryOf(property) is { Length: > 0 } summary ? summary : null;
 
     /**
      * 读声明处的注释摘要; 两种仓库风格都认(`/// <summary>` 与 `/** … *&#47;`), 无注释返回空。

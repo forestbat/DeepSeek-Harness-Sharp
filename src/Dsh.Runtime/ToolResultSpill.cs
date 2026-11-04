@@ -4,9 +4,23 @@ using System.Text;
 namespace Dsh.Runtime;
 
 public sealed record ToolResultSpillOptions(
-    long MaxBytes = 64 * 1024,
-    int HeadChars = 4096,
-    int TailChars = 1024);
+    long MaxBytes = ToolResultSpillOptions.DefaultMaxBytes,
+    int? HeadChars = null,
+    int? TailChars = null)
+{
+    public const long DefaultMaxBytes = 64 * 1024;
+    public const int DefaultHeadChars = 4096;
+    public const int DefaultTailChars = 1024;
+
+    /** 未显式指定时按 max_bytes 缩放: 头 1/2、尾 1/8, 上限即 64K 阈值下的 4096/1024。 */
+    public int HeadLength => HeadChars is { } chars
+        ? Math.Max(0, chars)
+        : (int)Math.Clamp(MaxBytes / 2, 0, DefaultHeadChars);
+
+    public int TailLength => TailChars is { } chars
+        ? Math.Max(0, chars)
+        : (int)Math.Clamp(MaxBytes / 8, 0, DefaultTailChars);
+}
 
 /**
  * 大工具结果落盘: 正文超过阈值时写入持久化根下的 tool-results 目录, 上下文里只保留头尾与文件路径,
@@ -39,8 +53,8 @@ public sealed class ToolResultSpill : Service
             var path = Path.Combine(_root, name);
             if (!File.Exists(path))
                 File.WriteAllText(path, text);
-            var head = Slice(text, 0, Options.HeadChars);
-            var tail = Slice(text, text.Length - Options.TailChars, Options.TailChars);
+            var head = Slice(text, 0, Options.HeadLength);
+            var tail = Slice(text, text.Length - Options.TailLength, Options.TailLength);
             return $"{head}\n\n[... {text.Length} chars spilled to {path} ...]\n\n{tail}";
         }
         catch (IOException)

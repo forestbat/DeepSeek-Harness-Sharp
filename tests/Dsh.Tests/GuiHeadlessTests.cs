@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
@@ -149,13 +150,110 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
 
             Capture(dialog, "headless-decision-question", 520);
             var single = decision.Questions[0];
-            single.SelectCommand.Execute(single.Options[1]);
+            var option = dialog.GetVisualDescendants().OfType<Button>().Single(button => ReferenceEquals(button.DataContext, single.Options[1]));
+            var point = option.TranslatePoint(new Point(option.Bounds.Width / 2, option.Bounds.Height / 2), dialog)!.Value;
+            dialog.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            dialog.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
             Assert.True(decision.CanSubmit);
 
             decision.SubmitCommand.Execute(null);
             Dispatcher.UIThread.RunJobs();
             var answer = Assert.IsType<AskUserQuestionAnswer>(decision.Result);
             Assert.Equal("全量", Assert.Single(answer.Answers).Selected[0]);
+        });
+
+    [Theory]
+    [InlineData(Key.Y, ApprovalOutcome.AllowedOnce)]
+    [InlineData(Key.A, ApprovalOutcome.AllowedForSession)]
+    [InlineData(Key.N, ApprovalOutcome.Rejected)]
+    [InlineData(Key.C, ApprovalOutcome.Cancelled)]
+    [InlineData(Key.Escape, ApprovalOutcome.Cancelled)]
+    public async Task DecisionDialog_ApprovalKeyboardActions_CloseWithoutAllowingOnEscape(Key key, ApprovalOutcome expected)
+        => await HeadlessGui.RunAsync(() =>
+        {
+            var decision = DecisionViewModel.ForApproval("bash", """{"command":"echo review"}""", "Review execution");
+            var dialog = new DecisionDialog(decision);
+            dialog.Show();
+            Dispatcher.UIThread.RunJobs();
+            var input = new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key };
+            dialog.RaiseEvent(input);
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(input.Handled);
+            Assert.Equal(expected, decision.Result);
+            Assert.False(dialog.IsVisible);
+            return Task.CompletedTask;
+        });
+
+    [Fact]
+    public async Task DecisionDialog_EscapeFromCustomInput_DismissesWholeQuestionGroup()
+        => await HeadlessGui.RunAsync(() =>
+        {
+            var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
+            [
+                new("choice", "Choose", Options: [new("Default", Value: "default", Default: true)]),
+                new("custom", "Add details"),
+            ]));
+            var dialog = new DecisionDialog(decision);
+            dialog.Show();
+            Dispatcher.UIThread.RunJobs();
+            var custom = dialog.GetVisualDescendants().OfType<TextBox>().Last();
+            custom.Focus();
+            custom.Text = "Partial answer";
+            var input = new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Escape };
+            custom.RaiseEvent(input);
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(input.Handled);
+            var result = Assert.IsType<AskUserQuestionAnswer>(decision.Result);
+            Assert.True(result.IsDismissed);
+            Assert.Empty(result.Answers);
+            Assert.Equal("user_cancelled", result.Reason);
+            Assert.False(dialog.IsVisible);
+            return Task.CompletedTask;
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DecisionDialog_UnsupportedCancellation_LeavesPendingVisible_AndExistingAnswerAvailable(bool approval)
+        => await HeadlessGui.RunAsync(() =>
+        {
+            var decision = approval
+                ? DecisionViewModel.ForApproval("bash", null, "Review")
+                : DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
+                    [new("q", "Choose", Options: [new("Yes", Value: "yes", Default: true)])]));
+            decision.SetCancellationSupported(false);
+            var dialog = new DecisionDialog(decision);
+            dialog.Show();
+            Dispatcher.UIThread.RunJobs();
+            var cancel = dialog.GetVisualDescendants().OfType<Button>().First(button => button.Command == decision.CancelCommand);
+            Assert.False(cancel.IsEffectivelyEnabled);
+            Assert.Contains(dialog.GetVisualDescendants(), visual =>
+                visual is TextBlock { IsVisible: true, Text: { } text } && text.Contains("Unsupported", StringComparison.Ordinal));
+
+            var escape = new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Escape };
+            dialog.RaiseEvent(escape);
+            dialog.Close();
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(escape.Handled);
+            Assert.True(dialog.IsVisible);
+            Assert.False(decision.IsClosed);
+            Assert.Null(decision.Result);
+
+            var answer = new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = approval ? Key.N : Key.Enter,
+                KeyModifiers = approval ? KeyModifiers.None : KeyModifiers.Control,
+            };
+            dialog.RaiseEvent(answer);
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(dialog.IsVisible);
+            if (approval)
+                Assert.Equal(ApprovalOutcome.Rejected, decision.Result);
+            else
+                Assert.Equal(["yes"], Assert.Single(Assert.IsType<AskUserQuestionAnswer>(decision.Result).Answers).Selected);
+            return Task.CompletedTask;
         });
 
     [Fact]
@@ -265,53 +363,6 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
         });
 
-    /** 模拟点击 preset 浮层里的项: 验证 XAML Click 处理器到 /preset 命令管道的整条接线。 */
-    [Fact]
-    public async Task PresetChip_Click_Item_SwitchesPreset() => await HeadlessGui.RunAsync(async () =>
-    {
-        // 环境组合必须离开 UI 线程(Task.Run): 在 headless dispatcher 上组合会拖垮后续的窗口测试。
-        var environment = await GuiTestEnvironment.CreateIsolatedAsync();
-        await using var environmentScope = environment;
-        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
-        var viewModel = window.ViewModel!;
-        window.Show();
-        viewModel.ShowChatCommand.Execute(null);
-        for (var attempt = 0; attempt < 50 && !viewModel.HasCommand("preset"); attempt++)
-        {
-            await viewModel.RefreshCommandsAsync();
-            await Task.Delay(100);
-        }
-        Assert.True(viewModel.HasCommand("preset"), "preset command was not registered");
-        Dispatcher.UIThread.RunJobs();
-        try
-        {
-            Assert.Equal("标准", viewModel.PresetLabel);
-            var chip = window.GetVisualDescendants().OfType<Button>()
-                .First(button => button.IsEffectivelyVisible && button.Flyout is Flyout { Content: ItemsControl });
-            var flyout = (Flyout)chip.Flyout!;
-            flyout.ShowAt(chip);
-            Dispatcher.UIThread.RunJobs();
-
-            var item = ((ItemsControl)flyout.Content!).GetVisualDescendants().OfType<Button>()
-                .First(button => button.DataContext is PresetListItem { Id: "minimal" });
-            item.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            await viewModel.SetPresetCommand.ExecutionTask!;
-
-            await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.PresetLabel == "极简");
-
-            Assert.Equal("极简", viewModel.PresetLabel);
-            Assert.Contains(environment.Agent.Session.SnapshotEvents(), sessionEvent => sessionEvent.Type == "preset/mode");
-            var tools = environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
-            var names = tools.Schemas(environment.Agent.ScopeKey).Select(schema => schema.Name).ToList();
-            Assert.NotEmpty(names);
-            Assert.All(names, name => Assert.Contains(name, ShellToolDialects.ByToolName.Keys));
-        }
-        finally
-        {
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-        }
-    });
 
     /** 拖动字号滑块实时预览(不落盘): FontSizeText 跟随 + App 资源更新 + 磁盘值不变。 */
     [Fact]
@@ -435,7 +486,15 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Assert.True(message.ShowPreview);
             Capture(window, "headless-diff-card-collapsed");
 
+            // 消息展开后卡片本体仍折叠: 只有标题栏, 没有 diff 行。
             message.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(message.IsDiffExpanded);
+            Assert.All(
+                diffView.GetVisualDescendants().OfType<TextBlock>(),
+                block => Assert.NotEqual("line 3 changed", block.Text));
+
+            message.IsDiffExpanded = true;
             Dispatcher.UIThread.RunJobs();
             Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "+3");
             Assert.Contains(diffView.GetVisualDescendants().OfType<TextBlock>(), block => block.Text == "-2");
@@ -443,7 +502,8 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Capture(window, "headless-diff-card-expanded");
 
             // 卡片内 chevron: 点击只隐藏 diff 行, 标题与计数保留
-            var chevron = diffView.GetVisualDescendants().OfType<Button>().Single();
+            var chevron = diffView.GetVisualDescendants().OfType<Button>()
+                .Single(button => button.Name == DiffView.ChevronName);
             chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Dispatcher.UIThread.RunJobs();
             Assert.False(message.IsDiffExpanded);
@@ -457,6 +517,50 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
             Assert.True(message.IsDiffExpanded);
             Assert.True(changedLine.IsEffectivelyVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+
+    /** @引用补全只看光标处的未完成 token: 选中候选或继续打提示词之后, 提示词都要保住并且能整段发送。 */
+    [Fact]
+    public async Task ComposerMentionMenu_ClosesOncePromptFollowsTheReference() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+            await using var environmentScope = environment;
+            var cwd = environment.Agent.Session.Header.Cwd ?? throw new InvalidOperationException("session has no cwd");
+            await File.WriteAllTextAsync(Path.Combine(cwd, "notes.md"), "见附图说明", TestContext.Current.CancellationToken);
+            var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+            var viewModel = window.ViewModel!;
+            window.Show();
+            viewModel.ShowChatCommand.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            var inputBox = window.GetVisualDescendants().OfType<ChatView>().Single().FindControl<TextBox>("InputBox")!;
+            Assert.True(inputBox.Focus());
+
+            // 选中引用候选后光标必须落在 token 之后, 继续打的提示词不能被清掉。
+            window.KeyTextInput("@notes");
+            Assert.Equal("@notes", viewModel.Composer.Input);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions, () => viewModel.Suggestions.Any(suggestion => suggestion.Label == "@notes.md"));
+            Assert.True(viewModel.IsSuggestionOpen);
+            Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "@notes.md");
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            Assert.Equal("@notes.md ", viewModel.Composer.Input);
+            Assert.Equal(viewModel.Composer.Input.Length, inputBox.CaretIndex);
+            Assert.False(viewModel.IsSuggestionOpen);
+
+            window.KeyTextInput("请修改这个文件");
+            Assert.Equal("@notes.md 请修改这个文件", viewModel.Composer.Input);
+            Assert.False(viewModel.IsSuggestionOpen);
+            window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            if (viewModel.SubmitCommand.ExecutionTask is { } submission)
+                await GuiTestEnvironment.PumpAsync(submission);
+            Assert.Equal("", viewModel.Composer.Input);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
+                () => viewModel.Messages.Any(message => message.Kind == MessageKind.User
+                    && message.Text.Contains("[file: notes.md]", StringComparison.Ordinal)
+                    && message.Text.Contains("请修改这个文件", StringComparison.Ordinal)),
+                () => GuiTestEnvironment.DescribeChatState(viewModel));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

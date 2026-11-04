@@ -47,7 +47,7 @@ public class ConfigBootTests
 
             // 用户 settings.yaml 未列出的插件发现即启用
             Assert.Equal(ActivationState.Active, app.Composition!.Find("@deepseek-ai/dsh-checkpoints")?.State);
-            Assert.Equal(ActivationState.Active, app.Composition.Find("@deepseek-ai/dsh-ide-history")?.State);
+            Assert.Equal(ActivationState.Active, app.Composition.Find("@deepseek-ai/dsh-ide")?.State);
 
             var fsSearch = app.Composition.Find("@deepseek-ai/dsh-tool-fs-search")!;
             Assert.Equal(false, (fsSearch.Config as IDictionary<string, object?>)?["sampleOverCapGlobResults"]);

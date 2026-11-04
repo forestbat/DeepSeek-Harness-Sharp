@@ -1,12 +1,14 @@
 using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Ide.History;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Persistence;
 using Dsh.Tui;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using static Dsh.Tests.IdeHistoryTestContext;
 
 namespace Dsh.Tests;
 
@@ -1286,6 +1288,47 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Null(ChatWindow.ParseIdeTarget("#12"));
     }
 
+    [Fact]
+    public async Task TimestampHistoryWindow_RevertPreviewsBeforeWriting_ThenConfirmsAndBacksUp()
+    {
+        var workspace = Path.Combine(_homeDir, "history-workspace");
+        var history = Path.Combine(_homeDir, "editor-data", ".config", "Code", "User", "History", "entry");
+        Directory.CreateDirectory(Path.Combine(workspace, ".vscode"));
+        Directory.CreateDirectory(history);
+        var target = Path.Combine(workspace, "app.cs");
+        File.WriteAllText(target, "current file");
+        File.WriteAllText(Path.Combine(history, "old.txt"), "historical file");
+        var timestamp = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds();
+        File.WriteAllText(Path.Combine(history, "entries.json"), $$"""
+            { "version": 1, "resource": "{{new Uri(target).AbsoluteUri}}",
+              "entries": [{ "id": "old.txt", "timestamp": {{timestamp}} }] }
+            """);
+        using var chat = await CreateChat(cwd: workspace, configure: (ctx, _) =>
+        {
+            ctx.SetOwn("dshHomePath", _homeDir);
+            CreateHistoryContext(ctx);
+            new IdeHistoryService(ctx,
+                IdeHistoryRegistry.CreateDefault(Path.Combine(_homeDir, "editor-data"), Path.Combine(_homeDir, "no-jb")),
+                IdeHistoryOptions.From(null) with { Timeline = true });
+        });
+        Type(chat, "message before the history revision");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => chat.TimestampCandidates().Any(candidate => candidate.Value.StartsWith("#", StringComparison.Ordinal)));
+        var token = Assert.Single(chat.TimestampCandidates(), candidate => candidate.Value.StartsWith("ide-group|", StringComparison.Ordinal)).Value;
+
+        chat.RunSlashCommand(chat.InputPane, $"/timestamp revert {token}");
+        await SettleAsync(chat, () => WideFrame(chat).Contains("Preview only", StringComparison.Ordinal));
+        Assert.Equal("current file", File.ReadAllText(target));
+        Assert.Contains("Preview only", WideFrame(chat), StringComparison.Ordinal);
+
+        chat.RunSlashCommand(chat.InputPane, $"/timestamp revert --confirm {token}");
+        await SettleAsync(chat, () => File.ReadAllText(target) == "historical file");
+        Assert.Equal("historical file", File.ReadAllText(target));
+        var backup = Assert.Single(Directory.GetFiles(Path.Combine(_homeDir, "checkpoints", "ide-backups"), "*.original"));
+        Assert.Equal("current file", File.ReadAllText(backup));
+        Assert.Equal("message before the history revision", chat.InputPane.Input);
+    }
+
     /** `/model` 候选与列表 = 声明 ∪ models.dev 目录: 目录已收录的模型没写进 settings 也要能列出/选中。 */
     [Fact]
     public async Task Model_Candidates_Include_Catalog_Models_Absent_From_Settings()
@@ -1324,7 +1367,8 @@ public class ChatWindowMenuTests : IDisposable
         Action<Context, CommandsService>? configure = null,
         string model = "deepseek-v4-flash",
         bool stubModelCommand = true,
-        Func<SessionId, ISessionPersistence>? persistenceFor = null)
+        Func<SessionId, ISessionPersistence>? persistenceFor = null,
+        string? cwd = null)
     {
         var ctx = new Context();
         _ = new SessionStore(ctx);
@@ -1341,7 +1385,7 @@ public class ChatWindowMenuTests : IDisposable
         configure?.Invoke(ctx, commands);
         var handle = await agents.Create(new CreateAgentOptions(
             SessionId.Create($"session-{Guid.NewGuid():N}"),
-            null,
+            cwd,
             new AgentOptions("deepseek-official", model)));
         var agent = (AgentLoopAgent)handle.Agent;
         await agent.WhenIdle();

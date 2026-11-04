@@ -3,7 +3,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Boot;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
 using Dsh.Transport;
@@ -46,12 +46,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         _toast = toast;
         _pageContext = pageContext;
         Actions = new FleetSessionActions(fleet);
-        SessionActions = new SessionActions(fleet, home ?? fleet.Options.LocalHome ?? new HarnessHome(Environment.CurrentDirectory), current);
+        SessionActions = new SessionActions(fleet, home ?? fleet.Services.LocalHome ?? new HarnessHome(Environment.CurrentDirectory), current);
         Dashboard = new DashboardViewModel(fleet, gui, SessionActions, current);
         Dashboard.ActionReported += toast;
         Notifications = new NotificationCenterViewModel(fleet, (machine, session) => Dashboard.Find(machine, session)?.Title) { Toast = toast };
         Palette = new CommandPaletteViewModel(() => Dashboard.AllCards);
-        Machines = new MachinesViewModel(fleet.Store, fleet.Options);
+        Machines = new MachinesViewModel(fleet.Services);
         Machines.Load();
         Machines.AttachFleet(fleet.Client);
         Machines.MachinesChanged += () => _ = ReloadMachinesAsync();
@@ -82,6 +82,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
 
     /** Opens the folder picker used by path-based host pages (Git). */
     public Func<Task<string?>>? FolderPicker { get; set; }
+    public Func<string, string, EditorOpenWithViewModel>? CreateEditorPicker { get; set; }
 
     private string? GitWorkspaceMachine { get; set; }
 
@@ -220,10 +221,14 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     {
         Pages.Register(new WorkspacePageEntry(WorkspacePages.Files, "文件", filesIcon, context => new HostPageViewModel(
             Fleet, "文件", FilesProtocol.Capability, context.Machine ?? MachineSpec.LocalName, context.ProjectPath ?? RemotePaths.Home,
-            async (host, _, path, style) =>
+            async (host, machine, path, style) =>
             {
                 var files = new FilesViewModel(host.Files, path, style);
-                await files.LoadAsync();
+                if (await files.LoadAsync())
+                {
+                    files.OpenWith = CreateEditorPicker?.Invoke(machine, files.Roots[0].Path);
+                    if (files.OpenWith is not null) await files.OpenWith.RefreshAsync();
+                }
                 return files;
             })));
         Pages.Register(new WorkspacePageEntry(WorkspacePages.Git, "Git", gitIcon, context => new HostPageViewModel(

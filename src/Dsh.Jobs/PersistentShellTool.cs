@@ -21,7 +21,14 @@ internal sealed record PersistentShellDialect(
     string CommandDescription,
     string SearchHint,
     Func<CancellationToken, IReadOnlyList<string>> StartArgv,
-    Func<string, PersistentShellMarkers, string> WrapCommand);
+    Func<string, PersistentShellMarkers, string> WrapCommand)
+{
+    /** The shell exists only on Windows; elsewhere the tool is not registered at all. */
+    public bool WindowsOnly { get; init; }
+
+    /** Extra platform capability check (e.g. an executable that may be missing); false hides it from the model's tool list. */
+    public Func<bool>? IsAvailable { get; init; }
+}
 
 internal readonly record struct PersistentShellSettings(long TimeoutMs, int MaxOutputChars, string Description);
 
@@ -111,6 +118,8 @@ internal static class PersistentShellTool
 
     public static IDisposable Register(Context ctx, PersistentShellDialect dialect, PersistentShellSettings settings)
     {
+        if (dialect.WindowsOnly && !OperatingSystem.IsWindows())
+            return new CompositeDisposable();
         if (settings.TimeoutMs <= 0)
             throw new ArgumentException($"{dialect.PackageLabel}: timeoutMs must be a positive safe integer");
         if (settings.MaxOutputChars <= 0)
@@ -166,6 +175,7 @@ internal static class PersistentShellTool
                 new JsonObject { ["type"] = "string" },
                 (_, value) => [new TextBlock(value.GetString() ?? "")]),
             Execute = (args, exec) => Execute(context, args, exec),
+            IsAvailable = dialect.IsAvailable,
             // Existing shells retain their own cwd; only a newly started process has a session-derived write target.
             WriteTargets = (_, exec) => exec.Agent is { } owner && shells.Get(owner) is not { Handle.Done.IsCompleted: false }
                 ? [owner.Session.WorkingDirectory ?? Environment.CurrentDirectory]

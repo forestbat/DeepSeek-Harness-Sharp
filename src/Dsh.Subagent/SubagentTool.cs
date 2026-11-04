@@ -54,9 +54,6 @@ public static class SubagentTool
     private const string ModelParameter = "model";
     private const string ReasoningEffortParameter = "reasoning_effort";
 
-    private const string BackgroundJobsUnavailable =
-        "background jobs unavailable: load @deepseek-ai/dsh-jobs and @deepseek-ai/dsh-tool-jobs";
-
     public static IDisposable Apply(Context ctx, SubagentToolConfig config)
     {
         if (config.MaxDepth is < 0)
@@ -256,9 +253,9 @@ public static class SubagentTool
             ToolFilter = config.ToolFilter,
             MaxDepth = config.MaxDepth,
         };
-        if (ResolveRunInBackground(args, config))
-            throw new InvalidOperationException(BackgroundJobsUnavailable);
-        return await SettleForegroundRun(await subagents.StartAsync(config.Provider, request));
+        if (!ResolveRunInBackground(args, config))
+            return await SettleForegroundRun(await subagents.StartAsync(config.Provider, request));
+        return await StartBackgroundRun(ctx, parent, subagents, config.Provider, request with { Background = true });
     }
 
     private static bool ResolveRunInBackground(JsonElement args, SubagentToolConfig config)
@@ -337,6 +334,30 @@ public static class SubagentTool
                 + "— fix that setting, or pass a `provider` and `model` listed by `list_subagent_models`",
                 error);
         }
+    }
+
+    /**
+     * 后台运行: 立即返回, 由完成回调把结果投回父会话并唤醒它。
+     *
+     * 这样用户在主会话按停只结束父自己的回合, 子代理继续跑完; 跑完的通知会把已经停下的父会话叫醒接着走。
+     */
+    private static async Task<object?> StartBackgroundRun(
+        Context ctx,
+        IAgent parent,
+        SubagentRuntime subagents,
+        string provider,
+        SubagentStartRequest request)
+    {
+        var run = await subagents.StartAsync(provider, request);
+        var dispatch = BackgroundRunDispatch.Start(ctx, parent, subagents, run, request.Label ?? "subagent task");
+        var value = new JsonObject
+        {
+            ["kind"] = "background",
+            ["runId"] = run.Id.Value,
+        };
+        if (dispatch.JobId is { } jobId)
+            value["jobId"] = jobId;
+        return value;
     }
 
     private static async Task<object?> SettleForegroundRun(ISubagentRun run)

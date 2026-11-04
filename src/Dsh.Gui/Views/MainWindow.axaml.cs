@@ -414,8 +414,11 @@ public sealed partial class MainWindow : Window
 
     private async Task<object?> ShowDecisionAsync(DecisionViewModel decision)
     {
+        if (decision.IsClosed)
+            return decision.Result;
         var dialog = new DecisionDialog(decision);
-        return await dialog.ShowDialog<object?>(this);
+        await dialog.ShowDialog<object?>(this);
+        return decision.Result;
     }
 
     private void CopyToClipboard(string text) => _ = CopyAsync(text);

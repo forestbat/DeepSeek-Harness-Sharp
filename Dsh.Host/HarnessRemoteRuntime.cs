@@ -14,6 +14,8 @@ internal sealed class HarnessRemoteRuntime(HarnessApp app, HostSessionRegistry s
     private readonly ConcurrentDictionary<string, AgentHandle> _handles = new(StringComparer.Ordinal);
 
     internal HarnessApp App => app;
+    internal AgentOptions DefaultAgentOptions { get; } = new(
+        app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort));
     internal HostSessionRegistry Sessions => sessions;
     internal HostPendingDecisions Pending => pending;
     internal AgentRegistry Registry => app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)
@@ -41,5 +43,6 @@ internal sealed class HarnessRemoteRuntime(HarnessApp app, HostSessionRegistry s
             handle.Dispose.Dispose();
         _handles.Clear();
     }
+
 
 }

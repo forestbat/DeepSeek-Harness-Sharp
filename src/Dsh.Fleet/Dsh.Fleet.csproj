@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Workspace\Dsh.Workspace.csproj" />
     <InternalsVisibleTo Include="Dsh.Tests" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />

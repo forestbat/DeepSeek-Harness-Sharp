@@ -87,7 +87,7 @@ public sealed class GuiViewsHeadlessTests
                 Kind = MachineKinds.Iroh,
                 EndpointId = new string('a', MachineSpec.IrohEndpointIdLength),
             });
-            var viewModel = new MachinesViewModel(store, new FleetOptions { SshTransportAdapter = new IrohSshTransport() });
+            var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions { SshTransportAdapter = new IrohSshTransport() }));
             viewModel.Load("build");
             var window = Show(new MachinesView { DataContext = viewModel });
             await Task.Yield();

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Dsh.Core;
+using Dsh.Ide.Bridge;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Plugins;
@@ -23,13 +24,11 @@ public sealed class PluginHostTests
         Assert.Equal(PluginForm.CompiledIn, descriptor.Form);
         Assert.True(host.Catalog.TryCreateDefinition("test/local", out var definition));
 
-        // 入口描述符随插件清单生成:丢掉接线(如 Web/Lsp 在重构中丢过)会在这里暴露。
         var web = Assert.Single(host.Catalog.Descriptors, entry => entry.Entry == "web");
         Assert.Equal("@deepseek-ai/dsh-web-bridge", web.Package);
         Assert.True(host.Catalog.TryGet(web.Package, out var createWeb));
         Assert.IsType<Dsh.WebBridge.Plugin>(createWeb());
         Assert.True(host.Catalog.TryDescribe("@deepseek-ai/dsh-fleet", out _));
-        Assert.Contains(host.Catalog.Descriptors, entry => entry.Entry == "lsp");
         Assert.Contains(host.Catalog.Descriptors, entry => entry.Package == "@deepseek-ai/dsh-tool-web");
 
         var ctx = new Context();
@@ -65,38 +64,65 @@ public sealed class PluginHostTests
         }
     }
 
-    [Fact(Timeout = 5000)]
-    public async Task FleetPlugin_DeactivationClosesOwnedLinksButKeepsHostSessions()
+    [Theory(Timeout = 5000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkspaceBackend_DeactivationClosesOwnedLinksWithoutIdeButKeepsHostSessions(bool unloadWorkspace)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var server = await HarnessHostFixture.CreateAsync("fpl", ct);
+        await server.StopHostAsync();
+        await server.Environment.App.Composition!.Find("@deepseek-ai/dsh-ide")!.DeactivateAsync();
+        await server.StartHostAsync(ct);
         var host = new PluginHost();
         host.RegisterCompiledIn();
+        Assert.True(host.Catalog.TryCreateDefinition("@deepseek-ai/dsh-workspace", out var workspaceDefinition));
         Assert.True(host.Catalog.TryCreateDefinition("@deepseek-ai/dsh-fleet", out var definition));
         var ctx = new Context();
         ctx.SetOwn("dshHomePath", server.Root);
+        var workspaceActivation = ctx.Plugin(workspaceDefinition!);
+        await workspaceActivation.WaitAsync();
         var activation = ctx.Plugin(definition!);
         await activation.WaitAsync();
         Assert.Equal(ActivationState.Active, activation.State);
-        var service = Assert.IsType<Dsh.Fleet.FleetService>(ctx.Get(Dsh.Fleet.FleetService.ServiceName));
-        var client = service.CreateClient(FleetConnectionTests.TestOptions);
+        Assert.Null(ctx.Get<IEditorService>(IEditorService.ServiceName, false));
+        var registry = Assert.IsType<WorkspaceService>(ctx.Get(WorkspaceService.ServiceName));
+        var provider = Assert.IsType<Dsh.Fleet.FleetService>(ctx.Get<IWorkspaceProvider>(IWorkspaceProvider.ServiceName));
+        var services = provider.Create(new Dsh.Boot.HarnessHome(server.Root), "workspace-plugin-test");
+        var client = services.CreateClient();
         client.Start();
         var lease = await Assert.Single(client.Machines).WaitConnectedAsync(ct);
+        Assert.Null(lease.Client.GetCapability<IRemoteEditors>());
         var session = await lease.Client.CreateSessionAsync(server.Root, ct);
         try
         {
-            await activation.DeactivateAsync();
+            await (unloadWorkspace ? workspaceActivation : activation).DeactivateAsync();
             Assert.True(lease.Lifetime.IsCancellationRequested);
             Assert.Null(ctx.Get(Dsh.Fleet.FleetService.ServiceName, false));
-            Assert.Throws<ObjectDisposedException>(() => service.CreateClient(FleetConnectionTests.TestOptions));
+            Assert.Null(ctx.Get<IWorkspaceProvider>(IWorkspaceProvider.ServiceName, false));
+            Assert.Throws<ObjectDisposedException>(() => services.CreateClient());
             await client.DisposeAsync();
-            service.Dispose();
+            provider.Dispose();
+            if (unloadWorkspace)
+                Assert.Throws<ObjectDisposedException>(() => registry.Register(ctx, provider));
             var observer = await server.ConnectAsync("after-fleet-unload", ct);
             Assert.Contains(await observer.ListHostSessionsAsync(ct), item => item.SessionId == session.Id);
+            if (!unloadWorkspace)
+            {
+                activation = ctx.Plugin(definition!);
+                await activation.WaitAsync();
+                var replacement = Assert.IsType<Dsh.Fleet.FleetService>(ctx.Get<IWorkspaceProvider>(IWorkspaceProvider.ServiceName));
+                Assert.NotSame(provider, replacement);
+                await using var restored = replacement.Create(new Dsh.Boot.HarnessHome(server.Root), "workspace-plugin-reload").CreateClient();
+                restored.Start();
+                var restoredLease = await Assert.Single(restored.Machines).WaitConnectedAsync(ct);
+                Assert.Contains(await restoredLease.Client.ListHostSessionsAsync(ct), item => item.SessionId == session.Id);
+            }
         }
         finally
         {
             await activation.DeactivateAsync();
+            await workspaceActivation.DeactivateAsync();
         }
     }
 

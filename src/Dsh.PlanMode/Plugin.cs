@@ -13,7 +13,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     public string[] Inject => packageName switch
     {
-        PlanMode => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SessionProjectionRegistry.ServiceName, UserQuestionService.ServiceName],
+        PlanMode => [ToolRuntime.ServiceName, SystemPrompt.ServiceName, SessionProjectionRegistry.ServiceName, UserQuestionService.ServiceName, CommandsService.ServiceName],
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 

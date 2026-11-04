@@ -4,7 +4,7 @@ using Dsh.Runtime;
 namespace Dsh.Fleet;
 
 /** Outbound settings belong to the target Host; Fleet only borrows its existing connection. */
-public sealed class FleetNetwork(MachineConnection connection, Action<string>? probeReady = null)
+public sealed class FleetNetwork(MachineConnection connection) : IWorkspaceMachineNetwork
 {
     public async Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken = default)
     {
@@ -34,7 +34,7 @@ public sealed class FleetNetwork(MachineConnection connection, Action<string>? p
         }
     }
 
-    public async Task<RemoteOutboundProxyProbeResult> ProbeOutboundAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken = default)
+    public async Task<RemoteOutboundProxyProbeResult> ProbeOutboundAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken = default, Action<string>? probeReady = null)
     {
         var capability = request.OperationId is null ? NetworkProtocol.Capability : NetworkProtocol.CancellableProbeCapability;
         var (lease, home) = await BorrowAsync(cancellationToken, capability).ConfigureAwait(false);

@@ -22,12 +22,19 @@ public sealed class ChatPane : ITuiPane
     private readonly Dictionary<ToolCallId, (int Start, string Arguments)> _pendingSubagentCalls = [];
     private AskUserQuestionRequest? _questionRequest;
     private readonly List<AskUserQuestionAnswerItem> _questionAnswers = [];
-    private readonly HashSet<int> _questionSelection = [];
-    private readonly Dictionary<int, string> _questionDrafts = [];
+    private ChoicePromptControl? _choicePrompt;
     private int _questionIndex;
     private string? _stashedInput;
     private int _stashedCursor;
     private IReadOnlyList<string> _mentionCandidates = [];
+    /** 会话的上下文占用(最近一次请求提示词 / 模型窗口), 显示在状态行。 */
+    private readonly ContextUsage _context = new();
+
+    /** 上下文整理是否在跑: 它不属于回合, 需要单独的状态位才能在状态行上显示出来。 */
+    private bool _maintaining;
+
+    /** 由插件提供的中立呈现接缝; 没安装该插件时为 null, 只是不显示整理进度。 */
+    private readonly IContextMaintenancePresenter? _maintenance;
     private int _mentionIndex;
     private int _mentionEnd;
     private int _mentionStart;
@@ -55,11 +62,14 @@ public sealed class ChatPane : ITuiPane
     private List<string>? _wrapCacheLines;
     private int _wrapProcessedLine;
     private readonly List<VisualRow> _visualRows = [];
-    private readonly List<(int Start, int End, bool Collapsed)> _foldSnapshot = [];
+    private readonly List<(int Start, int End, bool Collapsed, int Scroll)> _foldSnapshot = [];
 
     public ChatPane(ChatWindow window, int id, AgentLoopAgent agent)
     {
         _window = window;
+        _maintenance = window.MaintenancePresenter;
+        // 字段初始器早于本构造函数执行, 那时还拿不到接缝, 因此在这里重建一次。
+        Renderer = new TranscriptRenderer(_maintenance);
         StatusText = ReadyStatus;
         Id = id;
         Agent = agent;
@@ -122,6 +132,9 @@ public sealed class ChatPane : ITuiPane
 
     public bool StickToBottom { get; set; } = true;
 
+    /** 刚刚往下滚过: 下一帧知道 maxOffset 后决定是否恢复贴底(只有用户可以改判跟随)。 */
+    private bool _resumeStickAtTail;
+
     /** jump 后抑制一次“新内容贴底”, 让目标消息保持在顶上; 一次性, 之后恢复正常贴底。 */
     private bool _suppressStickOnce;
 
@@ -152,7 +165,14 @@ public sealed class ChatPane : ITuiPane
 
     public bool Busy { get; private set; }
 
-    public string StatusText { get; set; }
+    private string _statusText = "";
+
+    /** 状态行文本; 读取时自动拼上上下文占用, 因此用量一更新(无需额外刷新)就会显示出来。 */
+    public string StatusText
+    {
+        get => ContextStatusOf(_statusText);
+        set => _statusText = value;
+    }
 
     public string? DeleteConfirmSessionId { get; set; }
 
@@ -162,20 +182,21 @@ public sealed class ChatPane : ITuiPane
 
     public void HandleKey(ConsoleKeyInfo key)
     {
-        if (PendingApproval is not null)
+        if (_choicePrompt is not null)
         {
-            if (key.Key == ConsoleKey.Y)
+            if (PendingApproval is not null && (key.Modifiers & (ConsoleModifiers.Control | ConsoleModifiers.Alt)) != 0)
+                return;
+            var approvalShortcut = PendingApproval is not null;
+            if (approvalShortcut && (key.Key == ConsoleKey.Y || key.KeyChar is 'y' or 'Y'))
                 AnswerApproval(ApprovalOutcome.AllowedOnce);
-            else if (key.Key == ConsoleKey.N)
+            else if (approvalShortcut && (key.Key == ConsoleKey.A || key.KeyChar is 'a' or 'A'))
+                AnswerApproval(ApprovalOutcome.AllowedForSession);
+            else if (approvalShortcut && (key.Key == ConsoleKey.N || key.KeyChar is 'n' or 'N'))
                 AnswerApproval(ApprovalOutcome.Rejected);
-            else if (key.Key == ConsoleKey.C || key.Key == ConsoleKey.Escape)
+            else if (approvalShortcut && (key.Key == ConsoleKey.C || key.KeyChar is 'c' or 'C'))
                 AnswerApproval(ApprovalOutcome.Cancelled);
-            return;
-        }
-
-        if (PendingQuestions is not null)
-        {
-            HandleQuestionKey(key);
+            else
+                _choicePrompt.HandleKey(key);
             return;
         }
 
@@ -418,8 +439,13 @@ public sealed class ChatPane : ITuiPane
 
     public void InsertText(string text)
     {
-        if (string.IsNullOrEmpty(text) || PendingApproval is not null)
+        if (string.IsNullOrEmpty(text))
             return;
+        if (_choicePrompt is not null)
+        {
+            _choicePrompt.InsertText(text);
+            return;
+        }
         var sanitized = text.Replace('\r', ' ').Replace('\n', ' ');
         if (sanitized.Length == 0)
             return;
@@ -431,6 +457,11 @@ public sealed class ChatPane : ITuiPane
     /** 括号粘贴: 本地图片路径转附件; 空粘贴尝试读 OS 剪贴板图片; 其余按文本插入。 */
     internal void HandlePaste(string text)
     {
+        if (_choicePrompt is not null)
+        {
+            _choicePrompt.InsertText(text);
+            return;
+        }
         if (text.Length == 0)
         {
             TryAttachClipboardImage();
@@ -467,8 +498,11 @@ public sealed class ChatPane : ITuiPane
     /** 鼠标滚轮只作用于收到的 pane; 由调用方按命中测试路由。 */
     public void HandleMouseWheel(float delta)
     {
-        if (PendingApproval is not null)
+        if (_choicePrompt is not null)
+        {
+            _choicePrompt.Scroll(delta > 0 ? -3 : delta < 0 ? 3 : 0);
             return;
+        }
         var lines = _wheel.Scroll(delta);
         if (lines > 0)
         {
@@ -477,7 +511,9 @@ public sealed class ChatPane : ITuiPane
         }
         else if (lines < 0)
         {
+            // 往下滚到末尾就恢复跟随; 这里拿不到视口高度, 由 DrawTranscript 按真实 maxOffset 判定。
             ScrollOffset += -lines;
+            _resumeStickAtTail = true;
         }
     }
 
@@ -492,9 +528,11 @@ public sealed class ChatPane : ITuiPane
         UnsubscribeSessionRenamed();
         Agent = agent;
         SubscribeSessionRenamed();
-        Renderer = new TranscriptRenderer();
+        Renderer = new TranscriptRenderer(_maintenance);
         SelectedFoldKey = null;
         RenderedSeq = 0;
+        // 切会话/重放时先清整理状态: 历史里可能残留未闭合的开始标记, 那种整理早已随进程退出。
+        _maintaining = false;
         ScrollOffset = 0;
         StickToBottom = true;
         InvalidateWrapCache();
@@ -513,6 +551,7 @@ public sealed class ChatPane : ITuiPane
         if (sessionEvent.Seq < RenderedSeq)
             return;
         RenderedSeq = sessionEvent.Seq + 1;
+        TrackContextUsage(sessionEvent.Data);
         switch (sessionEvent.Data)
         {
             case TurnStartPayload:
@@ -522,6 +561,12 @@ public sealed class ChatPane : ITuiPane
                 SetBusy(false);
                 break;
         }
+
+        // 上下文整理可能长达数分钟, 期间必须让状态行显示出来; 否则用户只会看到界面没反应,
+        // 然后再触发一次 —— 那次必然撞上"已在进行"。只认实时事件: 重放里残留的未闭合标记
+        // 属于早已退出的进程, 不能把界面卡在"进行中"。
+        if (!replay && _maintenance?.Describe(sessionEvent) is { } maintenance)
+            TrackMaintenance(maintenance);
 
         if (sessionEvent.Data is ToolCallPayload call)
             _pendingSubagentCalls[call.CallId] = (Renderer.CurrentLength, call.Arguments);
@@ -569,6 +614,23 @@ public sealed class ChatPane : ITuiPane
         return child is not null;
     }
 
+    /** 上下文占用: 请求上下文给容量分母, 流式/最终用量给分子(只认最近一次请求的提示词)。 */
+    private void TrackContextUsage(SessionEventPayload payload)
+    {
+        switch (payload)
+        {
+            case RequestContextPayload context:
+                _context.ObserveRequest(context.ContextWindow);
+                break;
+            case AssistantChunkPayload { Chunk: StreamChunk.Usage usage }:
+                _context.ObserveUsage(usage.Value);
+                break;
+            case AssistantMessagePayload { Usage: { } messageUsage }:
+                _context.ObserveUsage(messageUsage);
+                break;
+        }
+    }
+
     /** 把子会话自身的工具调用/结果摘要追加进 fold 区间, 展开委派调用即可内联查看。 */
     private void AppendSubagentSummary(SubagentNode child, int foldStart)
     {
@@ -596,14 +658,12 @@ public sealed class ChatPane : ITuiPane
         return string.Join('\n', lines);
     }
 
+    /**
+     * 系统/工具提示文本: 只追加内容, 不改判跟随意图。
+     * 跟随只由用户自己的滚动(滚轮/PageUp/Home/End)改变; 否则用户在读历史时, 新来的输出会把视口拽回底部。
+     */
     public void AppendRaw(string text)
-        => AppendText(text);
-
-    private void AppendText(string text)
-    {
-        Renderer.AppendSystemMessage(text);
-        RequestStickToBottom();
-    }
+        => Renderer.AppendSystemMessage(text);
 
     public void DrawTranscript(CellGrid grid, ConsoleRect rect)
     {
@@ -623,6 +683,12 @@ public sealed class ChatPane : ITuiPane
         var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
         if (StickToBottom)
             ScrollOffset = maxOffset;
+        else if (_resumeStickAtTail)
+        {
+            // 用户往下滚到的位置就是末尾: 恢复跟随, 让后续输出重新贴底。
+            StickToBottom = ScrollOffset >= maxOffset;
+        }
+        _resumeStickAtTail = false;
         ScrollOffset = Math.Clamp(ScrollOffset, 0, maxOffset);
 
         var start = ScrollOffset;
@@ -837,6 +903,8 @@ public sealed class ChatPane : ITuiPane
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
+        if (_choicePrompt is not null)
+            return;
 
         var prompt = PendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
         var caret = Math.Clamp(Cursor, 0, Input.Length);
@@ -877,27 +945,83 @@ public sealed class ChatPane : ITuiPane
         var hint = $"Enter 发送 - / 命令 - @ 引用 - Tab 下一个参数 - {_window.KeyBindings.Leader(TuiAction.SessionMenu)} 会话";
         CellText.Draw(grid, rect.X, infoY, hint, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
         var (currentProvider, currentModel) = CurrentModel(Agent);
-        var preset = CurrentPreset(Agent);
         var profile = CurrentReasoningEffort(Agent) is { } effort
-            ? $"{preset} - {currentProvider} - {currentModel} - {effort.Value}"
-            : $"{preset} - {currentProvider} - {currentModel}";
+            ? $"{currentProvider} - {currentModel} - {effort.Value}"
+            : $"{currentProvider} - {currentModel}";
         var profileWidth = TerminalTextWidth.Of(profile);
         if (TerminalTextWidth.Of(hint) + profileWidth + 2 < rect.Width)
             CellText.Draw(grid, rect.Right - profileWidth, infoY, profile, AnsiColor.Default, AnsiColor.Default, CellStyle.Dim);
     }
 
+    public bool HasChoicePrompt => _choicePrompt is not null;
+
+    public void DrawChoicePrompt(CellGrid grid)
+    {
+        if (_choicePrompt is not null)
+            _choicePrompt.Draw(grid, new ConsoleRect(0, 0, grid.Width, grid.Height));
+    }
+
+    public bool HandleChoicePointer(int x, int y, bool click)
+        => _choicePrompt?.HandlePointer(x, y, click) ?? false;
+
+    public bool SynchronizeChoicePrompt()
+    {
+        if (_choicePrompt is null || PendingApproval?.Task.IsCompleted != true && PendingQuestions?.Task.IsCompleted != true)
+            return false;
+        PendingApproval = null;
+        PendingQuestions = null;
+        _questionRequest = null;
+        _questionAnswers.Clear();
+        CloseChoicePrompt();
+        return true;
+    }
+
+    private void StashDraft()
+    {
+        _window.CancelPointerGestures();
+        if (_stashedInput is not null)
+            return;
+        _stashedInput = Input;
+        _stashedCursor = Cursor;
+        Input = "";
+        Cursor = 0;
+        CloseMentionMenu();
+        CommandMenu = null;
+    }
+
+    private void CloseChoicePrompt()
+    {
+        _choicePrompt = null;
+        if (_stashedInput is not null)
+        {
+            Input = _stashedInput;
+            Cursor = _stashedCursor;
+            _stashedInput = null;
+        }
+        SetStatusReady();
+    }
+
     public void ShowApprovalPrompt(ApprovalRequest request, TaskCompletionSource<object?> answer)
     {
+        if (PendingApproval is not null)
+            AnswerApproval(ApprovalOutcome.Cancelled);
+        if (PendingQuestions is not null)
+            CompleteQuestions(AskUserQuestionAnswer.Dismissed);
+        StashDraft();
         PendingApproval = answer;
-        var argument = ApprovalHints.PrimaryArgument(request.ToolName, request.Arguments);
-        var impact = ApprovalHints.Impact(request.ToolName, request.Arguments);
-        var line = $"  ⚠ approve tool \"{request.ToolName}\"?"
-            + (request.Reason is null ? "" : $" {request.Reason}")
-            + (argument.Length == 0 ? "" : $" - {argument}")
-            + (impact.Length == 0 ? "" : $" {impact}")
-            + " [y]es/[n]o/[c]ancel turn\n";
-        AppendRaw(line);
-        StatusText = $"approval pending for \"{request.ToolName}\" - y/n/c";
+        _choicePrompt = new ChoicePromptControl(ChoicePrompt.ForApproval(request.ToolName, request.Arguments, request.Reason));
+        _choicePrompt.Completed += dismissed =>
+        {
+            var value = _choicePrompt?.State.SelectedValues().FirstOrDefault();
+            AnswerApproval(dismissed ? ApprovalOutcome.Cancelled : value switch
+            {
+                "once" => ApprovalOutcome.AllowedOnce,
+                "session" => ApprovalOutcome.AllowedForSession,
+                "reject" => ApprovalOutcome.Rejected,
+                _ => ApprovalOutcome.Cancelled,
+            });
+        };
+        StatusText = $"approval pending for \"{request.ToolName}\" - y/a/n/c";
     }
 
     private void AnswerApproval(ApprovalOutcome outcome)
@@ -906,148 +1030,54 @@ public sealed class ChatPane : ITuiPane
         if (pending is null)
             return;
         PendingApproval = null;
+        CloseChoicePrompt();
         AppendRaw($"  approval: {outcome}\n");
-        SetStatusReady();
         pending.TrySetResult(outcome);
     }
 
     public void ShowQuestionPrompt(AskUserQuestionRequest request, TaskCompletionSource<object?> answer)
     {
+        if (PendingApproval is not null)
+            AnswerApproval(ApprovalOutcome.Cancelled);
         if (PendingQuestions is not null)
-            CompleteQuestions(null);
+            CompleteQuestions(AskUserQuestionAnswer.Dismissed);
+        StashDraft();
         PendingQuestions = answer;
         _questionRequest = request;
         _questionIndex = 0;
         _questionAnswers.Clear();
-        _questionSelection.Clear();
-        _questionDrafts.Clear();
-        _stashedInput = Input;
-        _stashedCursor = Cursor;
-        Input = "";
-        Cursor = 0;
-        AppendRaw("  ? 智能体需要你回答:\n");
+
         ShowCurrentQuestion();
     }
 
     private void ShowCurrentQuestion()
     {
         var question = _questionRequest!.Questions[_questionIndex];
-        AppendRaw($"  ? {question.Question}\n");
-        if (question.Detail is { } detail)
-            AppendRaw($"    {detail}\n");
-        if (question.Options is { Count: > 0 } options)
+        _choicePrompt = new ChoicePromptControl(ChoicePrompt.FromQuestion(question));
+        _choicePrompt.Completed += dismissed =>
         {
-            for (var index = 0; index < options.Count && index < 9; index++)
+            if (dismissed)
             {
-                var option = options[index];
-                AppendRaw($"    [{index + 1}] {option.Label}{(option.Description is null ? "" : $" - {option.Description}")}\n");
-            }
-        }
-        Input = _questionDrafts.GetValueOrDefault(_questionIndex, "");
-        Cursor = Input.Length;
-        RefreshQuestionStatus();
-    }
-
-    private void RefreshQuestionStatus()
-    {
-        var question = _questionRequest!.Questions[_questionIndex];
-        var total = _questionRequest.Questions.Count;
-        var prefix = total > 1 ? $"问题 {_questionIndex + 1}/{total} - " : "";
-        StatusText = question.Options is { Count: > 0 }
-            ? question.MultiSelect
-                ? $"{prefix}1-9 切换选项(已选 {_questionSelection.Count}) - 输入框可补充 - Enter 确认 - Esc 取消"
-                : $"{prefix}1-9 选择 - 输入框可补充 - Enter 确认 - Esc 取消"
-            : $"{prefix}输入回答 - Enter 确认 - Esc 取消";
-    }
-
-    private void HandleQuestionKey(ConsoleKeyInfo key)
-    {
-        var question = _questionRequest!.Questions[_questionIndex];
-        if (key.Key == ConsoleKey.Escape)
-        {
-            AppendRaw("  x 已取消\n");
-            CompleteQuestions(null);
-            return;
-        }
-        if (key.Key == ConsoleKey.Enter)
-        {
-            SubmitCurrentQuestion(question);
-            return;
-        }
-        if (key.Key == ConsoleKey.Backspace)
-        {
-            if (Cursor > 0)
-            {
-                Input = Input.Remove(Cursor - 1, 1);
-                Cursor--;
-            }
-            return;
-        }
-        if (question.Options is { Count: > 0 } options && key.KeyChar >= '1' && key.KeyChar <= '9')
-        {
-            var index = key.KeyChar - '1';
-            if (index >= options.Count)
+                CompleteQuestions(AskUserQuestionAnswer.Dismissed);
                 return;
-            if (question.MultiSelect)
-            {
-                if (!_questionSelection.Remove(index))
-                    _questionSelection.Add(index);
             }
+            _questionAnswers.Add(_choicePrompt!.State.BuildAnswer(question.Id));
+            _questionIndex++;
+            if (_questionIndex < _questionRequest!.Questions.Count)
+                ShowCurrentQuestion();
             else
-            {
-                _questionSelection.Clear();
-                _questionSelection.Add(index);
-            }
-            RefreshQuestionStatus();
-            return;
-        }
-        if (!char.IsControl(key.KeyChar))
-        {
-            Input = Input.Insert(Cursor, key.KeyChar.ToString());
-            Cursor++;
-        }
+                CompleteQuestions(new AskUserQuestionAnswer([.. _questionAnswers]));
+        };
+        StatusText = $"question {_questionIndex + 1}/{_questionRequest.Questions.Count} - Tab custom - Enter submit - Esc dismiss all";
     }
 
-    private void SubmitCurrentQuestion(AskUserQuestionItem question)
-    {
-        IReadOnlyList<string> selected = question.Options is { Count: > 0 } options
-            ? _questionSelection.Where(index => index < options.Count).Order().Select(index => options[index].Label).ToList()
-            : [];
-        var custom = Input.Trim();
-        if (selected.Count == 0 && custom.Length == 0)
-        {
-            StatusText = "请先选择选项或输入回答";
-            return;
-        }
-        _questionDrafts[_questionIndex] = Input;
-        _questionAnswers.Add(new AskUserQuestionAnswerItem(question.Id, selected, custom.Length > 0 ? custom : null));
-        _questionSelection.Clear();
-        Input = "";
-        Cursor = 0;
-        _questionIndex++;
-        if (_questionIndex < _questionRequest!.Questions.Count)
-        {
-            ShowCurrentQuestion();
-            return;
-        }
-        AppendRaw("  + 已回答\n");
-        CompleteQuestions(new AskUserQuestionAnswer([.. _questionAnswers]));
-    }
-
-    private void CompleteQuestions(object? result)
+    private void CompleteQuestions(AskUserQuestionAnswer result)
     {
         var pending = PendingQuestions;
         PendingQuestions = null;
-        _questionDrafts.Clear();
         _questionRequest = null;
-        _questionSelection.Clear();
-        if (_stashedInput is not null)
-        {
-            Input = _stashedInput;
-            Cursor = _stashedCursor;
-            _stashedInput = null;
-        }
-        SetStatusReady();
+        _questionAnswers.Clear();
+        CloseChoicePrompt();
         pending?.TrySetResult(result);
     }
 
@@ -1068,7 +1098,7 @@ public sealed class ChatPane : ITuiPane
             // 回到普通输入(浮层关闭)时丢弃 Ctrl+P 暂存的提示词, 避免误接到别的命令后面。
             _promptText = "";
             DeleteConfirmSessionId = null;
-            if (TryGetMentionToken(text, Cursor, out var start, out var end))
+            if (MentionResolver.TryGetActiveToken(text, Cursor, out var start, out var end))
             {
                 _mentionActive = true;
                 _mentionStart = start;
@@ -1172,38 +1202,6 @@ public sealed class ChatPane : ITuiPane
     private static ReasoningEffortId? CurrentReasoningEffort(IAgent agent)
         => agent.Session.RequestHeader()?.Config.ReasoningEffort ?? agent.Options.ReasoningEffort;
 
-    /** 会话 preset 持久在 `preset/mode` 事件里; Dsh.Tui 不引用 Dsh.Presets, 属性名按约定泛化读取。 */
-    private static string CurrentPreset(IAgent agent)
-    {
-        var preset = "standard";
-        foreach (var sessionEvent in agent.Session.SnapshotEvents())
-        {
-            if (sessionEvent.Type != "preset/mode")
-                continue;
-            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
-        }
-        return preset;
-    }
-
-    private static string? ReadStringProperty(SessionEventPayload payload, string name)
-    {
-        try
-        {
-            var node = JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options);
-            if (node is not JsonObject json)
-                return null;
-            foreach (var (key, value) in json)
-            {
-                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
-                    return value.GetValue<string>();
-            }
-            return null;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
 
     /** 输入行为空时 Home/End 直达记录头/尾(有内容时留给输入光标)。 */
     private void JumpToTranscriptHead()
@@ -1398,7 +1396,7 @@ public sealed class ChatPane : ITuiPane
 
     private void InsertMentionCandidate()
     {
-        var (inserted, cursor) = ReplaceMention(Input, _mentionStart, _mentionEnd, _mentionCandidates[_mentionIndex]);
+        var (inserted, cursor) = MentionResolver.ReplaceActiveToken(Input, _mentionStart, _mentionEnd, _mentionCandidates[_mentionIndex]);
         Cursor = cursor;
         Input = inserted;
         CloseMentionMenu();
@@ -1447,10 +1445,32 @@ public sealed class ChatPane : ITuiPane
     private string ReadyStatus
         => $"ready - Enter to send, ^ history, Esc cancels a running turn, {_window.KeyBindings.Keys(TuiAction.Interrupt)}×2 quits";
 
+    private string BusyStatus => _maintaining ? "compacting context~ (Esc to cancel)" : "working~ (Esc to cancel)";
+
     public void SetStatusReady()
-        => StatusText = Busy
-            ? "working~ (Esc to cancel)"
+        => StatusText = Busy || _maintaining
+            ? BusyStatus
             : ReadyStatus;
+
+    /** 上下文占用跟在状态行前面; 还没有任何用量时(_context 为空)保持原样, 不给状态行添乱。 */
+    private string ContextStatusOf(string status)
+        => _context.Label == ContextUsage.Empty ? status : $"{_context.Label} | {status}";
+
+    /** 整理的开始/结束单独记账, 与回合的忙碌位分开: 整理结束后不能替回合清掉忙碌。 */
+    private void TrackMaintenance(ContextMaintenanceEvent maintenance)
+    {
+        switch (maintenance)
+        {
+            case ContextMaintenanceEvent.Started:
+                _maintaining = true;
+                SetStatusReady();
+                break;
+            case ContextMaintenanceEvent.Finished or ContextMaintenanceEvent.Failed:
+                _maintaining = false;
+                SetStatusReady();
+                break;
+        }
+    }
 
     private void SetBusy(bool busy)
     {
@@ -1646,36 +1666,6 @@ public sealed class ChatPane : ITuiPane
         Agent.Followup(MessageFactory.CreateUserMessage(content));
     }
 
-    /** 仅当光标落在「@token」区间内部或紧邻末尾时才算活跃 mention, 否则(如 token 后又输入了提示词)视为普通文本。 */
-    internal static bool TryGetMentionToken(string text, int cursor, out int start, out int end)
-    {
-        var at = text.LastIndexOf('@');
-        if (at < 0)
-        {
-            start = 0;
-            end = 0;
-            return false;
-        }
-
-        var tokenEnd = at + 1;
-        while (tokenEnd < text.Length && !char.IsWhiteSpace(text[tokenEnd]) && text[tokenEnd] != '@')
-            tokenEnd++;
-        if (cursor <= at || cursor > tokenEnd)
-        {
-            start = 0;
-            end = 0;
-            return false;
-        }
-
-        start = at;
-        end = tokenEnd;
-        return true;
-    }
-
-    /** 只替换 mention token 区间并补尾随空格, 保留 token 之后已输入的文本; 返回新文本与光标位置。 */
-    internal static (string Text, int Cursor) ReplaceMention(string text, int start, int end, string candidate)
-        => ($"{text[..start]}@{candidate} {text[end..]}", start + candidate.Length + 2);
-
     private void RecallHistory(int direction)
     {
         if (_history.Count == 0)
@@ -1870,11 +1860,48 @@ public sealed class ChatPane : ITuiPane
         return true;
     }
 
-    /** 键盘(Enter)与鼠标点击共用同一切换入口。 */
+    /** 键盘(Enter)与鼠标点击共用同一切换入口: 展开 → 逐页翻 → 收起。 */
     public void ToggleFold(TranscriptFold fold)
     {
-        fold.Collapsed = !fold.Collapsed;
+        if (fold.Collapsed)
+        {
+            fold.Collapsed = false;
+            fold.Scroll = 0;
+        }
+        else if (fold.Paged && fold.Scroll + DiffCardDisplay.PageLines < fold.Lines)
+        {
+            fold.Scroll += DiffCardDisplay.PageLines;
+        }
+        else
+        {
+            fold.Collapsed = true;
+            fold.Scroll = 0;
+        }
         Renderer.BumpVersion();
+    }
+
+    /**
+     * 滚轮落在某个已展开的长折叠里时就滚折叠本身, 不再带动整篇记录。
+     * 到边界后返回 false, 让滚轮继续滚正文(用户不会觉得滚轮"卡住")。
+     */
+    public bool ScrollFoldAt(float delta, int cellY, ConsoleRect rect)
+    {
+        if (Math.Abs(delta) < float.Epsilon)
+            return false;
+        var wrappedIndex = ScrollOffset + (cellY - rect.Y);
+        if (wrappedIndex < 0 || SourceOffsetAt(wrappedIndex) is not { } offset)
+            return false;
+        var fold = Renderer.Folds.FirstOrDefault(candidate =>
+            !candidate.Collapsed && candidate.Paged && candidate.Start <= offset && offset < candidate.End);
+        if (fold is null)
+            return false;
+        var maxScroll = Math.Max(0, fold.Lines - DiffCardDisplay.PageLines);
+        var target = Math.Clamp(fold.Scroll - _wheel.Scroll(delta), 0, maxScroll);
+        if (target == fold.Scroll)
+            return false;
+        fold.Scroll = target;
+        Renderer.BumpVersion();
+        return true;
     }
 
     /** 视觉行 > 源偏移: rows 的 FlatStart 升序, 二分找最后一个不超过 wrappedIndex 的行。 */
@@ -1951,7 +1978,7 @@ public sealed class ChatPane : ITuiPane
             for (var index = 0; index < folds.Count; index++)
             {
                 var fold = folds[index];
-                if (index < _foldSnapshot.Count && _foldSnapshot[index] == (fold.Start, fold.End, fold.Collapsed))
+                if (index < _foldSnapshot.Count && _foldSnapshot[index] == (fold.Start, fold.End, fold.Collapsed, fold.Scroll))
                     continue;
                 if (index >= _foldSnapshot.Count && !fold.Collapsed)
                     continue;
@@ -1980,6 +2007,40 @@ public sealed class ChatPane : ITuiPane
         {
             var lineStart = lineIndex < lines.Count ? starts[lineIndex] : tailStart;
             var raw = lineIndex < lines.Count ? lines[lineIndex] : tail;
+            var expanded = FindExpandedFold(folds, lineStart);
+            if (expanded is not null)
+            {
+                var endLine = LineIndexOf(starts, lines.Count, tailStart, expanded.End);
+                var foldLines = Math.Max(0, endLine - lineIndex);
+                expanded.Lines = foldLines;
+                var pageCount = !expanded.Paged
+                    ? 1
+                    : Math.Max(1, (foldLines + DiffCardDisplay.PageLines - 1) / DiffCardDisplay.PageLines);
+                expanded.PageCount = pageCount;
+                var maxScroll = expanded.Paged ? Math.Max(0, foldLines - DiffCardDisplay.PageLines) : 0;
+                expanded.Scroll = Math.Clamp(expanded.Scroll, 0, maxScroll);
+                if (expanded.Paged && foldLines > DiffCardDisplay.PageLines)
+                {
+                    var last = Math.Min(foldLines, expanded.Scroll + DiffCardDisplay.PageLines);
+                    AddRow(expanded.Start,
+                        $"{expanded.Preview} [第 {expanded.Scroll + 1}-{last} 行 / 共 {foldLines} 行]  (滚轮滚动, 点击翻页)",
+                        width);
+                }
+                var bodyStart = expanded.Paged ? lineIndex + expanded.Scroll : lineIndex;
+                var bodyEnd = expanded.Paged ? Math.Min(endLine, bodyStart + DiffCardDisplay.PageLines) : endLine;
+                for (var pageLine = bodyStart; pageLine < bodyEnd; pageLine++)
+                {
+                    var pageStartOffset = pageLine < lines.Count ? starts[pageLine] : tailStart;
+                    var pageContent = pageLine < lines.Count ? lines[pageLine] : tail;
+                    if (pageContent.EndsWith('\r'))
+                        pageContent = pageContent[..^1];
+                    if (expanded.Paged && pageLine == bodyStart && expanded.Scroll == 0 && pageCount > 1)
+                        pageContent = $"{pageContent} [1/{pageCount}]";
+                    AddRow(pageStartOffset, pageContent, width);
+                }
+                lineIndex = endLine;
+                continue;
+            }
             var fold = FindCollapsedFold(folds, lineStart);
             if (fold is not null)
             {
@@ -2039,6 +2100,17 @@ public sealed class ChatPane : ITuiPane
         return outermost;
     }
 
+    /** 展开态的 fold 只渲染当前页; 折叠头所在的源偏移按 fold.Start 命中。 */
+    private static TranscriptFold? FindExpandedFold(IReadOnlyList<TranscriptFold> folds, int position)
+    {
+        foreach (var fold in folds)
+        {
+            if (!fold.Collapsed && fold.Start == position && fold.End > fold.Start)
+                return fold;
+        }
+        return null;
+    }
+
     private static int LowerBoundRow(List<VisualRow> rows, int sourceStart)
     {
         var low = 0;
@@ -2066,7 +2138,7 @@ public sealed class ChatPane : ITuiPane
     {
         _foldSnapshot.Clear();
         foreach (var fold in folds)
-            _foldSnapshot.Add((fold.Start, fold.End, fold.Collapsed));
+            _foldSnapshot.Add((fold.Start, fold.End, fold.Collapsed, fold.Scroll));
     }
 
     internal static void WrapSingleLine(string line, int width, List<string> output)
@@ -2122,6 +2194,6 @@ public sealed class ChatPane : ITuiPane
     {
         UnsubscribeSessionRenamed();
         PendingApproval?.TrySetResult(ApprovalOutcome.Cancelled);
-        PendingQuestions?.TrySetResult(null);
+        PendingQuestions?.TrySetResult(AskUserQuestionAnswer.Dismissed);
     }
 }

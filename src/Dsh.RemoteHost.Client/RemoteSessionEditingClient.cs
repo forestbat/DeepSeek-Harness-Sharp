@@ -3,7 +3,7 @@ using static Dsh.RemoteHost.RemoteHostRpc;
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional SessionEditing domain. */
-public sealed class RemoteSessionEditingClient
+public sealed class RemoteSessionEditingClient : IWorkspaceSessionEditing
 {
     private readonly RemoteHostClient _host;
 

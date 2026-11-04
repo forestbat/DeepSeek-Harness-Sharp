@@ -47,6 +47,9 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static IDisposable RegisterBasicCompaction(Context ctx, object? config)
     {
         var engine = BasicCompactionEngine.Register(ctx, WithHarnessSummarization(ctx, BasicCompactionConfigFrom(config)));
+        // 同时提供"压缩进度"的呈现接缝: 界面层据此显示进度, 而不需要引用本程序集。
+        // 注册本身没有需要释放的资源(服务随 Context 生命周期收掉), 因此不进 Bundle。
+        _ = CompactionMaintenancePresenter.Register(ctx);
         return ctx.GetProp("harnessOptions") is HarnessOptions options
             ? new Bundle(engine, new SessionAutoRename(ctx, options))
             : engine;

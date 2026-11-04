@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Text;
-using Dsh.IdeHistory;
+using Dsh.Ide.History;
+using Dsh.Runtime;
+using static Dsh.Tests.IdeHistoryTestContext;
 
 namespace Dsh.Tests;
 
@@ -224,6 +226,58 @@ public sealed class IdeHistoryTests(ITestOutputHelper output)
         finally
         {
             DeleteQuietly(home);
+        }
+    }
+
+    [Fact]
+    public void Timeline_DeduplicatesAcrossRealProvidersInConfiguredOrder()
+    {
+        var root = CreateTempDirectory("provider-order");
+        try
+        {
+            var workspace = Path.Combine(root, "workspace");
+            Directory.CreateDirectory(Path.Combine(workspace, ".idea"));
+            Directory.CreateDirectory(Path.Combine(workspace, ".vscode"));
+            var target = Path.Combine(workspace, "app.cs");
+            var history = Path.Combine(root, ".config", "Code", "User", "History", "entry");
+            Directory.CreateDirectory(history);
+            File.WriteAllText(Path.Combine(history, "old.txt"), "same body");
+            File.WriteAllText(Path.Combine(history, "entries.json"), $$"""
+                { "version": 1, "resource": "{{new Uri(target).AbsoluteUri}}",
+                  "entries": [{ "id": "old.txt", "timestamp": 1780000001000 }] }
+                """);
+            var cacheRoot = Path.Combine(root, "jetbrains");
+            var product = Path.Combine(cacheRoot, "Rider2026.1");
+            var local = Path.Combine(product, "LocalHistory");
+            var caches = Path.Combine(product, "caches");
+            Directory.CreateDirectory(local);
+            Directory.CreateDirectory(caches);
+            var content = SyntheticContentStore.Write(Path.Combine(caches, "content.dat"), "same body"u8.ToArray());
+            var payload = SyntheticChangeSet.Build(7, 1780000000000, "fixture",
+                [new SyntheticChange("content", target.Replace('\\', '/'), (int)content)]);
+            var data = new byte[0x20 + payload.Length];
+            payload.CopyTo(data, 0x20);
+            File.WriteAllBytes(Path.Combine(local, "changes.storageData"), data);
+            var index = new byte[32 + 2 * 32];
+            BinaryPrimitives.WriteInt32BigEndian(index.AsSpan(0), 0x1f2f3f58);
+            BinaryPrimitives.WriteInt32BigEndian(index.AsSpan(4), 7);
+            BinaryPrimitives.WriteInt64BigEndian(index.AsSpan(8), 1);
+            BinaryPrimitives.WriteInt64BigEndian(index.AsSpan(64), 0x20);
+            BinaryPrimitives.WriteInt32BigEndian(index.AsSpan(72), payload.Length);
+            BinaryPrimitives.WriteInt32BigEndian(index.AsSpan(76), payload.Length);
+            BinaryPrimitives.WriteInt64BigEndian(index.AsSpan(88), 1780000000000);
+            File.WriteAllBytes(Path.Combine(local, "changes.storageRecordIndex"), index);
+            var registry = IdeHistoryRegistry.CreateDefault(root, cacheRoot);
+            var preferred = new IdeHistoryService(CreateHistoryContext(), registry, IdeHistoryOptions.From(null) with { Providers = ["jetbrains", "vscode"] });
+            var defaults = new IdeHistoryService(CreateHistoryContext(), registry, IdeHistoryOptions.From(null));
+
+            Assert.Equal(2, preferred.Query(workspace, null, null).Count);
+            Assert.Equal("jetbrains", Assert.Single(Assert.Single(preferred.QueryTimeline(workspace)).Entries).Provider);
+            Assert.Equal("vscode", Assert.Single(Assert.Single(defaults.QueryTimeline(workspace)).Entries).Provider);
+        }
+        finally
+        {
+            DeleteQuietly(root);
         }
     }
 
@@ -506,12 +560,7 @@ public sealed class IdeHistoryTests(ITestOutputHelper output)
         }
     }
 
-    private static string CreateTempDirectory(string prefix)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"dsh-idehistory-{prefix}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
-        return directory;
-    }
+    private static string CreateTempDirectory(string prefix) => TempTree.CreateDirectory($"ide-history-{prefix}");
 
     private static void DeleteQuietly(string directory)
     {

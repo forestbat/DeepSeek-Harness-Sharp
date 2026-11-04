@@ -1,7 +1,7 @@
 using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Plugins;
-using Dsh.Fleet;
+using Dsh.Workspace;
 
 [assembly: DshPlugin("@deepseek-ai/dsh-gui")]
 
@@ -10,7 +10,7 @@ namespace Dsh.Gui;
 [DshEntrypoint("gui")]
 public sealed class Plugin : IDshPlugin, IDshEntrypoint
 {
-    public string[] Inject => [FleetService.ServiceName];
+    public string[] Inject => [IWorkspaceProvider.ServiceName];
 
     public IDisposable Apply(Context ctx, object? config) => new CallbackDisposable();
 

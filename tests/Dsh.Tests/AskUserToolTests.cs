@@ -90,12 +90,16 @@ public class AskUserToolTests
         Assert.Equal("string", itemProperties["id"]!["type"]!.GetValue<string>());
         Assert.Equal("string", itemProperties["question"]!["type"]!.GetValue<string>());
         Assert.Equal("string", itemProperties["header"]!["type"]!.GetValue<string>());
+        Assert.Equal("string", itemProperties["detail"]!["type"]!.GetValue<string>());
+        Assert.Equal("boolean", itemProperties["allowCustom"]!["type"]!.GetValue<string>());
         Assert.Equal("array", itemProperties["options"]!["type"]!.GetValue<string>());
         Assert.Equal("boolean", itemProperties["multi_select"]!["type"]!.GetValue<string>());
         var optionProperties = itemProperties["options"]!["items"]!["properties"]!;
         Assert.Equal("string", optionProperties["label"]!["type"]!.GetValue<string>());
         Assert.Equal("string", optionProperties["description"]!["type"]!.GetValue<string>());
-        Assert.Null(optionProperties["value"]);
+        Assert.Equal("string", optionProperties["value"]!["type"]!.GetValue<string>());
+        Assert.Equal("boolean", optionProperties["disabled"]!["type"]!.GetValue<string>());
+        Assert.Equal("boolean", optionProperties["default"]!["type"]!.GetValue<string>());
         Assert.Null(optionProperties["recommended"]);
         Assert.Null(optionProperties["preview"]);
     }
@@ -117,7 +121,7 @@ public class AskUserToolTests
             """, signal: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
-        Assert.Equal("""{"answers":[{"id":"pkg","selected":["pnpm"]}]}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
+        Assert.Equal("""{"status":"answered","answers":[{"id":"pkg","selected":["pnpm"]}],"reason":null}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
         var request = Assert.Single(seen);
         var question = Assert.Single(request.Questions);
         Assert.Equal("pkg", question.Id);
@@ -174,12 +178,77 @@ public class AskUserToolTests
             """, signal: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
-        const string expected = """{"answers":[{"id":"targets","selected":["tests","docs"],"custom":"release notes"},{"id":"labels-only","selected":["tests"]},{"id":"notes","selected":[],"custom":"ship today"}]}""";
+        const string expected = """{"status":"answered","answers":[{"id":"targets","selected":["tests","docs"],"custom":"release notes"},{"id":"labels-only","selected":["tests"]},{"id":"notes","selected":[],"custom":"ship today"}],"reason":null}""";
         Assert.Equal(expected, Assert.IsType<TextBlock>(result.Content[0]).Text);
         Assert.Equal(expected, ((ToolExecutionResult.Success)result).Value.GetRawText());
         Assert.NotNull(seen);
         Assert.True(seen.Questions[0].MultiSelect);
         Assert.False(seen.Questions[2].MultiSelect);
+    }
+
+    [Fact]
+    public async Task Passes_Stable_Values_Disabled_Default_And_Custom_Policy_To_Provider()
+    {
+        using var harness = new Harness();
+        using var tool = AskUserTool.Register(harness.Ctx);
+        AskUserQuestionRequest? seen = null;
+        using var answerer = Answerer(harness, request =>
+        {
+            seen = request;
+            return new AskUserQuestionAnswer([new AskUserQuestionAnswerItem("mode", ["safe"])]);
+        });
+
+        var result = await Execute(harness, """
+            {"questions":[
+              {"id":"mode","question":"Choose mode","detail":"Changes production settings.","allowCustom":false,
+               "options":[{"label":"Safe","description":"Read only","value":"safe","default":true},
+                          {"label":"Dangerous","value":"dangerous","disabled":true}]},
+              {"id":"note","question":"Anything else?"}
+            ]}
+            """, signal: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsError);
+        Assert.NotNull(seen);
+        var question = seen.Questions[0];
+        Assert.False(question.AllowCustom);
+        Assert.Equal("Changes production settings.", question.Detail);
+        Assert.Equal(new AskUserQuestionOption("Safe", "Read only", "safe", Default: true), question.Options![0]);
+        Assert.Equal(new AskUserQuestionOption("Dangerous", Value: "dangerous", Disabled: true), question.Options[1]);
+        Assert.True(seen.Questions[1].AllowCustom);
+        Assert.Equal("safe", Assert.Single(((ToolExecutionResult.Success)result).Value.GetProperty("answers")[0].GetProperty("selected").EnumerateArray()).GetString());
+    }
+
+    [Fact]
+    public async Task Dismissed_Group_Is_A_Structured_Success_Without_Partial_Answers()
+    {
+        using var harness = new Harness();
+        using var tool = AskUserTool.Register(harness.Ctx);
+        using var answerer = Answerer(harness, _ =>
+            new AskUserQuestionAnswer([new AskUserQuestionAnswerItem("first", ["A"])], "dismissed", "user_cancelled"));
+
+        var result = await Execute(harness, """
+            {"questions":[{"id":"first","question":"First?"},{"id":"second","question":"Second?"}]}
+            """, signal: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsError);
+        const string expected = """{"status":"dismissed","answers":[],"reason":"user_cancelled"}""";
+        Assert.Equal(expected, ((ToolExecutionResult.Success)result).Value.GetRawText());
+        Assert.Equal(expected, Assert.IsType<TextBlock>(Assert.Single(result.Content)).Text);
+    }
+
+    [Fact]
+    public async Task Provider_Failure_Remains_Distinct_From_User_Dismissal()
+    {
+        using var harness = new Harness();
+        using var tool = AskUserTool.Register(harness.Ctx);
+        harness.Ctx.OnWaterfall<UserQuestionsRequestNotification>((_, _) =>
+            throw new InvalidOperationException("provider exploded"));
+
+        var result = await Execute(harness, """{"questions":[{"id":"q","question":"Continue?"}]}""",
+            signal: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsError);
+        Assert.Contains("provider exploded", ((ToolExecutionResult.Failure)result).Error.Message);
     }
 
     [Fact]
@@ -217,7 +286,7 @@ public class AskUserToolTests
         var result = await Execute(harness, """{ "questions": [{ "id": "continue", "header": "Confirm", "question": "Continue?" }] }""", agent, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsError);
-        Assert.Equal("""{"answers":[{"id":"continue","selected":["ok"]}]}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
+        Assert.Equal("""{"status":"answered","answers":[{"id":"continue","selected":["ok"]}],"reason":null}""", Assert.IsType<TextBlock>(result.Content[0]).Text);
         var request = Assert.Single(seen);
         Assert.Same(agent, request.Agent);
         Assert.Equal("Confirm", Assert.Single(request.Questions).Header);

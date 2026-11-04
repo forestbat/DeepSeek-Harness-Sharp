@@ -134,6 +134,50 @@ public sealed class HarnessSettingsSaveTests
         }
     }
 
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void SavePlugins_PreservesNestedUnknownKeysAndComments_AndBacksUpTheOriginal(string newline)
+    {
+        var home = CreateHome(newline);
+        const string original = """
+            # document comment
+            plugins:
+              "@deepseek-ai/dsh-ide": # package comment
+                enabled: true
+                future_option: keep # unknown option comment
+                history:
+                  # history comment
+                  timeline: false # value comment
+                  future_history: [a, b] # future nested comment
+              "@acme/other": true # other package comment
+            custom: retained
+            """;
+        try
+        {
+            File.WriteAllText(home.SettingsFile, original.ReplaceLineEndings(newline));
+            var settings = HarnessSettings.Load(home);
+            var history = Assert.IsAssignableFrom<IDictionary<string, object?>>(settings.Plugins["@deepseek-ai/dsh-ide"].Parameters["history"]);
+            history["timeline"] = true;
+
+            settings.SavePlugins(home);
+
+            var text = ReadSettings(home);
+            Assert.Contains("timeline: true # value comment", text);
+            Assert.Contains("future_option: keep # unknown option comment", text);
+            Assert.Contains("future_history: [a, b] # future nested comment", text);
+            Assert.Contains("# history comment", text);
+            Assert.Contains("\"@deepseek-ai/dsh-ide\": # package comment", text);
+            Assert.Contains("\"@acme/other\": true # other package comment", text);
+            Assert.Equal(original.ReplaceLineEndings(newline), File.ReadAllText($"{home.SettingsFile}.bak"));
+            Assert.Equal(text.ReplaceLineEndings(newline), text);
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
     [Fact]
     public async Task ProviderRemove_KeepsSectionsTheCommandDoesNotOwn()
     {

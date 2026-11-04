@@ -40,10 +40,14 @@ public sealed class Inbox
 
     public bool HasPending => _nextTurn.Count > 0 || _nextStep.Count > 0;
 
-    public void Clear()
+    /**
+     * 清空收件箱。keep 指定要留下的消息 —— 取消时会用它保住"后台任务已完成"这类通知:
+     * 那正是用户按停之后最需要看到的东西, 清掉等于把已经跑完的成果一起丢掉。
+     */
+    public void Clear(Func<UserMessage, bool>? keep = null)
     {
-        Splice(InboxTargets.NextStep, 0, _nextStep.Count, []);
-        Splice(InboxTargets.NextTurn, 0, _nextTurn.Count, []);
+        Splice(InboxTargets.NextStep, 0, _nextStep.Count, keep is null ? [] : [.. _nextStep.Where(keep)]);
+        Splice(InboxTargets.NextTurn, 0, _nextTurn.Count, keep is null ? [] : [.. _nextTurn.Where(keep)]);
     }
 
     internal List<UserMessage> Claim(string target, int turn)

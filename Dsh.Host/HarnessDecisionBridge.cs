@@ -27,9 +27,10 @@ internal sealed class HarnessDecisionBridge : IDisposable
     {
         var request = notification.Request;
         var response = await _pending.AskApprovalAsync(
-            new RemoteApprovalRequest(NewRequestId(), RootSessionId(request.Agent), request.ToolName, request.Arguments, request.Reason),
-            request.Agent.Id.Value).ConfigureAwait(false);
-        if (response is null)
+            new RemoteApprovalRequest(NewRequestId(), RootSessionId(request.Agent), request.ToolName, request.Arguments, request.Reason,
+                ApprovalHints.Impact(request.ToolName, request.Arguments)),
+            request.Agent.Id.Value, notification.Signal).ConfigureAwait(false);
+        if (response is null || response.Cancelled)
             return ApprovalOutcome.Cancelled;
         return !response.Allow ? ApprovalOutcome.Rejected
             : response.RememberForSession ? ApprovalOutcome.AllowedForSession : ApprovalOutcome.AllowedOnce;
@@ -44,14 +45,16 @@ internal sealed class HarnessDecisionBridge : IDisposable
                 question.Question,
                 question.Detail,
                 question.Header,
-                [.. (question.Options ?? []).Select(option => new RemoteQuestionOption(option.Label, option.Description))],
+                [.. (question.Options ?? []).Select(option => new RemoteQuestionOption(option.Label, option.Description, option.Value, option.Disabled, option.Default))],
                 question.MultiSelect,
-                question.Intent?.Approve))
+                question.Intent?.Approve,
+                question.AllowCustom))
             .ToList();
         var sessionId = request.Agent is { } agent ? RootSessionId(agent) : "";
-        var response = await _pending.AskQuestionAsync(new RemoteQuestionRequest(NewRequestId(), sessionId, items), request.Agent?.Id.Value).ConfigureAwait(false)
+        var response = await _pending.AskQuestionAsync(new RemoteQuestionRequest(NewRequestId(), sessionId, items), request.Agent?.Id.Value, notification.Signal).ConfigureAwait(false)
             ?? throw new UserQuestionException("ask_user_question was cancelled before any client answered", UserQuestionException.AskAborted);
-        return new AskUserQuestionAnswer([.. response.Answers.Select(answer => new AskUserQuestionAnswerItem(answer.Id, answer.Selected, answer.Custom))]);
+        return response.Status == "dismissed" ? AskUserQuestionAnswer.Dismissed
+            : new AskUserQuestionAnswer([.. response.Answers.Select(answer => new AskUserQuestionAnswerItem(answer.Id, answer.Selected, answer.Custom))], response.Status, response.Reason);
     }
 
     private static string NewRequestId() => Guid.NewGuid().ToString("N");

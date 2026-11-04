@@ -49,11 +49,12 @@ public sealed class AnthropicAdapter : LlmAdapter
             .Select(id => new LlmModelInfo(ProviderInfo.Id, id, id, null, _modelsDev.InputModalitiesFor(id)))
             .ToList();
 
-    /** 推理强度解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 models.dev 快照; 输入模态取自 models.dev 快照。 */
+    /** 推理强度解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 models.dev 快照; 上下文窗口与输入模态取自 models.dev 快照。 */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
         var reasoning = _metadataSource.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model);
-        return new LlmResolvedModelInfo(ProviderInfo.Id, model, model, null, _modelsDev.InputModalitiesFor(model), null, null, reasoning);
+        return new LlmResolvedModelInfo(ProviderInfo.Id, model, model, null, _modelsDev.InputModalitiesFor(model),
+            _modelsDev.ContextWindowFor(model), null, reasoning);
     }
 
     public override async IAsyncEnumerable<StreamChunk> Stream(

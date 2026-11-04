@@ -5,17 +5,6 @@ using Dsh.Runtime;
 
 namespace Dsh.Fleet;
 
-public enum DoctorOutcome
-{
-    Ok,
-    Warning,
-    Failed,
-    Skipped,
-}
-
-/** One diagnosis: what was checked, how it went, what was found, and a command that repairs it when it is not Ok. */
-public sealed record DoctorCheck(string Name, DoctorOutcome Outcome, string Detail, string? Fix = null);
-
 /**
  * Diagnoses one machine for `dsharp doctor`: ssh reachability, platform, the deployed dsharp and its release, whether the host runs, endpoint permissions, the PTY daemon and a live host round trip.
  * The same POSIX status script runs over ssh for remote machines and through /bin/sh for the local one, so both report from the machine's own view.

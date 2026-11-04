@@ -8,8 +8,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Boot;
 using Dsh.Core;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Gui.Services;
+using Dsh.Ide.Bridge;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.RemoteHost;
@@ -48,7 +49,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private const int ContentSearchLimit = 50;
     private const int MinContentQueryLength = 2;
 
-    private const string PresetEventType = "preset/mode";
     private const int MaxToasts = 4;
 
     private readonly Context _ctx;
@@ -58,23 +58,39 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly List<MessageViewModel> _lastUserMessages = [];
     private IReadOnlyList<string> _skillNames = [];
     private readonly Dictionary<string, string> _contentMatches = new(StringComparer.Ordinal);
-    private readonly Dictionary<ToolCallId, (string Name, string Arguments)> _pendingToolCalls = [];
+    private readonly Dictionary<ToolCallId, (string Name, string Arguments, MessageViewModel Message)> _pendingToolCalls = [];
     private readonly Dictionary<string, DecisionViewModel?> _pendingDialogs = new(StringComparer.Ordinal);
     private CancellationTokenSource? _contentSearch;
 
     private readonly HostChatSession _chat;
     private long _renderedSeq;
+    private bool _renderedAny;
+    private bool _resyncRequested;
     private MessageViewModel? _openAssistant;
     private MessageViewModel? _openReasoning;
+
+    /** 忙碌位是否由上下文整理置上: 自动压缩在回合内, 结束后不能替回合清掉 IsBusy。 */
+    private bool _compactionBusy;
+
+    /** 由插件提供的中立呈现接缝; 未安装该插件时为 null, 只是不显示整理进度。 */
+    private readonly IContextMaintenancePresenter? _maintenance;
     private bool _disposed;
     private Task? _disposal;
+    private readonly IEditorService? _editors;
+    private readonly GuiEditorTerminalHost _editorTerminalHost;
+    private readonly GuiEditorClientBinding _editorClientBinding;
+
+    [ObservableProperty]
+    private EditorOpenWithViewModel? _editorPicker;
     private bool _updatingSuggestions;
     private bool _commandSuggestionsLoaded;
+    private CancellationTokenSource? _suggestionCancellation;
 
     /** Local chat lifecycle and all session mutations belong to the persistent Host. */
     public MainViewModel(HarnessApp app, HostChatSession chat)
     {
         _ctx = app.Ctx;
+        _maintenance = _ctx.Get<IContextMaintenancePresenter>(IContextMaintenancePresenter.ServiceName, false);
         _chat = chat;
         Home = app.Home;
         Subagents = new SubagentPanelViewModel(chat);
@@ -102,9 +118,24 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RefreshTraceFilters();
         RefreshSessions();
         Workspace = CreateWorkspace(chat.Fleet);
+        Workspace.CreateEditorPicker = CreateEditorPicker;
+        _editorTerminalHost = new GuiEditorTerminalHost(chat.Fleet, async terminal =>
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (TerminalRequested is null) throw new InvalidOperationException("No terminal panel is attached.");
+                TerminalRequested(terminal);
+            });
+        });
+        var editors = _ctx.Get<IEditorService>(IEditorService.ServiceName, false);
+        _editors = editors is null ? null
+            : _ctx.Get<EditorExecutionContext>(EditorExecutionContext.ServiceName, false)!.BindTerminal(editors, _editorTerminalHost);
+        _editorClientBinding = new GuiEditorClientBinding(_editors,
+            _ctx.Get<Func<string, EditorRequest, EditorRequest>>("editorClientRequestMapper", false),
+            _ctx.Get<Func<string, string, bool>>("editorClientHasMapping", false));
         chat.Fleet.Changed += OnFleetChanged;
         chat.Reset += ShowSession;
-        chat.Received += ApplyEvents;
+        chat.Received += OnChatReceived;
         chat.Failed += SetStatus;
         ShowSession();
         chat.Follow();
@@ -245,11 +276,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private SessionMode _mode = SessionMode.Standard;
 
-    [ObservableProperty]
-    private string _preset = "standard";
-
-    [ObservableProperty]
-    private IReadOnlyList<PresetListItem> _presetItems = BuildPresetItems("standard");
 
     [ObservableProperty]
     private bool _isDashboardPage;
@@ -297,11 +323,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _ => "标准模式",
     };
 
-    public string PresetLabel => PresetDefinitions.FirstOrDefault(definition => definition.Id == Preset).Label ?? Preset;
-
-    public bool HasCommand(string name) => _chat.Commands.Any(command => string.Equals(command.Name, name, StringComparison.Ordinal));
-
-    public Task RefreshCommandsAsync() => _chat.RefreshCommandsAsync();
 
     /** 只有这三页走懒加载的 ContentControl; 其他页面由各自的 Host 承载, ContentControl 必须隐藏, 否则会把枚举名画成 "Chat"/"WorkspacePage" 文本。 */
     public bool IsLazyPage => Page is AppPage.Dashboard or AppPage.Settings or AppPage.Market;
@@ -406,18 +427,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnModeChanged(SessionMode value) => OnPropertyChanged(nameof(ModeLabel));
 
-    partial void OnPresetChanged(string value)
-    {
-        OnPropertyChanged(nameof(PresetLabel));
-        PresetItems = BuildPresetItems(value);
-    }
-
-    /** preset 四项固定, 标签口径与 Dsh.Presets 的 InteractionPreset 对齐; 未知 id 原样显示。 */
-    private static readonly (string Id, string Label)[] PresetDefinitions =
-        [("standard", "标准"), ("minimal", "极简"), ("ptc", "PTC"), ("creative", "创造")];
-
-    private static IReadOnlyList<PresetListItem> BuildPresetItems(string current)
-        => [.. PresetDefinitions.Select(definition => new PresetListItem(definition.Id, definition.Label, definition.Id == current))];
 
     partial void OnSelectedSessionChanged(SessionNodeViewModel? value)
     {
@@ -437,7 +446,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             node.IsSelected = false;
         Workspaces.Clear();
         FileSystemNodes.Clear();
-        var nodes = FilteredCatalog();
+        // 目录只取一次: 过滤后用于侧栏分组, 全量用于最近工作区。
+        var catalog = _catalog.Load();
+        var nodes = FilteredCatalog(catalog);
         foreach (var group in GroupByWorkspace(nodes))
             Workspaces.Add(group);
         foreach (var node in BuildFileTree(nodes))
@@ -446,15 +457,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         foreach (var node in Sort(nodes).Take(20))
             RecentSessions.Add(node);
         SelectedSession = FindSession(_chat.Id);
-        RebuildRecentWorkspaces();
+        // 全量目录已在上方取到, 这里不再第二次扫描。
+        RebuildRecentWorkspaces(catalog);
         UpdateCurrentWorkspace();
     }
 
     /** 最近工作区 = 已有会话的 distinct 完整路径, 按最近创建倒序; 选中只改默认目录。 */
-    private void RebuildRecentWorkspaces()
+    private void RebuildRecentWorkspaces(IReadOnlyList<SessionNodeViewModel> catalog)
     {
         RecentWorkspaces.Clear();
-        var paths = _catalog.Load()
+        var paths = catalog
             .Where(node => node.WorkspacePath != SessionCatalog.UnspecifiedWorkspace)
             .GroupBy(node => node.WorkspacePath, StringComparer.Ordinal)
             .OrderByDescending(group => group.Max(node => node.CreatedAt))
@@ -469,6 +481,33 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private EditorOpenWithViewModel CreateEditorPicker(string machine, string workspace)
+    {
+        var sessionId = Workspace.ActiveSession is { } active && active.Machine == machine
+            ? active.SessionId : machine == _chat.Machine ? _chat.Id.Value : null;
+        var turn = machine == _chat.Machine && sessionId == _chat.Id.Value
+            ? (_chat.Events.LastOrDefault(item => item.Data is TurnStartPayload)?.Data as TurnStartPayload)?.Turn
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null;
+        return new(_editors, async cancellationToken =>
+        {
+            var connection = _chat.Fleet.Find(machine) ?? throw new InvalidOperationException("The editor host is unavailable.");
+            var lease = await connection.WaitConnectedAsync(cancellationToken);
+            var editors = lease.Client.GetCapability<IRemoteEditors>()
+                ?? throw new NotSupportedException("The selected Host does not provide IDE integration.");
+            var service = new HostEditorService(editors);
+            await service.RefreshAsync(workspace, cancellationToken, sessionId);
+            return service;
+        }, workspace, machine, sessionId, turn);
+    }
+
+    [RelayCommand]
+    private async Task PrepareEditorPickerAsync()
+    {
+        EditorPicker = CreateEditorPicker(Workspace.ActiveSession?.Machine ?? _chat.Machine,
+            Workspace.ActiveSession?.Card.ProjectPath ?? _chat.Header.Cwd ?? Home.Root);
+        await EditorPicker.RefreshAsync();
+    }
     /** 在当前会话/选中会话的机器上打开终端: 本地与远端共用同一套 TerminalViewModel。 */
     [RelayCommand]
     private void OpenTerminal() => _ = OpenTerminalAsync();
@@ -756,7 +795,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         node.Title = title;
         if (node.SessionId == _chat.Id)
         {
-            await _chat.ReloadAsync();
+            await _chat.ReloadAsync(forceReset: false);
             SessionTitle = title;
         }
         StatusText = $"已重命名为「{title}」";
@@ -781,6 +820,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         await (await _chat.ClientAsync()).SessionEditing.DeleteSessionAsync(node.SessionId.Value);
+        // 磁盘上已经没有这条会话, 缓存的目录快照必须失效, 否则它会在侧栏里留下幽灵条目。
+        _catalog.InvalidateDiskCache();
         StatusText = "会话已删除";
         RefreshSessions();
     }
@@ -942,6 +983,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         var insert = $"@{text}";
         Composer.Input = Composer.Input.Length == 0 ? $"{insert} " : $"{Composer.Input.TrimEnd()} {insert} ";
+        Composer.CaretIndex = Composer.Input.Length;
     }
 
     [RelayCommand]
@@ -976,24 +1018,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    [RelayCommand]
-    private async Task SetPreset(string id)
-    {
-        var previous = Preset;
-        Preset = id;
-        try
-        {
-            var result = await _chat.ExecuteAsync($"/preset {id}");
-            StatusText = result.Text ?? "";
-            if (!result.Success)
-                Preset = previous;
-        }
-        catch
-        {
-            Preset = previous;
-            throw;
-        }
-    }
 
     [RelayCommand]
     private async Task SwitchModelAsync(string? model)
@@ -1079,14 +1103,19 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         _disposed = true;
+        _suggestionCancellation?.Cancel();
+        _suggestionCancellation?.Dispose();
+        _suggestionCancellation = null;
+        await _editorTerminalHost.DisposeAsync();
+        await _editorClientBinding.DisposeAsync();
         Preferences.BeginNetworkShutdown();
         Workspace.Machines.BeginNetworkShutdown();
         foreach (var dialog in _pendingDialogs.Values)
-            dialog?.CancelCommand.Execute(null);
+            dialog?.Invalidate();
         _pendingDialogs.Clear();
         _chat.Fleet.Changed -= OnFleetChanged;
         _chat.Reset -= ShowSession;
-        _chat.Received -= ApplyEvents;
+        _chat.Received -= OnChatReceived;
         _chat.Failed -= SetStatus;
         _contentSearch?.Cancel();
         _contentSearch?.Dispose();
@@ -1150,9 +1179,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private SessionNodeViewModel? FindSession(SessionId id)
         => AllSessions().FirstOrDefault(node => node.SessionId == id);
 
-    private IReadOnlyList<SessionNodeViewModel> FilteredCatalog()
+    private IReadOnlyList<SessionNodeViewModel> FilteredCatalog(IReadOnlyList<SessionNodeViewModel> catalog)
     {
-        var nodes = _catalog.Load();
+        var nodes = catalog;
         var search = SearchText.Trim();
         if (search.Length > 0)
             nodes = [.. nodes.Where(node => IsTitleHit(node, search) || _contentMatches.ContainsKey(node.SessionId.Value))];
@@ -1269,28 +1298,36 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RefreshSessions();
         Subagents.Refresh();
         _chat.RefreshConnection();
+        _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         RefreshPendingDialogs();
     }
 
     /** Host broadcasts are authoritative: another client's answer closes this client's outstanding dialog. */
     public void RefreshPendingDialogs()
     {
-        var pending = _chat.Fleet.Client.Pending().Where(item => item.Machine == _chat.Machine).ToList();
+        var pending = _chat.Fleet.Client.Pending().Where(item => item.Machine == _chat.Machine && item.SessionId == _chat.Id.Value).ToList();
         var present = pending.Select(item => item.RequestId).ToHashSet(StringComparer.Ordinal);
         foreach (var id in _pendingDialogs.Keys.Where(id => !present.Contains(id)).ToList())
         {
-            _pendingDialogs[id]?.CancelCommand.Execute(null);
+            var dialog = _pendingDialogs[id];
             _pendingDialogs.Remove(id);
+            dialog?.Invalidate();
         }
         if (_disposed || DecisionRequested is null)
             return;
+        var supportsCancellation = _chat.Fleet.Find(_chat.Machine)?.Hello?.Capabilities?.Contains(DecisionProtocol.Capability) == true;
         foreach (var item in pending)
         {
-            if (_pendingDialogs.ContainsKey(item.RequestId))
+            if (_pendingDialogs.TryGetValue(item.RequestId, out var existing))
+            {
+                existing?.SetCancellationSupported(supportsCancellation);
                 continue;
+            }
             var decision = item.Approval is { } approval
-                ? DecisionViewModel.ForApproval(approval.Tool, approval.Arguments, approval.Reason)
-                : DecisionViewModel.ForQuestion(new AskUserQuestionRequest([.. item.Question!.Questions.Select(PendingDecisionViewModel.ToItem)]));
+                ? DecisionViewModel.ForApproval(approval.Tool, approval.Arguments, approval.Reason, item.RequestId,
+                    approval.Availability?.AllowOnce ?? true, approval.Availability?.AllowForSession ?? true, approval.Availability?.Reject ?? true)
+                : DecisionViewModel.ForQuestion(new AskUserQuestionRequest([.. item.Question!.Questions.Select(PendingDecisionViewModel.ToItem)]), item.RequestId);
+            decision.SetCancellationSupported(supportsCancellation);
             _pendingDialogs[item.RequestId] = decision;
             _ = AnswerPendingAsync(item, decision);
         }
@@ -1301,26 +1338,40 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var result = await DecisionRequested!(decision);
-            if (_disposed || !_pendingDialogs.ContainsKey(item.RequestId))
+            if (_disposed || decision.IsSuperseded || !_pendingDialogs.ContainsKey(item.RequestId))
                 return;
-            _pendingDialogs[item.RequestId] = null;
             var client = await _chat.ClientAsync();
+            if (_disposed || decision.IsSuperseded || !_pendingDialogs.ContainsKey(item.RequestId))
+                return;
             if (item.Approval is not null && result is ApprovalOutcome outcome)
                 await client.RespondApprovalAsync(item.RequestId,
                     outcome is ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession,
-                    rememberForSession: outcome is ApprovalOutcome.AllowedForSession);
+                    rememberForSession: outcome is ApprovalOutcome.AllowedForSession,
+                    cancelled: outcome is ApprovalOutcome.Cancelled);
             else if (result is AskUserQuestionAnswer answer)
                 await client.RespondQuestionAsync(item.RequestId,
-                    [.. answer.Answers.Select(value => new RemoteQuestionAnswerItem(value.Id, value.Selected, value.Custom))]);
+                    [.. answer.Answers.Select(value => new RemoteQuestionAnswerItem(value.Id, value.Selected, value.Custom))],
+                    status: answer.Status, reason: answer.Reason);
+            if (_pendingDialogs.ContainsKey(item.RequestId))
+                _pendingDialogs[item.RequestId] = null;
         }
         catch (Exception error)
         {
             if (!_disposed)
+            {
                 StatusText = $"决定提交失败: {error.Message}";
+                if (_pendingDialogs.Remove(item.RequestId))
+                    RefreshPendingDialogs();
+            }
         }
     }
     private void OnComposerPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
+        if (args.PropertyName == nameof(ComposerViewModel.CaretIndex))
+        {
+            RefreshSuggestions();
+            return;
+        }
         if (args.PropertyName != nameof(ComposerViewModel.Input))
             return;
         RefreshSuggestions();
@@ -1411,7 +1462,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void ShowSession()
     {
         UpdateCurrentWorkspace();
+        _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         _renderedSeq = 0;
+        _renderedAny = false;
+        // 上一个进程可能留下未闭合的 compaction/start: 重放它会把界面卡在"正在压缩",
+        // 而那次压缩早已随进程退出。
+        _compactionBusy = false;
         _openAssistant = null;
         _openReasoning = null;
         Messages.Clear();
@@ -1422,30 +1478,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pendingToolCalls.Clear();
         SessionTitle = _chat.Header.Title ?? _chat.Id.Value;
         IsBusy = false;
-        ApplyEvents(_chat.Events);
+        ApplyEvents(_chat.Events, replay: true);
         RefreshMode();
-        RefreshPreset();
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
+        RefreshPendingDialogs();
     }
 
     private void RefreshMode()
         => Mode = PlanActive(_chat.Events) ? SessionMode.Plan : SessionMode.Standard;
 
-    /** preset 状态持久在会话事件 `preset/mode` 里; payload 类型在 Dsh.Presets 程序集, GUI 只能按事件 Type + 泛化属性读取。 */
-    private void RefreshPreset()
-    {
-        var preset = "standard";
-        foreach (var sessionEvent in _chat.Events)
-        {
-            if (sessionEvent.Type != PresetEventType)
-                continue;
-            preset = ReadStringProperty(sessionEvent.Data, "Preset") ?? preset;
-        }
-        Preset = preset;
-    }
 
     /** 计划模式状态持久在会话事件 `plan/mode` 里; 这里只读它, 不复制 PlanMode 插件的判定逻辑。 */
     private static bool PlanActive(IReadOnlyList<SessionEvent> events)
@@ -1463,8 +1507,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private static bool? ReadBoolProperty(SessionEventPayload payload, string name)
         => ReadProperty<bool>(payload, name);
 
-    private static string? ReadStringProperty(SessionEventPayload payload, string name)
-        => ReadProperty<string>(payload, name);
 
     /** payload 经 DshJson(camelCase) 序列化后键名会变形, 故按忽略大小写匹配。 */
     private static T? ReadProperty<T>(SessionEventPayload payload, string name)
@@ -1496,7 +1538,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RefreshFilteredModels();
     }
 
-    private void ApplyEvents(IReadOnlyList<SessionEvent> batch)
+    /** 实时事件: 不是重放, 因此压缩状态要按真实生命周期切换。 */
+    private void OnChatReceived(IReadOnlyList<SessionEvent> batch) => ApplyEvents(batch);
+
+    /** replay=true 表示在重放既有历史(切会话/重新加载), 而不是收到了实时事件。 */
+    private void ApplyEvents(IReadOnlyList<SessionEvent> batch, bool replay = false)
     {
         if (_disposed)
             return;
@@ -1504,18 +1550,54 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (sessionEvent.Seq < _renderedSeq)
                 continue;
+            if (_renderedAny && sessionEvent.Seq > _renderedSeq)
+            {
+                RequestResync(sessionEvent.Seq);
+                return;
+            }
+            _renderedAny = true;
             _renderedSeq = sessionEvent.Seq + 1;
-            ApplyEvent(sessionEvent);
+            ApplyEvent(sessionEvent, replay);
         }
     }
 
-    private void ApplyEvent(SessionEvent sessionEvent)
+    private void RequestResync(long receivedSeq)
     {
-        if (sessionEvent.Type == PresetEventType)
-            RefreshPreset();
+        if (_resyncRequested || _disposed)
+            return;
+        _resyncRequested = true;
+        _ctx.LoggerFor("gui").Warn($"session event gap: expected seq {_renderedSeq}, received {receivedSeq}; reloading snapshot");
+        _ = ResyncAsync();
+    }
+
+    private async Task ResyncAsync()
+    {
+        try
+        {
+            await _chat.ReloadAsync(forceReset: true);
+        }
+        catch (Exception error)
+        {
+            if (!_disposed)
+                StatusText = $"会话重同步失败: {error.Message}";
+        }
+        finally
+        {
+            _resyncRequested = false;
+        }
+    }
+
+    private void ApplyEvent(SessionEvent sessionEvent, bool replay)
+    {
         if (sessionEvent.Data is TurnStartPayload or TurnEndPayload)
             foreach (var node in AllSessions().Where(node => node.SessionId == _chat.Id))
                 node.IsRunning = sessionEvent.Data is TurnStartPayload;
+        // 上下文整理(压缩)的进度由插件经由中立视图给出, 界面层因此不引用该插件。
+        if (_maintenance?.Describe(sessionEvent) is { } maintenance)
+        {
+            ApplyMaintenance(sessionEvent.Seq, maintenance, replay);
+            return;
+        }
         switch (sessionEvent.Data)
         {
             case TurnStartPayload turn:
@@ -1553,6 +1635,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case RequestContextPayload context:
                 // 请求元数据(provider/model)只在轨迹里出现, 进正文会和运行时上下文注入行重复。
+                TokenStats.ObserveRequestContext(context.ContextWindow);
                 AddTrace(sessionEvent.Seq, TraceKind.Context, $"请求上下文 · {context.Provider}/{context.Model}", context.SystemPromptUpdate ?? "");
                 break;
             case CommandRunPayload run:
@@ -1573,17 +1656,22 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyUserMessage(long seq, UserMessagePayload payload)
     {
-        var text = SessionText.ContentText(payload.Message.Content);
+        var text = UserFacingText.StripSystemReminders(SessionText.ContentText(payload.Message.Content));
         switch (payload.Message.Source)
         {
             case UserMessageSource:
+                if (text.Length == 0)
+                    break;
                 var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false));
                 _lastUserMessages.Add(user);
+                break;
+            // 压缩检查点的正文已经由 compaction/summary 那一行渲染过, 再当成上下文注入会重复一遍摘要。
+            case PluginMessageSource source when _maintenance?.IsCheckpointMessage(source) == true:
                 break;
             case PluginMessageSource plugin:
                 var label = $"上下文注入 · {plugin.Plugin}";
                 var injected = AppendMessage(new MessageViewModel("", label, MessageKind.Context, false));
-                injected.Detail = plugin.Summary ?? text;
+                injected.Detail = UserFacingText.StripSystemReminders(plugin.Summary ?? text);
                 AddTrace(seq, TraceKind.Context, label, injected.Detail);
                 break;
             default:
@@ -1598,6 +1686,59 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _openReasoning = null;
         if (reason is TurnEndReason.Error error)
             AppendMessage(new MessageViewModel("错误", $"{error.Failure.Code}: {error.Failure.Message}", MessageKind.System, false));
+    }
+
+    /** 上下文整理(压缩)的进度落在正文与轨迹里; 只用中立视图, 因此这里不出现压缩插件的类型。 */
+    private void ApplyMaintenance(long seq, ContextMaintenanceEvent maintenance, bool replay)
+    {
+        switch (maintenance)
+        {
+            // 重放时不当作进行中: 历史里未闭合的开始标记属于早已退出的进程。
+            case ContextMaintenanceEvent.Started when !replay:
+                BeginMaintenance(seq);
+                break;
+            case ContextMaintenanceEvent.Started:
+                break;
+            case ContextMaintenanceEvent.Pruned pruned:
+                AddTrace(seq, TraceKind.Context, $"裁剪 {pruned.Items} 条过大的工具结果", $"~{pruned.Tokens} tokens");
+                break;
+            case ContextMaintenanceEvent.Summarized summarized:
+                ApplySummarized(seq, summarized);
+                break;
+            case ContextMaintenanceEvent.Failed failed:
+                EndMaintenance();
+                AppendMessage(new MessageViewModel("错误", $"压缩失败: {failed.Error}", MessageKind.System, false));
+                AddTrace(seq, TraceKind.Context, "压缩失败", failed.Error);
+                break;
+            case ContextMaintenanceEvent.Finished:
+                EndMaintenance();
+                break;
+        }
+    }
+
+    private void BeginMaintenance(long seq)
+    {
+        // 自动压缩发生在回合内部: 那种情况忙碌位已经由 turn/start 置上, 结束后不能替回合清掉。
+        _compactionBusy = !IsBusy;
+        IsBusy = true;
+        StatusText = "正在压缩上下文…";
+        AppendMessage(new MessageViewModel("压缩", "正在压缩上下文，摘要生成可能需要几分钟…", MessageKind.Context, false));
+        AddTrace(seq, TraceKind.Context, "压缩开始");
+    }
+
+    private void ApplySummarized(long seq, ContextMaintenanceEvent.Summarized summarized)
+    {
+        var label = $"上下文已压缩 · 收起 {summarized.Items} 条历史 (~{summarized.Tokens} tokens)";
+        AppendMessage(new MessageViewModel("", label, MessageKind.Context, false)).Detail = summarized.Summary;
+        AddTrace(seq, TraceKind.Context, label, summarized.Summary);
+    }
+
+    private void EndMaintenance()
+    {
+        if (!_compactionBusy)
+            return;
+        _compactionBusy = false;
+        IsBusy = false;
     }
 
     private void ApplyChunk(long seq, StreamChunk chunk)
@@ -1651,20 +1792,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _openReasoning = null;
         var isSubagent = string.Equals(call.Name, ISubagentService.DefaultToolName, StringComparison.Ordinal);
         var label = isSubagent ? ReadDescription(call.Arguments) : null;
+        var arguments = ToolPresentation.FormatArguments(call.Arguments);
         var message = AppendMessage(new MessageViewModel(
             "工具",
-            isSubagent ? SubagentCardText(label) : $"{call.Name} {call.Arguments}",
+            isSubagent ? SubagentCardText(label) : call.Name,
             MessageKind.Tool,
-            false));
-        message.Detail = call.Arguments;
-        _pendingToolCalls[call.CallId] = (call.Name, call.Arguments);
+            false)
+        {
+            ToolName = isSubagent ? SubagentCardText(label) : call.Name,
+            ArgumentText = arguments,
+        });
+        message.Detail = arguments;
+        _pendingToolCalls[call.CallId] = (call.Name, call.Arguments, message);
         if (isSubagent)
         {
             message.IsSubagentTool = true;
             message.SubagentLabel = label;
             message.IsExpanded = false;
         }
-        AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", call.Arguments);
+        AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", arguments);
     }
 
     /** subagent 工具的 description 参数即子会话 descriptor 的 Label, 用它把工具卡片关联到子代理条目。 */
@@ -1720,11 +1866,19 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyToolResult(long seq, ToolResultPayload result)
     {
-        var text = SessionText.ContentText(result.Message.Content);
+        var text = ToolPresentation.FormatResult(SessionText.ContentText(result.Message.Content));
         var label = result.Error is null ? "结果" : $"错误 {result.Error.Code}";
-        var message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
-        message.Detail = text;
         _pendingToolCalls.Remove(result.Message.Block.ToolCallId, out var pending);
+        MessageViewModel? message = pending.Message;
+        if (message is null)
+        {
+            message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
+            message.Detail = text;
+        }
+        else
+        {
+            message.SetToolResult(text, result.Error is not null);
+        }
         if (result.Error is null && DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text) is { } card)
             message.SetDiff(card);
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);
@@ -1777,15 +1931,66 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (_updatingSuggestions || _disposed)
             return;
+        _suggestionCancellation?.Cancel();
+        _suggestionCancellation?.Dispose();
+        _suggestionCancellation = null;
         var input = Composer.Input;
-        var suggestions = BuildSuggestions(input);
+        var caret = Composer.CaretIndex;
+        if (IsImagePath(input) || input.StartsWith('/') || !MentionResolver.TryGetActiveToken(input, caret, out var start, out var end))
+        {
+            ApplySuggestions(BuildSuggestions(input, caret));
+            return;
+        }
+        var cancellation = new CancellationTokenSource();
+        _suggestionCancellation = cancellation;
+        _ = RefreshMentionSuggestionsAsync(input, caret, start, end, cancellation.Token);
+    }
+
+    private async Task RefreshMentionSuggestionsAsync(
+        string input,
+        int caret,
+        int start,
+        int end,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(60, cancellationToken);
+            var sessions = CurrentMentionSessions();
+            var cwd = _chat.Header.Cwd ?? Environment.CurrentDirectory;
+            var candidates = await MentionResolver.ResolveCandidatesAsync(
+                input[(start + 1)..end], cwd, sessions, cancellationToken);
+            if (cancellationToken.IsCancellationRequested || _disposed
+                || !string.Equals(Composer.Input, input, StringComparison.Ordinal)
+                || Composer.CaretIndex != caret)
+                return;
+            ApplySuggestions([.. candidates.Select(candidate => new SuggestionViewModel("mention", $"@{candidate}", "", candidate))]);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            if (!_disposed)
+                _ctx.LoggerFor("gui").Warn($"failed to resolve mention suggestions: {error.Message}");
+        }
+    }
+
+    private void ApplySuggestions(IReadOnlyList<SuggestionViewModel> suggestions)
+    {
         _updatingSuggestions = true;
-        Suggestions.Clear();
-        foreach (var suggestion in suggestions)
-            Suggestions.Add(suggestion);
-        SuggestionIndex = 0;
-        IsSuggestionOpen = Suggestions.Count > 0;
-        _updatingSuggestions = false;
+        try
+        {
+            Suggestions.Clear();
+            foreach (var suggestion in suggestions)
+                Suggestions.Add(suggestion);
+            SuggestionIndex = 0;
+            IsSuggestionOpen = Suggestions.Count > 0;
+        }
+        finally
+        {
+            _updatingSuggestions = false;
+        }
     }
 
     /** 文本里是否含"图片路径"片段(用于: 有图路径时不弹命令/引用补全)。 */
@@ -1801,15 +2006,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private IReadOnlyList<SuggestionViewModel> BuildSuggestions(string input)
+    private IReadOnlyList<SuggestionViewModel> BuildSuggestions(string input, int caret)
     {
         if (IsImagePath(input))
             return [];
-        if (input.StartsWith('@') || input.Contains(" @", StringComparison.Ordinal))
-            return MentionSuggestions(input);
         if (input.StartsWith('/'))
             return CommandSuggestions(input);
-        return [];
+        // 引用补全只在光标处存在未完成的 @token 时出现; token 之后已输入提示词就不再算选文件。
+        return MentionResolver.TryGetActiveToken(input, caret, out var start, out var end)
+            ? MentionSuggestions(input, start, end)
+            : [];
     }
 
     private IReadOnlyList<SuggestionViewModel> CommandSuggestions(string input)
@@ -1869,33 +2075,30 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private IReadOnlyList<SuggestionViewModel> MentionSuggestions(string input)
+    private IReadOnlyList<SuggestionViewModel> MentionSuggestions(string input, int start, int end)
     {
-        var at = input.LastIndexOf('@');
-        var end = at + 1;
-        while (end < input.Length && !char.IsWhiteSpace(input[end]) && input[end] != '@')
-            end++;
-        var token = input[(at + 1)..end];
+        var token = input[(start + 1)..end];
         var cwd = _chat.Header.Cwd ?? Environment.CurrentDirectory;
         return [.. MentionResolver.ResolveCandidates(token, cwd, CurrentMentionSessions())
-            .Select(candidate => new SuggestionViewModel("mention", $"@{candidate}", "", $"@{candidate}"))];
+            .Select(candidate => new SuggestionViewModel("mention", $"@{candidate}", "", candidate))];
     }
 
     private void ApplySuggestion(SuggestionViewModel suggestion)
     {
-        if (suggestion.Kind == "argument")
+        if (suggestion.Kind != "mention")
         {
             Composer.Input = suggestion.InsertText;
+            Composer.CaretIndex = Composer.Input.Length;
+            CloseSuggestions();
+            return;
         }
-        else if (suggestion.Kind == "mention")
+        // token 可能已被用户改到光标之外, 那种情况只收起菜单, 不再改写文本。
+        if (MentionResolver.TryGetActiveToken(Composer.Input, Composer.CaretIndex, out var start, out var end))
         {
-            var input = Composer.Input;
-            var at = input.LastIndexOf('@');
-            Composer.Input = at < 0 ? input : input[..at] + suggestion.InsertText + " ";
-        }
-        else
-        {
-            Composer.Input = suggestion.InsertText;
+            // 只替换光标所在的 @token, token 之后已经输入的提示词必须原样保留。
+            var (text, caret) = MentionResolver.ReplaceActiveToken(Composer.Input, start, end, suggestion.InsertText);
+            Composer.Input = text;
+            Composer.CaretIndex = caret;
         }
         CloseSuggestions();
     }

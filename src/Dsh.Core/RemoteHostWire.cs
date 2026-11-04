@@ -19,13 +19,24 @@ public sealed record RemoteSubscriptionRef(string SubscriptionId);
 public readonly record struct RemoteEventFrame(string SubscriptionId, RemoteSessionEvent Event);
 
 
-public sealed record RemoteSessionSnapshot(SessionHeader Header, IReadOnlyList<SessionEvent> Events, string? ApprovalPolicy = null);
+/** 会话历史分页请求: 从 FromEvent 起返回装得进 MaxBytes 的一段; 响应里的 TotalEventCount 让客户端接着取下一页。 */
+public sealed record RemoteSessionSnapshotRequest(string SessionId, long FromEvent = 0, int MaxBytes = HostProtocol.SnapshotPageBytes);
+
+/** 会话历史的一页; TotalEventCount 是整段历史的条数, 客户端据此取完剩余各页。 */
+public sealed record RemoteSessionSnapshot(
+    SessionHeader Header,
+    IReadOnlyList<SessionEvent> Events,
+    long TotalEventCount,
+    string? ApprovalPolicy = null);
 
 
 /** 远端发起的审批/问答: 需本地决策, 用 RequestId 回填。 */
-public sealed record RemoteApprovalRequest(string RequestId, string SessionId, string Tool, string? Arguments, string? Reason);
+public sealed record RemoteApprovalRequest(string RequestId, string SessionId, string Tool, string? Arguments, string? Reason, string? Impact = null, RemoteApprovalAvailability? Availability = null);
 
-public sealed record RemoteQuestionOption(string Label, string? Description);
+/** Per-request choices that the provider can represent without changing the user's requested scope. */
+public readonly record struct RemoteApprovalAvailability(bool AllowOnce, bool AllowForSession, bool Reject);
+
+public sealed record RemoteQuestionOption(string Label, string? Description, string? Value = null, bool Disabled = false, bool Default = false);
 
 public sealed record RemoteQuestionItem(
     string Id,
@@ -34,13 +45,14 @@ public sealed record RemoteQuestionItem(
     string? Header,
     IReadOnlyList<RemoteQuestionOption> Options,
     bool MultiSelect,
-    string? ApproveLabel);
+    string? ApproveLabel,
+    bool AllowCustom = true);
 
 public sealed record RemoteQuestionRequest(string RequestId, string SessionId, IReadOnlyList<RemoteQuestionItem> Questions);
 
 public sealed record RemoteQuestionAnswerItem(string Id, IReadOnlyList<string> Selected, string? Custom);
 
-public sealed record RemoteQuestionResponse(string RequestId, IReadOnlyList<RemoteQuestionAnswerItem> Answers);
+public sealed record RemoteQuestionResponse(string RequestId, IReadOnlyList<RemoteQuestionAnswerItem> Answers, string Status = "answered", string? Reason = null);
 
 public sealed record RemoteSessionCreateRequest(string Cwd);
 
@@ -51,7 +63,7 @@ public sealed record RemoteMessageRequest(string SessionId, string Text, IReadOn
 /** 远端消息里的一张图片: 字节经 base64 传输, 由远端落进附件库后作为 ImageBlock 发给会话。 */
 public sealed record RemoteImageBlock(string MediaType, int Width, int Height, string? Name, string Base64);
 
-public sealed record RemoteApprovalResponse(string RequestId, bool Allow, string? Reason, bool RememberForSession = false);
+public sealed record RemoteApprovalResponse(string RequestId, bool Allow, string? Reason, bool RememberForSession = false, bool Cancelled = false);
 
 
 /** 全部未决的审批与问答(host.pending.list), 也是新连接补发的内容。 */
@@ -80,6 +92,7 @@ public static class PendingResolutions
     public const string Allowed = "allowed";
     public const string Rejected = "rejected";
     public const string Answered = "answered";
+    public const string Dismissed = "dismissed";
 
     /** 会话被中断、结束或 host 退出, 请求不再有人等待。 */
     public const string Cancelled = "cancelled";
@@ -276,7 +289,8 @@ public sealed record RemotePtyStartRequest(
     string? Cwd = null,
     int? Columns = null,
     int? Rows = null,
-    string? Title = null);
+    string? Title = null,
+    IReadOnlyDictionary<string, string>? Environment = null);
 
 public sealed record RemotePtyResize(string PtyId, int Columns, int Rows);
 

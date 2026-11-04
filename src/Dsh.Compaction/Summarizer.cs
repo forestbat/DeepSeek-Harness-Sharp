@@ -15,7 +15,15 @@ public sealed record SummaryResult(
     string Provider,
     string Model,
     int MaxTokens,
-    TokenUsage? Usage);
+    TokenUsage? Usage,
+    bool LlmStreamCall = true,
+    bool Truncated = false);
+
+/**
+ * 摘要内容不可用(空输出, 或比被压缩的内容更大)。
+ * 单独成类型是为了让上层能区分「摘要这一阶段失败」与「会话/持久化出问题」, 前者可以降级处理。
+ */
+public sealed class SummaryUnusableException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 public static class Summarizer
 {
@@ -104,8 +112,13 @@ public static class Summarizer
             Model = target.Model,
             Messages = messages,
             System = input.System,
-            Tools = input.Tools,
+            // 摘要请求不带工具: 提示词已要求"不要调用任何工具", 带着 schema 只会挤占摘要预算,
+            // 也与"消息序列里已无工具结构"的事实不符(Kilo Code 直接传 tools: {})。
+            Tools = null,
             MaxTokens = maxTokens,
+            // 压缩是"复述已有事实", 不是解题: 推理只会烧掉输出预算, 甚至出现把 maxTokens 全用在思维链上、
+            // 一个字正文都没产出(见下方"no text summary content")。所以取模型最省推理的那一档。
+            ReasoningEffort = CheapestReasoningEffort(llm, target.Provider, target.Model),
             SessionId = agent.Session.Id,
             Purpose = GeneratePurpose.Compaction,
             Cancellation = signal,
@@ -117,9 +130,16 @@ public static class Summarizer
 
         var rawOutput = assembler.Blocks();
         var summary = SummaryText(rawOutput);
+        // 截断意味着 checkpoint 不完整, 但已产出的部分通常仍可用; 先接受并标记, 由上层决定是否降级,
+        // 否则长历史 + maxTokens 偏小时会必然失败且无法自救。
+        var truncated = assembler.Finish is FinishReason.MaxTokens;
         if (!summary.Any(block => block.Text.Trim().Length > 0))
-            throw new InvalidOperationException("summarization produced no text summary content");
-        return new SummaryResult(summary, rawOutput, target.Provider, target.Model, maxTokens, assembler.Usage);
+            throw new SummaryUnusableException(truncated
+                ? "summarization was truncated before any text was produced; raise the compaction maxTokens setting"
+                : "summarization produced no text summary content");
+        return new SummaryResult(
+            summary, rawOutput, target.Provider, target.Model, maxTokens, assembler.Usage,
+            LlmStreamCall: true, Truncated: truncated);
     }
 
     public static IReadOnlyList<ContentBlock> FrameSummary(IReadOnlyList<ContentBlock> summary)
@@ -130,13 +150,30 @@ public static class Summarizer
             new TextBlock(SummaryCloseTag),
         ];
 
+    /** 只有真正的失败才抛异常; MaxTokens 是"产出不完整但仍可用", 由调用方标记而不是直接失败。 */
     private static HarnessException? FinishError(FinishReason finish) => finish switch
     {
         FinishReason.Error error => new HarnessException(error.Failure.Message, error.Failure.Code),
         FinishReason.Aborted aborted => new HarnessException(aborted.Failure.Message, aborted.Failure.Code),
-        FinishReason.MaxTokens => new HarnessException("summarization truncated at the token cap (incomplete checkpoint)", "MAX_TOKENS"),
         _ => null,
     };
+
+    /**
+     * 模型提供的最省推理档位("off"); 没提供就返回 null, 让它走自身默认, 不替用户猜一个档位。
+     * 未注册的 provider 会让 ResolveModelInfo 抛异常, 那种情况下摘要请求本身也会失败, 由真正的请求错误说话。
+     */
+    private static ReasoningEffortId? CheapestReasoningEffort(LlmRuntime llm, string provider, string model)
+    {
+        try
+        {
+            return llm.ResolveModelInfo(provider, model).Reasoning?.Efforts
+                .FirstOrDefault(effort => string.Equals(effort.Id.Value, "off", StringComparison.OrdinalIgnoreCase))?.Id;
+        }
+        catch (LlmException)
+        {
+            return null;
+        }
+    }
 
     private static IReadOnlyList<TextBlock> SummaryText(IReadOnlyList<ContentBlock> blocks)
     {
@@ -148,3 +185,4 @@ public static class Summarizer
     private static bool ContentHasImage(IReadOnlyList<ContentBlock> blocks)
         => blocks.Any(block => block is ImageBlock || (block is ToolResultBlock result && ContentHasImage(result.Content)));
 }
+

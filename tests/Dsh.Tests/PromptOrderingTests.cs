@@ -96,7 +96,7 @@ public sealed class PromptOrderingTests
     public async Task Contexts_FollowTheirOwnSpine()
     {
         var ctx = new Context();
-        var prompt = new SystemPrompt(ctx, new SystemPromptConfig { IncludeHarnessIdentity = false });
+        var prompt = new SystemPrompt(ctx, new SystemPromptConfig { IncludeHarnessIdentity = false, FoldContextsIntoSystem = false });
         using var first = prompt.Context(PromptContext.Literal("board:coordination", "board"));
         using var second = prompt.Context(PromptContext.Literal("approval:policy", "approval"));
 

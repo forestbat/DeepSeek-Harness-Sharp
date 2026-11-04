@@ -1,0 +1,76 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dsh.Gui.ViewModels" x:Class="Dsh.Gui.Views.EditorSettingsView"
+             x:DataType="vm:EditorSettingsViewModel" x:CompileBindings="True">
+  <StackPanel Spacing="12">
+    <TextBlock Text="IDE 与编辑器" Classes="Title" />
+    <TextBlock Text="全局模板仅在此定义。工作区只能引用编辑器 ID；列表顺序就是尝试与触发顺序。" Classes="Tertiary" TextWrapping="Wrap" />
+    <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+      <StackPanel Spacing="8">
+        <TextBlock Text="选择与安全" Classes="Secondary" />
+        <TextBox Text="{Binding DefaultEditor, Mode=TwoWay}" PlaceholderText="default_editor: auto 或编辑器 ID" />
+        <CheckBox Content="严格匹配文件与工作区条件" IsChecked="{Binding StrictMatch, Mode=TwoWay}" />
+        <CheckBox Content="允许打开工作区之外的真实路径" IsChecked="{Binding AllowOutsideWorkspace, Mode=TwoWay}" />
+        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+          <StackPanel><TextBlock Text="聚焦 focus" Classes="Tertiary" /><ComboBox ItemsSource="{Binding FocusOptions}" SelectedItem="{Binding Focus, Mode=TwoWay}" HorizontalAlignment="Stretch" /></StackPanel>
+          <StackPanel Grid.Column="1"><TextBlock Text="复用 reuse_window" Classes="Tertiary" /><ComboBox ItemsSource="{Binding ReuseOptions}" SelectedItem="{Binding ReuseWindow, Mode=TwoWay}" HorizontalAlignment="Stretch" /></StackPanel>
+          <StackPanel Grid.Column="2"><TextBlock Text="回退 fallback" Classes="Tertiary" /><ComboBox ItemsSource="{Binding FallbackOptions}" SelectedItem="{Binding Fallback, Mode=TwoWay}" HorizontalAlignment="Stretch" /></StackPanel>
+        </Grid>
+      </StackPanel>
+    </Border>
+    <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+      <StackPanel Spacing="8">
+        <TextBlock Text="有序编辑器 · 全局命令与动作模板" Classes="Secondary" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Button Classes="Chip" Content="添加" Command="{Binding AddEditorCommand}" /><Button Classes="Ghost" Content="删除" Command="{Binding RemoveEditorCommand}" />
+          <Button Classes="Ghost" Content="上移" Command="{Binding MoveEditorUpCommand}" /><Button Classes="Ghost" Content="下移" Command="{Binding MoveEditorDownCommand}" />
+        </StackPanel>
+        <ListBox ItemsSource="{Binding Editors}" SelectedItem="{Binding SelectedEditor, Mode=TwoWay}" MaxHeight="180">
+          <ListBox.ItemTemplate><DataTemplate x:DataType="vm:EditorConfigurationRow"><StackPanel Orientation="Horizontal" Spacing="8"><CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" ToolTip.Tip="启用此编辑器" /><TextBlock Text="{Binding Label}" VerticalAlignment="Center" /></StackPanel></DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBox Text="{Binding SelectedEditor.Id, Mode=TwoWay}" PlaceholderText="稳定 ID" />
+          <ComboBox Grid.Column="1" ItemsSource="{Binding KindOptions}" SelectedItem="{Binding SelectedEditor.Kind, Mode=TwoWay}" />
+        </Grid>
+        <TextBox Text="{Binding SelectedEditor.Command, Mode=TwoWay}" PlaceholderText="command（默认定义来自 settings.yaml）" />
+        <TextBlock Text="YAML 字段：id、enabled、display_name、kind、command、executables、remote_executables、bundles、actions、remote_actions、history_provider、discovery_commands、when、env、cwd 及窗口参数。默认定义来自随包 settings.yaml；显式列表保留顺序，actions/when 的空映射可清除默认值。动作参数支持 {path}/{file}/{dir}/{workspace}/{line}/{column}/{left}/{right}/{remote_uri}。" Classes="Tertiary" TextWrapping="Wrap" />
+        <TextBox Name="EditorProfileYaml" Text="{Binding SelectedEditor.Yaml, Mode=TwoWay}" AcceptsReturn="True" MinHeight="200" FontFamily="{DynamicResource Font.Mono}" TextWrapping="NoWrap" />
+      </StackPanel>
+    </Border>
+    <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+      <StackPanel Spacing="8">
+        <TextBlock Text="声明顺序的触发规则" Classes="Secondary" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Button Classes="Chip" Content="添加规则" Command="{Binding AddTriggerCommand}" /><Button Classes="Ghost" Content="删除" Command="{Binding RemoveTriggerCommand}" />
+          <Button Classes="Ghost" Content="上移" Command="{Binding MoveTriggerUpCommand}" /><Button Classes="Ghost" Content="下移" Command="{Binding MoveTriggerDownCommand}" />
+        </StackPanel>
+        <ListBox ItemsSource="{Binding Triggers}" SelectedItem="{Binding SelectedTrigger, Mode=TwoWay}" MaxHeight="180">
+          <ListBox.ItemTemplate><DataTemplate x:DataType="vm:EditorConfigurationRow"><StackPanel Orientation="Horizontal" Spacing="8"><CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" ToolTip.Tip="启用此规则" /><TextBlock Text="{Binding Label}" VerticalAlignment="Center" /></StackPanel></DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+          <ComboBox ItemsSource="{Binding EventOptions}" SelectedItem="{Binding SelectedTrigger.Event, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+          <ComboBox Grid.Column="1" ItemsSource="{Binding ActionOptions}" SelectedItem="{Binding SelectedTrigger.Action, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+        </Grid>
+        <TextBox Text="{Binding SelectedTrigger.EditorOrder, Mode=TwoWay}" PlaceholderText="editors: auto 或逗号分隔的编辑器 ID" />
+        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+          <ComboBox ItemsSource="{Binding ModeOptions}" SelectedItem="{Binding SelectedTrigger.Mode, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+          <ComboBox Grid.Column="1" ItemsSource="{Binding OnceOptions}" SelectedItem="{Binding SelectedTrigger.Once, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+          <ComboBox Grid.Column="2" ItemsSource="{Binding FocusOptions}" SelectedItem="{Binding SelectedTrigger.Focus, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+        </Grid>
+        <TextBox Text="{Binding SelectedTrigger.Cooldown, Mode=TwoWay}" PlaceholderText="cooldown: 0s / 60s / 1m" />
+        <CheckBox Content="成功后停止后续规则" IsChecked="{Binding SelectedTrigger.StopOnSuccess, Mode=TwoWay}" />
+        <TextBlock Text="on: session.start/session.resume/tool.after_write/agent.error/test.failure/manual；action: open_workspace/open_file/open_diff/reveal；editors: 有序 ID 或 [auto]；mode: first/all；once: process/workspace/session/turn；cooldown: 60s；focus: never/if_running/always；stop_on_success、enabled；when: workspace/extensions/globs/project_types/machine_types/host_editors/session_sources。" Classes="Tertiary" TextWrapping="Wrap" />
+        <TextBox Name="EditorTriggerYaml" Text="{Binding SelectedTrigger.Yaml, Mode=TwoWay}" AcceptsReturn="True" MinHeight="220" FontFamily="{DynamicResource Font.Mono}" TextWrapping="NoWrap" />
+      </StackPanel>
+    </Border>
+    <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
+      <StackPanel Spacing="8">
+        <TextBlock Text="IDE 本地历史" Classes="Secondary" />
+        <TextBox Text="{Binding HistoryProviders, Mode=TwoWay}" PlaceholderText="providers: vscode, jetbrains" />
+        <CheckBox Content="在时间线显示 IDE 历史" IsChecked="{Binding HistoryTimeline, Mode=TwoWay}" />
+        <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="时间线数量上限" VerticalAlignment="Center" /><TextBox Text="{Binding HistoryLimit, Mode=TwoWay}" Width="100" /></StackPanel>
+      </StackPanel>
+    </Border>
+    <StackPanel Orientation="Horizontal" Spacing="8"><Button Name="SaveEditorSettings" Classes="Primary" Content="保存 IDE 设置" Command="{Binding SaveCommand}" /><Button Classes="Ghost" Content="重新读取" Command="{Binding ReloadCommand}" /></StackPanel>
+    <TextBlock Text="{Binding Status}" Classes="Tertiary" TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

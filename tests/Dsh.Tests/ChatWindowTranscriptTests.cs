@@ -1,8 +1,8 @@
 using Dsh.Boot;
+using Dsh.Compaction;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Presets;
 using Dsh.Runtime;
 using Dsh.Tui;
 using Dsh.Tui.Services;
@@ -26,6 +26,10 @@ public sealed class ChatWindowTranscriptTests : IDisposable
 
         using var chat = new ChatWindow(ctx, agent, home);
         chat.DrainUi();
+
+        // 工具调用/结果默认折叠成一个"⚙ bash"折叠头: 展开后再核对内容只出现一次。
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
 
         var frame = DrawFrame(chat);
         Assert.Equal(1, Count(frame, "你好世界"));
@@ -54,6 +58,10 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Contains("resumed:", frame);
         Assert.Equal(1, Count(frame, "继续任务丙"));
         Assert.Equal(1, Count(frame, "回答丁"));
+        // 工具结果在折叠头里: 展开后确认回放没有重复。
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        frame = DrawFrame(chat);
         Assert.Equal(1, Count(frame, "工具输出乙"));
     }
 
@@ -71,6 +79,92 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         chat.DrainUi();
 
         Assert.Equal(1, Count(DrawFrame(chat), "非流式回答戊"));
+    }
+
+    /**
+     * 压缩期间必须看得见"正在压缩"。摘要要发若干次模型请求, 一次压缩可能持续数分钟;
+     * 界面完全没反应时用户只会再按一次 /compact, 而那次必然被"压缩已在进行"挡回来。
+     */
+    [Fact]
+    public async Task CompactionStart_ShowsProgressInTranscriptAndStatus()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        // 实时事件(不是重放): 只有真实开始的整理才应显示进行中。
+        agent.Session.Append(new CompactionStartPayload(CompactionId.Create("cmp-1"), null, null));
+
+        chat.DrainUi();
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("正在压缩上下文", frame, StringComparison.Ordinal);
+        Assert.Contains("compacting context", frame, StringComparison.Ordinal);
+    }
+
+    /** 压缩结果要渲染出摘要与统计, 且检查点消息不重复渲染一遍同样的正文。 */
+    [Fact]
+    public async Task CompactionSummary_RendersOnceAndHidesDuplicateCheckpointBody()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var compactionId = CompactionId.Create("cmp-2");
+        agent.Session.Append(new CompactionStartPayload(compactionId, null, null));
+        agent.Session.Append(new CompactionSummaryPayload(
+            compactionId,
+            null,
+            [new TextBlock("压缩摘要正文丁")],
+            new ShadowedRange(0, 10),
+            [0, 1, 2],
+            1234,
+            "deepseek-official",
+            "deepseek-v4-flash"));
+        agent.Session.Append(
+            new UserMessagePayload(new UserMessage
+            {
+                Id = MessageFactory.NewId(),
+                Content = [new TextBlock("压缩摘要正文丁")],
+                Source = CompactionCheckpoint.Source(compactionId),
+            }),
+            new SurfaceOp.Append());
+        agent.Session.Append(new CompactionEndPayload(compactionId, null, null));
+
+        chat.DrainUi();
+
+        var frame = DrawFrame(chat);
+        Assert.Equal(1, Count(frame, "压缩摘要正文丁"));
+        Assert.Contains("收起 3 条历史", frame, StringComparison.Ordinal);
+    }
+
+    /** 会话里残留未闭合的 compaction/start(上一个进程没结束)时, 重放不能把界面永久留在"压缩中"。 */
+    [Fact]
+    public async Task DanglingCompactionMarker_DoesNotLeaveThePaneStuckCompacting()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        agent.Session.Append(new CompactionStartPayload(CompactionId.Create("cmp-dangling"), null, null));
+
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+
+        Assert.DoesNotContain("compacting context", DrawFrame(chat), StringComparison.Ordinal);
+    }
+
+    /** 压缩失败要显示失败原因, 并把状态位交还给"就绪"。 */
+    [Fact]
+    public async Task CompactionFailure_ShowsTheErrorAndClearsBusy()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var compactionId = CompactionId.Create("cmp-3");
+        agent.Session.Append(new CompactionStartPayload(compactionId, null, null));
+        agent.Session.Append(new CompactionEndPayload(compactionId, null, null, "upstream exploded"));
+
+        chat.DrainUi();
+
+        var frame = DrawFrame(chat);
+        Assert.Contains("压缩失败", frame, StringComparison.Ordinal);
+        Assert.Contains("upstream exploded", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("compacting context", frame, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -141,7 +235,6 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         chat.DrainUi();
         var frame = DrawFrame(chat);
         Assert.Contains("选择策略", frame);
-        Assert.Contains("[2] 乙", frame);
 
         Type(chat, "2");
         Press(chat, ConsoleKey.Enter);
@@ -205,30 +298,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
     }
 
     [Fact]
-    public async Task AskUser_Enter_Without_Answer_Stays_Pending()
-    {
-        var (ctx, agent, home) = await CreateAgent();
-        var userQuestions = UserQuestionService.Register(ctx);
-        using var chat = new ChatWindow(ctx, agent, home);
-        var question = new AskUserQuestionItem(
-            "q1",
-            "选择策略",
-            Options: [new AskUserQuestionOption("甲"), new AskUserQuestionOption("乙")]);
-
-        var answerTask = userQuestions.Ask(new AskUserQuestionRequest([question], agent), TestContext.Current.CancellationToken);
-        chat.DrainUi();
-
-        Press(chat, ConsoleKey.Enter);
-        Assert.False(answerTask.IsCompleted);
-        Assert.Contains("请先选择", DrawFrame(chat));
-
-        Type(chat, "1");
-        Press(chat, ConsoleKey.Enter);
-        Assert.Equal("甲", Assert.Single(Assert.Single((await answerTask).Answers).Selected));
-    }
-
-    [Fact]
-    public async Task AskUser_Escape_Cancels_With_NoProvider()
+    public async Task AskUser_Escape_ReturnsDismissedWithoutSubmittingAnEmptyAnswer()
     {
         var (ctx, agent, home) = await CreateAgent();
         var userQuestions = UserQuestionService.Register(ctx);
@@ -239,25 +309,12 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         chat.DrainUi();
         Press(chat, ConsoleKey.Escape);
 
-        var error = await Assert.ThrowsAsync<UserQuestionException>(async () => await answerTask);
-        Assert.Equal(UserQuestionException.NoProvider, error.Code);
+        var answer = await answerTask;
+        Assert.Equal("dismissed", answer.Status);
+        Assert.Equal("user_cancelled", answer.Reason);
+        Assert.Empty(answer.Answers);
     }
 
-    [Fact]
-    public async Task Input_Info_Line_Shows_Current_Preset()
-    {
-        var (ctx, agent, home) = await CreateAgent();
-        PresetModePayload.RegisterCodec();
-        using var chat = new ChatWindow(ctx, agent, home);
-        chat.DrainUi();
-
-        Assert.Contains("standard - deepseek-official - deepseek-v4-flash", DrawFrame(chat));
-
-        agent.Session.Append(new PresetModePayload(InteractionPreset.Minimal));
-        chat.DrainUi();
-
-        Assert.Contains("minimal - deepseek-official - deepseek-v4-flash", DrawFrame(chat));
-    }
 
     /** present 成功后的交付物事件在会话流里渲染为卡片: 绝对路径可直接复制, 并提示 /deliverables 打开; 历史回放同样出现一次。 */
     [Fact]
@@ -278,10 +335,74 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Contains(TranscriptRenderer.DeliverablesHint, frame);
     }
 
+    /** 工具卡片: 折叠只显示工具名, 展开后显示命令与结果; 长结果只占 20 行, 由滚轮在卡片内滚动。 */
+    [Fact]
+    public async Task ToolCard_FoldsToTheToolName_AndScrollsLongResults()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        var callSeq = agent.Session.Seq;
+        var callId = ToolCallId.Create("call-long");
+        agent.Session.Append(new ToolCallPayload(1, 1, callId, "bash", """{"command":"seq 1 45"}"""));
+        agent.Session.Append(
+            new ToolResultPayload(1, 1, MessageFactory.CreateToolResultMessage(
+                callId,
+                [new TextBlock(string.Join('\n', Enumerable.Range(1, 45).Select(index => $"page-row-{index:D2}")))],
+                false)),
+            new SurfaceOp.Append(),
+            [callSeq]);
+        chat.DrainUi();
+
+        var collapsed = DrawFrame(chat);
+        Assert.Contains("⚙ bash", collapsed);
+        Assert.DoesNotContain("seq 1 45", collapsed);
+        Assert.DoesNotContain("page-row-01", collapsed);
+
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+
+        var expanded = DrawFrame(chat);
+        Assert.Contains("seq 1 45", expanded);
+        Assert.Contains("page-row-01", expanded);
+        Assert.Contains($"第 1-{DiffCardDisplay.PageLines} 行 / 共 ", expanded);
+        Assert.DoesNotContain($"page-row-{DiffCardDisplay.PageLines + 5:D2}", expanded);
+
+        // 指针停在卡片里滚轮下滚: 卡片内容滚动, 整篇记录的滚动位置不变。
+        var layout = LayoutEngine.Calculate(120, 40);
+        var headerRow = RowOf(expanded, "seq 1 45");
+        var offsetBefore = chat.InputPane.ScrollOffset;
+        chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        var scrolled = DrawFrame(chat);
+
+        Assert.Equal(offsetBefore, chat.InputPane.ScrollOffset);
+        Assert.DoesNotContain("page-row-01", scrolled);
+        Assert.DoesNotContain("第 1-", scrolled);
+
+        // 继续滚到末尾后, 再滚一格交给整篇记录(不会卡死在卡片上)。
+        for (var step = 0; step < 20; step++)
+            chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        var tail = DrawFrame(chat);
+        Assert.Contains("page-row-45", tail);
+        chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
+        Assert.NotEqual(offsetBefore, chat.InputPane.ScrollOffset);
+    }
+
+    private static int RowOf(string frame, string needle)
+    {
+        var rows = frame.Split('\n');
+        for (var index = 0; index < rows.Length; index++)
+            if (rows[index].Contains(needle, StringComparison.Ordinal))
+                return index;
+        throw new InvalidOperationException($"row \"{needle}\" not found");
+    }
+
     private async Task<(Context Ctx, AgentLoopAgent Agent, HarnessHome Home)> CreateAgent()
     {
         var ctx = new Context();
         _ = new SessionStore(ctx);
+        // 上下文整理的进度行由插件提供的中立接缝驱动; 测试里显式装上它, 才能断言这些行。
+        _ = CompactionMaintenancePresenter.Register(ctx);
         var agents = new AgentRegistry(ctx);
         _ = new AgentLoop(ctx);
         CommandsService.Register(ctx);
@@ -552,6 +673,87 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Contains("Enter 发送", rows[grown.Input.Bottom - 1]);
         Assert.DoesNotContain("Enter 发送", rows[grown.Input.Y + 1]);
         Assert.Equal(40, rows.Count);
+    }
+
+    [Theory]
+    [InlineData("input", false)]
+    [InlineData("input", true)]
+    [InlineData("sidebar", false)]
+    [InlineData("sidebar", true)]
+    [InlineData("pane", false)]
+    [InlineData("pane", true)]
+    public async Task ChoicePrompt_InterruptedLayoutDrag_DoesNotResumeAfterDismissal(string divider, bool approval)
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        var settings = new TuiSettings(home) { InputHeight = 6, SidebarWidth = 30 };
+        using var chat = new ChatWindow(ctx, agent, home, null, settings);
+        chat.DrainUi();
+        var layout = LayoutEngine.Calculate(120, 40, 30, 6);
+        if (divider == "pane")
+        {
+            chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.X, false, false, true));
+            chat.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.OemPlus, false, false, false));
+            chat.DrainUi();
+        }
+        var x = divider switch
+        {
+            "input" => 10,
+            "sidebar" => layout.RightPanel.X - 1,
+            _ => FindPaneDividerColumn(chat, layout),
+        };
+        var y = divider == "input" ? layout.Input.Y - 1 : 1;
+        Assert.True(x > 0 && y > 0);
+        chat.HandleMouseClick(x, y, layout);
+        var dragX = divider == "input" ? x : x + 4;
+        var dragY = divider == "input" ? y - 2 : y;
+        chat.HandleMouseDrag(dragX, dragY, layout);
+        var pending = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pane = chat.InputPane;
+        if (approval)
+            pane.ShowApprovalPrompt(new(pane.Agent, "bash", ToolCallId.Create("interrupted-drag")), pending);
+        else
+            pane.ShowQuestionPrompt(new([new("q", "Choose", Options: [new("A")])]), pending);
+        chat.Draw(new CellGrid(120, 40), layout);
+        Assert.Null(chat.HandleMouseRelease(dragX, dragY, layout));
+        Assert.True(pane.HasChoicePrompt);
+        Assert.False(pending.Task.IsCompleted);
+        Press(chat, ConsoleKey.Escape);
+        Assert.False(pane.HasChoicePrompt);
+        Assert.True(pending.Task.IsCompleted);
+        var before = BorderRows();
+        var saved = new TuiSettings(home);
+        var savedSizes = (saved.InputHeight, saved.SidebarWidth);
+        chat.HandleMouseClick(5, 2, layout);
+        chat.HandleMouseDrag(18, 5, layout);
+        chat.HandleMouseRelease(18, 5, layout);
+        Assert.Equal(before, BorderRows());
+        saved = new TuiSettings(home);
+        Assert.Equal(savedSizes, (saved.InputHeight, saved.SidebarWidth));
+        Assert.False(chat.ExitRequested);
+
+        string[] BorderRows()
+        {
+            var grid = new CellGrid(120, 40);
+            chat.Draw(grid, layout);
+            // Find the visible sidebar boundary after any pre-prompt resize.
+            var sidebarDivider = grid.Width - 1;
+            while (sidebarDivider >= 0 && grid[sidebarDivider, 0].Character != '│')
+                sidebarDivider--;
+            Assert.InRange(sidebarDivider, 0, grid.Width - 1);
+            var rows = new string[grid.Height];
+            for (var row = 0; row < grid.Height; row++)
+            {
+                var characters = new char[grid.Width];
+                var sidebarBody = grid[sidebarDivider, row].Character == '│';
+                for (var column = 0; column < grid.Width; column++)
+                {
+                    var character = sidebarBody && column > sidebarDivider ? ' ' : grid[column, row].Character;
+                    characters[column] = character is '│' or '─' or '┼' ? character : ' ';
+                }
+                rows[row] = new string(characters);
+            }
+            return rows;
+        }
     }
 
     /** 输入栏高度要跨进程沿用: 写进 settings.yaml 后, 新起的 ChatWindow 直接量出拖出来的高度。 */

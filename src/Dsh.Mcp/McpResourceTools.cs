@@ -59,7 +59,7 @@ internal static class McpResourceTools
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         return
         [
-            systemPrompt.Section(new PromptSection(SectionName, _ => SectionText(service), Dynamic: true)),
+            systemPrompt.Section(new PromptSection(SectionName, _ => SectionText(service), ToolNames: [ListResourcesName, ListTemplatesName, ReadResourceName])),
             tools.Register(Listing(
                 ListResourcesName,
                 "List the resources (uri, name, mimeType, description, size) that one connected MCP server exposes. Without cursor every page is collected; with cursor only that page is returned and nextCursor names the next one. Read a listed resource with read_mcp_resource on the same server.",

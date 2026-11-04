@@ -98,4 +98,106 @@ public class SkillTests
         Assert.Contains("demo skill instructions", success.FollowupPrompt);
         Assert.EndsWith("帮我重构", success.FollowupPrompt);
     }
+
+    [Fact]
+    public void Plugin_Activates_Without_Resolving_Its_Own_Registry()
+    {
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        _ = CommandsService.Register(ctx);
+
+        using var registration = new Dsh.Skills.Plugin("@deepseek-ai/dsh-skill").Apply(ctx, null);
+
+        Assert.NotNull(tools.Get(SkillCatalog.ToolName, new ScopeKey()));
+        Assert.NotNull(ctx.Get<SkillRegistry>(SkillRegistry.ServiceName));
+    }
+
+    [Fact]
+    public async Task CatalogTool_Loads_Skill_And_Catalog_Renders()
+    {
+        var ctx = new Context();
+        _ = new SessionStore(ctx);
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        var tools = new ToolRuntime(ctx);
+        var agents = new AgentRegistry(ctx);
+        _ = new AgentLoop(ctx);
+        var skills = new SkillRegistry(ctx, new SkillRegistryConfig());
+        using var registration = skills.Register(new SkillRegistration
+        {
+            Name = "demo-skill",
+            Description = "demo <skill>",
+            Source = "test",
+            Content = "demo skill instructions",
+        });
+        using var catalog = new SkillCatalog(ctx, skills);
+
+        var handle = await agents.Create(new CreateAgentOptions(
+            SessionId.Create($"session-{Guid.NewGuid():N}"),
+            null,
+            new AgentOptions("demo-provider", "demo-model")), TestContext.Current.CancellationToken);
+        var agent = handle.Agent;
+
+        Assert.Contains(tools.Schemas(agent.ScopeKey), schema => schema.Name == SkillCatalog.ToolName);
+        var result = await tools.Execute(new ToolExecutionInput
+        {
+            CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+            Name = SkillCatalog.ToolName,
+            Arguments = System.Text.Json.JsonDocument.Parse("""{"name":"demo-skill"}""").RootElement,
+            Agent = agent,
+            Signal = TestContext.Current.CancellationToken,
+        });
+        Assert.False(result.IsError);
+        Assert.Contains("demo skill instructions", Assert.IsType<TextBlock>(result.Content[0]).Text);
+
+        var rendered = SkillCatalog.RenderCatalog(
+            [new SkillSummary
+            {
+                Name = "demo-skill",
+                Description = "demo <skill>",
+                Source = "test",
+                Provider = "test",
+                Invocation = new SkillInvocationPolicy(true, true),
+            }],
+            update: false,
+            incomplete: false);
+        Assert.Contains("<available_skills>", rendered);
+        Assert.Contains("&lt;skill&gt;", rendered);
+    }
+
+    [Fact]
+    public async Task Catalog_Is_Injected_As_User_Prefix_Reminder()
+    {
+        var ctx = new Context();
+        _ = new SessionStore(ctx);
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        _ = new ToolRuntime(ctx);
+        _ = new LlmRuntime(ctx);
+        var agents = new AgentRegistry(ctx);
+        _ = new AgentLoop(ctx);
+        var skills = new SkillRegistry(ctx, new SkillRegistryConfig());
+        using var registration = skills.Register(new SkillRegistration
+        {
+            Name = "demo-skill",
+            Description = "demo",
+            Source = "test",
+            Content = "demo skill instructions",
+        });
+        using var catalog = new SkillCatalog(ctx, skills);
+
+        var handle = await agents.Create(new CreateAgentOptions(
+            SessionId.Create($"session-{Guid.NewGuid():N}"),
+            null,
+            new AgentOptions("demo-provider", "demo-model")), TestContext.Current.CancellationToken);
+        var agent = (AgentLoopAgent)handle.Agent;
+        agent.Followup(MessageFactory.CreateUserText("hi"));
+        await agent.WhenIdle();
+
+        var message = agent.Session.DeriveMessages()
+            .OfType<UserMessage>()
+            .Single(message => message.Source is PluginMessageSource source
+                && source.Plugin == SkillCatalog.PluginName);
+        Assert.Contains("<available_skills>", Assert.IsType<TextBlock>(message.Content[0]).Text);
+        Assert.Contains("demo-skill", Assert.IsType<TextBlock>(message.Content[0]).Text);
+    }
 }

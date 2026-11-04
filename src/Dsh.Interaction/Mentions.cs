@@ -19,6 +19,13 @@ public static partial class MentionResolver
     [GeneratedRegex(@"@([^\s@]+)", RegexOptions.Compiled)]
     private static partial Regex MentionPattern();
 
+    public static Task<IReadOnlyList<string>> ResolveCandidatesAsync(
+        string token,
+        string cwd,
+        IReadOnlyList<MentionSessionInfo> sessions,
+        CancellationToken cancellationToken = default)
+        => Task.Run(() => ResolveCandidates(token, cwd, sessions), cancellationToken);
+
     public static IReadOnlyList<string> ResolveCandidates(string token, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
     {
         var files = ResolveFileSystemCandidates(token, cwd);
@@ -30,6 +37,28 @@ public static partial class MentionResolver
             .Select(session => session.Id);
         return [.. sessionMatches, .. files];
     }
+
+    /** 仅当光标落在「@token」区间内或紧邻末尾时才算活跃引用; token 之后已输入提示词时视为普通文本。 */
+    public static bool TryGetActiveToken(string text, int caret, out int start, out int end)
+    {
+        var at = text.LastIndexOf('@');
+        if (at < 0)
+        {
+            start = 0;
+            end = 0;
+            return false;
+        }
+        var tokenEnd = at + 1;
+        while (tokenEnd < text.Length && !char.IsWhiteSpace(text[tokenEnd]) && text[tokenEnd] != '@')
+            tokenEnd++;
+        start = at;
+        end = tokenEnd;
+        return caret > at && caret <= tokenEnd;
+    }
+
+    /** 只替换引用 token 区间并补尾随空格, token 之后已输入的提示词原样保留; 返回新文本与光标位置。 */
+    public static (string Text, int Caret) ReplaceActiveToken(string text, int start, int end, string candidate)
+        => ($"{text[..start]}@{candidate} {text[end..]}", start + candidate.Length + 2);
 
     public static string ExpandMentions(string text, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
     {

@@ -39,7 +39,7 @@ public sealed class RemoteHostSubscriptions(Func<CancellationToken, Task<HostLea
     }
 
     public async Task AttachPtyAsync(string ptyId, Stream input, Stream output, CancellationToken cancellationToken,
-        Func<RemoteHostClient, CancellationToken, Task>? prepare = null)
+        Func<IWorkspaceHost, CancellationToken, Task>? prepare = null)
     {
         using var owner = CancellationTokenSource.CreateLinkedTokenSource(lifetime, cancellationToken);
         while (true)

@@ -70,7 +70,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             ActivationState.Failed => $"failed: {activation.Error}",
             ActivationState.Disposed => "removed",
             ActivationState.Pending => "pending (dependencies missing)",
-            null when _settings.Plugins.TryGetValue(package, out var setting) && !setting.Enabled => "disabled",
+            null when _settings.Plugins.GetValueOrDefault(package) is { Enabled: false } => "disabled",
             _ => "available",
         };
         var descriptor = Descriptor(package);
@@ -292,7 +292,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             return $"plugin {package} is already active ({existing.State})";
         if (!_host.Catalog.TryCreateDefinition(package, out var definition))
             return $"plugin package not found: {package}";
-        var activation = await _composition.AddAsync(definition!);
+        var setting = _settings.Plugins.GetValueOrDefault(package);
+        var activation = await _composition.AddAsync(definition!, setting is { Parameters.Count: > 0 } ? setting.Parameters : null);
         if (activation.State == ActivationState.Active)
         {
             Persist(package, existing => Toggled(existing, enabled: true));
@@ -384,9 +385,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _settings.SavePlugins(_home);
     }
 
-    /** enable/disable resets plugin parameters but keeps the permission grants. */
+    /** Activation changes retain plugin parameters and permission grants. */
     private static PluginSetting Toggled(PluginSetting? existing, bool enabled)
-        => new() { Enabled = enabled, Permissions = existing?.Permissions };
+        => (existing ?? new PluginSetting()) with { Enabled = enabled };
 
     public void Dispose()
     {

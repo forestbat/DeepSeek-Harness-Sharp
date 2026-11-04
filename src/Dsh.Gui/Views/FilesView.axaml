@@ -37,6 +37,9 @@
         <Button Classes="Primary" Content="打开" Command="{Binding OpenCommand}" />
         <Button Classes="Ghost" Content="上传…" Click="OnUploadClick" ToolTip.Tip="上传本机文件到选中的目录（同名文件会被替换）" />
         <Button Classes="Ghost" Content="下载…" Click="OnDownloadSelectedClick" />
+        <Button Classes="Ghost" Content="打开方式…" IsVisible="{Binding OpenWith, Converter={x:Static ObjectConverters.IsNotNull}}">
+          <Button.Flyout><Flyout><views:EditorOpenWithView DataContext="{Binding OpenWith}" /></Flyout></Button.Flyout>
+        </Button>
       </StackPanel>
 
       <TreeView Grid.Row="3" x:Name="Tree" ItemsSource="{Binding Roots}"

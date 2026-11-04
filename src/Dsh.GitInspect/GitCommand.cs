@@ -72,6 +72,40 @@ internal static class GitCommand
         return result.Ok ? result.Output : throw new GitCommandException(arguments[0], result.ExitCode, result.Error);
     }
 
+    internal static async Task CopyOutputAsync(string workingDirectory, IReadOnlyList<string> arguments, Stream destination, CancellationToken cancellationToken)
+    {
+        using var process = new Process { StartInfo = CreateStartInfo(workingDirectory, arguments) };
+        process.Start();
+        process.StandardInput.Close();
+        using var abort = cancellationToken.Register(() => Stop(process));
+        var errors = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.StandardOutput.BaseStream.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            if (process.ExitCode != 0)
+                throw new GitCommandException(arguments[0], process.ExitCode, (await errors.ConfigureAwait(false)).Trim());
+            await errors.ConfigureAwait(false);
+        }
+        finally
+        {
+            Stop(process);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private static void Stop(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
     private static ProcessStartInfo CreateStartInfo(string workingDirectory, IReadOnlyList<string> arguments)
     {
         var info = new ProcessStartInfo(Executable)

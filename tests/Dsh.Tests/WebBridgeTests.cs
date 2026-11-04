@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.RemoteHost;
 using Dsh.Transport;
 using Dsh.WebBridge;
@@ -37,6 +39,101 @@ public sealed class WebBridgeTests
             && method.GetString() == HostProtocol.NotificationEvent
             && message.GetProperty("params").GetProperty("EventJson").GetString()!.Contains("web-user-message", StringComparison.Ordinal));
         Assert.Equal(sessionId, pushed.GetProperty("params").GetProperty("SessionId").GetString());
+    }
+
+    [Theory(Timeout = 60000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BrowserQuestionResponses_PreserveChoiceContract_AndAuthoritativeResolutionWins(bool dismissed)
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("wbq", TestContext.Current.CancellationToken);
+        await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
+        var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
+        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        var cookies = await access.LoginAsync(Ct);
+        using var first = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
+        using var second = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
+        var service = host.Environment.App.Ctx.Get<UserQuestionService>(UserQuestionService.ServiceName)!;
+        var waiting = service.Ask(new AskUserQuestionRequest(
+        [
+            new("targets", "Choose targets", Detail: "Shared choices", Options:
+            [
+                new("Tests", Value: "tests", Default: true),
+                new("Disabled", Value: "disabled", Disabled: true),
+                new("Docs", Value: "docs"),
+            ], MultiSelect: true, AllowCustom: false),
+            new("notes", "Add notes"),
+        ], host.Environment.Agent), Ct);
+        var firstView = await PendingViewAsync(first, "Questions", present: true);
+        var secondView = await PendingViewAsync(second, "Questions", present: true);
+        var request = firstView.GetProperty("Pending").GetProperty("Questions")[0];
+        var requestId = request.GetProperty("RequestId").GetString()!;
+        Assert.Equal(requestId, secondView.GetProperty("Pending").GetProperty("Questions")[0].GetProperty("RequestId").GetString());
+        var question = request.GetProperty("Questions")[0];
+        Assert.False(question.GetProperty("AllowCustom").GetBoolean());
+        Assert.True(question.GetProperty("MultiSelect").GetBoolean());
+        Assert.Equal("tests", question.GetProperty("Options")[0].GetProperty("Value").GetString());
+        Assert.True(question.GetProperty("Options")[0].GetProperty("Default").GetBoolean());
+        Assert.True(question.GetProperty("Options")[1].GetProperty("Disabled").GetBoolean());
+        var response = new RemoteQuestionResponse(requestId,
+            dismissed ? [] : [new("targets", ["tests", "docs"], null), new("notes", [], "Browser notes")],
+            dismissed ? "dismissed" : "answered", dismissed ? "user_cancelled" : null);
+        var json = JsonSerializer.Serialize(response, HostProtocolJsonContext.Default.RemoteQuestionResponse);
+        Assert.True((await WebSocketRpc.RequestAsync(first, 1, HostProtocol.MethodQuestionRespond, json)).GetBoolean());
+        var resolved = await PendingViewAsync(second, "Questions", present: false);
+        Assert.Empty(resolved.GetProperty("Pending").GetProperty("Questions").EnumerateArray());
+        Assert.False((await WebSocketRpc.RequestAsync(second, 1, HostProtocol.MethodQuestionRespond, json)).GetBoolean());
+        var result = await waiting.WaitAsync(TimeSpan.FromSeconds(20), Ct);
+        Assert.Equal(dismissed, result.IsDismissed);
+        if (dismissed)
+        {
+            Assert.Empty(result.Answers);
+            Assert.Equal("user_cancelled", result.Reason);
+        }
+        else
+        {
+            Assert.Equal(["tests", "docs"], result.Answers[0].Selected);
+            Assert.Equal("Browser notes", result.Answers[1].Custom);
+        }
+    }
+
+    [Theory(Timeout = 60000)]
+    [InlineData(true, false, false, ApprovalOutcome.AllowedOnce)]
+    [InlineData(true, true, false, ApprovalOutcome.AllowedForSession)]
+    [InlineData(false, false, false, ApprovalOutcome.Rejected)]
+    [InlineData(false, false, true, ApprovalOutcome.Cancelled)]
+    public async Task BrowserApprovalResponses_CarryAllFourOutcomes_AndRemoveOtherClientPending(
+        bool allow, bool rememberForSession, bool cancelled, ApprovalOutcome expected)
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("wba", TestContext.Current.CancellationToken);
+        await using var bridge = WebBridgeServer.Start(new WebBridgeOptions(host.Root, 0));
+        var access = new BridgeAccess(bridge.Port, LocalEndpointToken.Read(WebBridgeEndpoint.PortFile(host.Root))!);
+        await access.WaitForMachinesAsync(states => states.Values.All(state => state == "Connected"), TimeSpan.FromSeconds(10), Ct);
+        var cookies = await access.LoginAsync(Ct);
+        using var first = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
+        using var second = await access.ConnectWebSocketAsync(cookies, access.Origin, Ct);
+        var waiting = RemoteHostMultiClientTests.RaiseApprovalAsync(host, host.Environment.Agent, "bash");
+        var firstView = await PendingViewAsync(first, "Approvals", present: true);
+        await PendingViewAsync(second, "Approvals", present: true);
+        var request = firstView.GetProperty("Pending").GetProperty("Approvals")[0];
+        var requestId = request.GetProperty("RequestId").GetString()!;
+        Assert.Equal("bash", request.GetProperty("Tool").GetString());
+        Assert.Equal("{}", request.GetProperty("Arguments").GetString());
+        var response = new RemoteApprovalResponse(requestId, allow, null, rememberForSession, cancelled);
+        var json = JsonSerializer.Serialize(response, HostProtocolJsonContext.Default.RemoteApprovalResponse);
+        Assert.True((await WebSocketRpc.RequestAsync(first, 1, HostProtocol.MethodApprovalRespond, json)).GetBoolean());
+        await PendingViewAsync(second, "Approvals", present: false);
+        Assert.False((await WebSocketRpc.RequestAsync(second, 1, HostProtocol.MethodApprovalRespond, json)).GetBoolean());
+        Assert.Equal(expected, await waiting.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+    }
+
+    private static async Task<JsonElement> PendingViewAsync(ClientWebSocket socket, string kind, bool present)
+    {
+        var message = await WebSocketRpc.ReceiveUntilAsync(socket, message =>
+            message.TryGetProperty("method", out var method) && method.GetString() == BridgeProtocol.NotificationView
+            && message.GetProperty("params").GetProperty("State").GetString() == "Connected"
+            && (message.GetProperty("params").GetProperty("Pending").GetProperty(kind).GetArrayLength() > 0) == present);
+        return message.GetProperty("params");
     }
 
     [Fact(Explicit = true)]

@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Gui.Services;
 using Dsh.Gui.Terminal;
 
@@ -14,7 +14,7 @@ namespace Dsh.Gui.ViewModels;
 public sealed partial class FleetSessionViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly FleetWorkspace _fleet;
-    private readonly MachineConnection _machine;
+    private readonly IWorkspaceMachine _machine;
     private readonly NotificationCenterViewModel _notifications;
     private readonly List<Task> _tabClosures = [];
     private readonly CancellationTokenSource _retirement = new();

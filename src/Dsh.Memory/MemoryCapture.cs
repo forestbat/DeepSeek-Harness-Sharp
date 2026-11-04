@@ -29,7 +29,10 @@ public sealed class MemoryCapture : Service, IDisposable
     private readonly Task _worker;
     private readonly Lock _sync = new();
 
-    public MemoryCapture(Context ctx, Func<Session, ProjectMemory> resolveMemory, HarnessOptions options) : base(ctx, ServiceName)
+    public MemoryCapture(
+        Context ctx,
+        Func<Session, ProjectMemory> resolveMemory,
+        HarnessOptions options) : base(ctx, ServiceName)
     {
         _resolveMemory = resolveMemory;
         _options = options;
@@ -45,7 +48,7 @@ public sealed class MemoryCapture : Service, IDisposable
     {
         if (sessionEvent.Data is not TurnEndPayload { Reason: TurnEndReason.Completed })
             return;
-        if (!IsEnabled())
+        if (!IsEnabled() || !_resolveMemory(session).IsEnabled)
             return;
         lock (_sync)
         {
@@ -92,6 +95,9 @@ public sealed class MemoryCapture : Service, IDisposable
 
     private async Task CaptureAsync(Session session, CancellationToken signal)
     {
+        var memory = _resolveMemory(session);
+        if (!memory.IsEnabled)
+            return;
         var llm = Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         if (ResolveTarget(session) is not { } target)
         {
@@ -103,7 +109,6 @@ public sealed class MemoryCapture : Service, IDisposable
             return;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(signal);
         timeout.CancelAfter(RunTimeout);
-        var memory = _resolveMemory(session);
         var digestText = await CallAsync(llm, target, CapturePrompts.Digest(transcript), session.Id, timeout.Token);
         if (ParseDigest(digestText) is { } digest)
             await memory.WriteDigestAsync(session.Id, digest.Topic, digest.Summary, signal);

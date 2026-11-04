@@ -1,19 +1,19 @@
+﻿using Dsh.Plugins;
+
 namespace Dsh.Boot;
 
 /**
- * settings.yaml 模板与配置面的同步钩子: 模板里 `# >>> generated` / `# <<< generated` 之间的内容由
- * SettingsSchemaCatalog 渲染, 手写说明在块外不受影响。
- * 用法: 构建/CI 用 Verify(不一致即失败并给出修复命令), 开发用 Write 一键重写。
+ * settings.yaml 模板生成块: 键和默认值来自 schema, 键上方的说明注释由模板保留。
+ * `--write-template` 会更新缺失/变更的键, 但不会覆盖人工写的说明。
  */
 public static class SettingsTemplate
 {
-    /** 模板随程序发布: 默认指向输出目录里的那份副本(verify 用); 写回源码用 --path 指定。 */
     public static string DefaultPath
         => Path.Combine(AppContext.BaseDirectory, "Profiles", "Templates", "settings.yaml");
 
     public static string FixHint => "dsharp config schema --write-template --path <模板路径>";
 
-    /** 校验: 返回 null 表示同步, 否则返回给用户的说明(含修复命令)。 */
+    /** 校验生成块的结构(键/默认值/顺序)，说明注释不参与比较。 */
     public static string? Verify(string path)
     {
         if (!File.Exists(path))
@@ -21,36 +21,113 @@ public static class SettingsTemplate
         var text = File.ReadAllText(path);
         if (!TryFindBlock(text, out var begin, out var tail))
             return $"模板缺少生成块标记({SettingsSchemaCatalog.GeneratedBegin} / {SettingsSchemaCatalog.GeneratedEnd}): {path}";
-        var expected = SettingsSchemaCatalog.RenderTemplateBlock();
-        // 与写回同一区域口径: 多出来的重复结束标记也算不同步(写回一次即自愈)。
-        var actual = text[begin..tail];
-        return Normalize(actual) == Normalize(expected)
+        var actual = ParseBlock(text[begin..tail]).Keys;
+        var expected = ParseBlock(SettingsSchemaCatalog.RenderTemplateBlock()).Keys;
+        return actual.SequenceEqual(expected)
             ? null
-            : $"settings.yaml 模板与配置面不同步(新增/改动了配置项后未更新模板): {path}; 修复: {FixHint}";
+            : $"settings.yaml 生成块与配置面不同步: {path}; 修复: {FixHint}";
     }
 
-    /** 写回: 就地替换生成块(并吞掉历史版本留下的重复结束标记), 返回是否有改动。 */
+    /** 重写生成块，保留已有键上方的说明注释。 */
     public static bool Write(string path)
     {
         var text = File.ReadAllText(path);
         if (!TryFindBlock(text, out var begin, out var tail))
             throw new InvalidOperationException($"模板缺少生成块标记({SettingsSchemaCatalog.GeneratedBegin} / {SettingsSchemaCatalog.GeneratedEnd}): {path}");
-        // 结束标记后统一收敛成一个空行: 历史 bug 曾让每次写回多留一串空行。
+        var comments = ParseBlock(text[begin..tail]).Comments;
         var rest = tail;
         while (rest < text.Length && (text[rest] == '\r' || text[rest] == '\n'))
             rest++;
         var newline = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var updated = string.Concat(text[..begin], SettingsSchemaCatalog.RenderTemplateBlock(), newline, newline, text[rest..]);
+        var updated = string.Concat(text[..begin], SettingsSchemaCatalog.RenderTemplateBlock(comments), newline, newline, text[rest..]);
         if (Normalize(updated) == Normalize(text))
             return false;
         File.WriteAllText(path, updated);
         return true;
     }
 
-    /**
-     * 定位生成块: begin 为起始标记下标, tail 为"块之后正文"的起点。
-     * tail 会跳过结束标记本身以及紧跟在后面的重复结束标记(曾有写回 bug 留下多份), 因此写回一次即自愈。
-     */
+    private static BlockParse ParseBlock(string block)
+    {
+        var comments = new Dictionary<string, string>(StringComparer.Ordinal);
+        var keys = new List<string>();
+        var document = SettingsSchemaCatalog.Document()?.Settings ?? [];
+        var plugins = SettingsSchemaCatalog.Plugins().ToDictionary(plugin => plugin.Package, plugin => plugin.Settings, StringComparer.Ordinal);
+        var stack = new List<Frame> { new(0, "", document) };
+        var pending = new List<string>();
+        foreach (var raw in block.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            if (!line.StartsWith("# ", StringComparison.Ordinal))
+            {
+                pending.Clear();
+                continue;
+            }
+            var body = line[2..];
+            if (body.Length == 0 || body == "(无参数)")
+            {
+                pending.Clear();
+                continue;
+            }
+            if (body.StartsWith("顶层 settings", StringComparison.Ordinal)
+                || body.StartsWith("插件参数", StringComparison.Ordinal)
+                || body.StartsWith(">>>", StringComparison.Ordinal)
+                || body.StartsWith("<<<", StringComparison.Ordinal))
+            {
+                pending.Clear();
+                continue;
+            }
+            if (body.StartsWith('@') && body.EndsWith(':') && !body.Contains(' '))
+            {
+                var package = body[..^1];
+                if (plugins.TryGetValue(package, out var settings))
+                {
+                    if (pending.Count > 0)
+                        comments[package] = string.Join("\n", pending);
+                    pending.Clear();
+                    stack.Clear();
+                    stack.Add(new Frame(2, package, settings));
+                }
+                continue;
+            }
+            if (IsKeyLine(body, out var indent, out var key))
+            {
+                var index = FindFrame(stack, indent, key);
+                if (index >= 0)
+                {
+                    var frame = stack[index];
+                    stack.RemoveRange(index + 1, stack.Count - index - 1);
+                    var path = frame.Path.Length == 0 ? key : $"{frame.Path}.{key}";
+                    if (pending.Count > 0)
+                        comments[path] = string.Join("\n", pending);
+                    pending.Clear();
+                    keys.Add(body.Trim());
+                    if (frame.Children.First(setting => setting.Key == key).Children is { Count: > 0 } children)
+                        stack.Add(new Frame(indent + 2, path, children));
+                    continue;
+                }
+            }
+            pending.Add(body.Trim());
+        }
+        return new(comments, keys);
+    }
+
+    private static bool IsKeyLine(string body, out int indent, out string key)
+    {
+        var trimmed = body.TrimStart();
+        indent = body.Length - trimmed.Length;
+        var colon = trimmed.IndexOf(':');
+        key = colon > 0 ? trimmed[..colon] : "";
+        return colon > 0 && key.Length > 0 && !key.Any(char.IsWhiteSpace);
+    }
+
+    private static int FindFrame(List<Frame> stack, int indent, string key)
+    {
+        for (var index = stack.Count - 1; index >= 0; index--)
+            if (stack[index].Indent == indent && stack[index].Children.Any(setting => setting.Key == key))
+                return index;
+        return -1;
+    }
+
     private static bool TryFindBlock(string text, out int begin, out int tail)
     {
         begin = text.IndexOf(SettingsSchemaCatalog.GeneratedBegin, StringComparison.Ordinal);
@@ -61,21 +138,13 @@ public static class SettingsTemplate
         if (end < 0)
             return false;
         tail = end + SettingsSchemaCatalog.GeneratedEnd.Length;
-        while (true)
-        {
-            var cursor = tail;
-            while (cursor < text.Length && (text[cursor] == '\r' || text[cursor] == '\n'))
-                cursor++;
-            if (cursor + SettingsSchemaCatalog.GeneratedEnd.Length > text.Length
-                || string.CompareOrdinal(text, cursor, SettingsSchemaCatalog.GeneratedEnd, 0, SettingsSchemaCatalog.GeneratedEnd.Length) != 0)
-            {
-                break;
-            }
-            tail = cursor + SettingsSchemaCatalog.GeneratedEnd.Length;
-        }
         return true;
     }
 
     private static string Normalize(string text)
         => text.Replace("\r\n", "\n").TrimEnd();
+
+    private readonly record struct BlockParse(IReadOnlyDictionary<string, string> Comments, IReadOnlyList<string> Keys);
+
+    private readonly record struct Frame(int Indent, string Path, IReadOnlyList<PluginSettingSpec> Children);
 }

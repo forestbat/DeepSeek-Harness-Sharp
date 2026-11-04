@@ -14,37 +14,15 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto"
+    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
           Classes="chatHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
         <TextBlock Text="{Binding SessionSubtitle}" Classes="Tertiary" />
       </StackPanel>
 
-      <Button Grid.Column="1" Classes="Chip" VerticalAlignment="Center" ToolTip.Tip="交互 preset">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
-          <TextBlock Text="{Binding PresetLabel}" />
-          <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
-        </StackPanel>
-        <Button.Flyout>
-          <Flyout Placement="BottomEdgeAlignedRight" Opened="OnPresetFlyoutOpened">
-            <ItemsControl ItemsSource="{Binding PresetItems}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:PresetListItem">
-                  <Button Classes="Ghost" Classes.selected="{Binding IsCurrent}"
-                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                          Click="OnPresetItemClick">
-                    <TextBlock Text="{Binding Label}" />
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </Flyout>
-        </Button.Flyout>
-      </Button>
 
-      <Button Grid.Column="2" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
+      <Button Grid.Column="1" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="子代理">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Trace}" />
           <TextBlock Text="子代理" />
@@ -86,7 +64,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="3" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
+      <Button Grid.Column="2" Name="DeliverablesChip" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="交付物">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Attach}" />
           <TextBlock Text="交付物" />
@@ -132,7 +110,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="4" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
+      <Button Grid.Column="3" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
           <TextBlock Text="{Binding ModeLabel}" />
@@ -146,7 +124,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="5" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
+      <Button Grid.Column="4" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Download}" />
           <TextBlock Text="Session log" />
@@ -202,9 +180,10 @@
               <StackPanel Spacing="3">
                 <TextBlock Text="{Binding Role}" Classes="Tertiary" IsVisible="{Binding HasRole}" />
 
-                <TextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
+                <SelectableTextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
                 <Button Classes="Ghost" Padding="2,0" HorizontalAlignment="Left"
                         IsVisible="{Binding IsFoldable}"
+                        Click="OnMessageFoldClick"
                         Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ToggleMessageFoldCommand}"
                         CommandParameter="{Binding}">
                   <TextBlock Text="{Binding FoldLabel}" Classes="Tertiary" />
@@ -216,8 +195,8 @@
                       <DataTemplate x:DataType="vm:MessageViewModel">
                         <Grid ColumnDefinitions="Auto,*" Margin="0,1">
                           <TextBlock Text="{Binding Role}" Classes="Tertiary" Margin="0,0,6,0" />
-                          <TextBlock Grid.Column="1" Text="{Binding Preview}" Classes="Secondary"
-                                     TextTrimming="CharacterEllipsis" />
+                          <SelectableTextBlock Grid.Column="1" Text="{Binding Preview}" Classes="Secondary"
+                                               TextTrimming="CharacterEllipsis" />
                         </Grid>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -233,9 +212,19 @@
                 <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding ShowMarkdown}" />
                 <views:DiffView Card="{Binding Diff}" IsVisible="{Binding ShowDiff}"
                                 IsCardExpanded="{Binding IsDiffExpanded, Mode=TwoWay}" />
-                <TextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
-                <TextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
-                           FontFamily="{DynamicResource Font.Mono}" />
+                <ScrollViewer Name="ToolArgumentScroll" IsVisible="{Binding ShowToolArguments}" MaxHeight="240"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                  <SelectableTextBlock Text="{Binding ArgumentText}" Classes="Body"
+                                       FontFamily="{DynamicResource Font.Mono}" TextWrapping="NoWrap" />
+                </ScrollViewer>
+                <ScrollViewer Name="ToolResultScroll" IsVisible="{Binding ShowToolResult}" MaxHeight="380"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                  <SelectableTextBlock Text="{Binding ResultText}" Classes="Body"
+                                       FontFamily="{DynamicResource Font.Mono}" TextWrapping="NoWrap" />
+                </ScrollViewer>
+                <SelectableTextBlock Text="{Binding Text}" Classes="Body" IsVisible="{Binding ShowPlainBody}" />
+                <SelectableTextBlock Text="{Binding Detail}" Classes="Body" IsVisible="{Binding ShowDetail}"
+                                     FontFamily="{DynamicResource Font.Mono}" />
 
                 <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowActions}">
                   <Button Classes="Icon" Width="26" Height="26" ToolTip.Tip="复制"
@@ -291,12 +280,13 @@
                     <TextBlock Text="{Binding Title}" Classes="Secondary" TextTrimming="CharacterEllipsis" />
                   </Button>
                   <Button Grid.Column="3" Classes="Icon" Width="22" Height="22" IsVisible="{Binding HasDetail}"
+                          Click="OnTraceExpandClick"
                           Command="{Binding ToggleExpandCommand}">
                     <TextBlock Text="{Binding ExpandLabel}" Classes="Tertiary" />
                   </Button>
                 </Grid>
-                <TextBlock Text="{Binding Detail}" Classes="Tertiary" Margin="0,2,0,0" TextWrapping="Wrap"
-                           IsVisible="{Binding IsExpanded}" />
+                <SelectableTextBlock Text="{Binding Detail}" Classes="Tertiary" Margin="0,2,0,0" TextWrapping="Wrap"
+                                     IsVisible="{Binding IsExpanded}" />
               </StackPanel>
             </Border>
           </DataTemplate>
@@ -467,6 +457,7 @@
 
     <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="22,0,22,10" Spacing="8">
       <TextBlock Text="{Binding StatusText}" Classes="Tertiary" VerticalAlignment="Center" />
+      <TextBlock Text="{Binding TokenStats.ContextText}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.Rounds}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.FirstToken}" Classes="Tertiary" />
       <TextBlock Text="{Binding TokenStats.TokensPerSecond}" Classes="Tertiary" />

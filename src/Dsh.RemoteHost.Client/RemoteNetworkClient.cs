@@ -3,7 +3,7 @@ using static Dsh.RemoteHost.RemoteHostRpc;
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Network domain. */
-public sealed class RemoteNetworkClient
+public sealed class RemoteNetworkClient : IWorkspaceNetwork
 {
     private const int ProbeCancellationAcknowledgementTimeoutSeconds = 5;
     private readonly RemoteHostClient _host;

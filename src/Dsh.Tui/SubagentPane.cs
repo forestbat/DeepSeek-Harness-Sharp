@@ -233,7 +233,7 @@ internal sealed class SubagentPane : ITuiPane
     private void NavigateTo(Session session)
     {
         _session = session;
-        Renderer = new TranscriptRenderer();
+        Renderer = new TranscriptRenderer(_window.MaintenancePresenter);
         RenderedSeq = 0;
         ScrollOffset = 0;
         StickToBottom = true;

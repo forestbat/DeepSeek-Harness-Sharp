@@ -297,6 +297,8 @@ public sealed class GpuRenderer : IDisposable, IGpuHostClient
         _mouseY = y;
         if (_leftButtonDown)
             _chat.HandleMouseDrag((int)(_mouseX / _atlas.GlyphWidth), (int)(_mouseY / _atlas.GlyphHeight), _layout);
+        else
+            _chat.HandleMouseMove((int)(_mouseX / _atlas.GlyphWidth), (int)(_mouseY / _atlas.GlyphHeight));
     }
 
     public void OnMouseButton(GpuMouseButton button, bool pressed, float x, float y)

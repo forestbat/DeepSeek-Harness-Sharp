@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.GitInspect;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
@@ -119,7 +119,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
     public bool NeedsCommand => Agent?.Entry.RequiresCommand == true;
 
     /** A user-defined terminal command takes its prompt as a "{prompt}" argument instead. */
-    public bool TakesPrompt => Agent?.Entry.AgentKind != Dsh.AgentAdapters.AgentKinds.Terminal;
+    public bool TakesPrompt => Agent?.Entry.AgentKind != AgentKinds.Terminal;
 
     public bool IsExistingWorktree => Worktree == NewSessionWorktree.Existing;
 
@@ -130,7 +130,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
     public event Action<NewSessionViewModel>? Completed;
 
     /** The view shows the remote folder picker for the machine's files domain and returns the chosen directory. */
-    public event Func<RemoteFilesClient, string?, Task<string?>>? BrowseRequested;
+    public event Func<IWorkspaceFiles, string?, Task<string?>>? BrowseRequested;
 
     partial void OnMachineChanged(string? value)
     {
@@ -268,7 +268,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
     }
 
     /** The machine's connection when it is connected now; the form does not wait for an unreachable machine. */
-    private async Task<HostLease?> LeaseAsync()
+    private async Task<WorkspaceHostLease?> LeaseAsync()
     {
         if (Machine is null || _fleet.Find(Machine) is not { State: MachineConnectionState.Connected } connection)
         {

@@ -5,12 +5,11 @@ namespace Dsh.Boot;
 
 /**
  * settings 配置面的单一出口: 数据来自各程序集生成器登记的 ISettingsSchemaProvider(零反射)。
- * 顶层文档(IsPlugin=false)与插件参数一起, 供 dsharp config schema、settings.yaml 模板生成块与 /inspect config 共用。
+ * 顶层文档(IsPlugin=false)与插件参数一起, 供 dsharp config schema 与 /inspect config 共用。
  */
 public static class SettingsSchemaCatalog
 {
-    /** 模板生成块的边界标记: 块内由本文件渲染, 块外的手写说明不受影响。 */
-    public const string GeneratedBegin = "# >>> generated: settings-schema (do not edit; run: dsharp config schema --write-template)";
+    public const string GeneratedBegin = "# >>> generated: settings-schema (配置项由 dsharp config schema --write-template 生成;键上方的说明注释会保留)";
 
     public const string GeneratedEnd = "# <<< generated";
 
@@ -22,15 +21,15 @@ public static class SettingsSchemaCatalog
     public static IReadOnlyList<ISettingsSchemaProvider> Plugins()
         => [.. All().Where(provider => provider.IsPlugin)];
 
-    /** 模板内容: 全部键以注释形式列出(不会替用户改默认行为), 顶层在前、插件在后。 */
-    public static string RenderTemplateBlock()
+    /** 模板生成块: 键上方的注释由 preserved 覆盖 schema 描述。 */
+    public static string RenderTemplateBlock(IReadOnlyDictionary<string, string>? preserved = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine(GeneratedBegin);
         if (Document() is { } document)
         {
             builder.AppendLine("# 顶层 settings(默认值来自 HarnessSettings, 取消注释即可覆盖):");
-            Render(document.Settings, 0, builder);
+            RenderSpecs(document.Settings, "", 0, preserved, builder);
         }
         var plugins = Plugins();
         if (plugins.Count > 0)
@@ -40,28 +39,31 @@ public static class SettingsSchemaCatalog
         }
         foreach (var plugin in plugins)
         {
-            builder.AppendLine("#");
+            if (preserved?.GetValueOrDefault(plugin.Package) is { Length: > 0 } header)
+                foreach (var line in header.Split('\n'))
+                    if (line.Trim() is { Length: > 0 } text)
+                        builder.Append("# ").AppendLine(text);
             builder.AppendLine($"# {plugin.Package}:");
-            if (plugin.Settings.Count == 0)
-            {
-                builder.AppendLine("#   (无参数)");
-                continue;
-            }
-            Render(plugin.Settings, 2, builder);
+            RenderSpecs(plugin.Settings, plugin.Package, 2, preserved, builder);
         }
         builder.Append(GeneratedEnd);
         return builder.ToString();
     }
 
-    private static void Render(IReadOnlyList<PluginSettingSpec> settings, int indent, StringBuilder builder)
+    private static void RenderSpecs(IReadOnlyList<PluginSettingSpec> settings, string prefix, int indent, IReadOnlyDictionary<string, string>? preserved, StringBuilder builder)
     {
         var pad = new string(' ', indent);
         foreach (var spec in settings)
         {
+            var path = prefix.Length == 0 ? spec.Key : $"{prefix}.{spec.Key}";
+            var comment = preserved?.GetValueOrDefault(path) ?? spec.Description;
+            if (!string.IsNullOrWhiteSpace(comment))
+                foreach (var line in comment.Split('\n'))
+                    if (line.Trim() is { Length: > 0 } text)
+                        builder.Append("# ").Append(pad).AppendLine(text);
             builder.Append("# ").Append(pad).Append(spec.Key).Append(':');
-            if (!string.IsNullOrWhiteSpace(spec.Description))
-                builder.Append("  # ").Append(spec.Description);
-            else if (spec.DefaultLiteral is { Length: > 0 } literal && IsLiteral(literal))
+            if (spec.Kind is not (PluginSettingKind.List or PluginSettingKind.Mapping)
+                && spec.DefaultLiteral is { Length: > 0 } literal && IsLiteral(literal))
                 builder.Append(' ').Append(literal.Replace("\n", " ").Replace("\r", ""));
             else if (spec.Kind == PluginSettingKind.List)
                 builder.Append(" []");
@@ -69,11 +71,10 @@ public static class SettingsSchemaCatalog
                 builder.Append(" {}");
             builder.AppendLine();
             if (spec.Children is { Count: > 0 } children)
-                Render(children, indent + 2, builder);
+                RenderSpecs(children, path, indent + 2, preserved, builder);
         }
     }
 
-    /** 只渲染字面量默认值: 初始化器写成表达式(如 LoggingOptions.DefaultBufferSize)时不猜。 */
     private static bool IsLiteral(string literal)
     {
         var text = literal.Trim();
@@ -84,14 +85,9 @@ public static class SettingsSchemaCatalog
         return text.Length > 1 && text[0] == '"' && text[^1] == '"';
     }
 
-    /** 文本形态输出(CLI/文档共用): yaml 为模板块内容, json 为结构化清单, markdown 为表格。 */
+    /** 文本形态输出(CLI/文档共用): json 为结构化清单, markdown 为表格。 */
     public static string Render(string format)
-        => format switch
-        {
-            "json" => RenderJson(),
-            "markdown" or "md" => RenderMarkdown(),
-            _ => RenderTemplateBlock(),
-        };
+        => format == "json" ? RenderJson() : RenderMarkdown();
 
     private static string RenderJson()
     {

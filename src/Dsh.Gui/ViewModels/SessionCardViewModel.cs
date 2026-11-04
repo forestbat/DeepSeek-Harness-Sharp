@@ -1,6 +1,6 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.ViewModels;

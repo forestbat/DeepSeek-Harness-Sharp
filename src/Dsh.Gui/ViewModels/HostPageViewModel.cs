@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Gui.Services;
 using Dsh.RemoteHost;
 
@@ -16,11 +16,11 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
 {
     private readonly FleetWorkspace _fleet;
     private readonly string _capability;
-    private readonly Func<RemoteHostClient, string, string, RemotePathStyle, Task<OperationViewModel>> _build;
+    private readonly Func<IWorkspaceHost, string, string, RemotePathStyle, Task<OperationViewModel>> _build;
     private readonly Func<Task<string?>>? _folderPicker;
     private readonly Action<string, string>? _pathSelected;
     private CancellationTokenSource? _run;
-    private MachineConnection? _connection;
+    private IWorkspaceMachine? _connection;
 
     /** build receives the connected client, machine, path and the connection's already-known path style. */
     public HostPageViewModel(
@@ -29,7 +29,7 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
         string capability,
         string machine,
         string path,
-        Func<RemoteHostClient, string, string, RemotePathStyle, Task<OperationViewModel>> build,
+        Func<IWorkspaceHost, string, string, RemotePathStyle, Task<OperationViewModel>> build,
         Func<Task<string?>>? folderPicker = null,
         Action<string, string>? pathSelected = null)
     {
@@ -103,7 +103,7 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
         Content = null;
     }
 
-    private async Task RunAsync(MachineConnection? connection, string machine, string path, CancellationToken cancellationToken)
+    private async Task RunAsync(IWorkspaceMachine? connection, string machine, string path, CancellationToken cancellationToken)
     {
         Content = null;
         if (connection is null)
@@ -139,11 +139,11 @@ public sealed partial class HostPageViewModel : ObservableObject, IDisposable
     }
 
     /** One link of the machine: the content lives until that link drops. */
-    private async Task ServeLinkAsync(MachineConnection connection, string machine, string path, CancellationToken cancellationToken)
+    private async Task ServeLinkAsync(IWorkspaceMachine connection, string machine, string path, CancellationToken cancellationToken)
     {
         Content = null;
         Status = $"等待 {machine} 连接…";
-        HostLease lease;
+        WorkspaceHostLease lease;
         try
         {
             lease = await connection.WaitConnectedAsync(cancellationToken);

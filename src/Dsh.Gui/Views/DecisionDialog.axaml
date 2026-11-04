@@ -15,11 +15,13 @@
         Background="{DynamicResource Brush.Bg.Card}">
 
   <ScrollViewer Classes="Slim" MaxHeight="680" Padding="20,18">
-    <StackPanel Spacing="14">
+    <StackPanel Spacing="14" IsEnabled="{Binding !IsClosed}">
       <StackPanel Spacing="3">
         <TextBlock Classes="Title" Text="{Binding Heading}" />
         <TextBlock Classes="Secondary" Text="{Binding QuestionSummary}" />
       </StackPanel>
+      <TextBlock Classes="Secondary" Text="{Binding CancellationSupportMessage}"
+                 TextWrapping="Wrap" IsVisible="{Binding !SupportsCancellation}" />
 
       <StackPanel Spacing="12" IsVisible="{Binding IsApproval}">
         <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="6">
@@ -40,13 +42,22 @@
                    Foreground="{DynamicResource Brush.Status.Warning}"
                    IsVisible="{Binding HasImpact}" />
 
-        <CheckBox Content="本会话内该工具不再询问" IsChecked="{Binding RememberForSession, Mode=TwoWay}" />
+        <Expander Header="完整参数">
+          <SelectableTextBlock Text="{Binding Arguments}" TextWrapping="Wrap"
+                               FontFamily="{DynamicResource Font.Mono}" />
+        </Expander>
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <WrapPanel HorizontalAlignment="Right">
+          <WrapPanel.Styles>
+            <Style Selector="Button">
+              <Setter Property="Margin" Value="4,0,0,8" />
+            </Style>
+          </WrapPanel.Styles>
           <Button Classes="Ghost" Content="拒绝 (n)" Command="{Binding RejectCommand}" />
+          <Button Classes="Ghost" Content="取消 (c / Esc)" Command="{Binding CancelCommand}" />
           <Button Classes="Primary" Content="仅本次允许 (y)" Command="{Binding AllowOnceCommand}" />
-          <Button Classes="Primary" Content="总是允许 (a)" Command="{Binding AllowAlwaysCommand}" />
-        </StackPanel>
+          <Button Classes="Primary" Content="本会话总是允许 (a)" Command="{Binding AllowAlwaysCommand}" />
+        </WrapPanel>
       </StackPanel>
 
       <StackPanel Spacing="14" IsVisible="{Binding IsQuestion}">
@@ -68,6 +79,7 @@
                     <DataTemplate x:DataType="vm:DecisionOptionViewModel">
                       <Button Classes="Chip"
                               Classes.selected="{Binding IsSelected}"
+                              IsEnabled="{Binding IsEnabled}"
                               Command="{Binding SelectCommand}"
                               Margin="0,0,0,6"
                               HorizontalAlignment="Stretch"

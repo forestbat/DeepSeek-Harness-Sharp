@@ -1,4 +1,4 @@
-﻿using Dsh.Tui;
+﻿using Dsh.Interaction;
 
 namespace Dsh.Tests;
 
@@ -6,9 +6,9 @@ namespace Dsh.Tests;
 public sealed class MentionTokenTests
 {
     [Fact]
-    public void MentionToken_ActiveWhenCursorInsideToken()
+    public void MentionToken_ActiveWhenCaretInsideToken()
     {
-        var active = ChatPane.TryGetMentionToken("see @READ for details", 8, out var start, out var end);
+        var active = MentionResolver.TryGetActiveToken("see @READ for details", 8, out var start, out var end);
 
         Assert.True(active);
         Assert.Equal(4, start);
@@ -16,17 +16,36 @@ public sealed class MentionTokenTests
     }
 
     [Fact]
-    public void MentionToken_InactiveWhenCursorBeyondToken()
+    public void MentionToken_InactiveWhenCaretBeyondToken()
     {
-        var active = ChatPane.TryGetMentionToken("@README.md 继续输入提示词", 12, out _, out _);
+        var active = MentionResolver.TryGetActiveToken("@README.md 继续输入提示词", 12, out _, out _);
 
         Assert.False(active);
     }
 
     [Fact]
+    public void MentionToken_InactiveWhenCaretBeforeToken()
+    {
+        var active = MentionResolver.TryGetActiveToken("总结 @README.md", 2, out _, out _);
+
+        Assert.False(active);
+    }
+
+    [Fact]
+    public void MentionToken_ActiveWhenCaretInsideEarlierTokenOfLongerPrompt()
+    {
+        var text = "@src 请修改这个文件";
+        var active = MentionResolver.TryGetActiveToken(text, 3, out var start, out var end);
+
+        Assert.True(active);
+        Assert.Equal(0, start);
+        Assert.Equal(4, end);
+    }
+
+    [Fact]
     public void MentionToken_ActiveWithEmptyTokenRightAfterAt()
     {
-        var active = ChatPane.TryGetMentionToken("look @", 6, out var start, out var end);
+        var active = MentionResolver.TryGetActiveToken("look @", 6, out var start, out var end);
 
         Assert.True(active);
         Assert.Equal(5, start);
@@ -36,22 +55,23 @@ public sealed class MentionTokenTests
     [Fact]
     public void MentionToken_InactiveWithoutAt()
     {
-        Assert.False(ChatPane.TryGetMentionToken("plain text", 3, out _, out _));
+        Assert.False(MentionResolver.TryGetActiveToken("plain text", 3, out _, out _));
     }
 
     [Fact]
     public void ReplaceMention_KeepsTextAfterTokenAndAppendsSpace()
     {
-        var (text, cursor) = ChatPane.ReplaceMention("@REA 请总结这个文件", 0, 4, "README.md");
+        var (text, caret) = MentionResolver.ReplaceActiveToken("@REA 请总结这个文件", 0, 4, "README.md");
 
         Assert.Equal("@README.md  请总结这个文件", text);
-        Assert.True(ChatPane.TryGetMentionToken(text, cursor, out _, out _) is false);
+        Assert.Equal(11, caret);
+        Assert.False(MentionResolver.TryGetActiveToken(text, caret, out _, out _));
     }
 
     [Fact]
     public void ReplaceMention_KeepsTextBeforeToken()
     {
-        var (text, _) = ChatPane.ReplaceMention("总结一下 @REA 这个文件", 5, 9, "README.md");
+        var (text, _) = MentionResolver.ReplaceActiveToken("总结一下 @REA 这个文件", 5, 9, "README.md");
 
         Assert.Equal("总结一下 @README.md  这个文件", text);
     }

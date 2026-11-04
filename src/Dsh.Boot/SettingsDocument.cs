@@ -2,12 +2,13 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Dsh.Plugins;
+using Dsh.Runtime.Composition;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 
 namespace Dsh.Boot;
 
-/** settings.yaml 的文本级编辑:按段替换(plugins 段 / 有变化的顶层段),保留其余内容与注释。 */
+/** Token-level plugin merges and changed top-level sections retain unrelated YAML keys and comments. */
 internal static partial class SettingsDocument
 {
     private const string PluginsHeader = "plugins:";
@@ -16,19 +17,8 @@ internal static partial class SettingsDocument
     private static readonly HashSet<string> ReservedScalars =
         new(["true", "false", "null", "~", "yes", "no", "on", "off"], StringComparer.OrdinalIgnoreCase);
 
-    [GeneratedRegex(@"^[A-Za-z0-9_./@\-]+$")]
+    [GeneratedRegex(@"\A[A-Za-z0-9_./][A-Za-z0-9_./@\-]*\z")]
     private static partial Regex PlainScalar();
-
-    public static string ReplacePluginsBlock(string text, string block)
-    {
-        var newline = NewLineOf(text);
-        var lines = SplitLines(text);
-        var start = FindPluginsStart(lines);
-        if (start < 0)
-            return $"{text.TrimEnd()}{newline}{block.ReplaceLineEndings(newline)}{newline}";
-        var end = BlockEnd(lines, start);
-        return $"{string.Join(newline, lines[..start].Concat(SplitLines(block)).Concat(lines[end..])).TrimEnd()}{newline}";
-    }
 
     /**
      * Merge top-level edits relative to the caller's saved snapshot, not the latest file snapshot.
@@ -78,6 +68,63 @@ internal static partial class SettingsDocument
             : ReplaceRange(text, owner.Value.StartIndex, owner.Value.End, "{}");
     }
 
+    /** Merge individual plugin values, preserving untouched tokens and comments even inside nested settings. */
+    public static string MergePlugins(string text, IReadOnlyDictionary<string, PluginSetting> plugins)
+    {
+        var before = YamlConfig.LoadMapping(text).GetValueOrDefault("plugins");
+        var after = YamlConfig.LoadMapping(RenderPlugins(plugins)).GetValueOrDefault("plugins");
+        return MergeValue(text, ["plugins"], before, after);
+    }
+
+    private static string MergeValue(string text, string[] path, object? before, object? after)
+    {
+        if (before is IDictionary<string, object?> oldMap && after is IDictionary<string, object?> newMap)
+        {
+            foreach (var key in oldMap.Keys.Union(newMap.Keys, StringComparer.Ordinal).ToArray())
+                text = newMap.ContainsKey(key)
+                    ? MergeValue(text, [.. path, key], oldMap.TryGetValue(key, out var oldValue) ? oldValue : null, newMap[key])
+                    : ReplacePath(text, [.. path, key], null);
+            return text;
+        }
+        return FlowValue(before) == FlowValue(after) ? text : ReplacePath(text, path, FlowValue(after));
+    }
+
+    private static string ReplacePath(string text, IReadOnlyList<string> path, string? value)
+    {
+        var parser = new Parser(new StringReader(text));
+        parser.Consume<StreamStart>();
+        parser.Consume<DocumentStart>();
+        var owner = ReadSpan(parser);
+        for (var index = 0; index < path.Count; index++)
+        {
+            if (owner.Start is not MappingStart)
+                throw new InvalidDataException("Plugin settings must be YAML mappings.");
+            var key = path[index];
+            var child = owner.Children.SingleOrDefault(pair => pair.Key.Start is Scalar scalar && scalar.Value == key);
+            if (index < path.Count - 1)
+            {
+                owner = child.Value ?? throw new InvalidDataException("Missing plugin settings parent.");
+                continue;
+            }
+            if (child.Value is null)
+                return value is null ? text : InsertEntry(text, owner, FormatKey(key), value);
+            if (value is not null)
+                return ReplaceRange(text, child.Value.StartIndex, child.Value.End, value);
+            return owner.Children.Count > 1
+                ? RemoveEntry(text, owner, child.Key)
+                : ReplaceRange(text, owner.StartIndex, owner.End, "{}");
+        }
+        return text;
+    }
+
+    private static string FlowValue(object? value) => value switch
+    {
+        IDictionary<string, object?> map => $"{{{string.Join(", ", map.Select(pair => $"{FormatKey(pair.Key)}: {FlowValue(pair.Value)}"))}}}",
+        string text => FormatString(text),
+        IEnumerable<object?> sequence => $"[{string.Join(", ", sequence.Select(FlowValue))}]",
+        _ => FormatScalar(value),
+    };
+
     private sealed record YamlSpan(ParsingEvent Start, int End, List<(YamlSpan Key, YamlSpan Value)> Children)
     {
         public int StartIndex => checked((int)Start.Start.Index);
@@ -94,6 +141,7 @@ internal static partial class SettingsDocument
             while (parser.Current is not MappingEnd)
                 children.Add((ReadSpan(parser), ReadSpan(parser)));
             var closing = parser.Consume<MappingEnd>();
+            // YamlDotNet flow closing events mark the delimiter itself, not its exclusive end.
             end = mapping.Style == MappingStyle.Flow ? checked((int)closing.End.Index + 1) : children[^1].Value.End;
         }
         else if (start is SequenceStart sequence)
@@ -118,6 +166,9 @@ internal static partial class SettingsDocument
         }
         var newline = NewLineOf(text);
         var indent = new string(' ', checked((int)mapping.Children[0].Key.Start.Start.Column - 1));
+        // A block scalar can already end at the next line's start; do not skip that sibling.
+        if (mapping.End > 0 && text[mapping.End - 1] == '\n')
+            return text.Insert(mapping.End, $"{indent}{key}: {value}{newline}");
         var lineEnd = text.IndexOf('\n', mapping.End);
         return lineEnd < 0
             ? $"{text}{newline}{indent}{key}: {value}"
@@ -298,28 +349,6 @@ internal static partial class SettingsDocument
         }
     }
 
-    private static int FindPluginsStart(string[] lines)
-    {
-        for (var index = 0; index < lines.Length; index++)
-        {
-            var line = lines[index].TrimEnd();
-            if (line == PluginsHeader || line.StartsWith(PluginsHeader + " ", StringComparison.Ordinal))
-                return index;
-        }
-        return -1;
-    }
-
-    private static int BlockEnd(string[] lines, int start)
-    {
-        var end = start + 1;
-        while (end < lines.Length && IsBlankOrIndented(lines[end]))
-            end++;
-        return end;
-    }
-
-    private static bool IsBlankOrIndented(string line)
-        => line.Length == 0 || line[0] is ' ' or '\t';
-
     private static string[] SplitLines(string text)
         => text.Replace("\r\n", "\n").Split('\n');
 
@@ -337,7 +366,46 @@ internal static partial class SettingsDocument
         return plain ? key : Quote(key);
     }
 
-    private static string Escape(string text) => text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static string Escape(string text)
+    {
+        StringBuilder? builder = null;
+        var unchangedStart = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            var escaped = character switch
+            {
+                '\\' => "\\\\",
+                '"' => "\\\"",
+                '\0' => "\\0",
+                '\a' => "\\a",
+                '\b' => "\\b",
+                '\t' => "\\t",
+                '\n' => "\\n",
+                '\v' => "\\v",
+                '\f' => "\\f",
+                '\r' => "\\r",
+                '\u001b' => "\\e",
+                '\u0085' => "\\N",
+                '\u2028' => "\\L",
+                '\u2029' => "\\P",
+                _ => null,
+            };
+            if (escaped is null && !char.IsControl(character))
+                continue;
+            builder ??= new StringBuilder(text.Length);
+            builder.Append(text, unchangedStart, index - unchangedStart);
+            if (escaped is not null)
+                builder.Append(escaped);
+            else
+            {
+                const string hex = "0123456789ABCDEF";
+                builder.Append("\\x").Append(hex[character >> 4]).Append(hex[character & 15]);
+            }
+            unchangedStart = index + 1;
+        }
+        return builder is null ? text : builder.Append(text, unchangedStart, text.Length - unchangedStart).ToString();
+    }
 
     private static string FormatScalar(object? value) => value switch
     {

@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Transport;
@@ -11,16 +11,18 @@ namespace Dsh.Gui.ViewModels;
 
 /**
  * 机器管理页: 机器清单(settings.yaml 的 fleet 段, 与 CLI 的 `dsharp machine` 和 WebBridge 共用)的增删改, 以及测试连接、手动部署与诊断。
- * 用法: new MachinesViewModel(store, options) 后 Load(); 集成方有常驻的 FleetClient 时调用 AttachFleet 显示实时连接状态, 并在 MachinesChanged 时按新清单重建它。
- * 测试连接与 `dsharp machine test` 相同: 只连接不部署、不自动拉起本机 host; 部署与诊断直接用 RemoteDsharpInstaller 与 FleetDoctor。
+ * The configured workspace services own machine persistence, diagnostics, deployment and connection construction.
+ * Connection tests use the backend administration capability without starting a local Host or reconnecting.
  * 后台线程的事件经构造时捕获的同步上下文回到 UI 线程(没有上下文时就地执行)。
  */
-public sealed partial class MachinesViewModel(MachineStore store, FleetOptions options) : OperationViewModel
+public sealed partial class MachinesViewModel(IWorkspaceServices services) : OperationViewModel
 {
+    private readonly IMachineCatalog store = services.Store;
+    private readonly IMachineAdministration administration = services.Administration;
     private readonly SynchronizationContext? _context = SynchronizationContext.Current;
     private CancellationTokenSource? _operation;
-    private FleetClient? _fleet;
-    private readonly FleetProxyProbe _networkProbe = new(options);
+    private IWorkspaceClient? _fleet;
+    private readonly IWorkspaceProxyProbe _networkProbe = services.CreateProxyProbe();
     private readonly HashSet<Task> _networkOperations = [];
     private readonly object _networkOperationsGate = new();
     private CancellationTokenSource? _remoteOperation;
@@ -206,7 +208,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
         try
         {
             var connection = SelectedConnection();
-            var network = new FleetNetwork(connection);
+            var network = connection.Network;
             RemoteOutboundProxyState state;
             if (write)
             {
@@ -267,7 +269,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
         }
     }
 
-    private MachineConnection SelectedConnection()
+    private IWorkspaceMachine SelectedConnection()
     {
         var machine = Selected ?? throw new InvalidOperationException("Select a saved, connected machine first.");
         return _fleet?.Find(machine.Name)
@@ -309,7 +311,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
 
     public ObservableCollection<MachineRowViewModel> Machines { get; } = [];
 
-    /** 部署进度(RemoteDsharpInstaller 的每一步)与测试连接的结果, 按时间顺序。 */
+    /** Backend deployment progress and connection results, in arrival order. */
     public ObservableCollection<string> OperationLog { get; } = [];
 
     public ObservableCollection<DoctorCheckRow> DoctorChecks { get; } = [];
@@ -356,7 +358,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     public void Load(string? select = null)
     {
         var config = store.Load();
-        IrohAvailable = options.SshTransportAdapter is { Kind: MachineKinds.Iroh };
+        IrohAvailable = administration.IrohAvailable;
         Deploy ??= DeploySettingsEditorViewModel.From(config.Deploy);
         var known = Machines.ToDictionary(row => row.Name, StringComparer.Ordinal);
         Machines.Clear();
@@ -373,8 +375,8 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
         DraftKind = null;
     }
 
-    /** 显示常驻连接的实时状态(FleetClient.Changed 在后台线程触发)。 */
-    public void AttachFleet(FleetClient? fleet)
+    /** 显示常驻连接的实时状态(IWorkspaceClient.Changed 在后台线程触发)。 */
+    public void AttachFleet(IWorkspaceClient? fleet)
     {
         _fleet?.Changed -= OnFleetChanged;
         _fleet = fleet;
@@ -460,14 +462,11 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     [RelayCommand]
     private Task TestConnectionAsync() => RunOperationAsync(async (spec, cancellationToken) =>
     {
-        var testOptions = options with { AutoReconnect = false, StartLocalHost = null };
-        await using var connection = new MachineConnection(spec, testOptions);
-        connection.Start();
-        await connection.WaitSettledAsync(cancellationToken);
+        var connection = await administration.TestConnectionAsync(spec, cancellationToken);
         RowOf(spec.Name)?.Apply(connection.State, connection.Info, connection.Detail);
         if (connection.State != MachineConnectionState.Connected || connection.Info is not { } info)
             throw new IOException($"{spec.Name}（{spec.Target}）连接失败: {connection.Detail}");
-        Log($"{spec.Name}: host {info.HostVersion}，平台 {info.Platform}，harness home {info.HomeRoot}，{connection.Sessions.Count} 个会话");
+        Log($"{spec.Name}: host {info.HostVersion}，平台 {info.Platform}，harness home {info.HomeRoot}，{connection.SessionCount} 个会话");
     });
 
     /** 手动部署(或升级)远端 dsharp, 按表单里的部署设置(可以尚未保存)逐步输出进度。 */
@@ -476,8 +475,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     {
         if (spec.IsLocal)
             throw new InvalidOperationException($"{spec.Name} 是本机，运行的就是这份 dsharp，不需要部署");
-        var result = await new RemoteDsharpInstaller(new SshTransport(spec, options.SshTransportAdapter), options.SshTransportAdapter).EnsureAsync(Deploy?.ToSettings() ?? store.Load().Deploy, Log, cancellationToken, options.ArchiveFactory, ForceDeploy, options.LocalProxy,
-            options.LocalHome ?? new Dsh.Boot.HarnessHome(Path.GetDirectoryName(store.FilePath)!));
+        var result = await administration.DeployAsync(spec, Deploy?.ToSettings() ?? store.Load().Deploy, ForceDeploy, Log, cancellationToken);
         Log(result.AlreadyPresent
             ? $"{spec.Name}: {result.CommandPath} 已是 {HostProtocol.ReleaseVersion} 或更新的版本（勾选“强制重新部署”可覆盖）"
             : $"{spec.Name}: 已部署 {HostProtocol.ReleaseVersion} 到 {result.CommandPath}");
@@ -488,15 +486,12 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     private Task EnableIrohAsync()
     {
         var originalName = Editor?.OriginalName;
-        var installOptions = options with { Deploy = Deploy?.ToSettings() ?? store.Load().Deploy };
         return RunOperationAsync(async (spec, cancellationToken) =>
         {
             if (spec.Kind != MachineKinds.Ssh)
                 throw new InvalidOperationException("请先选择或填写一台可通过普通 SSH 连接的机器");
-            MachineStore.Validate(PlanChange(spec, originalName).Machines);
-            var setup = FleetService.IrohSetup
-                ?? throw new InvalidOperationException("iroh 插件未加载");
-            var converted = await setup.EnableAndSaveAsync(spec, installOptions, converted => Persist(converted, originalName), Log, cancellationToken);
+            store.Validate(PlanChange(spec, originalName).Machines);
+            var converted = await administration.EnableIrohAsync(spec, Deploy?.ToSettings() ?? store.Load().Deploy, converted => Persist(converted, originalName), Log, cancellationToken);
             Load(converted.Name);
             Report($"已启用 {converted.Name} 的 SSH-over-iroh（{converted.EndpointId}）");
             MachinesChanged?.Invoke();
@@ -506,7 +501,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     [RelayCommand]
     private Task RunDoctorAsync() => RunOperationAsync(async (spec, cancellationToken) =>
     {
-        var checks = await FleetDoctor.CheckAsync(spec, options, cancellationToken);
+        var checks = await administration.DiagnoseAsync(spec, cancellationToken);
         DoctorChecks.Clear();
         foreach (var check in checks)
             DoctorChecks.Add(new DoctorCheckRow(check));
@@ -537,9 +532,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
         Editor.IrohExecutablePath = path;
     }
 
-    private string? IrohExecutable => options.SshTransportAdapter is { Kind: MachineKinds.Iroh } adapter
-        ? adapter.FindExecutable()
-        : null;
+    private string? IrohExecutable => administration.IrohExecutable;
 
     partial void OnIsDraftingChanged(bool value) => NotifyDraftKind();
 
@@ -558,7 +551,7 @@ public sealed partial class MachinesViewModel(MachineStore store, FleetOptions o
     private FleetConfig PlanChange(MachineSpec spec, string? originalName)
     {
         var config = store.Load();
-        IrohAvailable = options.SshTransportAdapter is { Kind: MachineKinds.Iroh };
+        IrohAvailable = administration.IrohAvailable;
         if (spec.IsIroh && !IrohAvailable && !config.Machines.Any(machine => machine.Name == originalName && machine.IsIroh))
             throw new InvalidOperationException("Iroh requires an installed iroh-ssh command available to this application.");
         if (spec.Name != originalName && config.Machines.Any(machine => machine.Name == spec.Name))

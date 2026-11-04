@@ -1,0 +1,17 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dsh.Gui.ViewModels" x:Class="Dsh.Gui.Views.EditorOpenWithView"
+             x:DataType="vm:EditorOpenWithViewModel" x:CompileBindings="True">
+  <StackPanel Spacing="8" Width="420" Margin="10">
+    <TextBlock Text="打开方式" Classes="Title" />
+    <TextBlock Text="local = 本机编辑器；remote = 文件所在 Host 的编辑器" Classes="Tertiary" TextWrapping="Wrap" />
+    <ComboBox Name="EditorDestination" ItemsSource="{Binding Destinations}" SelectedItem="{Binding Destination, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+    <TextBox Name="LocalEditorWorkspace" Text="{Binding LocalWorkspace, Mode=TwoWay}" PlaceholderText="本机工作区路径（远端文件映射到本机时必填）" />
+    <SelectableTextBlock Text="{Binding TargetDescription}" Classes="Mono" TextWrapping="Wrap" />
+    <ListBox Name="DetectedEditors" ItemsSource="{Binding Editors}" SelectedItem="{Binding SelectedEditor, Mode=TwoWay}" MaxHeight="240">
+      <ListBox.ItemTemplate><DataTemplate x:DataType="vm:EditorChoice"><StackPanel><TextBlock Text="{Binding Label}" /><TextBlock Text="{Binding Executable}" Classes="Tertiary" TextWrapping="Wrap" /></StackPanel></DataTemplate></ListBox.ItemTemplate>
+    </ListBox>
+    <CheckBox Content="记住此工作区的选择" IsChecked="{Binding RememberSelection, Mode=TwoWay}" />
+    <StackPanel Orientation="Horizontal" Spacing="8"><Button Name="OpenSelectedEditor" Classes="Primary" Content="打开" Command="{Binding OpenCommand}" IsEnabled="{Binding !IsBusy}" /><Button Classes="Ghost" Content="重新检测" Command="{Binding RefreshCommand}" /></StackPanel>
+    <TextBlock Text="{Binding Status}" Classes="Tertiary" TextWrapping="Wrap" />
+  </StackPanel>
+</UserControl>

@@ -33,6 +33,9 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "mcp")]
     public Dictionary<string, McpServerSettings> McpServers { get; set; } = [];
 
+    [YamlMember(Alias = "tools")]
+    public ToolsSettings? Tools { get; set; }
+
     [YamlMember(Alias = "a2a")]
     public A2aSettings? A2a { get; set; }
 
@@ -154,9 +157,13 @@ public sealed class HarnessSettings
         using var transaction = new SettingsWriteLock(path);
         var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
         _ = Parse(text);
-        var updated = SettingsDocument.ReplacePluginsBlock(text, SettingsDocument.RenderPlugins(Plugins));
+        var updated = SettingsDocument.MergePlugins(text, Plugins);
         _ = Parse(updated);
-        WriteAtomic(path, updated);
+        if (updated != text)
+        {
+            WriteAtomic($"{path}.bak", text);
+            WriteAtomic(path, updated);
+        }
     }
 
     /** Validate independently, persist only the owned child, then publish the route to existing clients. */
@@ -327,8 +334,13 @@ public sealed class SkillsSettings
     [YamlMember(Alias = "paths")]
     public List<string> Paths { get; set; } = [];
 
+    /// 远程技能源: 每个 URL 返回 {"skills":[{"name","description","whenToUse","content"}]}
     [YamlMember(Alias = "urls")]
     public List<string> Urls { get; set; } = [];
+
+    /// 允许上架的远程技能名; 留空表示一个都不要(默认), 远端内容因此进不了提示词。
+    [YamlMember(Alias = "enabled")]
+    public List<string> Enabled { get; set; } = [];
 }
 
 public sealed class CompactionSettings
@@ -480,6 +492,23 @@ public sealed class A2aRemoteSettings
 
     [YamlMember(Alias = "headers")]
     public Dictionary<string, string> Headers { get; set; } = [];
+}
+
+/** 工具集行为: 渐进式披露与其阈值。 */
+public sealed class ToolsSettings
+{
+    public const int DefaultDisclosureThreshold = 8;
+
+    /**
+     * 是否启用渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开。
+     * 模型不一定理解"路由工具"这种约定, 所以默认关闭 —— 所有工具直接可见, 需要省 token 时再打开。
+     */
+    [YamlMember(Alias = "progressive_disclosure")]
+    public bool ProgressiveDisclosure { get; set; }
+
+    /** 启用渐进式披露时, 工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返。 */
+    [YamlMember(Alias = "disclosure_threshold")]
+    public int DisclosureThreshold { get; set; } = DefaultDisclosureThreshold;
 }
 
 public sealed class McpServerSettings

@@ -197,7 +197,7 @@ public static class TerminalTools
         var terminals = ctx.Get<TerminalSessionService>(TerminalSessionService.ServiceName)!;
         var disposables = new List<IDisposable>();
 
-        disposables.Add(systemPrompt.Section(PromptSection.Literal("tool:pty", SectionText)));
+        disposables.Add(systemPrompt.Section(PromptSection.Literal("tool:pty", SectionText, ToolNames: ["terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close", "terminal_list"])));
 
         IReadOnlyList<ContentBlock>? FinalizeContent(ToolExecution _, ToolExecutionResult result)
         {

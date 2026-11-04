@@ -295,8 +295,10 @@ public static class TuiRunner
             var mouse = inputEvent.Mouse!.Value;
             if (mouse.IsWheel)
                 chat.HandleMouseWheel(mouse.WheelDelta, mouse.X, mouse.Y, layout);
-            else if (mouse.IsMove)
+            else if (mouse.IsMove && mouse.Pressed)
                 chat.HandleMouseDrag(mouse.X, mouse.Y, layout);
+            else if (mouse.IsMove)
+                chat.HandleMouseMove(mouse.X, mouse.Y);
             else if (mouse.Pressed)
                 chat.HandleMouseClick(mouse.X, mouse.Y, layout);
             else

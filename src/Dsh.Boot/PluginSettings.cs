@@ -106,6 +106,20 @@ public sealed record PluginPermissions
 public static class PluginSettingsSection
 {
     public const string PluginsKey = "plugins";
+    private static readonly Lazy<Dictionary<string, PluginSetting>> TemplateSettings = new(() => ParseDocument(HarnessSettings.LoadTemplate()));
+
+    public static Dictionary<string, object?> DefaultParameters(string name)
+        => TemplateSettings.Value.GetValueOrDefault(name)?.Parameters.ToDictionary(pair => pair.Key, pair => CloneValue(pair.Value), StringComparer.Ordinal) ?? [];
+
+    public static object? DefaultParameter(string name, string key)
+        => CloneValue(TemplateSettings.Value.GetValueOrDefault(name)?.Parameters.GetValueOrDefault(key));
+
+    private static object? CloneValue(object? value) => value switch
+    {
+        IReadOnlyDictionary<string, object?> map => map.ToDictionary(pair => pair.Key, pair => CloneValue(pair.Value), StringComparer.Ordinal),
+        IEnumerable<object?> items => items.Select(CloneValue).ToArray(),
+        _ => value,
+    };
 
     public static Dictionary<string, PluginSetting> ParseDocument(string yaml)
     {

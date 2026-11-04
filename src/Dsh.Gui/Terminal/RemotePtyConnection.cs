@@ -1,5 +1,5 @@
 using System.IO.Pipelines;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.Pty;
 using Dsh.RemoteHost;
 using Dsh.Transport;
@@ -16,7 +16,7 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
     /** How long disposing waits for the machine to stop a PTY it started. */
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly MachineConnection _machine;
+    private readonly IWorkspaceMachine _machine;
     private readonly string _ptyId;
     private readonly bool _ownsPty;
     private readonly Pipe _input = new();
@@ -28,7 +28,7 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
     private readonly SemaphoreSlim _resizeGate = new(1);
     private TerminalSize _size = new(80, 24);
 
-    private RemotePtyConnection(MachineConnection machine, string ptyId, bool ownsPty)
+    private RemotePtyConnection(IWorkspaceMachine machine, string ptyId, bool ownsPty)
     {
         _machine = machine;
         _ptyId = ptyId;
@@ -41,13 +41,13 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
     public string PtyId => _ptyId;
 
     /** Attaches to an existing PTY (an external agent's or a terminal session's; the session id is the PTY id). */
-    public static RemotePtyConnection Attach(MachineConnection machine, string ptyId) => new(machine, ptyId, ownsPty: false);
+    public static RemotePtyConnection Attach(IWorkspaceMachine machine, string ptyId) => new(machine, ptyId, ownsPty: false);
 
     /**
      * Starts an owned PTY.
      * The caller can cancel connection acquisition; once acquired, the link lifetime owns the create response so cancellation cannot lose a newly created PTY before its owner receives it.
      */
-    public static async Task<RemotePtyConnection> StartAsync(MachineConnection machine, RemotePtyStartRequest request, CancellationToken cancellationToken)
+    public static async Task<RemotePtyConnection> StartAsync(IWorkspaceMachine machine, RemotePtyStartRequest request, CancellationToken cancellationToken)
     {
         var lease = await machine.WaitConnectedAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -84,7 +84,7 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
         }
     }
 
-    private async Task ResizeForAttachAsync(RemoteHostClient client, CancellationToken cancellationToken)
+    private async Task ResizeForAttachAsync(IWorkspaceHost client, CancellationToken cancellationToken)
     {
         await _resizeGate.WaitAsync(cancellationToken);
         try

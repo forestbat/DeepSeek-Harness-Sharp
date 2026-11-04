@@ -2,7 +2,8 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Dsh.Gui.Services;
 using Dsh.Gui.Terminal;
-using Dsh.Fleet;
+using Dsh.Workspace;
+using Dsh.Core;
 using Dsh.Pty;
 using Dsh.RemoteHost;
 
@@ -16,6 +17,53 @@ public sealed partial class TerminalViewModel : ObservableObject, IAsyncDisposab
 
     private RemotePtyConnection? _remote;
     private string _origin = "";
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly TaskCompletionSource<int?> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private IWorkspaceMachine? _editorMachine;
+    private bool _disposed;
+    private readonly Lock _disposeGate = new();
+    private Task? _disposal;
+
+    public Task<int?> Completion => _completion.Task;
+    public string? PtyId => _remote?.PtyId;
+    public bool ActivateOnOpen { get; init; } = true;
+
+    public async Task StartEditorAsync(IWorkspaceMachine machine, EditorLaunchCommand command, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        _editorMachine = machine;
+        machine.SessionsChanged += ObserveEditorExit;
+        try
+        {
+            var connection = await RemotePtyConnection.StartAsync(machine, new RemotePtyStartRequest(
+                command.Executable, command.Arguments, command.WorkingDirectory,
+                InitialSize.Columns, InitialSize.Rows, Title, Environment: command.Environment), linked.Token);
+            if (_disposed || linked.IsCancellationRequested)
+            {
+                await connection.DisposeAsync();
+                linked.Token.ThrowIfCancellationRequested();
+                throw new ObjectDisposedException(nameof(TerminalViewModel));
+            }
+            AttachRemote(connection, $"{machine.Machine.Name} · {command.Editor.Value}");
+            ObserveEditorExit(machine);
+        }
+        catch
+        {
+            machine.SessionsChanged -= ObserveEditorExit;
+            _editorMachine = null;
+            throw;
+        }
+    }
+
+    private void ObserveEditorExit(IWorkspaceMachine machine)
+    {
+        if (_remote is null) return;
+        var summary = machine.Sessions.FirstOrDefault(session => session.Id == _remote.PtyId);
+        if (summary?.ExitCode is not { } exitCode) return;
+        machine.SessionsChanged -= ObserveEditorExit;
+        _completion.TrySetResult(exitCode);
+        Dispatcher.UIThread.Post(() => Status = $"{_origin} · exit {exitCode}");
+    }
 
     public TerminalViewModel(string title) => Title = title;
 
@@ -33,7 +81,7 @@ public sealed partial class TerminalViewModel : ObservableObject, IAsyncDisposab
 
     /** 本地机器也经常驻 host/PTY daemon 启动, 与 SSH 终端共享会话登记和断线存活语义。 */
     public async Task StartOnMachineAsync(
-        MachineConnection machine,
+        IWorkspaceMachine machine,
         string workingDirectory,
         string? title = null,
         CancellationToken cancellationToken = default)
@@ -56,7 +104,7 @@ public sealed partial class TerminalViewModel : ObservableObject, IAsyncDisposab
             Rows: InitialSize.Rows);
     }
 
-    private static RemotePtyStartRequest RemoteRequest(MachineConnection machine, string workingDirectory, string title)
+    private static RemotePtyStartRequest RemoteRequest(IWorkspaceMachine machine, string workingDirectory, string title)
     {
         var windows = machine.Info?.Platform == "windows";
         return new RemotePtyStartRequest(
@@ -76,20 +124,32 @@ public sealed partial class TerminalViewModel : ObservableObject, IAsyncDisposab
     /** 控件按自身尺寸算出新的格子数后回调, 用于状态栏显示。 */
     public void OnGridResized(TerminalSize size) => Status = $"{_origin} · {size.Columns}x{size.Rows}";
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        lock (_disposeGate) return new(_disposal ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        await _lifetime.CancelAsync();
+        if (_editorMachine is not null) _editorMachine.SessionsChanged -= ObserveEditorExit;
+        _completion.TrySetResult(null);
         if (Session is not null)
             await Session.DisposeAsync();
         // 主机持有 PTY; 自己创建的终端在关闭窗口时显式停止, 附加的终端只断开视图。
         if (_remote is not null)
             await _remote.DisposeAsync();
+        _lifetime.Dispose();
     }
 
     private void Attach(ITerminalConnection connection, string origin)
     {
         _origin = origin;
         var session = new TerminalSession(connection, InitialSize);
-        session.Exited += () => Dispatcher.UIThread.Post(() => Status = $"{_origin} · 已退出");
+        session.Exited += () => Dispatcher.UIThread.Post(() => Status = _completion.Task.IsCompletedSuccessfully && _completion.Task.Result is { } code
+            ? $"{_origin} · exit {code}" : $"{_origin} · 已退出");
         session.Start();
         Status = origin;
         Session = session;

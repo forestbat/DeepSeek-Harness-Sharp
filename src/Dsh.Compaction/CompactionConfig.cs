@@ -5,12 +5,21 @@ public record CompactionPolicyConfig
     public double? ThresholdRatio { get; init; }
     public double? RetainRatio { get; init; }
     public int? RetainTokens { get; init; }
+
+    /** 保留的尾部"轮数": 数的是当前表面上最后 N 条真实用户消息(UserMessageSource), 不是请求数也不是 turn/start 次数。 */
     public int? TailTurns { get; init; }
+
     public string? SummarizationProvider { get; init; }
     public string? SummarizationModel { get; init; }
     public int? MaxTokens { get; init; }
     public int? CompactionRetries { get; init; }
     public int? MaxOverflowRetries { get; init; }
+
+    /**
+     * 摘要不可用(失败/比原文更大)时改为丢弃旧历史并保留的轮数上限(同样按表面上的用户消息数);
+     * 0 表示不降级、直接失败。表面不足这么多条、或按此保留丢不掉足够多时, 会退到更少的轮数再试。
+     */
+    public int? DegradedRetainTurns { get; init; }
 }
 
 public sealed record ModelCompactPolicyConfig : CompactionPolicyConfig
@@ -43,7 +52,8 @@ public sealed record ResolvedConfig(
     int CompactionRetries,
     int MaxOverflowRetries,
     IReadOnlyList<ModelCompactPolicyConfig> ModelPolicies,
-    bool Auto);
+    bool Auto,
+    int DegradedRetainTurns);
 
 public sealed record ResolvedTargetPolicy(
     string Provider,
@@ -55,7 +65,8 @@ public sealed record ResolvedTargetPolicy(
     string SummarizationModel,
     int MaxTokens,
     int CompactionRetries,
-    int MaxOverflowRetries);
+    int MaxOverflowRetries,
+    int DegradedRetainTurns);
 
 public sealed record ResolvedCompactSpec(
     string Provider,
@@ -69,7 +80,8 @@ public sealed record ResolvedCompactSpec(
     string SummarizationModel,
     int MaxTokens,
     int CompactionRetries,
-    int MaxOverflowRetries);
+    int MaxOverflowRetries,
+    int DegradedRetainTurns);
 
 public sealed class TargetPressureConfigError(string targetKey, string message) : Exception(message)
 {
@@ -87,6 +99,9 @@ public static class CompactionConfigResolver
     public const int DefaultMaxTokens = 8192;
     public const int DefaultCompactionRetries = 1;
     public const int DefaultMaxOverflowRetries = 1;
+
+    /** 摘要不可用时保留的轮数: 6 轮原文足以让模型接上正在做的事, 又不需要任何摘要。 */
+    public const int DefaultDegradedRetainTurns = 6;
 
     public static ResolvedConfig ResolveConfig(BasicCompactionConfig? config = null)
     {
@@ -115,7 +130,8 @@ public static class CompactionConfigResolver
             config.CompactionRetries ?? DefaultCompactionRetries,
             config.MaxOverflowRetries ?? DefaultMaxOverflowRetries,
             modelPolicies,
-            config.Auto ?? true);
+            config.Auto ?? true,
+            config.DegradedRetainTurns ?? DefaultDegradedRetainTurns);
     }
 
     public static ResolvedTargetPolicy ResolveTargetPolicy(ResolvedConfig config, string provider, string model)
@@ -131,7 +147,8 @@ public static class CompactionConfigResolver
             policyOverride?.SummarizationModel ?? config.SummarizationModel,
             policyOverride?.MaxTokens ?? config.MaxTokens,
             policyOverride?.CompactionRetries ?? config.CompactionRetries,
-            policyOverride?.MaxOverflowRetries ?? config.MaxOverflowRetries);
+            policyOverride?.MaxOverflowRetries ?? config.MaxOverflowRetries,
+            policyOverride?.DegradedRetainTurns ?? config.DegradedRetainTurns);
     }
 
     /** 尾部保留预算:配置为 token 时直接采用;为比例且已知上下文窗口时按比例换算;否则回退到保守常量。 */
@@ -166,7 +183,8 @@ public static class CompactionConfigResolver
             policy.SummarizationModel,
             policy.MaxTokens,
             policy.CompactionRetries,
-            policy.MaxOverflowRetries);
+            policy.MaxOverflowRetries,
+            policy.DegradedRetainTurns);
     }
 
     private static ResolvedRetention ResolveRetention(CompactionPolicyConfig? config, ResolvedRetention fallback)
@@ -225,6 +243,8 @@ public static class CompactionConfigResolver
             AssertNonNegative($"{name}.compactionRetries", compactionRetries);
         if (config.MaxOverflowRetries is { } maxOverflowRetries)
             AssertNonNegative($"{name}.maxOverflowRetries", maxOverflowRetries);
+        if (config.DegradedRetainTurns is { } degradedRetainTurns)
+            AssertNonNegative($"{name}.degradedRetainTurns", degradedRetainTurns);
 
         var provider = config.SummarizationProvider;
         var model = config.SummarizationModel;

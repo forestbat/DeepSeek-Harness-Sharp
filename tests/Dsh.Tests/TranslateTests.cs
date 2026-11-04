@@ -275,7 +275,8 @@ public class TranslateTests
             CompletionTokensDetails = new WireCompletionTokensDetails { ReasoningTokens = 24 },
         });
 
-        Assert.Equal(new TokenUsage(27, 69, 352, 256, null, 24), usage);
+        // InputTokens 是完整提示词(prompt_tokens), 缓存命中是它的子集而不是额外量。
+        Assert.Equal(new TokenUsage(283, 69, 352, 256, null, 24), usage);
     }
 
     [Fact]
@@ -288,7 +289,7 @@ public class TranslateTests
             PromptCacheHitTokens = 8,
         });
 
-        Assert.Equal(new TokenUsage(2, 2, 12, 8), usage);
+        Assert.Equal(new TokenUsage(10, 2, 12, 8), usage);
     }
 
     [Fact]

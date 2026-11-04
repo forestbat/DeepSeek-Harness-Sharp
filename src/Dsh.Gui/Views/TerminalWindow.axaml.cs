@@ -14,6 +14,7 @@ public sealed partial class TerminalWindow : Window
         DataContext = viewModel;
         Terminal.TitleChanged += (_, title) => viewModel.ScreenTitle = title;
         Terminal.GridResized += (_, size) => viewModel.OnGridResized(size);
-        Opened += (_, _) => Terminal.Focus();
+        ShowActivated = viewModel.ActivateOnOpen;
+        Opened += (_, _) => { if (viewModel.ActivateOnOpen) Terminal.Focus(); };
     }
 }

@@ -247,18 +247,65 @@ public sealed class VtScreenRenderStateTests
         Assert.Equal('Z', restored.Row(1)[0].Character);
     }
 
-    [Fact]
-    public void Snapshot_Does_Not_Replay_Mouse_Reporting()
+    [Theory]
+    [InlineData("", TerminalMouseTracking.None, false)]
+    [InlineData("", TerminalMouseTracking.None, true)]
+    [InlineData("\e[?9h", TerminalMouseTracking.X10, false)]
+    [InlineData("\e[?9h", TerminalMouseTracking.X10, true)]
+    [InlineData("\e[?1000h", TerminalMouseTracking.Normal, false)]
+    [InlineData("\e[?1000h", TerminalMouseTracking.Normal, true)]
+    [InlineData("\e[?1002h", TerminalMouseTracking.ButtonEvent, false)]
+    [InlineData("\e[?1002h", TerminalMouseTracking.ButtonEvent, true)]
+    [InlineData("\e[?1003h", TerminalMouseTracking.AnyEvent, false)]
+    [InlineData("\e[?1003h", TerminalMouseTracking.AnyEvent, true)]
+    public void Snapshot_RoundTrip_PreservesNativeMouseModes(string tracking, TerminalMouseTracking expected, bool sgr)
     {
-        var screen = Fed("\e[?1002h\e[?1006h", width: 10, height: 3);
-        Assert.Equal(TerminalMouseTracking.ButtonEvent, screen.MouseTracking);
-        Assert.True(screen.SgrMouse);
+        var source = Fed($"native{tracking}{(sgr ? "\e[?1006h" : "\e[?1006h\e[?1006l")}", width: 10, height: 3);
+        Assert.Equal(expected, source.MouseTracking);
+        Assert.Equal(sgr, source.SgrMouse);
+        var restored = Fed("\e[?1003h\e[?1006h", width: 10, height: 3);
+        restored.Feed(source.Snapshot());
+        AssertScreensEqual(source, restored);
+        foreach (var continuation in new[] { "\e[?1000h", "\e[?1006l", "\e[?1003h\e[?1006h", "\e[?1003l", "\ec" })
+        {
+            source.Feed(continuation);
+            restored.Feed(continuation);
+            AssertScreensEqual(source, restored);
+        }
+    }
 
-        var snapshot = screen.Snapshot();
+    [Theory]
+    [InlineData("\e[?9h\e[?1006h\e[?9l\e[?1006l")]
+    [InlineData("\e[?1000h\e[?1006h\e[?1000l\e[?1006l")]
+    [InlineData("\e[?1002h\e[?1006h\e[?1002l\e[?1006l")]
+    [InlineData("\e[?1003h\e[?1006h\e[?1003l\e[?1006l")]
+    [InlineData("\e[?1003h\e[?1006h\ec")]
+    public void Snapshot_RoundTrip_ClearsStaleReconnectMouseModesAfterReset(string reset)
+    {
+        var source = Fed(reset);
+        var restored = Fed("\e[?1002h\e[?1006h");
+        restored.Feed(source.Snapshot());
+        AssertScreensEqual(source, restored);
+        Assert.Equal(TerminalMouseTracking.None, restored.MouseTracking);
+        Assert.False(restored.SgrMouse);
+    }
 
-        Assert.DoesNotContain("\u001b[?1006", snapshot);
-        Assert.DoesNotContain("\u001b[?1002", snapshot);
-        Assert.DoesNotContain("\u001b[?1003", snapshot);
+    [Theory]
+    [InlineData("")]
+    [InlineData("\e[?9h")]
+    [InlineData("\e[?1002h\e[?1006l")]
+    public void ConsoleSnapshot_PreservesAttachingOwnersSgrMouseNegotiation(string nativeModes)
+    {
+        var source = Fed($"native{nativeModes}");
+        var nativeTracking = source.MouseTracking;
+        var nativeSgr = source.SgrMouse;
+        var owner = Fed("\e[?1003h\e[?1006h");
+        owner.Feed(source.ConsoleSnapshot(wantsMouse: true));
+        Assert.Equal(TerminalMouseTracking.AnyEvent, owner.MouseTracking);
+        Assert.True(owner.SgrMouse);
+        Assert.Equal("native", RowText(owner, 0));
+        Assert.Equal(nativeTracking, source.MouseTracking);
+        Assert.Equal(nativeSgr, source.SgrMouse);
     }
 
     private static void AssertScreensEqual(VtScreen expected, VtScreen actual)

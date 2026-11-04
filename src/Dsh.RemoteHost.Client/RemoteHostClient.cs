@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading.Channels;
+using Dsh.Core;
 using Dsh.Transport;
 
 namespace Dsh.RemoteHost;
@@ -10,7 +11,7 @@ namespace Dsh.RemoteHost;
  * 本地侧连接远端 host: 先握手(版本/token), 然后实现 RemoteHost 客户端。
  * 会话事件/审批/PTY 输出经服务端推送(通知)转成本端的异步流。
  */
-public sealed class RemoteHostClient : IAsyncDisposable
+public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost
 {
     private readonly JsonRpcPeer _peer;
     private readonly RemotePtyClient _pty;
@@ -32,6 +33,8 @@ public sealed class RemoteHostClient : IAsyncDisposable
         SessionEditing = new RemoteSessionEditingClient(this);
         Plugins = new RemotePluginsClient(this);
         Network = new RemoteNetworkClient(this);
+        Editor = new RemoteEditorClient(this);
+        peer.RequestPreparation = Editor.Prepare;
         peer.NotificationReceived += OnNotification;
         peer.Closed += OnClosed;
     }
@@ -45,6 +48,18 @@ public sealed class RemoteHostClient : IAsyncDisposable
     public RemoteSessionEditingClient SessionEditing { get; }
     public RemotePluginsClient Plugins { get; }
     public RemoteNetworkClient Network { get; }
+    public RemoteEditorClient Editor { get; }
+    IWorkspaceAgents IWorkspaceHost.Agent => Agent;
+    public T? GetCapability<T>() where T : class
+        => Supports(Dsh.Ide.Bridge.EditorProtocol.Capability) ? Editor as T : null;
+    IWorkspaceFiles IWorkspaceHost.Files => Files;
+    IWorkspaceGit IWorkspaceHost.Git => Git;
+    IWorkspaceNotifications IWorkspaceHost.Notifications => Notifications;
+    IWorkspaceSessionEditing IWorkspaceHost.SessionEditing => SessionEditing;
+    IWorkspacePlugins IWorkspaceHost.Plugins => Plugins;
+    IWorkspaceNetwork IWorkspaceHost.Network => Network;
+    IWorkspaceTerminals IWorkspaceHost.Pty => Pty;
+
     internal bool IsClosed => _peer.IsClosed;
 
     /** Whether the host advertises a capability from HostProtocolCatalog. */
@@ -53,8 +68,18 @@ public sealed class RemoteHostClient : IAsyncDisposable
     public Task WhenClosed => _closed.Task;
 
     public async Task<JsonElement> RequestAsync(string method, JsonElement? parameters, CancellationToken cancellationToken)
-        => await _peer.RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false)
+    {
+        if (parameters is { ValueKind: JsonValueKind.Object } value
+            && ((method == HostProtocol.MethodApprovalRespond
+                    && value.TryGetProperty(nameof(RemoteApprovalResponse.Cancelled), out var cancelled)
+                    && cancelled.ValueKind == JsonValueKind.True)
+                || (method == HostProtocol.MethodQuestionRespond
+                    && value.TryGetProperty(nameof(RemoteQuestionResponse.Status), out var status)
+                    && status.ValueKind == JsonValueKind.String && status.ValueEquals("dismissed"))))
+            RequireDecisionCancellation();
+        return await _peer.RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false)
             ?? throw new IOException($"host returned no result for {method}");
+    }
 
     public static Task<RemoteHostClient> ConnectAsync(
         Stream duplex,
@@ -115,8 +140,29 @@ public sealed class RemoteHostClient : IAsyncDisposable
     public Task<RemoteSessionSummary> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
         => SendAsync(HostProtocol.MethodSessionResume, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.RemoteSessionSummary, cancellationToken);
 
-    public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken = default)
-        => SendAsync(HostProtocol.MethodSessionSnapshot, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.RemoteSessionSnapshot, cancellationToken);
+    /** 整段历史按字节预算分页取完再拼成一个快照, 调用方看到的历史与单次响应时一致。 */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await FetchSnapshotPageAsync(sessionId, 0, cancellationToken).ConfigureAwait(false);
+        var events = new List<SessionEvent>(snapshot.Events);
+        while (events.Count < snapshot.TotalEventCount)
+        {
+            var next = await FetchSnapshotPageAsync(sessionId, events.Count, cancellationToken).ConfigureAwait(false);
+            // 分页期间历史被截断时整段也就到此为止。
+            if (next.Events.Count == 0)
+                break;
+            events.AddRange(next.Events);
+            snapshot = next;
+        }
+        // 拼好的快照就是整段历史: 条数按实到的事件重算, 免得把中途的旧总数带出去。
+        return snapshot with { Events = events, TotalEventCount = events.Count };
+    }
+
+    private Task<RemoteSessionSnapshot> FetchSnapshotPageAsync(string sessionId, long fromEvent, CancellationToken cancellationToken)
+        => SendAsync(HostProtocol.MethodSessionSnapshot,
+            Serialize(new RemoteSessionSnapshotRequest(sessionId, fromEvent), HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest),
+            HostProtocolJsonContext.Default.RemoteSessionSnapshot,
+            cancellationToken);
 
     public async IAsyncEnumerable<RemoteSessionEvent> SubscribeAsync(string sessionId, long fromSeq, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -148,12 +194,22 @@ public sealed class RemoteHostClient : IAsyncDisposable
     public IAsyncEnumerable<RemotePendingChange> PendingChangesAsync(CancellationToken cancellationToken = default)
         => _pendingChanges.Reader.ReadAllAsync(cancellationToken);
 
-    public Task<bool> RespondApprovalAsync(string requestId, bool allow, string? reason = null, CancellationToken cancellationToken = default, bool rememberForSession = false)
-        => SendAsync(HostProtocol.MethodApprovalRespond, Serialize(new RemoteApprovalResponse(requestId, allow, reason, rememberForSession), HostProtocolJsonContext.Default.RemoteApprovalResponse), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+    public Task<bool> RespondApprovalAsync(string requestId, bool allow, string? reason = null, CancellationToken cancellationToken = default, bool rememberForSession = false, bool cancelled = false)
+    {
+        return SendAsync(HostProtocol.MethodApprovalRespond, Serialize(new RemoteApprovalResponse(requestId, allow, reason, rememberForSession, cancelled), HostProtocolJsonContext.Default.RemoteApprovalResponse), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+    }
 
 
-    public Task<bool> RespondQuestionAsync(string requestId, IReadOnlyList<RemoteQuestionAnswerItem> answers, CancellationToken cancellationToken = default)
-        => SendAsync(HostProtocol.MethodQuestionRespond, Serialize(new RemoteQuestionResponse(requestId, answers), HostProtocolJsonContext.Default.RemoteQuestionResponse), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+    public Task<bool> RespondQuestionAsync(string requestId, IReadOnlyList<RemoteQuestionAnswerItem> answers, CancellationToken cancellationToken = default, string status = "answered", string? reason = null)
+    {
+        return SendAsync(HostProtocol.MethodQuestionRespond, Serialize(new RemoteQuestionResponse(requestId, answers, status, reason), HostProtocolJsonContext.Default.RemoteQuestionResponse), HostProtocolJsonContext.Default.Boolean, cancellationToken);
+    }
+
+    private void RequireDecisionCancellation()
+    {
+        if (!Supports(DecisionProtocol.Capability))
+            throw new NotSupportedException($"Unsupported: host does not support {DecisionProtocol.Capability}; the request is still pending. Upgrade the host to cancel it.");
+    }
 
 
     public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default)
@@ -203,6 +259,7 @@ public sealed class RemoteHostClient : IAsyncDisposable
         var failure = error ?? new IOException("host connection closed");
         _pty.OnClosed(failure);
         _notifications.OnClosed(failure);
+        _ = Editor.DisposeAsync();
         foreach (var stream in _eventStreams.Values)
             stream.Writer.TryComplete(failure);
         _pendingChanges.Writer.TryComplete(failure);
@@ -221,7 +278,11 @@ public sealed class RemoteHostClient : IAsyncDisposable
         return JsonSerializer.Deserialize(value, info) ?? throw new IOException($"host returned an invalid result for {method}");
     }
 
-    public ValueTask DisposeAsync() => _peer.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _peer.DisposeAsync().ConfigureAwait(false);
+        await Editor.DisposeAsync().ConfigureAwait(false);
+    }
 }
 
 

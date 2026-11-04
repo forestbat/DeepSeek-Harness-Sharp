@@ -3,6 +3,11 @@ using System.Text.Json.Serialization;
 
 namespace Dsh.Llm;
 
+/**
+ * 一次请求的用量。InputTokens 是**完整**提示词(含命中缓存的部分), CacheRead/CacheWrite 是其中的子集,
+ * 与 OpenAI 的 prompt_tokens、MEAI 的 InputTokenCount 同义; 因此总量就是 Input + Output, 不能再把缓存加一遍。
+ * 上下文占用(GUI 状态栏)与压缩阈值都按这个口径读, 两边不会因为缓存命中而互相矛盾。
+ */
 public sealed record TokenUsage(
     double InputTokens,
     double OutputTokens,

@@ -16,6 +16,7 @@ public interface IRemoteHostBackend
     IRemoteSessionEditingBackend? SessionEditing { get; }
     IRemotePluginsBackend? Plugins { get; }
     IRemoteNetworkBackend? Network { get; }
+    IRemoteEditorBackend? Editor => null;
 }
 
 /** Required session execution and event stream. Subscribe installs its live listener before returning. */
@@ -76,6 +77,13 @@ public interface IRemoteNetworkBackend
 public interface IRemoteNetworkReloadBackend
 {
     Task ReloadAsync(CancellationToken cancellationToken);
+}
+
+public interface IRemoteEditorBackend
+{
+    Dsh.Core.IEditorService Service { get; }
+    Dsh.Ide.Bridge.EditorClientDispatcher? Clients { get; }
+    HostPathPolicy? Paths => null;
 }
 
 

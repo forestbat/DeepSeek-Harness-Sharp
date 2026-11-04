@@ -262,6 +262,7 @@ public static class StrReplaceEditorTool
         if (directory is not null)
             Directory.CreateDirectory(directory);
         File.WriteAllText(target, content, new UTF8Encoding(false, false));
+        exec.RecordFileChange(target);
         return $"New file created successfully at: {target}";
     }
 
@@ -287,6 +288,7 @@ public static class StrReplaceEditorTool
         }
         var offset = offsets[0];
         File.WriteAllText(target, string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length)), new UTF8Encoding(false, false));
+        exec.RecordFileChange(target);
         return $"The file {target} has been edited successfully.";
     }
 
@@ -304,6 +306,7 @@ public static class StrReplaceEditorTool
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");
         var after = string.Join('\n', lines.Take(insertLine.Value).Concat(value.Split('\n')).Concat(lines.Skip(insertLine.Value)));
         File.WriteAllText(target, after, new UTF8Encoding(false, false));
+        exec.RecordFileChange(target);
         return $"The file {target} has been edited successfully.";
     }
 

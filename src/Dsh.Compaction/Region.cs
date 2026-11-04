@@ -20,7 +20,11 @@ public sealed record CompactionTransactionOptions(
     CompactionStability Stability,
     string? SourceCommandId = null,
     Func<Task>? Flush = null,
-    string? Focus = null);
+    string? Focus = null,
+    /** > 0 时, 摘要在可用性上失败(失败/比原文更大)后改为丢弃旧历史并保留最近 N 轮原文; 0 表示不降级。 */
+    int DegradedRetainTurns = 0,
+    /** 内部标记: 当前这次已经是降级尝试, 不允许再次降级(否则会无限递归)。 */
+    bool AlreadyDegraded = false);
 
 public sealed record SurfaceSelection(
     long Start,
@@ -190,8 +194,10 @@ public static class CompactionRegion
         int? owner;
         if (standalone)
         {
-            if (entryState.OpenTurn is not null)
-                throw new ManualCompactionError(ManualCompactionErrorCode.Busy, "manual compaction: the session already has an open turn");
+            if (entryState.OpenTurn is { } openTurn)
+                throw new ManualCompactionError(
+                    ManualCompactionErrorCode.BusyTurn,
+                    $"manual compaction: turn {openTurn} is still open");
             owner = null;
         }
         else
@@ -257,6 +263,14 @@ public static class CompactionRegion
 
         if (standalone)
             signal.ThrowIfCancellationRequested();
+        if (failure is not null && IsSummaryStageFailure(failure, failureStage)
+            && !options.AlreadyDegraded && options.DegradedRetainTurns > 0)
+        {
+            // 摘要这一阶段失败(API 报错、空输出、比原文更大): 不把整次压缩判死, 改为丢弃旧历史 + 保留最近 N 轮原文。
+            var degraded = await TryDegradedCompactionAsync(meter, session, agent, options, signal);
+            if (degraded is not null)
+                return degraded;
+        }
         if (failure is not null)
         {
             if (standalone)
@@ -268,9 +282,70 @@ public static class CompactionRegion
         return result ?? throw new InvalidOperationException("compaction committed without a result");
     }
 
-    private static void ThrowManualFailure(Exception error, ManualCompactionErrorCode stage)
+    /** 摘要阶段的失败才允许降级; 取消、持久化、表面变化都不该被降级掩盖。 */
+    private static bool IsSummaryStageFailure(Exception failure, ManualCompactionErrorCode stage)
+        => stage == ManualCompactionErrorCode.Summary
+            && failure is not SurfaceChangedError
+            && failure is not OperationCanceledException;
+
+    /**
+     * 降级压缩: 不再生成摘要, 直接把"最近 N 轮之前"的历史整段丢弃, 最近 N 轮原文保留。
+     * 这是 F1/N6 的共同兜底——摘要压不出来时, 会话仍然能继续, 而不是从此再也压不动。
+     *
+     * 保留轮数从 N 一路退到 1, 因为按 N 切出来的区间常常丢不出东西:
+     * 表面上一次压缩留下的 checkpoint 是插在中间的(它带着新的 seq), 其前只剩极少节点,
+     * 于是"保留最近 6 轮"剩下的可丢区间就只有 checkpoint 加一个节点 —— 比占位摘要还小,
+     * 压缩守卫判"没变小"而失败。此时若不退让, 降级始终返回 null, 会话永远压不动;
+     * 而表面已高于阈值, 结果就是每一步都白跑一遍注定失败的压缩。
+     */
+    private static async Task<CompactionResult?> TryDegradedCompactionAsync(
+        TokenMeter meter,
+        Session session,
+        IAgent agent,
+        CompactionTransactionOptions options,
+        CancellationToken signal)
     {
-        switch (stage)
+        var measurement = meter.Measure(session);
+        for (var keeps = Math.Max(1, options.DegradedRetainTurns); keeps >= 1; keeps -= 1)
+        {
+            // 预算给到无穷大: 让选区恰好停在"最近 N 轮"的起点, 这 N 轮本身不被丢弃、也不被摘要。
+            if (SelectCompactableRange(session, measurement, int.MaxValue, keeps) is not { } range)
+                continue;
+            signal.ThrowIfCancellationRequested();
+            try
+            {
+                return await CompactSurfaceRegion(
+                    meter,
+                    (_, _, _) => Task.FromResult(DiscardedSummary(range)),
+                    session,
+                    range.Start,
+                    range.End,
+                    agent,
+                    options with { AlreadyDegraded = true, Focus = null },
+                    signal);
+            }
+            catch (Exception error) when (error is SummaryUnusableException or ManualCompactionError or InvalidOperationException)
+            {
+                // 丢得还不够多(占位摘要比被丢的内容还大): 少留几轮, 再试一次。
+                measurement = meter.Measure(session);
+            }
+        }
+        // 降级也压不动(例如可丢弃的部分本来就很小): 交回原始失败原因, 不要用降级的错误覆盖它。
+        return null;
+    }
+
+    /** 降级压缩写回的占位摘要: 明确说明旧历史是被丢弃的, 而不是被摘要过。 */
+    private static SummaryResult DiscardedSummary(ShadowedRange range)
+    {
+        var text = new TextBlock(
+            "[history discarded] The earlier conversation history was dropped without a summary because a compaction "
+            + "summary could not be produced. The most recent turns are kept verbatim below; continue from them and "
+            + $"re-read files if earlier details are needed. (discarded through seq {range.End})");
+        return new SummaryResult([text], [text], "", "", 0, null, LlmStreamCall: false);
+    }
+
+    private static void ThrowManualFailure(Exception error, ManualCompactionErrorCode stage)
+    {        switch (stage)
         {
             case ManualCompactionErrorCode.Commit:
                 throw new ManualCompactionError(ManualCompactionErrorCode.Commit, "manual compaction did not commit cleanly", error);
@@ -287,15 +362,54 @@ public static class CompactionRegion
         AssertCompactionInactive(entryState.UnmatchedCompactionStart, entryState.LatestEndSeedSeq, stage);
     }
 
+    /**
+     * 关掉上一个进程遗留的压缩标记。
+     *
+     * 压缩标记(compaction/start)写盘后若进程退出, 标记就没有配对的 end, 之后每次压缩都会被判成"已有压缩在进行" —— 会话从此再也压不动。
+     * 单写者保证让这个判断可靠: 能持有写句柄就说明写这份日志的进程已经退出, 因此**本次进程启动之前**就已存在的未闭合标记必然是死的, 可以安全地补一个 end。
+     * 只有 Seq < FirstLiveSeq(从磁盘加载的部分)才算遗留; 本进程里刚写的标记仍然按"进行中"处理。
+     */
+    public static SessionEvent? CloseInheritedCompactionMarker(Session session)
+    {
+        var entryState = InspectCompactionEntryState(session);
+        if (entryState.UnmatchedCompactionStart is not { } stale || stale.Seq >= session.FirstLiveSeq)
+            return null;
+        SessionEvent closed;
+        try
+        {
+            closed = session.Append(new CompactionEndPayload(
+                ((CompactionStartPayload)stale.Data).CompactionId,
+                ((CompactionStartPayload)stale.Data).SourceCommandId,
+                ((CompactionStartPayload)stale.Data).Turn,
+                "compaction was interrupted: the process that started it exited before finishing"));
+        }
+        catch (Exception)
+        {
+            // 补不上 end 就维持原状, 让调用方按"进行中"处理, 不要在这里吞掉真正的失败原因。
+            return null;
+        }
+        return closed;
+    }
+
     private static void AssertCompactionInactive(SessionEvent? unmatchedCompactionStart, long? latestEndSeedSeq, string stage)
     {
         if (unmatchedCompactionStart is null
             || (latestEndSeedSeq is { } seedSeq && seedSeq > unmatchedCompactionStart.Seq))
             return;
+        // 把"哪个压缩、从什么时候开始、已经跑了多久"带给用户: 光是"已有压缩在进行"无法区分
+        // 是另一个窗口在压、还是本窗口卡住了, 也无从判断该等还是该重开。
+        var started = DateTimeOffset.FromUnixTimeMilliseconds(unmatchedCompactionStart.Time).ToLocalTime();
+        var running = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(unmatchedCompactionStart.Time);
         throw new ManualCompactionError(
             ManualCompactionErrorCode.Busy,
-            $"{stage}: compaction already in progress; the session compaction lock is already active");
+            $"{stage}: compaction already in progress; the session compaction lock is already active "
+            + $"(started {started:HH:mm:ss}, running for {Describe(running)})");
     }
+
+    private static string Describe(TimeSpan elapsed)
+        => elapsed < TimeSpan.FromMinutes(1)
+            ? $"{Math.Max(1, (int)elapsed.TotalSeconds)}s"
+            : $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s";
 
     private static int IndexOfSeq(IReadOnlyList<long> nodes, long seq)
     {
@@ -357,7 +471,7 @@ public static class CompactionRegion
             CompactionCheckpoint.Source(compactionId, sourceCommandId));
         var framedSummaryTokenCount = meter.EstimateMessage(checkpointMessage);
         if (framedSummaryTokenCount >= prepared.ShadowedRouteTokenCount)
-            throw new InvalidOperationException(
+            throw new SummaryUnusableException(
                 $"summary is not smaller than the shadowed content ({framedSummaryTokenCount} estimated framed tokens >= {prepared.ShadowedRouteTokenCount})");
         return new SummarizedCompaction(prepared, summaryResult, checkpointMessage);
     }
@@ -405,7 +519,7 @@ public static class CompactionRegion
             summaryResult.MaxTokens,
             summaryResult.Usage,
             summaryResult.RawOutput,
-            true));
+            summaryResult.LlmStreamCall));
         session.Append(
             new UserMessagePayload(summarized.CheckpointMessage),
             new SurfaceOp.Replace(selection.Start, selection.End),
@@ -434,7 +548,10 @@ public static class CompactionRegion
             .Select(seq => Surface.DeriveEventMessage(session.EventAt(seq)!))
             .OfType<Message>()
             .ToList();
-        return new SummarizationInput(system, header?.Tools, regionMessages, focus);
+        // 事件级配对平衡不代表派生成的消息序列合法: 拍平工具结构后消息里不再有 tool_calls/tool 角色,
+        // 服务端的配对校验无从触发(否则会 HTTP 400), 工具名/参数/输出仍完整保留为文本。
+        var flattened = SummaryMessagePairing.FlattenToolStructure(regionMessages);
+        return new SummarizationInput(system, header?.Tools, flattened, focus);
     }
 
     private static (int? OpenTurn, SessionEvent? UnmatchedCompactionStart, long? LatestEndSeedSeq) InspectCompactionEntryState(Session session)

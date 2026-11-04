@@ -23,7 +23,8 @@ public static class McpToolBridge
         string toolName,
         string? description,
         JsonElement inputSchema,
-        Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call)
+        Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<CallToolResult>> call,
+        ToolDisclosure? disclosure = null)
         => new()
         {
             Name = $"mcp_{Sanitize(serverName)}_{Sanitize(toolName)}",
@@ -31,12 +32,13 @@ public static class McpToolBridge
             Parameters = SchemaOrDefault(inputSchema),
             Output = new ToolOutputDefinition(OutputSchema(), Render),
             Execute = (args, exec) => ExecuteAsync(call, args, exec),
+            Disclosure = disclosure,
         };
 
     // 绑定可换句柄: 调用时解析当前 McpClientTool, 陈旧会话失败则重连一次并重试一次。
-    internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool)
+    internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool, ToolDisclosure? disclosure = null)
         => Wrap(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
-            (arguments, signal) => CallWithReconnectAsync(handle, tool.Name, arguments, signal));
+            (arguments, signal) => CallWithReconnectAsync(handle, tool.Name, arguments, signal), disclosure);
 
     internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
         McpServerHandle handle,

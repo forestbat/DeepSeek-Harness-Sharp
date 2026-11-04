@@ -5,8 +5,8 @@ using Dsh.AgentAdapters.Acp;
 namespace Dsh.Tests;
 
 /**
- * Smoke tests against the real `opencode acp` agent installed on this machine (skipped when it is missing).
- * The handshake test makes no model call; the LlmSmoke tests send real prompts through OpenCode's configured model.
+ * Smoke tests against real native ACP agents installed on this machine (skipped when missing).
+ * Handshake tests make no model call; LlmSmoke tests send real prompts through OpenCode's configured model.
  * Starting OpenCode is CPU heavy for several seconds, so these run serially instead of skewing timing-sensitive tests in parallel.
  */
 public sealed class AcpAgentProcessSmokeTests : IDisposable
@@ -31,10 +31,15 @@ public sealed class AcpAgentProcessSmokeTests : IDisposable
             Directory.Delete(_workspace, recursive: true);
     }
 
-    [Fact]
-    public async Task OpenCode_HandshakeAndSessionLifecycle()
+    [Theory]
+    [InlineData(Dsh.RemoteHost.AgentKinds.OpenCode)]
+    [InlineData(Dsh.RemoteHost.AgentKinds.KiloCode)]
+    public async Task BuiltInAcp_HandshakeAndSessionLifecycle(string agentKind)
     {
-        await using var agent = StartOpenCode();
+        var adapter = Assert.IsType<AgentAdapter>(AgentAdapterCatalog.Find(agentKind));
+        if (AgentExecutableLocator.Resolve(adapter.Acp!.Executable) is null)
+            Assert.Skip($"{adapter.DisplayName} is not installed on this machine");
+        await using var agent = AcpAgentProcess.Start(adapter.Acp!, _workspace);
         var info = await agent.Client.InitializeAsync(new AcpImplementationInfo("dsh-tests", "0"), TestContext.Current.CancellationToken)
             .WaitAsync(HandshakeTimeout, TestContext.Current.CancellationToken);
         var session = await agent.Client.NewSessionAsync(_workspace, TestContext.Current.CancellationToken)
@@ -42,7 +47,6 @@ public sealed class AcpAgentProcessSmokeTests : IDisposable
         await agent.Client.CancelAsync(session.SessionId!, TestContext.Current.CancellationToken);
 
         Assert.Equal(AcpMethods.ProtocolVersion, info.ProtocolVersion);
-        Assert.Equal("OpenCode", info.AgentInfo?.Name);
         Assert.True(info.CanLoadSession);
         Assert.False(string.IsNullOrEmpty(session.SessionId));
         Assert.False(agent.HasExited);

@@ -272,10 +272,7 @@ public sealed class PlanModeController : Service, IDisposable
         var interaction = Ctx.Get<UserQuestionService>(UserQuestionService.ServiceName, false);
         if (interaction is null)
             throw new InvalidOperationException("no user-questions channel is available to review the plan; ask the user to switch the session mode instead");
-        AskUserQuestionAnswer answer;
-        try
-        {
-            answer = await interaction.Ask(new AskUserQuestionRequest(
+        var answer = await interaction.Ask(new AskUserQuestionRequest(
             [
                 new AskUserQuestionItem(
                     ReviewId,
@@ -289,12 +286,9 @@ public sealed class PlanModeController : Service, IDisposable
                     ],
                     Intent: new AskUserQuestionIntent(AskUserQuestionIntentKind.PlanReview, ApproveLabel)),
             ], agent), exec.Signal);
-        }
-        catch (UserQuestionException error) when (error.Code == "ASK_CANCELLED")
-        {
+        if (answer.IsDismissed)
             throw new InvalidOperationException(
                 "The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.");
-        }
         if (_disposed)
             throw new InvalidOperationException("the plan-mode service was reloaded while the plan was under review; present the plan again");
         var item = answer.Answers.Count(entry => entry.Id == ReviewId) == 1 ? answer.Answers.First(entry => entry.Id == ReviewId) : null;

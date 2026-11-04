@@ -166,6 +166,16 @@ public sealed class VtScreen
         output.Append("\u001b7");
         AppendRegion(output, _scrollTop, _scrollBottom);
         AppendModes(output);
+        output.Append(MouseTracking switch
+        {
+            TerminalMouseTracking.X10 => "\u001b[?9h",
+            TerminalMouseTracking.Normal => "\u001b[?1000h",
+            TerminalMouseTracking.ButtonEvent => "\u001b[?1002h",
+            TerminalMouseTracking.AnyEvent => "\u001b[?1003h",
+            _ => "",
+        });
+        if (SgrMouse)
+            output.Append("\u001b[?1006h");
         AppendCursor(output, CaptureCursor(), _lines);
         output.Append("\u001b]2;").Append(Title).Append("\u001b\\");
         AppendPendingCharset(output);
@@ -173,12 +183,15 @@ public sealed class VtScreen
     }
 
     /** 独占控制台 attach 的可见屏投影: 留在宿主备用屏, detach 时才能还原调用方的 shell。 */
-    internal string ConsoleSnapshot()
+    internal string ConsoleSnapshot(bool wantsMouse)
     {
         var output = new StringBuilder("\u001b[?1049h\u001b[?7h\u001b[4l\u001b[r");
         AppendScreen(output, _lines);
         AppendRegion(output, _scrollTop, _scrollBottom);
         AppendModes(output);
+        // Console attachments keep the owner's mouse negotiation instead of replaying native mouse modes.
+        if (wantsMouse)
+            output.Append(PtyConsoleBridge.MouseEnableSequence);
         AppendCursor(output, CaptureCursor(), _lines);
         AppendPendingCharset(output);
         return output.ToString();
@@ -198,8 +211,6 @@ public sealed class VtScreen
         output.Append(_insertMode ? "\u001b[4h" : "\u001b[4l");
         output.Append(BracketedPaste ? "\u001b[?2004h" : "\u001b[?2004l");
         output.Append(FocusReporting ? "\u001b[?1004h" : "\u001b[?1004l");
-        // 鼠标上报由持有用户终端的客户端(proxy / GPU 窗口)自己声明。这里回放 ?1006l / ?1003h 会在 proxy 刚打开
-        // ?1000h?1002h?1006h 之后把编码重置回 X10, 坐标 >95 的原始字节随后被 UTF-8 解码成 U+FFFD, 泄漏进输入行。
         output.Append("\u001b[").Append(CursorShape switch
         {
             TerminalCursorShape.Block => 2,

@@ -13,7 +13,7 @@ public sealed class MachinesViewModelTests : IDisposable
     [Fact]
     public void NewMachineButtons_HighlightOnlyTheActiveDraftKind()
     {
-        var viewModel = new MachinesViewModel(new MachineStore(new HarnessHome(_home)), FleetConnectionTests.TestOptions);
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(new MachineStore(new HarnessHome(_home)), FleetConnectionTests.TestOptions));
         viewModel.Load();
 
         viewModel.NewSshCommand.Execute(null);
@@ -43,7 +43,7 @@ public sealed class MachinesViewModelTests : IDisposable
     public async Task Machines_AreAddedRenamedAndDeleted_AndEveryFieldRoundTripsThroughTheStore()
     {
         var store = new MachineStore(new HarnessHome(_home));
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         var changes = 0;
         viewModel.MachinesChanged += () => changes++;
         viewModel.Load();
@@ -89,7 +89,7 @@ public sealed class MachinesViewModelTests : IDisposable
         var machine = MachineSpec.Ssh("target", "server.internal", MachineSpec.DefaultSshPort, "fixture-user", SshAuth.Agent);
         var store = new MachineStore(new HarnessHome(_home));
         store.Upsert(machine);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load("target");
 
         Assert.False(viewModel.NewIrohCommand.CanExecute(null));
@@ -133,7 +133,7 @@ public sealed class MachinesViewModelTests : IDisposable
         };
         var store = new MachineStore(new HarnessHome(_home));
         store.Upsert(machine);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load("target");
         Assert.Equal(kind == MachineKinds.Iroh, viewModel.Editor!.Kinds.Contains(MachineKinds.Iroh));
         viewModel.Editor!.Name = "renamed";
@@ -168,7 +168,7 @@ public sealed class MachinesViewModelTests : IDisposable
         };
         var store = new MachineStore(new HarnessHome(_home));
         store.Upsert(original);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load("target");
         var editor = viewModel.Editor!;
         Assert.Equal("http://***@proxy.invalid:3128", editor.OutboundTunnelProxyUrl);
@@ -196,7 +196,7 @@ public sealed class MachinesViewModelTests : IDisposable
         };
         var store = new MachineStore(new HarnessHome(_home));
         store.Upsert(original);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load("target");
         Assert.Equal("http://***@ssh-proxy.invalid:3128", viewModel.Editor!.Proxy);
         Assert.Equal("http://***@proxy.invalid:3128", viewModel.Editor.OutboundTunnelProxyUrl);
@@ -218,7 +218,7 @@ public sealed class MachinesViewModelTests : IDisposable
     public async Task DeploySettings_AreSavedSeparately_AndSurviveSavingAMachine()
     {
         var store = new MachineStore(new HarnessHome(_home));
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load();
         var deploy = viewModel.Deploy!;
 
@@ -244,7 +244,7 @@ public sealed class MachinesViewModelTests : IDisposable
     public async Task IrohMachines_RoundTripAndRemainIrohWhenEdited(string auth)
     {
         var store = new MachineStore(new HarnessHome(_home));
-        var viewModel = new MachinesViewModel(store, new FleetOptions { SshTransportAdapter = new IrohSshTransport() });
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions { SshTransportAdapter = new IrohSshTransport() }));
         viewModel.Load();
         viewModel.NewIrohCommand.Execute(null);
         var editor = viewModel.Editor!;
@@ -278,7 +278,7 @@ public sealed class MachinesViewModelTests : IDisposable
         var store = new MachineStore(new HarnessHome(_home));
         var machine = MachineSpec.Ssh("box", "box.internal", 22, "dev", SshAuth.Agent) with { Kind = MachineKinds.Iroh, EndpointId = new string('b', 64) };
         store.Upsert(machine);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         var changes = 0;
         viewModel.MachinesChanged += () => changes++;
         viewModel.Load("box");
@@ -302,7 +302,7 @@ public sealed class MachinesViewModelTests : IDisposable
         var store = new MachineStore(new HarnessHome(_home));
         store.Upsert(machine);
         var original = File.ReadAllText(store.FilePath);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         var changes = 0;
         viewModel.MachinesChanged += () => changes++;
         viewModel.Load("box");
@@ -331,7 +331,7 @@ public sealed class MachinesViewModelTests : IDisposable
         var store = new MachineStore(new HarnessHome(_home));
         store.Save(new FleetConfig([machine, MachineSpec.Ssh("taken", "other", 22, "dev", SshAuth.Agent)], new DeploySettings()));
         var original = await File.ReadAllBytesAsync(store.FilePath, TestContext.Current.CancellationToken);
-        var viewModel = new MachinesViewModel(store, new FleetOptions());
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(store, new FleetOptions()));
         viewModel.Load("box");
         viewModel.Editor!.Name = name;
         await viewModel.EnableIrohCommand.ExecuteAsync(null);
@@ -347,7 +347,7 @@ public sealed class MachinesViewModelTests : IDisposable
         await using var host = await HarnessHostFixture.CreateAsync("mvt", TestContext.Current.CancellationToken);
         // The fixture's listener starts in the background; a probe connection (which retries) waits until it accepts, so the single test attempt below meets a ready host.
         await host.ConnectAsync("probe", TestContext.Current.CancellationToken);
-        var viewModel = new MachinesViewModel(new MachineStore(new HarnessHome(_home)), FleetConnectionTests.TestOptions);
+        var viewModel = new MachinesViewModel(new FleetWorkspaceServices(new MachineStore(new HarnessHome(_home)), FleetConnectionTests.TestOptions));
         viewModel.Load();
         viewModel.NewLocalCommand.Execute(null);
         (viewModel.Editor!.Name, viewModel.Editor.HarnessHome) = ("alpha", host.Root);

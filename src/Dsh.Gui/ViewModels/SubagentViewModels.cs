@@ -4,7 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.Core;
 using Dsh.Gui.Services;
-using Dsh.Fleet;
+using Dsh.Workspace;
 using Dsh.RemoteHost;
 using Dsh.Llm;
 using Dsh.Runtime;

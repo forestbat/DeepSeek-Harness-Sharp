@@ -5,7 +5,7 @@
   <!-- An approval or question waiting on some machine, answerable in place (notification center and session header). -->
   <DataTemplate x:Key="Template.PendingDecision" x:DataType="vm:PendingDecisionViewModel">
     <Border Classes="PendingItem">
-      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <StackPanel Spacing="8">
         <StackPanel Spacing="2">
           <StackPanel Orientation="Horizontal" Spacing="6">
             <Border Classes="Pill attention">
@@ -16,16 +16,33 @@
           </StackPanel>
           <TextBlock Text="{Binding Title}" Classes="Body" TextWrapping="Wrap" />
           <TextBlock Text="{Binding Detail}" Classes="Tertiary" TextWrapping="Wrap" IsVisible="{Binding HasDetail}" />
+          <TextBlock Text="{Binding Impact}" Classes="Body" TextWrapping="Wrap" IsVisible="{Binding HasImpact}"
+                     Foreground="{DynamicResource Brush.Status.Warning}" />
+          <Expander Header="完整参数" IsVisible="{Binding HasArguments}">
+            <ScrollViewer Classes="Slim" MaxHeight="200" HorizontalScrollBarVisibility="Disabled">
+              <SelectableTextBlock Text="{Binding Arguments}" TextWrapping="Wrap"
+                                   FontFamily="{DynamicResource Font.Mono}" />
+            </ScrollViewer>
+          </Expander>
         </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" IsEnabled="{Binding !IsBusy}">
-          <Button Classes="Primary" Padding="10,3" Content="允许" IsVisible="{Binding IsApproval}" Command="{Binding AllowCommand}" />
+        <TextBlock Text="{Binding CancellationSupportMessage}" Classes="Tertiary"
+                   TextWrapping="Wrap" IsVisible="{Binding !SupportsCancellation}" />
+        <WrapPanel IsEnabled="{Binding !IsBusy}">
+          <WrapPanel.Styles>
+            <Style Selector="Button">
+              <Setter Property="Margin" Value="0,0,4,4" />
+            </Style>
+          </WrapPanel.Styles>
+          <Button Classes="Primary" Padding="10,3" Content="仅本次" IsVisible="{Binding IsApproval}" Command="{Binding AllowCommand}" />
+          <Button Classes="Chip" Padding="10,3" Content="本会话总是允许" IsVisible="{Binding IsApproval}" Command="{Binding AlwaysCommand}" />
           <Button Classes="Chip" Padding="10,3" Content="拒绝" IsVisible="{Binding IsApproval}" Command="{Binding RejectCommand}" />
           <Button Classes="Primary" Padding="10,3" Content="回答…" IsVisible="{Binding IsQuestion}" Command="{Binding AnswerCommand}" />
+          <Button Classes="Chip" Padding="10,3" Content="取消" Command="{Binding CancelCommand}" />
           <Button Classes="Icon" Width="26" Height="26" ToolTip.Tip="打开会话" Command="{Binding OpenCommand}">
             <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.OpenWindow}" />
           </Button>
-        </StackPanel>
-      </Grid>
+        </WrapPanel>
+      </StackPanel>
     </Border>
   </DataTemplate>
 </ResourceDictionary>

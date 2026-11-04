@@ -13,6 +13,11 @@ public static class LspMethods
 
 public sealed class LspServer
 {
+    public const string ServiceName = "lsp";
+
+    public Task<int> RunStdioAsync(Stream input, Stream output, CancellationToken cancellationToken = default)
+        => LspStdioTransport.RunAsync(input, output, HandleRequestAsync, cancellationToken);
+
     public Task<object?> HandleRequestAsync(string method, JsonElement? parameters)
     {
         return method switch

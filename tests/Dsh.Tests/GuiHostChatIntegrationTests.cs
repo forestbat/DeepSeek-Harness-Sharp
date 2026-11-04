@@ -102,10 +102,12 @@ public sealed class GuiHostChatIntegrationTests
         var observer = await host.ConnectAsync("survivor", Ct);
         string id = "";
         Task<ApprovalOutcome>? waiting = null;
+        WorkspaceHostLease detachedLease = default;
         await HeadlessGui.RunAsync(async () =>
         {
             await using var fleet = Fleet(host, gui);
             var chat = await HostChatSession.OpenAsync(fleet, host.Environment.Agent.Session.Header.Cwd!, null, Ct);
+            detachedLease = await fleet.Find(MachineSpec.LocalName)!.WaitConnectedAsync(Ct);
             await using (var viewModel = new MainViewModel(gui.App, chat))
             {
                 id = viewModel.CurrentSessionId.Value;
@@ -117,6 +119,8 @@ public sealed class GuiHostChatIntegrationTests
             }
             Dispatcher.UIThread.RunJobs();
         });
+        Assert.True(detachedLease.Lifetime.IsCancellationRequested);
+        await detachedLease.Closed.WaitAsync(Ct);
         Assert.NotNull(waiting);
         Assert.False(waiting.IsCompleted);
         var request = Assert.Single((await observer.ListPendingAsync(Ct)).Approvals, item => item.SessionId == id);
@@ -148,6 +152,65 @@ public sealed class GuiHostChatIntegrationTests
             Assert.Contains(await observer.ListHostSessionsAsync(Ct), session => session.SessionId == id);
             Assert.DoesNotContain(gui.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.List(), agent => agent.Id.Value == id);
         });
+    }
+
+    /** Host 列出历史会话: 磁盘上的会话(前一个进程写的)必须在, 没写过事件的空会话不在。 */
+    [Fact]
+    public async Task HostSessionList_KeepsDiskHistory_AndSkipsSessionsWithoutEvents()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gl", TestContext.Current.CancellationToken);
+        var persisted = host.Environment.Agent.Session;
+        persisted.Append(new UserMessagePayload(MessageFactory.CreateUserText("历史会话")), new SurfaceOp.Append());
+        await host.Environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(persisted);
+        await host.RestartHostAsync(Ct);
+        var client = await host.ConnectAsync("history-reader", Ct);
+
+        var history = await client.ListSessionsAsync(Ct);
+        Assert.Contains(history, session => session.Id == persisted.Id.Value);
+
+        var empty = await client.CreateSessionAsync(host.Environment.App.Home.Root, Ct);
+        Assert.DoesNotContain(await client.ListSessionsAsync(Ct), session => session.Id == empty.Id);
+    }
+
+    /** 启动 GUI 不新建会话: Host 重启后会话只剩磁盘日志, 未指定会话的打开必须恢复同工作区最近一次会话。 */
+    [Fact]
+    public async Task OpeningChat_WithoutSession_ResumesWorkspaceHistory_AfterHostRestart()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gs", Ct);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var cwd = host.Environment.Agent.Session.Header.Cwd!;
+
+        string id;
+        await using (var fleet = Fleet(host, gui))
+        {
+            using var chat = await HostChatSession.OpenAsync(fleet, cwd, null, Ct);
+            id = chat.Id.Value;
+            var store = host.Environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
+            var session = store.Get(chat.Id)!;
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText("启动时不要新建会话")), new SurfaceOp.Append());
+            await store.Flush(session);
+        }
+        await host.RestartHostAsync(Ct);
+
+        await using var reopened = Fleet(host, gui);
+        using var resumed = await HostChatSession.OpenAsync(reopened, cwd, null, Ct);
+        Assert.Equal(id, resumed.Id.Value);
+    }
+
+    /** 同一个 Host 内重复打开: 还没写过事件的会话也必须在原会话上继续, 不能每次启动再建一个。 */
+    [Fact]
+    public async Task OpeningChat_WithoutSession_ReusesTheLiveSessionWithoutEvents()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gt", Ct);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var cwd = host.Environment.Agent.Session.Header.Cwd!;
+        await using var fleet = Fleet(host, gui);
+
+        string first;
+        using (var chat = await HostChatSession.OpenAsync(fleet, cwd, null, Ct))
+            first = chat.Id.Value;
+        using (var again = await HostChatSession.OpenAsync(fleet, cwd, null, Ct))
+            Assert.Equal(first, again.Id.Value);
     }
 
     [Fact]
@@ -201,11 +264,87 @@ public sealed class GuiHostChatIntegrationTests
             Assert.True(await observer.RespondApprovalAsync(request.RequestId, true, cancellationToken: Ct));
             Assert.Equal(ApprovalOutcome.Cancelled, await GuiTestEnvironment.PumpAsync(closed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct)));
             Assert.Equal(ApprovalOutcome.AllowedOnce, await waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+            Assert.True(dialog.IsClosed);
+            Assert.True(dialog.IsSuperseded);
+            dialog.AllowAlwaysCommand.Execute(null);
+            Assert.Equal(ApprovalOutcome.Cancelled, dialog.Result);
             Assert.False(await observer.RespondApprovalAsync(request.RequestId, false, cancellationToken: Ct));
             var change = await RemoteHostMultiClientTests.NextAsync(observer.PendingChangesAsync(Ct), item => item.Resolution?.RequestId == request.RequestId);
             Assert.Empty(change.Pending.Approvals);
             Assert.Empty(change.Pending.Questions);
             Assert.Equal(("answering-client", PendingResolutions.Allowed), (change.Resolution!.ResolvedBy, change.Resolution.Resolution));
+        });
+    }
+
+    [Theory(Timeout = 120000)]
+    [InlineData("answered")]
+    [InlineData("dismissed")]
+    [InlineData("remote")]
+    public async Task OrdinaryChat_QuestionResultsCarryStatus_AndResolvedDialogsCannotSubmitAgain(string resolution)
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gqq", TestContext.Current.CancellationToken);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var observer = await host.ConnectAsync("question-peer", Ct);
+        await HeadlessGui.RunAsync(async () =>
+        {
+            await using var fleet = Fleet(host, gui);
+            var chat = await HostChatSession.OpenAsync(fleet, host.Environment.Agent.Session.Header.Cwd!, null, Ct);
+            await using var viewModel = new MainViewModel(gui.App, chat);
+            var shown = new TaskCompletionSource<DecisionViewModel>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closed = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            viewModel.DecisionRequested += decision =>
+            {
+                decision.Closed += value => closed.TrySetResult(value.Result);
+                shown.TrySetResult(decision);
+                return closed.Task;
+            };
+            var agent = host.Environment.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Get(viewModel.CurrentSessionId)!;
+            var service = host.Environment.App.Ctx.Get<UserQuestionService>(UserQuestionService.ServiceName)!;
+            var other = service.Ask(new([new("other", "Another session", Options: [new("Leave pending")])], host.Environment.Agent), Ct);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspace.Notifications.Pending,
+                () => viewModel.Workspace.Notifications.Pending.Any(item => item.SessionId == host.Environment.Agent.Id.Value));
+            Assert.False(shown.Task.IsCompleted);
+            var waiting = service.Ask(new AskUserQuestionRequest(
+            [
+                new("choice", "Choose", Options: [new("Go", Value: "go", Default: true)], AllowCustom: false),
+                new("notes", "Explain"),
+            ], agent), Ct);
+            var dialog = await GuiTestEnvironment.PumpAsync(shown.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+            var request = Assert.Single((await observer.ListPendingAsync(Ct)).Questions, item => item.SessionId == viewModel.CurrentSessionId.Value);
+            Assert.Equal(request.RequestId, dialog.RequestId);
+            Assert.Equal(request.RequestId, dialog.Questions[0].State.Prompt.RequestId);
+            dialog.Questions[1].CustomText = "Local answer";
+            if (resolution == "remote")
+                Assert.True(await observer.RespondQuestionAsync(request.RequestId,
+                    [new("choice", ["go"], null), new("notes", [], "Peer answer")], Ct));
+            else if (resolution == "dismissed")
+                dialog.CancelCommand.Execute(null);
+            else
+                dialog.SubmitCommand.Execute(null);
+            var answer = await GuiTestEnvironment.PumpAsync(waiting.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+            await GuiTestEnvironment.PumpAsync(closed.Task.WaitAsync(TimeSpan.FromSeconds(20), Ct));
+            Assert.True(dialog.IsClosed);
+            Assert.False(dialog.CanSubmit);
+            var original = dialog.Result;
+            dialog.SubmitCommand.Execute(null);
+            Assert.Same(original, dialog.Result);
+            Assert.False(await observer.RespondQuestionAsync(request.RequestId, [], Ct, "dismissed", "user_cancelled"));
+            Assert.Equal(resolution == "dismissed", answer.IsDismissed);
+            if (answer.IsDismissed)
+            {
+                Assert.Empty(answer.Answers);
+                Assert.Equal("user_cancelled", answer.Reason);
+            }
+            else
+            {
+                Assert.Equal(["go"], answer.Answers[0].Selected);
+                Assert.Equal(resolution == "remote" ? "Peer answer" : "Local answer", answer.Answers[1].Custom);
+            }
+            var otherRequest = Assert.Single((await observer.ListPendingAsync(Ct)).Questions);
+            Assert.Equal(host.Environment.Agent.Id.Value, otherRequest.SessionId);
+            Assert.False(other.IsCompleted);
+            Assert.True(await observer.RespondQuestionAsync(otherRequest.RequestId, [], Ct, "dismissed", "user_cancelled"));
+            Assert.True((await other.WaitAsync(TimeSpan.FromSeconds(5), Ct)).IsDismissed);
         });
     }
 
@@ -222,6 +361,8 @@ public sealed class GuiHostChatIntegrationTests
             var preferences = new GuiSettings(gui.App.Home);
             preferences.Save(preferences.Load() with { CloseAction = GuiSettings.CloseQuit });
             var window = new MainWindow(gui.App, chat);
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            window.Closed += (_, _) => closed.TrySetResult();
             try
             {
                 window.Show();
@@ -263,6 +404,7 @@ public sealed class GuiHostChatIntegrationTests
                 await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                     () => viewModel.Messages.Any(message => message.Text == "last message before closing"));
                 Dispatcher.UIThread.RunJobs();
+                await GuiTestEnvironment.PumpAsync(closed.Task.WaitAsync(Ct));
                 Assert.False(window.IsVisible);
             }
             finally
@@ -275,7 +417,6 @@ public sealed class GuiHostChatIntegrationTests
     private static FleetWorkspace Fleet(HarnessHostFixture host, GuiTestEnvironment gui)
     {
         var options = FleetConnectionTests.TestOptions with { ClientName = "ordinary-gui-chat" };
-        return new FleetWorkspace(new MachineStore(gui.App.Home), options,
-            () => new FleetClient([MachineSpec.Local(host.Root)], options));
+        return new FleetWorkspace(new FleetWorkspaceServices(new MachineStore(gui.App.Home), options, () => new FleetClient([MachineSpec.Local(host.Root)], options)));
     }
 }

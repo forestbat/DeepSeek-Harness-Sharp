@@ -12,7 +12,8 @@ public static class AskUserTool
 
     private const string Description =
         "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding. "
-        + "Send one or more questions, each with a stable id that will be echoed in the answer.";
+        + "Send one or more questions, each with a stable id that will be echoed in the answer. "
+        + "A dismissed result means the user cancelled the entire question group; do not treat it as an answer.";
 
     public static IDisposable Register(Context ctx)
     {
@@ -36,19 +37,25 @@ public static class AskUserTool
                           "id": { "type": "string", "description": "Stable id for this question; echoed in the answer." },
                           "question": { "type": "string", "description": "The specific question to ask the user." },
                           "header": { "type": "string", "description": "Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\"." },
+                          "detail": { "type": "string", "description": "Optional longer context or impact to display with the question." },
                           "options": {
                             "type": "array",
-                            "description": "Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label.",
+                            "description": "Optional choices to show the user. Use value for stable machine-facing answers and default to preselect a choice.",
                             "items": {
                               "type": "object",
                               "additionalProperties": true,
                               "properties": {
                                 "label": { "type": "string", "description": "Short user-facing option label." },
-                                "description": { "type": "string", "description": "One sentence explaining the tradeoff or impact." }
-                              }
+                                "description": { "type": "string", "description": "One sentence explaining the tradeoff or impact." },
+                                "value": { "type": "string", "description": "Stable answer value; defaults to label when omitted." },
+                                "disabled": { "type": "boolean", "description": "Whether the choice is unavailable. Defaults to false." },
+                                "default": { "type": "boolean", "description": "Whether to select this enabled choice initially. Defaults to false." }
+                              },
+                              "required": ["label"]
                             }
                           },
-                          "multi_select": { "type": "boolean", "description": "Whether the user may select more than one option. Defaults to false." }
+                          "multi_select": { "type": "boolean", "description": "Whether the user may select more than one option. Defaults to false." },
+                          "allowCustom": { "type": "boolean", "description": "Whether the user may enter a custom answer. Defaults to true." }
                         },
                         "required": ["id", "question"]
                       }
@@ -62,8 +69,10 @@ public static class AskUserTool
                     {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["answers"],
+                      "required": ["status", "answers", "reason"],
                       "properties": {
+                        "status": { "type": "string", "enum": ["answered", "dismissed"] },
+                        "reason": { "type": ["string", "null"], "description": "user_cancelled for dismissal; otherwise null." },
                         "answers": {
                           "type": "array",
                           "items": {
@@ -103,7 +112,12 @@ public static class AskUserTool
                 item["custom"] = answer.Custom;
             answers.Add(item);
         }
-        var value = new JsonObject { ["answers"] = answers };
+        var value = new JsonObject
+        {
+            ["status"] = result.Status,
+            ["answers"] = answers,
+            ["reason"] = result.Reason,
+        };
         return JsonDocument.Parse(value.ToJsonString()).RootElement;
     }
 
@@ -121,11 +135,11 @@ public static class AskUserTool
             questions.Add(new AskUserQuestionItem(
                 StringArg(candidate, "id") ?? throw new ArgumentException("invalid `questions`: question `id` must be a string"),
                 StringArg(candidate, "question") ?? throw new ArgumentException("invalid `questions`: question `question` must be a string"),
+                Detail: StringArg(candidate, "detail"),
                 Header: StringArg(candidate, "header"),
                 Options: ParseOptions(candidate),
-                MultiSelect: candidate.TryGetProperty("multi_select", out var multiSelect)
-                    && multiSelect.ValueKind is JsonValueKind.True or JsonValueKind.False
-                    && multiSelect.GetBoolean()));
+                MultiSelect: BoolArg(candidate, "multi_select"),
+                AllowCustom: BoolArg(candidate, "allowCustom", true)));
         }
         return questions;
     }
@@ -138,9 +152,17 @@ public static class AskUserTool
             .Where(option => option.ValueKind == JsonValueKind.Object)
             .Select(option => new AskUserQuestionOption(
                 StringArg(option, "label") ?? throw new ArgumentException("invalid `questions`: option `label` must be a string"),
-                StringArg(option, "description")))
+                StringArg(option, "description"),
+                StringArg(option, "value"),
+                BoolArg(option, "disabled"),
+                BoolArg(option, "default")))
             .ToList();
     }
+
+    private static bool BoolArg(JsonElement element, string name, bool defaultValue = false)
+        => element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? property.GetBoolean()
+            : defaultValue;
 
     private static string? StringArg(JsonElement element, string name)
         => element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String

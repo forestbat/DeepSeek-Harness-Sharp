@@ -53,7 +53,7 @@ internal static class Program
         var options = new FleetOptions { ClientName = $"gui-views@{Environment.MachineName}", AutoReconnect = false };
         if (view == "machines")
         {
-            var machines = new MachinesViewModel(new MachineStore(home), options);
+            var machines = new MachinesViewModel(new FleetWorkspaceServices(new MachineStore(home), options));
             machines.Load();
             window.Content = new MachinesView { DataContext = machines };
             return;

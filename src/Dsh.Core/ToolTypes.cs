@@ -9,6 +9,12 @@ public sealed record ToolOutputDefinition(
     Func<JsonElement, JsonElement, IReadOnlyList<ContentBlock>> Render,
     Func<JsonElement, JsonElement, JsonElement?>? PresentationMeta = null);
 
+/**
+ * 渐进式披露: 同一 Group 的工具默认不出现在模型可见的 schema 里, 只暴露一个路由工具;
+ * 模型调用路由工具展开该组后才真正看到这些工具。DefaultVisible=true 表示即使成组也直接暴露。
+ */
+public sealed record ToolDisclosure(string Group, string Summary, bool DefaultVisible = false);
+
 public sealed class ToolDefinition
 {
     public required string Name { get; init; }
@@ -19,6 +25,10 @@ public sealed class ToolDefinition
     public Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? FinalizeContent { get; init; }
     public long? TimeoutMs { get; init; }
     public Func<JsonElement, bool>? IsConcurrencySafe { get; init; }
+    public ToolDisclosure? Disclosure { get; init; }
+
+    /** 平台能力判定: false 时工具仍可被内部调用, 但不出现在模型可见的 schema 里。 */
+    public Func<bool>? IsAvailable { get; init; }
 
     /**
      * Absolute paths a call writes, including the directory a newly started process runs in.
@@ -112,6 +122,9 @@ public sealed class ToolRunContext : ToolExecution
     internal Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? CapturedFinalizer { get; set; }
 
     public void ConcludeTurn() => ConcludedRequested = true;
+
+    /** Call only after successfully committing a file mutation, never for write intent or directories. */
+    public void RecordFileChange(string absolutePath) => Agent?.Session.Append(new FileChangedPayload(absolutePath));
 }
 
 public abstract record ScheduledToolPreparation
@@ -161,10 +174,3 @@ public sealed class ToolOutputException : HarnessException
 }
 
 public sealed record ToolRestriction(IReadOnlyList<string>? Allow = null, IReadOnlyList<string>? Deny = null);
-
-public enum ToolPresentationMode
-{
-    Native,
-    Ptc,
-    Both,
-}

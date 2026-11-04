@@ -71,7 +71,7 @@ internal sealed class HarnessHostFixture : IAsyncDisposable
      * host.file.* and host.git.* reach only the home directories and session projects (HostPathPolicy).
      * Starts a shell in Project, as a session there would, so that a test directory outside the user's home (the Windows CI checkout on D:) is reachable.
      */
-    public static async Task OpenProjectAsync(RemoteHostClient client, string project, CancellationToken cancellationToken)
+    public static async Task OpenProjectAsync(IWorkspaceHost client, string project, CancellationToken cancellationToken)
     {
         var (fileName, arguments) = RemoteHostMultiClientTests.Shell;
         await client.Pty.StartPtyAsync(new RemotePtyStartRequest(fileName, arguments, Cwd: project), cancellationToken);

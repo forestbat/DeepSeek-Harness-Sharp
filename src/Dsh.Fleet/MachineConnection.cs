@@ -10,7 +10,7 @@ namespace Dsh.Fleet;
  * Each connection starts with ordered Host snapshots, then applies their changes without another query or replay cache.
  * The last authoritative projections remain visible while the machine is not connected.
  */
-public sealed class MachineConnection : IAsyncDisposable
+public sealed class MachineConnection : IWorkspaceMachine
 {
     private readonly FleetOptions _options;
     private readonly Lock _gate = new();
@@ -29,11 +29,14 @@ public sealed class MachineConnection : IAsyncDisposable
     public MachineConnection(MachineSpec machine, FleetOptions options)
     {
         Machine = machine;
+        Network = new FleetNetwork(this);
         _options = options;
         _subscriptions = new RemoteHostSubscriptions(WaitConnectedAsync, _lifetime.Token);
     }
 
     public MachineSpec Machine { get; }
+
+    public IWorkspaceMachineNetwork Network { get; }
 
     public MachineConnectionState State { get; private set; } = MachineConnectionState.Offline;
 
@@ -47,13 +50,13 @@ public sealed class MachineConnection : IAsyncDisposable
     /** The ssh process of the current link (SSH machines only). */
     internal Process? LinkProcess { get; private set; }
 
-    public event Action<MachineConnection>? StateChanged;
+    public event Action<IWorkspaceMachine>? StateChanged;
 
-    public event Action<MachineConnection>? SessionsChanged;
+    public event Action<IWorkspaceMachine>? SessionsChanged;
 
-    public event Action<MachineConnection>? PendingChanged;
+    public event Action<IWorkspaceMachine>? PendingChanged;
 
-    public event Action<MachineConnection, RemoteNotificationChange?>? NotificationsChanged;
+    public event Action<IWorkspaceMachine, RemoteNotificationChange?>? NotificationsChanged;
 
     public RemoteNotifyPage? Notifications
     {
@@ -95,6 +98,12 @@ public sealed class MachineConnection : IAsyncDisposable
             return _connected.Task.WaitAsync(cancellationToken);
     }
 
+    async Task<WorkspaceHostLease> IWorkspaceMachine.WaitConnectedAsync(CancellationToken cancellationToken)
+    {
+        var lease = await WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
+        return new(lease.Client, lease.Lifetime, lease.Closed);
+    }
+
     /** Borrows only the currently published lease; never waits for a future reconnect. */
     internal HostLease? CurrentLease
     {
@@ -126,7 +135,7 @@ public sealed class MachineConnection : IAsyncDisposable
      * Returns when the PTY ends; fails when the host does not know the PTY (for example it exited while the machine was unreachable).
      */
     public Task AttachPtyAsync(string ptyId, Stream input, Stream output, CancellationToken cancellationToken,
-        Func<RemoteHostClient, CancellationToken, Task>? prepare = null)
+        Func<IWorkspaceHost, CancellationToken, Task>? prepare = null)
         => _subscriptions.AttachPtyAsync(ptyId, input, output, cancellationToken, prepare);
 
 
