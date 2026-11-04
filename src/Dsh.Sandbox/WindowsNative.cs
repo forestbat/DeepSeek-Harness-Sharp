@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -109,6 +110,100 @@ internal static class WindowsNative
     }
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
+
+    internal static unsafe SafeFileHandle OpenReadAcl(string path)
+    {
+        const uint readControl = 0x00020000, readAttributes = 0x00000080, synchronize = 0x00100000;
+        const uint caseInsensitive = 0x40, synchronousIoNonAlert = 0x20, backupIntent = 0x4000;
+        const uint shareAll = (uint)(FileShare.Read | FileShare.Write | FileShare.Delete);
+        const int stackCharacters = 512, errorFilenameExceedsRange = 206;
+        // Policy paths are canonical local absolute paths; replace the extended DOS prefix without normalizing the suffix.
+        var source = path.AsSpan();
+        if (source.StartsWith(@"\\?\", StringComparison.Ordinal))
+            source = source[4..];
+        const string ntPrefix = @"\??\";
+        var length = source.Length + ntPrefix.Length;
+        // Keep room for the terminator required by the former Win32 path conversion, without overflowing UNICODE_STRING.
+        if (length > ushort.MaxValue / sizeof(char) - 1)
+            return FailedFileHandle(errorFilenameExceedsRange);
+        char[]? rented = null;
+        Span<char> buffer = length <= stackCharacters ? stackalloc char[length]
+            : rented = ArrayPool<char>.Shared.Rent(length);
+        SafeFileHandle handle;
+        int error;
+        try
+        {
+            ntPrefix.AsSpan().CopyTo(buffer);
+            source.CopyTo(buffer[ntPrefix.Length..]);
+            fixed (char* text = buffer)
+            {
+                var name = new UnicodeString
+                {
+                    Length = (ushort)(length * sizeof(char)),
+                    MaximumLength = (ushort)(length * sizeof(char)),
+                    Buffer = text
+                };
+                var attributes = new ObjectAttributes
+                {
+                    Length = (uint)sizeof(ObjectAttributes),
+                    ObjectName = &name,
+                    Attributes = caseInsensitive
+                };
+                // CreateFileW implicitly adds FILE_READ_ATTRIBUTES and SYNCHRONIZE even for READ_CONTROL-only callers.
+                var status = NtOpenFile(out handle, readControl | readAttributes | synchronize, ref attributes,
+                    out _, shareAll, synchronousIoNonAlert | backupIntent);
+                error = status < 0 ? (int)RtlNtStatusToDosError(status) : 0;
+            }
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<char>.Shared.Return(rented);
+        }
+        if (error == 0)
+            return handle;
+        handle.Dispose();
+        return FailedFileHandle(error);
+    }
+
+    private static SafeFileHandle FailedFileHandle(int error)
+    {
+        var handle = new SafeFileHandle(-1, ownsHandle: true);
+        // Restore the captured error only after all buffer and native-handle cleanup.
+        Marshal.SetLastPInvokeError(error);
+        return handle;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct UnicodeString
+    {
+        public ushort Length, MaximumLength;
+        public char* Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct ObjectAttributes
+    {
+        public uint Length;
+        public nint RootDirectory;
+        public UnicodeString* ObjectName;
+        public uint Attributes;
+        public nint SecurityDescriptor, SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public nint Status;
+        public nuint Information;
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern unsafe int NtOpenFile(out SafeFileHandle handle, uint access, ref ObjectAttributes attributes,
+        out IoStatusBlock statusBlock, uint share, uint options);
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
+
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
     [DllImport("advapi32.dll", SetLastError = true)]
