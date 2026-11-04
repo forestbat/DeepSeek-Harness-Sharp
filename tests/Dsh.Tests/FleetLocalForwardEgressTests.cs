@@ -667,8 +667,31 @@ public sealed class FleetLocalForwardEgressTests
     {
         using var rebound = new TcpListener(IPAddress.Loopback, port);
         rebound.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        rebound.Start();
+        try
+        {
+            rebound.Start();
+        }
+        catch (SocketException exception) when (exception.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            throw new IOException($"The released local-forward port cannot be rebound ({DescribePortState(port)}).", exception);
+        }
         Assert.Equal(new IPEndPoint(IPAddress.Loopback, port), rebound.LocalEndpoint);
+    }
+
+    private static string DescribePortState(int port)
+    {
+        try
+        {
+            var properties = IPGlobalProperties.GetIPGlobalProperties();
+            var listeners = properties.GetActiveTcpListeners().Count(endpoint => endpoint.Port == port);
+            var connections = properties.GetActiveTcpConnections().Where(connection => connection.LocalEndPoint.Port == port)
+                .Select(static connection => connection.State).ToArray();
+            return $"listeners={listeners}, connections=[{string.Join(",", connections)}], osVersion={Environment.OSVersion.Version}";
+        }
+        catch (NetworkInformationException exception)
+        {
+            return $"networkStateUnavailable={exception.ErrorCode}, osVersion={Environment.OSVersion.Version}";
+        }
     }
 
     internal static async Task AssertOwnedSshRetiredAsync(string root, string mode, params int[] proxyPorts)
