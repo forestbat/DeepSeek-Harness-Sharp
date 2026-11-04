@@ -56,7 +56,7 @@ public sealed class PromptOrderingTests
     }
 
     [Fact]
-    public async Task UnpositionedSections_AppendAfterPositionedInRegistrationOrder()
+    public async Task UnpositionedSections_AppendAfterPositionedInNameOrder()
     {
         var ctx = new Context();
         var prompt = new SystemPrompt(ctx, new SystemPromptConfig { IncludeHarnessIdentity = false });
@@ -69,8 +69,25 @@ public sealed class PromptOrderingTests
         ]);
 
         Assert.Equal(
-            ["deployment:persona", "tool:bash", "zz:free", "aa:free"],
+            ["deployment:persona", "tool:bash", "aa:free", "zz:free"],
             names);
+    }
+
+    /** 插件异步加载会让注册序漂移; 同样的段落在两次组装里必须逐字节相同, 否则前缀缓存会在换位处失效。 */
+    [Fact]
+    public async Task UnpositionedSections_AreStableAcrossRegistrationOrder()
+    {
+        var forward = new SystemPrompt(new Context(), new SystemPromptConfig { IncludeHarnessIdentity = false });
+        _ = forward.Section(PromptSection.Literal("aa:free", "a"));
+        _ = forward.Section(PromptSection.Literal("zz:free", "z"));
+
+        var backward = new SystemPrompt(new Context(), new SystemPromptConfig { IncludeHarnessIdentity = false });
+        _ = backward.Section(PromptSection.Literal("zz:free", "z"));
+        _ = backward.Section(PromptSection.Literal("aa:free", "a"));
+
+        Assert.Equal(
+            PromptRender.RenderPrompt(await forward.Assemble(new AssembleContext())),
+            PromptRender.RenderPrompt(await backward.Assemble(new AssembleContext())));
     }
 
     [Fact]

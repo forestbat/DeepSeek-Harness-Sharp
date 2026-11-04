@@ -7,7 +7,8 @@ public sealed record AssembleContext(ScopeKey? Scope = null, CancellationToken S
 
 /**
  * 提示词段: Name 全局唯一; After/Before 声明相对位置(目标段不存在时该约束忽略)。
- * 均不声明的段落在组装时按注册序追加在尾部。
+ * 均不声明的段落在组装时按名字排序追加在尾部: 插件是异步加载的, 注册序在进程间/重载后不稳定,
+ * 用它排序会让同样的段落在两次组装里换位置, 把前缀缓存从换位处打断。
  */
 public sealed record PromptSection(
     string Name,
@@ -103,7 +104,12 @@ public sealed class SystemPromptConfig
     public bool IncludeHarnessIdentity { get; init; } = true;
     public bool IncludeTone { get; init; } = true;
     public bool IncludeRuntimeContext { get; init; } = true;
-    public bool FoldContextsIntoSystem { get; init; } = true;
+
+    /**
+     * 运行期上下文(项目记忆、审批策略、工作目录、看板)默认作为尾部快照下发, 不折进 system prompt:
+     * 它们每回合重算, 折进前缀会让提示词从第一处差异起全部重算, 把前缀缓存打穿。
+     */
+    public bool FoldContextsIntoSystem { get; init; }
     public bool IncludeEnvironment { get; init; }
     public string Persona { get; init; } = "";
     public IReadOnlyList<string>? ToolOrder { get; init; }
@@ -394,7 +400,11 @@ public sealed class SystemPrompt : Service
         var comparer = Comparer<int>.Create((a, b) =>
         {
             var zone = (positioned[a] ? 0 : 1).CompareTo(positioned[b] ? 0 : 1);
-            return zone != 0 ? zone : entries[a].Seq.CompareTo(entries[b].Seq);
+            if (zone != 0)
+                return zone;
+            return positioned[a]
+                ? entries[a].Seq.CompareTo(entries[b].Seq)
+                : string.CompareOrdinal(nameOf(entries[a].Value), nameOf(entries[b].Value));
         });
         var ready = new SortedSet<int>(comparer);
         for (var i = 0; i < entries.Count; i++)

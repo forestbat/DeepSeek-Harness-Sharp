@@ -92,10 +92,10 @@ public sealed class DeepSeekAdapter : LlmAdapter
         var connection = _config.Options();
         var configured = connection.Models.FirstOrDefault(entry => entry.Id == model);
         if (configured?.SystemPromptUpdate is { } systemPromptUpdate
-            && systemPromptUpdate != SystemPromptUpdateModes.InHistory)
+            && systemPromptUpdate is not (SystemPromptUpdateModes.InHistory or SystemPromptUpdateModes.RewriteHead))
         {
             throw new LlmException(new LlmFailure(
-                $"catalog model \"{model}\" systemPromptUpdate must be \"{SystemPromptUpdateModes.InHistory}\" when present",
+                $"catalog model \"{model}\" systemPromptUpdate must be \"{SystemPromptUpdateModes.InHistory}\" or \"{SystemPromptUpdateModes.RewriteHead}\" when present",
                 "INVALID_MODEL_INFO"));
         }
         var contextWindow = configured?.ContextWindow ?? connection.DefaultContextWindow;
@@ -118,7 +118,9 @@ public sealed class DeepSeekAdapter : LlmAdapter
             contextWindow,
             configured?.MaxTokens ?? connection.MaxTokens,
             reasoning,
-            configured?.SystemPromptUpdate);
+            // DeepSeek 接受对话中途的 system 消息, 变化后的系统提示叠到尾部即可保住前缀缓存;
+            // 没显式声明时按 in-history 走, 否则每次变化都会原地改写前缀。
+            configured?.SystemPromptUpdate ?? SystemPromptUpdateModes.InHistory);
     }
 
     public override PreparedAdapterCall PrepareCall(string model, CancellationToken cancellationToken)

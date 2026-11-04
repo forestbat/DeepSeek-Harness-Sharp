@@ -18,9 +18,14 @@ internal static class AnthropicWire
 
         var system = SerializeSystem(options);
         if (system.Count > 0)
+        {
+            MarkCacheBreakpoint((JsonObject)system[^1]!);
             body["system"] = system;
+        }
 
-        body["messages"] = SerializeMessages(options);
+        var messages = SerializeMessages(options);
+        MarkLastBlockCacheBreakpoint(messages);
+        body["messages"] = messages;
 
         if (options.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(SerializeTool).ToArray());
@@ -29,6 +34,26 @@ internal static class AnthropicWire
             body["output_config"] = new JsonObject { ["effort"] = effort.Value };
 
         return body.ToJsonString();
+    }
+
+    /**
+     * Anthropic 只在显式 cache_control 断点处建立前缀缓存, 不打点则每次请求都是全量输入。
+     * 断点打在系统提示与最后一条消息的最后一个块上: 下一次请求的前缀到旧断点为止都能命中。
+     */
+    private static void MarkCacheBreakpoint(JsonObject block)
+        => block["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+
+    private static void MarkLastBlockCacheBreakpoint(JsonArray messages)
+    {
+        if (messages.Count == 0
+            || messages[^1] is not JsonObject last
+            || last["content"] is not JsonArray content
+            || content.Count == 0
+            || content[^1] is not JsonObject block)
+        {
+            return;
+        }
+        MarkCacheBreakpoint(block);
     }
 
     /** Anthropic 只在顶层 system 字段接收系统提示: options.System 在前, 消息里的 system 角色按出现顺序合并。 */
