@@ -84,7 +84,7 @@ class NativeFileIoCapture:
             profile = Path(self.directory.name) / "owned.wprp"
             profile.write_text(PROFILE, encoding="utf-8")
             self.control_unknown = True
-            result = self.command([self.wpr, "-start", f"{profile}!DshOwnedIo.Light", "-instancename", self.instance], 15)
+            result = self.command([self.wpr, "-start", f"{profile}!DshOwnedIo.Light", "-filemode", "-recordtempto", self.directory.name, "-instancename", self.instance], 15)
             self.owned = result.returncode == 0
             if self.owned:
                 self.control_unknown = False
@@ -99,7 +99,7 @@ class NativeFileIoCapture:
                 self.emit("NATIVE_IO_UNAVAILABLE code=13")
                 self.cancel()
                 return
-            self.emit(f"NATIVE_IO_STARTED collectors={len(rows)} buffer_kb={rows[0][1]} maximum_buffers={rows[0][2]} actual_buffers={rows[0][3]}")
+            self.emit(f"NATIVE_IO_STARTED collectors={len(rows)} buffer_kb={rows[0][1]} maximum_buffers={rows[0][2]} actual_buffers={rows[0][3]} file_mode=1 maximum_file_mb=512")
         except Exception:
             self.emit("NATIVE_IO_UNAVAILABLE code=14")
             if self.control_unknown and not self.owned:
@@ -131,6 +131,7 @@ class NativeFileIoCapture:
                 self.emit(f"NATIVE_IO_UNAVAILABLE code=16 exit={stopped.returncode}")
                 return
             self.owned = False
+            self.emit(f"NATIVE_IO_FILE bytes={etl.stat().st_size}")
             result = self.command(["dotnet", "run", "--project", "tests/ci/NativeIoSummary/NativeIoSummary.csproj", "--", str(etl), str(pid)], 120)
             lines = result.stdout.decode("utf-8", errors="replace").splitlines()
             emitted = 0
@@ -157,6 +158,7 @@ PROFILE = """<?xml version="1.0" encoding="utf-8"?>
   <Profiles>
     <SystemCollector Id="OwnedSystem" Name="NT Kernel Logger">
       <BufferSize Value="128"/><Buffers Value="1024"/>
+      <MaximumFileSize Value="512" FileMode="Sequential"/>
     </SystemCollector>
     <SystemProvider Id="OwnedIo">
       <Keywords>

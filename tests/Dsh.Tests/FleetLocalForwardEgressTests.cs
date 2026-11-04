@@ -667,8 +667,34 @@ public sealed class FleetLocalForwardEgressTests
     {
         using var rebound = new TcpListener(IPAddress.Loopback, port);
         rebound.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        rebound.Start();
+        try
+        {
+            rebound.Start();
+        }
+        catch (SocketException error)
+        {
+            ObservePortRebindFailure(port, error);
+            throw;
+        }
         Assert.Equal(new IPEndPoint(IPAddress.Loopback, port), rebound.LocalEndpoint);
+    }
+
+    private static void ObservePortRebindFailure(int port, SocketException error)
+    {
+        var output = TestContext.Current.TestOutputHelper;
+        try
+        {
+            var sockets = IPGlobalProperties.GetIPGlobalProperties();
+            var listeners = sockets.GetActiveTcpListeners().Count(endpoint => endpoint.Port == port);
+            var states = sockets.GetActiveTcpConnections().Where(connection => connection.LocalEndPoint.Port == port)
+                .GroupBy(connection => connection.State).OrderBy(group => group.Key)
+                .Select(group => $"{group.Key}:{group.Count()}").ToArray();
+            output?.WriteLine($"owned-port-r22 pid={Environment.ProcessId} runtime={Environment.Version} error={error.SocketErrorCode} listeners={listeners} states={string.Join(',', states)}");
+        }
+        catch (Exception observationFailure)
+        {
+            output?.WriteLine($"owned-port-r22 unavailable={observationFailure.GetType().Name}");
+        }
     }
 
     internal static async Task AssertOwnedSshRetiredAsync(string root, string mode, params int[] proxyPorts)

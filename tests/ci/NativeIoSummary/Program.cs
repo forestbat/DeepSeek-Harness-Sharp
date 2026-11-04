@@ -18,8 +18,7 @@ try
     var summary = new NativeIoSummary(rootPid);
     summary.Attach(source);
     source.Process();
-    await summary.WriteAsync(source.EventsLost);
-    return 0;
+    return await summary.WriteAsync(source.EventsLost) ? 0 : 2;
 }
 catch (Exception exception)
 {
@@ -123,7 +122,7 @@ sealed class NativeIoSummary(int rootPid)
             _pagingDisk++;
     }
 
-    public async Task WriteAsync(long lost)
+    public async Task<bool> WriteAsync(long lost)
     {
         var endpoints = _rootStarts == 1 && _rootStops == 1;
         await Console.Out.WriteLineAsync(FormattableString.Invariant($"NATIVE_IO_CAPTURE root_pid={rootPid} root_starts={_rootStarts} root_stops={_rootStops} descendants={_descendants} endpoint_complete={(endpoints ? 1 : 0)} events_lost={lost} unhandled_fileio={_unhandledFileIo} unknown_process_events={_unknownProcessEvents} unmatched_owned_ends={_unknownEnds} pending_owned={_pending.Count} collisions={_collisions} overflow={_overflow}"));
@@ -132,6 +131,7 @@ sealed class NativeIoSummary(int rootPid)
         await _diskRead.WriteAsync((int)OperationKind.DiskRead);
         await _diskWrite.WriteAsync((int)OperationKind.DiskWrite);
         await Console.Out.WriteLineAsync(FormattableString.Invariant($"NATIVE_IO_LIMITS paging_disk={_pagingDisk} cross_layer_irp_join=0 security_query_attribution=0 accesscheck_attribution=0 minifilter_schema_verified=0"));
+        return endpoints && lost == 0 && _pending.Count == 0 && _collisions == 0 && _overflow == 0;
     }
 
     private readonly record struct PendingIo(OperationKind Kind, double Start);
