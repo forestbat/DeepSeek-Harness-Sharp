@@ -72,10 +72,17 @@ public sealed class FleetLocalForwardEgressTests
             var accepted = incumbent.AcceptTcpClientAsync(deadline.Token);
             await witness.ConnectAsync(IPAddress.Loopback, port, deadline.Token);
             using var server = await accepted;
-            await server.GetStream().WriteAsync("incumbent-owned"u8.ToArray(), deadline.Token);
+            var serverStream = server.GetStream();
+            var witnessStream = witness.GetStream();
+            await serverStream.WriteAsync("incumbent-owned"u8.ToArray(), deadline.Token);
             var bytes = new byte["incumbent-owned".Length];
-            await witness.GetStream().ReadExactlyAsync(bytes, deadline.Token);
+            await witnessStream.ReadExactlyAsync(bytes, deadline.Token);
             Assert.Equal("incumbent-owned"u8.ToArray(), bytes);
+            // The witness owns the active close; the incumbent must not leave TIME_WAIT on the fixed listening port.
+            witness.Client.Shutdown(SocketShutdown.Send);
+            Assert.Equal(0, await serverStream.ReadAsync(bytes.AsMemory(0, 1), deadline.Token));
+            server.Client.Shutdown(SocketShutdown.Send);
+            Assert.Equal(0, await witnessStream.ReadAsync(bytes.AsMemory(0, 1), deadline.Token));
         }
         incumbent.Stop();
         AssertPortCanRebind(port);
