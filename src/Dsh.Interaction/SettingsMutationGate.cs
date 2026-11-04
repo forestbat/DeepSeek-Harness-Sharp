@@ -26,8 +26,8 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
 
     public void Dispose() => registration.Dispose();
 
-    public string SettingsPath => SandboxFileAccess.Canonicalize(home.SettingsFile);
-    public bool Owns(string path) => SettingsFilePath.SameFile(path, home.SettingsFile);
+    public string SettingsPath => global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
+    public bool Owns(string path) => global::Dsh.Transport.FilePathAccess.SameFile(path, home.SettingsFile);
 
     public async Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default)
     {

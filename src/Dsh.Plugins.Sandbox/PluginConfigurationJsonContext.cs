@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Metadata for raw settings mappings, sequences and scalar plugin parameters. */
 [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]

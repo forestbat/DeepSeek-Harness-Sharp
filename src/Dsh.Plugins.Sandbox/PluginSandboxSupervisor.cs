@@ -5,11 +5,11 @@ using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Sandbox;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Owns one co-trusted worker; plugins share memory and caller identity. */
-internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home, HarnessSettings settings,
-    PluginCapabilityFactory capabilities, string pluginsDirectory) : IDisposable
+internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionEnvironment environment,
+    IPluginHostFactory capabilities, string pluginsDirectory) : IDisposable
 {
     private static readonly JsonElement EmptyConfiguration = JsonSerializer.SerializeToElement(
         new Dictionary<string, object?>(), PluginConfigurationJsonContext.Default.Object);
@@ -18,7 +18,7 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
     private readonly Dictionary<string, PluginSandboxSource> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly string _pluginsDirectory = Path.TrimEndingDirectorySeparator(SandboxFileAccess.Canonicalize(pluginsDirectory));
+    private readonly string _pluginsDirectory = Path.TrimEndingDirectorySeparator(global::Dsh.Transport.FilePathAccess.Canonicalize(pluginsDirectory));
     private Domain? _domain;
     private bool _disposed;
 
@@ -85,15 +85,14 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         }
     }
 
-    private HarnessSettings CurrentSettings()
-        => File.Exists(home.SettingsFile) ? HarnessSettings.LoadForReview(home) : settings;
+    private PluginExecutionSettings CurrentSettings() => environment.ReadSettings();
 
-    private void DemandExecution(string package, HarnessSettings active)
+    private void DemandExecution(string package, PluginExecutionSettings active)
     {
         var configured = active.Plugins.GetValueOrDefault(package);
         var form = Source(package)?.Descriptor.Form ?? PluginForm.ManagedAssembly;
-        if (active.Sandbox?.Enabled != true || configured?.Enabled == false
-            || PluginSetting.EffectiveExecution(configured, form) != PluginExecution.Sandbox)
+        if (!active.SandboxEnabled || configured?.Enabled == false
+            || PluginRoleResolver.Resolve(package, configured, form) != PluginExecution.Sandbox)
             throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "The isolated plugin's active execution profile changed; retire the shared worker.");
     }
 
@@ -176,7 +175,7 @@ internal sealed class PluginSandboxSupervisor(Context context, HarnessHome home,
         stagingDirectory = null;
         if (source.ArtifactPath is not { } artifact)
             return null;
-        var original = SandboxFileAccess.Canonicalize(artifact);
+        var original = global::Dsh.Transport.FilePathAccess.Canonicalize(artifact);
         SandboxFileAccess.DemandOrdinaryFile(original, allowMissing: false);
         stagingDirectory = Path.Combine(domain.Directory, Guid.NewGuid().ToString("N"));
         try

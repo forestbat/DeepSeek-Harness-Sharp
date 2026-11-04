@@ -2,47 +2,41 @@ using System.Runtime.CompilerServices;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
-namespace Dsh.Boot;
-
-public sealed record PluginSandboxLoadResult(IReadOnlyList<string> Packages, PluginScanResult Loaded);
+namespace Dsh.Plugins.Sandbox;
 
 /** Discovers plugins in the shared worker and applies the same execution roles to every source. */
-public sealed class PluginSandboxCatalog : IDisposable
+internal sealed class PluginSandboxCatalog : IPluginExecutionCatalog
 {
     private const int MaximumPackagesPerArtifact = 256;
     private const int MaximumPackageCharacters = 256;
-    private readonly HarnessHome _home;
+    private readonly IPluginExecutionEnvironment _environment;
     private readonly PluginHost _host;
-    private readonly HarnessSettings _settings;
     private readonly string _directory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
     private readonly PluginSandboxSupervisor _supervisor;
-    private readonly Dictionary<string, string?> _sources = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, PluginSandboxMetadata> _metadata = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _hostRoles = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PluginRuntimeEntry> _entries = new(StringComparer.Ordinal);
+    private readonly record struct PluginRuntimeEntry(string? Artifact, PluginDescriptor Descriptor,
+        PluginExecution Execution, PluginSandboxMetadata? Metadata);
     private PluginSkip[] _failures = [];
     private readonly SemaphoreSlim _loading = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private bool _disposed;
 
-    internal PluginSandboxCatalog(HarnessHome home, PluginHost host, HarnessSettings settings, string directory,
+    internal PluginSandboxCatalog(IPluginExecutionEnvironment environment, PluginHost host, string directory,
         Func<INativePlugin, IDshPlugin>? nativeBridge, PluginSandboxSupervisor supervisor)
     {
-        _home = home;
+        _environment = environment;
         _host = host;
-        _settings = settings;
         _directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         _nativeBridge = nativeBridge;
         _supervisor = supervisor;
         Directory.CreateDirectory(_directory);
     }
 
-    public bool Enabled => _settings.Sandbox?.Enabled == true;
     public IReadOnlyList<PluginSkip> Failures => [.. Volatile.Read(ref _failures), .. _supervisor.Failures];
-    public string? ArtifactPath(string package) => _sources.GetValueOrDefault(package);
-    internal PluginForm? Form(string package)
-        => _metadata.GetValueOrDefault(package)?.Form
-            ?? (_sources.TryGetValue(package, out var artifact) ? artifact is null ? PluginForm.CompiledIn : PluginForm.ManagedAssembly : null);
+    public string? ArtifactPath(string package) => _entries.GetValueOrDefault(package).Artifact;
+    public PluginForm? Form(string package)
+        => _entries.TryGetValue(package, out var entry) ? entry.Descriptor.Form : null;
     public IReadOnlyList<string> DomainPackages(string package) => _supervisor.DomainPackages(package);
     public bool IsFaulted(string package) => _supervisor.IsFaulted(package);
     public Task RetireDomainAsync(string package, CancellationToken cancellationToken = default)
@@ -57,11 +51,11 @@ public sealed class PluginSandboxCatalog : IDisposable
         Validate(inspection, full);
         var active = CurrentSettings();
         foreach (var metadata in inspection.Packages)
-            DemandExecution(metadata, (active.Plugins.GetValueOrDefault(metadata.Package) ?? new PluginSetting()) with { Enabled = true });
+            _ = Role(metadata, (active.Plugins.GetValueOrDefault(metadata.Package) ?? new PluginSetting()) with { Enabled = true });
         return inspection.Packages.Select(package => package.Package).ToArray();
     }
 
-    public async Task<PluginSandboxLoadResult> LoadAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<PluginCatalogLoadResult> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
         await _loading.WaitAsync(linked.Token).ConfigureAwait(false);
@@ -95,8 +89,8 @@ public sealed class PluginSandboxCatalog : IDisposable
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
-                    foreach (var source in _sources.Where(source => source.Value is not null
-                        && PluginSandboxLaunch.PathComparer.Equals(source.Value, path)))
+                    foreach (var source in _entries.Where(source => source.Value.Artifact is not null
+                        && PluginSandboxLaunch.PathComparer.Equals(source.Value.Artifact, path)))
                         _host.Catalog.Remove(source.Key);
                     skipped.Add(new PluginSkip(path, error.Message));
                 }
@@ -107,7 +101,7 @@ public sealed class PluginSandboxCatalog : IDisposable
         }
         catch
         {
-            ReleaseLoaded(_host, new PluginScanResult(managed, native, []));
+            _host.Release(new PluginScanResult(managed, native, []));
             throw;
         }
         finally { _loading.Release(); }
@@ -142,44 +136,7 @@ public sealed class PluginSandboxCatalog : IDisposable
         foreach (var registration in DshPluginCatalogRegistry.Snapshot())
         {
             signal.ThrowIfCancellationRequested();
-            if (_sources.TryGetValue(registration.Package, out var artifact) && artifact is not null)
-                continue;
-            try
-            {
-                var setting = active.Plugins.GetValueOrDefault(registration.Package);
-                var host = PluginSetting.EffectiveExecution(setting, PluginForm.CompiledIn) == PluginExecution.Host;
-                if (_sources.ContainsKey(registration.Package)
-                    && _host.Catalog.PackageNames.Contains(registration.Package, StringComparer.Ordinal)
-                    && _hostRoles.Contains(registration.Package) == host
-                    && (host || setting?.Enabled == false || _metadata.ContainsKey(registration.Package)))
-                {
-                    if (_metadata.TryGetValue(registration.Package, out var known))
-                        DemandExecution(known, setting);
-                    continue;
-                }
-                var descriptor = PluginDescriptor.For(registration.Package, PluginForm.CompiledIn) with { Entry = registration.Entry };
-                if (host)
-                {
-                    _host.Catalog.Remove(registration.Package);
-                    _host.Catalog.Register(descriptor, registration.Create);
-                    _hostRoles.Add(registration.Package);
-                }
-                else
-                {
-                    if (setting?.Enabled != false)
-                    {
-                        var inspection = await _supervisor.InspectAsync(null, registration.Package, signal).ConfigureAwait(false);
-                        Validate(inspection, registration.Package);
-                        var metadata = inspection.Packages.SingleOrDefault(package => package.Package == registration.Package)
-                            ?? throw new RuntimeException("PLUGIN_INSPECTION_MISMATCH", "The compiled plugin inspection did not describe the requested package.");
-                        _metadata[metadata.Package] = metadata;
-                        DemandExecution(metadata, setting);
-                    }
-                    _supervisor.Register(_host, new PluginSandboxSource(descriptor, null));
-                    _hostRoles.Remove(registration.Package);
-                }
-                _sources[registration.Package] = null;
-            }
+            try { await RegisterCompiledPackageAsync(registration, active, signal).ConfigureAwait(false); }
             catch (Exception error) when (error is not OperationCanceledException)
             {
                 _host.Catalog.Remove(registration.Package);
@@ -188,59 +145,95 @@ public sealed class PluginSandboxCatalog : IDisposable
         }
     }
 
-    private HarnessSettings CurrentSettings()
-        => File.Exists(_home.SettingsFile) ? HarnessSettings.LoadForReview(_home) : _settings;
+    private async Task RegisterCompiledPackageAsync(DshPluginRegistration registration, PluginExecutionSettings active,
+        CancellationToken signal)
+    {
+        var hasKnown = _entries.TryGetValue(registration.Package, out var known);
+        if (hasKnown && known.Artifact is not null)
+            return;
+        var setting = active.Plugins.GetValueOrDefault(registration.Package);
+        var role = PluginRoleResolver.Resolve(registration.Package, setting, PluginForm.CompiledIn);
+        if (hasKnown && known.Execution == role && _host.Catalog.TryDescribe(registration.Package, out _)
+            && (role == PluginExecution.Host || setting?.Enabled == false || known.Metadata is not null))
+        {
+            if (known.Metadata is not null)
+                _ = Role(known.Metadata, setting);
+            return;
+        }
+        var descriptor = PluginDescriptor.For(registration.Package, PluginForm.CompiledIn) with { Entry = registration.Entry };
+        PluginSandboxMetadata? metadata = null;
+        if (role == PluginExecution.Host)
+        {
+            _host.Catalog.Remove(registration.Package);
+            _host.Catalog.Register(descriptor, registration.Create);
+        }
+        else
+        {
+            if (setting?.Enabled != false)
+            {
+                var inspection = await _supervisor.InspectAsync(null, registration.Package, signal).ConfigureAwait(false);
+                Validate(inspection, registration.Package);
+                metadata = inspection.Packages.SingleOrDefault(package => package.Package == registration.Package)
+                    ?? throw new RuntimeException("PLUGIN_INSPECTION_MISMATCH", "The compiled plugin inspection did not describe the requested package.");
+                _ = Role(metadata, setting);
+            }
+            _supervisor.Register(_host, new PluginSandboxSource(descriptor, null));
+        }
+        _entries[registration.Package] = new PluginRuntimeEntry(null, descriptor, role, metadata);
+    }
 
-    private async Task<PluginSandboxLoadResult> LoadCoreAsync(string path, CancellationToken signal)
+    private PluginExecutionSettings CurrentSettings() => _environment.ReadSettings();
+
+    private async Task<PluginCatalogLoadResult> LoadCoreAsync(string path, CancellationToken signal)
     {
         var active = CurrentSettings();
-        var known = _sources.Where(source => source.Value is not null
-            && PluginSandboxLaunch.PathComparer.Equals(source.Value, path)).Select(source => source.Key).ToArray();
+        var known = _entries.Where(source => source.Value.Artifact is not null
+            && PluginSandboxLaunch.PathComparer.Equals(source.Value.Artifact, path)).Select(source => source.Key).ToArray();
         foreach (var package in known)
-            if (_metadata.TryGetValue(package, out var metadata))
-                DemandExecution(metadata, active.Plugins.GetValueOrDefault(package));
-        if (known.Length > 0 && known.All(package => _host.Catalog.PackageNames.Contains(package, StringComparer.Ordinal)
-            && _hostRoles.Contains(package) == (active.Plugins.GetValueOrDefault(package) is { Enabled: not false, Execution: PluginExecution.Host })))
-            return new PluginSandboxLoadResult(known, new PluginScanResult([], [], []));
+            if (_entries[package].Metadata is { } metadata)
+                _ = Role(metadata, active.Plugins.GetValueOrDefault(package));
+        if (known.Length > 0 && known.All(package => _host.Catalog.TryDescribe(package, out _)
+            && _entries[package].Execution == (active.Plugins.GetValueOrDefault(package)?.Enabled != false
+                ? PluginRoleResolver.Resolve(package, active.Plugins.GetValueOrDefault(package), _entries[package].Descriptor.Form)
+                : PluginExecution.Sandbox)))
+            return new PluginCatalogLoadResult(known, new PluginScanResult([], [], []));
         var form = PluginSandboxLaunch.InspectForm(path);
         var inspection = await _supervisor.InspectAsync(path, null, signal).ConfigureAwait(false);
         Validate(inspection, path);
+        var hostPackages = new Dictionary<string, PluginSandboxMetadata>(StringComparer.Ordinal);
         foreach (var metadata in inspection.Packages)
         {
-            _metadata[metadata.Package] = metadata;
-            DemandExecution(metadata, active.Plugins.GetValueOrDefault(metadata.Package));
+            var setting = active.Plugins.GetValueOrDefault(metadata.Package);
+            if (Role(metadata, setting) == PluginExecution.Host && setting?.Enabled != false)
+                hostPackages.Add(metadata.Package, metadata);
         }
         if (inspection.Packages.Length == 0)
-            return new PluginSandboxLoadResult([], new PluginScanResult([], [], []));
-        var hostPackages = inspection.Packages.Where(package =>
-            active.Plugins.GetValueOrDefault(package.Package) is { Enabled: not false, Execution: PluginExecution.Host })
-            .Select(package => package.Package).ToHashSet(StringComparer.Ordinal);
-        var hosted = hostPackages.Count == 0 ? new PluginSandboxLoadResult([], new PluginScanResult([], [], []))
+            return new PluginCatalogLoadResult([], new PluginScanResult([], [], []));
+        var hosted = hostPackages.Count == 0 ? new PluginCatalogLoadResult([], new PluginScanResult([], [], []))
             : LoadHost(path, form, active, hostPackages, signal);
         var packages = new List<string>(hosted.Packages);
         foreach (var metadata in inspection.Packages)
         {
-            if (hostPackages.Contains(metadata.Package))
+            if (hostPackages.ContainsKey(metadata.Package))
                 continue;
             DemandUnique(metadata.Package, path);
-            if (_sources.TryGetValue(metadata.Package, out var existing) && existing is not null
-                && PluginSandboxLaunch.PathComparer.Equals(existing, path) && !_hostRoles.Contains(metadata.Package)
-                && _host.Catalog.PackageNames.Contains(metadata.Package, StringComparer.Ordinal))
+            if (_entries.TryGetValue(metadata.Package, out var existing) && existing.Artifact is not null
+                && PluginSandboxLaunch.PathComparer.Equals(existing.Artifact, path) && existing.Execution == PluginExecution.Sandbox
+                && _host.Catalog.TryDescribe(metadata.Package, out _))
             {
                 packages.Add(metadata.Package);
                 continue;
             }
             var descriptor = PluginDescriptor.For(metadata.Package, form);
             _supervisor.Register(_host, new PluginSandboxSource(descriptor, path));
-            _sources[metadata.Package] = path;
-            _hostRoles.Remove(metadata.Package);
+            _entries[metadata.Package] = new PluginRuntimeEntry(path, descriptor, PluginExecution.Sandbox, metadata);
             packages.Add(metadata.Package);
         }
-        return new PluginSandboxLoadResult(packages, hosted.Loaded);
+        return new PluginCatalogLoadResult(packages, hosted.Loaded);
     }
 
-    private PluginSandboxLoadResult LoadHost(string path, PluginForm form,
-        HarnessSettings active, HashSet<string> hostPackages, CancellationToken signal)
+    private PluginCatalogLoadResult LoadHost(string path, PluginForm form,
+        PluginExecutionSettings active, Dictionary<string, PluginSandboxMetadata> hostPackages, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
         _host.SharedPool ??= new SharedAssemblyPool(Path.Combine(_directory, ".shared"));
@@ -253,9 +246,9 @@ public sealed class PluginSandboxCatalog : IDisposable
         {
             var result = temporary.TryLoad(path);
             skipped.AddRange(result.Skipped);
-            foreach (var package in result.Packages.Where(hostPackages.Contains))
+            foreach (var package in result.Packages.Where(hostPackages.ContainsKey))
             {
-                RegisterHost(temporary, package, path, active);
+                RegisterHost(temporary, package, path, active, hostPackages.GetValueOrDefault(package));
                 managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, InstallDirectory(path)));
                 loaded.Add(package);
             }
@@ -269,7 +262,7 @@ public sealed class PluginSandboxCatalog : IDisposable
                 throw new RuntimeException("PLUGIN_NATIVE_LOAD_FAILED", result.Reason ?? "Native plugin loading failed.");
             try
             {
-                RegisterHost(temporary, result.Plugin!.Package, path, active);
+                RegisterHost(temporary, result.Plugin!.Package, path, active, hostPackages.GetValueOrDefault(result.Plugin.Package));
                 native.Add(result.Plugin);
                 loaded.Add(result.Plugin.Package);
             }
@@ -279,19 +272,21 @@ public sealed class PluginSandboxCatalog : IDisposable
                 throw;
             }
         }
-        return new PluginSandboxLoadResult(loaded, new PluginScanResult(managed, native, skipped));
+        return new PluginCatalogLoadResult(loaded, new PluginScanResult(managed, native, skipped));
     }
 
-    private void RegisterHost(PluginHost temporary, string package, string source, HarnessSettings active)
+    private void RegisterHost(PluginHost temporary, string package, string source, PluginExecutionSettings active,
+        PluginSandboxMetadata? metadata)
     {
-        DemandHost(package, active);
+        if (PluginRoleResolver.Resolve(package, active.Plugins.GetValueOrDefault(package),
+            metadata?.Form ?? PluginSandboxLaunch.InspectForm(source)) != PluginExecution.Host)
+            throw new RuntimeException("PLUGIN_HOST_ROLE_REQUIRED", "The file plugin is not configured for host execution.");
         DemandUnique(package, source);
         if (!temporary.Catalog.TryDescribe(package, out var descriptor) || !temporary.Catalog.TryGet(package, out var create))
             throw new RuntimeException("PLUGIN_HOST_LOAD_FAILED", "The explicitly trusted plugin has no registered implementation.");
         _host.Catalog.Remove(package);
         _host.Catalog.Register(descriptor, create);
-        _sources[package] = source;
-        _hostRoles.Add(package);
+        _entries[package] = new PluginRuntimeEntry(source, descriptor, PluginExecution.Host, metadata);
     }
 
     private string? InstallDirectory(string path)
@@ -303,27 +298,13 @@ public sealed class PluginSandboxCatalog : IDisposable
 
     private void DemandUnique(string package, string path)
     {
-        if (_sources.TryGetValue(package, out var existing) && existing is not null
-            && !PluginSandboxLaunch.PathComparer.Equals(existing, path))
+        if (_entries.TryGetValue(package, out var existing) && existing.Artifact is not null
+            && !PluginSandboxLaunch.PathComparer.Equals(existing.Artifact, path))
             throw new RuntimeException("PLUGIN_DUPLICATE_PACKAGE", $"Plugin {package} is already registered from another artifact.");
     }
 
-    private static void DemandExecution(PluginSandboxMetadata metadata, PluginSetting? setting)
-    {
-        if (setting?.Enabled != false && PluginSetting.EffectiveExecution(setting, metadata.Form) != PluginExecution.Host
-            && (!metadata.SupportsCapabilities || metadata.Entry is not null))
-            throw HostRoleRequired(metadata.Package);
-    }
-
-    private static void DemandHost(string package, HarnessSettings settings)
-    {
-        if (settings.Plugins.GetValueOrDefault(package)?.Execution != PluginExecution.Host)
-            throw HostRoleRequired(package);
-    }
-
-    private static RuntimeException HostRoleRequired(string package)
-        => new("PLUGIN_HOST_ROLE_REQUIRED",
-            $"Plugin {package} uses the full Context API and requires plugins.\"{package}\".execution: host while sandbox.enabled is ON. Configure this role explicitly or migrate the plugin to IDshIsolatedPlugin; host execution is not OS-confined.");
+    private static PluginExecution Role(PluginSandboxMetadata metadata, PluginSetting? setting)
+        => PluginRoleResolver.Resolve(metadata.Package, setting, metadata.Form, metadata.SupportsCapabilities, metadata.Entry);
 
     private static void Validate(PluginSandboxInspection inspection, string source)
     {
@@ -337,23 +318,6 @@ public sealed class PluginSandboxCatalog : IDisposable
             throw new RuntimeException("PLUGIN_INSPECTION_FAILED", $"Plugin inspection failed for {Path.GetFileName(source)}: {string.Join("; ", inspection.Errors)}");
     }
 
-    internal static void ReleaseLoaded(PluginHost host, PluginScanResult loaded)
-    {
-        foreach (var managed in loaded.Managed)
-            host.Catalog.Remove(managed.Package);
-        foreach (var native in loaded.Native)
-        {
-            host.Catalog.Remove(native.Package);
-            native.Dispose();
-        }
-        var contexts = new HashSet<PluginLoadContext>();
-        foreach (var managed in loaded.Managed)
-            if (contexts.Add(managed.Context))
-            {
-                host.SharedPool?.Release(managed.SharedDependencies);
-                managed.Context.Unload();
-            }
-    }
 
     public void Dispose()
     {

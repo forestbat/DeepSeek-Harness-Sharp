@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dsh.Plugins;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Wire values carry data only; shared-process plugins remain co-trusted. */
 internal static class PluginSandboxMethods
@@ -18,7 +18,7 @@ internal static class PluginSandboxMethods
     internal const string HostCall = "sandbox/hostCall";
     internal const string Log = "sandbox/log";
     internal const int MaximumFrameBytes = PluginHostOperations.MaximumFrameBytes;
-    internal const int MaximumTools = 256;
+    internal const int MaximumTools = PluginHostOperations.MaximumTools;
     internal const int MaximumPendingRequests = 16;
 }
 

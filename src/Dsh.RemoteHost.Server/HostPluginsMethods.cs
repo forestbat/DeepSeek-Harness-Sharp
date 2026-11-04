@@ -17,11 +17,6 @@ internal static class HostPluginsMethods
                 var request = Require(message, PluginsProtocolJsonContext.Default.RemotePluginPermissionRequest, "permission requires package, permission and allowed");
                 return Serialize(await backend.SetPluginPermissionAsync(request.Package, request.Permission, request.Allowed, cancellationToken).ConfigureAwait(false), PluginsProtocolJsonContext.Default.String);
             }
-            case PluginsProtocol.MethodPluginExecution:
-            {
-                var request = Require(message, PluginsProtocolJsonContext.Default.RemotePluginExecutionRequest, "execution requires package and a nullable execution override");
-                return Serialize(await backend.SetPluginExecutionAsync(request.Package, request.Execution, cancellationToken).ConfigureAwait(false), PluginsProtocolJsonContext.Default.String);
-            }
             default:
                 throw MethodNotFound(name);
         }

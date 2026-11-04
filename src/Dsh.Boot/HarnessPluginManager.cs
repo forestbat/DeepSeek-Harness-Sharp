@@ -15,7 +15,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly string _pluginsDirectory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
     private readonly IReadOnlyList<PluginSkip> _loadFailures;
-    private readonly PluginSandboxCatalog? _sandbox;
+    private readonly IPluginExecutionCatalog? _sandbox;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
@@ -33,7 +33,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         IReadOnlyList<PluginSkip> loadFailures,
         Func<INativePlugin, IDshPlugin>? nativeBridge,
         string pluginsDirectory,
-        PluginSandboxCatalog? sandbox)
+        IPluginExecutionCatalog? sandbox)
     {
         _host = host;
         _composition = composition;
@@ -42,7 +42,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _pluginsDirectory = pluginsDirectory;
         _nativeBridge = nativeBridge;
         _loadFailures = loadFailures;
-        _sandbox = sandbox is { Enabled: true } ? sandbox : null;
+        _sandbox = sandbox;
         Track(new PluginScanResult(loadedOnStart, nativeOnStart, []));
     }
 
@@ -248,38 +248,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         var result = $"plugin {trimmed} {key} permission {(allowed ? "allowed" : "denied")}";
         if (_sandbox is null)
             return $"{result} in its future isolation profile (sandbox is off; no OS access restrictions are enforced)";
-        if (PluginSetting.EffectiveExecution(_settings.Plugins.GetValueOrDefault(trimmed), ExecutionForm(trimmed)) == PluginExecution.Host)
+        if (PluginRoleResolver.Resolve(trimmed, _settings.Plugins.GetValueOrDefault(trimmed), ExecutionForm(trimmed)) == PluginExecution.Host)
             return $"{result} for broker calls; host-role code retains unrestricted in-process access";
         return $"{result}; the next broker operation uses the current permissions";
-    }
-
-    public async Task<string> SetExecutionAsync(string package, string? execution,
-        CancellationToken cancellationToken = default, ToolRunContext? run = null)
-    {
-        var role = execution switch
-        {
-            null => (PluginExecution?)null,
-            "sandbox" => PluginExecution.Sandbox,
-            "host" => PluginExecution.Host,
-            _ => throw new ArgumentException("Execution must be sandbox, host or null.", nameof(execution)),
-        };
-        await _mutation.WaitAsync(cancellationToken);
-        try
-        {
-            var trimmed = package.Trim();
-            if (!IsKnown(trimmed))
-                return $"plugin package not found: {trimmed}";
-            cancellationToken.ThrowIfCancellationRequested();
-            var domain = CaptureDomain(trimmed);
-            var form = ExecutionForm(trimmed);
-            var previous = PluginSetting.EffectiveExecution(_settings.Plugins.GetValueOrDefault(trimmed), form);
-            await PersistAsync(trimmed, existing => (existing ?? new PluginSetting()) with { Execution = role }, run);
-            var result = $"plugin {trimmed} execution set to {execution ?? "default"}";
-            if (_sandbox is not null && previous != PluginSetting.EffectiveExecution(_settings.Plugins.GetValueOrDefault(trimmed), form))
-                return $"{result}; {await RebuildDomainAsync(trimmed, domain, force: false)}";
-            return result;
-        }
-        finally { _mutation.Release(); }
     }
 
     private static bool IsLibraryPath(string spec)
@@ -447,7 +418,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         }
         Track(await _sandbox.ScanAsync());
         foreach (var member in domain)
-            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false, Execution: not PluginExecution.Host })
+            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false } setting
+                && PluginRoleResolver.Resolve(member, setting, ExecutionForm(member)) != PluginExecution.Host)
                 _host.Catalog.Remove(member);
         var messages = await ActivatePackagesAsync(domain);
         return messages.Count == 0 ? Removed(package, leaked: false) : string.Join(';', messages);
@@ -523,7 +495,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             native.Dispose();
         }
         if (removeRegistration && _sandbox is not null
-            && _settings.Plugins.GetValueOrDefault(package)?.Execution != PluginExecution.Host)
+            && PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
             _host.Catalog.Remove(package);
         return null;
     }
@@ -588,7 +560,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     {
         if (_sandbox is not null)
             foreach (var package in _host.Catalog.PackageNames.ToArray())
-                if (_settings.Plugins.GetValueOrDefault(package)?.Execution != PluginExecution.Host)
+                if (PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
                     _host.Catalog.Remove(package);
         _sandbox?.Dispose();
         foreach (var group in _loadedContexts.GroupBy(entry => entry.Value))

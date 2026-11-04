@@ -8,7 +8,7 @@ public static class SandboxRuntimePaths
 {
     private static readonly Lazy<IReadOnlyList<string>> CurrentHost = new(BuildCurrentHost);
     private static readonly string? UserHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) is { Length: > 0 } home
-        ? Path.TrimEndingDirectorySeparator(SandboxFileAccess.Canonicalize(home)) : null;
+        ? Path.TrimEndingDirectorySeparator(global::Dsh.Transport.FilePathAccess.Canonicalize(home)) : null;
 
     public static IReadOnlyList<string> ForCurrentHost() => CurrentHost.Value;
 
@@ -72,7 +72,7 @@ public static class SandboxRuntimePaths
         if (directory is null || !Directory.Exists(directory))
             return;
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        var canonical = SandboxFileAccess.Canonicalize(full);
+        var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(full);
         if (paths.Comparer.Equals(canonical, Path.GetPathRoot(canonical))
             || UserHome is not null && paths.Comparer.Equals(canonical, UserHome))
             return;

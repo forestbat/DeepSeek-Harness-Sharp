@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Plugins.Native;
+using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -89,7 +90,7 @@ public sealed unsafe class NativeHostCallBufferTests
         var context = new Context();
         _ = new SystemPrompt(context, new SystemPromptConfig());
         _ = new ToolRuntime(context);
-        return new PluginCapabilityFactory(context, new HarnessHome(root), new HarnessSettings())
+        return new PluginCapabilityFactory(context, new PluginExecutionEnvironment(new HarnessHome(root), new HarnessSettings(), root))
             .Create("test.native-host-buffer", context);
     }
 

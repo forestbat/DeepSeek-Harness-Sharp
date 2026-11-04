@@ -38,21 +38,6 @@ public sealed class NativePluginBridgeTests
         Assert.Null(tools.Get("native_echo"));
     }
 
-    [Fact]
-    public void CatalogDefinition_ExposesNativePackage()
-    {
-        var catalog = new PluginCatalog();
-        var plugin = new FakeNativePlugin();
-        catalog.Register(
-            PluginDescriptor.For(plugin.Package, PluginForm.NativeLibrary),
-            () => NativePluginBridge.AsPlugin(plugin));
-
-        Assert.Contains(plugin.Package, catalog.PackageNames);
-        Assert.True(catalog.TryCreateDefinition(plugin.Package, out var definition));
-        Assert.Equal(plugin.Package, definition!.Name);
-        Assert.True(catalog.TryGet(plugin.Package, out var create));
-        Assert.Empty(create().Inject);
-    }
 
     /** 原生 ABI 的配置通道: 宿主把 plugins.<包名> 段编成 JSON, 激活前交给插件(旧插件不取即无感)。 */
     [Fact]

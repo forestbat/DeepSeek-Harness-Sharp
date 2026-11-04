@@ -140,13 +140,6 @@ jobs:
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
-      - name: Prepare temporary native startup stack capture
-        if: runner.os == 'Windows' && inputs.suite == 'regression-1'
-        shell: pwsh
-        run: |
-          dotnet tool install dotnet-stack --version 10.0.750501 --tool-path .artifacts/native-startup-stack
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Validate the explicitly installed native Iroh test fixture
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
         shell: bash
@@ -314,34 +307,16 @@ jobs:
           fi
           "$EXE" "${ARGS[@]}"
 
-      - name: Capture temporary native startup consumers
+      - name: Run original owned MCP sandbox regression (Windows)
         if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && inputs.suite == 'regression-1' }}
         shell: bash
         run: |
           set -euo pipefail
           EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe"
-          NATIVE_CODE=0
-          for SPEC in \
-            '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.InvalidSyntax_ReturnsFrontendDiagnosticsAsFailure' \
-            '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.MultilineProgram_PreservesStateAndPrintsFinalExpression' \
-            '5|owned-mcp-r10 launch=1 stage=15|Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings' \
-            '5|owned-plugin-r12 call=[0-9]+ stage=4|Dsh.Tests.PluginSandboxIntegrationTests.AddIndependentArtifact_ApprovesBeforeInstall_AndNeverConstructsFileCodeInMain' \
-            '2|owned-pane-r12 stage=0|Dsh.Tests.ChatWindowPaneTests.Overview_Enter_Host_Shell_Pty_Opens_Terminal_Pane'; do
-            IFS='|' read -r SAMPLE MARKER METHOD <<< "$SPEC"
-            IO_CAPTURE=()
-            if [[ "$MARKER" == owned-mcp-* ]]; then IO_CAPTURE+=(--file-io); fi
-            set +e
-            python3 tests/ci/observe_native_startup.py \
-              --stack-tool .artifacts/native-startup-stack/dotnet-stack.exe \
-              --sample-after "$SAMPLE" --marker "$MARKER" "${IO_CAPTURE[@]}" -- \
-              "$EXE" -noColor -parallelMode none -reporter verbose -method "$METHOD" \
-              -trait- Category=GpuStress -trait- Category=OnlyGpu \
-              -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
-            CODE=$?
-            set -e
-            if [ "$CODE" -ne 0 ]; then NATIVE_CODE=$CODE; fi
-          done
-          exit "$NATIVE_CODE"
+          "$EXE" -noColor -parallelMode none -reporter verbose \
+            -method Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings \
+            -trait- Category=GpuStress -trait- Category=OnlyGpu \
+            -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
 
       - name: Check schedule time zones with invariant globalization
         if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'

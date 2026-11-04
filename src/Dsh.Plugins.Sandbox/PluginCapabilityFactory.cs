@@ -11,45 +11,26 @@ using Dsh.Runtime;
 using Dsh.Sandbox;
 using Dsh.Transport;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Implements the same file, HTTP and tool capabilities for local and isolated plugin SDKs. */
-public sealed class PluginCapabilityFactory(Context context, HarnessHome home, HarnessSettings settings)
+public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnvironment environment)
     : IPluginHostFactory, IDisposable
 {
     internal const int MaximumChunkBytes = 256 * 1024;
-    internal const int MaximumRegistrations = PluginSandboxMethods.MaximumTools;
+    internal const int MaximumRegistrations = PluginHostOperations.MaximumTools;
     private const int CopyBufferBytes = 16 * 1024;
-    private static readonly JsonElement EmptyConfiguration = CreateEmptyConfiguration();
     private readonly HttpClient _http = new(context.GetProp(OutboundProxy.PropName) is OutboundProxy proxy
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
-    public IPluginHost Create(string package, Context pluginContext) => new LocalHost(this, package, pluginContext);
-
-    public async Task<IDisposable?> ActivateAsync(string package, IDshIsolatedPlugin plugin, Context pluginContext,
-        object? configuration, CancellationToken cancellationToken = default)
+    public IPluginHost Create(string package, Context pluginContext)
     {
         var host = new LocalHost(this, package, pluginContext);
-        try
-        {
-            var value = configuration is null ? EmptyConfiguration
-                : JsonSerializer.SerializeToElement(configuration, PluginConfigurationJsonContext.Default.Object);
-            var lifetime = await plugin.InitializeAsync(host, value, cancellationToken).ConfigureAwait(false);
-            return new LocalLifetime(host, lifetime);
-        }
-        catch
-        {
-            host.Dispose();
-            throw;
-        }
+        pluginContext.Effect(() => host, IPluginHostFactory.ServiceName);
+        return host;
     }
 
-    private static JsonElement CreateEmptyConfiguration()
-    {
-        using var document = JsonDocument.Parse("{}");
-        return document.RootElement.Clone();
-    }
 
     internal ValueTask<JsonElement> ExecuteAsync(string package, string operation, JsonElement arguments,
         ToolRunContext? execution, CancellationToken cancellationToken)
@@ -63,7 +44,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
 
     private bool Require(string package, PluginPermission permission)
     {
-        var active = File.Exists(home.SettingsFile) ? HarnessSettings.LoadForReview(home) : settings;
+        var active = environment.ReadSettings();
         var configured = active.Plugins.GetValueOrDefault(package)?.Permissions ?? PluginPermissions.AllAllowed;
         if (!configured.Allows(permission))
             throw new RuntimeException("PLUGIN_PERMISSION_DENIED", $"The plugin's {PluginPermissions.KeyOf(permission)} permission is denied.");
@@ -74,11 +55,10 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
     {
         var path = arguments.GetProperty("path").GetString()
             ?? throw new ArgumentException("The file operation requires a path.");
-        SandboxFileAccess.DemandFilePath(path);
+        global::Dsh.Transport.FilePathAccess.DemandFilePath(path);
         var cwd = execution?.Agent?.Session.WorkingDirectory
-            ?? (context.GetProp("harnessOptions") as HarnessOptions)?.Cwd
-            ?? Environment.CurrentDirectory;
-        return SandboxFileAccess.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
+            ?? environment.WorkingDirectory;
+        return global::Dsh.Transport.FilePathAccess.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
     }
 
     private async ValueTask<JsonElement> ReadFileAsync(string package, JsonElement arguments,
@@ -118,7 +98,7 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
-        if (gate?.Owns(path) == true || SettingsFilePath.SameFile(path, home.SettingsFile))
+        if (gate?.Owns(path) == true || FilePathAccess.SameFile(path, environment.SettingsPath))
             await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
             await WriteBytesAsync(path, data, append, cancellationToken).ConfigureAwait(false);
@@ -397,20 +377,6 @@ public sealed class PluginCapabilityFactory(Context context, HarnessHome home, H
         }
     }
 
-    private sealed class LocalLifetime(LocalHost host, IAsyncDisposable? lifetime) : IDisposable
-    {
-        public void Dispose()
-        {
-            try
-            {
-                lifetime?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            }
-            finally
-            {
-                host.Dispose();
-            }
-        }
-    }
 }
 
 internal sealed record PluginFileReadResult(string Data, long Length, bool Eof);

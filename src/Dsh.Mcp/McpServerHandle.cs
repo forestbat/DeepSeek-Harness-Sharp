@@ -21,7 +21,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     private const string ListenProtocolVersion = "2026-07-28";
 
     private readonly SemaphoreSlim _reconnectGate = new(1, 1);
-    private static long _startupSequence;
     private Live? _live;
     private int _ownedProcess;
     private long _version;
@@ -76,42 +75,16 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         var transport = transportFactory();
         if (transport is OwnedStdioClientTransport)
             Volatile.Write(ref _ownedProcess, 1);
-        // Temporary Windows owned-launch evidence; no process arguments, paths, or protocol payloads are emitted.
-        Action<int, int?>? observeStartup = null;
-        if (transport is OwnedStdioClientTransport observed && OperatingSystem.IsWindows())
-        {
-            var launch = Interlocked.Increment(ref _startupSequence);
-            var started = System.Diagnostics.Stopwatch.GetTimestamp();
-            var treeObservations = 0;
-            observed.ObserveStartup = observeStartup = (stage, count) =>
-            {
-                if (stage >= 30 && Interlocked.Increment(ref treeObservations) > 64)
-                    return;
-                // Each write owns its wrapper so a timed-out connection cannot close a later producer's writer.
-                using var diagnostics = new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
-                var milliseconds = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-                if (count is { } value)
-                    diagnostics.WriteLine($"owned-mcp-r10 launch={launch} stage={stage} ms={milliseconds} count={value}");
-                else
-                    diagnostics.WriteLine($"owned-mcp-r10 launch={launch} stage={stage} ms={milliseconds}");
-            };
-        }
         McpClient client;
         try
         {
             client = await McpClient.CreateAsync(transport, options, NullLoggerFactory.Instance, signal);
-            observeStartup?.Invoke(22, null);
         }
         catch
         {
             if (transport is IAsyncDisposable owned)
                 await owned.DisposeAsync();
             throw;
-        }
-        finally
-        {
-            if (transport is OwnedStdioClientTransport observedTransport)
-                observedTransport.ObserveStartup = null;
         }
         Live? live = null;
         try

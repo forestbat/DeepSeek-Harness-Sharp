@@ -1,5 +1,6 @@
 using System.Globalization;
 using Dsh.Boot;
+using Dsh.Plugins;
 
 namespace Dsh.Tui.Services;
 

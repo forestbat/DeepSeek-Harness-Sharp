@@ -27,6 +27,4 @@ internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager
         return manager.SetPermissionAsync(package, parsed, allowed, cancellationToken);
     }
 
-    public Task<string> SetPluginExecutionAsync(string package, string? execution, CancellationToken cancellationToken)
-        => manager.SetExecutionAsync(package, execution, cancellationToken);
 }

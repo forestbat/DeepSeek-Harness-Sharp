@@ -65,7 +65,6 @@ public interface IRemotePluginsBackend
 {
     Task<IReadOnlyList<RemotePluginInfo>> ListPluginsAsync(CancellationToken cancellationToken);
     Task<string> SetPluginPermissionAsync(string package, string permission, bool allowed, CancellationToken cancellationToken);
-    Task<string> SetPluginExecutionAsync(string package, string? execution, CancellationToken cancellationToken);
 }
 
 public interface IRemoteNetworkBackend

@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -162,7 +163,7 @@ public sealed class PluginTemplateTests
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         tools = new ToolRuntime(ctx);
-        var factory = new PluginCapabilityFactory(ctx, new HarnessHome(directory), new HarnessSettings());
+        var factory = new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(directory), new HarnessSettings(), directory));
         ctx.Provide(IPluginHostFactory.ServiceName, factory);
         return ctx;
     }

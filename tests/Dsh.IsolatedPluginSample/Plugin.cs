@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Dsh.Plugins;
+using Dsh.Runtime;
 
 [assembly: DshPlugin("test/isolated-alpha")]
 [assembly: DshPlugin("test/isolated-beta")]
@@ -36,28 +38,37 @@ internal static class ProcessProbe
     }
 }
 
-public sealed class Plugin : IDshIsolatedPlugin
+public sealed class Plugin : IDshPlugin
 {
+    private static readonly ConcurrentDictionary<string, string> LocalResources = new(StringComparer.Ordinal);
+    private readonly string _package;
     private readonly string _name;
     private readonly Guid _instance = Guid.NewGuid();
     private int _state;
     private readonly int _constructorProcessId = Environment.ProcessId;
     private int _initializationProcessId;
-    private JsonElement _configuration;
+    private PluginConfiguration _configuration = new();
+    private Context? _context;
     private TaskCompletionSource? _release;
     private Task<JsonElement>? _background;
 
+    public string[] Inject => [IPluginHostFactory.ServiceName];
+    public Type ConfigType => typeof(PluginConfiguration);
+
     public Plugin(string package)
     {
+        _package = package;
         _name = package.EndsWith("alpha", StringComparison.Ordinal) ? "alpha" : "beta";
         ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-constructor-marker", "constructor executed");
     }
 
-    public ValueTask<IAsyncDisposable?> InitializeAsync(IPluginHost host, JsonElement configuration,
+    public Task<IDisposable?> ApplyAsync(Context context, object? configuration,
         CancellationToken cancellationToken = default)
     {
+        _context = context;
+        var host = context.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)!.Create(_package, context);
         _initializationProcessId = Environment.ProcessId;
-        _configuration = configuration.Clone();
+        _configuration = configuration as PluginConfiguration ?? new();
         ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-initialize-marker", "initialize executed");
         var registration = host.RegisterTool(new PluginToolDefinition(
             "isolated_" + _name,
@@ -73,7 +84,7 @@ public sealed class Plugin : IDshIsolatedPlugin
                 required = new[] { "operation" },
             }),
             (arguments, signal) => ExecuteAsync(host, arguments, signal)));
-        return ValueTask.FromResult<IAsyncDisposable?>(new Lifetime(registration));
+        return Task.FromResult<IDisposable?>(registration);
     }
 
     private async ValueTask<JsonElement> ExecuteAsync(IPluginHost host, JsonElement input, CancellationToken signal)
@@ -95,38 +106,31 @@ public sealed class Plugin : IDshIsolatedPlugin
                     pidNamespace = OperatingSystem.IsLinux() ? new FileInfo("/proc/self/ns/pid").LinkTarget : null,
                 });
             case "configuration":
-                return _configuration;
+                return JsonSerializer.SerializeToElement(new { label = _configuration.Label });
             case "increment-state":
                 return JsonSerializer.SerializeToElement(new { state = ++_state });
-            case "invalid-registration":
-                try
+            case "open-local-resource":
+                var localResourcePath = Path.Combine(Path.GetTempPath(), $"local-plugin-resource-{Guid.NewGuid():N}.bin");
+                LocalResources[_package] = localResourcePath;
+                _context!.Plugin(PluginDefinition.From((_, _) => new LocalFileResource(localResourcePath),
+                    name: $"{_package}:local-resource"));
+                await _context.Root.Scheduler.SettleAsync().WaitAsync(signal);
+                return JsonSerializer.SerializeToElement(new { created = File.Exists(localResourcePath) });
+            case "probe-local-resource":
+                var nestedResourcePath = LocalResources[arguments.GetProperty("package").GetString()!];
+                var nestedResourceExists = File.Exists(nestedResourcePath);
+                var nestedResourceLocked = false;
+                if (nestedResourceExists)
                 {
-                    using var invalid = host.RegisterTool(new PluginToolDefinition("", "", JsonSerializer.SerializeToElement(new { }),
-                        (_, _) => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { }))));
-                    return JsonSerializer.SerializeToElement(new { rejected = false });
+                    try { using var nestedProbe = File.Open(nestedResourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite); }
+                    catch (IOException) { nestedResourceLocked = true; }
                 }
-                catch (Exception)
-                {
-                    return JsonSerializer.SerializeToElement(new { rejected = true });
-                }
-            case "oversized-log":
-                try
-                {
-                    host.Log(1, new string('x', PluginHostOperations.MaximumFrameBytes));
-                    return JsonSerializer.SerializeToElement(new { rejected = false });
-                }
-                catch (Exception)
-                {
-                    return JsonSerializer.SerializeToElement(new { rejected = true });
-                }
-            case "log-burst":
-                for (var index = 0; index < 40; index++)
-                    host.Log(1, "fixture log");
-                return JsonSerializer.SerializeToElement(new { completed = true });
-            case "stderr-burst":
-                await Console.Error.WriteAsync(new string('x', 9000));
-                await Console.Error.FlushAsync(signal);
-                return JsonSerializer.SerializeToElement(new { completed = true });
+                return JsonSerializer.SerializeToElement(new { exists = nestedResourceExists, locked = nestedResourceLocked });
+            case "read-resource":
+                var resourceDirectory = Path.GetDirectoryName(GetType().Assembly.Location)!;
+                var resource = await File.ReadAllTextAsync(
+                    Path.GetFullPath(arguments.GetProperty("relativePath").GetString()!, resourceDirectory), signal);
+                return JsonSerializer.SerializeToElement(new { text = resource });
             case "wait-after-write":
                 await host.CallAsync(PluginHostOperations.WriteFile, arguments, signal);
                 await Task.Delay(Timeout.InfiniteTimeSpan, signal);
@@ -233,12 +237,20 @@ public sealed class Plugin : IDshIsolatedPlugin
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    private sealed class Lifetime(IDisposable registration) : IAsyncDisposable
+    private sealed class LocalFileResource(string path) : IDisposable
     {
-        public ValueTask DisposeAsync()
+        private readonly FileStream _stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+
+        public void Dispose()
         {
-            registration.Dispose();
-            return ValueTask.CompletedTask;
+            _stream.Dispose();
+            File.Delete(path);
         }
     }
+
+}
+
+public sealed record PluginConfiguration
+{
+    public string Label { get; init; } = "";
 }

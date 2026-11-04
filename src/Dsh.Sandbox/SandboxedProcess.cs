@@ -27,18 +27,16 @@ public static class SandboxedProcess
     public static string? BackendExecutablePath => OperatingSystem.IsLinux() ? LinuxSandbox.BackendExecutablePath
         : OperatingSystem.IsMacOS() ? "/usr/bin/sandbox-exec" : null;
 
-    public static async Task<SandboxProcess> StartAsync(SandboxProcessOptions options, CancellationToken cancellationToken = default,
-        Action<int, int?>? observeStartup = null)
+    public static async Task<SandboxProcess> StartAsync(SandboxProcessOptions options, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("No sandbox backend exists for this operating system.");
         if (OperatingSystem.IsMacOS() && options is { AllowChildProcesses: true })
             throw new PlatformNotSupportedException("macOS sandbox child processes cannot currently be owned without escape races: XNU does not mediate setsid/setpgid with Seatbelt. Run a single executable or use a separately provisioned kernel-owned execution domain; no process-group approximation is used.");
-        observeStartup?.Invoke(10, null);
         var policy = SandboxPolicy.Create(options);
         ISandboxLifetime lifetime = OperatingSystem.IsLinux() ? LinuxSandbox.Start(policy)
-            : OperatingSystem.IsWindows() ? WindowsSandbox.Start(policy, cancellationToken, observeStartup)
+            : OperatingSystem.IsWindows() ? WindowsSandbox.Start(policy, cancellationToken)
             : OperatingSystem.IsMacOS() ? MacSandbox.Start(policy)
             : throw new PlatformNotSupportedException("No sandbox backend exists for this operating system.");
         var process = new SandboxProcess(lifetime, cancellationToken);

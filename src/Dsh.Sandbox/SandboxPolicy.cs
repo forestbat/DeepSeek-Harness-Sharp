@@ -110,5 +110,5 @@ internal sealed record SandboxPolicy(
     }
 
     internal static string CanonicalExistingPath(string path)
-        => SandboxFileAccess.Canonicalize(path, allowNetwork: false);
+        => global::Dsh.Transport.FilePathAccess.Canonicalize(path, allowNetwork: false);
 }

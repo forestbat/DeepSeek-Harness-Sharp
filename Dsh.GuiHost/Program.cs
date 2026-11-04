@@ -11,7 +11,7 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
         => Dsh.Host.HarnessEntrypoint.RunAsync(
-            args is [HostCommand, ..] or [TuiCommand, ..] || args.Contains(Dsh.Boot.PluginSandboxWorker.HostArgument)
+            args is [HostCommand, ..] or [TuiCommand, ..] || args.Contains(Dsh.Plugins.Sandbox.PluginSandboxWorker.HostArgument)
                 ? args
                 : ["gui", .. args]).GetAwaiter().GetResult();
 }

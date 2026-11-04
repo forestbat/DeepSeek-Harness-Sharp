@@ -60,17 +60,11 @@ public static class ConfigBoot
         try
         {
             ctx.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
-            _ = new ScriptExecutionPolicy(ctx, home, settings);
-            var capabilities = new PluginCapabilityFactory(ctx, home, settings);
-            ctx.Provide(IPluginHostFactory.ServiceName, capabilities);
-            app.Track(capabilities);
-            PluginSandboxCatalog? sandbox = null;
-            if (settings.Sandbox?.Enabled == true)
-            {
-                sandbox = new PluginSandboxCatalog(home, pluginHost, settings, pluginsDirectory, nativeBridge,
-                    new PluginSandboxSupervisor(ctx, home, settings, capabilities, pluginsDirectory));
-                app.Track(sandbox);
-            }
+            var execution = PluginExecutionRuntime.Create(ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
+                pluginHost, pluginsDirectory, nativeBridge);
+            if (execution is not null)
+                app.Track(execution);
+            var sandbox = execution?.Catalog;
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(pluginHost, discovery);
             foreach (var skip in discovery.Skipped)
@@ -105,20 +99,19 @@ public static class ConfigBoot
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
         context.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
-        _ = new ScriptExecutionPolicy(context, home, settings);
-        using var capabilities = new PluginCapabilityFactory(context, home, settings);
-        context.Provide(IPluginHostFactory.ServiceName, capabilities);
         var host = new PluginHost();
         host.RegisterCompiledIn();
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
         var bridge = ResolveNativeBridge();
-        using var sandbox = settings.Sandbox?.Enabled != true ? null : new PluginSandboxCatalog(home, host, settings, directory, bridge,
-            new PluginSandboxSupervisor(context, home, settings, capabilities, directory));
+        using var execution = PluginExecutionRuntime.Create(context,
+            new PluginExecutionEnvironment(home, settings, options.Cwd), host, directory, bridge);
+        var sandbox = execution?.Catalog;
         var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
         try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
-        finally { PluginSandboxCatalog.ReleaseLoaded(host, discovered); }
+        finally { host.Release(discovered); }
     }
+
 
     /** Invalid baselines retain their existing startup policy; a saved borrowed selection always starts fail-closed. */
     private static OutboundProxy CreateOutboundProxy(Context ctx, NetworkSettings? network)
@@ -198,7 +191,7 @@ public static class ConfigBoot
         public void Dispose()
         {
             if (!_transferred)
-                PluginSandboxCatalog.ReleaseLoaded(host, discovery);
+                host.Release(discovery);
         }
     }
 

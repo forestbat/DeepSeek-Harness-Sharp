@@ -12,14 +12,11 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
     private int _terminal;
 
     public string Name => config.Name;
-    internal Action<int, int?>? ObserveStartup { get; set; }
 
     public async Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
     {
         if (Volatile.Read(ref _terminal) != 0)
             throw new IOException("The owned MCP process is unavailable; it cannot be restarted.");
-        var observeStartup = ObserveStartup;
-        observeStartup?.Invoke(20, null);
         _process = await subprocess.SpawnSandboxedAsync(new SubprocessSpawnSpec
         {
             Argv = [config.Command!, .. config.Arguments ?? []],
@@ -29,8 +26,7 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
             Stderr = new SubprocessCollect(64 * 1024, null),
             Signal = cancellationToken,
         }, (spec, executable, temporaryDirectory) => SubprocessSandboxOptions.Create(
-            spec, executable, temporaryDirectory, true, true, true, settingsPath), observeStartup);
-        observeStartup?.Invoke(21, null);
+            spec, executable, temporaryDirectory, true, true, true, settingsPath));
         try
         {
             ThrowIfUnavailable();

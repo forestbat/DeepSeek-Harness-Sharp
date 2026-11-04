@@ -42,6 +42,24 @@ public sealed class PluginHost
             Catalog.Register(Descriptor(registration, PluginForm.CompiledIn), registration.Create);
     }
 
+    public void Release(PluginScanResult loaded)
+    {
+        foreach (var managed in loaded.Managed)
+            Catalog.Remove(managed.Package);
+        foreach (var native in loaded.Native)
+        {
+            Catalog.Remove(native.Package);
+            native.Dispose();
+        }
+        var contexts = new HashSet<PluginLoadContext>();
+        foreach (var managed in loaded.Managed)
+            if (contexts.Add(managed.Context))
+            {
+                SharedPool?.Release(managed.SharedDependencies);
+                managed.Context.Unload();
+            }
+    }
+
     /** 从文件装载托管插件:按类型名读取插件自带的生成清单,不反射遍历插件类型。 */
     public PluginLoadResult TryLoad(string path)
     {

@@ -1,5 +1,6 @@
 using Dsh.Runtime;
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime.Events;

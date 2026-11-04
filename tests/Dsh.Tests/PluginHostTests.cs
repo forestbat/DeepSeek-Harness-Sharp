@@ -46,7 +46,7 @@ public sealed class PluginHostTests
         {
             var home = Dsh.Boot.HarnessHome.Resolve(root);
             var settings = Dsh.Boot.HarnessSettings.Load(home);
-            settings.Plugins["@deepseek-ai/dsh-web-bridge"] = new Dsh.Boot.PluginSetting { Enabled = false };
+            settings.Plugins["@deepseek-ai/dsh-web-bridge"] = new Dsh.Plugins.PluginSetting { Enabled = false };
             settings.SavePlugins(home);
             using var app = await Dsh.Boot.ConfigBoot.Compose(new Dsh.Boot.HarnessOptions(home, Cwd: root));
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-web-bridge"));

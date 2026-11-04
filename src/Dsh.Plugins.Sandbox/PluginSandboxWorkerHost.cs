@@ -1,13 +1,14 @@
 using System.Text.Json;
 using Dsh.Plugins;
+using Dsh.Runtime;
 using Dsh.Transport;
-using static Dsh.Boot.PluginSandboxWorkerWire;
+using static Dsh.Plugins.Sandbox.PluginSandboxWorkerWire;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Each package has callbacks and broker policy; the shared process is co-trusted. */
 internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session session, string package, bool native)
-    : IPluginHost, INativePluginHost
+    : IPluginHost, INativePluginHost, IPluginHostFactory
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Tool> _tools = [];
@@ -21,6 +22,13 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     private TaskCompletionSource? _drained;
 
     internal CancellationTokenSource Lifetime { get; } = new();
+
+    public IPluginHost Create(string requestedPackage, Context context)
+    {
+        if (requestedPackage != package)
+            throw new InvalidOperationException("The worker capability host belongs to a different plugin package.");
+        return this;
+    }
 
     public IDisposable RegisterTool(PluginToolDefinition definition)
     {

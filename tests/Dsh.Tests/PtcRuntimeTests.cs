@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Plugins.Sandbox;
 using Dsh.Ptc;
 using Dsh.Runtime;
 using Dsh.ScriptHost;

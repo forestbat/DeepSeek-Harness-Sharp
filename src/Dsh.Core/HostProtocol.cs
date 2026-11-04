@@ -290,18 +290,16 @@ public static class PluginsProtocol
 {
     public const string Capability = "plugins.manage";
     public static IReadOnlyList<string> Methods { get; } = Array.AsReadOnly<string>(
-        [MethodPluginsList, MethodPluginPermission, MethodPluginExecution]);
+        [MethodPluginsList, MethodPluginPermission]);
 
     public const string MethodPluginsList = "host.plugins.list";
     public const string MethodPluginPermission = "host.plugins.permission";
-    public const string MethodPluginExecution = "host.plugins.execution";
 }
 
 [JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(RemotePluginInfo))]
 [JsonSerializable(typeof(IReadOnlyList<RemotePluginInfo>))]
 [JsonSerializable(typeof(RemotePluginPermissionRequest))]
-[JsonSerializable(typeof(RemotePluginExecutionRequest))]
 [JsonSerializable(typeof(string))]
 public partial class PluginsProtocolJsonContext : JsonSerializerContext;
 
