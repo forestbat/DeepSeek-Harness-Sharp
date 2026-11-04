@@ -34,12 +34,24 @@ providers:
   #       name: My Model
   #       tool_call: true
 
-# 技能目录
+# 技能目录：一个技能是一个含 SKILL.md 的子目录，或根目录下直接的 *.md
+# 内置扫描顺序如下，同名技能按此顺序取第一个：
+#   1. <项目根>/.dsh/skills       项目根 = 从会话 cwd 向上第一个含 .git 的目录
+#   2. <项目根>/.agents/skills
+#   3. paths 里列出的目录（本项），以及插件参数 customSkillDirs
+#   4. ~/.dsh/skills              用户级
+#   5. ~/.agents/skills           用户级
+#   6. 随包技能目录 bundledSkillDir / DSH_BUNDLED_SKILL_DIR
+# 想加自己的目录就写在 paths 里；写绝对路径，这里不展开 ~
+# urls 是远程技能源：每个 URL 返回 {"skills":[{"name","description","whenToUse","content"}]}
+# 远程技能默认一个都不上架（防止远端的提示词注入），只有 enabled 里点名的名字才会进入技能目录
 skills:
-  # 本地技能目录
+  # 额外的技能目录列表
   paths: []
-  # 远程技能 URL
+  # 远程技能源 URL 列表
   urls: []
+  # 允许使用的远程技能名；留空表示全部禁用
+  enabled: []
 
 # 全局规则文本
 rules: []
@@ -491,12 +503,15 @@ plugins:
 #     tool_call:
 #     系统提示覆盖
 #     system_prompt_update:
-# 技能目录
+# 技能目录：扫描顺序 <项目根>/.dsh/skills -> <项目根>/.agents/skills -> paths/customSkillDirs
+# -> ~/.dsh/skills -> ~/.agents/skills -> bundledSkillDir(DSH_BUNDLED_SKILL_DIR)；同名先到先得
 # skills:
-#   本地目录列表
+#   额外的本地目录列表(写绝对路径, 不展开 ~)
 #   paths: []
-#   远程 URL 列表
+#   远程技能源 URL 列表
 #   urls: []
+#   允许使用的远程技能名(留空 = 全部禁用)
+#   enabled: []
 # 全局规则文本列表
 # rules: []
 # MCP 服务器
