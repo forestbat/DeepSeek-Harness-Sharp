@@ -44,8 +44,6 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
 
         Assert.Equal(expectedCount, actual.Count);
         Assert.True(expected.SequenceEqual(actual), "Collection must retain native entry order and FIFO directory order.");
-        Assert.True(expected.OrderBy(static entry => entry.Path.Length).SequenceEqual(actual.OrderBy(static entry => entry.Path.Length)),
-            "Stable equal-length ACL modification order must not change.");
         Assert.Equal(actual.Count, actual.Select(static entry => entry.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.All(actual, static entry => Assert.Equal(Directory.Exists(entry.Path), entry.Directory));
     }
@@ -218,6 +216,34 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
 
         Assert.Equal(unchecked((int)0x8007010b), failure.HResult);
         Assert.Equal(1, visits);
+    }
+
+    [Fact]
+    public void ExclusivelyOpenedNestedDirectory_IsReportedAndReleasesAncestors()
+    {
+        RequireWindows();
+        var child = Directory.CreateDirectory(Path.Combine(_root, "child")).FullName;
+        var middle = Directory.CreateDirectory(Path.Combine(child, "middle")).FullName;
+        var nested = Directory.CreateDirectory(Path.Combine(middle, "locked")).FullName;
+        var file = Path.Combine(nested, "input.txt");
+        File.WriteAllText(file, "not enumerable");
+        var actual = new List<string>();
+        const uint listDirectory = 1;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+        const int sharingViolation = unchecked((int)0x80070020);
+        using (var handle = WindowsNative.CreateFile(nested, listDirectory, 0, 0, openExisting, backupSemantics, 0))
+        {
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive nested directory fixture could not open its directory.");
+
+            var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(_root,
+                (path, _) => actual.Add(path), TestContext.Current.CancellationToken));
+
+            Assert.Equal(sharingViolation, failure.HResult);
+            Assert.DoesNotContain(file, actual);
+        }
+        AssertDirectoriesReleased();
     }
 
     [Theory]

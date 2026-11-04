@@ -5,7 +5,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
-/// <summary>Collects non-reparse descendants using root-relative directory opens and one native buffer.</summary>
+/// <summary>Collects non-reparse descendants using parent-relative directory opens and one native buffer.</summary>
 [SupportedOSPlatform("windows")]
 internal static class WindowsDirectoryCollector
 {
@@ -34,8 +34,10 @@ internal static class WindowsDirectoryCollector
     /// Callers must finish collecting all roots before modifying any ACL.
     /// </summary>
     /// <remarks>
-    /// Each queued path is opened strictly relative to the retained root when its FIFO turn arrives.
-    /// Only pending directory paths are retained, with at most the root and one current directory handle open.
+    /// Each directory is fully read before its children are opened relative to its retained handle.
+    /// An explicit DFS stack retains only the root and active ancestor handles, O(depth), not pending siblings.
+    /// Per-call paths and entry topology cost O(entries), plus a FIFO directory queue for publication.
+    /// Root entries are published before opening children; descendant entries only after all descendants are read.
     /// Native calls are synchronous, with cancellation checked before directory opens, between entries and after completion.
     /// </remarks>
     public static unsafe void Collect(string root, Action<string, bool> accept, CancellationToken cancellationToken)
@@ -51,29 +53,61 @@ internal static class WindowsDirectoryCollector
         using var rootHandle = WindowsNative.CreateFile(nativeRoot, ListDirectory, ShareAll, 0, OpenExisting, BackupSemantics, 0);
         if (rootHandle.IsInvalid)
             throw DirectoryError(Marshal.GetLastPInvokeError(), rootPath, openingDirectory: true);
-        var relativeStart = rootPath.Length + (Path.EndsInDirectorySeparator(rootPath) ? 0 : 1);
-        var pending = new Queue<string>();
-        pending.Enqueue(rootPath);
+        var rootDirectory = new DirectoryWork(rootPath);
+        var pending = new Queue<DirectoryWork>();
+        var stack = new List<TraversalFrame>();
         var buffer = Marshal.AllocHGlobal(BufferSize);
         try
         {
-            while (pending.TryDequeue(out var directory))
+            CollectDirectory(rootHandle, rootDirectory, buffer, cancellationToken);
+            PublishDirectory(rootDirectory, pending, accept, cancellationToken);
+            stack.Add(new TraversalFrame(rootDirectory, rootHandle));
+            while (stack.Count != 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                using var childHandle = directory.Length == rootPath.Length ? null
-                    : OpenRelativeDirectory(rootHandle, directory.AsSpan(relativeStart), directory);
-                CollectDirectory(childHandle ?? rootHandle, directory, buffer, pending, accept, cancellationToken);
+                var current = stack[^1];
+                if (current.NextEntry == current.Directory.Entries.Count)
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                    if (stack.Count != 0)
+                        current.Handle.Dispose();
+                    continue;
+                }
+                var entry = current.Directory.Entries[current.NextEntry++];
+                stack[^1] = current;
+                if (entry.Directory is not { } child)
+                    continue;
+                var relativeStart = current.Directory.Path.Length
+                    + (Path.EndsInDirectorySeparator(current.Directory.Path) ? 0 : 1);
+                var childHandle = OpenRelativeDirectory(current.Handle, child.Path.AsSpan(relativeStart), child.Path);
+                try
+                {
+                    stack.Add(new TraversalFrame(child, childHandle));
+                }
+                catch
+                {
+                    childHandle.Dispose();
+                    throw;
+                }
+                CollectDirectory(childHandle, child, buffer, cancellationToken);
+            }
+            while (pending.TryDequeue(out var directory))
+            {
+                PublishDirectory(directory, pending, accept, cancellationToken);
             }
             cancellationToken.ThrowIfCancellationRequested();
         }
         finally
         {
+            // The root has its own using scope; every other active frame owns one child handle.
+            for (var index = stack.Count - 1; index > 0; index--)
+                stack[index].Handle.Dispose();
             Marshal.FreeHGlobal(buffer);
         }
     }
 
-    private static unsafe void CollectDirectory(SafeFileHandle handle, string directory, nint buffer,
-        Queue<string> pending, Action<string, bool> accept, CancellationToken cancellationToken)
+    private static unsafe void CollectDirectory(SafeFileHandle handle, DirectoryWork directory, nint buffer,
+        CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -83,7 +117,7 @@ internal static class WindowsDirectoryCollector
             if (status is NoMoreFiles or NoSuchFile)
                 return;
             if (status != 0)
-                throw DirectoryError((int)RtlNtStatusToDosError(status), directory);
+                throw DirectoryError((int)RtlNtStatusToDosError(status), directory.Path);
             if (ioStatus.Information == 0)
                 return;
             var entry = (DirectoryInformation*)buffer;
@@ -93,12 +127,9 @@ internal static class WindowsDirectoryCollector
                 var name = new ReadOnlySpan<char>(&entry->FileName, checked((int)entry->FileNameLength / sizeof(char)));
                 if ((entry->Attributes & FileAttributes.ReparsePoint) == 0 && !name.SequenceEqual(".") && !name.SequenceEqual(".."))
                 {
-                    var path = Path.Join(directory.AsSpan(), name);
-                    var isDirectory = (entry->Attributes & FileAttributes.Directory) != 0;
-                    accept(path, isDirectory);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (isDirectory)
-                        pending.Enqueue(path);
+                    var path = Path.Join(directory.Path.AsSpan(), name);
+                    var child = (entry->Attributes & FileAttributes.Directory) != 0 ? new DirectoryWork(path) : null;
+                    directory.Entries.Add(new Entry(path, child));
                 }
                 if (entry->NextEntryOffset == 0)
                     break;
@@ -107,7 +138,35 @@ internal static class WindowsDirectoryCollector
         }
     }
 
-    private static unsafe SafeFileHandle OpenRelativeDirectory(SafeFileHandle root, ReadOnlySpan<char> relativePath, string path)
+    private static void PublishDirectory(DirectoryWork directory, Queue<DirectoryWork> pending,
+        Action<string, bool> accept, CancellationToken cancellationToken)
+    {
+        foreach (var entry in directory.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            accept(entry.Path, entry.Directory is not null);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.Directory is { } child)
+                pending.Enqueue(child);
+        }
+    }
+
+    private sealed class DirectoryWork(string path)
+    {
+        public string Path { get; } = path;
+        public List<Entry> Entries { get; } = [];
+    }
+
+    private readonly record struct Entry(string Path, DirectoryWork? Directory);
+
+    private struct TraversalFrame(DirectoryWork directory, SafeFileHandle handle)
+    {
+        public DirectoryWork Directory = directory;
+        public SafeFileHandle Handle = handle;
+        public int NextEntry;
+    }
+
+    private static unsafe SafeFileHandle OpenRelativeDirectory(SafeFileHandle parent, ReadOnlySpan<char> relativePath, string path)
     {
         if (relativePath.Length > ushort.MaxValue / sizeof(char))
             throw new PathTooLongException($"Unable to open directory '{path}'.");
@@ -122,12 +181,12 @@ internal static class WindowsDirectoryCollector
             var attributes = new ObjectAttributes
             {
                 Length = (uint)sizeof(ObjectAttributes),
-                RootDirectory = root.DangerousGetHandle(),
+                RootDirectory = parent.DangerousGetHandle(),
                 ObjectName = &nativeName,
                 Attributes = CaseInsensitive
             };
             var status = NtOpenFile(out var handle, ListDirectory | Synchronize, ref attributes, out _, ShareAll, SynchronousDirectoryOpen);
-            GC.KeepAlive(root);
+            GC.KeepAlive(parent);
             if (status == 0)
                 return handle;
             handle.Dispose();
