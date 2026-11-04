@@ -103,8 +103,6 @@ internal static class WindowsNative
     internal static string PathForNative(string path) => path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path : $"\\\\?\\{path}";
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    internal static extern SafeFileHandle ReOpenFile(SafeFileHandle original, uint access, uint share, uint flags);
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
     [DllImport("advapi32.dll", SetLastError = true)]

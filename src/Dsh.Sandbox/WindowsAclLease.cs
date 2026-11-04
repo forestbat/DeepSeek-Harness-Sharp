@@ -346,7 +346,7 @@ internal sealed class WindowsAclLease : IDisposable
         private SafeFileHandle Open(bool readOnly = false)
         {
             using var timing = new StartupTiming(timings, StartupMetric.Open);
-            // Bootstrap rollback needs READ_CONTROL and WRITE_DAC; final policy entries retain WRITE_OWNER for MIC restoration.
+            // Read proofs need only READ_CONTROL; bootstrap and policy edits retain their distinct ACL rights.
             var access = readOnly ? ReadAclAccess : bootstrap ? BootstrapAclAccess : PolicyAclAccess;
             var handle = WindowsNative.CreateFile(path, access, 7, 0, 3, 0x02000000, 0);
             if (!handle.IsInvalid)
@@ -354,18 +354,6 @@ internal sealed class WindowsAclLease : IDisposable
             var error = Marshal.GetLastPInvokeError();
             handle.Dispose();
             throw new Win32Exception(error, $"Cannot open an AppContainer filesystem grant (Win32 error {error}).");
-        }
-
-        private SafeFileHandle ReopenForPolicy(SafeFileHandle inspection)
-        {
-            using var timing = new StartupTiming(timings, StartupMetric.Open);
-            // Reopen the inspected object with edit rights only when its ACL must change.
-            var handle = WindowsNative.ReOpenFile(inspection, PolicyAclAccess, 7, 0x02000000);
-            if (!handle.IsInvalid)
-                return handle;
-            var error = Marshal.GetLastPInvokeError();
-            handle.Dispose();
-            throw new Win32Exception(error, $"Cannot reopen an AppContainer filesystem grant (Win32 error {error}).");
         }
 
         public void Grant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network,
@@ -378,15 +366,29 @@ internal sealed class WindowsAclLease : IDisposable
                 timings?.Record(StartupMetric.GateWait, waiting);
                 using var timing = new StartupTiming(timings, StartupMetric.GateHold);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!bootstrap && (access & WriteData) == 0
+                    && CanReuseReadGrant(sid, access, inheritedAccess, directory, restrict, network, effectiveRead))
+                    return;
                 GrantCore(sid, access, inheritedAccess, directory, restrict, network, effectiveRead);
             }
+        }
+
+        private bool CanReuseReadGrant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory,
+            bool restrict, bool network, EffectiveRead? effectiveRead)
+        {
+            if (_inheritance is not null || restrict && ProtectedInheritance.ContainsKey(path))
+                return false;
+            using var handle = Open(readOnly: true);
+            var (acl, _, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
+            if (restrict)
+                DemandNoAmbientGrant(acl, access, network);
+            return reuseRead || inheritedAccess == access && HasInheritedGrant(acl, sid, access, directory);
         }
 
         private void GrantCore(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network,
             EffectiveRead? effectiveRead)
         {
-            var readOnly = !bootstrap && (access & WriteData) == 0;
-            using var handle = Open(readOnly);
+            using var handle = Open();
             var (acl, protectedDacl, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
             if (restrict)
                 DemandNoAmbientGrant(acl, access, network);
@@ -399,7 +401,6 @@ internal sealed class WindowsAclLease : IDisposable
                 return;
             if (inheritedAccess != access || !HasInheritedGrant(acl, sid, access, directory))
             {
-                using var editHandle = readOnly ? ReopenForPolicy(handle) : null;
                 var inheritedGrant = false;
                 if (restrict)
                     for (var index = acl.Count - 1; index >= 0; index--)
@@ -423,7 +424,7 @@ internal sealed class WindowsAclLease : IDisposable
                 if (directory && inheritedAccess != access)
                     acl.InsertAce(insertion, new CommonAce(inherited | AceFlags.InheritOnly, AceQualifier.AccessAllowed, inheritedAccess, sid, false, null));
                 _sidGranted = true;
-                WriteAcl(editHandle ?? handle, acl, protectDacl ? ProtectDacl : 0, timings);
+                WriteAcl(handle, acl, protectDacl ? ProtectDacl : 0, timings);
             }
             if ((access & WriteData) == 0)
                 return;
