@@ -370,7 +370,6 @@ internal sealed class WindowsAclLease : IDisposable
 
     private sealed class Entry(string path, bool bootstrap = false)
     {
-        private const uint ReadAclAccess = 0x20000;
         private const uint BootstrapAclAccess = 0x60000;
         private const uint PolicyAclAccess = 0xe0000;
         private WritableLabel? _label;
@@ -379,9 +378,9 @@ internal sealed class WindowsAclLease : IDisposable
 
         private SafeFileHandle Open(bool readOnly = false)
         {
-            // Read proofs need only READ_CONTROL; bootstrap and policy edits retain their distinct ACL rights.
-            var access = readOnly ? ReadAclAccess : bootstrap ? BootstrapAclAccess : PolicyAclAccess;
-            var handle = WindowsNative.CreateFile(path, access, 7, 0, 3, 0x02000000, 0);
+            // Read proofs use a direct native open; bootstrap and policy edits keep their distinct Win32 ACL rights.
+            var handle = readOnly ? WindowsNative.OpenReadAcl(path)
+                : WindowsNative.CreateFile(path, bootstrap ? BootstrapAclAccess : PolicyAclAccess, 7, 0, 3, 0x02000000, 0);
             if (!handle.IsInvalid)
                 return handle;
             var error = Marshal.GetLastPInvokeError();
