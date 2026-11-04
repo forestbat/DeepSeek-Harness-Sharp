@@ -629,7 +629,7 @@ public sealed class ChatWindowPaneTests : IDisposable
         if (!PtyShell.Exists(shell))
             Assert.Skip("The interactive shell executable is unavailable.");
         var startup = Stopwatch.StartNew();
-        var stages = Enumerable.Repeat(-1L, 21).ToArray();
+        var stages = Enumerable.Repeat(-1L, 23).ToArray();
         var shellCode = Path.GetFileNameWithoutExtension(shell).ToLowerInvariant() switch
         {
             "pwsh" => 1,

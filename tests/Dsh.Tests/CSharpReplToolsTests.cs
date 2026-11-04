@@ -206,7 +206,6 @@ public sealed class CSharpReplToolsTests
         private readonly SubprocessService _subprocess;
         private readonly ToolRuntime _tools;
         private IDisposable? _registration;
-        private bool _startupObserved;
 
         public Harness(CSharpReplConfig? config)
         {
@@ -241,7 +240,7 @@ public sealed class CSharpReplToolsTests
             }
         }
 
-        public async Task<ToolExecutionResult> RunAsync(string code, CancellationToken? signal = null, long? timeoutMs = null)
+        public Task<ToolExecutionResult> RunAsync(string code, CancellationToken? signal = null, long? timeoutMs = null)
         {
             var arguments = JsonSerializer.SerializeToElement(new
             {
@@ -250,32 +249,13 @@ public sealed class CSharpReplToolsTests
                 workdir = Root,
                 timeoutMs = timeoutMs ?? 45_000,
             });
-            var result = await _tools.Execute(new ToolExecutionInput
+            return _tools.Execute(new ToolExecutionInput
             {
                 CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
                 Name = ToolRunCSharpRepl.ToolName,
                 Arguments = arguments,
                 Signal = signal ?? TestContext.Current.CancellationToken,
             });
-            await ObserveFrontendInitializationAsync();
-            return result;
-        }
-
-        private async Task ObserveFrontendInitializationAsync()
-        {
-            if (!OperatingSystem.IsWindows() || _startupObserved)
-                return;
-            _startupObserved = true;
-            try
-            {
-                var files = Directory.EnumerateFiles(Root, "csharprepl-tracelog-*.txt").Take(2).ToArray();
-                var trace = files.Length == 1 ? await File.ReadAllTextAsync(files[0], CancellationToken.None) : string.Empty;
-                await Console.Error.WriteLineAsync($"owned-repl-init-r17 files={files.Length} session={(trace.Contains("Trace session starting", StringComparison.Ordinal) ? 1 : 0)} started={(trace.Contains("Starting background initialization", StringComparison.Ordinal) ? 1 : 0)} msbuild={(trace.Contains("Discovered dotnet version", StringComparison.Ordinal) ? 1 : 0)} references={(trace.Contains("Available Reference Assemblies", StringComparison.Ordinal) ? 1 : 0)} implementations={(trace.Contains("Available Implementation Assemblies", StringComparison.Ordinal) ? 1 : 0)} completed={(trace.Contains("Background initialization complete", StringComparison.Ordinal) ? 1 : 0)}");
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                await Console.Error.WriteLineAsync($"owned-repl-init-r17 read_error=1 hresult={error.HResult}");
-            }
         }
 
         public async Task<int> WaitForPidAsync(Task<ToolExecutionResult> pending)

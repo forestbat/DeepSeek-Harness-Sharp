@@ -52,6 +52,8 @@ internal sealed class ShellPane : ITuiPane
             }
             EnqueueWrite(System.Text.Encoding.UTF8.GetBytes(reply));
         };
+        if (_window.ShellStartupStage is not null)
+            _screen.ColorQueryObserved += code => _window.ShellStartupStage?.Invoke(code == 10 ? 21 : 22);
         Id = id;
         StatusText = layerPtyId is { Length: > 0 }
             ? $"[pty {layerPtyId}] 层 - {window.KeyBindings.Keys(TuiAction.Overview)} 总览 - {window.KeyBindings.Keys(TuiAction.PrevSession, TuiAction.NextSession)} 切该 pty 的会话 - {window.KeyBindings.Keys(TuiAction.Detach)} 离开 DSH"

@@ -109,6 +109,9 @@ public sealed class VtScreen
     /** 需要写回子进程的应答(光标位置、设备属性、颜色查询); 在 Feed 调用线程上同步触发。 */
     public event Action<string>? Reply;
 
+    // Temporary numeric-only observation of actual OSC color queries.
+    public event Action<int>? ColorQueryObserved;
+
     public int ScrollbackCount => _scrollback.Count;
 
     public ReadOnlySpan<Cell> Row(int y) => _lines.AsSpan(y * Width, Width);
@@ -525,6 +528,7 @@ public sealed class VtScreen
 
     private void ReplyColor(string code, CellColor color)
     {
+        ColorQueryObserved?.Invoke(code == "10" ? 10 : 11);
         if (color.IsRgb)
             Reply?.Invoke($"\u001b]{code};rgb:{color.R:x2}{color.R:x2}/{color.G:x2}{color.G:x2}/{color.B:x2}{color.B:x2}\u001b\\");
     }
