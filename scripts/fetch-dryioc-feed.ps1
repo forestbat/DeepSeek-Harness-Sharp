@@ -11,6 +11,9 @@
     pwsh -File scripts/fetch-dryioc-feed.ps1 -Force                      # 不管戳记是否一致都重建
     pwsh -File scripts/fetch-dryioc-feed.ps1 -Proxy http://<host>:<port>   # 访问 GitHub 走指定代理, 不传则直连
     pwsh -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact   # 本机有已登录的 gh CLI 时, 优先直接从 CI 产物下载
+    pwsh -File scripts/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit <sha> -ExpectedSha256 <hash> [-RefreshPackageCache]
+    VerifyOnly never contacts upstream or builds packages and checks the run's exact commit, SHA256, package ID, version, and assembly content.
+    RefreshPackageCache only invalidates this package version when its cached nupkg differs from the verified package.
 
 依赖: git 与 dotnet SDK。
 #>
@@ -18,10 +21,23 @@
 param(
     [string]$Proxy,
     [switch]$UseGhArtifact,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$VerifyOnly,
+    [string]$ExpectedCommit,
+    [string]$ExpectedSha256,
+    [switch]$RefreshPackageCache
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($VerifyOnly) {
+    if ($Force -or $UseGhArtifact -or $Proxy -or $ExpectedCommit -cnotmatch '^[0-9a-f]{40}$' -or $ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Verification requires an exact commit and SHA256, without fetch options.'
+    }
+}
+elseif ($ExpectedCommit -or $ExpectedSha256 -or $RefreshPackageCache) {
+    throw 'Expected commit, SHA256 and cache refresh require VerifyOnly.'
+}
 
 # 指定代理时对本脚本启动的子进程生效(git/gh/dotnet 都识别这些标准变量); 未指定则直连。
 if ($Proxy) {
@@ -187,9 +203,71 @@ function Assert-ProducedVersion([string]$TargetNupkg, [string]$Version) {
     throw "构建结束但未在 $FeedDir 找到任何 $PackageId.*.nupkg, 请检查上面的输出。"
 }
 
+function Assert-SharedFeed([string]$TargetNupkg, [string]$StampFile, [string]$Version) {
+    if ((Read-BuildStamp $StampFile) -cne $ExpectedCommit) {
+        throw 'The shared DryIoc feed commit does not match this run.'
+    }
+    if ((Get-FileHash -LiteralPath $TargetNupkg -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedSha256) {
+        throw 'The shared DryIoc package SHA256 does not match this run.'
+    }
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($TargetNupkg)
+    try {
+        $specifications = @($archive.Entries | Where-Object { $_.FullName -notmatch '/' -and $_.FullName.EndsWith('.nuspec') })
+        if ($specifications.Count -ne 1) {
+            throw 'The shared DryIoc package must contain one root nuspec.'
+        }
+        $reader = [System.IO.StreamReader]::new($specifications[0].Open())
+        try {
+            [xml]$specification = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+        if ($specification.package.metadata.id -cne $PackageId -or $specification.package.metadata.version -cne $Version) {
+            throw 'The shared DryIoc package ID or version does not match the project PackageReference.'
+        }
+        $assemblies = @($archive.Entries | Where-Object { $_.FullName -cmatch '^lib/[^/]+/DryIoc\.dll$' -and $_.Length -gt 0 })
+        if ($assemblies.Count -eq 0) {
+            throw 'The shared DryIoc package contains no runtime assembly.'
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
 $PackageVersion = Get-RequiredPackageVersion
 $TargetNupkg = Join-Path $FeedDir "$PackageId.$PackageVersion.nupkg"
 $StampFile = "$TargetNupkg.commit"
+
+if ($VerifyOnly) {
+    Assert-ProducedVersion $TargetNupkg $PackageVersion
+    Assert-SharedFeed $TargetNupkg $StampFile $PackageVersion
+    if ($RefreshPackageCache) {
+        if ($PackageVersion -cnotmatch '^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
+            throw 'Cannot refresh the cache for an invalid NuGet package version.'
+        }
+        Assert-DotnetSdk
+        $cacheOutput = @(dotnet nuget locals global-packages --list --force-english-output)
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to locate the NuGet global packages directory.'
+        }
+        $cacheLocations = @($cacheOutput | ForEach-Object { if ($_ -match '^global-packages:\s*(.+)$') { $Matches[1] } })
+        if ($cacheLocations.Count -ne 1 -or -not [System.IO.Path]::IsPathFullyQualified($cacheLocations[0])) {
+            throw 'Expected one absolute NuGet global packages directory.'
+        }
+        $cachedPackage = Join-Path $cacheLocations[0] "$($PackageId.ToLowerInvariant())/$($PackageVersion.ToLowerInvariant())"
+        $cachedNupkg = Join-Path $cachedPackage "$($PackageId.ToLowerInvariant()).$($PackageVersion.ToLowerInvariant()).nupkg"
+        $cacheMatches = (Test-Path -LiteralPath $cachedNupkg -PathType Leaf) -and
+            (Get-FileHash -LiteralPath $cachedNupkg -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $ExpectedSha256
+        if ((Test-Path -LiteralPath $cachedPackage) -and -not $cacheMatches) {
+            Write-Host "Invalidating cached $PackageId $PackageVersion because it does not match this run's verified package."
+            Remove-Item -LiteralPath $cachedPackage -Recurse -Force
+        }
+    }
+    Write-Host "Verified shared $PackageId $PackageVersion at commit $ExpectedCommit."
+    exit 0
+}
 
 if ((Test-Path -LiteralPath $TargetNupkg) -and -not $Force) {
     $localCommit = Read-BuildStamp $StampFile

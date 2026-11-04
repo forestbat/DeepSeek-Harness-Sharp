@@ -165,9 +165,17 @@ jobs:
           [ "${STATES[macos]}" = true ] && add_build macos-latest osx-arm64 jit dsharp-osx-arm64.tar.gz clang
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  dryioc-feed:
+    name: Prepare shared DryIoc feed
+    needs: [prepare, gate]
+    if: ${{ needs.gate.outputs.matrix != '[]' }}
+    uses: ./.github/workflows/ci-dryioc.yml
+    with:
+      checkout-ref: ${{ needs.prepare.outputs.sha }}
+
   build:
     name: 构建 ${{ matrix.flavor }} / ${{ matrix.rid }}
-    needs: [prepare, gate]
+    needs: [prepare, gate, dryioc-feed]
     if: ${{ needs.gate.outputs.matrix != '[]' }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -185,15 +193,17 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ needs.dryioc-feed.outputs.commit }}' -ExpectedSha256 '${{ needs.dryioc-feed.outputs.sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 安装 Clang/LLVM 工具链（Linux；原生库与 AOT 链接共用）
         if: matrix.rid == 'linux-x64'
@@ -383,8 +393,8 @@ jobs:
 
   release:
     name: 创建/更新 Release
-    needs: [prepare, gate, build]
-    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && needs.gate.outputs.matrix != '[]' && needs.build.result != 'cancelled' }}
+    needs: [prepare, gate, dryioc-feed, build]
+    if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && needs.gate.outputs.matrix != '[]' && needs.dryioc-feed.result == 'success' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -396,6 +406,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: dsharp-*
           path: dist
 
       - name: 创建或更新 Release（说明用 GitHub 自动生成）
