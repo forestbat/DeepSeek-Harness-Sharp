@@ -40,7 +40,7 @@ internal static class ProcessProbe
 
 public sealed class Plugin : IDshPlugin
 {
-    private static readonly ConcurrentDictionary<string, string> LocalResources = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, (string Path, WeakReference<FileStream> Stream)> LocalResources = new(StringComparer.Ordinal);
     private readonly string _package;
     private readonly string _name;
     private readonly Guid _instance = Guid.NewGuid();
@@ -113,25 +113,21 @@ public sealed class Plugin : IDshPlugin
                 var localResourcePath = Path.GetFullPath(arguments.GetProperty("relativePath").GetString()!,
                     Path.GetDirectoryName(typeof(Plugin).Assembly.Location)!);
                 var localResourceOpened = false;
-                LocalResources[_package] = localResourcePath;
                 _context!.Plugin(PluginDefinition.From((_, _) =>
                 {
                     var resource = new LocalFileResource(localResourcePath);
+                    LocalResources[_package] = (localResourcePath, new WeakReference<FileStream>(resource.Stream));
                     localResourceOpened = true;
                     return resource;
                 }, name: $"{_package}:local-resource"));
                 await _context.Root.Scheduler.SettleAsync().WaitAsync(signal);
                 return JsonSerializer.SerializeToElement(new { opened = localResourceOpened });
             case "probe-local-resource":
-                var nestedResourcePath = LocalResources[arguments.GetProperty("package").GetString()!];
-                var nestedResourceExists = File.Exists(nestedResourcePath);
-                var nestedResourceLocked = false;
-                if (nestedResourceExists)
-                {
-                    try { using var nestedProbe = File.Open(nestedResourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite); }
-                    catch (IOException) { nestedResourceLocked = true; }
-                }
-                return JsonSerializer.SerializeToElement(new { exists = nestedResourceExists, locked = nestedResourceLocked });
+                var nestedResource = LocalResources[arguments.GetProperty("package").GetString()!];
+                var nestedResourceExists = File.Exists(nestedResource.Path);
+                var nestedResourceOpen = nestedResource.Stream.TryGetTarget(out var stream)
+                    && !stream.SafeFileHandle.IsClosed && stream.ReadByte() >= 0;
+                return JsonSerializer.SerializeToElement(new { exists = nestedResourceExists, open = nestedResourceOpen });
             case "read-resource":
                 var resourceDirectory = Path.GetDirectoryName(GetType().Assembly.Location)!;
                 var resource = await File.ReadAllTextAsync(
@@ -245,11 +241,11 @@ public sealed class Plugin : IDshPlugin
 
     private sealed class LocalFileResource(string path) : IDisposable
     {
-        private readonly FileStream _stream = new(path, FileMode.Open, FileAccess.Read, FileShare.None);
+        public FileStream Stream { get; } = new(path, FileMode.Open, FileAccess.Read, FileShare.None);
 
         public void Dispose()
         {
-            _stream.Dispose();
+            Stream.Dispose();
         }
     }
 

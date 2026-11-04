@@ -9,10 +9,11 @@ internal sealed class ConPtySession : IDisposable
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const int ProcThreadAttributePseudoConsole = 0x00020016;
-    private const uint Infinite = 0xFFFFFFFF;
+    private const int ExitTimeoutMilliseconds = 5000;
 
     private readonly IntPtr _pseudoConsole;
     private readonly IntPtr _processHandle;
+    private readonly ProcessExitWaitHandle _processExit;
     private readonly IntPtr _threadHandle;
     private readonly FileStream _input;
     private readonly FileStream _output;
@@ -22,6 +23,7 @@ internal sealed class ConPtySession : IDisposable
     {
         _pseudoConsole = pseudoConsole;
         _processHandle = processHandle;
+        _processExit = new ProcessExitWaitHandle(processHandle);
         _threadHandle = threadHandle;
         Pid = pid;
         _input = input;
@@ -154,7 +156,7 @@ internal sealed class ConPtySession : IDisposable
         try
         {
             TerminateProcess(_processHandle, 0);
-            await Task.Run(() => WaitForSingleObject(_processHandle, 5000)).ConfigureAwait(false);
+            await Completion.WaitAsync(TimeSpan.FromMilliseconds(ExitTimeoutMilliseconds)).ConfigureAwait(false);
         }
         catch
         {
@@ -171,17 +173,37 @@ internal sealed class ConPtySession : IDisposable
         _output.Dispose();
         if (_threadHandle != IntPtr.Zero)
             CloseHandle(_threadHandle);
-        if (_processHandle != IntPtr.Zero)
-            CloseHandle(_processHandle);
+        _processExit.Dispose();
     }
 
     private async Task<int?> MonitorExit()
     {
-        await Task.Run(() => WaitForSingleObject(_processHandle, Infinite)).ConfigureAwait(false);
-        int? exitCode = null;
-        if (GetExitCodeProcess(_processHandle, out var code))
-            exitCode = (int)code;
-        return exitCode;
+        var exited = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handle = _processExit.SafeWaitHandle;
+        var retained = false;
+        RegisteredWaitHandle? registration = null;
+        try
+        {
+            // Retain the process handle until the exit callback has read its exit code.
+            handle.DangerousAddRef(ref retained);
+            registration = ThreadPool.RegisterWaitForSingleObject(_processExit, (_, _) =>
+            {
+                int? exitCode = GetExitCodeProcess(_processHandle, out var code) ? (int)code : null;
+                exited.TrySetResult(exitCode);
+            }, null, Timeout.Infinite, executeOnlyOnce: true);
+            return await exited.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            registration?.Unregister(null);
+            if (retained)
+                handle.DangerousRelease();
+        }
+    }
+
+    private sealed class ProcessExitWaitHandle : WaitHandle
+    {
+        public ProcessExitWaitHandle(IntPtr handle) => SafeWaitHandle = new SafeWaitHandle(handle, ownsHandle: true);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -289,9 +311,6 @@ internal sealed class ConPtySession : IDisposable
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcess(string? lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string? lpCurrentDirectory, ref StartupInfoEx lpStartupInfo, out ProcessInformation lpProcessInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);

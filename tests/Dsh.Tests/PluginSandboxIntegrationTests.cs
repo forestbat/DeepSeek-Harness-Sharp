@@ -336,7 +336,7 @@ public sealed class PluginSandboxIntegrationTests
             .GetProperty("opened").GetBoolean());
         var before = await fixture.Success("beta", "probe-local-resource", new { package = Alpha });
         Assert.True(before.GetProperty("exists").GetBoolean());
-        Assert.True(before.GetProperty("locked").GetBoolean());
+        Assert.True(before.GetProperty("open").GetBoolean());
 
         var removed = await fixture.App.Composition!.Root.Scheduler.UnloadAsync(Alpha);
         await fixture.App.Composition.Root.Scheduler.SettleAsync();
@@ -345,7 +345,7 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Null(fixture.Tools.Get("isolated_alpha"));
         var after = await fixture.Success("beta", "probe-local-resource", new { package = Alpha });
         Assert.True(after.GetProperty("exists").GetBoolean());
-        Assert.False(after.GetProperty("locked").GetBoolean());
+        Assert.False(after.GetProperty("open").GetBoolean());
         Assert.Equal("owned resource", await File.ReadAllTextAsync(localResourcePath, TestContext.Current.CancellationToken));
         var sibling = await fixture.Identity("beta");
         Assert.Equal(beta.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
