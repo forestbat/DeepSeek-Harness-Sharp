@@ -25,6 +25,9 @@ public enum WorkspaceDestination
  */
 public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 {
+    /** 退出时等"重新加载机器列表"让出闸门的上限; 超过就放弃收尾, 不能把关窗口一起拖住。 */
+    private static readonly TimeSpan DisposeGateTimeout = TimeSpan.FromSeconds(3);
+
     private readonly Dictionary<(string Machine, string Session), FleetSessionViewModel> _windows = [];
     private readonly Dictionary<FleetSessionViewModel, Task> _retirements = [];
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
@@ -285,7 +288,9 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
     {
         Machines.BeginNetworkShutdown();
         await Machines.WaitForNetworkOperationsAsync();
-        await _connectionGate.WaitAsync();
+        // 退出时不能让"重新加载机器列表"占着闸门把我们卡死: 拿不到就放弃收尾, 由上层超时兜底。
+        if (!await _connectionGate.WaitAsync(DisposeGateTimeout))
+            return;
         try
         {
             _closingSessions = true;

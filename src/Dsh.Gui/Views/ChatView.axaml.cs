@@ -36,6 +36,9 @@ public sealed partial class ChatView : UserControl
     private int _anchorPasses;
     private bool _anchorRealizePosted;
     private bool _draggingThumb;
+
+    /** 上一次滚动事件时的位置快照, 用来判断"这次布局变化之前视口是否在底部"。 */
+    private ScrollSnapshot _lastScroll;
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _subagentFlyout;
@@ -187,6 +190,12 @@ public sealed partial class ChatView : UserControl
     private void OnScrollInput(object? sender, RoutedEventArgs e) =>
         _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
 
+    /** 滚轮/键盘/拖动滚动条都属于用户自己在移动视口; 只读文本里的指针事件不算。 */
+    private bool IsUserScrollInput(RoutedEventArgs e)
+        => e is PointerWheelEventArgs
+            || e is KeyEventArgs { Key: Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End }
+            || e is PointerEventArgs pointer && IsScrollBarInput(pointer.Source as Visual);
+
     private bool IsScrollBarInput(Visual? source)
     {
         var inScrollBar = false;
@@ -205,10 +214,7 @@ public sealed partial class ChatView : UserControl
     {
         if (change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
             return;
-        var manual = _scrollInput is PointerWheelEventArgs
-            || _scrollInput is KeyEventArgs { Key: Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End }
-            || _scrollInput is PointerEventArgs pointer && IsScrollBarInput(pointer.Source as Visual);
-        if (!manual)
+        if (_scrollInput is not { } input || !IsUserScrollInput(input))
             return;
         // 用户重新滚动时放弃折叠对齐, 不与其滚动意图抢位置。
         ClearAnchor();
@@ -218,9 +224,16 @@ public sealed partial class ChatView : UserControl
     /**
      * 跟随中随内容增长贴合末尾; 用户停在中途时一帧都不动, 阅读位置因此保持稳定。
      *
-     * 跟随意图只在"视口自己动了"时重新判定(用户滚动、程序滚动、我们自己的贴底)。
+     * 硬规则: 视口本来就不在底部时, 任何情况下都不许自动贴底。判据是"这次布局变化之前的位置",
+     * 因为内容一增长, 当前位置立刻就不算底部了 —— 用增长前的 extent(e.Extent.Height - ExtentDelta.Y)判断。
+     * 在这一条之上, 跟随还要同时满足: 意图仍为跟随、没有折叠对齐在飞、没在拖滚动条、用户刚滚动过的静默窗口已过。
+     *
+     * 意图只在"视口自己动了"时重新判定(用户滚动、程序性跳转、我们自己的贴底)。
      * 内容高度变化(流式输出、虚拟化重估、折叠)一律不改判: 否则每一帧的 extent 抖动都会把跟随
      * 自己打开又关掉, 表现为滚动条高频小幅乱跳、拖到底又弹回上面、点折叠没反应。
+     *
+     * 用户刚用滚轮/滚动条动过视口时, 即使此刻判定为"贴底"也要让路一帧以上的静默窗口:
+     * "消息往下刷 + 滚轮往上走"落在同一帧时, 输入与布局的先后顺序不保证, 不让路就会被拽回底部。
      */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
@@ -229,13 +242,23 @@ public sealed partial class ChatView : UserControl
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
         if (!layoutChanged)
         {
+            // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
+            // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
+            // 否则一次布局增长就会把人拽回底部。
             _scrollGeneration++;
-            _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
+            _sticky = IsAtBottom(scroll);
         }
         // 拖动滚动条期间一帧都不许自动滚, 否则会和用户的拖动抢位置。
-        if (layoutChanged && _sticky && _anchorList is null && !_draggingThumb)
+        // wasAtBottom 取上涨之前的快照: 内容一长高, 当前位置立刻就不算底部了。
+        var wasAtBottom = _lastScroll.IsAtBottom(StickyTolerance);
+        if (layoutChanged && _sticky && wasAtBottom && _anchorList is null && !_draggingThumb)
             scroll.ScrollToEnd();
+        _lastScroll = new ScrollSnapshot(scroll.Offset.Y, scroll.Viewport.Height, scroll.Extent.Height);
     }
+
+    /** 视口是否在底部; 自动贴底只允许发生在这里为真的情形。 */
+    private static bool IsAtBottom(ScrollViewer scroll)
+        => scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
 
     /** SelectableTextBlock 点击后不会自动获得焦点, 而 Ctrl+C 只有在其拥有焦点时才生效; 选中文字即意味着在阅读, 同时停止触底跟随。 */
     private void OnSelectablePointerPressed(object? sender, PointerPressedEventArgs e)
@@ -375,8 +398,10 @@ public sealed partial class ChatView : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             _scrollEndPosted = false;
-            if (generation == _scrollGeneration && _sticky && _viewModel?.Messages.Count is > 0)
-                (MessageList.Scroll as ScrollViewer)?.ScrollToEnd();
+            // 位置判断放在真正执行时: 视口不在底部就绝不贴底, 不管是谁排的队。
+            if (generation == _scrollGeneration && _sticky && _viewModel?.Messages.Count is > 0
+                && MessageList.Scroll is ScrollViewer live && IsAtBottom(live))
+                live.ScrollToEnd();
         });
     }
 
@@ -557,5 +582,11 @@ public sealed partial class ChatView : UserControl
         InputBox.RemoveHandler(InputElement.KeyDownEvent, OnInputKeyDown);
         Detach();
         base.OnUnloaded(e);
+    }
+
+    /** 一次滚动事件时的视口状态; 初始为"在底部"(空列表没有可滚内容)。 */
+    private readonly record struct ScrollSnapshot(double Offset, double Viewport, double Extent)
+    {
+        public bool IsAtBottom(double tolerance) => Offset + Viewport >= Extent - tolerance;
     }
 }
