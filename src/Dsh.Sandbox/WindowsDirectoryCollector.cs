@@ -20,13 +20,14 @@ internal static class WindowsDirectoryCollector
 
     /// <summary>
     /// Visits descendants, excluding the root, serially on the calling thread.
-    /// Each directory retains its native entry order; directories are published in FIFO discovery order, matching recursive FileSystemEnumerable on an unchanged tree.
+    /// Entries retain recursive FileSystemEnumerable's breadth-first order on an unchanged tree.
     /// No callback runs after this method returns or throws.
     /// The callback may use a plain dictionary, but must only collect topology: callers must finish all roots before modifying any ACL.
     /// </summary>
     /// <remarks>
-    /// Child directories are opened by full path when a worker reaches them.
-    /// Concurrent changes can therefore produce a different observation or an error than recursive FileSystemEnumerable, which opens children relative to their parent at discovery.
+    /// Directories are opened by full path when a worker reaches them, rather than relative to their parent at discovery.
+    /// Concurrent changes can therefore produce a different observation or an error than recursive FileSystemEnumerable.
+    /// The work queue and retained topology grow with the tree; only the number of enumeration threads is bounded.
     /// Missing directories and other enumeration errors are not ignored.
     /// </remarks>
     public static void Collect(string root, Action<string, bool> accept, CancellationToken cancellationToken)
@@ -34,77 +35,68 @@ internal static class WindowsDirectoryCollector
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(accept);
         cancellationToken.ThrowIfCancellationRequested();
+        var rootEntries = new List<Entry>();
+        foreach (var entry in new FileSystemEnumerable<Entry>(root, TransformEntry, Options))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            rootEntries.Add(entry);
+        }
+
+        var directories = new Queue<DirectoryWork>();
+        foreach (var entry in rootEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            accept(entry.Path, entry.Child is not null);
+            if (entry.Child is { } child)
+                directories.Enqueue(child);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (directories.Count == 0)
+            return;
+
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var jobs = new BlockingCollection<DirectoryWork>(WorkerCount);
-        var slots = new DirectoryWork[WorkerCount];
+        using var jobs = new BlockingCollection<DirectoryWork>();
+        // Count both queued and active directories, adding each child before its parent can finish.
+        var pending = directories.Count;
+        foreach (var directory in directories)
+            jobs.Add(directory);
         var workers = new Thread[WorkerCount];
         var started = 0;
         ExceptionDispatchInfo? failure = null;
         try
         {
-            var available = new Stack<DirectoryWork>(WorkerCount);
-            var inFlight = new Queue<DirectoryWork>(WorkerCount);
-            var directories = new Queue<string>();
-            directories.Enqueue(root);
-            for (var index = 0; index < WorkerCount; index++)
+            for (var index = 0; index < workers.Length && !stop.IsCancellationRequested; index++)
             {
-                var slot = new DirectoryWork();
-                slots[index] = slot;
-                available.Push(slot);
                 var worker = new Thread(RunWorker) { IsBackground = true, Name = "Sandbox directory collector" };
                 workers[index] = worker;
                 worker.Start();
                 started++;
             }
-
-            while (directories.Count != 0 || inFlight.Count != 0)
-            {
-                stop.Token.ThrowIfCancellationRequested();
-                while (available.Count != 0 && directories.TryDequeue(out var directory))
-                {
-                    var work = available.Pop();
-                    work.Path = directory;
-                    work.Completed.Reset();
-                    jobs.Add(work, stop.Token);
-                    inFlight.Enqueue(work);
-                }
-
-                var completed = inFlight.Dequeue();
-                completed.Completed.Wait(stop.Token);
-                Volatile.Read(ref failure)?.Throw();
-                // Publish in submission order so subdirectories join the FIFO in the order used by stable path-length sorting in Grant.
-                foreach (var entry in completed.Entries)
-                {
-                    stop.Token.ThrowIfCancellationRequested();
-                    accept(entry.Path, entry.Directory);
-                    if (entry.Directory)
-                        directories.Enqueue(entry.Path);
-                }
-                completed.Entries.Clear();
-                completed.Path = "";
-                available.Push(completed);
-            }
-            stop.Token.ThrowIfCancellationRequested();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && Volatile.Read(ref failure) is null)
+        catch (Exception error)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
-        }
-        catch
-        {
-            Volatile.Read(ref failure)?.Throw();
-            throw;
+            Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(error), null);
+            stop.Cancel();
         }
         finally
         {
-            stop.Cancel();
-            jobs.CompleteAdding();
             for (var index = 0; index < started; index++)
                 workers[index].Join();
-            foreach (var slot in slots)
-                slot?.Dispose();
         }
+
+        Volatile.Read(ref failure)?.Throw();
+        cancellationToken.ThrowIfCancellationRequested();
+        while (directories.TryDequeue(out var directory))
+        {
+            foreach (var entry in directory.Entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                accept(entry.Path, entry.Child is not null);
+                if (entry.Child is { } child)
+                    directories.Enqueue(child);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
 
         void RunWorker()
         {
@@ -112,29 +104,18 @@ internal static class WindowsDirectoryCollector
             {
                 foreach (var work in jobs.GetConsumingEnumerable(stop.Token))
                 {
-                    try
+                    foreach (var entry in new FileSystemEnumerable<Entry>(work.Path, TransformEntry, Options))
                     {
-                        foreach (var entry in new FileSystemEnumerable<(string Path, bool Directory)>(work.Path,
-                            static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory), Options))
+                        stop.Token.ThrowIfCancellationRequested();
+                        work.Entries.Add(entry);
+                        if (entry.Child is { } child)
                         {
-                            stop.Token.ThrowIfCancellationRequested();
-                            work.Entries.Add(entry);
+                            Interlocked.Increment(ref pending);
+                            jobs.Add(child, stop.Token);
                         }
                     }
-                    catch (OperationCanceledException) when (stop.IsCancellationRequested)
-                    {
-                    }
-                    catch (Exception error)
-                    {
-                        Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(error), null);
-                        stop.Cancel();
-                    }
-                    finally
-                    {
-                        work.Completed.Set();
-                    }
-                    if (stop.IsCancellationRequested)
-                        return;
+                    if (Interlocked.Decrement(ref pending) == 0)
+                        jobs.CompleteAdding();
                 }
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -148,12 +129,17 @@ internal static class WindowsDirectoryCollector
         }
     }
 
-    private sealed class DirectoryWork : IDisposable
+    private static Entry TransformEntry(ref FileSystemEntry entry)
     {
-        public string Path = "";
-        public readonly List<(string Path, bool Directory)> Entries = [];
-        public readonly ManualResetEventSlim Completed = new(false);
+        var path = entry.ToFullPath();
+        return new Entry(path, entry.IsDirectory ? new DirectoryWork(path) : null);
+    }
 
-        public void Dispose() => Completed.Dispose();
+    private readonly record struct Entry(string Path, DirectoryWork? Child);
+
+    private sealed class DirectoryWork(string path)
+    {
+        public readonly string Path = path;
+        public readonly List<Entry> Entries = [];
     }
 }

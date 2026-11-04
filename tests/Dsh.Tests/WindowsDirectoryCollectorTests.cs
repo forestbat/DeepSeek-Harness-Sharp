@@ -1,7 +1,7 @@
+using System.ComponentModel;
 using System.IO.Enumeration;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using Dsh.Sandbox;
 
 namespace Dsh.Tests;
@@ -174,30 +174,25 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
     }
 
     [Fact]
-    public void DeniedDirectoryListing_IsReportedAndDoesNotPublishPartialSuccess()
+    public void ExclusivelyOpenedDirectory_IsReportedWithoutPublishingEntries()
     {
         RequireWindows();
-        var directory = Directory.CreateDirectory(Path.Combine(_root, "denied"));
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "locked"));
         File.WriteAllText(Path.Combine(directory.FullName, "input.txt"), "not enumerable");
-        using var identity = WindowsIdentity.GetCurrent();
-        var security = directory.GetAccessControl(AccessControlSections.Access);
-        var original = security.GetSecurityDescriptorBinaryForm();
-        security.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory, AccessControlType.Deny));
+        const uint listDirectory = 1;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+        const int sharingViolation = unchecked((int)0x80070020);
+        using var handle = WindowsNative.CreateFile(directory.FullName, listDirectory, 0, 0, openExisting, backupSemantics, 0);
+        if (handle.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive directory fixture could not open its directory.");
         var visits = 0;
-        try
-        {
-            directory.SetAccessControl(security);
 
-            Assert.Throws<UnauthorizedAccessException>(() => WindowsDirectoryCollector.Collect(directory.FullName,
-                (_, _) => visits++, TestContext.Current.CancellationToken));
+        var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(directory.FullName,
+            (_, _) => visits++, TestContext.Current.CancellationToken));
 
-            Assert.Equal(0, visits);
-        }
-        finally
-        {
-            security.SetSecurityDescriptorBinaryForm(original, AccessControlSections.Access);
-            directory.SetAccessControl(security);
-        }
+        Assert.Equal(sharingViolation, failure.HResult);
+        Assert.Equal(0, visits);
     }
 
     private int PopulateTree()
