@@ -132,6 +132,9 @@ public sealed class ChatPane : ITuiPane
 
     public bool StickToBottom { get; set; } = true;
 
+    /** 刚刚往下滚过: 下一帧知道 maxOffset 后决定是否恢复贴底(只有用户可以改判跟随)。 */
+    private bool _resumeStickAtTail;
+
     /** jump 后抑制一次“新内容贴底”, 让目标消息保持在顶上; 一次性, 之后恢复正常贴底。 */
     private bool _suppressStickOnce;
 
@@ -508,7 +511,9 @@ public sealed class ChatPane : ITuiPane
         }
         else if (lines < 0)
         {
+            // 往下滚到末尾就恢复跟随; 这里拿不到视口高度, 由 DrawTranscript 按真实 maxOffset 判定。
             ScrollOffset += -lines;
+            _resumeStickAtTail = true;
         }
     }
 
@@ -653,14 +658,12 @@ public sealed class ChatPane : ITuiPane
         return string.Join('\n', lines);
     }
 
+    /**
+     * 系统/工具提示文本: 只追加内容, 不改判跟随意图。
+     * 跟随只由用户自己的滚动(滚轮/PageUp/Home/End)改变; 否则用户在读历史时, 新来的输出会把视口拽回底部。
+     */
     public void AppendRaw(string text)
-        => AppendText(text);
-
-    private void AppendText(string text)
-    {
-        Renderer.AppendSystemMessage(text);
-        RequestStickToBottom();
-    }
+        => Renderer.AppendSystemMessage(text);
 
     public void DrawTranscript(CellGrid grid, ConsoleRect rect)
     {
@@ -680,6 +683,12 @@ public sealed class ChatPane : ITuiPane
         var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
         if (StickToBottom)
             ScrollOffset = maxOffset;
+        else if (_resumeStickAtTail)
+        {
+            // 用户往下滚到的位置就是末尾: 恢复跟随, 让后续输出重新贴底。
+            StickToBottom = ScrollOffset >= maxOffset;
+        }
+        _resumeStickAtTail = false;
         ScrollOffset = Math.Clamp(ScrollOffset, 0, maxOffset);
 
         var start = ScrollOffset;

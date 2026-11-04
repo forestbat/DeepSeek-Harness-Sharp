@@ -215,18 +215,23 @@ public sealed partial class ChatView : UserControl
         _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
     }
 
-    /** 跟随中随内容增长贴合末尾; 用户停在中途时一帧都不动, 阅读位置因此保持稳定。 */
+    /**
+     * 跟随中随内容增长贴合末尾; 用户停在中途时一帧都不动, 阅读位置因此保持稳定。
+     *
+     * 跟随意图只在"视口自己动了"时重新判定(用户滚动、程序滚动、我们自己的贴底)。
+     * 内容高度变化(流式输出、虚拟化重估、折叠)一律不改判: 否则每一帧的 extent 抖动都会把跟随
+     * 自己打开又关掉, 表现为滚动条高频小幅乱跳、拖到底又弹回上面、点折叠没反应。
+     */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
         if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
-        // 内容增长不改判跟随意图, 否则流式输出时跟随会被自己关掉(表现为来回跳)。
-        if (!layoutChanged || !_sticky)
-            _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
-        // 折叠引起的高度变化不能触发触底跟随, 否则用户刚操作的消息会被甩出视口。
         if (!layoutChanged)
+        {
             _scrollGeneration++;
+            _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
+        }
         // 拖动滚动条期间一帧都不许自动滚, 否则会和用户的拖动抢位置。
         if (layoutChanged && _sticky && _anchorList is null && !_draggingThumb)
             scroll.ScrollToEnd();
