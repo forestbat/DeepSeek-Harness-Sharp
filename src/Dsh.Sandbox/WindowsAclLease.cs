@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.IO.Enumeration;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -13,7 +12,6 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsAclLease : IDisposable
 {
-    private const int EnumerationBufferSize = 16 * 1024;
     private const int ReadProbeParallelism = 4;
     private const int ReadProbeBatchSize = 128;
     private const int ReadExecute = 0x1200a9;
@@ -189,13 +187,8 @@ internal sealed class WindowsAclLease : IDisposable
             return;
         paths[root] = (write, directory);
         if (directory)
-            foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
-                static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, BufferSize = EnumerationBufferSize }))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                paths[path] = (write, isDirectory);
-            }
+            WindowsDirectoryCollector.Collect(root, (path, isDirectory) => paths[path] = (write, isDirectory),
+                cancellationToken);
     }
 
     public void Dispose()

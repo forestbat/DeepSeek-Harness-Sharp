@@ -6,6 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Dsh.Tests" />
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
   </ItemGroup>
 </Project>
