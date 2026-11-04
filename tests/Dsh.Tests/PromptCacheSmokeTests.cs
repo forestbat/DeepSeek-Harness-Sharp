@@ -3,18 +3,22 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Llm.Anthropic;
 using Dsh.Llm.OpenAi;
+using Dsh.Runtime;
 
 namespace Dsh.Tests;
 
 /**
- * 真机验证前缀缓存: 同一条稳定前缀在 deepseek / openai chat / openai responses / anthropic 四条通道上都应命中。
- * 各家回报缓存的字段不同, 统一走 TokenUsage.CacheReadTokens。
+ * 真机跑多轮 agent, 量每条通道的缓存命中率。
+ * 系统提示里放一段固定的长文本(约一万 token), 另有一段每轮都变的运行期上下文:
+ * 修复后增量只剩尾部几十个 token, 第三轮起命中率应该到 99% 以上。
  */
 [Trait("Category", "LlmSmoke")]
 public sealed class PromptCacheSmokeTests
 {
-    private const string Model = "deepseek-flash";
     private const string Provider = "deepseek-official";
+    private const string Model = "deepseek-flash";
+    private const int Rounds = 5;
+    private const double ExpectedHitRate = 0.99;
 
     private static (string ApiKey, string BaseUrl)? ResolveCredentials()
     {
@@ -27,90 +31,80 @@ public sealed class PromptCacheSmokeTests
             : (apiKey, (provider.Options?.BaseUrl ?? "https://api.deepseek.com").TrimEnd('/'));
     }
 
-    private static string Stable()
-        => "You are a deterministic probe harness. " + string.Concat(Enumerable.Repeat(
-            "Answer with the single token the system prompt last demanded, nothing else. ", 40));
-
-    private static IReadOnlyList<Message> FirstTurn()
-    {
-        var system = MessageFactory.CreateSystemMessage(
-            [new TextBlock($"{Stable()}\nReply with the single token ALPHA.")],
-            new PluginMessageSource(SystemPromptProjection.Source));
-        return [system, MessageFactory.CreateUserText("start")];
-    }
-
-    private static IReadOnlyList<Message> SecondTurn()
-        =>
-        [
-            .. FirstTurn(),
-            MessageFactory.CreateAssistantMessage([new TextBlock("ALPHA")], Provider, Model),
-            MessageFactory.CreateUserText("again"),
-        ];
-
-    private static async Task<TokenUsage?> RunOnce(LlmAdapter adapter, IReadOnlyList<Message> messages)
-    {
-        TokenUsage? usage = null;
-        await foreach (var chunk in adapter.Stream(new GenerateOptions
-        {
-            Provider = adapter.ProviderInfo.Id,
-            Model = Model,
-            Messages = messages,
-            Temperature = 0,
-        }, CancellationToken.None))
-        {
-            switch (chunk)
-            {
-                case StreamChunk.Usage measured:
-                    usage = measured.Value;
-                    break;
-                case StreamChunk.Finish { Reason: FinishReason.Error error }:
-                    throw new InvalidOperationException($"{adapter.ProviderInfo.Id} stream failed: {error.Failure.Message}");
-            }
-        }
-        return usage;
-    }
+    private static string Corpus(string channel)
+        => string.Concat(Enumerable.Repeat(
+            "The harness keeps a deterministic corpus in the system prompt so every request shares a long stable prefix. "
+                + $"(channel {channel}) ",
+            1800));
 
     [Theory]
-    [InlineData("openai-chat", false)]
-    [InlineData("openai-responses", true)]
-    public async Task OpenAiFamily_ReusesThePrefixCache(string channel, bool useResponses)
+    [InlineData("deepseek")]
+    [InlineData("openai-chat")]
+    [InlineData("openai-responses")]
+    [InlineData("anthropic")]
+    public async Task CacheHitRate_ReachesNinetyNinePercentAfterAFewRounds(string channel)
     {
         if (ResolveCredentials() is not { } credentials)
             return;
-        var adapter = new OpenAiCompatibleAdapter(
-            channel,
-            $"{credentials.BaseUrl}/v1",
-            credentials.ApiKey,
-            [new ProviderModelSpec(Model)],
-            useResponses: useResponses);
+        var adapter = BuildAdapter(channel, credentials);
+        var rates = await RunRounds(adapter);
 
-        _ = await RunOnce(adapter, FirstTurn());
-        var second = await RunOnce(adapter, SecondTurn());
-
-        Assert.NotNull(second);
-        Assert.True(second.CacheReadTokens > 0, $"{channel} reported no cache read: {second.InputTokens} in");
+        var report = $"{channel} ({adapter.ProviderInfo.Id}) hit rates: {string.Join(", ", rates.Select(rate => rate.ToString("P2")))}";
+        await Console.Out.WriteLineAsync(report);
+        Assert.True(rates.Length == Rounds, $"{report} — expected {Rounds} measured requests");
+        Assert.True(rates[2..].All(rate => rate >= ExpectedHitRate), report);
     }
 
-    [Fact]
-    public async Task Anthropic_ReusesThePrefixCache()
+    /** 真实 AgentLoop + 真实适配器, 每轮换一次运行期上下文文本, 收集每次请求的缓存命中率。 */
+    private static async Task<double[]> RunRounds(LlmAdapter adapter)
     {
-        if (ResolveCredentials() is not { } credentials)
-            return;
-        var adapter = new AnthropicAdapter("anthropic", $"{credentials.BaseUrl}/anthropic", credentials.ApiKey, [Model]);
+        var ctx = new Context();
+        _ = new SessionStore(ctx);
+        var prompt = new SystemPrompt(ctx, new SystemPromptConfig());
+        _ = new ToolRuntime(ctx);
+        var llm = new LlmRuntime(ctx);
+        var agents = new AgentRegistry(ctx);
+        _ = new AgentLoop(ctx);
+        _ = prompt.Section(PromptSection.Literal("test:corpus", Corpus(adapter.ProviderInfo.Id)));
+        var round = 0;
+        _ = prompt.Context(new PromptContext("test:runtime", _ => $"Runtime marker: round {round}."));
+        llm.RegisterAdapter([adapter.ProviderInfo.Id], adapter);
+        var handle = await agents.Create(new CreateAgentOptions(
+            SessionId.Create($"session-cache-{Guid.NewGuid():N}"),
+            null,
+            new AgentOptions(adapter.ProviderInfo.Id, Model)), TestContext.Current.CancellationToken);
+        var agent = (AgentLoopAgent)handle.Agent;
 
-        _ = await RunOnce(adapter, FirstTurn());
-        var second = await RunOnce(adapter, SecondTurn());
+        for (round = 1; round <= Rounds; round++)
+        {
+            agent.Followup(MessageFactory.CreateUserText($"round {round}"));
+            await agent.WhenIdle();
+        }
 
-        Assert.NotNull(second);
-        Assert.True(second.CacheReadTokens > 0, $"anthropic reported no cache read: {second.InputTokens} in");
+        return
+        [
+            .. agent.Session.SnapshotEvents()
+                .Select(sessionEvent => sessionEvent.Data)
+                .OfType<AssistantMessagePayload>()
+                .Select(payload => payload.Usage)
+                .Where(usage => usage is { InputTokens: > 0 })
+                .Select(usage => (double)usage!.CacheReadTokens / usage.InputTokens),
+        ];
     }
 
-    /** DeepSeek 原生通道: 变化后的系统提示叠在尾部时, 前缀缓存必须仍然命中。 */
-    [Fact]
-    public async Task DeepSeekInHistory_KeepsThePrefixCached()
+    private static LlmAdapter BuildAdapter(string channel, (string ApiKey, string BaseUrl) credentials)
+        => channel switch
+        {
+            "deepseek" => DeepSeekAdapter(credentials),
+            "openai-chat" => new OpenAiCompatibleAdapter(
+                channel, $"{credentials.BaseUrl}/v1", credentials.ApiKey, [new ProviderModelSpec(Model)]),
+            "openai-responses" => new OpenAiCompatibleAdapter(
+                channel, $"{credentials.BaseUrl}/v1", credentials.ApiKey, [new ProviderModelSpec(Model)], useResponses: true),
+            _ => new AnthropicAdapter("anthropic", $"{credentials.BaseUrl}/anthropic", credentials.ApiKey, [Model]),
+        };
+
+    private static Dsh.Llm.DeepSeek.DeepSeekAdapter DeepSeekAdapter((string ApiKey, string BaseUrl) credentials)
     {
-        if (ResolveCredentials() is not { } credentials)
-            return;
         var connection = new Dsh.Llm.DeepSeek.DeepSeekConnectionOptions(
             credentials.BaseUrl,
             "DEEPSEEK_API_KEY",
@@ -120,23 +114,14 @@ public sealed class PromptCacheSmokeTests
             [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(Model, SystemPromptUpdate: SystemPromptUpdateModes.InHistory)],
             Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "test"));
-        var adapter = new Dsh.Llm.DeepSeek.DeepSeekAdapter(Provider, new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
+        return new Dsh.Llm.DeepSeek.DeepSeekAdapter(Provider, new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
         {
             Options = () => connection,
             ResolveApiKey = (_, _) => Task.FromResult(credentials.ApiKey),
             ResolveUserId = () => "test-user",
         });
-
-        _ = await RunOnce(adapter, FirstTurn());
-        var appended = await RunOnce(adapter,
-        [
-            .. SecondTurn(),
-            MessageFactory.CreateSystemMessage(
-                [new TextBlock("Reply with the single token BRAVO.")],
-                new PluginMessageSource(SystemPromptProjection.Source)),
-        ]);
-
-        Assert.NotNull(appended);
-        Assert.True(appended.CacheReadTokens > 0, $"deepseek reported no cache read: {appended.InputTokens} in");
     }
 }
+
+
+

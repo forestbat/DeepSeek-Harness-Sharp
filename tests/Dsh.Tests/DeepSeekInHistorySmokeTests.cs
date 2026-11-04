@@ -112,8 +112,10 @@ public sealed class DeepSeekInHistorySmokeTests
         ]);
 
         Assert.Contains("BRAVO", inHistory.Text);
-        Assert.NotNull(inHistory.Usage?.CacheReadTokens);
-        Assert.True(inHistory.Usage!.CacheReadTokens > 0);
+        Assert.NotNull(inHistory.Usage);
+        var rate = inHistory.Usage!.CacheReadTokens / inHistory.Usage.InputTokens;
+        Assert.True(rate >= 0.4,
+            $"in-history append kept only {rate:P1} of the prefix: {inHistory.Usage.InputTokens} in, {inHistory.Usage.CacheReadTokens} cached");
         Assert.True(inHistory.Usage.CacheReadTokens >= (rewritten.Usage?.CacheReadTokens ?? 0));
     }
 }

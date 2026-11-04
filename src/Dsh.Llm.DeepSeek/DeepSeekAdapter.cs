@@ -99,10 +99,10 @@ public sealed class DeepSeekAdapter : LlmAdapter
         var connection = _config.Options();
         var configured = connection.Models.FirstOrDefault(entry => entry.Id == model);
         if (configured?.SystemPromptUpdate is { } systemPromptUpdate
-            && systemPromptUpdate is not (SystemPromptUpdateModes.InHistory or SystemPromptUpdateModes.RewriteHead))
+            && systemPromptUpdate != SystemPromptUpdateModes.InHistory)
         {
             throw new LlmException(new LlmFailure(
-                $"catalog model \"{model}\" systemPromptUpdate must be \"{SystemPromptUpdateModes.InHistory}\" or \"{SystemPromptUpdateModes.RewriteHead}\" when present",
+                $"catalog model \"{model}\" systemPromptUpdate must be \"{SystemPromptUpdateModes.InHistory}\" when present",
                 "INVALID_MODEL_INFO"));
         }
         var contextWindow = configured?.ContextWindow ?? connection.DefaultContextWindow;

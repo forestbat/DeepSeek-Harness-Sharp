@@ -94,7 +94,7 @@ public class AgentLoopIntegrationTests
         public AgentRegistry Agents { get; }
         public AgentLoop Loop { get; }
 
-        public HarnessFixture(string baseUrl, bool inHistory = false, ResolvedRetryPolicy? retryPolicy = null, AgentLoopConfig? loopConfig = null, IReadOnlyList<string>? inputModalities = null)
+        public HarnessFixture(string baseUrl, ResolvedRetryPolicy? retryPolicy = null, AgentLoopConfig? loopConfig = null, IReadOnlyList<string>? inputModalities = null)
         {
             Ctx = new Context();
             Sessions = new SessionStore(Ctx);
@@ -112,7 +112,7 @@ public class AgentLoopIntegrationTests
                 [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(
                     "test-model",
                     InputModalities: inputModalities,
-                    SystemPromptUpdate: inHistory ? SystemPromptUpdateModes.InHistory : SystemPromptUpdateModes.RewriteHead),
+                    SystemPromptUpdate: SystemPromptUpdateModes.InHistory),
                     new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(TextOnlyModel)],
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
                 retryPolicy ?? ResolvedRetryPolicy.Resolve(null, "test"));
@@ -491,7 +491,7 @@ public class AgentLoopIntegrationTests
     public async Task InHistoryModel_AppendsSystemPromptOnChange()
     {
         await using var server = await MockDeepSeekServer.StartAsync(_ => SseTextOnly);
-        using var fixture = new HarnessFixture(server.BaseUrl, inHistory: true);
+        using var fixture = new HarnessFixture(server.BaseUrl);
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-in-history"),
             null,
@@ -516,38 +516,6 @@ public class AgentLoopIntegrationTests
         Assert.Contains("persona v2", Assert.IsType<TextBlock>(systems[^1].Content[0]).Text);
         var systemCount = server.LastRequestBody!.Split("\"role\":\"system\"").Length - 1;
         Assert.Equal(2, systemCount);
-    }
-
-    [Fact]
-    public async Task NonInHistoryModel_RewritesSystemHeadOnChange()
-    {
-        await using var server = await MockDeepSeekServer.StartAsync(_ => SseTextOnly);
-        using var fixture = new HarnessFixture(server.BaseUrl);
-        var handle = await fixture.Agents.Create(new CreateAgentOptions(
-            SessionId.Create("session-replace"),
-            null,
-            new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
-        var agent = (AgentLoopAgent)handle.Agent;
-
-        agent.Followup(MessageFactory.CreateUserText("hi"));
-        await agent.WhenIdle();
-        fixture.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!.ReplacePersona("persona v2");
-        agent.Followup(MessageFactory.CreateUserText("again"));
-        await agent.WhenIdle();
-
-        var systemEvents = agent.Session.SnapshotEvents()
-            .Where(e => e.Type == SessionEventTypes.SystemMessage)
-            .ToList();
-        Assert.Equal(2, systemEvents.Count);
-        Assert.IsType<SurfaceOp.Append>(systemEvents[0].SurfaceOp);
-        var replacement = Assert.IsType<SurfaceOp.Replace>(systemEvents[1].SurfaceOp);
-        Assert.Equal(systemEvents[0].Seq, replacement.Start);
-        Assert.Equal(systemEvents[0].Seq, replacement.End);
-        var messages = agent.Session.DeriveMessages();
-        Assert.Equal(MessageRole.System, messages[0].Role);
-        var single = Assert.Single(messages, message => message.Role == MessageRole.System);
-        Assert.Contains("persona v2", Assert.IsType<TextBlock>(single.Content[0]).Text);
-        Assert.Equal(1, server.LastRequestBody!.Split("\"role\":\"system\"").Length - 1);
     }
 
     /**

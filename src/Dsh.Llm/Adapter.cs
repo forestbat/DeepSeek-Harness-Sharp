@@ -102,11 +102,8 @@ public sealed record LlmResolvedModelInfo(
 
 public static class SystemPromptUpdateModes
 {
-    /** 变化后的系统提示叠在历史尾部(需要供应商接受对话中途的 system 消息), 前缀逐字节不变, 缓存可延续。 */
+    /** 变化后的系统提示叠在历史尾部(供应商接受对话中途的 system 消息), 前缀逐字节不变, 缓存可延续; 未声明时为原地改写。 */
     public const string InHistory = "in-history";
-
-    /** 变化后的系统提示原地改写开头那条 system 消息; 从改写处起整段前缀按未命中重算。 */
-    public const string RewriteHead = "rewrite-head";
 }
 
 public sealed record LlmModelReasoningInfo(IReadOnlyList<LlmReasoningEffortInfo> Efforts, ReasoningEffortId? DefaultEffort = null);
