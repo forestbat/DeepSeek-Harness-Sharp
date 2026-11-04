@@ -75,6 +75,14 @@ jobs:
       - name: 验证变更选择边界
         run: python3 -m unittest discover -s tests/ci -v
 
+  dryioc-feed:
+    name: Prepare shared DryIoc feed
+    needs: changes
+    if: needs.changes.outputs.tests == 'true' || needs.changes.outputs.jit == 'true' || needs.changes.outputs.aot == 'true'
+    uses: ./.github/workflows/ci-dryioc.yml
+    with:
+      checkout-ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || github.sha }}
+
   iroh-component-windows:
     name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
     needs: changes
@@ -178,7 +186,7 @@ jobs:
 
   test:
     name: 测试（${{ matrix.platform.os }}，${{ matrix.suite }}）
-    needs: changes
+    needs: [changes, dryioc-feed]
     if: needs.changes.outputs.tests == 'true' && join(fromJSON(needs.changes.outputs.suites), ',') != 'quick'
     strategy:
       fail-fast: false
@@ -208,10 +216,12 @@ jobs:
       native-cc-alt: ${{ matrix.platform.native-cc-alt }}
       suite: ${{ matrix.suite }}
       quick-cohort: all
+      dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
+      dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
   test-windows-quick:
     name: 测试（windows-latest，quick）
-    needs: [changes, iroh-component-windows]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-windows.result == 'success' || needs.iroh-component-windows.result == 'skipped') }}
+    needs: [changes, dryioc-feed, iroh-component-windows]
+    if: ${{ !cancelled() && needs.dryioc-feed.result == 'success' && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-windows.result == 'success' || needs.iroh-component-windows.result == 'skipped') }}
     uses: ./.github/workflows/ci-tests.yml
     with:
       os: windows-latest
@@ -219,11 +229,13 @@ jobs:
       native-cc-alt: clang-cl
       suite: quick
       quick-cohort: all
+      dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
+      dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
   test-linux-quick:
     name: 测试（ubuntu-latest，quick）
-    needs: [changes, iroh-component-linux]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-linux.result == 'success' || needs.iroh-component-linux.result == 'skipped') }}
+    needs: [changes, dryioc-feed, iroh-component-linux]
+    if: ${{ !cancelled() && needs.dryioc-feed.result == 'success' && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-linux.result == 'success' || needs.iroh-component-linux.result == 'skipped') }}
     uses: ./.github/workflows/ci-tests.yml
     with:
       os: ubuntu-latest
@@ -231,12 +243,14 @@ jobs:
       native-cc-alt: ''
       suite: quick
       quick-cohort: all
+      dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
+      dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
 
   test-macos-quick:
     name: 测试（macos-latest，quick-${{ matrix.cohort }}）
-    needs: [changes, iroh-component-macos]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-macos.result == 'success' || needs.iroh-component-macos.result == 'skipped') }}
+    needs: [changes, dryioc-feed, iroh-component-macos]
+    if: ${{ !cancelled() && needs.dryioc-feed.result == 'success' && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-macos.result == 'success' || needs.iroh-component-macos.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -247,10 +261,12 @@ jobs:
       native-cc: clang
       suite: quick
       quick-cohort: ${{ matrix.cohort }}
+      dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
+      dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
   build:
     name: 三入口发布验收（${{ matrix.rid }}，JIT）
-    needs: changes
+    needs: [changes, dryioc-feed]
     if: needs.changes.outputs.jit == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
@@ -283,15 +299,16 @@ jobs:
           dotnet-version: '10.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ needs.dryioc-feed.outputs.commit }}' -ExpectedSha256 '${{ needs.dryioc-feed.outputs.sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 依次发布三个入口并校验原生故障遏制库（Release + 裁剪 + 自包含）
         shell: bash
         run: |
@@ -363,7 +380,7 @@ jobs:
 
   aot:
     name: AOT 构建（${{ matrix.rid }}）
-    needs: changes
+    needs: [changes, dryioc-feed]
     if: needs.changes.outputs.aot == 'true'
     strategy:
       fail-fast: false
@@ -380,10 +397,12 @@ jobs:
       os: ${{ matrix.os }}
       rid: ${{ matrix.rid }}
       native-cc: ${{ matrix.native-cc }}
+      dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
+      dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
   result:
     name: CI 结果
-    needs: [changes, validate, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot]
+    needs: [changes, validate, dryioc-feed, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -12,6 +12,12 @@ on:
       native-cc:
         required: true
         type: string
+      dryioc-commit:
+        required: true
+        type: string
+      dryioc-sha256:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -43,15 +49,17 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
       - name: Prepare local NuGet feed
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install AOT toolchain on Linux
         if: inputs.rid == 'linux-x64'
