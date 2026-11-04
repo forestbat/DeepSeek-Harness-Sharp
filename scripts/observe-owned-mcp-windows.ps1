@@ -138,6 +138,16 @@ $methods = @(
     @('Dsh.Mcp.McpServerHandle', 'CloseAsync'),
     @('Dsh.Mcp.McpToolBridge', 'ExecuteAsync')
 )
+$frameworkMethods = @(
+    @('System.IO.Enumeration.FileSystemEnumerator', 'Init'),
+    @('System.IO.Enumeration.FileSystemEnumerator', 'CreateDirectoryHandle'),
+    @('System.IO.Enumeration.FileSystemEnumerator', 'GetData'),
+    @('System.IO.Enumeration.FileSystemEnumerator', 'MoveNext'),
+    @('System.Collections.Concurrent.BlockingCollection', 'TryTakeWithNoTimeValidation'),
+    @('System.Threading.ManualResetEventSlim', 'Wait'),
+    @('System.Threading.SemaphoreSlim', 'Wait'),
+    @('System.Threading.Thread', 'Join')
+)
 try {
     $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $root 'tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe'))
     $start.WorkingDirectory = $root
@@ -171,6 +181,7 @@ try {
                 $sample = [OwnedMcpObservation29]::Run($stack, @('report', '--process-id', [string]$consumer.Id),
                     $root, $privateDirectory, 8000).GetAwaiter().GetResult()
                 Write-Host "MCP_OBSERVER sample=$($sample.Status) start_ms=$at elapsed_ms=$($sample.ElapsedMilliseconds) exit=$($sample.ExitCode) truncated=$([int]$sample.Truncated)"
+                Write-Host "MCP_OBSERVER root_cpu_ms=$([long]$consumer.TotalProcessorTime.TotalMilliseconds)"
                 if ($sample.Status -eq 'ok') {
                     $lines = $sample.Text -split '\r?\n'
                     $threads = @($lines | Where-Object { $_ -match '^Thread \(0x[0-9a-fA-F]+\):$' }).Count
@@ -185,6 +196,15 @@ try {
                         if ($count -gt 0) {
                             $matched += $count
                             Write-Host "MCP_OBSERVER method=$($method[0]).$($method[1]) frames=$count"
+                        }
+                    }
+                    foreach ($method in $frameworkMethods) {
+                        $type = [regex]::Escape($method[0])
+                        $name = [regex]::Escape($method[1])
+                        $pattern = '!' + $type + '(?:`[0-9]+(?:\[[^\r\n]*\])?)?\.' + $name + '\('
+                        $count = @($lines | Where-Object { $_ -match $pattern }).Count
+                        if ($count -gt 0) {
+                            Write-Host "MCP_OBSERVER framework_method=$($method[0]).$($method[1]) frames=$count"
                         }
                     }
                     Write-Host "MCP_OBSERVER threads=$threads frames=$frames allowlisted_frames=$matched"
