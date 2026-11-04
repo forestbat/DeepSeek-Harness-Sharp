@@ -324,11 +324,16 @@ public sealed class PluginSandboxIntegrationTests
     public async Task IndependentUnload_ReleasesOwnedResources_AndKeepsSiblingStateAndAuthority()
     {
         using var fixture = new Fixture();
+        // Deployed assets are readable on every backend; macOS does not grant worker scratch writes.
+        const string localResourceName = "owned-resource.bin";
+        var localResourcePath = Path.Combine(Path.GetDirectoryName(fixture.Artifact)!, localResourceName);
+        await File.WriteAllTextAsync(localResourcePath, "owned resource", TestContext.Current.CancellationToken);
         await fixture.StartAsync();
         var alpha = await fixture.Identity("alpha");
         var beta = await fixture.Identity("beta");
         Assert.Equal(1, (await fixture.Success("beta", "increment-state")).GetProperty("state").GetInt32());
-        Assert.True((await fixture.Success("alpha", "open-local-resource")).GetProperty("created").GetBoolean());
+        Assert.True((await fixture.Success("alpha", "open-local-resource", new { relativePath = localResourceName }))
+            .GetProperty("opened").GetBoolean());
         var before = await fixture.Success("beta", "probe-local-resource", new { package = Alpha });
         Assert.True(before.GetProperty("exists").GetBoolean());
         Assert.True(before.GetProperty("locked").GetBoolean());
@@ -339,7 +344,9 @@ public sealed class PluginSandboxIntegrationTests
         Assert.Equal(ActivationState.Disposed, removed!.State);
         Assert.Null(fixture.Tools.Get("isolated_alpha"));
         var after = await fixture.Success("beta", "probe-local-resource", new { package = Alpha });
-        Assert.False(after.GetProperty("exists").GetBoolean());
+        Assert.True(after.GetProperty("exists").GetBoolean());
+        Assert.False(after.GetProperty("locked").GetBoolean());
+        Assert.Equal("owned resource", await File.ReadAllTextAsync(localResourcePath, TestContext.Current.CancellationToken));
         var sibling = await fixture.Identity("beta");
         Assert.Equal(beta.GetProperty("pluginInstance").GetGuid(), sibling.GetProperty("pluginInstance").GetGuid());
         Assert.Equal(beta.GetProperty("instance").GetGuid(), sibling.GetProperty("instance").GetGuid());

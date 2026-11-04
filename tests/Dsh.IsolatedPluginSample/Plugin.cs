@@ -110,12 +110,18 @@ public sealed class Plugin : IDshPlugin
             case "increment-state":
                 return JsonSerializer.SerializeToElement(new { state = ++_state });
             case "open-local-resource":
-                var localResourcePath = Path.Combine(Path.GetTempPath(), $"local-plugin-resource-{Guid.NewGuid():N}.bin");
+                var localResourcePath = Path.GetFullPath(arguments.GetProperty("relativePath").GetString()!,
+                    Path.GetDirectoryName(typeof(Plugin).Assembly.Location)!);
+                var localResourceOpened = false;
                 LocalResources[_package] = localResourcePath;
-                _context!.Plugin(PluginDefinition.From((_, _) => new LocalFileResource(localResourcePath),
-                    name: $"{_package}:local-resource"));
+                _context!.Plugin(PluginDefinition.From((_, _) =>
+                {
+                    var resource = new LocalFileResource(localResourcePath);
+                    localResourceOpened = true;
+                    return resource;
+                }, name: $"{_package}:local-resource"));
                 await _context.Root.Scheduler.SettleAsync().WaitAsync(signal);
-                return JsonSerializer.SerializeToElement(new { created = File.Exists(localResourcePath) });
+                return JsonSerializer.SerializeToElement(new { opened = localResourceOpened });
             case "probe-local-resource":
                 var nestedResourcePath = LocalResources[arguments.GetProperty("package").GetString()!];
                 var nestedResourceExists = File.Exists(nestedResourcePath);
@@ -239,12 +245,11 @@ public sealed class Plugin : IDshPlugin
 
     private sealed class LocalFileResource(string path) : IDisposable
     {
-        private readonly FileStream _stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        private readonly FileStream _stream = new(path, FileMode.Open, FileAccess.Read, FileShare.None);
 
         public void Dispose()
         {
             _stream.Dispose();
-            File.Delete(path);
         }
     }
 
