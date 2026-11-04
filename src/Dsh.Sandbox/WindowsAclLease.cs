@@ -12,6 +12,7 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsAclLease : IDisposable
 {
+    private const int EnumerationBufferSize = 16 * 1024;
     private const int ReadExecute = 0x1200a9;
     private const int Modify = 0x1301bf;
     private const int Delete = 0x10000;
@@ -65,26 +66,24 @@ internal sealed class WindowsAclLease : IDisposable
         }
     }
 
-    public void Apply(SandboxPolicy policy, SafeFileHandle process, CancellationToken cancellationToken, Action<int, int?>? observeStartup = null)
+    public void Apply(SandboxPolicy policy, SafeFileHandle process, CancellationToken cancellationToken)
     {
         using var effectiveRead = EffectiveRead.TryCreate(process);
         var paths = new Dictionary<string, (bool Write, bool Directory)>(StringComparer.OrdinalIgnoreCase);
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-        observeStartup?.Invoke(15, null);
         foreach (var grant in policy.Writable.OrderBy(static grant => grant.Source.Length))
             if (!SandboxPolicy.Contains(windows, grant.Source))
-                AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken, observeStartup);
+                AddTree(paths, grant.Source, grant.IsDirectory, true, cancellationToken);
         foreach (var grant in policy.Readable.OrderBy(static grant => grant.Source.Length))
             if (!SandboxPolicy.Contains(windows, grant.Source))
-                AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken, observeStartup);
+                AddTree(paths, grant.Source, grant.IsDirectory, false, cancellationToken);
         foreach (var denied in policy.Denied)
         {
             if (File.Exists(denied) || Directory.Exists(denied))
-                AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken, observeStartup);
+                AddTree(paths, denied, Directory.Exists(denied), false, cancellationToken);
             else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                 throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
         }
-        observeStartup?.Invoke(16, paths.Count);
         var checkedAncestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in paths.Keys)
             for (var parent = Path.GetDirectoryName(path); parent is not null; parent = Path.GetDirectoryName(parent))
@@ -94,7 +93,6 @@ internal sealed class WindowsAclLease : IDisposable
                     break;
                 Entry.DemandAmbientAncestorGrant(parent, policy.AllowNetwork);
             }
-        observeStartup?.Invoke(17, checkedAncestors.Count);
         foreach (var (path, access) in paths.OrderBy(static entry => entry.Key.Length))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -110,36 +108,25 @@ internal sealed class WindowsAclLease : IDisposable
             entry.Grant(_sid, mask, inheritedMask, access.Directory, denyWrite || denyDelete, policy.AllowNetwork,
                 denyWrite ? effectiveRead : null, cancellationToken);
         }
-        observeStartup?.Invoke(18, _entries.Count);
     }
 
     private void AddTree(Dictionary<string, (bool Write, bool Directory)> paths, string root, bool directory, bool write,
-        CancellationToken cancellationToken, Action<int, int?>? observeStartup)
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Earlier trees already include every descendant with the same access.
         // A different access still walks the subtree to narrow all existing children.
         if (paths.TryGetValue(root, out var existing) && existing.Write == write && existing.Directory == directory)
             return;
-        observeStartup?.Invoke(30, paths.Count);
         paths[root] = (write, directory);
-        try
-        {
-            if (directory)
-                foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
-                    static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
-                    new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    paths[path] = (write, isDirectory);
-                }
-        }
-        catch
-        {
-            observeStartup?.Invoke(32, paths.Count);
-            throw;
-        }
-        observeStartup?.Invoke(31, paths.Count);
+        if (directory)
+            foreach (var (path, isDirectory) in new FileSystemEnumerable<(string Path, bool Directory)>(root,
+                static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
+                new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false, BufferSize = EnumerationBufferSize }))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                paths[path] = (write, isDirectory);
+            }
     }
 
     public void Dispose()
@@ -169,7 +156,7 @@ internal sealed class WindowsAclLease : IDisposable
         public int Owners { get; set; } = 1;
     }
 
-    private sealed class EffectiveRead : IDisposable
+    private sealed class EffectiveRead(SafeAccessTokenHandle token) : IDisposable
     {
         private const uint TokenQuery = 0x0008;
         private const uint TokenDuplicate = 0x0002;
@@ -185,9 +172,6 @@ internal sealed class WindowsAclLease : IDisposable
         private const int MandatoryReadExecuteUp = 6;
         private static readonly SecurityIdentifier OwnerRights = new("S-1-3-4");
         private static readonly SecurityIdentifier PrincipalSelf = new("S-1-5-10");
-        private readonly SafeAccessTokenHandle _token;
-
-        private EffectiveRead(SafeAccessTokenHandle token) => _token = token;
 
         public static EffectiveRead? TryCreate(SafeFileHandle process)
         {
@@ -205,7 +189,7 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        public void Dispose() => _token.Dispose();
+        public void Dispose() => token.Dispose();
 
         public unsafe bool CanRead(nint descriptor)
         {
@@ -213,7 +197,7 @@ internal sealed class WindowsAclLease : IDisposable
             byte* privileges = stackalloc byte[PrivilegeBufferBytes];
             uint length = PrivilegeBufferBytes;
             // The existing SID grant remains the fallback when the native check cannot prove read authority.
-            var succeeded = WindowsNative.AccessCheck(descriptor, _token, ReadExecute, ref mapping, (nint)privileges, ref length,
+            var succeeded = WindowsNative.AccessCheck(descriptor, token, ReadExecute, ref mapping, (nint)privileges, ref length,
                 out var granted, out var allowed);
             return succeeded && allowed && (granted & ReadExecute) == ReadExecute;
         }
@@ -273,16 +257,17 @@ internal sealed class WindowsAclLease : IDisposable
 
     private sealed class Entry(string path, bool bootstrap = false)
     {
+        private const uint ReadAclAccess = 0x20000;
         private const uint BootstrapAclAccess = 0x60000;
         private const uint PolicyAclAccess = 0xe0000;
         private WritableLabel? _label;
         private bool _sidGranted;
         private TemporaryInheritance? _inheritance;
 
-        private SafeFileHandle Open()
+        private SafeFileHandle Open(bool readOnly = false)
         {
-            // Bootstrap rollback needs READ_CONTROL and WRITE_DAC; final policy entries retain WRITE_OWNER for MIC restoration.
-            var access = bootstrap ? BootstrapAclAccess : PolicyAclAccess;
+            // Read proofs need only READ_CONTROL; bootstrap and policy edits retain their distinct ACL rights.
+            var access = readOnly ? ReadAclAccess : bootstrap ? BootstrapAclAccess : PolicyAclAccess;
             var handle = WindowsNative.CreateFile(path, access, 7, 0, 3, 0x02000000, 0);
             if (!handle.IsInvalid)
                 return handle;
@@ -298,8 +283,23 @@ internal sealed class WindowsAclLease : IDisposable
             lock (AclGate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!bootstrap && (access & WriteData) == 0
+                    && CanReuseReadGrant(sid, access, inheritedAccess, directory, restrict, network, effectiveRead))
+                    return;
                 GrantCore(sid, access, inheritedAccess, directory, restrict, network, effectiveRead);
             }
+        }
+
+        private bool CanReuseReadGrant(SecurityIdentifier sid, int access, int inheritedAccess, bool directory,
+            bool restrict, bool network, EffectiveRead? effectiveRead)
+        {
+            if (_inheritance is not null || restrict && ProtectedInheritance.ContainsKey(path))
+                return false;
+            using var handle = Open(readOnly: true);
+            var (acl, _, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
+            if (restrict)
+                DemandNoAmbientGrant(acl, access, network);
+            return reuseRead || inheritedAccess == access && HasInheritedGrant(acl, sid, access, directory);
         }
 
         private void GrantCore(SecurityIdentifier sid, int access, int inheritedAccess, bool directory, bool restrict, bool network,
@@ -358,7 +358,7 @@ internal sealed class WindowsAclLease : IDisposable
             {
                 if (!WindowsNative.GetSecurityDescriptorSacl(descriptor, out _, out var sacl, out _))
                     throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot read the AppContainer writable label.");
-                Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, sacl));
+                WriteLabel(handle, sacl);
                 _label = new WritableLabel(originalLabel);
                 WritableLabels.Add(path, _label);
             }
@@ -477,7 +477,7 @@ internal sealed class WindowsAclLease : IDisposable
             if (restoreLabel)
             {
                 fixed (byte* label = originalLabel)
-                    Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, (nint)label));
+                    WriteLabel(handle, (nint)label);
             }
         }
 
@@ -547,6 +547,11 @@ internal sealed class WindowsAclLease : IDisposable
             acl.GetBinaryForm(bytes, 0);
             fixed (byte* pointer = bytes)
                 Check(WindowsNative.SetSecurityInfo(handle, 1, 4 | inheritance, 0, 0, (nint)pointer, 0));
+        }
+
+        private static void WriteLabel(SafeFileHandle handle, nint label)
+        {
+            Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, label));
         }
 
         private static void Check(uint error)

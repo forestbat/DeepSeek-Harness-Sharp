@@ -1,7 +1,7 @@
 using System.Reflection.PortableExecutable;
 using Dsh.Sandbox;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Only code is exposed to the worker; configuration and business files go through the broker. */
 internal static class PluginSandboxLaunch
@@ -16,7 +16,7 @@ internal static class PluginSandboxLaunch
     {
         if (artifactPath is null)
             return Dsh.Plugins.PluginForm.CompiledIn;
-        artifactPath = SandboxFileAccess.Canonicalize(artifactPath);
+        artifactPath = global::Dsh.Transport.FilePathAccess.Canonicalize(artifactPath);
         Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
         if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
             return Dsh.Plugins.PluginForm.NativeLibrary;

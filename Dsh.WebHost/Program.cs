@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Host;
+using Dsh.Plugins.Sandbox;
 using Dsh.WebBridge;
 using Dsh.ScriptHost;
 

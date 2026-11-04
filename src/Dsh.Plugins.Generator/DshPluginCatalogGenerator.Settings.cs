@@ -13,8 +13,8 @@ namespace Dsh.Plugins.Generator;
  * 配置面生成: 插件的参数面来自两类声明——
  *  - `IDshPlugin.ConfigType => typeof(X)`: 与宿主绑定同一个类型(声明即启用未知键告警);
  *  - 标了 [DshPluginSettings] 的类型: 只声明文档面, 不改变运行期解析(适合自己解析参数的插件, 可多类型合并)。
- * 生成器读这些类型的**语法**(属性名/类型/初始化器默认值/嵌套记录)产出 ISettingsSchemaProvider,
- * 并在模块初始化器里注册。只读语法不反射: 默认值以字面量落进生成代码, 裁剪/AOT 下与 JIT 行为一致。
+ * Generates schema literals from property symbols, source initializers and explicit cross-assembly default metadata.
+ * Generated providers register without runtime reflection and preserve the same literals in trimmed and AOT applications.
  * 顶层 settings 文档由标了 [DshSettingsDocument] 的类型(如 HarnessSettings)产出, IsPlugin=false。
  */
 public sealed partial class DshPluginCatalogGenerator
@@ -25,6 +25,7 @@ public sealed partial class DshPluginCatalogGenerator
     private const string SchemaHintName = "DshPluginSettingsSchema.g.cs";
     private const string SettingsAttributeMetadataName = "Dsh.Plugins.DshPluginSettingsAttribute";
     private const string DocumentAttributeMetadataName = "Dsh.Plugins.DshSettingsDocumentAttribute";
+    private const string DefaultValueAttributeMetadataName = "System.ComponentModel.DefaultValueAttribute";
 
     private static void EmitSettingsSchema(SourceProductionContext context, Compilation compilation)
     {
@@ -312,9 +313,13 @@ public sealed partial class DshPluginCatalogGenerator
             && named.AllInterfaces.Any(candidate => candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
             && named.SpecialType != SpecialType.System_String;
 
-    /** 默认值: 取属性的初始化器文本(`= true` / `= 30` / `= []`); 主构造参数默认值与无初始化器都留空。 */
+    /** Explicit default metadata survives assembly boundaries; source initializers supply other local defaults. */
     private static string? DefaultLiteralOf(IPropertySymbol property)
     {
+        var declared = property.GetAttributes().FirstOrDefault(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == DefaultValueAttributeMetadataName);
+        if (declared is { ConstructorArguments.Length: 1 })
+            return declared.ConstructorArguments[0].ToCSharpString();
         if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not PropertyDeclarationSyntax syntax)
             return null;
         return syntax.Initializer?.Value.ToString();

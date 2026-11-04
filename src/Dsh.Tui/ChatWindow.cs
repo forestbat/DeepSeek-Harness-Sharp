@@ -201,9 +201,6 @@ public sealed partial class ChatWindow : IDisposable
 
     internal int FocusedPaneId => _focusedPaneId;
 
-    // Temporary numeric-only tracing for the native host-shell prompt failure.
-    internal Action<int>? ShellStartupStage { get; set; }
-
     /** 当前是否整屏显示在某个 pty 的"层"视图里(pty 层不与 session/pane 并排)。 */
     internal bool InPtyLayer => _ptyLayer is not null;
 

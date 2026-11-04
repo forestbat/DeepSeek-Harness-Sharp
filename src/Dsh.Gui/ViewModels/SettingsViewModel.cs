@@ -595,21 +595,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    private async Task<bool> SetPluginExecutionAsync(string package, string? execution)
-    {
-        try
-        {
-            Status = await (await _plugins()).SetPluginExecutionAsync(package, execution);
-            await LoadPluginRowsAsync();
-            return true;
-        }
-        catch (Exception error)
-        {
-            Status = $"插件执行方式写入失败: {error.Message}";
-            return false;
-        }
-    }
-
     [RelayCommand]
     private async Task PluginActionAsync(string action)
     {
@@ -1019,11 +1004,10 @@ public sealed partial class SettingsViewModel : ObservableObject
                     index++;
                 var row = index < Plugins.Count && Plugins[index].Package == plugin.Package ? Plugins[index] : null;
                 if (row is null || row.Description != plugin.Description || row.Enabled != plugin.Enabled
-                    || row.CanRead != plugin.ReadAllowed || row.CanWrite != plugin.WriteAllowed || row.CanNetwork != plugin.NetworkAllowed
-                    || row.Execution?.Value != plugin.Execution)
+                    || row.CanRead != plugin.ReadAllowed || row.CanWrite != plugin.WriteAllowed || row.CanNetwork != plugin.NetworkAllowed)
                     row = new PluginRowViewModel(plugin.Package, plugin.Description, plugin.Enabled,
                         new PluginPermissions { Read = plugin.ReadAllowed, Write = plugin.WriteAllowed, Network = plugin.NetworkAllowed },
-                        SetPluginPermission, plugin.Execution, SetPluginExecutionAsync);
+                        SetPluginPermission);
                 rows.Add(row);
             }
             CollectionSync.Sync(Plugins, rows);
@@ -1100,9 +1084,7 @@ public sealed partial class PluginRowViewModel(
     string description,
     bool enabled,
     PluginPermissions permissions,
-    Action<string, PluginPermission, bool> setPermission,
-    string? execution,
-    Func<string, string?, Task<bool>> setExecution) : ObservableObject
+    Action<string, PluginPermission, bool> setPermission) : ObservableObject
 {
     public string Package { get; } = package;
 
@@ -1115,52 +1097,6 @@ public sealed partial class PluginRowViewModel(
     public string WireAction => $"{(Enabled ? "disable" : "enable")}:{Package}";
 
     public string RemoveAction => $"remove:{Package}";
-
-    public static IReadOnlyList<PluginExecutionOption> ExecutionOptions { get; } =
-    [
-        new(null, "默认"),
-        new("sandbox", "Sandbox"),
-        new("host", "Host · 完全信任"),
-    ];
-
-    private bool _restoringExecution;
-
-    public PluginExecutionOption? Execution
-    {
-        get;
-        set
-        {
-            if (value is null || Equals(field, value) || IsChangingExecution && !_restoringExecution)
-                return;
-            var previous = field;
-            field = value;
-            OnPropertyChanged();
-            if (!_restoringExecution)
-                _ = SaveExecutionAsync(previous, value);
-        }
-    } = ExecutionOptions.Single(option => option.Value == execution);
-
-    [ObservableProperty]
-    private bool _isChangingExecution;
-
-
-    private async Task SaveExecutionAsync(PluginExecutionOption? oldValue, PluginExecutionOption newValue)
-    {
-        IsChangingExecution = true;
-        try
-        {
-            if (!await setExecution(Package, newValue.Value))
-            {
-                _restoringExecution = true;
-                Execution = oldValue;
-            }
-        }
-        finally
-        {
-            _restoringExecution = false;
-            IsChangingExecution = false;
-        }
-    }
 
     [ObservableProperty]
     private bool _canRead = permissions.Read;
@@ -1178,4 +1114,3 @@ public sealed partial class PluginRowViewModel(
     partial void OnCanNetworkChanged(bool value) => setPermission(Package, PluginPermission.Network, value);
 }
 
-public sealed record PluginExecutionOption(string? Value, string Label);

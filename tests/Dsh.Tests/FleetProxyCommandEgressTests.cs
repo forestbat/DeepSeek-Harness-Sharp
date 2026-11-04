@@ -252,27 +252,15 @@ public sealed class FleetProxyCommandEgressTests
     [InlineData("localForward")]
     public async Task KillingTheOwnedSsh_AbortsWithoutReplay_AndOnlyANewRequestRebuilds(string mode)
     {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        using var diagnostics = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
-        const int MaximumObservations = 64;
-        var observationCount = 0;
-        Task Observe(int stage) => Interlocked.Increment(ref observationCount) <= MaximumObservations
-            ? diagnostics.WriteLineAsync(
-                $"owned-ssh-r9 stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds}")
-            : Task.CompletedTask;
-        await Observe(1);
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
         await using var remoteProxy = new TestForwardProxy(pauseResponses: true);
         await using var tunnel = new SshOutboundTunnel(CreateMachine(ssh, remoteProxy, authenticated: false, mode: mode));
-        await Observe(2);
         var connections = new ConcurrentQueue<SshProxyStream>();
         async ValueTask<Stream> Connect(DnsEndPoint endpoint, CancellationToken token)
         {
-            await Observe(3);
             var stream = (SshProxyStream)await tunnel.ConnectAsync(endpoint, token);
             connections.Enqueue(stream);
-            await Observe(4);
             return stream;
         }
         using var outbound = new OutboundProxy();
@@ -280,50 +268,34 @@ public sealed class FleetProxyCommandEgressTests
         using var client = new HttpClient(outbound.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         deadline.CancelAfter(SignalTimeout);
-        try
-        {
-            var originalRoute = outbound.CaptureRoute(new Uri(Target));
-            await Observe(5);
-            var paused = client.GetStringAsync($"{Target}interrupted", Ct);
-            await remoteProxy.WaitForRequestAsync(deadline.Token);
-            await Observe(6);
-            var owned = Assert.Single(connections);
-            var originalPort = tunnel.LocalPort;
-            var exited = owned.Process.WaitForExitAsync(deadline.Token);
-            var retiredAtExit = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            owned.Process.Exited += (_, _) => retiredAtExit.TrySetResult(originalRoute.CancellationToken.IsCancellationRequested);
-            await Observe(7);
-            owned.Process.Kill(entireProcessTree: true);
-            await Observe(8);
-            await exited;
-            await Observe(9);
-            Assert.True(await retiredAtExit.Task.WaitAsync(deadline.Token),
-                "An unexpected SSH exit must retire the captured HTTP route before exit observers can release a pending response.");
-            await Observe(10);
-            remoteProxy.ReleaseResponse();
-            var failure = await Record.ExceptionAsync(async () => await paused.WaitAsync(deadline.Token));
-            Assert.True(failure is HttpRequestException or IOException or OperationCanceledException, "The interrupted request must fail rather than fall back or time out.");
-            Assert.False(deadline.IsCancellationRequested, "The interrupted send must fail before the watchdog.");
-            Assert.Equal([$"GET {Target}interrupted HTTP/1.1"], remoteProxy.Requests.ToArray());
-            if (originalPort is { } port)
-                FleetLocalForwardEgressTests.AssertPortCanRebind(port);
-            await Observe(11);
-            var fresh = client.GetStringAsync($"{Target}fresh", Ct);
-            await remoteProxy.WaitForRequestAsync(deadline.Token);
-            remoteProxy.ReleaseResponse();
-            Assert.Equal(TestForwardProxy.ProxiedBody, await fresh.WaitAsync(deadline.Token));
-            await Observe(12);
-            Assert.Equal([$"GET {Target}interrupted HTTP/1.1", $"GET {Target}fresh HTTP/1.1"], remoteProxy.Requests.ToArray());
-            var recovered = connections.ToArray();
-            Assert.Equal(2, recovered.Length);
-            Assert.NotSame(recovered[0].Process, recovered[1].Process);
-            Assert.NotEqual(originalRoute.Generation, outbound.CaptureRoute(new Uri(Target)).Generation);
-            await Observe(13);
-        }
-        finally
-        {
-            await Observe(14);
-        }
+        var originalRoute = outbound.CaptureRoute(new Uri(Target));
+        var paused = client.GetStringAsync($"{Target}interrupted", Ct);
+        await remoteProxy.WaitForRequestAsync(deadline.Token);
+        var owned = Assert.Single(connections);
+        var originalPort = tunnel.LocalPort;
+        var exited = owned.Process.WaitForExitAsync(deadline.Token);
+        var retiredAtExit = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        owned.Process.Exited += (_, _) => retiredAtExit.TrySetResult(originalRoute.CancellationToken.IsCancellationRequested);
+        owned.Process.Kill(entireProcessTree: true);
+        await exited;
+        Assert.True(await retiredAtExit.Task.WaitAsync(deadline.Token),
+            "An unexpected SSH exit must retire the captured HTTP route before exit observers can release a pending response.");
+        remoteProxy.ReleaseResponse();
+        var failure = await Record.ExceptionAsync(async () => await paused.WaitAsync(deadline.Token));
+        Assert.True(failure is HttpRequestException or IOException or OperationCanceledException, "The interrupted request must fail rather than fall back or time out.");
+        Assert.False(deadline.IsCancellationRequested, "The interrupted send must fail before the watchdog.");
+        Assert.Equal([$"GET {Target}interrupted HTTP/1.1"], remoteProxy.Requests.ToArray());
+        if (originalPort is { } port)
+            FleetLocalForwardEgressTests.AssertPortCanRebind(port);
+        var fresh = client.GetStringAsync($"{Target}fresh", Ct);
+        await remoteProxy.WaitForRequestAsync(deadline.Token);
+        remoteProxy.ReleaseResponse();
+        Assert.Equal(TestForwardProxy.ProxiedBody, await fresh.WaitAsync(deadline.Token));
+        Assert.Equal([$"GET {Target}interrupted HTTP/1.1", $"GET {Target}fresh HTTP/1.1"], remoteProxy.Requests.ToArray());
+        var recovered = connections.ToArray();
+        Assert.Equal(2, recovered.Length);
+        Assert.NotSame(recovered[0].Process, recovered[1].Process);
+        Assert.NotEqual(originalRoute.Generation, outbound.CaptureRoute(new Uri(Target)).Generation);
     }
 
     [Theory]

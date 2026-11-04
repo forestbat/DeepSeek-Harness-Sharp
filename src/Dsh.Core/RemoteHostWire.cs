@@ -277,7 +277,6 @@ public sealed record RemotePluginInfo(string Package, string Description, bool E
 
 public sealed record RemotePluginPermissionRequest(string Package, string Permission, bool Allowed);
 
-public sealed record RemotePluginExecutionRequest(string Package, string? Execution);
 
 
 public sealed record RemotePtyAttachRequest(string PtyId, string SubscriptionId);

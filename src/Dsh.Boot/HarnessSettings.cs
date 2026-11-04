@@ -99,7 +99,7 @@ public sealed class HarnessSettings
         return () =>
         {
             if (!File.Exists(home.SettingsFile)) return fallback ?? new HarnessSettings();
-            var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
+            var canonical = Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
             if (PublicationPath.Value == canonical)
                 return Read(canonical, ReadSettingsTextShared(canonical));
             using var transaction = new SettingsWriteLock(canonical);
@@ -128,7 +128,7 @@ public sealed class HarnessSettings
 
     public static HarnessSettings LoadForReview(HarnessHome home)
     {
-        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
+        var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
         if (PublicationPath.Value == canonical)
             return LoadSnapshot(home.SettingsFile, canonical);
         using var transaction = new SettingsWriteLock(home.SettingsFile);
@@ -186,7 +186,7 @@ public sealed class HarnessSettings
         if (saved is not null)
         {
             _savedDocument = saved;
-            _savedPath = Dsh.Sandbox.SandboxFileAccess.Canonicalize(home.SettingsFile);
+            _savedPath = global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
         }
     }
 
@@ -259,7 +259,7 @@ public sealed class HarnessSettings
     /** Applies a raw document transform while owning the settings writer transaction. */
     internal static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
     {
-        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
+        var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(path);
         using var transaction = new SettingsWriteLock(canonical);
         var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
         if (PrepareMutation(before, canonical, prepare) is not { } after)
@@ -386,7 +386,7 @@ public sealed class HarnessSettings
 
         public SettingsWriteLock(string path)
         {
-            var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
+            var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(path);
             CanonicalPath = canonical;
             if (PublicationPath.Value == canonical)
                 throw new InvalidOperationException("A settings commit callback cannot reenter settings persistence.");

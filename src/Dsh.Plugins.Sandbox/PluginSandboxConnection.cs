@@ -7,7 +7,7 @@ using Dsh.Plugins;
 using Dsh.Sandbox;
 using Dsh.Transport;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** Broker checks are per plugin; plugins sharing this process are co-trusted. */
 internal sealed class PluginSandboxConnection : IAsyncDisposable

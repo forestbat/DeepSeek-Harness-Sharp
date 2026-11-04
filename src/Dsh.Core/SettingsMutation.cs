@@ -42,7 +42,7 @@ public static class SettingsMutation
         var gate = context?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
         var active = gate?.SettingsPath ?? context?.GetProp(ISettingsMutationGate.SettingsPathProperty) as string;
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var isSettings = active is not null && comparer.Equals(SandboxFileAccess.Canonicalize(path), SandboxFileAccess.Canonicalize(active));
+        var isSettings = active is not null && comparer.Equals(global::Dsh.Transport.FilePathAccess.Canonicalize(path), global::Dsh.Transport.FilePathAccess.Canonicalize(active));
         if (isSettings)
             await RequireGate(run).CommitAsync(new(path, before, after, run),
                 (temporary, cancellation) => WriteFileAsync(temporary, after, FileMode.Create, cancellation), token).ConfigureAwait(false);

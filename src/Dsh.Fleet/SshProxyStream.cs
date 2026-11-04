@@ -10,7 +10,6 @@ namespace Dsh.Fleet;
 internal sealed class SshProxyProcess : IAsyncDisposable
 {
     private const int DiagnosticCapacity = 8192;
-    private readonly object _gate = new();
     private readonly bool _persistent;
     private readonly ISshTransportAdapter? _adapter;
     private readonly CancellationTokenSource _stop = new();
@@ -40,6 +39,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
         FailureToken = _failure.Token;
     }
 
+    // Exit callbacks hold this process monitor; lifecycle state uses the same monitor.
     internal Process Process { get; }
     internal CancellationToken FailureToken { get; }
     internal Stream Input => Process.StandardInput.BaseStream;
@@ -50,7 +50,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
     {
         try
         {
-            lock (_gate)
+            lock (Process)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 cancellationToken.ThrowIfCancellationRequested();
@@ -87,7 +87,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
 
     private void OnExited(object? sender, EventArgs args)
     {
-        lock (_gate)
+        lock (Process)
         {
             if (_started && !_exitClassified.Task.IsCompleted)
                 ClassifyExit();
@@ -100,7 +100,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
         try
         {
             await _exited.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-            lock (_gate)
+            lock (Process)
             {
                 if (!_exitClassified.Task.IsCompleted)
                     ClassifyExit();
@@ -137,7 +137,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
     {
         if (observeExit)
         {
-            lock (_gate)
+            lock (Process)
             {
                 if (_started && !_disposed && Process.HasExited)
                     ClassifyExit();
@@ -149,7 +149,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
 
     private void SignalFailure()
     {
-        lock (_gate)
+        lock (Process)
         {
             if (_disposed)
                 return;
@@ -232,7 +232,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
 
     private void DeleteAskPass(bool retryCleanup = false)
     {
-        lock (_gate)
+        lock (Process)
         {
             if (_askPass is not { } path)
                 return;
@@ -255,7 +255,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
 
     internal void Dispose(bool retryCleanup = false)
     {
-        lock (_gate)
+        lock (Process)
         {
             if (_disposed)
             {
@@ -308,7 +308,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
 
     internal ValueTask ReleaseAsync(bool retryCleanup)
     {
-        lock (_gate)
+        lock (Process)
         {
             if (_disposal is null)
                 _disposal = ReleaseProcessAsync(retryCleanup);
@@ -347,7 +347,7 @@ internal sealed class SshProxyProcess : IAsyncDisposable
                 }
                 finally
                 {
-                    lock (_gate)
+                    lock (Process)
                     {
                         Process.Exited -= OnExited;
                         Process.Dispose();

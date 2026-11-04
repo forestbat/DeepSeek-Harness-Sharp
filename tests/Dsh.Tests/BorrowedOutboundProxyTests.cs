@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using System.Diagnostics;
 using System.Net;

@@ -202,7 +202,7 @@ public static class NativePluginBridge
 
     private sealed class NativePluginAdapter(INativePlugin plugin) : IDshPlugin
     {
-        public string[] Inject => [];
+        public string[] Inject => [ToolRuntime.ServiceName, IPluginHostFactory.ServiceName];
 
         public async Task<IDisposable?> ApplyAsync(Context ctx, object? config, CancellationToken cancellationToken = default)
             => await CreateDefinition(plugin).Apply(ctx, config, cancellationToken).ConfigureAwait(false) as IDisposable;

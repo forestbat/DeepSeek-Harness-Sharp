@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dsh.Runtime;
 
 namespace Dsh.Plugins;
 
@@ -8,6 +9,13 @@ public interface IPluginHost
     IDisposable RegisterTool(PluginToolDefinition definition);
     ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default);
     void Log(int level, string message);
+}
+
+public interface IPluginHostFactory
+{
+    const string ServiceName = "pluginCapabilities";
+
+    IPluginHost Create(string package, Context context);
 }
 
 public sealed record PluginToolDefinition(
@@ -20,6 +28,9 @@ public static class PluginHostOperations
 {
     /// <summary>Maximum encoded capability or worker protocol frame size.</summary>
     public const int MaximumFrameBytes = 1024 * 1024;
+
+    /// <summary>Maximum tool registrations owned by a capability host or shared worker.</summary>
+    public const int MaximumTools = 256;
 
     /// <summary>{path, offset?, count?} returns {data: base64, length, eof}.</summary>
     public const string ReadFile = "files.read";

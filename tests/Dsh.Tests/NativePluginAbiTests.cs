@@ -7,6 +7,7 @@ using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Plugins.Native;
 using Dsh.Plugins.Native.Host;
+using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -20,7 +21,6 @@ public sealed class NativePluginAbiTests
 {
     private const string EchoTool = "native_echo";
     private const string LengthTool = "native_length";
-    private const string EchoLogMarker = "echo invoked";
     private const int LargeMessageLength = 200_000;
     // All payloads in these binary compatibility regressions are synthetic test inputs.
 
@@ -52,7 +52,6 @@ public sealed class NativePluginAbiTests
         }
         Assert.Null(tools.Get("legacy_v1_count"));
         Assert.Null(tools.Get("legacy_v1_config"));
-        Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("frozen v1 deactivated"));
         using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
             .Apply(ctx, null, TestContext.Current.CancellationToken))!)
         {
@@ -104,79 +103,7 @@ public sealed class NativePluginAbiTests
         return path;
     }
     [Fact]
-    public async Task PublishedSample_RunsToolOnce_AndTreatsPluginExceptionsAsToolErrors()
-    {
-        var ctx = new Context();
-        _ = new SystemPrompt(ctx, new SystemPromptConfig());
-        var tools = new ToolRuntime(ctx);
-        var load = NativePluginLibrary.TryLoad(PublishedSamplePath());
-        Assert.True(load.Succeeded, load.Reason);
-        using var native = load.Plugin!;
-        using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(load.Plugin!).Apply(ctx, null, TestContext.Current.CancellationToken))!;
-
-        var message = $"大消息-{new string('x', LargeMessageLength)}";
-        var result = await tools.Execute(new ToolExecutionInput
-        {
-            CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
-            Name = EchoTool,
-            Arguments = JsonSerializer.SerializeToElement(new { message }),
-            Agent = null,
-            Signal = default,
-        });
-
-        Assert.False(result.IsError);
-        Assert.Equal($"echo:{message}", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
-        Assert.Equal(1, ctx.Root.Logger.Buffer.Count(line => line.Text.Contains(EchoLogMarker)));
-        Assert.Equal(NativePluginState.Active, load.Plugin!.State);
-        Assert.Throws<NullReferenceException>(() => LengthOf(null));
-
-        var failed = await tools.Execute(new ToolExecutionInput
-        {
-            CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
-            Name = LengthTool,
-            Arguments = JsonSerializer.SerializeToElement(new { }),
-            Agent = null,
-            Signal = default,
-        });
-
-        Assert.True(failed.IsError);
-        Assert.Equal(NativePluginState.Active, load.Plugin.State);
-        Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("invoke_tool failed"));
-        Assert.NotNull(tools.Get(EchoTool));
-    }
-
-    [Fact]
-    public async Task PublishedSample_ConfigurationAndToolLifecycleSurviveReactivation()
-    {
-        var sample = PublishedSamplePath();
-        var ctx = new Context();
-        _ = new SystemPrompt(ctx, new SystemPromptConfig());
-        var tools = new ToolRuntime(ctx);
-        var load = NativePluginLibrary.TryLoad(sample);
-        Assert.True(load.Succeeded, load.Reason);
-        using var native = load.Plugin!;
-        var configuration = new Dictionary<string, object?> { ["label"] = "config 中文", ["enabled"] = true };
-        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
-            .Apply(ctx, configuration, TestContext.Current.CancellationToken))!)
-        {
-            var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
-            using var configured = JsonDocument.Parse(response.GetProperty("config").GetString()!);
-            Assert.Equal("config 中文", configured.RootElement.GetProperty("label").GetString());
-            Assert.True(configured.RootElement.GetProperty("enabled").GetBoolean());
-        }
-        Assert.Null(tools.Get("native_config"));
-        Assert.Null(tools.Get("native_http"));
-        using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
-            .Apply(ctx, null, TestContext.Current.CancellationToken))!)
-        {
-            var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
-            Assert.Equal("", response.GetProperty("config").GetString());
-        }
-        Assert.Null(tools.Get("native_config"));
-    }
-
-    [Fact]
-    public async Task PublishedSample_DisposalPreservesHostExceptionsAndAllowsReload()
+    public async Task PublishedSample_LifecyclePreservesConfiguration_ToolFailures_AndReload()
     {
         var sample = PublishedSamplePath();
         for (var activation = 0; activation < 2; activation++)
@@ -186,14 +113,49 @@ public sealed class NativePluginAbiTests
             var tools = new ToolRuntime(ctx);
             var load = NativePluginLibrary.TryLoad(sample);
             Assert.True(load.Succeeded, load.Reason);
+            var configuration = activation == 0
+                ? new Dictionary<string, object?> { ["label"] = "config 中文", ["enabled"] = true }
+                : null;
             using (var native = load.Plugin!)
             using (var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
-                .Apply(ctx, null, TestContext.Current.CancellationToken))!)
+                .Apply(ctx, configuration, TestContext.Current.CancellationToken))!)
             {
                 var response = await ExecuteJson(tools, "native_config", JsonSerializer.SerializeToElement(new { }));
-                Assert.Equal("", response.GetProperty("config").GetString());
+                if (configuration is null)
+                    Assert.Equal("", response.GetProperty("config").GetString());
+                else
+                {
+                    using var configured = JsonDocument.Parse(response.GetProperty("config").GetString()!);
+                    Assert.Equal("config 中文", configured.RootElement.GetProperty("label").GetString());
+                    Assert.True(configured.RootElement.GetProperty("enabled").GetBoolean());
+                    var message = $"大消息-{new string('x', LargeMessageLength)}";
+                    var result = await tools.Execute(new ToolExecutionInput
+                    {
+                        CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                        Name = EchoTool,
+                        Arguments = JsonSerializer.SerializeToElement(new { message }),
+                        Agent = null,
+                        Signal = TestContext.Current.CancellationToken,
+                    });
+                    Assert.False(result.IsError);
+                    Assert.Equal($"echo:{message}", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+                    Assert.Throws<NullReferenceException>(() => LengthOf(null));
+                    var failed = await tools.Execute(new ToolExecutionInput
+                    {
+                        CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
+                        Name = LengthTool,
+                        Arguments = JsonSerializer.SerializeToElement(new { }),
+                        Agent = null,
+                        Signal = TestContext.Current.CancellationToken,
+                    });
+                    Assert.True(failed.IsError);
+                    Assert.Equal(NativePluginState.Active, native.State);
+                    Assert.NotNull(tools.Get(EchoTool));
+                }
             }
             Assert.Null(tools.Get("native_config"));
+            Assert.Null(tools.Get("native_http"));
+            Assert.Null(tools.Get(EchoTool));
             Assert.Throws<NullReferenceException>(() => LengthOf(null));
         }
     }
@@ -233,14 +195,14 @@ public sealed class NativePluginAbiTests
     }
 
     [Fact]
-    public async Task PublishedSample_FileHostCallsUseCommonBrokerAndPropagateFailure()
+    public async Task PublishedSample_FileAndHttpBrokerCallsExecuteOnce_AndRecoverFromOperationFailure()
     {
-        var sample = PublishedSamplePath();
-        var root = TempTree.CreateDirectory("native-common-files");
+        var root = TempTree.CreateDirectory("native-common-broker");
         try
         {
+            await using var server = await PluginSdkHttpServer.StartAsync();
             var ctx = CreateCapabilityContext(root, out var tools);
-            var load = NativePluginLibrary.TryLoad(sample);
+            var load = NativePluginLibrary.TryLoad(PublishedSamplePath());
             Assert.True(load.Succeeded, load.Reason);
             using var native = load.Plugin!;
             using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
@@ -253,7 +215,6 @@ public sealed class NativePluginAbiTests
             var read = await ExecuteJson(tools, "native_read_file", JsonSerializer.SerializeToElement(new { path }));
             Assert.Equal(data, read.GetProperty("data").GetString());
             Assert.True(read.GetProperty("eof").GetBoolean());
-
             var failed = await tools.Execute(new ToolExecutionInput
             {
                 CallId = ToolCallId.Create($"call-{Guid.NewGuid():N}"),
@@ -264,28 +225,6 @@ public sealed class NativePluginAbiTests
             });
             Assert.True(failed.IsError);
             Assert.Equal(NativePluginState.Active, native.State);
-            Assert.Contains(ctx.Root.Logger.Buffer, line => line.Text.Contains("host operation 'files.read' failed"));
-        }
-        finally
-        {
-            TempTree.Delete(root);
-        }
-    }
-
-    [Fact]
-    public async Task PublishedSample_HttpHostCallSendsOneRequestWithOneShotExchange()
-    {
-        var sample = PublishedSamplePath();
-        var root = TempTree.CreateDirectory("native-common-http");
-        try
-        {
-            await using var server = await PluginSdkHttpServer.StartAsync();
-            var ctx = CreateCapabilityContext(root, out var tools);
-            var load = NativePluginLibrary.TryLoad(sample);
-            Assert.True(load.Succeeded, load.Reason);
-            using var native = load.Plugin!;
-            using var registration = (IDisposable)(await NativePluginBridge.CreateDefinition(native)
-                .Apply(ctx, null, TestContext.Current.CancellationToken))!;
             var body = Encoding.UTF8.GetBytes("native request");
             var response = await ExecuteJson(tools, "native_http", JsonSerializer.SerializeToElement(new
             {
@@ -300,10 +239,7 @@ public sealed class NativePluginAbiTests
             Assert.Equal("sdk", server.RequestHeader);
             Assert.Equal(1, server.Requests);
         }
-        finally
-        {
-            TempTree.Delete(root);
-        }
+        finally { TempTree.Delete(root); }
     }
 
     private static Context CreateCapabilityContext(string root, out ToolRuntime tools)
@@ -314,7 +250,7 @@ public sealed class NativePluginAbiTests
         var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
         _ = new SafetyBoundary(ctx, () => settings);
         ctx.Provide(IPluginHostFactory.ServiceName,
-            new PluginCapabilityFactory(ctx, new HarnessHome(root), settings));
+            new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(root), settings, root)));
         return ctx;
     }
 

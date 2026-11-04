@@ -628,33 +628,6 @@ public sealed class ChatWindowPaneTests : IDisposable
         var shell = PtyShell.Resolve();
         if (!PtyShell.Exists(shell))
             Assert.Skip("The interactive shell executable is unavailable.");
-        var startup = Stopwatch.StartNew();
-        var stages = Enumerable.Repeat(-1L, 21).ToArray();
-        var shellCode = Path.GetFileNameWithoutExtension(shell).ToLowerInvariant() switch
-        {
-            "pwsh" => 1,
-            "powershell" => 2,
-            "cmd" => 3,
-            "bash" => 4,
-            "zsh" => 5,
-            "sh" => 6,
-            _ => 0,
-        };
-        using var stageOutput = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
-        var shellProcessId = 0;
-        var observing = true;
-        chat.ShellStartupStage = stage =>
-        {
-            lock (stageOutput)
-            {
-                if (!observing || stages[stage] >= 0)
-                    return;
-                var milliseconds = startup.ElapsedMilliseconds;
-                stages[stage] = milliseconds;
-                stageOutput.WriteLine($"owned-pane-r12 stage={stage} ms={milliseconds} pid={Volatile.Read(ref shellProcessId)} shell={shellCode}");
-            }
-        };
-        chat.ShellStartupStage.Invoke(15);
         var session = await PtyHost.Default.StartAsync(new PtyStartInfo
         {
             FileName = shell,
@@ -662,8 +635,6 @@ public sealed class ChatWindowPaneTests : IDisposable
             Rows = 24,
             Columns = 80,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Volatile.Write(ref shellProcessId, session.ProcessId ?? 0);
-        chat.ShellStartupStage.Invoke(0);
         try
         {
             var layout = LayoutEngine.Calculate(120, 40);
@@ -677,7 +648,6 @@ public sealed class ChatWindowPaneTests : IDisposable
             Press(chat, ConsoleKey.Enter);
             chat.DrainUi();
             Assert.True(chat.InPtyLayer);
-            chat.ShellStartupStage.Invoke(11);
             var paneId = chat.FocusedPaneId;
             // pty 层是"一层", 不进窗格目录; 但它绑定的就是这个真 shell。
             var panes = await DispatchAsync(chat, chat.SnapshotPanesAsync());
@@ -685,16 +655,7 @@ public sealed class ChatWindowPaneTests : IDisposable
 
             // A computed marker confirms that the shell executed the submitted command.
             var promptText = await WaitForPaneTextAsync(chat, paneId, HasPrompt);
-            var promptReady = HasPrompt(promptText);
-            if (promptReady)
-                chat.ShellStartupStage.Invoke(20);
-            var diagnostics = "";
-            if (!promptReady)
-            {
-                var hostText = session.SnapshotText();
-                diagnostics = $" shell={shellCode}; status={(int)session.Status}; host-chars={hostText.Length}; host-prompt={(HasPrompt(hostText) ? 1 : 0)}; pane-chars={promptText.Length}; elapsed-ms={startup.ElapsedMilliseconds}; stages-ms=[{string.Join(',', stages)}]";
-            }
-            Assert.True(promptReady, $"The shell did not render its prompt before input.{diagnostics}");
+            Assert.True(HasPrompt(promptText), "The shell did not render its prompt before input.");
             var input = Path.GetFileNameWithoutExtension(shell).Equals("cmd", StringComparison.OrdinalIgnoreCase)
                 ? "cmd /v:on /c \"set /a m=6*7 & echo STAGE1-!m!\"\r"
                 : "echo STAGE1-$((6*7))\r";
@@ -703,11 +664,6 @@ public sealed class ChatWindowPaneTests : IDisposable
         }
         finally
         {
-            lock (stageOutput)
-            {
-                observing = false;
-                chat.ShellStartupStage = null;
-            }
             await PtyHost.Default.StopAsync(session.Id.Value);
             chat.Dispose();
         }

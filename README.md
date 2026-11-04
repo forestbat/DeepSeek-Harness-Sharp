@@ -421,134 +421,38 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 含旧预设事件且未标记为可忽略的会话，仍按通用未知事件规则拒绝读取。
 会话起始模板（`.agent-presets`）和计划模式不受影响。
 
-#### 插件执行角色与沙箱
+#### 插件沙箱
 
-`sandbox.enabled` 默认是 `false`，用于保留现有插件、shell、PTC、C# 前端与 MCP 的运行方式；此时配置的插件权限不是任意 BCL/原生调用的 OS 限制。可信工具与 typed settings API 对实际配置差异的审批始终启用，不随沙箱开关关闭。
-
-需要 OS 保护时，在自己的 `settings.yaml` 中明确开启，并分别设置插件能力和脚本权限：
+`sandbox.enabled` 默认关闭，保留原有运行方式；开启后，外部能力插件在共享的 OS 沙箱进程中运行，通过宿主中介读写文件和访问网络。
+编译进应用的插件默认在宿主执行；外部完整 `Context` 插件需要在 YAML 中显式设置 `execution: host`，这表示完整进程内信任。
 
 ```yaml
 sandbox:
   enabled: true
+plugins:
+  "@example/report":
+    permissions:
+      read: true
+      write: false
+      network: false
 scripts:
   permissions:
     read: true
     write: false
     network: false
-plugins:
-  "@example/report":
-    enabled: true
-    execution: sandbox
-    permissions:
-      read: true
-      write: false
-      network: false
 ```
 
-省略 `execution` 时，编译进当前应用镜像的插件默认在宿主执行，外部文件插件默认在共享沙箱执行；显式 `sandbox` 或 `host` 覆盖该缺省。
-这一区分取决于实际制品形态，不取决于作者、包名前缀或预置包身份。
-托管隔离插件必须实现 `IDshIsolatedPlugin`，原生插件使用同一 broker 操作。
-完整 `Context` 或入口文件插件缺少 `execution: host` 时跳过并报告；编译插件显式选择不兼容的 `sandbox` 也使用相同失败汇总，扫描继续，取消仍传播。
-权限值未指定时为允许，因此要按需要显式收紧 `read`、`write`、`network`。
+未指定的权限为允许，可通过 GUI 或 TUI 插件命令修改；脚本权限单独作用于 `run_csx` 和 `run_csharp_repl`。
+settings 变更审批始终启用，宿主角色的权限位只限制中介调用，不限制同进程代码的任意访问。
+开启沙箱不等于隔离所有工具，shell、PTC、PTY、编辑器和远程进程不会被自动接管。
 
-隔离 worker 不直接取得业务目录、宿主凭据或网络访问。托管与原生插件通过同一组 broker 操作 `files.read`、`files.write`、`http.send` 请求能力；broker 检查对应插件的当前权限、路径与读写大小，写活动 settings 还需要真实工具上下文和 diff 审批。受限接口不暴露 `Context`、`IAgent` 或宿主服务对象。
+Linux 需要可用的 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程隔离；所需能力不可用时明确失败，不降级为普通进程。
+隔离插件共享地址空间，必须相互信任；崩溃、超时或取消会影响整个共享进程，不自动重放调用，也不提供内存用量限制。
+切换沙箱总开关需要重启；已经加载进宿主的代码不能被追溯隔离。
 
-外部完整 `IDshPlugin`/`Context` 组合插件需要显式选择完全信任的宿主角色：
+托管插件沿用 `IDshPlugin`，开发示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生插件保留 C ABI v1，见 [`templates/native-plugin`](templates/native-plugin)。
 
-```yaml
-plugins:
-  "@example/workspace-host":
-    execution: host
-    permissions:
-      read: true
-      write: false
-      network: false
-```
 
-这些权限位只约束宿主角色通过 broker 发起的调用，不能撤销同地址空间代码的任意 BCL/原生访问。
-GUI 提供默认、Sandbox、Host 三态执行选择，默认清除显式覆盖并恢复按制品形态的缺省；Host 表示完整进程内信任。
-沙箱关闭时，执行选择只保存将来开启沙箱时使用的配置，当前运行方式仍是原有的进程内执行。
-GUI 的三个权限开关与 TUI 的 `ban_read`/`enable_read`、`ban_write`/`enable_write`、`ban_network`/`enable_network` 都通过实际设置审批保存，不因插件来自编译镜像而禁用。
-TUI 执行角色通过手工编辑 YAML 管理。
-需要真正受限的执行，应迁移到能力接口，而不是仅修改角色名称或权限位。
-
-模板不为预置插件写入批量宿主授权；已有配置无需补写角色即可采用上述中性缺省，`Dsh.Tool` 原有默认写能力/白名单不因此被收回。
-
-**已经编译进主进程镜像的代码与模块初始化器都是宿主可信计算基（TCB）的一部分。** 事后把某个类型放入 worker，不能隔离它已经在主进程执行过的初始化器；不可信代码应作为独立文件部署的能力插件加载。
-
-`/plugins add` 在实际共享 worker 中观察工件并检查将启用的执行角色，之后才进入 settings 差异审批与安装。
-检查使用独占 staging 副本，完成探测和卸载后释放，拒绝、失败、取消也释放该次副本。
-激活使用域拥有的独立副本，整个已安装插件目录及 `.shared` 保持布局；旧式根目录和外部单文件只复制同目录代码文件及 `.shared`。
-运行时使用应用、dotnet host/shared、工具安装与 SDK 的只读目录根，业务 HOME 保持在代码根之外。
-文件使用普通流与路径、权限和大小检查。
-
-Worker 启动的单个15秒截止共同覆盖原生启动与 `sandbox/ready` 握手；启动完成后的工件观察另有20秒截止。
-启动取消仍按取消处理，错误仅提供有界阶段（`launch-options`、`native-launch`、`protocol-setup`、`ready-request`）、启动任务状态、进程持有情况与清理前采样的取消状态，不包含路径或 worker stderr。
-这些字段说明尚未完成的启动操作，不代表已经定位底层原因。
-工件观察先于 settings 差异审批与安装，因此启动取消不是审批拒绝，也不生成拒绝审计。
-
-权限变化在下一次 broker 操作即时生效，保留共享 worker 与 sibling 实例、状态。
-独立释放一个插件的 lease 只卸载该包在 worker 中的激活、工具和 broker 绑定，其他包继续运行。
-显式禁用、卸载、执行边界切换或故障恢复会退役旧共享 worker 并重建仍启用的成员，不重放失败或取消的调用。
-拒绝配置审批不会提交对应变更。
-
-`sandbox.enabled` 与宿主启动时的值不同会要求重启；热切换不会追溯隔离已经加载到主进程的代码。
-
-#### 共享 worker 与平台边界
-
-所有隔离插件共用一个 worker，托管与原生代码共享地址空间和故障后果。它们必须相互信任；broker 的逐插件权限不是抵御同进程恶意插件伪造调用身份或内存访问的边界。崩溃、超时或取消会影响共享 worker 中的成员，主进程保留并返回明确错误。
-
-产品不提供 worker 内存上限、内存用量监测或内存耗尽保护；需要资源预算时，应由独立运行环境管理。
-
-| 平台 | 必需条件与实际边界 |
-|---|---|
-| Linux | 需要可用的 bubblewrap 及所需 namespace、挂载能力，提供文件与网络隔离；后端或能力不可用时明确拒绝，不自动下载或改用普通进程。 |
-| Windows | 使用 AppContainer 文件/网络边界及 Job Object 的进程树终止能力；可写目录使用显式授权。AppContainer 的 localhost/loopback 限制仍可能阻止本机服务连接，不自动添加 loopback exemption。 |
-| macOS | 需要系统 `sandbox-exec`，保留单进程 Seatbelt 文件/网络隔离；要求派生子进程的执行明确拒绝，不声称已解决任意后代进程的所有权。 |
-
-Windows 进程创建失败会报告实际 Win32 错误码；载荷不附着控制台，三条标准流仅继承明确列出的管道，AppContainer 与 Job 约束在恢复执行前建立。
-Windows 子进程保留声明的工作目录，相对路径按该目录解析。
-Windows 的单文件读取授权不包含父目录枚举；`cmd` 的文件名形式 `TYPE` 会先搜索目录，不能作为仅有单文件读取权限的通用消费者。
-直接打开文件与列出父目录是不同的[文件访问权限](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)，后端不会为命令的额外目录搜索扩大单文件授权。
-可写目录内的只读或保护路径通过收窄当前 AppContainer SID 的 allow ACE 实现，不依赖包 SID 的 deny ACE；必要时暂时停止该对象的 DACL 继承，释放时按当前 ACL 移除本次 SID，并仅清除临时保护形成且内容未变的继承 ACE 副本，再恢复原继承状态；期间其他主体新增或修改的显式 ACE 不回滚。
-Windows 引导仅为可执行文件与工作目录对象添加不继承的当前 AppContainer SID 读取/执行授权；打开这两个对象及撤销引导授权只请求 `READ_CONTROL | WRITE_DAC`，不请求数据写入、删除或最大可用权限。正常 ACL 写入仍传播其他主体已有的可继承 ACE，不禁用系统继承传播。
-同一 SID 已继承、有效且完全匹配所需传播范围的授权会直接复用，不重复改写运行时或可写目录后代的 DACL；额外的环境组授权检查及保护路径的过量权限收窄仍然执行。
-只读授权还会检查已创建但尚未恢复执行的实际子进程 token：复用已有只读权限前，逐一读取每个现有对象的 ACL、所有者、组与完整性标签，只有稳定的纯 allow ACL 已允许该 token 读取/执行，且目录的稳定继承 ACE 同时能证明未来文件与目录的权限时，才免去添加本次 SID。泛型权限按实际文件继承规则映射；无法取得 token、查询失败、权限或未来继承无法证明时，回到原有逐对象授权与收窄路径，不省略后代检查。完整策略在受 Job 管理的暂停子进程恢复执行前完成。
-同权限目录根先处理祖先，并复用已经枚举的子树；不同权限的子树仍完整处理，应用、工具安装与 SDK 的实际只读目录根保持不变。
-目录授权在启动前递归准备普通后代，文件与目录的分类直接复用枚举器返回的属性，并跳过 reparse-point 条目，不扩大声明的目录树。
-同进程并发沙箱的 ACL 读改写与原生继承传播串行完成，各自只移除自身 SID；临时 DACL 保护与可写完整性标签由仍存活的路径租约共同持有，最后一个使用者释放时才恢复，避免先结束的沙箱撤销另一个沙箱仍需要的边界或写入能力。
-Windows 启动在目录枚举、授权和进程创建/恢复前观察原调用取消；取消后的已获授权仍按原清理路径撤销，不继续启动迟到的载荷，也不重放请求。
-Windows 的 `SetSecurityInfo` 可能把旧式 DACL 转换到[自动继承模型](https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces)并设置 SDDL 的 `AI` 标记；恢复契约保留全部 ACE 的顺序、权限与标志及原继承保护状态，并保持后续实际继承与保护行为，不要求撤销该系统元数据转换。
-若既有 AppContainer 组或本次启用的 capability SID 在保护对象或相关祖先上已有额外写入、删除或改权限的 allow，后端明确拒绝启动，不修改其他 SID 来伪装通用 deny 支持。
-保护路径的可写祖先目录不授予自身删除权限，但新建的普通工作区文件仍可继承正常修改、改名与删除权限。
-AppContainer 的应用数据目录由 Windows 按当前容器身份重定向，用作容器自有临时区；这不授予宿主工作目录写权限，也不意味着继承完整宿主环境。
-
-macOS 的 dyld 共享缓存引导需要读取根目录对象；该权限仅针对 `/` 目录本身，不是递归读取根目录下文件内容的授权。
-托管 worker 的全球化运行时可只读系统 `/usr/share/icu` 数据；该例外不授予写入、执行或读取其他宿主数据的权限。
-单进程镜像替换只允许执行明确授权的只读输入；目录读取授权不自动变成执行授权。
-
-`scripts.permissions.read/write/network` 只用于实际脚本执行器 `run_csx` 和 `run_csharp_repl`，不从执行器插件权限推导，未指定的值为允许。
-沙箱开启时，脚本工作目录的数据访问按这些权限授权，运行时代码只读输入和独占临时目录另外授权；禁止工作目录写入仍可在私有临时目录计算。
-Linux 的 `read: false, write: false` 使用空的 guest 工作目录；`read: false, write: true` 无法兑现只写目录语义，明确拒绝。
-后续脚本调用读取当前权限；关闭沙箱时保留原有执行方式。
-
-可归属的本机 MCP stdio 进程保留显式 OS 沙箱启动路径，不支持的后端/子进程需求明确失败。shell、持久 shell、PTC、原生 PTY、编辑器、Git、远程和不可归属 MCP 不被这套脚本策略全局接管，也不因开启插件沙箱而自动获得 OS 保护。
-
-#### 能力 SDK 与原生 ABI
-
-`IPluginHost`、`IDshIsolatedPlugin` 与 `PluginHostOperations` 位于 `Dsh.Plugins.Abstractions`，命名空间仍为 `Dsh.Plugins`。托管隔离插件通过 `InitializeAsync(IPluginHost, JsonElement, CancellationToken)` 初始化，使用 `RegisterTool`、`CallAsync` 和 `Log`；插件引用宿主提供的同一契约，不打包第二份宿主契约程序集。
-
-`templates/managed-plugin` 保留 `IDshPlugin.Apply(Context, ...)` 生命周期、配置和 prompt 注入，并演示能力调用；它不是隔离插件模板，开启沙箱时仍需显式宿主角色。原生示例见 `tests/Dsh.NativePluginSample`。
-
-- `files.read`：参数 `{path, offset?, count?}`，返回 `{data, length, eof}`，`data` 为 base64。
-- `files.write`：参数 `{path, data, append?}`，`data` 为 base64，返回 `{bytesWritten}`。
-- `http.send`：参数 `{url, method?, headers?, body?}`，`body` 为 base64，返回 `{status, headers, body}`。
-
-原生 ABI 保留 **v1** 版本、原入口和旧表前缀，在宿主 API 尾部追加可选 `HostCall`。新增可选入口 `dsh_plugin_entry_with_host_size` 用实际表长协商新能力；仅有版本号不能证明尾部字段存在，新插件在旧宿主中只读取旧前缀。原有 v1 二进制不要求重建。
-
-`NativePluginContext.CallHost` / `DshNativePluginRuntime.CallHost` 使用上述操作与 JSON 语义，当前宿主以一次同步调用和完整响应缓冲执行，不通过重复调用业务操作探测结果大小。原生 SDK 同样提供 `Native.Host.SettingsJson.Write`。
-
-原生插件的逻辑停用会注销工具并释放本次激活资源，但镜像可驻留到所属进程退出。[NativeAOT 不支持通过 `dlclose` / `FreeLibrary` 卸载共享库](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/libraries)；替换原生工件后需要新 worker 或重启宿主，不宣称普通加载器会识别内容变化或逻辑卸载能回收镜像。
 
 <details>
 <summary>插件配置</summary>
@@ -618,6 +522,7 @@ sandbox:
 - 新增 Kilo Code 内置适配器，支持 ACP 会话与交互终端入口。
 - 内置 Host 新建或恢复会话时继承启动默认模型与 reasoning；持久化的会话选择仍优先，完全未配置模型时仍明确报错。
 - SSH 借用出口区分跳板 `-W` 目标连接失败与本机转发监听失败，避免将 `stdio forwarding failed` 误报为本机端口绑定冲突。
+- 修复 SSH 退出与连接关闭并发时的回收死锁；故障请求仍不自动重放，只由新的请求重建出口。
 
 </details>
 

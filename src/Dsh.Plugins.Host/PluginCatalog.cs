@@ -48,7 +48,23 @@ public sealed class PluginCatalog
     {
         if (!_plugins.TryGetValue(packageName, out var holder))
             throw new KeyNotFoundException($"Plugin package '{packageName}' is not registered.");
-        return holder.ToDefinition();
+        return CreateDefinition(holder.Descriptor, holder.Create);
+    }
+
+    public static PluginDefinition CreateDefinition(PluginDescriptor descriptor, Func<IDshPlugin> create)
+    {
+        var probe = create();
+        var configType = probe.ConfigType;
+        return new PluginDefinition
+        {
+            Name = descriptor.Package,
+            Inject = probe.Inject,
+            InjectTypes = probe.InjectTypes,
+            ConfigType = configType,
+            Apply = async (ctx, config, cancellationToken) => await create().ApplyAsync(ctx,
+                configType is null ? config : PluginConfigBinding.Bind(configType, config,
+                    message => ctx.LoggerFor("config").Warn("%s", message)), cancellationToken).ConfigureAwait(false),
+        };
     }
 
     public bool TryCreateDefinition(string packageName, out PluginDefinition? definition)
@@ -58,46 +74,11 @@ public sealed class PluginCatalog
             definition = null;
             return false;
         }
-        definition = holder.ToDefinition();
+        definition = CreateDefinition(holder.Descriptor, holder.Create);
         return true;
     }
 
     public void Remove(string packageName) => _plugins.Remove(packageName);
 
-    private sealed record PluginHolder(PluginDescriptor Descriptor, Func<IDshPlugin> Create)
-    {
-        /** 与旧反射路径同语义:探测实例取 Inject/InjectTypes/ConfigType,每次 Apply 构造新实例。
-         *  声明了 ConfigType 的插件在 Apply 前把 parameters 绑定成该类型,未知字段在激活期 WARN。 */
-        public PluginDefinition ToDefinition()
-        {
-            var probe = Create();
-            var isolated = probe is IDshIsolatedPlugin;
-            var configType = isolated ? null : probe.ConfigType;
-            return new PluginDefinition
-            {
-                Name = Descriptor.Package,
-                Inject = isolated ? ["tools", IPluginHostFactory.ServiceName] : probe.Inject,
-                InjectTypes = isolated ? [] : probe.InjectTypes,
-                ConfigType = configType,
-                Apply = (ctx, config, cancellationToken) => ActivateAsync(Create(), ctx, config, configType, cancellationToken),
-            };
-        }
-
-        private async Task<object?> ActivateAsync(IDshPlugin plugin, Context ctx, object? config,
-            Type? configType, CancellationToken cancellationToken)
-        {
-            if (plugin is IDshIsolatedPlugin isolated)
-            {
-                var factory = ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
-                    ?? throw new InvalidOperationException("The plugin capability host is unavailable.");
-                return await factory.ActivateAsync(Descriptor.Package, isolated, ctx, config, cancellationToken).ConfigureAwait(false);
-            }
-            return await plugin.ApplyAsync(ctx, BindConfig(configType, config, ctx), cancellationToken).ConfigureAwait(false);
-        }
-
-        private static object? BindConfig(Type? configType, object? config, Context ctx)
-            => configType is null
-                ? config
-                : PluginConfigBinding.Bind(configType, config, message => ctx.LoggerFor("config").Warn("%s", message));
-    }
+    private sealed record PluginHolder(PluginDescriptor Descriptor, Func<IDshPlugin> Create);
 }

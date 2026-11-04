@@ -101,6 +101,4 @@ internal sealed class RecordingPluginManager : IPluginManager
         return Task.FromResult($"plugin {package} {permission} {allowed}");
     }
 
-    public Task<string> SetExecutionAsync(string package, string? execution, CancellationToken cancellationToken = default, ToolRunContext? run = null)
-        => throw new NotSupportedException();
 }

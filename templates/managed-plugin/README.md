@@ -5,7 +5,7 @@
 
 本目录可直接复制为插件工程：`DshPluginTemplate.csproj` + `Plugin.cs`。模板通过 `SystemPrompt` 注册可配置的提示词段，并保留读文件、写文件和 HTTP 三个真实转发工具；工具使用宿主能力工厂，不直接访问文件系统或网络。
 
-原生（AOT）插件使用相同操作定义，通过 C ABI v2 调用宿主；写法见 `templates/native-plugin/README.md`。
+原生（AOT）插件使用相同操作定义，通过 C ABI v1 的可选宿主能力回调调用宿主；写法见 `templates/native-plugin/README.md`。
 
 ## 原有插件生命周期与宿主能力
 
@@ -19,7 +19,10 @@
 - `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` 返回 `{status, headers, body}`；请求和响应 `body` 都为 base64。宿主应用网络权限、代理配置及响应大小限额。
 - `host.Log(level, message)` 通过宿主 logger 记录日志。
 
-需要受限 worker 的插件可另行实现已有的 `IDshIsolatedPlugin.InitializeAsync(IPluginHost host, JsonElement configuration, CancellationToken cancellationToken)`，返回可异步释放的生命周期。该显式能力接口与完整服务表不同，不能取得父进程 `Context`、agent、服务对象或凭据，也不能将透明 RPC 当作进程内 API；它不取代本模板的原有接口。
+需要受限 worker 的插件同样实现 `IDshPlugin`，在 `Inject` / `InjectTypes` 中声明 `IPluginHostFactory`，并只依赖 worker 能提供的服务。
+正常的 `Apply` / `ApplyAsync` 通过能力工厂创建 `IPluginHost`，`ConfigType` 按普通配置绑定，返回的 `IDisposable` 由运行时释放。
+此时收到的是 worker 本地 `Context`，不能取得父进程的 `Context`、agent、服务对象或凭据，也不把透明 RPC 当作进程内 API。
+自定义宿主使用宿主能力 SDK 或隔离 worker 时，引用 `Dsh.Plugins.Sandbox`，并在组合前调用已有的生成式 `DshPluginCatalog.RegisterAll()`，接入能力工厂与同一进程入口的 worker 模式。
 
 ## 编译期诊断
 
@@ -62,6 +65,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
 - **依赖声明优先用类型**：`InjectTypes => [typeof(IMyContract)]` 替代 `Inject` 字符串；宿主在服务表里按可赋值性找唯一激活服务，类型拼错在编译期就报。同一契约有多个实现时该类型边按不满足处理（pending WARN 会列出候选），改用 `Inject` 字符串按名消歧；`ctx.Get<T>()` 同理，歧义时抛错并列出可选名字。
 - **契约类型必须跨插件同一份**：契约接口放进共享依赖程序集（`[assembly: DshSharedDependency]`），否则提供方与消费方各持一份类型身份，按类型匹配永远落空。
 - **配置用自带类型**：声明 `ConfigType => typeof(MyConfig)` 后，`plugins.<包名>` 的参数段在 Apply 前绑定成该类型；未知字段（拼错）与类型错配在激活期 WARN 并列出已知字段，不再静默吞掉。配置类型须有公共无参构造。
+- **跨程序集默认值**：嵌套配置类型在独立程序集时，用 `System.ComponentModel.DefaultValueAttribute` 声明生成 schema 所需的默认值；宿主生成器不会在运行时构造类型来推断默认值。
 - **AOT 边界**：AOT 编译的插件是原生库，走原生通道（契约是 C ABI），类型化注入与托管配置绑定不适用；托管通道内本设计无代码生成、无动态泛型，裁剪安全。
 
 ## 共享依赖（库型插件）

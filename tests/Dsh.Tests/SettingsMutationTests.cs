@@ -28,7 +28,7 @@ public sealed class SettingsMutationTests
         Assert.Equal("rejected", audit.Outcome);
         Assert.Equal(tool, audit.ToolName);
         Assert.Equal(audit.CallId, audit.RootCallId);
-        Assert.Equal(Dsh.Sandbox.SandboxFileAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
+        Assert.Equal(global::Dsh.Transport.FilePathAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
         Assert.DoesNotContain("credential-old-for-test", audit.Diff);
         Assert.Contains("alpha/new", audit.Diff);
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());

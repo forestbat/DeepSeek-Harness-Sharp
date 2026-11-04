@@ -934,51 +934,32 @@ public sealed class NetworkSettingsGuiTests : IDisposable
     [InlineData("localForward")]
     public async Task BorrowedProbe_UsesTheLatestSavedMachineWithoutReplacingTheConsumerRoute(string mode)
     {
-        var call = System.Diagnostics.Stopwatch.GetTimestamp();
-        using var diagnostics = TextWriter.Synchronized(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
-        Task Observe(int stage) => diagnostics.WriteLineAsync(
-            $"owned-borrowed-r13 call={call} stage={stage} ms={(long)System.Diagnostics.Stopwatch.GetElapsedTime(call).TotalMilliseconds} mode={(mode == "proxyCommand" ? 0 : 1)}");
-        await Observe(0);
         FleetSshEndToEndTests.RequireEnvironment();
-        await Observe(1);
         await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken);
-        await Observe(2);
         await using var original = new TestForwardProxy();
         await using var changed = new TestForwardProxy(requiredCredential: "fixture:required");
-        await Observe(3);
         await using var host = await CreateHostAsync("ngbc", Ct);
-        await Observe(4);
         var home = host.Environment.App.Home;
         var service = host.Environment.App.Ctx.Get<FleetService>(FleetService.ServiceName)!;
         HarnessSettings.SaveOutboundProxy(home, new() { ProbeUrl = ProbeTarget }, service.OutboundRoute.Proxy);
-        await Observe(5);
         var machine = ssh.Machine("changed-borrow", home.Root) with { OutboundTunnel = new(mode, LocalSettings(original).Url!) };
         var store = new MachineStore(home);
         store.Upsert(machine);
-        await Observe(6);
         await using var lease = await service.OutboundRoute.AcquireAsync(Ct);
-        await Observe(7);
         await service.OutboundRoute.SelectAsync(machine.Name, Ct);
-        await Observe(8);
         using var consumer = new HttpClient(service.OutboundRoute.Proxy.CreateHandler());
         Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync(ProbeTarget + "/before-change", Ct));
-        await Observe(9);
         var current = service.OutboundRoute.Proxy.CaptureRoute(new Uri(ProbeTarget));
         store.Upsert(machine with { OutboundTunnel = new(mode, LocalSettings(changed).Url!) });
-        await Observe(10);
         var result = await service.OutboundRoute.ProbeAsync(machine.Name, Guid.NewGuid(), Ct);
-        await Observe(11);
         Assert.Equal((ProxyProbeOutcome.Failed, ProxyProbeStage.ProxyAuth, (int?)407),
             (result.Outcome, result.Stage, result.HttpStatus));
         var after = service.OutboundRoute.Proxy.CaptureRoute(new Uri(ProbeTarget));
         Assert.Equal((current.Generation, current.ProxyUri, current.CancellationToken),
             (after.Generation, after.ProxyUri, after.CancellationToken));
         Assert.Equal(machine.Name, HarnessSettings.Load(home).Network!.BorrowedOutboundMachine);
-        await Observe(12);
         Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync(ProbeTarget + "/after-change", Ct));
-        await Observe(13);
         Assert.Contains(original.Requests, request => request.Contains("/after-change", StringComparison.Ordinal));
-        await Observe(14);
     }
 
     [Theory(Timeout = TestTimeout)]

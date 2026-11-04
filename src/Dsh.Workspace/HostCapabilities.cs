@@ -68,7 +68,6 @@ public interface IWorkspacePlugins
 {
     Task<IReadOnlyList<RemotePluginInfo>> ListPluginsAsync(CancellationToken cancellationToken = default);
     Task<string> SetPluginPermissionAsync(string package, string permission, bool allowed, CancellationToken cancellationToken = default);
-    Task<string> SetPluginExecutionAsync(string package, string? execution, CancellationToken cancellationToken = default);
 }
 
 /** Typed network capability; the connection owner controls its lifetime. */

@@ -6,6 +6,7 @@ using Dsh.Core;
 using Dsh.CSharpRepl;
 using Dsh.Csx;
 using Dsh.Llm;
+using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -304,7 +305,10 @@ public sealed class ScriptPermissionBoundaryTests
             _ = new SystemPrompt(Context, new SystemPromptConfig());
             Processes = new SubprocessService(Context);
             Tools = new ToolRuntime(Context);
-            _ = new ScriptExecutionPolicy(Context, Home, HarnessSettings.Load(Home));
+            var settings = HarnessSettings.Load(Home);
+            _ = new SafetyBoundary(Context, HarnessSettings.CreatePolicyReader(Home, settings));
+            Context.Provide(IScriptExecutionPolicy.ServiceName,
+                new ScriptExecutionPolicy(Context, new PluginExecutionEnvironment(Home, settings, Home.Root)));
         }
 
 

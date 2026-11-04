@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.Versioning;
 using Dsh.Boot;
+using Dsh.Plugins;
 using Microsoft.Win32;
 
 namespace Dsh.Tui;

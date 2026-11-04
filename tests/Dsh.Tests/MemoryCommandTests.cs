@@ -228,7 +228,6 @@ public sealed class MemoryCommandTests
 
         public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ToolRunContext? run = null) => Task.FromResult("");
 
-        public Task<string> SetExecutionAsync(string package, string? execution, CancellationToken cancellationToken = default, ToolRunContext? run = null) => throw new NotSupportedException();
     }
 
     private sealed class FakeAgent : IAgent

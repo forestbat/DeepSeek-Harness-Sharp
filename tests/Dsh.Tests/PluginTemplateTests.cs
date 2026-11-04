@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -164,7 +165,7 @@ public sealed class PluginTemplateTests
         tools = new ToolRuntime(ctx);
         var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
         _ = new SafetyBoundary(ctx, () => settings);
-        var factory = new PluginCapabilityFactory(ctx, new HarnessHome(directory), settings);
+        var factory = new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(directory), settings, directory));
         ctx.Provide(IPluginHostFactory.ServiceName, factory);
         return ctx;
     }

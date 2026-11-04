@@ -14,7 +14,7 @@ subagent:
 # LLM 提供方；未配置 key 的 provider 会被跳过
 providers:
   deepseek-official:
-    # openai-compatible | openai-responses | anthropic | deepseek
+    # openai-compatible | openai-compatible(response) | anthropic | deepseek
     type: openai-compatible
     options:
       # 接口地址
@@ -481,36 +481,25 @@ plugins:
 # LLM 提供方
 # providers:
 #   <id>:
+#     适配器类型:openai-compatible | openai-compatible(response) | anthropic | deepseek
 #     type:
+#     适配器选项
 #     options:
+#       接口地址
 #       baseUrl:
+#       API key(明文)
 #       apiKey:
+#       API key 环境变量
 #       apiKeyEnv:
+#     模型覆盖(显示名/系统提示等)
 #     models:
 #       <id>:
+#         显示名
 #         name:
+#         是否支持工具调用
 #         tool_call:
+#         系统提示覆盖
 #         system_prompt_update:
-# <id>:
-# 适配器类型:openai-compatible | openai-responses | anthropic | deepseek
-# type:
-# 适配器选项
-# options:
-# 接口地址
-# baseUrl:
-# API key(明文)
-# apiKey:
-# API key 环境变量
-# apiKeyEnv:
-# 模型覆盖(显示名/系统提示等)
-# models:
-# <id>:
-# 显示名
-# name:
-# 是否支持工具调用
-# tool_call:
-# 系统提示覆盖
-# system_prompt_update:
 # 技能目录
 # skills:
 #   本地目录列表
@@ -522,7 +511,8 @@ plugins:
 # MCP 服务器
 # mcp:
 #   <id>:
-#     transport: stdio | streamable-http | sse
+#     Transport: stdio | streamable-http | sse.
+#     transport:
 #     command: []
 #     args: []
 #     url:
@@ -556,16 +546,12 @@ plugins:
 #   远端 A2A 服务
 #   remotes:
 #     <id>:
+#       远端 URL
 #       url:
+#       鉴权 token
 #       token:
+#       额外请求头
 #       headers: {}
-# <id>:
-# 远端 URL
-# url:
-# 鉴权 token
-# token:
-# 额外请求头
-# headers: {}
 # 自动压缩
 # compaction:
 #   上下文超限时自动压缩
@@ -584,12 +570,6 @@ plugins:
 #       path:
 #       intent:
 #       args: {}
-#   <id>:
-#   tool: []
-#   dialect:
-#   path:
-#   intent:
-#   args: {}
 #   whitelist:
 #     <id>:
 #       tool: []
@@ -597,12 +577,6 @@ plugins:
 #       path:
 #       intent:
 #       args: {}
-# <id>:
-# tool: []
-# dialect:
-# path:
-# intent:
-# args: {}
 # 日志
 # logging:
 #   最低级别:trace | debug | info | warn | error | off
@@ -686,12 +660,6 @@ plugins:
 #         path:
 #         intent:
 #         args: {}
-#     <id>:
-#     tool: []
-#     dialect:
-#     path:
-#     intent:
-#     args: {}
 #     whitelist:
 #       <id>:
 #         tool: []
@@ -699,12 +667,6 @@ plugins:
 #         path:
 #         intent:
 #         args: {}
-# <id>:
-# tool: []
-# dialect:
-# path:
-# intent:
-# args: {}
 # 插件开关
 # plugins:
 #   <id>:
@@ -792,16 +754,12 @@ plugins:
 #     各提供方存储位置
 #     discovery:
 #       <id>:
+#         用户配置目录
 #         roots: {}
+#         历史存储子目录
 #         store_paths: []
+#         设置文件名
 #         settings_file:
-#     <id>:
-#     用户配置目录
-#     roots: {}
-#     历史存储子目录
-#     store_paths: []
-#     设置文件名
-#     settings_file:
 #     是否读取时间线
 #     timeline:
 #     时间线条目上限

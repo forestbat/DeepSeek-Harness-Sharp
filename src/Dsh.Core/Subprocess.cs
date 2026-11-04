@@ -383,7 +383,7 @@ public sealed class SubprocessService : Service, IDisposable
     }
 
     public async Task<SubprocessHandle> SpawnSandboxedAsync(SubprocessSpawnSpec spec,
-        Func<SubprocessSpawnSpec, string, string, SandboxProcessOptions> createOptions, Action<int, int?>? observeStartup = null)
+        Func<SubprocessSpawnSpec, string, string, SandboxProcessOptions> createOptions)
     {
         if (spec.Argv.Count == 0)
             throw new ArgumentException("subprocess: argv must be non-empty");
@@ -398,7 +398,7 @@ public sealed class SubprocessService : Service, IDisposable
         try
         {
             var options = createOptions(spec, executable, temporaryDirectory);
-            process = await SandboxedProcess.StartAsync(options, spec.Signal, observeStartup).ConfigureAwait(false);
+            process = await SandboxedProcess.StartAsync(options, spec.Signal).ConfigureAwait(false);
             var handle = new SubprocessHandle(process,
                 new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
                 new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),

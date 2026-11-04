@@ -28,11 +28,11 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
     private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null)
         => new(run?.Name, run?.Arguments ?? default,
             run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory,
-            path is null ? null : Dsh.Sandbox.SandboxFileAccess.Canonicalize(path), intent,
+            path is null ? null : Dsh.Transport.FilePathAccess.Canonicalize(path), intent,
             PathIsCanonical: path is not null);
 
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
-        => PermissionEngine.Decide(rules, input, static path => Dsh.Sandbox.SandboxFileAccess.Canonicalize(path));
+        => PermissionEngine.Decide(rules, input, static path => Dsh.Transport.FilePathAccess.Canonicalize(path));
 
     public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
     {
@@ -103,7 +103,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
     public async Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
         CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false)
     {
-        var canonical = Dsh.Sandbox.SandboxFileAccess.Canonicalize(path);
+        var canonical = Dsh.Transport.FilePathAccess.Canonicalize(path);
         var (rules, space) = Policy(run);
         var input = Input(run, canonical, intent);
         var decision = Decide(rules, input);

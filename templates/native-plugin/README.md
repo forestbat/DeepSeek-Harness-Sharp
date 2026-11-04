@@ -6,7 +6,9 @@
 ## 一句话定位
 
 原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主通过 **C ABI v1** 交换日志、工具、配置及可选的宿主能力调用。
-它看不到父进程的服务表、类型或会话。文件和网络操作使用与托管 `IDshIsolatedPlugin` 相同的 `Dsh.Plugins.Abstractions` 操作常量，不把完整 Context 伪装成远程对象。原有 v1 二进制可以继续加载、配置和调用；新回调不要求旧插件重新编译。
+它看不到父进程的服务表、类型或会话。
+文件和网络操作与托管 `IDshPlugin` 通过 `IPluginHostFactory` 取得的能力使用同一组 `Dsh.Plugins.Abstractions` 操作常量，不把完整 Context 伪装成远程对象。
+原有 v1 二进制可以继续加载、配置和调用；新回调不要求旧插件重新编译。
 
 ## 最小骨架
 
@@ -116,7 +118,7 @@ public sealed class SamplePlugin : IDshNativePlugin
 | 维度 | 托管（`templates/managed-plugin`） | 原生（本文） |
 | --- | --- | --- |
 | 产物 | 托管 dll + deps.json 闭包 | 每 RID 一份原生共享库 |
-| 契约 | `IDshIsolatedPlugin` / 完全信任的 `IDshPlugin` | C ABI v1 + 可选带大小入口 |
+| 契约 | `IDshPlugin`；worker 使用本地 `Context` 与 `IPluginHostFactory` | C ABI v1 + 可选带大小入口 |
 | 能力面 | 显式工具/日志/文件/网络；完全信任接口另有服务组合 | 显式工具/日志/配置/文件/网络 |
 | 装载 | 启动扫描 + `/plugins add` 热装载托管 dll | 启动扫描 + `/plugins add` 热装载原生库 |
 | 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate`；映像随承载进程退出 |
@@ -126,7 +128,9 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 ## v1 布局与真实二进制兼容回归
 
-手写 C 消费者可参考本目录的 `dsh_plugin.h`。调用约定保持 Cdecl，原入口返回 `int` 并写入调用者提供的插件函数表，不是结构体返回。`DshPluginApi` 的布局未变化。x64 的原宿主前缀为 48 字节，`HostCall` 位于偏移 48，新表为 56 字节；x86 对应 24、24、28 字节。只有带大小入口明确提供足够空间时，新插件才读取尾部；原入口始终按原前缀大小处理，不能以 `Version == 1` 猜测尾部存在。
+ABI 胶水由 SDK 生成，不需要另行维护手写头文件；原始 v1 兼容契约冻结在下述独立 C 消费者中。
+调用约定保持 Cdecl，原入口写入调用者提供的插件函数表，`DshPluginApi` 布局未变化。
+新入口只按实际宿主表长读取可选尾部，原入口始终按原前缀大小处理，不能以 `Version == 1` 推断尾部存在。
 
 `tests/Dsh.NativePluginV1Fixture/v1.h` 是冻结的原始 v1 契约，不依赖当前 SDK；`plugin.c` 产出真实旧插件，`host.c` 产出真实旧宿主。后者把宿主表紧贴不可读保护页，加载新 NativeAOT 样例，执行 echo、读取配置、拒绝缺失的 HostCall 并停用，读取尾部会令独立消费者进程失败。所有输入均为合成测试数据，不使用真实配置或模型。
 

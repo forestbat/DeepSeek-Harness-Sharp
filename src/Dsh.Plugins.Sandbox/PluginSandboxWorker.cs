@@ -1,10 +1,11 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Dsh.Plugins;
+using Dsh.Runtime;
 using Dsh.Transport;
-using static Dsh.Boot.PluginSandboxWorkerWire;
+using static Dsh.Plugins.Sandbox.PluginSandboxWorkerWire;
 
-namespace Dsh.Boot;
+namespace Dsh.Plugins.Sandbox;
 
 /** The executable must dispatch this entry before composing any application Context. */
 public static class PluginSandboxWorker
@@ -239,9 +240,8 @@ public static class PluginSandboxWorker
                     throw new InvalidOperationException("Plugin package is already loaded.");
             }
             Artifact? artifact = null;
-            IDshPlugin? candidate = null;
-            IDshIsolatedPlugin? plugin = null;
-            IAsyncDisposable? lease = null;
+            PluginDefinition? definition = null;
+            PluginSandboxWorkerContext? lease = null;
             PluginSandboxWorkerHost? host = null;
             try
             {
@@ -249,9 +249,9 @@ public static class PluginSandboxWorker
                 {
                     var registration = Compiled(request.Package).SingleOrDefault()
                         ?? throw new InvalidOperationException("Compiled plugin package was not found.");
-                    candidate = registration.Create();
-                    plugin = candidate as IDshIsolatedPlugin
-                        ?? throw new InvalidOperationException("Legacy full-Context plugins require explicit host authority.");
+                    definition = PluginCatalog.CreateDefinition(
+                        PluginDescriptor.For(registration.Package, PluginForm.CompiledIn) with { Entry = registration.Entry },
+                        registration.Create);
                 }
                 else
                 {
@@ -266,11 +266,8 @@ public static class PluginSandboxWorker
                         throw new InvalidOperationException("Native artifact package does not match the request.");
                     if (artifact.Native is null)
                     {
-                        if (!artifact.Host!.Catalog.TryGet(request.Package, out var create))
+                        if (!artifact.Host!.Catalog.TryCreateDefinition(request.Package, out definition))
                             throw new InvalidOperationException("Managed artifact package was not found.");
-                        candidate = create();
-                        plugin = candidate as IDshIsolatedPlugin
-                            ?? throw new InvalidOperationException("Legacy full-Context plugins require explicit host authority.");
                     }
                 }
                 host = new PluginSandboxWorkerHost(this, request.Package, artifact?.Native is not null);
@@ -281,10 +278,14 @@ public static class PluginSandboxWorker
                 }
                 else
                 {
-                    lease = await plugin!.InitializeAsync(host, configuration, cancellationToken).ConfigureAwait(false);
+                    var managed = definition ?? throw new InvalidOperationException("Managed plugin definition is missing.");
+                    if (!PluginSandboxWorkerContext.Supports(managed.Inject, managed.InjectTypes))
+                        throw new InvalidOperationException("The plugin requires services unavailable in the worker Context.");
+                    lease = new PluginSandboxWorkerContext(host);
+                    await lease.ActivateAsync(managed, configuration, cancellationToken).ConfigureAwait(false);
                 }
                 lock (_gate)
-                    _packages.Add(request.Package, new LoadedPackage(host, artifact, plugin, lease));
+                    _packages.Add(request.Package, new LoadedPackage(host, artifact, lease));
             }
             catch (Exception activationError)
             {
@@ -300,8 +301,6 @@ public static class PluginSandboxWorker
                     if (lease is not null)
                         await lease.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (Exception error) { cleanupFailure ??= BoundedFailure(error); }
-                try { await DisposePluginAsync(candidate, lease).ConfigureAwait(false); }
                 catch (Exception error) { cleanupFailure ??= BoundedFailure(error); }
                 if (host is not null)
                 {
@@ -336,7 +335,6 @@ public static class PluginSandboxWorker
             {
                 if (package.Lease is not null)
                     await package.Lease.DisposeAsync().ConfigureAwait(false);
-                await DisposePluginAsync(package.Plugin, package.Lease).ConfigureAwait(false);
             }
             finally
             {
@@ -424,8 +422,8 @@ public static class PluginSandboxWorker
             string? entry, Func<IDshPlugin> create)
         {
             var plugin = create();
-            try { return new PluginSandboxMetadata(package, form, entry, plugin is IDshIsolatedPlugin); }
-            finally { await DisposePluginAsync(plugin, null).ConfigureAwait(false); }
+            try { return new PluginSandboxMetadata(package, form, entry, PluginSandboxWorkerContext.Supports(plugin.Inject, plugin.InjectTypes)); }
+            finally { await DisposeProbeAsync(plugin).ConfigureAwait(false); }
         }
 
         private static IEnumerable<DshPluginRegistration> Compiled(string? package)
@@ -440,10 +438,8 @@ public static class PluginSandboxWorker
             }
         }
 
-        private static async ValueTask DisposePluginAsync(IDshPlugin? plugin, IAsyncDisposable? lease)
+        private static async ValueTask DisposeProbeAsync(IDshPlugin plugin)
         {
-            if (ReferenceEquals(plugin, lease))
-                return;
             if (plugin is IAsyncDisposable asynchronous)
                 await asynchronous.DisposeAsync().ConfigureAwait(false);
             else if (plugin is IDisposable synchronous)
@@ -470,8 +466,7 @@ public static class PluginSandboxWorker
 
     }
 
-    private sealed record LoadedPackage(PluginSandboxWorkerHost Host, Artifact? Artifact,
-        IDshIsolatedPlugin? Plugin, IAsyncDisposable? Lease);
+    private sealed record LoadedPackage(PluginSandboxWorkerHost Host, Artifact? Artifact, PluginSandboxWorkerContext? Lease);
 
     /** One artifact owns one ALC/library, independently of its active package leases. */
     private sealed class Artifact(string path, PluginHost? host, PluginLoadContext? context, NativePluginLibrary? native)
