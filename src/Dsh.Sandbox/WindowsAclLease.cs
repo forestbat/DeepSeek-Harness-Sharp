@@ -295,8 +295,8 @@ internal sealed class WindowsAclLease : IDisposable
         {
             if (_inheritance is not null || restrict && ProtectedInheritance.ContainsKey(path))
                 return false;
-            using var handle = Open(readOnly: true);
-            var (acl, _, reuseRead) = ReadGrantAcl(handle, sid, directory, effectiveRead);
+            // Read-only probes query names; edits retain the policy handle for revalidation.
+            var (acl, _, reuseRead) = ReadGrantAcl(null, sid, directory, effectiveRead);
             if (restrict)
                 DemandNoAmbientGrant(acl, access, network);
             return reuseRead || inheritedAccess == access && HasInheritedGrant(acl, sid, access, directory);
@@ -481,19 +481,24 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle handle,
+        private (RawAcl Acl, bool Protected, bool ReuseRead) ReadGrantAcl(SafeFileHandle? handle,
             SecurityIdentifier sid, bool directory, EffectiveRead? effectiveRead)
         {
             if (effectiveRead is null)
             {
-                var original = ReadAcl(handle);
+                using var readHandle = handle is null ? Open(readOnly: true) : null;
+                var original = ReadAcl(handle ?? readHandle!);
                 return (original.Acl, original.Protected, false);
             }
-            var queryError = WindowsNative.GetSecurityInfo(handle, 1, 0x17, out var owner, out var group,
-                out var dacl, out var label, out var descriptor);
+            var queryError = handle is null
+                ? WindowsNative.GetNamedSecurityInfo(path, 1, 0x17, out var owner, out var group,
+                    out var dacl, out var label, out var descriptor)
+                : WindowsNative.GetSecurityInfo(handle, 1, 0x17, out owner, out group,
+                    out dacl, out label, out descriptor);
             if (queryError != 0)
             {
-                var original = ReadAcl(handle);
+                using var readHandle = handle is null ? Open(readOnly: true) : null;
+                var original = ReadAcl(handle ?? readHandle!);
                 return (original.Acl, original.Protected, false);
             }
             try
