@@ -34,7 +34,7 @@ public sealed class MobileHostConnection : IAsyncDisposable
     private readonly Action<string> _trustFingerprint;
     private string _fingerprint;
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, RemoteHostSession> _sessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RemoteSessionSummary> _sessions = new(StringComparer.Ordinal);
     private readonly RemoteHostSubscriptions _subscriptions;
     private readonly CancellationTokenSource _lifetime = new();
     private TaskCompletionSource<HostLease> _connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -52,13 +52,15 @@ public sealed class MobileHostConnection : IAsyncDisposable
 
     public MobileConnectionState State { get; private set; } = MobileConnectionState.Offline;
 
+    public HostProfile Profile => _profile;
+
     public string? Detail { get; private set; }
 
     public HostInfo? Info { get; private set; }
 
     public event Action? Changed;
 
-    public IReadOnlyList<RemoteHostSession> Sessions
+    public IReadOnlyList<RemoteSessionSummary> Sessions
     {
         get
         {
@@ -84,7 +86,7 @@ public sealed class MobileHostConnection : IAsyncDisposable
             return _connected.Task.WaitAsync(cancellationToken);
     }
 
-    public IAsyncEnumerable<RemoteEventInfo> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken)
+    public IAsyncEnumerable<RemoteSessionEvent> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken)
         => _subscriptions.SubscribeAsync(sessionId, fromSeq, cancellationToken);
 
     public async ValueTask DisposeAsync()

@@ -26,6 +26,11 @@
       <Setter Property="MinHeight" Value="44" />
       <Setter Property="CornerRadius" Value="10" />
     </Style>
+    <Style Selector="Button.small">
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Padding" Value="12,4" />
+      <Setter Property="FontSize" Value="13" />
+    </Style>
     <Style Selector="Border.message">
       <Setter Property="Background" Value="#1B1E24" />
       <Setter Property="CornerRadius" Value="12" />
@@ -40,6 +45,12 @@
     </Style>
     <Style Selector="Border.message.result">
       <Setter Property="Background" Value="#1D2620" />
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="#1B1E24" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="12,10" />
+      <Setter Property="Margin" Value="12,5" />
     </Style>
     <Style Selector="TextBlock.role">
       <Setter Property="Foreground" Value="#8B929C" />
@@ -62,6 +73,13 @@
                 Margin="0,0,10,0"
                 Command="{Binding BackCommand}"
                 IsVisible="{Binding ShowChat}" />
+        <Button Grid.Column="0"
+                Content="←"
+                FontSize="18"
+                Padding="12,4"
+                Margin="0,0,10,0"
+                Command="{Binding CancelMachineCommand}"
+                IsVisible="{Binding ShowConnect}" />
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
           <TextBlock Text="DSH" FontSize="17" FontWeight="SemiBold" />
           <StackPanel Orientation="Horizontal" Spacing="6">
@@ -70,16 +88,104 @@
           </StackPanel>
         </StackPanel>
         <Button Grid.Column="2"
-                Content="断开"
-                Command="{Binding DisconnectCommand}"
-                IsVisible="{Binding !ShowConnect}" />
+                Content="＋"
+                FontSize="18"
+                Padding="12,4"
+                Command="{Binding AddMachineCommand}"
+                IsVisible="{Binding ShowMachines}" />
+        <Button Grid.Column="2"
+                Content="机器"
+                Padding="12,4"
+                Command="{Binding OpenMachinesCommand}"
+                IsVisible="{Binding ShowSessions}" />
       </Grid>
     </Border>
 
-    <!-- 连接表单 -->
+    <!-- 机器列表 + 手机工具 -->
+    <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowMachines}">
+      <StackPanel Margin="0,4,0,20">
+        <TextBlock Margin="16,10,16,2" Text="机器" FontSize="16" FontWeight="SemiBold" />
+        <TextBlock Margin="16,0,16,4" Classes="hint" Text="每台机器各有一条连接；切到会话页可以同时看到所有机器上的会话。" />
+        <TextBlock Margin="16,0,16,4" Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+        <ItemsControl ItemsSource="{Binding Machines}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:MachineRowViewModel">
+              <Border Classes="card">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" Spacing="2">
+                      <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Target}" Classes="hint" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="2" HorizontalAlignment="Right">
+                      <TextBlock Text="{Binding Status}" FontSize="12" Foreground="#8B929C" HorizontalAlignment="Right" />
+                      <TextBlock Text="{Binding SessionSummary}" FontSize="11" Foreground="#5F6672" HorizontalAlignment="Right" />
+                    </StackPanel>
+                  </Grid>
+                  <TextBlock Classes="error" Text="{Binding Detail}" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Classes="small"
+                            Content="连接"
+                            IsVisible="{Binding CanConnect}"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).AttachMachineCommand}"
+                            CommandParameter="{Binding}" />
+                    <Button Classes="small"
+                            Content="断开"
+                            IsVisible="{Binding IsConnected}"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).DetachMachineCommand}"
+                            CommandParameter="{Binding}" />
+                    <Button Classes="small"
+                            Content="查看会话"
+                            IsVisible="{Binding IsConnected}"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).AttachMachineCommand}"
+                            CommandParameter="{Binding}" />
+                    <Button Classes="small"
+                            Content="编辑"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).EditMachineCommand}"
+                            CommandParameter="{Binding}" />
+                    <Button Classes="small"
+                            Content="删除"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).RemoveMachineCommand}"
+                            CommandParameter="{Binding}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Margin="16,10,16,0" Classes="hint"
+                   Text="还没有机器。点右上角 ＋ 填写一台桌面机的地址，保存后会立即连接。"
+                   IsVisible="{Binding HasNoMachines}" />
+
+        <Border Classes="card" Background="#141A22" Margin="12,18,12,5">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0" Spacing="2">
+                <TextBlock Text="手机工具（MCP）" FontSize="15" FontWeight="SemiBold" />
+                <TextBlock Classes="hint" Text="把手机本身的能力（列应用、启动应用、打开链接）暴露给电脑上的 agent。" />
+              </StackPanel>
+              <Button Grid.Column="1" Classes="small"
+                      Content="{Binding PhoneToolsToggleLabel}"
+                      Command="{Binding TogglePhoneToolsCommand}" />
+            </Grid>
+            <TextBlock Classes="hint" Text="在电脑的 settings.yaml 里加：" IsVisible="{Binding PhoneToolsEnabled}" />
+            <TextBox Text="{Binding PhoneToolsUrl}" IsReadOnly="True" FontSize="12" TextWrapping="Wrap" MaxHeight="90"
+                     IsVisible="{Binding PhoneToolsEnabled}" />
+            <Button Content="复制地址" Classes="small" HorizontalAlignment="Stretch" Click="OnCopyPhoneToolsUrl"
+                    IsVisible="{Binding PhoneToolsEnabled}" />
+            <TextBlock Classes="hint" IsVisible="{Binding PhoneToolsEnabled}"
+                       Text="mcpServers:&#10;  phone:&#10;    transport: streamable-http&#10;    url: 上面的地址" />
+            <TextBlock Classes="error" Text="{Binding PhoneToolsError}" IsVisible="{Binding HasPhoneToolsError}" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- 添加/编辑一台机器 -->
     <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowConnect}">
       <StackPanel Margin="20,28" Spacing="12" MaxWidth="520">
-        <TextBlock Text="连接到电脑上的 DSH host" FontSize="20" FontWeight="SemiBold" />
+        <TextBlock Text="添加桌面机" FontSize="20" FontWeight="SemiBold" />
+        <TextBox PlaceholderText="机器名，例如 工作站" Text="{Binding MachineName}" />
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Content="TCP" Command="{Binding UseTcpTransportCommand}" Classes.active="{Binding UseTcp}" />
           <Button Content="SSH" Command="{Binding UseSshTransportCommand}" Classes.active="{Binding UseSsh}" />
@@ -100,21 +206,41 @@
           <Button Content="复制公钥" Click="OnCopyPublicKey" HorizontalAlignment="Stretch" />
         </StackPanel>
         <TextBox PlaceholderText="访问令牌" Text="{Binding Token}" PasswordChar="●" />
-        <Button Content="连接" Command="{Binding ConnectCommand}" HorizontalAlignment="Stretch" />
+        <Button Content="保存并连接" Command="{Binding SaveMachineCommand}" HorizontalAlignment="Stretch" />
+        <Button Content="取消" Command="{Binding CancelMachineCommand}" HorizontalAlignment="Stretch" />
         <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
       </StackPanel>
     </ScrollViewer>
 
     <!-- 会话列表 -->
-    <Grid Grid.Row="1" IsVisible="{Binding ShowSessions}" RowDefinitions="Auto,Auto,*">
-      <TextBlock Grid.Row="0" Margin="16,14,16,6" Text="会话" FontSize="16" FontWeight="SemiBold" />
-      <TextBlock Grid.Row="1" Classes="error" Margin="16,0,16,4" Text="{Binding Error}" IsVisible="{Binding HasError}" />
-      <ListBox Grid.Row="2"
+    <Grid Grid.Row="1" IsVisible="{Binding ShowSessions}" RowDefinitions="Auto,Auto,Auto,*,Auto">
+      <TextBlock Grid.Row="0" Margin="16,12,16,0" Text="{Binding SessionScope}" FontSize="16" FontWeight="SemiBold" />
+      <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Margin="12,6,12,0">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Classes="small" Content="全部" Command="{Binding ShowAllMachinesCommand}" />
+          <ItemsControl ItemsSource="{Binding Machines}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" Spacing="8" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MachineRowViewModel">
+                <Button Classes="small" Classes.active="{Binding IsSelected}" Content="{Binding Name}"
+                        Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).SelectMachineCommand}"
+                        CommandParameter="{Binding}" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </ScrollViewer>
+      <TextBlock Grid.Row="2" Classes="error" Margin="16,4,16,0" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+      <ListBox Grid.Row="3"
                ItemsSource="{Binding Sessions}"
                SelectedItem="{Binding SelectedSession}"
                SelectionMode="Single"
                Background="Transparent"
-               Margin="6,0">
+               Margin="6,4,6,0">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:SessionRowViewModel">
             <Grid ColumnDefinitions="*,Auto" Margin="6,6">
@@ -132,6 +258,11 @@
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
+      <Grid Grid.Row="4" ColumnDefinitions="*,Auto" Margin="12,6,12,16">
+        <TextBox Grid.Column="0" PlaceholderText="新会话的工作目录，例如 /home/me/project"
+                 Text="{Binding NewSessionCwd}" Margin="0,0,8,0" />
+        <Button Grid.Column="1" Content="新建会话" Command="{Binding CreateSessionCommand}" />
+      </Grid>
     </Grid>
 
     <!-- 会话内容 -->

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
 using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -15,20 +14,24 @@ namespace Dsh.Android.ViewModels;
 public enum MobilePage
 {
     Connect,
+    Machines,
     Sessions,
     Chat,
 }
 
-/** 会话列表的一行: 登记表推送只改这一行, 不重建整个列表。 */
+/** 会话列表的一行: 登记表推送只改这一行, 不重建整个列表; 行上带着它属于哪台机器。 */
 public sealed partial class SessionRowViewModel : ObservableObject
 {
-    public SessionRowViewModel(RemoteHostSession session)
+    public SessionRowViewModel(string machine, RemoteSessionSummary session)
     {
         Id = session.SessionId;
+        Machine = machine;
         Update(session);
     }
 
     public string Id { get; }
+
+    public string Machine { get; }
 
     [ObservableProperty]
     private string _title = "";
@@ -47,11 +50,11 @@ public sealed partial class SessionRowViewModel : ObservableObject
 
     public string Kind { get; private set; } = "";
 
-    public void Update(RemoteHostSession session)
+    public void Update(RemoteSessionSummary session)
     {
-        Kind = session.Kind;
+        Kind = session.Kind ?? "";
         Title = session.Title is { Length: > 0 } title ? title : session.ProjectPath ?? session.SessionId;
-        Subtitle = session.ProjectPath ?? session.SessionId;
+        Subtitle = $"{Machine} · {session.ProjectPath ?? session.SessionId}";
         Status = session.Status switch
         {
             HostSessionStatuses.Running => "运行中",
@@ -73,69 +76,103 @@ public sealed partial class SessionRowViewModel : ObservableObject
     }
 }
 
+/** 机器列表的一行: 名字与目标是用户填的, 其余是链路当前状态。 */
+public sealed partial class MachineRowViewModel : ObservableObject
+{
+    public MachineRowViewModel(HostProfile profile)
+    {
+        Name = profile.Name;
+        Profile = profile;
+        Target = profile.Display;
+    }
+
+    public string Name { get; }
+
+    public HostProfile Profile { get; private set; }
+
+    [ObservableProperty]
+    private string _target = "";
+
+    [ObservableProperty]
+    private string _status = "未连接";
+
+    [ObservableProperty]
+    private string _detail = "";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    private bool _isConnected;
+
+    [ObservableProperty]
+    private bool _isBusy;
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    [ObservableProperty]
+    private string _sessionSummary = "";
+
+    public bool CanConnect => !IsConnected && !IsBusy;
+
+    public void Update(HostProfile profile)
+    {
+        Profile = profile;
+        Target = profile.Display;
+    }
+}
+
 /**
- * 手机端外壳: 连接桌面 host, 看会话列表, 读事件流, 发消息, 处理审批。
+ * 手机端外壳: 同时连接多台桌面 host, 按机器查看会话、新建会话, 读事件流, 发消息, 处理审批。
  * 网络事件先在后台线程入队, 由 DispatcherBridge 合并后一次投递到 UI 线程, 避免每个 token 一次 JNI/调度。
  */
 public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDisposable
 {
     private const int MessageScrollThrottleMilliseconds = 80;
 
-    private readonly EndpointStore _store;
-    private readonly DispatcherBridge<RemoteEventInfo> _events;
+    private readonly MachineStore _store;
+    private readonly PhoneToolStore _phoneToolStore;
+    private readonly MobileFleet _fleet;
+    private readonly DispatcherBridge<RemoteSessionEvent> _events;
     private readonly CancellationTokenSource _lifetime = new();
-    private MobileHostConnection? _connection;
     private CancellationTokenSource? _sessionLifetime;
+    private PhoneMcpServer? _phoneServer;
     private SubagentTranscript _transcript = new();
-    private long _renderedSeq;
     private string _openSessionId = "";
+    private string _openMachine = "";
     private string _approvalRequestId = "";
+    private string _approvalMachine = "";
     private DateTime _lastScrollRequest;
+    private string _editingName = "";
+    private string _questionMachine = "";
 
-    public MobileShellViewModel(EndpointStore store)
+    public MobileShellViewModel(MachineStore store, PhoneToolStore phoneToolStore)
     {
         _store = store;
-        var profile = store.Load();
-        _transport = profile.Transport;
-        _host = profile.Host;
-        _portText = profile.Port.ToString();
-        _token = profile.Token;
-        _sshUser = profile.SshUser;
-        _fingerprint = profile.SshFingerprint;
-        _events = new DispatcherBridge<RemoteEventInfo>(ApplyEvents);
+        _phoneToolStore = phoneToolStore;
+        _fleet = new MobileFleet(store);
+        _fleet.Changed += OnFleetChanged;
+        _events = new DispatcherBridge<RemoteSessionEvent>(ApplyEvents);
         ShareInbox.Changed += DrainShares;
         DrainShares();
-        if (profile.Transport == HostTransportKind.Ssh)
-            EnsureKey();
+        var key = store.LoadPrivateKey();
+        if (key is null)
+        {
+            store.SavePrivateKey(SshKeyPair.GeneratePrivateKeyPem());
+            key = store.LoadPrivateKey();
+        }
+        RefreshKeyLine(key);
+        var settings = phoneToolStore.Load();
+        _phoneToolsEnabled = settings.Enabled;
+        _phoneToolsUrl = string.Empty;
+        if (settings.Enabled)
+            _ = ApplyPhoneToolsAsync(true);
+        foreach (var machine in store.Load())
+            Machines.Add(new MachineRowViewModel(machine));
         // 保存过完整地址就自动连: 手机端没有稳定的桌面入口, 每次启动都要手点一次连接只会拖慢回到会话的速度。
-        if (profile.IsComplete)
-            _ = ConnectAsync();
+        _ = AttachAllAsync();
     }
 
-    /** 分享进来的文字/图片先在 UI 线程落到输入框或附件槽, 发送仍由用户确认。 */
-    private void DrainShares()
-    {
-        if (!Dispatcher.UIThread.CheckAccess())
-        {
-            Dispatcher.UIThread.Post(DrainShares);
-            return;
-        }
-        while (ShareInbox.Take() is { } item)
-        {
-            if (item.Error.Length > 0)
-            {
-                Error = item.Error;
-                continue;
-            }
-            if (item.Text.Length > 0)
-            {
-                Input = Input.Length == 0 ? item.Text : $"{Input}\n{item.Text}";
-                continue;
-            }
-            if (item.Image.Length > 0 && item.MediaType.Length > 0)
-                SetAttachment(item.Name, item.MediaType, item.Image);
-        }
-    }
+    public ObservableCollection<MachineRowViewModel> Machines { get; } = [];
 
     public ObservableCollection<SessionRowViewModel> Sessions { get; } = [];
 
@@ -152,6 +189,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     [ObservableProperty]
     private string _token = "";
+
+    [ObservableProperty]
+    private string _machineName = "";
 
     [ObservableProperty]
     private HostTransportKind _transport = HostTransportKind.Tcp;
@@ -179,7 +219,6 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         {
             if (PortText.Trim() == "47321")
                 PortText = "22";
-            EnsureKey();
         }
         else if (PortText.Trim() == "22")
         {
@@ -194,17 +233,14 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private void UseSshTransport() => Transport = HostTransportKind.Ssh;
 
     [RelayCommand]
-    private void ShowKey() => EnsureKey();
+    private void ShowKey() => RefreshKeyLine(_store.LoadPrivateKey());
 
     /** 首次进入 SSH 时生成一对 RSA 密钥; 私钥经 SecretBox 加密后落盘, 公钥只用于展示。 */
-    private void EnsureKey()
+    private void RefreshKeyLine(string? pem)
     {
-        var pem = _store.LoadPrivateKey();
         if (pem is null)
-        {
             pem = SshKeyPair.GeneratePrivateKeyPem();
-            _store.SavePrivateKey(pem);
-        }
+        _store.SavePrivateKey(pem);
         PublicKeyLine = SshKeyPair.PublicKeyLine(pem) ?? "";
         ShowPublicKey = PublicKeyLine.Length > 0;
     }
@@ -230,10 +266,14 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private SessionRowViewModel? _selectedSession;
 
     [ObservableProperty]
+    private MachineRowViewModel? _selectedMachine;
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowConnect))]
+    [NotifyPropertyChangedFor(nameof(ShowMachines))]
     [NotifyPropertyChangedFor(nameof(ShowSessions))]
     [NotifyPropertyChangedFor(nameof(ShowChat))]
-    private MobilePage _page = MobilePage.Connect;
+    private MobilePage _page = MobilePage.Machines;
 
     [ObservableProperty]
     private bool _hasApproval;
@@ -257,17 +297,46 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [ObservableProperty]
     private string _attachmentBase64 = "";
 
+    [ObservableProperty]
+    private string _newSessionCwd = "";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CreateSessionCommand))]
+    private bool _isCreatingSession;
+
+    [ObservableProperty]
+    private bool _phoneToolsEnabled;
+
+    [ObservableProperty]
+    private string _phoneToolsUrl = "";
+
+    [ObservableProperty]
+    private string _phoneToolsError = "";
+
+    [ObservableProperty]
+    private bool _hasNoMachines = true;
+
+    public string PhoneToolsToggleLabel => PhoneToolsEnabled ? "停用" : "启用";
+
+    partial void OnPhoneToolsEnabledChanged(bool value) => OnPropertyChanged(nameof(PhoneToolsToggleLabel));
+
     public string AttachmentSummary => $"{AttachmentName} · {AttachmentBytes / 1024} KB";
 
     private int AttachmentBytes => AttachmentBase64.Length * 3 / 4;
 
     public bool ShowConnect => Page == MobilePage.Connect;
 
+    public bool ShowMachines => Page == MobilePage.Machines;
+
     public bool ShowSessions => Page == MobilePage.Sessions;
 
     public bool ShowChat => Page == MobilePage.Chat;
 
     public bool HasError => Error.Length > 0;
+
+    public bool HasPhoneToolsError => PhoneToolsError.Length > 0;
+
+    public string SessionScope => SelectedMachine?.Name ?? "全部机器";
 
     public ObservableCollection<QuestionItemViewModel> Questions { get; } = [];
 
@@ -287,104 +356,294 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     partial void OnErrorChanged(string value) => OnPropertyChanged(nameof(HasError));
 
-    public bool IsConnected => _connection?.State == MobileConnectionState.Connected;
+    partial void OnPhoneToolsErrorChanged(string value) => OnPropertyChanged(nameof(HasPhoneToolsError));
+
+    public bool IsConnected => Machines.Any(machine => machine.IsConnected);
 
     public string ChatTitle => SelectedSession?.Title ?? "会话";
 
-    public string ChatSubtitle => SelectedSession?.Status ?? "";
+    public string ChatSubtitle => SelectedSession?.Subtitle ?? "";
+
+    /** 分享进来的文字/图片先在 UI 线程落到输入框或附件槽, 发送仍由用户确认。 */
+    private void DrainShares()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(DrainShares);
+            return;
+        }
+        while (ShareInbox.Take() is { } item)
+        {
+            if (item.Error.Length > 0)
+            {
+                Error = item.Error;
+                continue;
+            }
+            if (item.Text.Length > 0)
+            {
+                Input = Input.Length == 0 ? item.Text : $"{Input}\n{item.Text}";
+                continue;
+            }
+            if (item.Image.Length > 0 && item.MediaType.Length > 0)
+                SetAttachment(item.Name, item.MediaType, item.Image);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
+        _fleet.Changed -= OnFleetChanged;
         await _lifetime.CancelAsync();
-        await DisconnectAsync();
+        await _fleet.DisposeAsync();
         _lifetime.Dispose();
     }
 
+    private async Task AttachAllAsync()
+    {
+        foreach (var row in Machines.ToList())
+        {
+            if (row.Profile.IsComplete)
+                await _fleet.AttachAsync(row.Profile);
+        }
+        // 链路状态事件本身就投递到 UI 线程; 这里 await 之后可能已经在线程池上, 显式回到 UI 线程。
+        await Dispatcher.UIThread.InvokeAsync(RefreshFromFleet);
+    }
+
+    // ---- 机器管理 ----
+
     [RelayCommand]
-    private async Task ConnectAsync()
+    private void AddMachine()
+    {
+        _editingName = "";
+        MachineName = "";
+        Host = "";
+        PortText = "47321";
+        Token = "";
+        SshUser = "";
+        _fingerprint = "";
+        Transport = HostTransportKind.Tcp;
+        Error = "";
+        Page = MobilePage.Connect;
+    }
+
+    [RelayCommand]
+    private void EditMachine(MachineRowViewModel? row)
+    {
+        if (row is null)
+            return;
+        _editingName = row.Name;
+        MachineName = row.Name;
+        Host = row.Profile.Host;
+        PortText = row.Profile.Port.ToString();
+        Token = row.Profile.Token;
+        SshUser = row.Profile.SshUser;
+        _fingerprint = row.Profile.SshFingerprint;
+        Transport = row.Profile.Transport;
+        Error = "";
+        Page = MobilePage.Connect;
+    }
+
+    [RelayCommand]
+    private void CancelMachine() => Page = MobilePage.Machines;
+
+    [RelayCommand]
+    private async Task SaveMachineAsync()
     {
         if (!int.TryParse(PortText.Trim(), out var port) || port is <= 0 or > 65535)
         {
             Error = "端口无效";
             return;
         }
-        var profile = new HostProfile(Transport, Host.Trim(), port, Token.Trim(), SshUser.Trim(), _fingerprint);
+        var name = MachineName.Trim();
+        if (name.Length == 0)
+        {
+            Error = "请先给这台机器起个名字（例如 工作站）";
+            return;
+        }
+        var profile = new HostProfile(
+            name, Transport, Host.Trim(), port, Token.Trim(), SshUser.Trim(),
+            _editingName == name ? _fingerprint : "");
         if (!profile.IsComplete)
         {
             Error = profile.Transport == HostTransportKind.Ssh ? "请填写主机、端口与 SSH 用户名" : "请填写主机与端口";
             return;
         }
-        string? keyPem = null;
         if (profile.Transport == HostTransportKind.Ssh)
+            RefreshKeyLine(_store.LoadPrivateKey());
+        var machines = _store.Load().Where(machine => machine.Name != name).ToList();
+        machines.Add(profile);
+        _store.Save(machines);
+        var existing = Machines.FirstOrDefault(row => row.Name == name);
+        if (existing is null)
         {
-            EnsureKey();
-            keyPem = _store.LoadPrivateKey();
-            if (keyPem is null)
-            {
-                Error = "SSH 私钥生成失败";
-                return;
-            }
-            // 旧版本留下的明文私钥在这里迁移成 Keystore 加密格式。
-            _store.SavePrivateKey(keyPem);
+            existing = new MachineRowViewModel(profile);
+            Machines.Add(existing);
         }
-
-        _store.Save(profile);
-        await DisconnectAsync();
-        var connection = new MobileHostConnection(profile, keyPem, fingerprint =>
-        {
-            _fingerprint = fingerprint;
-            _store.SaveFingerprint(fingerprint);
-        });
-        connection.Changed += OnConnectionChanged;
-        _connection = connection;
+        existing.Update(profile);
+        _editingName = name;
         Error = "";
+        await _fleet.AttachAsync(profile);
+        SelectedMachine = existing;
         Page = MobilePage.Sessions;
-        Status = "连接中…";
-        StatusBrush = Brushes.Orange;
-        ConnectionServiceBridge.Publish(Status);
-        if (MainActivity.IsForeground)
-            ConnectionServiceBridge.Start();
-        connection.Start();
+        RefreshFromFleet();
     }
 
     [RelayCommand]
-    private async Task DisconnectAsync()
+    private async Task AttachMachine(MachineRowViewModel? row)
     {
-        var connection = _connection;
-        _connection = null;
-        if (connection is not null)
-        {
-            connection.Changed -= OnConnectionChanged;
-            await connection.DisposeAsync();
-        }
-        await CloseSessionAsync();
-        ConnectionServiceBridge.Stop();
-        Page = MobilePage.Connect;
-        Status = "未连接";
-        StatusBrush = Brushes.Gray;
-        OnPropertyChanged(nameof(IsConnected));
-        Sessions.Clear();
-        HasApproval = false;
-        foreach (var question in Questions)
-            question.Changed -= OnAnswerChanged;
-        Questions.Clear();
-        QuestionRequestId = "";
-        QuestionTitle = "";
-        HasQuestions = false;
+        if (row is null)
+            return;
+        await _fleet.AttachAsync(row.Profile);
+        SelectedMachine = row;
+        Page = MobilePage.Sessions;
+        RefreshFromFleet();
     }
+
+    [RelayCommand]
+    private async Task DetachMachine(MachineRowViewModel? row)
+    {
+        if (row is null)
+            return;
+        await _fleet.DetachAsync(row.Name);
+        row.IsConnected = false;
+        row.IsBusy = false;
+        row.Status = "未连接";
+        row.Detail = "";
+        row.SessionSummary = "";
+        RefreshFromFleet();
+    }
+
+    [RelayCommand]
+    private async Task RemoveMachine(MachineRowViewModel? row)
+    {
+        if (row is null)
+            return;
+        await _fleet.DetachAsync(row.Name);
+        _store.Save(_store.Load().Where(machine => machine.Name != row.Name).ToList());
+        Machines.Remove(row);
+        if (SelectedMachine == row)
+            SelectedMachine = null;
+        RefreshFromFleet();
+    }
+
+    // ---- 会话 ----
+
+    [RelayCommand]
+    private void SelectMachine(MachineRowViewModel? row) => SelectedMachine = row;
+
+    [RelayCommand]
+    private void ShowAllMachines() => SelectedMachine = null;
+
+    [RelayCommand]
+    private void OpenMachines() => Page = MobilePage.Machines;
+
+    partial void OnSelectedMachineChanged(MachineRowViewModel? value)
+    {
+        foreach (var row in Machines)
+            row.IsSelected = ReferenceEquals(row, value);
+        OnPropertyChanged(nameof(SessionScope));
+        if (value is not null)
+        {
+            var link = _fleet.Find(value.Name);
+            if (link?.Info is { } info && NewSessionCwd.Trim().Length == 0)
+                NewSessionCwd = info.HomeRoot;
+        }
+        RebuildSessions();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCreateSession))]
+    private async Task CreateSessionAsync()
+    {
+        var row = SelectedMachine;
+        if (row is null)
+        {
+            Error = "先选择一台机器再新建会话";
+            return;
+        }
+        var cwd = NewSessionCwd.Trim();
+        if (cwd.Length == 0)
+        {
+            Error = "请填写工作目录";
+            return;
+        }
+        var link = _fleet.Find(row.Name);
+        if (link is null)
+        {
+            Error = "这台机器还没连接";
+            return;
+        }
+        IsCreatingSession = true;
+        try
+        {
+            var lease = await link.WaitConnectedAsync(_lifetime.Token);
+            var created = await lease.Client.CreateSessionAsync(cwd, _lifetime.Token);
+            Error = "";
+            RefreshFromFleet();
+            var createdRow = Sessions.FirstOrDefault(session => session.Id == created.SessionId)
+                ?? AddSessionRow(row.Name, created);
+            // 新会话还没有事件, Host 的登记表可能晚一步推送; 直接本地补一行并打开它。
+            SelectedMachine = row;
+            await OpenSessionAsync(createdRow);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Error = $"新建会话失败: {error.Message}";
+        }
+        finally
+        {
+            IsCreatingSession = false;
+        }
+    }
+
+    private bool CanCreateSession() => !IsCreatingSession && SelectedMachine is not null;
+
+    // ---- 手机工具(MCP) ----
+
+    [RelayCommand]
+    private async Task TogglePhoneToolsAsync()
+    {
+        var enabled = !PhoneToolsEnabled;
+        _phoneToolStore.Save(_phoneToolStore.Load() with { Enabled = enabled });
+        await ApplyPhoneToolsAsync(enabled);
+    }
+
+    private async Task ApplyPhoneToolsAsync(bool enabled)
+    {
+        var previous = _phoneServer;
+        _phoneServer = null;
+        if (previous is not null)
+            await previous.DisposeAsync();
+        PhoneToolsEnabled = enabled;
+        PhoneToolsUrl = "";
+        PhoneToolsError = "";
+        if (enabled)
+        {
+            var settings = _phoneToolStore.Load();
+            var server = new PhoneMcpServer(settings.Port, settings.Token);
+            server.Start();
+            _phoneServer = server;
+            PhoneToolsUrl = server.Endpoint;
+            PhoneToolsError = server.Error ?? "";
+        }
+        RefreshStatus();
+    }
+
+    // ---- 会话内容 ----
 
     [RelayCommand]
     private async Task BackAsync()
     {
         await CloseSessionAsync();
-        Page = _connection is null ? MobilePage.Connect : MobilePage.Sessions;
+        Page = MobilePage.Sessions;
     }
 
     [RelayCommand(CanExecute = nameof(CanSend))]
     private async Task SendAsync()
     {
         var text = Input.Trim();
-        if ((text.Length == 0 && !HasAttachment) || _connection is null || _openSessionId.Length == 0)
+        if ((text.Length == 0 && !HasAttachment) || _openSessionId.Length == 0)
+            return;
+        var link = _fleet.Find(_openMachine);
+        if (link is null)
             return;
         IReadOnlyList<RemoteImageBlock> images = HasAttachment && AttachmentMediaType is { Length: > 0 } mediaType
             ? [new RemoteImageBlock(mediaType, 0, 0, AttachmentName, AttachmentBase64)]
@@ -393,10 +652,10 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         IsSending = true;
         try
         {
-            var lease = await _connection.WaitConnectedAsync(_lifetime.Token);
+            var lease = await link.WaitConnectedAsync(_lifetime.Token);
             // 与桌面端一致: 先恢复 harness 会话(agent 还活着时是空操作), 否则发给已退出会话的消息会丢。
             if (SelectedSession?.Kind == HostSessionKinds.Harness)
-                await lease.Client.ResumeSessionAsync(_openSessionId, null, null, _lifetime.Token);
+                await lease.Client.ResumeSessionAsync(_openSessionId, _lifetime.Token);
             await lease.Client.SendMessageAsync(_openSessionId, text, images, _lifetime.Token);
             ClearAttachment();
             Error = "";
@@ -444,11 +703,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task RespondApprovalAsync(bool allow)
     {
-        if (_connection is null || _approvalRequestId.Length == 0)
+        if (_approvalRequestId.Length == 0 || _fleet.Find(_approvalMachine) is not { } link)
             return;
         try
         {
-            var lease = await _connection.WaitConnectedAsync(_lifetime.Token);
+            var lease = await link.WaitConnectedAsync(_lifetime.Token);
             await lease.Client.RespondApprovalAsync(_approvalRequestId, allow, reason: null, _lifetime.Token);
             Error = "";
         }
@@ -458,76 +717,100 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private void OnConnectionChanged() => Dispatcher.UIThread.Post(RefreshFromConnection);
+    private void OnFleetChanged() => Dispatcher.UIThread.Post(RefreshFromFleet);
 
-    private void RefreshFromConnection()
+    private void RefreshFromFleet()
     {
-        var connection = _connection;
-        if (connection is null)
-            return;
-        ApplyState(connection);
-        ApplySessions(connection);
-        ApplyPending(connection);
+        foreach (var row in Machines)
+        {
+            var link = _fleet.Find(row.Name);
+            row.Target = row.Profile.Display;
+            row.Status = link?.State switch
+            {
+                MobileConnectionState.Connected => "已连接",
+                MobileConnectionState.Connecting => "连接中…",
+                MobileConnectionState.Reconnecting => "重连中…",
+                _ => "未连接",
+            };
+            row.IsConnected = link?.State == MobileConnectionState.Connected;
+            row.IsBusy = link?.State is MobileConnectionState.Connecting or MobileConnectionState.Reconnecting;
+            row.Detail = link?.Detail ?? "";
+            row.SessionSummary = link is null || link.Sessions.Count == 0 ? "" : $"{link.Sessions.Count} 个会话";
+        }
+        RebuildSessions();
+        RefreshPending();
+        RefreshStatus();
+        HasNoMachines = Machines.Count == 0;
+        OnPropertyChanged(nameof(IsConnected));
+        if (SelectedMachine is { } selected
+            && NewSessionCwd.Trim().Length == 0
+            && _fleet.Find(selected.Name)?.Info is { } info)
+            NewSessionCwd = info.HomeRoot;
+        if (Page == MobilePage.Machines && PhoneToolsEnabled)
+            PhoneToolsError = _phoneServer?.Error ?? "";
     }
 
-    private void ApplyState(MobileHostConnection connection)
+    /** 会话列表按当前选择聚合: 选了一台机器就只显示它, 没选就显示所有机器的会话。 */
+    private void RebuildSessions()
     {
-        (Status, StatusBrush) = connection.State switch
-        {
-            MobileConnectionState.Connected => ("已连接", Brushes.MediumSeaGreen),
-            MobileConnectionState.Connecting => ("连接中…", Brushes.Orange),
-            MobileConnectionState.Reconnecting => ("重连中…", Brushes.Orange),
-            _ => ("未连接", Brushes.Gray),
-        };
-        ConnectionServiceBridge.Publish(Status);
-        if (connection.State == MobileConnectionState.Connected)
-        {
-            OnPropertyChanged(nameof(IsConnected));
-            Error = "";
-        }
-        else if (connection.Detail is { Length: > 0 } detail)
-        {
-            Error = detail;
-        }
-    }
-
-    private void ApplySessions(MobileHostConnection connection)
-    {
-        var remote = connection.Sessions;
+        var scope = SelectedMachine?.Name;
+        var rows = _fleet.Links
+            .Where(link => scope is null || link.Profile.Name == scope)
+            .SelectMany(link => link.Sessions.Select(session => (link.Profile.Name, Session: session)))
+            .OrderByDescending(entry => entry.Session.LastActivityAt)
+            .ToList();
         var present = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var session in remote.OrderByDescending(value => value.LastActivityAt))
+        foreach (var (machine, session) in rows)
         {
-            present.Add(session.SessionId);
-            var row = Sessions.FirstOrDefault(value => value.Id == session.SessionId);
+            present.Add(KeyOf(machine, session.SessionId));
+            var row = Sessions.FirstOrDefault(value => value.Machine == machine && value.Id == session.SessionId);
             if (row is null)
-                Sessions.Add(new SessionRowViewModel(session));
+                Sessions.Add(new SessionRowViewModel(machine, session));
             else
                 row.Update(session);
         }
         for (var index = Sessions.Count - 1; index >= 0; index--)
         {
-            if (!present.Contains(Sessions[index].Id))
+            if (!present.Contains(KeyOf(Sessions[index].Machine, Sessions[index].Id)))
                 Sessions.RemoveAt(index);
         }
+        // 不在当前机器前面板上的会话(被机器筛选挡掉的)在切换机器后就自然消失, 这里只负责保留可见集合。
+        if (SelectedSession is not null && !Sessions.Contains(SelectedSession))
+            SelectedSession = null;
     }
 
-    private void ApplyPending(MobileHostConnection connection)
+    private SessionRowViewModel AddSessionRow(string machine, RemoteSessionSummary session)
     {
-        var approval = connection.Pending.Approvals.FirstOrDefault();
-        HasApproval = approval is not null;
-        _approvalRequestId = approval?.RequestId ?? "";
-        // 待决列表是全局的: 标题里带上会话名, 避免在 A 会话里误批 B 会话的请求。
-        ApprovalTitle = approval is null
+        var row = new SessionRowViewModel(machine, session);
+        Sessions.Insert(0, row);
+        return row;
+    }
+
+    private static string KeyOf(string machine, string sessionId) => $"{machine}\u001f{sessionId}";
+
+    private void RefreshPending()
+    {
+        var approval = _fleet.Links
+            .Select(link => (link.Profile.Name, Approval: link.Pending.Approvals.FirstOrDefault()))
+            .FirstOrDefault(entry => entry.Approval is not null);
+        _approvalRequestId = approval.Approval?.RequestId ?? "";
+        _approvalMachine = _approvalRequestId.Length == 0 ? "" : approval.Name;
+        HasApproval = _approvalRequestId.Length > 0;
+        // 待决列表是全局的: 标题里带上机器与会话名, 避免在 A 会话里误批 B 会话的请求。
+        ApprovalTitle = approval.Approval is not { } request
             ? ""
-            : $"{approval.Tool} 请求批准 · {SessionTitle(approval.SessionId)}";
-        ApprovalDetail = approval is null
+            : $"{request.Tool} 请求批准 · {approval.Name} · {SessionTitle(approval.Name, request.SessionId)}";
+        ApprovalDetail = approval.Approval is not { } detail
             ? ""
-            : (approval.Reason is { Length: > 0 } reason ? reason : approval.Arguments ?? "");
-        ApplyQuestions(connection.Pending.Questions.FirstOrDefault());
+            : (detail.Reason is { Length: > 0 } reason ? reason : detail.Arguments ?? "");
+        var question = _fleet.Links
+            .Select(link => (link.Profile.Name, Question: link.Pending.Questions.FirstOrDefault()))
+            .FirstOrDefault(entry => entry.Question is not null);
+        ApplyQuestions(question.Name, question.Question);
     }
 
     /** 只在 requestId 变化时重建题目, 否则用户已经勾好的选项会被待决广播刷掉。 */
-    private void ApplyQuestions(RemoteQuestionRequest? request)
+    private void ApplyQuestions(string machine, RemoteQuestionRequest? request)
     {
         var id = request?.RequestId ?? "";
         if (id == QuestionRequestId)
@@ -536,16 +819,17 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             question.Changed -= OnAnswerChanged;
         Questions.Clear();
         QuestionRequestId = id;
+        _questionMachine = machine;
         if (request is null)
         {
             HasQuestions = false;
             QuestionTitle = "";
             return;
         }
-        var session = SessionTitle(request.SessionId);
+        var session = SessionTitle(machine, request.SessionId);
         QuestionTitle = request.Questions.Count == 1
-            ? $"{request.Questions[0].Question} · {session}"
-            : $"需要你回答 {request.Questions.Count} 个问题 · {session}";
+            ? $"{request.Questions[0].Question} · {machine} · {session}"
+            : $"需要你回答 {request.Questions.Count} 个问题 · {machine} · {session}";
         foreach (var item in request.Questions)
         {
             var question = new QuestionItemViewModel(item);
@@ -566,7 +850,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand(CanExecute = nameof(CanSubmitAnswers))]
     private async Task SubmitAnswersAsync()
     {
-        if (_connection is null || QuestionRequestId.Length == 0)
+        if (QuestionRequestId.Length == 0 || _fleet.Find(_questionMachine) is not { } link)
             return;
         IsSendingAnswers = true;
         try
@@ -577,7 +861,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
                     question.SelectedLabels,
                     question.Custom.Trim() is { Length: > 0 } custom ? custom : null))
                 .ToList();
-            var lease = await _connection.WaitConnectedAsync(_lifetime.Token);
+            var lease = await link.WaitConnectedAsync(_lifetime.Token);
             var accepted = await lease.Client.RespondQuestionAsync(QuestionRequestId, answers, _lifetime.Token);
             Error = accepted ? "" : "问题已被其他客户端回答";
         }
@@ -591,8 +875,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private string SessionTitle(string sessionId)
-        => Sessions.FirstOrDefault(row => row.Id == sessionId)?.Title ?? sessionId;
+    private string SessionTitle(string machine, string sessionId)
+        => Sessions.FirstOrDefault(row => row.Machine == machine && row.Id == sessionId)?.Title ?? sessionId;
 
     partial void OnSelectedSessionChanged(SessionRowViewModel? value)
     {
@@ -605,6 +889,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         await StopFollowingAsync();
         _openSessionId = row.Id;
+        _openMachine = row.Machine;
         Page = MobilePage.Chat;
         OnPropertyChanged(nameof(ChatTitle));
         OnPropertyChanged(nameof(ChatSubtitle));
@@ -613,18 +898,18 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             Error = "终端会话请在桌面端操作";
             return;
         }
-        if (_connection is null)
+        if (_fleet.Find(row.Machine) is not { } link)
             return;
 
         var lifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _sessionLifetime = lifetime;
         try
         {
-            await foreach (var item in _connection.SubscribeAsync(row.Id, 0, lifetime.Token))
+            await foreach (var item in link.SubscribeAsync(row.Id, 0, lifetime.Token))
             {
                 if (item.Reset)
                 {
-                    await ReloadSnapshotAsync(row.Id, lifetime.Token);
+                    await ReloadSnapshotAsync(link, row.Id, lifetime.Token);
                     continue;
                 }
                 _events.Enqueue(item);
@@ -639,14 +924,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private async Task ReloadSnapshotAsync(string sessionId, CancellationToken cancellationToken)
+    private async Task ReloadSnapshotAsync(MobileHostConnection link, string sessionId, CancellationToken cancellationToken)
     {
-        if (_connection is null)
-            return;
         RemoteSessionSnapshot snapshot;
         try
         {
-            var lease = await _connection.WaitConnectedAsync(cancellationToken);
+            var lease = await link.WaitConnectedAsync(cancellationToken);
             snapshot = await lease.Client.GetSessionSnapshotAsync(sessionId, cancellationToken);
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -660,9 +943,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             if (cancellationToken.IsCancellationRequested || sessionId != _openSessionId)
                 return;
             _transcript = new SubagentTranscript();
-            _renderedSeq = 0;
             Messages.Clear();
-            ApplyEvents(snapshot.Events);
+            ApplySnapshot(snapshot.Events);
         });
     }
 
@@ -677,7 +959,6 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             lifetime.Dispose();
         }
         _openSessionId = "";
-        _renderedSeq = 0;
         _transcript = new SubagentTranscript();
         Messages.Clear();
         Error = "";
@@ -688,25 +969,53 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         await StopFollowingAsync();
         SelectedSession = null;
-        Page = _connection is null ? MobilePage.Connect : MobilePage.Sessions;
+        Page = MobilePage.Sessions;
         OnPropertyChanged(nameof(ChatTitle));
         OnPropertyChanged(nameof(ChatSubtitle));
     }
 
+    /** 状态栏与常驻通知只显示一句汇总, 细节留给机器行。 */
+    private void RefreshStatus()
+    {
+        var links = _fleet.Links;
+        var connected = links.Count(link => link.State == MobileConnectionState.Connected);
+        var busy = links.Count(link => link.State is MobileConnectionState.Connecting or MobileConnectionState.Reconnecting);
+        var phone = PhoneToolsEnabled ? 1 : 0;
+        (Status, StatusBrush) = (connected, busy, phone) switch
+        {
+            (_, > 0, _) => ($"{connected}/{links.Count} 台已连接，{busy} 台连接中…", Brushes.Orange),
+            (> 0, _, _) when phone == 1 => ($"{connected} 台已连接 · 手机工具已开启", Brushes.MediumSeaGreen),
+            (> 0, _, _) => ($"{connected} 台已连接", Brushes.MediumSeaGreen),
+            (_, _, 1) => ("手机工具已开启", Brushes.MediumSeaGreen),
+            _ => ("未连接", Brushes.Gray),
+        };
+        RefreshServiceState();
+    }
+
+    /** 连接或手机工具任一需要常驻时, 才让前台服务活着。 */
+    private void RefreshServiceState()
+    {
+        var active = _fleet.Links.Count > 0 || PhoneToolsEnabled;
+        ConnectionStatusHub.Publish(Status, active);
+        if (active)
+        {
+            if (MainActivity.IsForeground)
+                ConnectionServiceBridge.Start();
+            return;
+        }
+        ConnectionServiceBridge.Stop();
+    }
+
     /** UI 线程上的批量落盘: 只在这一个地方改 Messages, 后台线程不碰绑定集合。 */
-    private void ApplyEvents(IReadOnlyList<RemoteEventInfo> batch)
+    private void ApplyEvents(IReadOnlyList<RemoteSessionEvent> batch)
     {
         var changed = false;
         foreach (var item in batch)
         {
-            if (item.Sequence < _renderedSeq)
+            if (item.Event is not { } sessionEvent)
                 continue;
-            _renderedSeq = item.Sequence + 1;
-            if (Deserialize(item.EventJson) is { } sessionEvent)
-            {
-                _transcript.Apply(sessionEvent, Messages);
-                changed = true;
-            }
+            _transcript.Apply(sessionEvent, Messages);
+            changed = true;
         }
         if (!changed)
             return;
@@ -718,15 +1027,18 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         TranscriptChanged?.Invoke();
     }
 
-    private static SessionEvent? Deserialize(string json)
+    /** 快照是裸事件列表: 与流式事件共用同一段渲染, 只是少了外层信封。 */
+    private void ApplySnapshot(IReadOnlyList<SessionEvent> events)
     {
-        try
+        var changed = false;
+        foreach (var sessionEvent in events)
         {
-            return JsonSerializer.Deserialize(json, DshCoreJsonContext.Default.SessionEvent);
+            _transcript.Apply(sessionEvent, Messages);
+            changed = true;
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+        if (!changed)
+            return;
+        _transcript.Flush();
+        TranscriptChanged?.Invoke();
     }
 }

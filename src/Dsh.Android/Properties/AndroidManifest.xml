@@ -5,6 +5,13 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <!-- 手机工具要按包名列应用、启动应用; Android 11+ 必须先声明可见性。 -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.MAIN" />
+      <category android:name="android.intent.category.LAUNCHER" />
+    </intent>
+  </queries>
   <application android:name=".MobileApplication"
                android:label="DSH"
                android:usesCleartextTraffic="true" />

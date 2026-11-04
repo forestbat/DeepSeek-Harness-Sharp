@@ -45,7 +45,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />
-    <ProjectReference Include="..\Dsh.RemoteHost\Dsh.RemoteHost.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
   </ItemGroup>
 
 </Project>

@@ -240,8 +240,7 @@ public static class HarnessEntrypoint
             await Console.Error.WriteLineAsync($"dsharp: invalid --listen \"{listen}\" (expected address:port, e.g. 0.0.0.0:47321)");
             return 2;
         }
-        if (!endpoint.Address.Equals(System.Net.IPAddress.Loopback) && token is not { Length: > 0 })
-            token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        token = Dsh.RemoteHost.RemoteHostListener.ResolveExposedToken(endpoint, token);
         using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
         await using var backend = await HarnessRemoteHostBackend.CreateAsync(app);
         var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
@@ -256,12 +255,12 @@ public static class HarnessEntrypoint
             context.Cancel = true;
             cancellation.Cancel();
         });
-        await Dsh.RemoteHost.RemoteHostListener.ServeTcpAsync(server, endpoint, cancellation.Token, async actual =>
+        await Dsh.RemoteHost.RemoteHostListener.ServeEndpointAsync(server, endpoint, async actual =>
         {
             await Console.Out.WriteLineAsync($"dsharp host listening on {actual}");
             if (token is { Length: > 0 })
                 await Console.Out.WriteLineAsync($"token: {token}");
-        });
+        }, cancellation.Token);
         return 0;
     }
 

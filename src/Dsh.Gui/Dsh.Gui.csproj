@@ -6,6 +6,8 @@
     <ProjectReference Include="..\Dsh.Workspace\Dsh.Workspace.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <!-- 与手机端共用的视图模型(消息、子代理转录、调度桥)在 Dsh.Gui.Shared 里, 桌面端也引用同一份。 -->
+    <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />
     <ProjectReference Include="..\Dsh.Ide\Dsh.Ide.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />

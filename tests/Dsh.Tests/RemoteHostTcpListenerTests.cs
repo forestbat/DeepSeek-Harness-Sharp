@@ -21,11 +21,11 @@ public sealed class RemoteHostTcpListenerTests
         using var serving = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var servingToken = serving.Token;
         var listener = Task.Run(
-            () => RemoteHostListener.ServeTcpAsync(server, new IPEndPoint(IPAddress.Loopback, 0), servingToken, endpoint =>
+            () => RemoteHostListener.ServeEndpointAsync(server, new IPEndPoint(IPAddress.Loopback, 0), endpoint =>
             {
                 bound.TrySetResult(endpoint);
                 return Task.CompletedTask;
-            }),
+            }, servingToken),
             cancellationToken);
         var endpoint = await bound.Task.WaitAsync(cancellationToken);
 
@@ -55,13 +55,15 @@ public sealed class RemoteHostTcpListenerTests
         }
     }
 
-    [Fact(Timeout = 30000)]
-    public async Task NonLoopbackListener_WithoutToken_IsRefused()
+    /** 非回环端点没给令牌时必须现生成一个, 回环端点才允许裸监听。 */
+    [Fact]
+    public void ExposedToken_IsGeneratedForNonLoopbackAndOptionalForLoopback()
     {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var backend = await RemoteHostCapabilityTests.FakeBackend.CreateAsync(cancellationToken);
-        var server = new RemoteHostServer(new RemoteHostServerOptions(), backend);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            RemoteHostListener.ServeTcpAsync(server, new IPEndPoint(IPAddress.Any, 0), cancellationToken));
+        var exposed = RemoteHostListener.ResolveExposedToken(new IPEndPoint(IPAddress.Any, 47321), null);
+        Assert.False(string.IsNullOrWhiteSpace(exposed));
+        Assert.Equal(32, exposed!.Length);
+
+        Assert.Null(RemoteHostListener.ResolveExposedToken(new IPEndPoint(IPAddress.Loopback, 47321), null));
+        Assert.Equal("chosen", RemoteHostListener.ResolveExposedToken(new IPEndPoint(IPAddress.Any, 47321), "chosen"));
     }
 }
