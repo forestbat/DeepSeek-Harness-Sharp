@@ -75,7 +75,7 @@ jobs:
       - name: 验证变更选择边界
         run: python3 -m unittest discover -s tests/ci -v
 
-  iroh-component:
+  iroh-component-windows:
     name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
     needs: changes
     if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
@@ -87,11 +87,7 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-          - os: ubuntu-latest
-            rid: linux-x64
-          - os: macos-latest
-            rid: osx-arm64
-    steps:
+    steps: &iroh-component-steps
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || github.sha }}
@@ -152,6 +148,34 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  iroh-component-linux:
+    name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
+    needs: changes
+    if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+    steps: *iroh-component-steps
+
+  iroh-component-macos:
+    name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
+    needs: changes
+    if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rid: osx-arm64
+    steps: *iroh-component-steps
+
   test:
     name: 测试（${{ matrix.platform.os }}，${{ matrix.suite }}）
     needs: changes
@@ -184,33 +208,35 @@ jobs:
       native-cc-alt: ${{ matrix.platform.native-cc-alt }}
       suite: ${{ matrix.suite }}
       quick-cohort: all
-  test-quick:
-    name: 测试（${{ matrix.platform.os }}，quick）
-    needs: [changes, iroh-component]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component.result == 'success' || needs.iroh-component.result == 'skipped') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - os: windows-latest
-            native-cc: cl
-            native-cc-alt: clang-cl
-          - os: ubuntu-latest
-            native-cc: clang
-            native-cc-alt: ''
+  test-windows-quick:
+    name: 测试（windows-latest，quick）
+    needs: [changes, iroh-component-windows]
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-windows.result == 'success' || needs.iroh-component-windows.result == 'skipped') }}
     uses: ./.github/workflows/ci-tests.yml
     with:
-      os: ${{ matrix.platform.os }}
-      native-cc: ${{ matrix.platform.native-cc }}
-      native-cc-alt: ${{ matrix.platform.native-cc-alt }}
+      os: windows-latest
+      native-cc: cl
+      native-cc-alt: clang-cl
+      suite: quick
+      quick-cohort: all
+
+  test-linux-quick:
+    name: 测试（ubuntu-latest，quick）
+    needs: [changes, iroh-component-linux]
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-linux.result == 'success' || needs.iroh-component-linux.result == 'skipped') }}
+    uses: ./.github/workflows/ci-tests.yml
+    with:
+      os: ubuntu-latest
+      native-cc: clang
+      native-cc-alt: ''
       suite: quick
       quick-cohort: all
 
 
   test-macos-quick:
     name: 测试（macos-latest，quick-${{ matrix.cohort }}）
-    needs: [changes, iroh-component]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component.result == 'success' || needs.iroh-component.result == 'skipped') }}
+    needs: [changes, iroh-component-macos]
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-macos.result == 'success' || needs.iroh-component-macos.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -357,7 +383,7 @@ jobs:
 
   result:
     name: CI 结果
-    needs: [changes, validate, iroh-component, test, test-quick, test-macos-quick, build, aot]
+    needs: [changes, validate, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

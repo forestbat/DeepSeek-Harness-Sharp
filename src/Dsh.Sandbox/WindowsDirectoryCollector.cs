@@ -9,7 +9,7 @@ namespace Dsh.Sandbox;
 [SupportedOSPlatform("windows")]
 internal static class WindowsDirectoryCollector
 {
-    private const int WorkerCount = 4;
+    private const int WorkerCount = 8;
     private static readonly EnumerationOptions Options = new()
     {
         RecurseSubdirectories = false,
