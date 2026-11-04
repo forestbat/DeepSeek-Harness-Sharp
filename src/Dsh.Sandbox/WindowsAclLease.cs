@@ -225,6 +225,7 @@ internal sealed class WindowsAclLease : IDisposable
         private const int SecurityImpersonation = 2;
         private const int ImpersonationToken = 2;
         private const int PrivilegeBufferBytes = 1024;
+        private const int PositiveProofCapacity = 128;
         private const uint FileGenericRead = 0x120089;
         private const uint FileGenericWrite = 0x120116;
         private const uint FileGenericExecute = 0x1200a0;
@@ -234,6 +235,8 @@ internal sealed class WindowsAclLease : IDisposable
         private const int MandatoryReadExecuteUp = 6;
         private static readonly SecurityIdentifier OwnerRights = new("S-1-3-4");
         private static readonly SecurityIdentifier PrincipalSelf = new("S-1-5-10");
+        private readonly Lock _proofGate = new();
+        private HashSet<byte[]>? _positiveProofs;
 
         public static EffectiveRead? TryCreate(SafeFileHandle process)
         {
@@ -251,17 +254,64 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        public void Dispose() => token.Dispose();
-
-        public unsafe bool CanRead(nint descriptor)
+        public void Dispose()
         {
+            lock (_proofGate)
+                _positiveProofs = null;
+            token.Dispose();
+        }
+
+        public unsafe bool CanRead(nint descriptor, ushort control)
+        {
+            // Absolute descriptors contain pointers, not a contiguous descriptor image.
+            var length = (control & (ushort)ControlFlags.SelfRelative) != 0
+                ? WindowsNative.GetSecurityDescriptorLength(descriptor) : 0;
+            var bytes = length is > 0 and <= int.MaxValue
+                ? new ReadOnlySpan<byte>((void*)descriptor, (int)length) : default;
+            return CanRead(descriptor, bytes);
+        }
+
+        private unsafe bool CanRead(nint descriptor, ReadOnlySpan<byte> bytes)
+        {
+            if (!bytes.IsEmpty)
+                lock (_proofGate)
+                    if (_positiveProofs is not null && _positiveProofs.GetAlternateLookup<ReadOnlySpan<byte>>().Contains(bytes))
+                        return true;
             var mapping = new WindowsNative.GenericMapping { Read = FileGenericRead, Write = FileGenericWrite, Execute = FileGenericExecute, All = FileAllAccess };
             byte* privileges = stackalloc byte[PrivilegeBufferBytes];
             uint length = PrivilegeBufferBytes;
             // The existing SID grant remains the fallback when the native check cannot prove read authority.
             var succeeded = WindowsNative.AccessCheck(descriptor, token, ReadExecute, ref mapping, (nint)privileges, ref length,
                 out var granted, out var allowed);
-            return succeeded && allowed && (granted & ReadExecute) == ReadExecute;
+            if (!succeeded || !allowed || (granted & ReadExecute) != ReadExecute)
+                return false;
+            // Only this context's immutable query-only token and constant mapping share successful proofs.
+            // Native checks run outside the cache lock; alternate insertion copies only a new successful image.
+            if (!bytes.IsEmpty)
+                lock (_proofGate)
+                {
+                    var proofs = _positiveProofs ??= new HashSet<byte[]>(PositiveProofCapacity, DescriptorComparer.Instance);
+                    if (proofs.Count < PositiveProofCapacity)
+                        proofs.GetAlternateLookup<ReadOnlySpan<byte>>().Add(bytes);
+                }
+            return true;
+        }
+
+        private sealed class DescriptorComparer : IEqualityComparer<byte[]>, IAlternateEqualityComparer<ReadOnlySpan<byte>, byte[]>
+        {
+            public static readonly DescriptorComparer Instance = new();
+
+            public bool Equals(byte[]? x, byte[]? y) => ReferenceEquals(x, y)
+                || x is not null && y is not null && x.AsSpan().SequenceEqual(y);
+            public bool Equals(ReadOnlySpan<byte> alternate, byte[] other) => alternate.SequenceEqual(other);
+            public int GetHashCode(byte[] value) => GetHashCode(value.AsSpan());
+            public int GetHashCode(ReadOnlySpan<byte> value)
+            {
+                var hash = new HashCode();
+                hash.AddBytes(value);
+                return hash.ToHashCode();
+            }
+            public byte[] Create(ReadOnlySpan<byte> alternate) => alternate.ToArray();
         }
 
         public static bool IsStableAllowAcl(RawAcl acl, SecurityIdentifier sid)
@@ -312,8 +362,9 @@ internal sealed class WindowsAclLease : IDisposable
                 new SecurityIdentifier(owner), new SecurityIdentifier(group), null, inherited);
             var bytes = new byte[descriptor.BinaryLength];
             descriptor.GetBinaryForm(bytes, 0);
+            // RawSecurityDescriptor.GetBinaryForm emits the complete self-relative image, including owner and group.
             fixed (byte* pointer = bytes)
-                return CanRead((nint)pointer);
+                return CanRead((nint)pointer, bytes);
         }
     }
 
@@ -571,7 +622,7 @@ internal sealed class WindowsAclLease : IDisposable
                 // Inspect every object, including protected descendants, and retain the narrowing path for this SID's existing ACEs.
                 var hasPrincipals = owner != 0 && group != 0;
                 var stable = EffectiveRead.IsStableAllowAcl(acl, sid);
-                var reuseRead = hasPrincipals && stable && effectiveRead.CanRead(descriptor)
+                var reuseRead = hasPrincipals && stable && effectiveRead.CanRead(descriptor, control)
                     && (!directory || effectiveRead.CanInheritRead(acl, owner, group, label));
                 return (acl, protectedDacl, reuseRead);
             }
