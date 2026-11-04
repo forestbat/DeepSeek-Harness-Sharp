@@ -200,6 +200,49 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         Assert.Equal(ReadDacl(hostAfter), ReadDacl(lateFile));
     }
 
+    [Fact]
+    [Trait("Category", "SandboxNative")]
+    public async Task ExistingReadAuthority_DoesNotRequireHostOwnershipChanges()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows AppContainer and native filesystem access checks.");
+        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
+        var readable = Directory.CreateDirectory(Path.Combine(_root, "readonly"));
+        var input = Path.Combine(readable.FullName, "input.txt");
+        await File.WriteAllTextAsync(input, "existing-read", TestContext.Current.CancellationToken);
+        var original = ReadDacl(readable.FullName);
+        using var identity = WindowsIdentity.GetCurrent();
+        ConfigureReadAuthorityWithoutHostOwnershipChanges(readable, identity.User!);
+        var protectedAcl = ReadDacl(readable.FullName);
+        try
+        {
+            await using (var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+            {
+                Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                WorkingDirectory = working,
+                ReadOnlyPaths = [readable.FullName],
+                Arguments = ["/D", "/Q", "/C", @"type ..\readonly\input.txt&(echo tampered>>..\readonly\input.txt) 2>nul&exit /b 0"],
+            }, TestContext.Current.CancellationToken))
+            {
+                var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
+                var error = consumer.StandardError.CopyToAsync(Stream.Null, TestContext.Current.CancellationToken);
+                await consumer.StandardInput.DisposeAsync();
+                Assert.Equal(0, await consumer.WaitForExitAsync(TestContext.Current.CancellationToken)
+                    .WaitAsync(Deadline, TestContext.Current.CancellationToken));
+                Assert.Contains("existing-read", await output);
+                await error;
+                Assert.Equal("existing-read", await File.ReadAllTextAsync(input, TestContext.Current.CancellationToken));
+            }
+            AssertDaclRestored(protectedAcl, readable.FullName);
+        }
+        finally
+        {
+            var restore = new DirectorySecurity();
+            restore.SetSecurityDescriptorSddlForm(original, AccessControlSections.Access);
+            readable.SetAccessControl(restore);
+        }
+    }
+
     [Theory]
     [InlineData("S-1-15-2-1", false)]
     [InlineData("S-1-15-2-2", false)]
@@ -268,6 +311,18 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         });
 
         Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+    }
+
+    private static void ConfigureReadAuthorityWithoutHostOwnershipChanges(DirectoryInfo directory, SecurityIdentifier host)
+    {
+        var acl = new DirectorySecurity();
+        acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        const InheritanceFlags inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        acl.AddAccessRule(new FileSystemAccessRule(host, FileSystemRights.ReadAndExecute | FileSystemRights.Delete | FileSystemRights.ChangePermissions,
+            inheritance, PropagationFlags.None, AccessControlType.Allow));
+        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-2-2"), FileSystemRights.ReadAndExecute,
+            inheritance, PropagationFlags.None, AccessControlType.Allow));
+        directory.SetAccessControl(acl);
     }
 
     private static string AddConcurrentReadAttributeGrant(string path, string original)

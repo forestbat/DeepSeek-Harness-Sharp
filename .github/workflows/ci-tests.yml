@@ -324,7 +324,7 @@ jobs:
           for SPEC in \
             '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.InvalidSyntax_ReturnsFrontendDiagnosticsAsFailure' \
             '15|owned-repl-r12 call=[0-9]+ stage=0|Dsh.Tests.CSharpReplToolsTests.MultilineProgram_PreservesStateAndPrintsFinalExpression' \
-            '45|owned-mcp-r10 launch=1 stage=30|Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings' \
+            '1|owned-mcp-r10 launch=1 stage=17|Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings' \
             '5|owned-plugin-r12 call=[0-9]+ stage=4|Dsh.Tests.PluginSandboxIntegrationTests.AddIndependentArtifact_ApprovesBeforeInstall_AndNeverConstructsFileCodeInMain' \
             '2|owned-pane-r12 stage=0|Dsh.Tests.ChatWindowPaneTests.Overview_Enter_Host_Shell_Pty_Opens_Terminal_Pane'; do
             IFS='|' read -r SAMPLE MARKER METHOD <<< "$SPEC"
