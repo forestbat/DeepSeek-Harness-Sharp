@@ -22,6 +22,12 @@ on:
         required: false
         type: string
         default: 'all'
+      dryioc-commit:
+        required: true
+        type: string
+      dryioc-sha256:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -81,15 +87,17 @@ jobs:
           $directory = [System.IO.Path]::GetFullPath("artifacts/iroh-ssh/$rid")
           $directory >> $env:GITHUB_PATH
 
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
       - name: Prepare local NuGet feed (packages/, DryIoc.dll)
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install real C# frontends for standalone tool tests
         if: (inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh') || (runner.os == 'Windows' && inputs.suite == 'regression-1')

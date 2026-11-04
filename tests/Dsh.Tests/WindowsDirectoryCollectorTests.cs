@@ -34,13 +34,16 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
                 BufferSize = 16 * 1024
             }).ToArray();
         var actual = new List<(string Path, bool Directory)>();
+        var callerThread = Environment.CurrentManagedThreadId;
 
-        WindowsDirectoryCollector.Collect(_root, (path, directory) => actual.Add((path, directory)), TestContext.Current.CancellationToken);
+        WindowsDirectoryCollector.Collect(_root, (path, directory) =>
+        {
+            Assert.Equal(callerThread, Environment.CurrentManagedThreadId);
+            actual.Add((path, directory));
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(expectedCount, actual.Count);
         Assert.True(expected.SequenceEqual(actual), "Collection must retain native entry order and FIFO directory order.");
-        Assert.True(expected.OrderBy(static entry => entry.Path.Length).SequenceEqual(actual.OrderBy(static entry => entry.Path.Length)),
-            "Stable equal-length ACL modification order must not change.");
         Assert.Equal(actual.Count, actual.Select(static entry => entry.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.All(actual, static entry => Assert.Equal(Directory.Exists(entry.Path), entry.Directory));
     }
@@ -121,6 +124,28 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
 
         Assert.Equal(cancellation.Token, error.CancellationToken);
         Assert.Equal(1, files);
+        AssertDirectoriesReleased();
+    }
+
+    [Fact]
+    public void CancellationFromFinalVisitor_IsReportedAfterTheLastEntry()
+    {
+        RequireWindows();
+        var file = Path.Combine(_root, "only.txt");
+        File.WriteAllText(file, "included");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var visits = 0;
+
+        var error = Assert.ThrowsAny<OperationCanceledException>(() => WindowsDirectoryCollector.Collect(_root, (path, directory) =>
+        {
+            Assert.Equal(file, path);
+            Assert.False(directory);
+            visits++;
+            cancellation.Cancel();
+        }, cancellation.Token));
+
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(1, visits);
     }
 
     [Fact]
@@ -141,6 +166,7 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
 
         Assert.Same(failure, observed);
         Assert.Equal(1, files);
+        AssertDirectoriesReleased();
     }
 
     [Fact]
@@ -174,7 +200,56 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
     }
 
     [Fact]
-    public void ExclusivelyOpenedDirectory_IsReportedWithoutPublishingEntries()
+    public void DiscoveredDirectoryReplacedByFile_IsReportedRatherThanSilentlySkipped()
+    {
+        RequireWindows();
+        var child = Directory.CreateDirectory(Path.Combine(_root, "child")).FullName;
+        var visits = 0;
+
+        var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(_root, (path, directory) =>
+        {
+            visits++;
+            Assert.True(directory && string.Equals(child, path, StringComparison.Ordinal));
+            Directory.Delete(child);
+            File.WriteAllText(child, "no longer a directory");
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(unchecked((int)0x8007010b), failure.HResult);
+        Assert.Equal(1, visits);
+    }
+
+    [Fact]
+    public void ExclusivelyOpenedNestedDirectory_IsReportedAndReleasesAncestors()
+    {
+        RequireWindows();
+        var child = Directory.CreateDirectory(Path.Combine(_root, "child")).FullName;
+        var middle = Directory.CreateDirectory(Path.Combine(child, "middle")).FullName;
+        var nested = Directory.CreateDirectory(Path.Combine(middle, "locked")).FullName;
+        var file = Path.Combine(nested, "input.txt");
+        File.WriteAllText(file, "not enumerable");
+        var actual = new List<string>();
+        const uint listDirectory = 1;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+        const int sharingViolation = unchecked((int)0x80070020);
+        using (var handle = WindowsNative.CreateFile(nested, listDirectory, 0, 0, openExisting, backupSemantics, 0))
+        {
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive nested directory fixture could not open its directory.");
+
+            var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(_root,
+                (path, _) => actual.Add(path), TestContext.Current.CancellationToken));
+
+            Assert.Equal(sharingViolation, failure.HResult);
+            Assert.DoesNotContain(file, actual);
+        }
+        AssertDirectoriesReleased();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExclusivelyOpenedDirectory_IsReportedWithoutPublishingItsEntries(bool collectParent)
     {
         RequireWindows();
         var directory = Directory.CreateDirectory(Path.Combine(_root, "locked"));
@@ -188,11 +263,28 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
             throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive directory fixture could not open its directory.");
         var visits = 0;
 
-        var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(directory.FullName,
-            (_, _) => visits++, TestContext.Current.CancellationToken));
+        var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(collectParent ? _root : directory.FullName,
+            (path, isDirectory) =>
+            {
+                Assert.Equal(directory.FullName, path);
+                Assert.True(isDirectory);
+                visits++;
+            }, TestContext.Current.CancellationToken));
 
         Assert.Equal(sharingViolation, failure.HResult);
-        Assert.Equal(0, visits);
+        Assert.Equal(collectParent ? 1 : 0, visits);
+    }
+
+    private void AssertDirectoriesReleased()
+    {
+        // An exclusive consumer must be able to reopen both the active directory and queued descendants after failure.
+        var directories = Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Prepend(_root);
+        foreach (var directory in directories)
+        {
+            using var handle = WindowsNative.CreateFile(directory, 1, 0, 0, 3, 0x02000000, 0);
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "The collector retained a directory handle after returning.");
+        }
     }
 
     private int PopulateTree()
