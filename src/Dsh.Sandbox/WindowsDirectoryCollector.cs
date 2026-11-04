@@ -1,145 +1,200 @@
-using System.Collections.Concurrent;
-using System.IO.Enumeration;
-using System.Runtime.ExceptionServices;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
-/// <summary>Collects non-reparse descendants with bounded, dedicated directory-enumeration threads.</summary>
+/// <summary>Collects non-reparse descendants using root-relative directory opens and one native buffer.</summary>
 [SupportedOSPlatform("windows")]
 internal static class WindowsDirectoryCollector
 {
-    private const int WorkerCount = 8;
-    private static readonly EnumerationOptions Options = new()
-    {
-        RecurseSubdirectories = false,
-        AttributesToSkip = FileAttributes.ReparsePoint,
-        IgnoreInaccessible = false,
-        BufferSize = 16 * 1024
-    };
+    private const int BufferSize = 16 * 1024;
+    private const uint ListDirectory = 1;
+    private const uint Synchronize = 0x00100000;
+    private const uint BackupSemantics = 0x02000000;
+    private const uint SynchronousDirectoryOpen = 0x00004021;
+    private const int FileFullDirectoryInformation = 2;
+    private const int NoMoreFiles = unchecked((int)0x80000006);
+    private const int NoSuchFile = unchecked((int)0xc000000f);
+    private const uint ShareAll = (uint)(FileShare.Read | FileShare.Write | FileShare.Delete);
+    private const uint OpenExisting = 3;
+    private const uint CaseInsensitive = 0x40;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorPathNotFound = 3;
+    private const int ErrorAccessDenied = 5;
+    private const int ErrorFilenameExceedsRange = 206;
+    private const int ErrorOperationAborted = 995;
+    private const int HResultHighWordMask = unchecked((int)0xffff0000);
+    private const int Win32HResultMask = unchecked((int)0x80070000);
 
     /// <summary>
-    /// Visits descendants, excluding the root, serially on the calling thread.
-    /// Entries retain recursive FileSystemEnumerable's breadth-first order on an unchanged tree.
+    /// Visits descendants, excluding the root, serially on the calling thread in native entry and FIFO directory order.
     /// No callback runs after this method returns or throws.
-    /// The callback may use a plain dictionary, but must only collect topology: callers must finish all roots before modifying any ACL.
+    /// Callers must finish collecting all roots before modifying any ACL.
     /// </summary>
     /// <remarks>
-    /// Directories are opened by full path when a worker reaches them, rather than relative to their parent at discovery.
-    /// Concurrent changes can therefore produce a different observation or an error than recursive FileSystemEnumerable.
-    /// The work queue and retained topology grow with the tree; only the number of enumeration threads is bounded.
-    /// Missing directories and other enumeration errors are not ignored.
+    /// Each queued path is opened strictly relative to the retained root when its FIFO turn arrives.
+    /// Only pending directory paths are retained, with at most the root and one current directory handle open.
+    /// Native calls are synchronous, with cancellation checked before directory opens, between entries and after completion.
     /// </remarks>
-    public static void Collect(string root, Action<string, bool> accept, CancellationToken cancellationToken)
+    public static unsafe void Collect(string root, Action<string, bool> accept, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(accept);
         cancellationToken.ThrowIfCancellationRequested();
-        var rootEntries = new List<Entry>();
-        foreach (var entry in new FileSystemEnumerable<Entry>(root, TransformEntry, Options))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            rootEntries.Add(entry);
-        }
-
-        var directories = new Queue<DirectoryWork>();
-        foreach (var entry in rootEntries)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            accept(entry.Path, entry.Child is not null);
-            if (entry.Child is { } child)
-                directories.Enqueue(child);
-        }
+        var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var nativeRoot = rootPath.StartsWith(@"\\", StringComparison.Ordinal)
+            && !rootPath.StartsWith(@"\\?\", StringComparison.Ordinal)
+            ? $@"\\?\UNC\{rootPath.AsSpan(2)}" : rootPath;
         cancellationToken.ThrowIfCancellationRequested();
-        if (directories.Count == 0)
-            return;
-
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var jobs = new BlockingCollection<DirectoryWork>();
-        // Count both queued and active directories, adding each child before its parent can finish.
-        var pending = directories.Count;
-        foreach (var directory in directories)
-            jobs.Add(directory);
-        var workers = new Thread[WorkerCount];
-        var started = 0;
-        ExceptionDispatchInfo? failure = null;
+        using var rootHandle = WindowsNative.CreateFile(nativeRoot, ListDirectory, ShareAll, 0, OpenExisting, BackupSemantics, 0);
+        if (rootHandle.IsInvalid)
+            throw DirectoryError(Marshal.GetLastPInvokeError(), rootPath, openingDirectory: true);
+        var relativeStart = rootPath.Length + (Path.EndsInDirectorySeparator(rootPath) ? 0 : 1);
+        var pending = new Queue<string>();
+        pending.Enqueue(rootPath);
+        var buffer = Marshal.AllocHGlobal(BufferSize);
         try
         {
-            for (var index = 0; index < workers.Length && !stop.IsCancellationRequested; index++)
+            while (pending.TryDequeue(out var directory))
             {
-                var worker = new Thread(RunWorker) { IsBackground = true, Name = "Sandbox directory collector" };
-                workers[index] = worker;
-                worker.Start();
-                started++;
+                cancellationToken.ThrowIfCancellationRequested();
+                using var childHandle = directory.Length == rootPath.Length ? null
+                    : OpenRelativeDirectory(rootHandle, directory.AsSpan(relativeStart), directory);
+                CollectDirectory(childHandle ?? rootHandle, directory, buffer, pending, accept, cancellationToken);
             }
-        }
-        catch (Exception error)
-        {
-            Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(error), null);
-            stop.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
         }
         finally
         {
-            for (var index = 0; index < started; index++)
-                workers[index].Join();
+            Marshal.FreeHGlobal(buffer);
         }
+    }
 
-        Volatile.Read(ref failure)?.Throw();
-        cancellationToken.ThrowIfCancellationRequested();
-        while (directories.TryDequeue(out var directory))
+    private static unsafe void CollectDirectory(SafeFileHandle handle, string directory, nint buffer,
+        Queue<string> pending, Action<string, bool> accept, CancellationToken cancellationToken)
+    {
+        while (true)
         {
-            foreach (var entry in directory.Entries)
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = NtQueryDirectoryFile(handle, 0, 0, 0, out var ioStatus, buffer, BufferSize,
+                FileFullDirectoryInformation, 0, 0, 0);
+            if (status is NoMoreFiles or NoSuchFile)
+                return;
+            if (status != 0)
+                throw DirectoryError((int)RtlNtStatusToDosError(status), directory);
+            if (ioStatus.Information == 0)
+                return;
+            var entry = (DirectoryInformation*)buffer;
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                accept(entry.Path, entry.Child is not null);
-                if (entry.Child is { } child)
-                    directories.Enqueue(child);
-            }
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-
-        void RunWorker()
-        {
-            try
-            {
-                foreach (var work in jobs.GetConsumingEnumerable(stop.Token))
+                var name = new ReadOnlySpan<char>(&entry->FileName, checked((int)entry->FileNameLength / sizeof(char)));
+                if ((entry->Attributes & FileAttributes.ReparsePoint) == 0 && !name.SequenceEqual(".") && !name.SequenceEqual(".."))
                 {
-                    foreach (var entry in new FileSystemEnumerable<Entry>(work.Path, TransformEntry, Options))
-                    {
-                        stop.Token.ThrowIfCancellationRequested();
-                        work.Entries.Add(entry);
-                        if (entry.Child is { } child)
-                        {
-                            Interlocked.Increment(ref pending);
-                            jobs.Add(child, stop.Token);
-                        }
-                    }
-                    if (Interlocked.Decrement(ref pending) == 0)
-                        jobs.CompleteAdding();
+                    var path = Path.Join(directory.AsSpan(), name);
+                    var isDirectory = (entry->Attributes & FileAttributes.Directory) != 0;
+                    accept(path, isDirectory);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (isDirectory)
+                        pending.Enqueue(path);
                 }
-            }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested)
-            {
-            }
-            catch (Exception error)
-            {
-                Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(error), null);
-                stop.Cancel();
+                if (entry->NextEntryOffset == 0)
+                    break;
+                entry = (DirectoryInformation*)((byte*)entry + entry->NextEntryOffset);
             }
         }
     }
 
-    private static Entry TransformEntry(ref FileSystemEntry entry)
+    private static unsafe SafeFileHandle OpenRelativeDirectory(SafeFileHandle root, ReadOnlySpan<char> relativePath, string path)
     {
-        var path = entry.ToFullPath();
-        return new Entry(path, entry.IsDirectory ? new DirectoryWork(path) : null);
+        if (relativePath.Length > ushort.MaxValue / sizeof(char))
+            throw new PathTooLongException($"Unable to open directory '{path}'.");
+        fixed (char* text = relativePath)
+        {
+            var nativeName = new UnicodeString
+            {
+                Length = (ushort)(relativePath.Length * sizeof(char)),
+                MaximumLength = (ushort)(relativePath.Length * sizeof(char)),
+                Buffer = text
+            };
+            var attributes = new ObjectAttributes
+            {
+                Length = (uint)sizeof(ObjectAttributes),
+                RootDirectory = root.DangerousGetHandle(),
+                ObjectName = &nativeName,
+                Attributes = CaseInsensitive
+            };
+            var status = NtOpenFile(out var handle, ListDirectory | Synchronize, ref attributes, out _, ShareAll, SynchronousDirectoryOpen);
+            GC.KeepAlive(root);
+            if (status == 0)
+                return handle;
+            handle.Dispose();
+            throw DirectoryError((int)RtlNtStatusToDosError(status), path, openingDirectory: true);
+        }
     }
 
-    private readonly record struct Entry(string Path, DirectoryWork? Child);
-
-    private sealed class DirectoryWork(string path)
+    private static Exception DirectoryError(int error, string path, bool openingDirectory = false)
     {
-        public readonly string Path = path;
-        public readonly List<Entry> Entries = [];
+        // Like a nonrecursive FileSystemEnumerator root open, a missing directory is not a missing file.
+        if (openingDirectory && error == ErrorFileNotFound)
+            error = ErrorPathNotFound;
+        var message = $"Unable to enumerate directory '{path}': {new Win32Exception(error).Message}";
+        return error switch
+        {
+            ErrorFileNotFound => new FileNotFoundException(message, path),
+            ErrorPathNotFound => new DirectoryNotFoundException(message),
+            ErrorAccessDenied => new UnauthorizedAccessException(message),
+            ErrorFilenameExceedsRange => new PathTooLongException(message),
+            ErrorOperationAborted => new OperationCanceledException(message),
+            _ => new IOException(message, (error & HResultHighWordMask) != 0 ? error : error | Win32HResultMask)
+        };
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct DirectoryInformation
+    {
+        public uint NextEntryOffset, FileIndex;
+        public long CreationTime, LastAccessTime, LastWriteTime, ChangeTime, EndOfFile, AllocationSize;
+        public FileAttributes Attributes;
+        public uint FileNameLength, EaSize;
+        public char FileName;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct UnicodeString
+    {
+        public ushort Length, MaximumLength;
+        public char* Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private unsafe struct ObjectAttributes
+    {
+        public uint Length;
+        public nint RootDirectory;
+        public UnicodeString* ObjectName;
+        public uint Attributes;
+        public nint SecurityDescriptor, SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public nint Status;
+        public nuint Information;
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryDirectoryFile(SafeFileHandle handle, nint completionEvent, nint apcRoutine,
+        nint apcContext, out IoStatusBlock statusBlock, nint information, uint length, int informationClass,
+        byte returnSingleEntry, nint fileName, byte restartScan);
+
+    [DllImport("ntdll.dll")]
+    private static extern unsafe int NtOpenFile(out SafeFileHandle handle, uint access, ref ObjectAttributes attributes,
+        out IoStatusBlock statusBlock, uint share, uint options);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
 }
