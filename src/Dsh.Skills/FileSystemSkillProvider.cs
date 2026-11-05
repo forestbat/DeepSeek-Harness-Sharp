@@ -464,27 +464,37 @@ public static class SkillFilesystem
 {
     public const string PluginName = "skill-filesystem";
 
-    public static IDisposable Apply(Context ctx, SkillFilesystemConfig? config = null)
+    public static IDisposable Apply(Context ctx, SkillFilesystemConfig? config = null, SkillRemoteConfig? remote = null)
     {
         var skills = ctx.Get<SkillRegistry>(SkillRegistry.ServiceName)!;
         FileSystemSkillProvider? provider = null;
+        RemoteSkillProvider? remoteProvider = null;
         var registration = skills.RegisterProvider(control =>
         {
             provider = new FileSystemSkillProvider(ctx, control, config);
             return provider;
         });
+        // 远程技能源只在配置了 urls 时注册; 抓到的技能默认全部丢弃, 由 skills.enabled 决定上架哪些。
+        var remoteRegistration = remote is { Urls.Count: > 0 }
+            ? skills.RegisterProvider(_ => remoteProvider = new RemoteSkillProvider(remote))
+            : null;
         var effect = ctx.Effect(() => (Func<Task>)(async () =>
         {
+            remoteProvider?.Dispose();
             if (provider is not null)
                 await provider.Dispose();
         }), "skill-filesystem watcher");
-        return new SkillFilesystemRegistration(registration, effect);
+        return new SkillFilesystemRegistration(registration, remoteRegistration, effect);
     }
 
-    private sealed class SkillFilesystemRegistration(IDisposable registration, EffectHandle effect) : IDisposable
+    private sealed class SkillFilesystemRegistration(
+        IDisposable registration,
+        IDisposable? remoteRegistration,
+        EffectHandle effect) : IDisposable
     {
         public void Dispose()
         {
+            remoteRegistration?.Dispose();
             registration.Dispose();
             effect.Dispose();
         }

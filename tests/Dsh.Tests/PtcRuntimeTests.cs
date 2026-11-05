@@ -78,46 +78,26 @@ public sealed class PtcRuntimeTests
         Assert.DoesNotContain("public static Task<JsonNode?> run_code(", first);
     }
 
+    /**
+     * 参数名/类型/描述已经在每个工具自己的 schema 里(每次请求都随工具定义发出), SDK 块只声明方法形状。
+     * 用超长描述与参数名反向验证: 它们一个字都不该进 SDK 块, 否则 154 个工具又能堆出 220KB。
+     */
     [Fact]
-    public void SdkRender_UnionType_IsProjectedWithoutThrowing()
+    public void SdkRender_KeepsOnlyMethodSignatures()
     {
-        var schema = new ToolSchema("union", "Union tool", new JsonObject
-        {
-            ["type"] = "object",
-            ["properties"] = new JsonObject
-            {
-                ["value"] = new JsonObject { ["type"] = new JsonArray("string", "null") },
-            },
-            ["required"] = new JsonArray("value"),
-        });
+        var schemas = Enumerable.Range(0, 40)
+            .Select(index => new ToolSchema(
+                $"tool_{index}",
+                new string('d', 400),
+                ObjectSchema(("argument_name", "string", true))))
+            .ToList();
 
-        var rendered = PtcSdkRenderer.Render([schema], debugBatching: false);
+        var rendered = PtcSdkRenderer.Render(schemas, debugBatching: false);
 
-        Assert.Contains("value: string | null", rendered);
-    }
-
-    [Fact]
-    public void SdkRender_MalformedSchemaFields_AreIgnored()
-    {
-        var schema = new ToolSchema("malformed", "Malformed tool", new JsonObject
-        {
-            ["type"] = "object",
-            ["properties"] = new JsonObject
-            {
-                ["value"] = new JsonObject
-                {
-                    ["type"] = new JsonObject { ["kind"] = "string" },
-                    ["description"] = new JsonArray("ignored"),
-                },
-            },
-            ["required"] = new JsonArray("value", new JsonObject(), JsonValue.Create(3)),
-        });
-
-        var rendered = PtcSdkRenderer.Render([schema], debugBatching: false);
-
-        Assert.Contains("value: JsonNode", rendered);
-        Assert.Contains("public static Task<JsonNode?> malformed(", rendered);
-        Assert.DoesNotContain("ignored", rendered);
+        Assert.Contains("public static Task<JsonNode?> tool_0(JsonObject args);", rendered);
+        Assert.DoesNotContain("argument_name", rendered);
+        Assert.DoesNotContain(new string('d', 40), rendered);
+        Assert.True(rendered.Length < 6_000, $"SDK block is {rendered.Length} chars for 40 tools");
     }
 
     [Fact]
