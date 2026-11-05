@@ -1,6 +1,5 @@
 using Dsh.Boot;
 using Dsh.Plugins;
-using Dsh.Plugins.Sandbox;
 using Dsh.ScriptHost;
 using Dsh.Tui;
 
@@ -9,13 +8,15 @@ namespace Dsh.Host;
 /** 入口组合根: 解析 CLI 参数并组合插件, 然后分发到 tui/gui/headless 分支。两个宿主 exe 的 Program 只做转发。 */
 public static class HarnessEntrypoint
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static async Task<int> RunAsync(string[] args, string? defaultCommand = null)
     {
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
-        if (args.Contains(PluginSandboxWorker.HostArgument))
-            return await PluginSandboxWorker.RunAsync(args);
+        if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
+            return await worker;
         if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
+        if (defaultCommand is not null && args is not ["host", ..] and not ["tui", ..])
+            args = [defaultCommand, .. args];
         // The web process alone owns ASP.NET. Forward before parsing so this assembly knows no web options or WebBridge types.
         if (args.FirstOrDefault() == "web")
             return await WebHostLauncher.RunAsync(args[1..]);

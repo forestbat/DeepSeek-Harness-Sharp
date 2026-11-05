@@ -8,7 +8,10 @@ public static class PluginSandboxModule
 {
     [DshPluginInitializer]
     public static void Register()
-        => PluginExecutionRuntime.Factory = CreateRuntime;
+    {
+        PluginExecutionRuntime.Factory = CreateRuntime;
+        PluginExecutionRuntime.Worker = PluginSandboxWorker.TryRunAsync;
+    }
 
     private static IPluginExecutionRuntime CreateRuntime(Context context, IPluginExecutionEnvironment environment,
         PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
