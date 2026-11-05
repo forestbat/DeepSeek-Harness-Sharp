@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Sdk;
 
