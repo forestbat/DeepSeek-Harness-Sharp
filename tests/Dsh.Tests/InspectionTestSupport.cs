@@ -71,31 +71,31 @@ internal sealed class RecordingPluginManager : IPluginManager
         return "active [compiled-in]";
     }
 
-    public Task<string> AddAsync(string packageOrPath, ToolRunContext? run = null)
+    public Task<string> AddAsync(string packageOrPath, ISettingsMutationContext? run = null)
     {
         Calls.Add($"add:{packageOrPath}");
         return Task.FromResult($"plugin {packageOrPath} activated");
     }
 
-    public Task<string> RemoveAsync(string package, bool force = false, ToolRunContext? run = null)
+    public Task<string> RemoveAsync(string package, bool force = false, ISettingsMutationContext? run = null)
     {
         Calls.Add($"remove:{package}:{force}");
         return Task.FromResult($"plugin {package} removed");
     }
 
-    public Task<string> DisableAsync(string package, ToolRunContext? run = null)
+    public Task<string> DisableAsync(string package, ISettingsMutationContext? run = null)
     {
         Calls.Add($"disable:{package}");
         return Task.FromResult($"plugin {package} disabled");
     }
 
-    public Task<string> EnableAsync(string package, ToolRunContext? run = null)
+    public Task<string> EnableAsync(string package, ISettingsMutationContext? run = null)
     {
         Calls.Add($"enable:{package}");
         return Task.FromResult($"plugin {package} enabled");
     }
 
-    public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ToolRunContext? run = null)
+    public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ISettingsMutationContext? run = null)
     {
         Calls.Add($"permission:{package}:{permission}:{allowed}");
         return Task.FromResult($"plugin {package} {permission} {allowed}");

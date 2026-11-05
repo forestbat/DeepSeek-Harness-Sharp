@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
@@ -80,14 +79,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return _leaked.Contains(package) ? $"{line}, leaked" : line;
     }
 
-    public async Task<string> AddAsync(string packageOrPath, ToolRunContext? run = null)
+    public async Task<string> AddAsync(string packageOrPath, ISettingsMutationContext? run = null)
     {
         await _mutation.WaitAsync(run?.Signal ?? CancellationToken.None);
         try { return await AddCoreAsync(packageOrPath, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> AddCoreAsync(string packageOrPath, ToolRunContext? run)
+    private async Task<string> AddCoreAsync(string packageOrPath, ISettingsMutationContext? run)
     {
         var spec = packageOrPath.Trim();
         if (spec.Length == 0)
@@ -99,14 +98,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return $"plugin package not found: {spec}";
     }
 
-    public async Task<string> RemoveAsync(string package, bool force = false, ToolRunContext? run = null)
+    public async Task<string> RemoveAsync(string package, bool force = false, ISettingsMutationContext? run = null)
     {
         await _mutation.WaitAsync();
         try { return await RemoveCoreAsync(package, force, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> RemoveCoreAsync(string package, bool force, ToolRunContext? run)
+    private async Task<string> RemoveCoreAsync(string package, bool force, ISettingsMutationContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -164,14 +163,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         }
     }
 
-    public async Task<string> DisableAsync(string package, ToolRunContext? run = null)
+    public async Task<string> DisableAsync(string package, ISettingsMutationContext? run = null)
     {
         await _mutation.WaitAsync();
         try { return await DisableCoreAsync(package, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> DisableCoreAsync(string package, ToolRunContext? run)
+    private async Task<string> DisableCoreAsync(string package, ISettingsMutationContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -197,14 +196,14 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         return $"plugin {trimmed} disabled (written to settings.yaml)";
     }
 
-    public async Task<string> EnableAsync(string package, ToolRunContext? run = null)
+    public async Task<string> EnableAsync(string package, ISettingsMutationContext? run = null)
     {
         await _mutation.WaitAsync();
         try { return await EnableCoreAsync(package, run); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> EnableCoreAsync(string package, ToolRunContext? run)
+    private async Task<string> EnableCoreAsync(string package, ISettingsMutationContext? run)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -224,7 +223,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     }
 
     public async Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken = default, ToolRunContext? run = null)
+        CancellationToken cancellationToken = default, ISettingsMutationContext? run = null)
     {
         await _mutation.WaitAsync(cancellationToken);
         try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken, run); }
@@ -232,7 +231,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     }
 
     private async Task<string> SetPermissionCoreAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken, ToolRunContext? run)
+        CancellationToken cancellationToken, ISettingsMutationContext? run)
     {
         var trimmed = package.Trim();
         var key = PluginPermissions.KeyOf(permission);
@@ -258,7 +257,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             || spec.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
             || spec.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<string> AddFromPathAsync(string spec, ToolRunContext? run)
+    private async Task<string> AddFromPathAsync(string spec, ISettingsMutationContext? run)
     {
         var signal = run?.Signal ?? CancellationToken.None;
         signal.ThrowIfCancellationRequested();
@@ -541,13 +540,13 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         _composition.Root.Logger.Error("%s", $"plugin {package} load context could not be collected: {report}");
     }
 
-    private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run)
+    private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run)
     {
         await HarnessSettings.UpdatePluginAsync(_home, package, update, run);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 
-    private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run)
+    private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run)
     {
         await HarnessSettings.UpdatePluginsAsync(_home, packages, update, run);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;

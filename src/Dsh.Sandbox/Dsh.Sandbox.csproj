@@ -8,5 +8,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Dsh.Tests" />
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
   </ItemGroup>
 </Project>

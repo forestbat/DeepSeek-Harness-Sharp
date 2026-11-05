@@ -244,23 +244,23 @@ public sealed class MemoryCommandTests
 
         public string Describe(string package) => "unknown";
 
-        public Task<string> AddAsync(string packageOrPath, ToolRunContext? run = null) => Task.FromResult("");
+        public Task<string> AddAsync(string packageOrPath, ISettingsMutationContext? run = null) => Task.FromResult("");
 
-        public Task<string> RemoveAsync(string package, bool force = false, ToolRunContext? run = null) => Task.FromResult("");
+        public Task<string> RemoveAsync(string package, bool force = false, ISettingsMutationContext? run = null) => Task.FromResult("");
 
-        public Task<string> DisableAsync(string package, ToolRunContext? run = null)
+        public Task<string> DisableAsync(string package, ISettingsMutationContext? run = null)
         {
             Calls.Add($"disable:{package}");
             return Task.FromResult("disabled");
         }
 
-        public Task<string> EnableAsync(string package, ToolRunContext? run = null)
+        public Task<string> EnableAsync(string package, ISettingsMutationContext? run = null)
         {
             Calls.Add($"enable:{package}");
             return Task.FromResult("enabled");
         }
 
-        public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ToolRunContext? run = null) => Task.FromResult("");
+        public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ISettingsMutationContext? run = null) => Task.FromResult("");
 
     }
 
