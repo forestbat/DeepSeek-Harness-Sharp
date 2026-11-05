@@ -41,9 +41,10 @@ public sealed class MessageFoldTests
     {
         ScrollToFraction(scene, 0.5);
         var card = PickCard(scene, last: false);
-        ((MessageViewModel)card.DataContext!).IsDiffExpanded = true;
+        var message = Assert.IsType<MessageViewModel>(card.DataContext);
+        message.IsDiffExpanded = true;
         scene.Pump(3);
-        return Reacquire(scene, card.DataContext as MessageViewModel);
+        return Reacquire(scene, message);
     });
 
     [Fact]
@@ -51,9 +52,10 @@ public sealed class MessageFoldTests
     {
         ScrollToFraction(scene, 0.5);
         var first = PickCard(scene, last: false);
+        var firstMessage = Assert.IsType<MessageViewModel>(first.DataContext);
         TapChevron(scene, first);
         scene.Pump(4);
-        Assert.True((first.DataContext as MessageViewModel)!.IsDiffExpanded,
+        Assert.True(firstMessage.IsDiffExpanded,
             "precondition: the first card must be expanded");
         ScrollToFraction(scene, 0.5);
         return PickCard(scene, last: false);
