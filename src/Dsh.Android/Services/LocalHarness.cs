@@ -12,6 +12,7 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
 {
     public const string MachineName = "本机";
     private const string ClientName = "dsh-phone";
+    private const string SettingsTemplateAsset = "Profiles/Templates/settings.yaml";
 
     private readonly HostProjection _projection = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -63,6 +64,7 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
                 ?? throw new InvalidOperationException("应用私有目录不可用");
             var home = new HarnessHome(Path.Combine(files, "harness"));
             home.Ensure();
+            await EnsureSettingsTemplateAsync(home);
             var settings = store.Load();
             _app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
@@ -107,6 +109,19 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
             await _backend.DisposeAsync();
         _app?.Dispose();
         _lifetime.Dispose();
+    }
+
+    /** 模板在 APK 里只是资源; 首次启动先落到会话目录, Compose 才能按普通文件读出默认配置。 */
+    private static async Task EnsureSettingsTemplateAsync(HarnessHome home)
+    {
+        if (File.Exists(home.SettingsFile))
+            return;
+        var context = global::Android.App.Application.Context
+            ?? throw new InvalidOperationException("应用上下文不可用");
+        await using var asset = context.Assets?.Open(SettingsTemplateAsset)
+            ?? throw new InvalidOperationException("安装包缺少 settings.yaml 模板");
+        using var reader = new StreamReader(asset);
+        await File.WriteAllTextAsync(home.SettingsFile, await reader.ReadToEndAsync());
     }
 
     private void SetState(MobileConnectionState state, string? detail)

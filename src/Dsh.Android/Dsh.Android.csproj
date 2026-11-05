@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginHost.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0-android</TargetFramework>
     <SupportedOSPlatformVersion>34</SupportedOSPlatformVersion>
@@ -34,6 +36,11 @@
   <PropertyGroup Condition="'$(AndroidSdkDirectory)' == '' and Exists('$(LOCALAPPDATA)\Android\Sdk')">
     <AndroidSdkDirectory>$(LOCALAPPDATA)\Android\Sdk</AndroidSdkDirectory>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 本机 host 首次启动要用它生成 settings.yaml; 桌面端靠 Content 拷到输出目录, APK 里只能以资源形式随包。 -->
+    <AndroidAsset Include="..\Dsh.Boot\Profiles\Templates\settings.yaml" Link="Profiles\Templates\settings.yaml" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.4" />
