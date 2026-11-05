@@ -94,7 +94,7 @@ public class AgentLoopIntegrationTests
         public AgentRegistry Agents { get; }
         public AgentLoop Loop { get; }
 
-        public HarnessFixture(string baseUrl, bool inHistory = false, ResolvedRetryPolicy? retryPolicy = null, AgentLoopConfig? loopConfig = null, IReadOnlyList<string>? inputModalities = null)
+        public HarnessFixture(string baseUrl, ResolvedRetryPolicy? retryPolicy = null, AgentLoopConfig? loopConfig = null, IReadOnlyList<string>? inputModalities = null)
         {
             Ctx = new Context();
             Sessions = new SessionStore(Ctx);
@@ -112,7 +112,7 @@ public class AgentLoopIntegrationTests
                 [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(
                     "test-model",
                     InputModalities: inputModalities,
-                    SystemPromptUpdate: inHistory ? SystemPromptUpdateModes.InHistory : null),
+                    SystemPromptUpdate: SystemPromptUpdateModes.InHistory),
                     new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(TextOnlyModel)],
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
                 retryPolicy ?? ResolvedRetryPolicy.Resolve(null, "test"));
@@ -491,7 +491,7 @@ public class AgentLoopIntegrationTests
     public async Task InHistoryModel_AppendsSystemPromptOnChange()
     {
         await using var server = await MockDeepSeekServer.StartAsync(_ => SseTextOnly);
-        using var fixture = new HarnessFixture(server.BaseUrl, inHistory: true);
+        using var fixture = new HarnessFixture(server.BaseUrl);
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
             SessionId.Create("session-in-history"),
             null,
@@ -518,36 +518,35 @@ public class AgentLoopIntegrationTests
         Assert.Equal(2, systemCount);
     }
 
+    /**
+     * 运行期上下文每回合重算(记忆/审批/工作目录), 它变了也不能碰 system prompt:
+     * 只追加一条尾部快照, 前缀逐字节不变, 缓存才能跨回合延续。
+     */
     [Fact]
-    public async Task NonInHistoryModel_RewritesSystemHeadOnChange()
+    public async Task RuntimeContextChange_DoesNotTouchTheSystemPrompt()
     {
         await using var server = await MockDeepSeekServer.StartAsync(_ => SseTextOnly);
         using var fixture = new HarnessFixture(server.BaseUrl);
+        var prompt = fixture.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
+        var marker = "alpha";
+        using var registration = prompt.Context(new PromptContext("test:runtime", _ => $"Runtime marker: {marker}."));
         var handle = await fixture.Agents.Create(new CreateAgentOptions(
-            SessionId.Create("session-replace"),
+            SessionId.Create("session-runtime-context"),
             null,
             new AgentOptions("test-provider", "test-model")), TestContext.Current.CancellationToken);
         var agent = (AgentLoopAgent)handle.Agent;
 
         agent.Followup(MessageFactory.CreateUserText("hi"));
         await agent.WhenIdle();
-        fixture.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!.ReplacePersona("persona v2");
+        marker = "bravo";
         agent.Followup(MessageFactory.CreateUserText("again"));
         await agent.WhenIdle();
 
         var systemEvents = agent.Session.SnapshotEvents()
-            .Where(e => e.Type == SessionEventTypes.SystemMessage)
+            .Where(sessionEvent => sessionEvent.Type == SessionEventTypes.SystemMessage)
             .ToList();
-        Assert.Equal(2, systemEvents.Count);
-        Assert.IsType<SurfaceOp.Append>(systemEvents[0].SurfaceOp);
-        var replacement = Assert.IsType<SurfaceOp.Replace>(systemEvents[1].SurfaceOp);
-        Assert.Equal(systemEvents[0].Seq, replacement.Start);
-        Assert.Equal(systemEvents[0].Seq, replacement.End);
-        var messages = agent.Session.DeriveMessages();
-        Assert.Equal(MessageRole.System, messages[0].Role);
-        var single = Assert.Single(messages, message => message.Role == MessageRole.System);
-        Assert.Contains("persona v2", Assert.IsType<TextBlock>(single.Content[0]).Text);
-        Assert.Equal(1, server.LastRequestBody!.Split("\"role\":\"system\"").Length - 1);
+        Assert.IsType<SurfaceOp.Append>(Assert.Single(systemEvents).SurfaceOp);
+        Assert.Contains("Runtime marker: bravo", server.LastRequestBody);
     }
 
     [Fact]

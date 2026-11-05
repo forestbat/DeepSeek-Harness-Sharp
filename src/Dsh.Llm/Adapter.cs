@@ -102,6 +102,7 @@ public sealed record LlmResolvedModelInfo(
 
 public static class SystemPromptUpdateModes
 {
+    /** 变化后的系统提示叠在历史尾部(供应商接受对话中途的 system 消息), 前缀逐字节不变, 缓存可延续; 未声明时为原地改写。 */
     public const string InHistory = "in-history";
 }
 

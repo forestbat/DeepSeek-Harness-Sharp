@@ -198,6 +198,47 @@ public sealed class AttachmentTests : IDisposable
         Assert.IsType<ImageBlock>(options.Messages[0].Content[1]);
     }
 
+    /**
+     * 模型目录(内置 Catalog)没写输入模态时, 以 models.dev 快照为准:
+     * deepseek-v4-flash 在快照里是多模态的, 漏查会把用户贴的图换成 "无法看图" 的说明文字。
+     */
+    [Fact]
+    public void ResolvedModalities_ComeFromTheCatalogSnapshot_WhenTheModelDoesNotDeclareThem()
+    {
+        var adapter = DeepSeekAdapterFor(new DeepSeekCapture());
+
+        Assert.Contains("image", adapter.ResolveModel("deepseek-v4-flash").InputModalities!);
+
+        // 快照里明确只有文本的模型必须保持纯文本。
+        Assert.DoesNotContain("image", adapter.ResolveModel("deepseek-v4-pro").InputModalities!);
+    }
+
+    /** 目录里声明为多模态的 DeepSeek 模型, 粘贴的图片必须真的发到线上, 而不是被替换成说明文字。 */
+    [Fact]
+    public async Task Runtime_SendsPastedImagesToAModelTheSnapshotDeclaresMultimodal()
+    {
+        var bytes = PngBytes();
+        var reference = _store.Put(bytes, "image/png", 1, 1, "shot.png");
+        var handler = new DeepSeekCapture();
+        var llm = new LlmRuntime(_ctx);
+        using var registration = llm.RegisterAdapter(["deepseek-official"], DeepSeekAdapterFor(handler));
+        var options = new GenerateOptions
+        {
+            Provider = "deepseek-official",
+            Model = "deepseek-v4-flash",
+            Messages = [MessageFactory.CreateUserMessage([new TextBlock("what is this"), new ImageBlock(reference)])],
+            Purpose = GeneratePurpose.Compaction,
+            Attachments = new Dictionary<string, byte[]> { [reference.AttachmentId] = bytes },
+        };
+
+        await foreach (var _ in llm.Stream(options))
+        {
+        }
+
+        Assert.Contains("image_url", handler.Body);
+        Assert.DoesNotContain(TextOnlyImages.OmittedText(reference), handler.Body);
+    }
+
     private static GenerateOptions ToolResultImageOptions(string model, ImageAttachmentRef reference, byte[] bytes)
     {
         var callId = ToolCallId.Create("call_1");
