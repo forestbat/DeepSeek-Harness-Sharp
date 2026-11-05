@@ -24,6 +24,13 @@ public sealed class GuiViewsHeadlessTests
     private const double WindowWidth = 1280;
     private const double WindowHeight = 800;
 
+    private readonly record struct ReadingParagraph(
+        int Index, string Text, Point Origin, ReadingLine[] Lines, Rect[] TextBounds);
+
+    private readonly record struct ReadingLine(
+        int FirstTextSourceIndex, int Length, int NewLineLength, double Start, double Width,
+        double WidthIncludingTrailingWhitespace, double Height, double Baseline);
+
     // A timed-out dispatch can outlive its caller, so diagnostics use a process-lifetime writer.
     private static readonly TextWriter Diagnostics = TextWriter.Synchronized(
         new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
@@ -269,42 +276,77 @@ public sealed class GuiViewsHeadlessTests
                 return markdown.GetVisualDescendants().OfType<SelectableTextBlock>().ToArray();
             }
 
-            (int Index, string Text, Rect Bounds)[] CaptureReadingParagraphs()
+            ReadingParagraph[] CaptureReadingParagraphs()
             {
                 var paragraphs = AssistantParagraphs();
                 var viewport = new Rect(scroll.Viewport);
-                var anchors = new List<(int Index, string Text, Rect Bounds)>();
+                var anchors = new List<ReadingParagraph>();
                 for (var index = 0; index < paragraphs.Length; index++)
                 {
                     var paragraph = paragraphs[index];
-                    if (!paragraph.IsEffectivelyVisible || paragraph.Bounds.Width <= 0 || paragraph.Bounds.Height <= 0
-                        || paragraph.TranslatePoint(default, scroll) is not { } origin)
+                    if (!paragraph.IsEffectivelyVisible || paragraph.Bounds.Width <= 0 || paragraph.Bounds.Height <= 0)
                         continue;
-                    var bounds = new Rect(origin, paragraph.Bounds.Size);
-                    if (viewport.Contains(bounds))
-                        anchors.Add((index, ParagraphText(paragraph), bounds));
+                    var snapshot = SnapshotParagraph(index, paragraph);
+                    if (snapshot.TextBounds.Length > 0 && snapshot.TextBounds.All(bounds => viewport.Contains(bounds)))
+                        anchors.Add(snapshot);
                 }
                 Assert.NotEmpty(anchors);
                 return anchors.ToArray();
             }
 
-            void AssertReadingParagraphs((int Index, string Text, Rect Bounds)[] anchors)
+            void AssertReadingParagraphs(ReadingParagraph[] anchors)
             {
-                // Virtualized extent coordinates can change while the same reading content stays in place.
+                // Compare rendered text geometry, not empty layout space stretched by a wider appended sibling.
                 var paragraphs = AssistantParagraphs();
+                var viewport = new Rect(scroll.Viewport);
                 foreach (var anchor in anchors)
                 {
                     Assert.InRange(anchor.Index, 0, paragraphs.Length - 1);
                     var paragraph = paragraphs[anchor.Index];
-                    Assert.Equal(anchor.Text, ParagraphText(paragraph));
                     Assert.True(paragraph.IsEffectivelyVisible);
-                    AssertInsideViewport(paragraph, scroll);
-                    var origin = paragraph.TranslatePoint(default, scroll)!.Value;
-                    Assert.Equal(anchor.Bounds.X, origin.X, 3);
-                    Assert.Equal(anchor.Bounds.Y, origin.Y, 3);
-                    Assert.Equal(anchor.Bounds.Width, paragraph.Bounds.Width, 3);
-                    Assert.Equal(anchor.Bounds.Height, paragraph.Bounds.Height, 3);
+                    var current = SnapshotParagraph(anchor.Index, paragraph);
+                    Assert.Equal(anchor.Text, current.Text);
+                    Assert.Equal(anchor.Origin.X, current.Origin.X, 3);
+                    Assert.Equal(anchor.Origin.Y, current.Origin.Y, 3);
+                    Assert.Equal(anchor.Lines.Length, current.Lines.Length);
+                    for (var index = 0; index < anchor.Lines.Length; index++)
+                    {
+                        var before = anchor.Lines[index];
+                        var after = current.Lines[index];
+                        Assert.Equal(before.FirstTextSourceIndex, after.FirstTextSourceIndex);
+                        Assert.Equal(before.Length, after.Length);
+                        Assert.Equal(before.NewLineLength, after.NewLineLength);
+                        Assert.Equal(before.Start, after.Start, 3);
+                        Assert.Equal(before.Width, after.Width, 3);
+                        Assert.Equal(before.WidthIncludingTrailingWhitespace, after.WidthIncludingTrailingWhitespace, 3);
+                        Assert.Equal(before.Height, after.Height, 3);
+                        Assert.Equal(before.Baseline, after.Baseline, 3);
+                    }
+                    Assert.Equal(anchor.TextBounds.Length, current.TextBounds.Length);
+                    for (var index = 0; index < anchor.TextBounds.Length; index++)
+                    {
+                        var before = anchor.TextBounds[index];
+                        var after = current.TextBounds[index];
+                        Assert.True(viewport.Contains(after), "The same reading text must remain inside the viewport.");
+                        Assert.Equal(before.X, after.X, 3);
+                        Assert.Equal(before.Y, after.Y, 3);
+                        Assert.Equal(before.Width, after.Width, 3);
+                        Assert.Equal(before.Height, after.Height, 3);
+                    }
                 }
+            }
+
+            ReadingParagraph SnapshotParagraph(int index, SelectableTextBlock paragraph)
+            {
+                var text = ParagraphText(paragraph);
+                var layout = paragraph.TextLayout;
+                var origin = paragraph.TranslatePoint(new Point(paragraph.Padding.Left, paragraph.Padding.Top), scroll)!.Value;
+                var lines = layout.TextLines.Select(line => new ReadingLine(
+                    line.FirstTextSourceIndex, line.Length, line.NewLineLength, line.Start, line.Width,
+                    line.WidthIncludingTrailingWhitespace, line.Height, line.Baseline)).ToArray();
+                var bounds = layout.HitTestTextRange(0, text.Length)
+                    .Select(bound => new Rect(origin + new Vector(bound.X, bound.Y), bound.Size)).ToArray();
+                return new ReadingParagraph(index, text, origin, lines, bounds);
             }
 
             static string ParagraphText(SelectableTextBlock paragraph) =>
