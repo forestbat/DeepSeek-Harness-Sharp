@@ -5,7 +5,7 @@ namespace Dsh.Sandbox;
 /// <summary>Runs synchronous read-only proof batches on reusable dedicated threads.</summary>
 /// <remarks>
 /// A single caller submits batches; callbacks must not call back into this coordinator.
-/// At most min(64, entryCount) workers exist, growing lazily to each batch's length.
+/// At most min(256, entryCount) workers exist, growing lazily to each batch's length.
 /// False stops dispatch and drains every reserved callback before returning the first false index, or the end when all pass.
 /// Failure, cancellation and disposal also join every started worker and never return a reusable prefix.
 /// Batch callbacks are released before completion, and disposal drains synchronous native calls.
@@ -14,7 +14,7 @@ namespace Dsh.Sandbox;
 /// </remarks>
 internal sealed class WindowsReadProofCoordinator : IDisposable
 {
-    private const int MaximumWorkers = 64;
+    private const int MaximumWorkers = 256;
     private readonly object _gate = new();
     private readonly Thread?[] _workers;
     private int _started;

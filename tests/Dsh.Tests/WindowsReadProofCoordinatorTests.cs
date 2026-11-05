@@ -8,7 +8,7 @@ public sealed class WindowsReadProofCoordinatorTests
 {
     [Theory(Timeout = 10000)]
     [InlineData(3, 3)]
-    [InlineData(128, 64)]
+    [InlineData(512, 256)]
     public void Batches_GrowFromOneEntryAndReuseTheSameBoundedDedicatedWorkers(int entries, int expectedWorkers)
     {
         using var proofs = new WindowsReadProofCoordinator(entries);
