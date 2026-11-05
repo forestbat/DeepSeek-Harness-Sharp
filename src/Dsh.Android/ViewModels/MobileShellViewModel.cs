@@ -656,22 +656,25 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand(CanExecute = nameof(CanCreateSession))]
     private async Task CreateSessionAsync()
     {
-        var row = SelectedMachine;
+        // 没选机器时用唯一/第一台已连接的: 手机上点 ＋ 的目的就是马上开始干活, 不该先去列表里挑一台。
+        var row = SelectedMachine ?? Machines.FirstOrDefault(machine => machine.IsConnected);
         if (row is null)
         {
-            Error = "先选择一台机器再新建会话";
-            return;
-        }
-        var cwd = NewSessionCwd.Trim();
-        if (cwd.Length == 0)
-        {
-            Error = "请填写工作目录";
+            Error = "先连接一台机器再新建会话";
             return;
         }
         var link = Find(row.Name);
         if (link is null)
         {
             Error = "这台机器还没连接";
+            return;
+        }
+        var cwd = NewSessionCwd.Trim();
+        if (cwd.Length == 0)
+            cwd = link.Info?.HomeRoot ?? "";
+        if (cwd.Length == 0)
+        {
+            Error = "请填写工作目录";
             return;
         }
         IsCreatingSession = true;
@@ -697,7 +700,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private bool CanCreateSession() => !IsCreatingSession && SelectedMachine is not null;
+    private bool CanCreateSession() => !IsCreatingSession && (SelectedMachine is not null || Machines.Any(machine => machine.IsConnected));
 
     // ---- 手机工具(MCP) ----
 
@@ -844,6 +847,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         RebuildSessions();
         RefreshPending();
         RefreshStatus();
+        CreateSessionCommand.NotifyCanExecuteChanged();
         LocalRunning = _local?.State == MobileConnectionState.Connected;
         HasNoMachines = Machines.Count == 0;
         OnPropertyChanged(nameof(IsConnected));
