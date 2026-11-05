@@ -26,7 +26,7 @@ public sealed class CheckpointTests
     }
 
     [Fact(Timeout = 5000)]
-    public async Task ShadowGit_CancelledStageJoinsItsNativeFilterBeforeReturning()
+    public async Task ShadowGit_CancelledStageClosesItsNativeFilterBeforeReturning()
     {
         var home = TempTree.CreateDirectory("checkpoint-cancellation");
         var project = Path.Combine(home, "project");
@@ -39,6 +39,7 @@ public sealed class CheckpointTests
         var pipeName = $"cpg-{Guid.NewGuid():N}";
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using var reader = new StreamReader(pipe, leaveOpen: true);
         var executable = Path.Combine(AppContext.BaseDirectory,
             $"Dsh.Tests{(OperatingSystem.IsWindows() ? ".exe" : "")}");
         string[] filterArguments = [executable, FilterConsumerArgument, pipeName, marker];
@@ -53,33 +54,40 @@ public sealed class CheckpointTests
         File.WriteAllText(Path.Combine(repository, "info", "attributes"), "input.txt filter=lifetime\n");
         using var cancellation = new CancellationTokenSource();
         Process? filter = null;
-        StreamWriter? release = null;
+        Task<string?>? filterClosed = null;
         var stage = git.StageTreeAsync(cancellation.Token);
         try
         {
             await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
-            using var reader = new StreamReader(pipe, leaveOpen: true);
-            release = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
             var pid = int.Parse((await reader.ReadLineAsync(TestContext.Current.CancellationToken))!,
                 CultureInfo.InvariantCulture);
             filter = Process.GetProcessById(pid);
             TestProcessScope.Track(filter);
+            filterClosed = reader.ReadLineAsync(CancellationToken.None).AsTask();
 
             await cancellation.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stage);
 
-            Assert.True(filter.HasExited, "The owned Git filter must exit before the cancelled staging operation returns.");
+            // The filter cannot finish normally while its release pipe remains open and receives no command.
+            Assert.Null(await filterClosed.WaitAsync(TestContext.Current.CancellationToken));
             Assert.False(File.Exists(marker));
         }
         finally
         {
             await cancellation.CancelAsync();
-            if (filter is { HasExited: false } && release is not null)
+            if (filter is not null && (filterClosed is null || !filterClosed.IsCompletedSuccessfully || filterClosed.Result is not null))
             {
-                await release.WriteLineAsync("finish");
-                await filter.WaitForExitAsync();
+                try
+                {
+                    filter.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The filter exited between the pipe check and the termination request.
+                }
+                if (filterClosed is { IsCompleted: false })
+                    await filterClosed;
             }
-            release?.Dispose();
             filter?.Dispose();
             try
             {
