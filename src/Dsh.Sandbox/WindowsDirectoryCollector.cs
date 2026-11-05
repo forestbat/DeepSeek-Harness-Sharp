@@ -11,7 +11,7 @@ namespace Dsh.Sandbox;
 internal static class WindowsDirectoryCollector
 {
     private const int BufferSize = 16 * 1024;
-    private const int WorkerCount = 128;
+    private const int WorkerCount = 256;
     private const uint ListDirectory = 1;
     private const uint Synchronize = 0x00100000;
     private const uint BackupSemantics = 0x02000000;
@@ -37,7 +37,7 @@ internal static class WindowsDirectoryCollector
     /// </summary>
     /// <remarks>
     /// Root entries are read and published before any descendant is opened.
-    /// One hundred twenty-eight dedicated workers each own one 16 KiB buffer and normally one descendant handle.
+    /// Up to 256 dedicated workers each own one 16 KiB buffer and normally one descendant handle.
     /// Root-relative names exceeding the native counted-name limit are split at directory separators.
     /// Such opens transiently own two descendant handles per worker; queued directories own none.
     /// Paths, entry topology and discovery/publication queues cost O(entries).
