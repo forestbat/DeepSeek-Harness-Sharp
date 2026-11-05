@@ -63,8 +63,8 @@ public sealed class DiffView : UserControl
     private TextBlock? _chevron;
     private readonly FontFamily _monoFont = FontFamily.Parse(MonoFontFallback);
     private DiffCard? _renderedCard;
-    private DiffCard? _pendingCard;
     private DiffCard? _builtCard;
+    private DiffCard? _pendingCard;
     private bool _rebuildPosted;
 
     public DiffView()
@@ -98,6 +98,21 @@ public sealed class DiffView : UserControl
             QueueRebuild(change.NewValue as DiffCard);
         else if (change.Property == IsCardExpandedProperty)
             ApplyExpanded();
+    }
+
+    /**
+     * 卡片内容必须在"展开"的同一轮布局里就位。
+     * 早先只把 _body 设成可见、行内容留到下一次重建才填, 卡片高度因此分两段变化, 第二段(最多 380px)
+     * 发生在点击之后很久, 列表面板据此重估坐标, 视口就跳。消息折叠没有这个两段式, 所以同样的滚动逻辑
+     * 对消息没问题、对卡片就跳。
+     */
+    private void ApplyExpanded()
+    {
+        if (_chevron is not null)
+            _chevron.Text = IsCardExpanded ? "▾" : "▸";
+        if (IsCardExpanded && Card is { } card)
+            BuildLines(card);
+        _body.IsVisible = IsCardExpanded;
     }
 
     private void QueueRebuild(DiffCard? card)
@@ -140,16 +155,6 @@ public sealed class DiffView : UserControl
         _root.Children.Add(BuildHeader(card));
         _root.Children.Add(_body);
         ApplyExpanded();
-    }
-
-    /** 卡片内 chevron: 折叠只隐藏 diff 行, 标题栏与计数始终可见; 行内容按需构建一次。 */
-    private void ApplyExpanded()
-    {
-        if (_chevron is not null)
-            _chevron.Text = IsCardExpanded ? "▾" : "▸";
-        _body.IsVisible = IsCardExpanded;
-        if (IsCardExpanded && _renderedCard is { } card && !ReferenceEquals(_builtCard, card))
-            BuildLines(card);
     }
 
     /** 展开态最多渲染 MaxRenderedLines 行, 其余靠内层滚动条查看; 视口固定 VisibleLines 行高。 */

@@ -438,8 +438,13 @@ public sealed class SkillsSettings
     [YamlMember(Alias = "paths")]
     public List<string> Paths { get; set; } = [];
 
+    /// 远程技能源: 每个 URL 返回 {"skills":[{"name","description","whenToUse","content"}]}
     [YamlMember(Alias = "urls")]
     public List<string> Urls { get; set; } = [];
+
+    /// 允许上架的远程技能名; 留空表示一个都不要(默认), 远端内容因此进不了提示词。
+    [YamlMember(Alias = "enabled")]
+    public List<string> Enabled { get; set; } = [];
 }
 
 public sealed class CompactionSettings

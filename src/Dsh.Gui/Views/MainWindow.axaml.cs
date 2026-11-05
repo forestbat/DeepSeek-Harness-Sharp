@@ -22,6 +22,12 @@ public sealed partial class MainWindow : Window
     private const double ScreenMargin = 60;
     private const double TitleBarHeight = 34;
 
+    /** 退出清理的等待上限: 清理卡住时也必须继续退出, 否则窗口点不动、进程只能手动结束。 */
+    private const int DisposeTimeoutSeconds = 5;
+
+    /** desktop.Shutdown() 之后等消息循环自行退出的宽限; 超过就强制结束进程。 */
+    private const int ExitWatchdogSeconds = 3;
+
     /** What /plugins add accepts from a path: managed assemblies and native shared libraries. */
     private static readonly FilePickerFileType PluginLibraries = new("插件库") { Patterns = ["*.dll", "*.so", "*.dylib"] };
 
@@ -61,6 +67,9 @@ public sealed partial class MainWindow : Window
     }
 
     public MainViewModel? ViewModel { get; }
+
+    /** 由 GuiRunner 置位: 本进程就是 GUI 本体, 退出时可以兜底强杀自己; 宿主里跑 GUI 的测试不得启用。 */
+    internal static bool OwnsProcess { get; set; }
 
     /** Session windows by view model, so the workspace can close or focus them. */
     private readonly Dictionary<FleetSessionViewModel, SessionWindow> _sessionWindows = [];
@@ -114,9 +123,10 @@ public sealed partial class MainWindow : Window
                     await AskCloseActionAsync();
                     return;
                 }
-                if (!ClosePolicy.TrayAvailable())
+                if (!ClosePolicy.TrayAvailable() || _tray is null)
                 {
-                    // 桌面托盘宿主已经退出(或从未就绪), 藏起来就找不回来了。
+                    // 托盘宿主已退出, 或本窗口的托盘图标没建起来(SetUpTray 静默降级):
+                    // 藏起来就再也找不回来, 也会留下一个只能手动结束的进程。
                     ViewModel?.SetStatus("托盘不可用，改为直接退出");
                     Quit();
                     return;
@@ -140,19 +150,19 @@ public sealed partial class MainWindow : Window
             try
             {
                 if (ViewModel is { } viewModel)
-                    await viewModel.DisposeAsync();
-                _closePrepared = true;
-                Dispatcher.UIThread.Post(Close);
+                    await viewModel.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(DisposeTimeoutSeconds));
             }
             catch (Exception error)
             {
-                ViewModel?.SetStatus($"退出清理失败: {Dsh.Runtime.OutboundProxy.Redact(error.Message)}");
-                IsEnabled = true;
+                // 清理失败或超时都不再阻止退出: 卡在清理上会让窗口点不动、进程只能手动结束。
+                ViewModel?.SetStatus($"退出清理失败或超时: {Dsh.Runtime.OutboundProxy.Redact(error.Message)}");
             }
             finally
             {
                 _preparingClose = false;
+                _closePrepared = true;
             }
+            Dispatcher.UIThread.Post(Close);
             return;
         }
         ViewModel?.PersistWindowBounds(Width, Height, Position.X, Position.Y, WindowState == WindowState.Maximized);
@@ -285,7 +295,8 @@ public sealed partial class MainWindow : Window
     private void Quit()
     {
         _forceQuit = true;
-        Close();
+        // 可能从关闭流程内部调用(托盘"退出"、关闭询问对话框的选定结果), 直接 Close() 会重入 OnClosing。
+        Dispatcher.UIThread.Post(Close);
     }
 
     /**
@@ -298,11 +309,18 @@ public sealed partial class MainWindow : Window
             return;
         _shutdownRequested = true;
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-        {
             desktop.Shutdown();
+        else
+            Close();
+        if (!OwnsProcess)
             return;
-        }
-        Close();
+        // 兜底: 消息循环因遗留线程/未完成的清理而没有真正退出时, 进程会变成只能手动结束的残留。
+        // 正常路径上 Main 已经返回, 这段永远等不到执行。只在真正的 GUI 进程里启用, 宿主里跑 GUI 的测试不得被它杀掉。
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(ExitWatchdogSeconds));
+            Environment.Exit(0);
+        });
     }
 
     private void RestoreBounds()

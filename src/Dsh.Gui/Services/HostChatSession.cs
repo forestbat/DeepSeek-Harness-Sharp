@@ -1,6 +1,5 @@
 using Avalonia.Threading;
 using Dsh.Core;
-using Dsh.Workspace;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 
@@ -63,18 +62,32 @@ public sealed class HostChatSession : IDisposable
         return chat;
     }
 
-    /** 未显式指定会话时恢复同工作区最近一次会话, 没有可恢复的才新建; 新建的空会话不会立即落盘。 */
+    /**
+     * 未显式指定会话时恢复同工作区最近一次会话, 没有可恢复的才新建。
+     * 只看目录不看 Summary: 磁盘上的会话由 Host 用 SessionHeader 投影, Summary 恒为 null,
+     * 只有活着且已有用户消息的会话才有摘要 —— 拿摘要当筛选条件, Host 一重启就永远选不中,
+     * 于是每次启动都新建会话(空会话又因为没事件而不在列表里, 下次启动照样新建)。
+     */
     private static async Task<RemoteSessionSummary> OpenRecentOrCreateAsync(
         IWorkspaceHost client,
         string cwd,
         CancellationToken cancellationToken)
     {
         var recent = (await client.ListSessionsAsync(cancellationToken))
-            .Where(session => SameDirectory(session.Cwd, cwd) && session.Summary is { Length: > 0 })
+            .Where(session => SameDirectory(session.Cwd, cwd))
             .OrderByDescending(session => session.UpdatedAt)
             .FirstOrDefault();
-        return recent is not null
-            ? await client.ResumeSessionAsync(recent.SessionId, cancellationToken)
+        if (recent is not null)
+            return await client.ResumeSessionAsync(recent.SessionId, cancellationToken);
+        // 还没写过事件的新会话不落盘也不进 ListSessionsAsync, 但它仍是 Host 里活着的那一个: 复用它, 不再新建。
+        var pending = (await client.ListHostSessionsAsync(cancellationToken))
+            .Where(session => session.Kind == HostSessionKinds.Harness
+                && session.Status != HostSessionStatuses.Exited
+                && SameDirectory(session.Cwd, cwd))
+            .OrderByDescending(session => session.UpdatedAt)
+            .FirstOrDefault();
+        return pending is not null
+            ? await client.ResumeSessionAsync(pending.SessionId, cancellationToken)
             : await client.CreateSessionAsync(cwd, cancellationToken);
     }
 

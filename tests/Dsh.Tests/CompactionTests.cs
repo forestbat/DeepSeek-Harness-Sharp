@@ -174,6 +174,75 @@ public class CompactionTests
             new BasicCompactionConfig { DegradedRetainTurns = 0 }).DegradedRetainTurns);
     }
 
+    /**
+     * 尾部预算是一个绝对 token 数(Kilo 的 preserve_recent_tokens 上限 8,000), 不再按窗口比例换算。
+     * 1M 窗口下旧配置(16%)会留 160K, 压缩后残留 150K; 这里同时固定"预算不超过触发阈值一半"的夹紧,
+     * 否则压完仍高于阈值, 选区为空、压缩等于没做。
+     */
+    [Fact]
+    public void RetainTokens_DefaultsToEightThousand_AndIsClampedToHalfTheThreshold()
+    {
+        Assert.Equal(8_000, CompactionConfigResolver.ResolveConfig().RetainTokens);
+
+        var defaultPolicy = CompactionConfigResolver.ResolveTargetPolicy(CompactionConfigResolver.ResolveConfig(), Provider, Model);
+        Assert.Equal(8_000, CompactionConfigResolver.ResolveCompactSpec(defaultPolicy, contextWindow: 1_000_000).RetainTokens);
+
+        var oversized = CompactionConfigResolver.ResolveTargetPolicy(
+            CompactionConfigResolver.ResolveConfig(new BasicCompactionConfig { RetainTokens = 100_000 }),
+            Provider,
+            Model);
+        Assert.Equal(2_000, CompactionConfigResolver.ResolveCompactSpec(oversized, contextWindow: 5_000).RetainTokens);
+
+        var freshStart = CompactionConfigResolver.ResolveTargetPolicy(
+            CompactionConfigResolver.ResolveConfig(new BasicCompactionConfig { RetainTokens = 0 }),
+            Provider,
+            Model);
+        Assert.Equal(0, CompactionConfigResolver.ResolveCompactSpec(freshStart, contextWindow: 1_000_000).RetainTokens);
+    }
+
+    /**
+     * 超大 user 消息不该因为"它在最后一轮"就被整条保留: 200K 字符(约 50K token)远超 8K 预算,
+     * 压缩必须切进这一轮, 把这条消息本身丢掉, 只留它后面的一小段。
+     */
+    [Fact]
+    public async Task PressureCompaction_TrimsAnOversizedTailTurn()
+    {
+        var oversized = new string('b', 200_000);
+        using var harness = new Harness(contextWindow: 60_000, turnText: "ok", auto: false);
+        var agent = await harness.CreateAgent("compaction-oversized-tail");
+        agent.Followup(MessageFactory.CreateUserText(new string('a', 20_000)));
+        await agent.WhenIdle();
+        agent.Followup(MessageFactory.CreateUserText(oversized));
+        await agent.WhenIdle();
+        agent.Session.Append(new TurnStartPayload(3));
+
+        var result = await harness.Compaction.CompactIfNeeded(agent, CompactionTrigger.Pressure, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Contains(UserSeqs(agent.Session)[0], result.ShadowedSeqs);
+        Assert.DoesNotContain(
+            agent.Session.DeriveMessages(),
+            message => message.Content.OfType<TextBlock>().Any(block => block.Text == oversized));
+    }
+
+    /**
+     * 缺 o200k 数据包时, 兜底估价必须按字符类别分开算: 旧实现一律 chars/4, 把中文历史低估近 2 倍
+     * (实测同一段历史启发式 370K、真实 666K), 尾部预算与压缩日志随之失真。
+     */
+    [Fact]
+    public void Estimate_DoesNotUnderpriceCjkText()
+    {
+        const string chineseText = "压缩之后上下文仍然很大，因为运行期上下文被写进了用户消息，工具清单又有一百五十四个。";
+        var chinese = MessageFactory.CreateUserText(chineseText);
+        var latin = MessageFactory.CreateUserText(new string('a', 400));
+
+        var chineseTokens = TokenEstimate.EstimateMessage(chinese);
+        Assert.InRange(TokenEstimate.EstimateMessage(latin), 90, 130);
+        Assert.True(
+            chineseTokens >= chineseText.Length / 2,
+            $"chinese estimate {chineseTokens} for {chineseText.Length} chars is still at the chars/4 fallback");
+    }
+
     private static async Task BuildFourTurns(AgentLoopAgent agent)
     {
         foreach (var user in TurnUsers)

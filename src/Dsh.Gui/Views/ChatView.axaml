@@ -167,11 +167,11 @@
 
     <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Border.Subtle}" />
 
-    <ListBox Grid.Row="2" Name="MessageList" Classes="MessageList" IsVisible="{Binding !IsTraceTab}"
+    <ListBox Grid.Row="2" Name="MessageList" Classes="MessageList" AutoScrollToSelectedItem="False" IsVisible="{Binding !IsTraceTab}"
              ItemsSource="{Binding Messages}">
       <ListBox.ItemsPanel>
         <ItemsPanelTemplate>
-          <VirtualizingStackPanel />
+          <VirtualizingStackPanel CacheLength="2" />
         </ItemsPanelTemplate>
       </ListBox.ItemsPanel>
       <ListBox.ItemTemplate>
@@ -183,7 +183,7 @@
                 <SelectableTextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
                 <Button Classes="Ghost" Padding="2,0" HorizontalAlignment="Left"
                         IsVisible="{Binding IsFoldable}"
-                        Click="OnMessageFoldClick"
+                        Click="OnFoldClick"
                         Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).ToggleMessageFoldCommand}"
                         CommandParameter="{Binding}">
                   <TextBlock Text="{Binding FoldLabel}" Classes="Tertiary" />
@@ -256,11 +256,11 @@
       </ListBox.ItemTemplate>
     </ListBox>
 
-    <ListBox Grid.Row="2" Name="TraceList" Classes="MessageList" IsVisible="{Binding IsTraceTab}"
+    <ListBox Grid.Row="2" Name="TraceList" Classes="MessageList" AutoScrollToSelectedItem="False" IsVisible="{Binding IsTraceTab}"
              ItemsSource="{Binding TraceView}">
       <ListBox.ItemsPanel>
         <ItemsPanelTemplate>
-          <VirtualizingStackPanel />
+          <VirtualizingStackPanel CacheLength="2" />
         </ItemsPanelTemplate>
       </ListBox.ItemsPanel>
       <ListBox.ItemTemplate>
@@ -280,7 +280,7 @@
                     <TextBlock Text="{Binding Title}" Classes="Secondary" TextTrimming="CharacterEllipsis" />
                   </Button>
                   <Button Grid.Column="3" Classes="Icon" Width="22" Height="22" IsVisible="{Binding HasDetail}"
-                          Click="OnTraceExpandClick"
+                          Click="OnFoldClick"
                           Command="{Binding ToggleExpandCommand}">
                     <TextBlock Text="{Binding ExpandLabel}" Classes="Tertiary" />
                   </Button>
@@ -498,7 +498,7 @@
                  ItemTemplate="{StaticResource Template.TranscriptMessage}">
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
-              <VirtualizingStackPanel />
+              <VirtualizingStackPanel  />
             </ItemsPanelTemplate>
           </ListBox.ItemsPanel>
         </ListBox>

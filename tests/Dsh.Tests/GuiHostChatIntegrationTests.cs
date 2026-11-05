@@ -172,6 +172,47 @@ public sealed class GuiHostChatIntegrationTests
         Assert.DoesNotContain(await client.ListSessionsAsync(Ct), session => session.Id == empty.Id);
     }
 
+    /** 启动 GUI 不新建会话: Host 重启后会话只剩磁盘日志, 未指定会话的打开必须恢复同工作区最近一次会话。 */
+    [Fact]
+    public async Task OpeningChat_WithoutSession_ResumesWorkspaceHistory_AfterHostRestart()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gs", Ct);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var cwd = host.Environment.Agent.Session.Header.Cwd!;
+
+        string id;
+        await using (var fleet = Fleet(host, gui))
+        {
+            using var chat = await HostChatSession.OpenAsync(fleet, cwd, null, Ct);
+            id = chat.Id.Value;
+            var store = host.Environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
+            var session = store.Get(chat.Id)!;
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText("启动时不要新建会话")), new SurfaceOp.Append());
+            await store.Flush(session);
+        }
+        await host.RestartHostAsync(Ct);
+
+        await using var reopened = Fleet(host, gui);
+        using var resumed = await HostChatSession.OpenAsync(reopened, cwd, null, Ct);
+        Assert.Equal(id, resumed.Id.Value);
+    }
+
+    /** 同一个 Host 内重复打开: 还没写过事件的会话也必须在原会话上继续, 不能每次启动再建一个。 */
+    [Fact]
+    public async Task OpeningChat_WithoutSession_ReusesTheLiveSessionWithoutEvents()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gt", Ct);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var cwd = host.Environment.Agent.Session.Header.Cwd!;
+        await using var fleet = Fleet(host, gui);
+
+        string first;
+        using (var chat = await HostChatSession.OpenAsync(fleet, cwd, null, Ct))
+            first = chat.Id.Value;
+        using (var again = await HostChatSession.OpenAsync(fleet, cwd, null, Ct))
+            Assert.Equal(first, again.Id.Value);
+    }
+
     [Fact]
     public async Task HostTruncation_RebuildsRichChatProjection_WithoutKeepingDiscardedMessages()
     {

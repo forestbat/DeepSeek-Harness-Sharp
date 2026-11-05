@@ -1,3 +1,4 @@
+using System.Text;
 using Dsh.Core;
 using Dsh.Llm;
 using Microsoft.ML.Tokenizers;
@@ -29,7 +30,32 @@ public static class TokenEstimate
     private static int CountText(string text)
         => SharedTokenizer.Value is { } tokenizer
             ? tokenizer.CountTokens(text)
-            : (int)Math.Ceiling(text.Length / (double)FallbackCharsPerToken);
+            : CountTextWithoutTokenizer(text);
+
+    /**
+     * 缺 o200k 数据包(Microsoft.ML.Tokenizers.Data.O200kBase)时的兜底估价: 按字符类别分开算, 而不是一律 chars/4。
+     * CJK 在真实分词器里约 1 字 1 token, 用 chars/4 会把中文历史低估近 2 倍 —— 尾部保留预算与压缩日志的 token 数都会偏小。
+     */
+    private static int CountTextWithoutTokenizer(string text)
+    {
+        var total = 0;
+        var cjk = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            total += 1;
+            if (IsCjk(rune.Value))
+                cjk += 1;
+        }
+        return cjk + (int)Math.Ceiling((total - cjk) / (double)FallbackCharsPerToken);
+    }
+
+    /** 统一表意文字、假名、谚文与全角字符: 与拉丁文相比, 一个字约等于一个 token。 */
+    private static bool IsCjk(int codePoint)
+        => codePoint is >= 0x2E80 and <= 0x9FFF
+            or >= 0xAC00 and <= 0xD7AF
+            or >= 0xF900 and <= 0xFAFF
+            or >= 0xFF00 and <= 0xFF65
+            or >= 0x20000 and <= 0x3FFFF;
 
     public static int EstimateStructuralBlock(ContentBlock block)
         => BlockOverhead + CountText(DshJson.Serialize(block));

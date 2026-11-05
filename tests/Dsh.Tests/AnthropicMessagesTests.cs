@@ -143,6 +143,27 @@ public class AnthropicMessagesTests
         Assert.Null(adapter.ResolveModel("not-in-models-dev").ContextWindow);
     }
 
+    /** Anthropic 只在显式 cache_control 断点处建立前缀缓存: 断点必须落在系统提示与最后一条消息的最后一个块上。 */
+    [Fact]
+    public async Task CacheBreakpoints_MarkSystemAndLastMessageBlock()
+    {
+        var handler = new ScriptedHandler(ToolTurnSse);
+        var options = Options(
+        [
+            MessageFactory.CreateSystemMessage([new TextBlock("persona")], new PluginMessageSource("test")),
+            MessageFactory.CreateUserText("hi"),
+        ]);
+
+        await Drain(Adapter(handler), options);
+
+        using var body = JsonDocument.Parse(handler.Bodies[0]);
+        Assert.Equal("ephemeral",
+            body.RootElement.GetProperty("system")[0].GetProperty("cache_control").GetProperty("type").GetString());
+        var messages = body.RootElement.GetProperty("messages");
+        var lastBlock = messages[messages.GetArrayLength() - 1].GetProperty("content")[0];
+        Assert.Equal("ephemeral", lastBlock.GetProperty("cache_control").GetProperty("type").GetString());
+    }
+
     private static AnthropicAdapter Adapter(HttpMessageHandler handler)
         => new("anthropic", "https://example.invalid", "sk-test", [Model], new HttpClient(handler));
 

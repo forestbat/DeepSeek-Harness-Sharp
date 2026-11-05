@@ -3,7 +3,11 @@ namespace Dsh.Compaction;
 public record CompactionPolicyConfig
 {
     public double? ThresholdRatio { get; init; }
-    public double? RetainRatio { get; init; }
+
+    /**
+     * 压缩后原样保留的尾部预算(token): 0 表示只保留当前未消费的一步(等价 fresh start)。
+     * 实际取值还会被触发阈值的一半夹紧, 见 CompactionConfigResolver.EffectiveRetainTokens。
+     */
     public int? RetainTokens { get; init; }
 
     /** 保留的尾部"轮数": 数的是当前表面上最后 N 条真实用户消息(UserMessageSource), 不是请求数也不是 turn/start 次数。 */
@@ -35,16 +39,9 @@ public sealed record BasicCompactionConfig : CompactionPolicyConfig
     public bool? Auto { get; init; }
 }
 
-public abstract record ResolvedRetention
-{
-    public sealed record Ratio(double RetainRatio) : ResolvedRetention;
-
-    public sealed record Tokens(int RetainTokens) : ResolvedRetention;
-}
-
 public sealed record ResolvedConfig(
     double ThresholdRatio,
-    ResolvedRetention Retention,
+    int RetainTokens,
     int TailTurns,
     string SummarizationProvider,
     string SummarizationModel,
@@ -59,7 +56,7 @@ public sealed record ResolvedTargetPolicy(
     string Provider,
     string Model,
     double ThresholdRatio,
-    ResolvedRetention Retention,
+    int RetainTokens,
     int TailTurns,
     string SummarizationProvider,
     string SummarizationModel,
@@ -93,9 +90,13 @@ public static class CompactionConfigResolver
     private const string PolicyKeySeparator = "\u001f";
 
     public const double DefaultThresholdRatio = 0.8;
-    public const double DefaultRetainRatio = 0.16;
+
+    /**
+     * 尾部保留预算默认值: 与 Kilo Code 的 compaction.preserve_recent_tokens 上限(8,000)一致。
+     * 旧实现是"窗口的 16%", 在 1M 窗口下会留 160K, 压缩后残留被尾部撑到 120K 以上。
+     */
+    public const int DefaultRetainTokens = 8_000;
     public const int DefaultTailTurns = 2;
-    public const int UnknownContextRetainTokens = 2_000;
     public const int DefaultMaxTokens = 8192;
     public const int DefaultCompactionRetries = 1;
     public const int DefaultMaxOverflowRetries = 1;
@@ -109,20 +110,12 @@ public static class CompactionConfigResolver
         ValidatePolicy(config, "BasicCompactionConfig");
 
         var thresholdRatio = config.ThresholdRatio ?? DefaultThresholdRatio;
-        var retention = ResolveRetention(config, new ResolvedRetention.Ratio(DefaultRetainRatio));
-        ValidateRatioRetention(thresholdRatio, retention, "BasicCompactionConfig");
+        var retainTokens = config.RetainTokens ?? DefaultRetainTokens;
         var modelPolicies = ResolveModelPolicies(config.ModelPolicies);
-        for (var index = 0; index < modelPolicies.Count; index++)
-        {
-            ValidateRatioRetention(
-                modelPolicies[index].ThresholdRatio ?? thresholdRatio,
-                ResolveRetention(modelPolicies[index], retention),
-                $"BasicCompactionConfig: modelPolicies[{index}]");
-        }
 
         return new ResolvedConfig(
             thresholdRatio,
-            retention,
+            retainTokens,
             config.TailTurns ?? DefaultTailTurns,
             config.SummarizationProvider ?? "",
             config.SummarizationModel ?? "",
@@ -141,7 +134,7 @@ public static class CompactionConfigResolver
             provider,
             model,
             policyOverride?.ThresholdRatio ?? config.ThresholdRatio,
-            ResolveRetention(policyOverride, config.Retention),
+            policyOverride?.RetainTokens ?? config.RetainTokens,
             policyOverride?.TailTurns ?? config.TailTurns,
             policyOverride?.SummarizationProvider ?? config.SummarizationProvider,
             policyOverride?.SummarizationModel ?? config.SummarizationModel,
@@ -151,14 +144,17 @@ public static class CompactionConfigResolver
             policyOverride?.DegradedRetainTurns ?? config.DegradedRetainTurns);
     }
 
-    /** 尾部保留预算:配置为 token 时直接采用;为比例且已知上下文窗口时按比例换算;否则回退到保守常量。 */
-    public static int ResolveRetainTokens(ResolvedRetention retention, int? contextWindow)
-        => retention switch
-        {
-            ResolvedRetention.Tokens tokens => tokens.RetainTokens,
-            ResolvedRetention.Ratio ratio when contextWindow is { } window => (int)Math.Floor(window * ratio.RetainRatio),
-            _ => UnknownContextRetainTokens,
-        };
+    /**
+     * 尾部保留预算的实际值: 配置值是上限, 再按触发阈值的一半夹紧。
+     * 留超过一半会让压缩后仍停在触发线附近甚至以上 —— 选区为空, 压缩等于没做, 之后每一步都白跑一次。
+     */
+    public static int EffectiveRetainTokens(int configured, double thresholdRatio, int? contextWindow)
+    {
+        if (contextWindow is not { } window || window <= 0)
+            return configured;
+        var thresholdTokens = (int)Math.Floor(window * thresholdRatio);
+        return Math.Clamp(configured, 0, Math.Max(0, thresholdTokens / 2));
+    }
 
     public static ResolvedCompactSpec ResolveCompactSpec(ResolvedTargetPolicy policy, int contextWindow)
     {
@@ -166,11 +162,7 @@ public static class CompactionConfigResolver
         if (contextWindow <= 0)
             throw new TargetPressureConfigError(targetKey, $"BasicCompactionConfig: contextWindow ({contextWindow}) must be a positive integer");
         var thresholdTokens = (int)Math.Floor(contextWindow * policy.ThresholdRatio);
-        var retainTokens = ResolveRetainTokens(policy.Retention, contextWindow);
-        if (retainTokens >= thresholdTokens)
-            throw new TargetPressureConfigError(
-                targetKey,
-                $"BasicCompactionConfig: {policy.Provider}/{policy.Model} retainTokens ({retainTokens}) must be less than threshold tokens {thresholdTokens}");
+        var retainTokens = EffectiveRetainTokens(policy.RetainTokens, policy.ThresholdRatio, contextWindow);
         return new ResolvedCompactSpec(
             policy.Provider,
             policy.Model,
@@ -185,21 +177,6 @@ public static class CompactionConfigResolver
             policy.CompactionRetries,
             policy.MaxOverflowRetries,
             policy.DegradedRetainTurns);
-    }
-
-    private static ResolvedRetention ResolveRetention(CompactionPolicyConfig? config, ResolvedRetention fallback)
-    {
-        if (config?.RetainTokens is { } retainTokens)
-            return new ResolvedRetention.Tokens(retainTokens);
-        if (config?.RetainRatio is { } retainRatio)
-            return new ResolvedRetention.Ratio(retainRatio);
-        return fallback;
-    }
-
-    private static void ValidateRatioRetention(double thresholdRatio, ResolvedRetention retention, string name)
-    {
-        if (retention is ResolvedRetention.Ratio { RetainRatio: var retainRatio } && retainRatio >= thresholdRatio)
-            throw new ArgumentException($"{name}: retainRatio ({retainRatio}) must be less than the resolved thresholdRatio ({thresholdRatio})");
     }
 
     private static IReadOnlyList<ModelCompactPolicyConfig> ResolveModelPolicies(IReadOnlyList<ModelCompactPolicyConfig>? configured)
@@ -229,14 +206,10 @@ public static class CompactionConfigResolver
     {
         if (config.ThresholdRatio is { } thresholdRatio)
             AssertRatio($"{name}.thresholdRatio", thresholdRatio);
-        if (config.RetainRatio is { } retainRatio)
-            AssertRatio($"{name}.retainRatio", retainRatio);
         if (config.RetainTokens is { } retainTokens)
             AssertNonNegative($"{name}.retainTokens", retainTokens);
         if (config.TailTurns is { } tailTurns)
             AssertPositive($"{name}.tailTurns", tailTurns);
-        if (config.RetainRatio is not null && config.RetainTokens is not null)
-            throw new ArgumentException($"{name}: retainRatio and retainTokens are mutually exclusive");
         if (config.MaxTokens is { } maxTokens)
             AssertPositive($"{name}.maxTokens", maxTokens);
         if (config.CompactionRetries is { } compactionRetries)

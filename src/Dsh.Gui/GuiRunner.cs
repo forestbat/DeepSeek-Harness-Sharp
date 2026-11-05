@@ -85,6 +85,9 @@ public static class GuiRunner
         });
         if (OperatingSystem.IsWindows())
             thread.SetApartmentState(ApartmentState.STA);
+        // 前台线程会阻止进程退出: 消息循环一旦退不干净(见 MainWindow.ShutdownApplication 的兜底),
+        // 进程就永远留在任务管理器里, 只能手动结束。
+        thread.IsBackground = true;
         thread.Start();
         return done.Task;
     }
@@ -99,6 +102,8 @@ public static class GuiRunner
         Func<string, CancellationToken, Task>? startLocalHost)
     {
         MainWindow? window = null;
+        // 本进程就是 GUI 本体: 允许退出兜底强杀自己(见 MainWindow.ShutdownApplication)。
+        MainWindow.OwnsProcess = true;
         instance.ActivationRequested += () =>
         {
             if (window is not null)

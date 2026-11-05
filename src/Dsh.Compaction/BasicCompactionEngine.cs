@@ -242,7 +242,9 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
         var contextWindow = target is null
             ? null
             : _llm.ResolveModelInfo(target.Value.Provider, target.Value.Model).ContextWindow;
-        return (CompactionConfigResolver.ResolveRetainTokens(policy.Retention, contextWindow), policy.TailTurns);
+        return (
+            CompactionConfigResolver.EffectiveRetainTokens(policy.RetainTokens, policy.ThresholdRatio, contextWindow),
+            policy.TailTurns);
     }
 
     public override Task<CompactionResult?> CompactNow(IAgent agent, CancellationToken signal, string? sourceCommandId = null)

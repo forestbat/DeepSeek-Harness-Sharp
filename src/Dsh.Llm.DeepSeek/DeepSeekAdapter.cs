@@ -84,8 +84,15 @@ public sealed class DeepSeekAdapter : LlmAdapter
                 model.Id,
                 model.Name ?? model.Id,
                 model.Description,
-                model.InputModalities ?? ["text"]))
+                InputModalitiesOf(model.Id, model.InputModalities)))
             .ToList();
+
+    /**
+     * 输入模态的取值顺序: 配置里显式声明 > models.dev 快照 > 纯文本。
+     * 快照是能力事实源, 漏了它就会把本来支持图片的模型当成纯文本, 用户贴的图会被静默替换成一段说明文字。
+     */
+    private IReadOnlyList<string> InputModalitiesOf(string model, IReadOnlyList<string>? declared)
+        => declared ?? _modelsDev.InputModalitiesFor(model) ?? ["text"];
 
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
@@ -114,11 +121,13 @@ public sealed class DeepSeekAdapter : LlmAdapter
             model,
             configured?.Name ?? model,
             configured?.Description,
-            configured?.InputModalities ?? ["text"],
+            InputModalitiesOf(model, configured?.InputModalities),
             contextWindow,
             configured?.MaxTokens ?? connection.MaxTokens,
             reasoning,
-            configured?.SystemPromptUpdate);
+            // DeepSeek 接受对话中途的 system 消息, 变化后的系统提示叠到尾部即可保住前缀缓存;
+            // 没显式声明时按 in-history 走, 否则每次变化都会原地改写前缀。
+            configured?.SystemPromptUpdate ?? SystemPromptUpdateModes.InHistory);
     }
 
     public override PreparedAdapterCall PrepareCall(string model, CancellationToken cancellationToken)
@@ -136,7 +145,9 @@ public sealed class DeepSeekAdapter : LlmAdapter
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (options.Messages.Any(message => ToolResultImages.Any(message.Content))
-            && connection.Models.FirstOrDefault(entry => entry.Id == options.Model)?.InputModalities?.Contains("image") != true)
+            && !InputModalitiesOf(
+                options.Model,
+                connection.Models.FirstOrDefault(entry => entry.Id == options.Model)?.InputModalities).Contains("image"))
         {
             throw new LlmException(new LlmFailure(
                 $"DeepSeek model \"{options.Model}\" does not accept image input.",

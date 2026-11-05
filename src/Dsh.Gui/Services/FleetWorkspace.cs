@@ -13,6 +13,9 @@ namespace Dsh.Gui.Services;
  */
 public sealed class FleetWorkspace : IAsyncDisposable
 {
+    /** 退出时等 ReloadAsync 让出闸门的上限。 */
+    private static readonly TimeSpan DisposeGateTimeout = TimeSpan.FromSeconds(3);
+
     private readonly Func<IWorkspaceClient> _factory;
     private readonly DispatcherBridge<bool> _changes;
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
@@ -106,7 +109,9 @@ public sealed class FleetWorkspace : IAsyncDisposable
     {
         _disposed = true;
         await _lifetime.CancelAsync();
-        await _reloadGate.WaitAsync();
+        // 退出时不能等一个正在重建连接的 ReloadAsync 让出闸门: 拿不到就放弃收尾, 由上层超时兜底。
+        if (!await _reloadGate.WaitAsync(DisposeGateTimeout))
+            return;
         try
         {
             Detach(Client);
