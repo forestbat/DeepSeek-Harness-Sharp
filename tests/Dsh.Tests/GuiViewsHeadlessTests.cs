@@ -211,19 +211,27 @@ public sealed class GuiViewsHeadlessTests
             window.UpdateLayout();
             Render();
             Assert.True(readingOffset < previousOffset, "The actual keyboard scroll command must move away from the tail.");
-            Assert.Equal(readingOffset, scroll.Offset.Y, 3);
+            AssertOutsideViewport("unfollowed-tail");
+            var keyboardReading = CaptureReadingParagraphs();
+            await StreamAsync("\n\nkeyboard-unfollowed-tail", "keyboard-unfollowed-tail");
+            AssertReadingParagraphs(keyboardReading);
+            AssertOutsideViewport("keyboard-unfollowed-tail");
 
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
-            AssertVisible("unfollowed-tail");
+            AssertVisible("keyboard-unfollowed-tail");
             await StreamAsync("\n\n" + Paragraphs(52, 12) + "rearmed-tail", "rearmed-tail");
             AssertVisible("rearmed-tail");
 
+            previousOffset = scroll.Offset.Y;
             window.MouseWheel(wheelPoint, new Vector(0, 8));
             Render();
             readingOffset = scroll.Offset.Y;
+            Assert.True(readingOffset < previousOffset, "The actual wheel input must move away from the tail.");
+            var wheelReading = CaptureReadingParagraphs();
             await StreamAsync("\n\n" + Paragraphs(64, 12) + "wheel-unfollowed-tail", "wheel-unfollowed-tail");
-            Assert.Equal(readingOffset, scroll.Offset.Y, 3);
+            AssertReadingParagraphs(wheelReading);
+            AssertOutsideViewport("wheel-unfollowed-tail");
 
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
@@ -254,14 +262,77 @@ public sealed class GuiViewsHeadlessTests
                 return message;
             }
 
+            SelectableTextBlock[] AssistantParagraphs()
+            {
+                var markdown = Assert.Single(list.GetVisualDescendants().OfType<MarkdownView>(),
+                    view => ReferenceEquals(view.DataContext, assistant) && view.IsEffectivelyVisible);
+                return markdown.GetVisualDescendants().OfType<SelectableTextBlock>().ToArray();
+            }
+
+            (int Index, string Text, Rect Bounds)[] CaptureReadingParagraphs()
+            {
+                var paragraphs = AssistantParagraphs();
+                var viewport = new Rect(scroll.Viewport);
+                var anchors = new List<(int Index, string Text, Rect Bounds)>();
+                for (var index = 0; index < paragraphs.Length; index++)
+                {
+                    var paragraph = paragraphs[index];
+                    if (!paragraph.IsEffectivelyVisible || paragraph.Bounds.Width <= 0 || paragraph.Bounds.Height <= 0
+                        || paragraph.TranslatePoint(default, scroll) is not { } origin)
+                        continue;
+                    var bounds = new Rect(origin, paragraph.Bounds.Size);
+                    if (viewport.Contains(bounds))
+                        anchors.Add((index, ParagraphText(paragraph), bounds));
+                }
+                Assert.NotEmpty(anchors);
+                return anchors.ToArray();
+            }
+
+            void AssertReadingParagraphs((int Index, string Text, Rect Bounds)[] anchors)
+            {
+                // Virtualized extent coordinates can change while the same reading content stays in place.
+                var paragraphs = AssistantParagraphs();
+                foreach (var anchor in anchors)
+                {
+                    Assert.InRange(anchor.Index, 0, paragraphs.Length - 1);
+                    var paragraph = paragraphs[anchor.Index];
+                    Assert.Equal(anchor.Text, ParagraphText(paragraph));
+                    Assert.True(paragraph.IsEffectivelyVisible);
+                    AssertInsideViewport(paragraph, scroll);
+                    var origin = paragraph.TranslatePoint(default, scroll)!.Value;
+                    Assert.Equal(anchor.Bounds.X, origin.X, 3);
+                    Assert.Equal(anchor.Bounds.Y, origin.Y, 3);
+                    Assert.Equal(anchor.Bounds.Width, paragraph.Bounds.Width, 3);
+                    Assert.Equal(anchor.Bounds.Height, paragraph.Bounds.Height, 3);
+                }
+            }
+
+            static string ParagraphText(SelectableTextBlock paragraph) =>
+                string.IsNullOrEmpty(paragraph.Text)
+                    ? string.Join("", paragraph.Inlines?.OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? [])
+                    : paragraph.Text;
+
             void AssertVisible(string marker)
             {
-                var block = Assert.Single(list.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(),
-                    block => block.Text == marker || string.Join("", block.Inlines?
-                        .OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? []) == marker);
+                var block = FindMarker(marker);
                 Assert.True(block.IsEffectivelyVisible);
                 AssertInsideViewport(block, scroll);
             }
+
+            void AssertOutsideViewport(string marker)
+            {
+                var block = FindMarker(marker);
+                Assert.True(block.IsEffectivelyVisible);
+                Assert.True(block.Bounds is { Width: > 0, Height: > 0 });
+                var origin = block.TranslatePoint(default, scroll)!.Value;
+                Assert.False(new Rect(scroll.Viewport).Intersects(new Rect(origin, block.Bounds.Size)),
+                    "Appending content must not bring the new tail into the reading viewport.");
+            }
+
+            Avalonia.Controls.TextBlock FindMarker(string marker) =>
+                Assert.Single(list.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(),
+                    block => block.Text == marker || string.Join("", block.Inlines?
+                        .OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? []) == marker);
         }
         finally
         {

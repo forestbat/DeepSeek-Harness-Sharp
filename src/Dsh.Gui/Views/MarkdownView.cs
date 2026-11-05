@@ -6,7 +6,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 
 namespace Dsh.Gui.Views;
 
@@ -164,16 +163,6 @@ public sealed class MarkdownView : UserControl
         _root.Children.Clear();
         if (!string.IsNullOrWhiteSpace(text))
             Render(text);
-        // Invalidate the ancestor measure chain so the virtualizing panel validates old sizes before measuring rebuilt content.
-        if (this.FindAncestorOfType<VirtualizingStackPanel>() is { } panel)
-        {
-            for (Layoutable? control = this; control is not null; control = control.GetVisualParent<Layoutable>())
-            {
-                control.InvalidateMeasure();
-                if (ReferenceEquals(control, panel))
-                    break;
-            }
-        }
     }
 
     private void Render(string text)
