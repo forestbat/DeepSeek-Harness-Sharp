@@ -261,8 +261,12 @@ public sealed class PluginSandboxIntegrationTests
             }, cancellation.Token);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
-            while (!File.Exists(marker))
-                await Task.Delay(10, deadline.Token);
+            // File creation precedes the asynchronous broker write; wait for the worker's actual write receipt.
+            var written = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("isolated_alpha",
+                new { operation = "wait-for-write-completion" }, deadline.Token)).Value;
+            Assert.Equal(Encoding.UTF8.GetByteCount("exactly once\n"), written.GetProperty("bytesWritten").GetInt32());
+            Assert.Equal("exactly once\n", await File.ReadAllTextAsync(marker, deadline.Token));
+            Assert.False(pending.IsCompleted);
             cancellation.Cancel();
             failed = await pending;
         }

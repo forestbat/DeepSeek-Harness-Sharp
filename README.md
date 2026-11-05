@@ -182,6 +182,8 @@ plugins:
 ### GUI
 
 本项目的 GUI 使用 Avalonia UI 原生实现，与 TUI 共用配置、会话和命令，双击安装包里的`dsh-gui.exe`即可打开，也可以从命令行启动。
+流式输出默认跟随底部；使用滚轮或 PageUp 离开底部后，新增输出保留当前阅读位置，回到底部后恢复跟随。
+展开或折叠消息时保留当前阅读位置。
 
 ```bash
 Dsh.GuiHost/bin/Debug/net10.0/dsh-gui.exe   # Windows

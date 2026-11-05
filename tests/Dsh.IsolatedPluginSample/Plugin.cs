@@ -51,6 +51,10 @@ public sealed class Plugin : IDshPlugin
     private Context? _context;
     private TaskCompletionSource? _release;
     private Task<JsonElement>? _background;
+    private TaskCompletionSource<JsonElement>? _writeCompletion;
+
+    private TaskCompletionSource<JsonElement> WriteCompletion => LazyInitializer.EnsureInitialized(ref _writeCompletion,
+        static () => new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously));
 
     public string[] Inject => [IPluginHostFactory.ServiceName];
     public Type ConfigType => typeof(PluginConfiguration);
@@ -134,9 +138,21 @@ public sealed class Plugin : IDshPlugin
                     Path.GetFullPath(arguments.GetProperty("relativePath").GetString()!, resourceDirectory), signal);
                 return JsonSerializer.SerializeToElement(new { text = resource });
             case "wait-after-write":
-                await host.CallAsync(PluginHostOperations.WriteFile, arguments, signal);
+                var completion = WriteCompletion;
+                try
+                {
+                    var written = await host.CallAsync(PluginHostOperations.WriteFile, arguments, signal);
+                    completion.TrySetResult(written.Clone());
+                }
+                catch (Exception error)
+                {
+                    completion.TrySetException(error);
+                    throw;
+                }
                 await Task.Delay(Timeout.InfiniteTimeSpan, signal);
                 throw new InvalidOperationException("An infinite wait unexpectedly completed.");
+            case "wait-for-write-completion":
+                return await WriteCompletion.Task.WaitAsync(signal);
             case "read":
                 return await host.CallAsync(PluginHostOperations.ReadFile, arguments, signal);
             case "write":
