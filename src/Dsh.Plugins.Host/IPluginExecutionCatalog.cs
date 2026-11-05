@@ -17,6 +17,11 @@ public static class PluginExecutionRuntime
 {
     public static PluginExecutionRuntimeFactory? Factory { private get; set; }
 
+    /// <summary>Returns null for ordinary application arguments, without composing an application Context.</summary>
+    public static Func<string[], ValueTask<int>?>? Worker { private get; set; }
+
+    public static ValueTask<int>? TryRunWorkerAsync(string[] args) => Worker?.Invoke(args);
+
     public static IPluginExecutionRuntime? Create(Context context, IPluginExecutionEnvironment environment,
         PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
     {
