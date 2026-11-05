@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Dsh.Boot;
+using Dsh.Checkpoints;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -217,7 +218,11 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        var project = Path.Combine(home, "project");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, "checkpoint-input.txt"), "checkpoint input");
+        await new ShadowGit(Path.Combine(project, ".git"), project).InitAsync(TestContext.Current.CancellationToken);
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -230,7 +235,7 @@ public sealed class SdkTests
             var subscription = client.Subscribe((method, _) => method == SdkMethods.SessionEvent);
 
             await client.InitializeAsync(new InitializeParams(
-                Directory.GetCurrentDirectory(),
+                project,
                 "deepseek-official",
                 "deepseek-v4-flash"));
             await client.PromptAsync("session-event-test", [new TextBlock("hello")]);

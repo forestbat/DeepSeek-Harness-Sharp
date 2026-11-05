@@ -18,6 +18,8 @@ internal static class TestProcessEntryPoint
     {
         if (args.FirstOrDefault() == SandboxFileGrantConsumer.Argument)
             return SandboxFileGrantConsumer.RunAsync(args).GetAwaiter().GetResult();
+        if (args.FirstOrDefault() == CheckpointTests.FilterConsumerArgument)
+            return CheckpointTests.RunFilterConsumerAsync(args).GetAwaiter().GetResult();
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
         if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
             return worker.GetAwaiter().GetResult();
