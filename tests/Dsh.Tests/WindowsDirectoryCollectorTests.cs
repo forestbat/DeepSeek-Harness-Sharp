@@ -301,6 +301,75 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
         Assert.Equal(collectParent ? 1 : 0, visits);
     }
 
+    [Theory]
+    [InlineData(31)]
+    [InlineData(32)]
+    [InlineData(33)]
+    [InlineData(65)]
+    public void DeepTree_PreservesReferenceOrderAndReleasesParentHandles(int depth)
+    {
+        RequireWindows();
+        var directory = _root;
+        for (var index = 0; index < depth; index++)
+        {
+            directory = Directory.CreateDirectory(Path.Combine(directory, "d")).FullName;
+            File.WriteAllText(Path.Combine(directory, "input.txt"), "included");
+            if (index % 8 == 0)
+            {
+                var sibling = Directory.CreateDirectory(Path.Combine(directory, "side")).FullName;
+                File.WriteAllText(Path.Combine(sibling, "input.txt"), "included");
+            }
+        }
+        var expected = new FileSystemEnumerable<(string Path, bool Directory)>(_root,
+            static (ref FileSystemEntry entry) => (entry.ToFullPath(), entry.IsDirectory),
+            new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                IgnoreInaccessible = false,
+                BufferSize = 16 * 1024
+            }).ToArray();
+        var actual = new List<(string Path, bool Directory)>();
+        var callerThread = Environment.CurrentManagedThreadId;
+
+        WindowsDirectoryCollector.Collect(_root, (path, isDirectory) =>
+        {
+            Assert.Equal(callerThread, Environment.CurrentManagedThreadId);
+            actual.Add((path, isDirectory));
+        }, TestContext.Current.CancellationToken);
+
+        Assert.True(expected.SequenceEqual(actual), "Deep branches must retain reference entry and FIFO directory order.");
+        AssertDirectoriesReleased();
+    }
+
+    [Theory]
+    [InlineData(32)]
+    [InlineData(33)]
+    [InlineData(65)]
+    public void ExclusivelyOpenedDeepDirectory_IsReportedAndReleasesParentHandles(int depth)
+    {
+        RequireWindows();
+        var directory = _root;
+        for (var index = 0; index < depth; index++)
+            directory = Directory.CreateDirectory(Path.Combine(directory, "d")).FullName;
+        var file = Path.Combine(directory, "input.txt");
+        File.WriteAllText(file, "not enumerable");
+        var actual = new List<string>();
+        const int sharingViolation = unchecked((int)0x80070020);
+        using (var handle = WindowsNative.CreateFile(directory, 1, 0, 0, 3, 0x02000000, 0))
+        {
+            if (handle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), "The exclusive deep directory fixture could not open its directory.");
+
+            var failure = Assert.Throws<IOException>(() => WindowsDirectoryCollector.Collect(_root,
+                (path, _) => actual.Add(path), TestContext.Current.CancellationToken));
+
+            Assert.Equal(sharingViolation, failure.HResult);
+            Assert.DoesNotContain(file, actual);
+        }
+        AssertDirectoriesReleased();
+    }
+
     private void AssertDirectoriesReleased()
     {
         // An exclusive consumer must be able to reopen both the active directory and queued descendants after failure.
