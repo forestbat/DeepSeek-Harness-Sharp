@@ -126,6 +126,7 @@ public sealed partial class MessageViewModel : ObservableObject
         Diff = diff;
         // 消息级展开以露出卡片标题栏, 卡片本体仍保持折叠(IsDiffExpanded 默认 false)。
         IsExpanded = true;
+        OnPropertyChanged(nameof(Diff));
         OnPropertyChanged(nameof(HasDiff));
         OnPropertyChanged(nameof(ShowDiff));
         OnPropertyChanged(nameof(ShowPlainBody));

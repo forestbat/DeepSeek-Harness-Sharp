@@ -51,6 +51,17 @@ internal sealed class ChatScene : IAsyncDisposable
         return scene;
     }
 
+    /** 只跑布局与派发队列, 不抓帧: 折叠/滚动的位置断言不需要图像, 抓帧才是慢的那一步。 */
+    public void Pump(int passes = 1)
+    {
+        for (var pass = 0; pass < passes; pass++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     public void Render()
     {
         Dispatcher.UIThread.RunJobs();
@@ -58,6 +69,10 @@ internal sealed class ChatScene : IAsyncDisposable
         Window.CaptureRenderedFrame()?.Dispose();
         Dispatcher.UIThread.RunJobs();
     }
+
+    /** 贴底: 写当前最大值, 不留超限的本地值(ScrollViewer.ScrollToEnd 会在内容长高后被钳制放开, 多滚一截)。 */
+    public void ScrollToEnd()
+        => Scroll.Offset = new Vector(Scroll.Offset.X, Math.Max(0, Scroll.Extent.Height - Scroll.Viewport.Height));
 
     /** 折叠后的对齐要跨多轮布局: 回收/实体化目标项、修正偏移、再确认稳定。 */
     public void Settle()
@@ -121,6 +136,17 @@ internal sealed class ChatScene : IAsyncDisposable
         var after = TopOf(List, message);
         Assert.True(Math.Abs(after - before) <= 2,
             $"{label}: message moved from {before:0} to {after:0} (offset {Scroll.Offset.Y:0})");
+    }
+
+    /** 视口顶部那条消息和它的屏幕位置; 用户看到的"有没有被挪动"就是这两样, 比 offset 更能代表阅读位置。 */
+    public (MessageViewModel Message, double Top) TopVisible()
+    {
+        var entry = List.GetVisualDescendants().OfType<ListBoxItem>()
+            .Select(item => (Item: item, Top: item.TranslatePoint(default, Scroll)?.Y ?? double.MaxValue))
+            .Where(candidate => candidate.Top > -0.5 && candidate.Item.Bounds.Height > 0)
+            .OrderBy(candidate => candidate.Top)
+            .First();
+        return (Assert.IsType<MessageViewModel>(entry.Item.DataContext), entry.Top);
     }
 
     public void Tap(Button button)
