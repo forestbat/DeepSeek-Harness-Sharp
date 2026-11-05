@@ -6,12 +6,13 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
-/// <summary>Collects non-reparse descendants using bounded root-relative native directory reads.</summary>
+/// <summary>Collects non-reparse descendants using bounded parent-relative native directory reads.</summary>
 [SupportedOSPlatform("windows")]
 internal static class WindowsDirectoryCollector
 {
     private const int BufferSize = 16 * 1024;
-    private const int WorkerCount = 32;
+    private const int WorkerCount = 128;
+    private const int ParentHandleLimit = 32;
     private const uint ListDirectory = 1;
     private const uint Synchronize = 0x00100000;
     private const uint BackupSemantics = 0x02000000;
@@ -37,9 +38,11 @@ internal static class WindowsDirectoryCollector
     /// </summary>
     /// <remarks>
     /// Root entries are read and published before any descendant is opened.
-    /// Thirty-two dedicated workers each own one 16 KiB buffer and normally one descendant handle.
+    /// One hundred twenty-eight dedicated workers each own one 16 KiB buffer and at most 32 open descendant frames.
+    /// Deeper branches return to shared root-relative work without retaining handles in the queue.
     /// Root-relative names exceeding the native counted-name limit are split at directory separators.
-    /// Such opens transiently own two descendant handles per worker; queued directories own none.
+    /// Such branch opens transiently own two handles before acquiring their first frame.
+    /// Buffers total at most 2 MiB; descendant handles total at most 4096, plus the shared root handle.
     /// Paths, entry topology and discovery/publication queues cost O(entries).
     /// All workers join before descendant publication; callbacks retain native entry and FIFO directory order.
     /// Native calls are synchronous, with cancellation checked before opens, between entries and after completion.
@@ -175,6 +178,13 @@ internal static class WindowsDirectoryCollector
 
     private readonly record struct Entry(string Path, DirectoryWork? Directory);
 
+    private struct DirectoryFrame
+    {
+        public DirectoryWork Directory;
+        public SafeFileHandle Handle;
+        public int NextEntry;
+    }
+
     private sealed class WorkQueue
     {
         private readonly object _gate = new();
@@ -199,18 +209,53 @@ internal static class WindowsDirectoryCollector
         public void Run()
         {
             nint buffer = 0;
+            DirectoryFrame[]? frames = null;
+            var depth = 0;
             try
             {
+                frames = new DirectoryFrame[ParentHandleLimit];
                 buffer = Marshal.AllocHGlobal(BufferSize);
                 while (Take() is { } directory)
                 {
                     ThrowIfStopped();
                     CancellationToken.ThrowIfCancellationRequested();
-                    using (var handle = OpenRelativeDirectory(_root, directory.Path.AsSpan(_relativeStart), directory.Path, this))
+                    var handle = OpenRelativeDirectory(_root, directory.Path.AsSpan(_relativeStart), directory.Path, this);
+                    frames[depth++] = new DirectoryFrame { Directory = directory, Handle = handle };
+                    CollectDirectory(handle, directory, buffer, CancellationToken, this);
+                    while (depth != 0)
                     {
-                        CollectDirectory(handle, directory, buffer, CancellationToken, this);
+                        ThrowIfStopped();
+                        CancellationToken.ThrowIfCancellationRequested();
+                        ref var parent = ref frames[depth - 1];
+                        DirectoryWork? child = null;
+                        while (parent.NextEntry < parent.Directory.Entries.Count)
+                        {
+                            child = parent.Directory.Entries[parent.NextEntry++].Directory;
+                            if (child is not null)
+                                break;
+                        }
+                        if (child is null)
+                        {
+                            parent.Handle.Dispose();
+                            parent = default;
+                            depth--;
+                            continue;
+                        }
+                        if (depth == ParentHandleLimit)
+                        {
+                            DeferBranch(child);
+                            continue;
+                        }
+                        ShareSiblings(frames, depth);
+                        ThrowIfStopped();
+                        CancellationToken.ThrowIfCancellationRequested();
+                        var relativeStart = parent.Directory.Path.Length
+                            + (Path.EndsInDirectorySeparator(parent.Directory.Path) ? 0 : 1);
+                        handle = OpenRelativeDirectory(parent.Handle, child.Path.AsSpan(relativeStart), child.Path, this);
+                        frames[depth++] = new DirectoryFrame { Directory = child, Handle = handle };
+                        CollectDirectory(handle, child, buffer, CancellationToken, this);
                     }
-                    Complete(directory);
+                    CompleteBranch();
                 }
             }
             catch (Exception error)
@@ -219,6 +264,14 @@ internal static class WindowsDirectoryCollector
             }
             finally
             {
+                if (frames is not null)
+                {
+                    while (depth != 0)
+                    {
+                        frames[--depth].Handle.Dispose();
+                        frames[depth] = default;
+                    }
+                }
                 if (buffer != 0)
                     Marshal.FreeHGlobal(buffer);
             }
@@ -247,20 +300,50 @@ internal static class WindowsDirectoryCollector
             }
         }
 
-        private void Complete(DirectoryWork directory)
+        private void ShareSiblings(DirectoryFrame[] frames, int depth)
         {
             lock (_gate)
             {
                 if (_failure is not null)
                     return;
-                // Outstanding counts queued plus active nodes. Publish children before retiring their parent.
-                foreach (var entry in directory.Entries)
+                var shared = false;
+                // Ancestor siblings remain available when other workers finish their branches.
+                for (var index = 0; index < depth && _pending.Count < WorkerCount - 1; index++)
                 {
-                    if (entry.Directory is not { } child)
-                        continue;
-                    _pending.Enqueue(child);
-                    _outstanding = checked(_outstanding + 1);
+                    ref var frame = ref frames[index];
+                    while (frame.NextEntry < frame.Directory.Entries.Count && _pending.Count < WorkerCount - 1)
+                    {
+                        if (frame.Directory.Entries[frame.NextEntry++].Directory is not { } child)
+                            continue;
+                        _pending.Enqueue(child);
+                        _outstanding = checked(_outstanding + 1);
+                        shared = true;
+                    }
                 }
+                if (shared)
+                    Monitor.PulseAll(_gate);
+            }
+        }
+
+        private void DeferBranch(DirectoryWork directory)
+        {
+            lock (_gate)
+            {
+                if (_failure is not null)
+                    return;
+                _pending.Enqueue(directory);
+                _outstanding = checked(_outstanding + 1);
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        private void CompleteBranch()
+        {
+            lock (_gate)
+            {
+                if (_failure is not null)
+                    return;
+                // Outstanding counts queued and active branch roots rather than inline descendants.
                 _outstanding--;
                 Monitor.PulseAll(_gate);
             }
