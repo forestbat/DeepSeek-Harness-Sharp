@@ -216,7 +216,7 @@ public sealed partial class ChatView : UserControl
     // Observe manual offset changes before ScrollChanged combines them with layout changes.
     private void OnScrollPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs change)
     {
-        if (change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
+        if (_restoringAnchor || change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
             return;
         if (!_draggingThumb && (_scrollInput is not { } input || !IsUserScrollInput(input)))
             return;
@@ -252,7 +252,6 @@ public sealed partial class ChatView : UserControl
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
         if (!_foldPending && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
-            && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
         {
             RestoreAnchor(scroll);
@@ -339,6 +338,7 @@ public sealed partial class ChatView : UserControl
         _anchorIndex = MessageList.IndexFromContainer(anchor);
         _anchorCount = MessageList.ItemCount;
         _anchorTop = top;
+        _anchorGeneration = _scrollGeneration;
     }
 
 
@@ -440,6 +440,8 @@ public sealed partial class ChatView : UserControl
 
     private void RestoreAnchor(ScrollViewer scroll)
     {
+        if (!_foldPending && _anchorGeneration != _scrollGeneration)
+            return;
         var index = ResolveAnchorIndex();
         if (index < 0)
             return;
@@ -461,8 +463,8 @@ public sealed partial class ChatView : UserControl
                 var delta = position.Y - _anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
-                // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
-                if (!_foldPending && Math.Abs(delta) > scroll.Viewport.Height)
+                // Restore large layout shifts only for the captured message identity.
+                if (!_foldPending && Math.Abs(delta) > scroll.Viewport.Height && !ReferenceEquals(item.DataContext, _anchorData))
                 {
                     RememberAnchor(scroll);
                     break;
@@ -535,6 +537,7 @@ public sealed partial class ChatView : UserControl
     private int _anchorIndex = -1;
     private int _anchorCount = -1;
     private double _anchorTop;
+    private long _anchorGeneration;
 
     /** 正在还原锚点; 期间产生的滚动事件不再参与判断。 */
     private bool _restoringAnchor;
