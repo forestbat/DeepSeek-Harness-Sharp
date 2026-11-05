@@ -61,6 +61,8 @@ Approved content is published atomically through a private temporary file; exist
 Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
 Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
 Missing settings gate, session, or approval service fails closed for these model-originated updates.
+The startup layer consumes the runtime's `ISettingsMutationContext` capability without referencing agent, transport, or sandbox assemblies; the original tool call still submits every model-originated settings proposal to the existing approval and audit service.
+Canonical settings identity uses the shared symbolic-link-aware path resolver, while ordinary-file checks and platform access enforcement stay outside the startup and runtime layers.
 
 ### Permission rules
 
@@ -425,6 +427,9 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 
 `sandbox.enabled` 默认关闭，保留原有运行方式；开启后，外部能力插件在共享的 OS 沙箱进程中运行，通过宿主中介读写文件和访问网络。
 编译进应用的插件默认在宿主执行；外部完整 `Context` 插件需要在 YAML 中显式设置 `execution: host`，这表示完整进程内信任。
+宿主在组合应用 `Context` 前，通过 `Dsh.Plugins.Host` 的可选执行边界分发插件 worker；沙箱模块沿用生成目录的初始化方法注册真正的 worker 入口，分发步骤遇到普通启动参数时直接返回，不创建 worker 或应用上下文。
+默认发行版仍按既有静态插件集合包含沙箱模块，关闭 `sandbox.enabled` 不改变该发行集合；自定义应用未引用此模块时，普通启动无需沙箱实现，显式开启沙箱则报告功能不可用。
+这不是运行时删掉默认发行包中任意 DLL 的容错机制，生成目录静态引用的模块仍须随包完整部署。
 
 ```yaml
 sandbox:
@@ -489,6 +494,7 @@ sandbox:
 - TUI 问答与既有审批共用键鼠选择控件，支持多选、自定义输入、禁用/默认、中文折行命中、长内容滚动和草稿光标恢复。
 - 问答整组取消返回结构化 `dismissed`，审批保留当前会话工具授权边界，GUI/Web 复用选择与结果契约及 Host 先答者生效生命周期。
 - 决策取消采用显式 Host 能力门禁：旧 v2 Host 不会把取消误读为空答案或拒绝；GUI/Web 显示 Unsupported、保留未决项，既有回答与拒绝继续可用。
+- SDK 的 `session/prompt` 只确认消息入队；释放宿主前须先完成 `shutdown`，它会取消并等待代理收尾，再刷盘和释放会话日志；并发或重复关闭等待同一次收尾并共享其成功或失败结果。
 
 </details>
 

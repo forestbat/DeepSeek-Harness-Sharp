@@ -182,8 +182,8 @@ public static class GlobTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
-        var canonicalRoot = Dsh.Transport.FilePathAccess.Canonicalize(root);
-        workdir = root == workdir ? canonicalRoot : Dsh.Transport.FilePathAccess.Canonicalize(workdir);
+        var canonicalRoot = Dsh.Runtime.CanonicalFilePath.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Runtime.CanonicalFilePath.Canonicalize(workdir);
         root = canonicalRoot;
         if (!Directory.Exists(root))
             throw new HarnessException($"glob search failed (exit 2): the directory does not exist: \"{root}\"", "SEARCH_FAILED");
@@ -334,8 +334,8 @@ public static class GrepTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
-        var canonicalRoot = Dsh.Transport.FilePathAccess.Canonicalize(root);
-        workdir = root == workdir ? canonicalRoot : Dsh.Transport.FilePathAccess.Canonicalize(workdir);
+        var canonicalRoot = Dsh.Runtime.CanonicalFilePath.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Runtime.CanonicalFilePath.Canonicalize(workdir);
         root = canonicalRoot;
         var includeMatcher = include is null ? null : SearchFiles.CreateMatcher(include);
         var matches = new List<GrepMatchValue>();

@@ -191,11 +191,6 @@ public sealed class PtyDaemonResponse
     public List<string>? Killed { get; set; }
 }
 
-internal static class PtyDaemonJson
-{
-    public static readonly JsonSerializerOptions Options = PtyDaemonJsonContext.Default.Options;
-}
-
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(PtyDaemonRequest))]
 [JsonSerializable(typeof(PtyDaemonResponse))]

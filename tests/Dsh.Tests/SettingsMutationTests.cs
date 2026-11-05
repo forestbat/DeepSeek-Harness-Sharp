@@ -28,7 +28,7 @@ public sealed class SettingsMutationTests
         Assert.Equal("rejected", audit.Outcome);
         Assert.Equal(tool, audit.ToolName);
         Assert.Equal(audit.CallId, audit.RootCallId);
-        Assert.Equal(global::Dsh.Transport.FilePathAccess.Canonicalize(fixture.Home.SettingsFile), audit.Path);
+        Assert.Equal(CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile), audit.Path);
         Assert.DoesNotContain("credential-old-for-test", audit.Diff);
         Assert.Contains("alpha/new", audit.Diff);
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
@@ -386,7 +386,7 @@ public sealed class SettingsMutationTests
             Session.Append(new TurnStartPayload(1));
             if (withApproval)
                 _ = ApprovalService.Register(Context);
-            Context.SetOwn(ISettingsMutationGate.SettingsPathProperty, Home.SettingsFile);
+            Context.SetOwn(ISettingsMutationContext.SettingsPathProperty, Home.SettingsFile);
             Gate = new SettingsMutationGate(Context, Home);
             _ = new SafetyBoundary(Context, HarnessSettings.CreatePolicyReader(Home));
             _tools = [WriteTool.Register(Context), EditTool.Register(Context), StrReplaceEditorTool.Register(Context)];

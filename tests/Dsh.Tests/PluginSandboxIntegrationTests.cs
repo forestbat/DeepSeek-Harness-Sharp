@@ -51,8 +51,8 @@ public sealed class PluginSandboxIntegrationTests
         var events = fixture.Session.SnapshotEvents().Skip(offset).Select(item => item.Data).ToArray();
         Assert.Equal("committed", Assert.Single(events.OfType<SettingsMutationAuditPayload>()).Outcome);
         var audits = events.OfType<SafetyDecisionAuditPayload>().ToArray();
-        Assert.Contains(audits, audit => audit.Intent == "read" && audit.Path == Dsh.Transport.FilePathAccess.Canonicalize(fixture.Home.SettingsFile));
-        Assert.Contains(audits, audit => audit.Intent == "write" && audit.Path == Dsh.Transport.FilePathAccess.Canonicalize(fixture.Home.SettingsFile));
+        Assert.Contains(audits, audit => audit.Intent == "read" && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile));
+        Assert.Contains(audits, audit => audit.Intent == "write" && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile));
         Assert.All(audits, audit => { Assert.Equal(fixture.Session.Id.Value, audit.SessionId); Assert.Equal("isolated_alpha", audit.Tool); });
         Assert.NotNull(Assert.Single(audits.Select(audit => audit.CallId).Distinct()));
     }

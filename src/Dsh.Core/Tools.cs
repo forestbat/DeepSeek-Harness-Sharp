@@ -631,7 +631,7 @@ public sealed class ToolRuntime : Service
             // Known denials precede every other approval hook, including root escalation.
             if (GuardReason(exec) is { } blocked)
                 throw new UnauthorizedAccessException(blocked);
-            if (Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+            if (SafetyBoundary.Resolve(Ctx) is { } safety)
             {
                 var definition = exec.Registration.Definition;
                 await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true, definition?.FilePaths).ConfigureAwait(false);

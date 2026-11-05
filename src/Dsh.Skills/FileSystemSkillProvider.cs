@@ -348,7 +348,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
     private Task AuthorizeCustomFilesystemAsync(ToolRunContext? run, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
-        return run is not null && _ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety
+        return run is not null && SafetyBoundary.Resolve(_ctx) is { } safety
             ? safety.AuthorizeOperationAsync(run, signal)
             : Task.CompletedTask;
     }

@@ -306,7 +306,7 @@ public sealed class ScriptPermissionBoundaryTests
             Processes = new SubprocessService(Context);
             Tools = new ToolRuntime(Context);
             var settings = HarnessSettings.Load(Home);
-            _ = new SafetyBoundary(Context, HarnessSettings.CreatePolicyReader(Home, settings));
+            _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(Home, settings));
             Context.Provide(IScriptExecutionPolicy.ServiceName,
                 new ScriptExecutionPolicy(Context, new PluginExecutionEnvironment(Home, settings, Home.Root)));
         }

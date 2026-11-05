@@ -474,7 +474,7 @@ public sealed class ToolConflictTests
             Tools = new ToolRuntime(Context);
             _ = ApprovalService.Register(Context);
             Settings = new HarnessSettings { Safety = safety };
-            Safety = new SafetyBoundary(Context, () => Settings);
+            _ = new SafetyPolicySource(Context, () => Settings);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             Session = Session.Create(id, null, new SessionHeader
             {
@@ -490,7 +490,6 @@ public sealed class ToolConflictTests
         public Context Context { get; }
         public ToolRuntime Tools { get; }
         public HarnessSettings Settings { get; }
-        public SafetyBoundary Safety { get; }
         public Session Session { get; }
         public AgentLoopAgent Agent { get; }
 

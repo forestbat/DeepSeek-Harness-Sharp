@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
-using Dsh.Plugins.Sandbox;
+using Dsh.Plugins;
 using Dsh.Ptc;
 using Dsh.Runtime;
 using Dsh.ScriptHost;
@@ -19,8 +19,8 @@ internal static class TestProcessEntryPoint
         if (args.FirstOrDefault() == SandboxFileGrantConsumer.Argument)
             return SandboxFileGrantConsumer.RunAsync(args).GetAwaiter().GetResult();
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
-        if (args.Any(argument => argument == PluginSandboxWorker.HostArgument))
-            return PluginSandboxWorker.RunAsync(args).GetAwaiter().GetResult();
+        if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
+            return worker.GetAwaiter().GetResult();
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
             return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == UnixPtyDescriptorOwnershipTests.SpawnFailureProbeArgument))

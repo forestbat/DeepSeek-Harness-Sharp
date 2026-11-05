@@ -28,8 +28,8 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
 
     public void Dispose() => registration.Dispose();
 
-    public string SettingsPath => global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
-    public bool Owns(string path) => global::Dsh.Transport.FilePathAccess.SameFile(path, home.SettingsFile);
+    public string SettingsPath => CanonicalFilePath.Canonicalize(home.SettingsFile);
+    public bool Owns(string path) => CanonicalFilePath.SameFile(path, home.SettingsFile);
 
     public async Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default)
     {
@@ -51,7 +51,7 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
                 var rules = read().Safety ?? new SafetySettings();
                 var input = new PermissionInput(run.Name, run.Arguments, run.Agent!.Session.WorkingDirectory ?? Environment.CurrentDirectory,
                     target, "write", PathIsCanonical: true);
-                var current = PermissionEngine.Decide(rules, input, static path => Dsh.Transport.FilePathAccess.Canonicalize(path));
+                var current = PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
                 if (current.Decision == "deny" || SafetyBoundary.Revision(rules) != revision && current.Decision != "allow")
                 {
                     SafetyBoundary.RecordDecision(context, run, input, current, "safety", outcome: "policy-changed");
@@ -91,7 +91,7 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
         var safety = read().Safety ?? new SafetySettings();
         var input = new PermissionInput(run.Name, run.Arguments, agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, target, "write", PathIsCanonical: true);
-        var permission = PermissionEngine.Decide(safety, input, static path => Dsh.Transport.FilePathAccess.Canonicalize(path));
+        var permission = PermissionEngine.Decide(safety, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
         SafetyBoundary.RecordDecision(context, run, input, permission, "safety");
         if (permission.Decision == "deny")
             throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{permission.Match!.RuleId}\".");

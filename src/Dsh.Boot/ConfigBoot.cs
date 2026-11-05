@@ -1,4 +1,3 @@
-using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
 using Dsh.Runtime.Logging;
@@ -59,8 +58,8 @@ public static class ConfigBoot
 
         try
         {
-            ctx.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
-            _ = new SafetyBoundary(ctx, HarnessSettings.CreatePolicyReader(home, settings));
+            ctx.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
+            _ = new SafetyPolicySource(ctx, HarnessSettings.CreatePolicyReader(home, settings));
             var execution = PluginExecutionRuntime.Create(ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
                 pluginHost, pluginsDirectory, nativeBridge);
             if (execution is not null)
@@ -99,8 +98,8 @@ public static class ConfigBoot
         context.SetOwn("dshHomePath", home.Root);
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
-        context.SetOwn(ISettingsMutationGate.SettingsPathProperty, home.SettingsFile);
-        _ = new SafetyBoundary(context, HarnessSettings.CreatePolicyReader(home, settings));
+        context.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
+        _ = new SafetyPolicySource(context, HarnessSettings.CreatePolicyReader(home, settings));
         var host = new PluginHost();
         host.RegisterCompiledIn();
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");

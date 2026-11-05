@@ -177,7 +177,7 @@ public sealed class SkillRegistry : Service, ISkillCatalog
         if (!collected.Entries.TryGetValue(name, out var match))
             return null;
         if (options.Run is { } run && match.Provider is not FileSystemSkillProvider
-            && Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+            && SafetyBoundary.Resolve(Ctx) is { } safety)
             await safety.AuthorizeOperationAsync(run, options.Signal).ConfigureAwait(false);
         var definition = await WaitWithAbort(match.Provider.Get(match.Candidate, options), options.Signal);
         if (definition is null)
@@ -280,7 +280,7 @@ public sealed class SkillRegistry : Service, ISkillCatalog
             var localOrder = 0;
             SkillProviderObservation observation;
             if (options.Run is { } run && slot.Provider is not FileSystemSkillProvider
-                && Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+                && SafetyBoundary.Resolve(Ctx) is { } safety)
                 await safety.AuthorizeOperationAsync(run, options.Signal).ConfigureAwait(false);
             try
             {

@@ -226,7 +226,7 @@ public sealed class PtyDaemon : IAsyncDisposable
     {
         try
         {
-            return JsonSerializer.Deserialize<PtyDaemonRequest>(line, PtyDaemonJson.Options);
+            return JsonSerializer.Deserialize(line, PtyDaemonJsonContext.Default.PtyDaemonRequest);
         }
         catch (JsonException)
         {
@@ -589,7 +589,7 @@ public sealed class PtyDaemon : IAsyncDisposable
 
     private static async Task WriteResponseAsync(Stream stream, PtyDaemonResponse response, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(response, PtyDaemonJson.Options) + "\n";
+        var json = $"{JsonSerializer.Serialize(response, PtyDaemonJsonContext.Default.PtyDaemonResponse)}\n";
         await stream.WriteAsync(Encoding.UTF8.GetBytes(json), cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }

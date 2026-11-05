@@ -10,7 +10,7 @@ public sealed class ScriptExecutionPolicy(Context context, IPluginExecutionEnvir
     public bool Enabled => environment.ReadSettings().SandboxEnabled;
 
     public Task AuthorizeAsync(ToolRunContext? run, CancellationToken signal)
-        => (context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName)
+        => (SafetyBoundary.Resolve(context, required: true)
             ?? throw new InvalidOperationException("Script execution requires the host safety boundary."))
             .AuthorizeOperationAsync(run, signal, scriptPermissions: true);
 

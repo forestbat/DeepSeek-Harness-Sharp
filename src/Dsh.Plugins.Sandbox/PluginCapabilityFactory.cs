@@ -9,7 +9,6 @@ using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Sandbox;
-using Dsh.Transport;
 
 namespace Dsh.Plugins.Sandbox;
 
@@ -25,7 +24,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
-    private ISafetyBoundary Safety => context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName)
+    private ISafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
         ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
     public IPluginHost Create(string package, Context pluginContext)
     {
@@ -58,10 +57,10 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     {
         var path = arguments.GetProperty("path").GetString()
             ?? throw new ArgumentException("The file operation requires a path.");
-        global::Dsh.Transport.FilePathAccess.DemandFilePath(path);
+        CanonicalFilePath.DemandFilePath(path);
         var cwd = execution?.Agent?.Session.WorkingDirectory
             ?? environment.WorkingDirectory;
-        return global::Dsh.Transport.FilePathAccess.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
+        return CanonicalFilePath.Canonicalize(Path.GetFullPath(path, cwd), allowNetwork);
     }
 
     private async ValueTask<JsonElement> ReadFileAsync(string package, JsonElement arguments,
@@ -103,7 +102,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
-        if (gate?.Owns(path) == true || FilePathAccess.SameFile(path, environment.SettingsPath))
+        if (gate?.Owns(path) == true || CanonicalFilePath.SameFile(path, environment.SettingsPath))
             await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
         {

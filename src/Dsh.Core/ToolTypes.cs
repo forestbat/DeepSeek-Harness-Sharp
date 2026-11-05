@@ -117,7 +117,7 @@ public class ToolExecution : ToolExecutionInput
     public CancellationToken WrapperSignal { get; set; }
 }
 
-public sealed class ToolRunContext : ToolExecution
+public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutationContext
 {
     private readonly List<UserMessage> _deferred = [];
 
@@ -136,6 +136,22 @@ public sealed class ToolRunContext : ToolExecution
     private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
     public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
     public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
+
+    async Task<bool> Dsh.Runtime.ISettingsMutationContext.CommitAsync(string path,
+        Func<string, Dsh.Runtime.SettingsMutationProposal?> prepare,
+        Func<string, Dsh.Runtime.SettingsMutationProposal, string, CancellationToken, Task> commit)
+    {
+        var gate = SettingsMutation.RequireGate(this);
+        if (!gate.Owns(path))
+            throw new InvalidOperationException("The mutation does not target the active settings document.");
+        var canonical = gate.SettingsPath;
+        await SafetyFileAccess.AuthorizeAsync(canonical, "read", this, Signal, settingsReview: true).ConfigureAwait(false);
+        if (prepare(canonical) is not { } proposal)
+            return false;
+        await gate.CommitAsync(new(canonical, proposal.Before, proposal.After, this),
+            (temporary, signal) => commit(canonical, proposal, temporary, signal), Signal).ConfigureAwait(false);
+        return true;
+    }
 
     public SettingsMutationAuditPayload? LastSettingsMutation { get; private set; }
 

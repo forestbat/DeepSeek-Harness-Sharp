@@ -8,14 +8,19 @@ using static Dsh.Plugins.Sandbox.PluginSandboxWorkerWire;
 namespace Dsh.Plugins.Sandbox;
 
 /** The executable must dispatch this entry before composing any application Context. */
-public static class PluginSandboxWorker
+internal static class PluginSandboxWorker
 {
-    public const string HostArgument = "--plugin-worker";
+    internal const string HostArgument = "--plugin-worker";
 
-    public static async Task<int> RunAsync(string[] args)
+    internal static ValueTask<int>? TryRunAsync(string[] args)
     {
-        if (args.Length != 1 || args[0] != HostArgument)
-            return 2;
+        if (Array.IndexOf(args, HostArgument) < 0)
+            return null;
+        return args.Length == 1 ? new ValueTask<int>(RunAsync()) : new ValueTask<int>(2);
+    }
+
+    private static async Task<int> RunAsync()
+    {
         // Keep the binary pipe independently of Console.Out. Ordinary managed writes are
         // discarded, never inserted into framing; raw native stdout remains a visible fault.
         var input = Console.OpenStandardInput();

@@ -33,7 +33,7 @@ public static class SafetyFileAccess
         CancellationToken signal, bool settingsReview = false)
     {
         signal.ThrowIfCancellationRequested();
-        var safety = (run.Agent?.Ctx ?? run.HostContext)?.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false);
+        var safety = SafetyBoundary.Resolve(run.Agent?.Ctx ?? run.HostContext);
         return safety?.AuthorizeFileAsync(run, path, intent, signal, settingsReview: settingsReview) ?? Task.CompletedTask;
     }
 

@@ -4,6 +4,8 @@ using System.Threading.Channels;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Runtime;
+using Dsh.Runtime.Events;
 using Dsh.Sdk;
 
 namespace Dsh.Tests;
@@ -183,6 +185,7 @@ public sealed class SdkTests
             var session = sessions.Get(SessionId.Create("session-1"));
             Assert.NotNull(session);
 
+            await client.RequestAsync(SdkMethods.Shutdown);
             await clientTransport.StopAsync();
             await serverTransport.StopAsync();
         }
@@ -239,6 +242,90 @@ public sealed class SdkTests
             Assert.True(parameters.GetProperty("event").ValueKind == JsonValueKind.Object);
 
             subscription.Dispose();
+            await client.RequestAsync(SdkMethods.Shutdown);
+            await clientTransport.StopAsync();
+            await serverTransport.StopAsync();
+        }
+        Directory.Delete(home, true);
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task SdkServer_ShutdownWaitsForCancelledPromptBeforeReleasingSession()
+    {
+        var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
+        WriteProviderSettings(home);
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        {
+            var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var detach = app.Ctx.OnWaterfall<AgentRequestNotification>(async (notification, next) =>
+            {
+                requestStarted.TrySetResult();
+                try
+                {
+                    await release.Task.WaitAsync(notification.Payload.Signal);
+                }
+                finally
+                {
+                    cancellationObserved.TrySetResult();
+                    await release.Task;
+                }
+                return await next();
+            }, new EventOptions { Global = true });
+            var pair = new DuplexTransportPair();
+            await using var serverTransport = pair.Server;
+            await using var clientTransport = pair.Client;
+            var server = new HarnessSdkServer(app.Ctx, serverTransport);
+            serverTransport.RequestHandler = server.HandleRequestAsync;
+            serverTransport.Start();
+            clientTransport.Start();
+            await using var client = new HarnessClient(clientTransport);
+            await client.InitializeAsync(new InitializeParams(
+                Directory.GetCurrentDirectory(),
+                "deepseek-official",
+                "deepseek-v4-flash"));
+            var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
+            var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
+            var id = SessionId.Create("session-shutdown-test");
+            IAgent? agent = null;
+            Task<Dictionary<string, object?>>? shutdown = null;
+            Task<Dictionary<string, object?>>? concurrentShutdown = null;
+            try
+            {
+                await client.PromptAsync(id.Value, [new TextBlock("hello")]);
+                await requestStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+                agent = Assert.IsType<AgentLoopAgent>(agents.Get(id));
+                shutdown = server.ShutdownAsync();
+                await cancellationObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+                concurrentShutdown = server.ShutdownAsync();
+
+                Assert.False(shutdown.IsCompleted);
+                Assert.False(concurrentShutdown.IsCompleted);
+                Assert.Same(agent, agents.Get(id));
+                Assert.Same(agent.Session, sessions.Get(id));
+            }
+            finally
+            {
+                release.TrySetResult();
+                if (shutdown is not null)
+                    await shutdown.WaitAsync(TestContext.Current.CancellationToken);
+                if (concurrentShutdown is not null)
+                    await concurrentShutdown.WaitAsync(TestContext.Current.CancellationToken);
+                if (agent is not null)
+                    await agent.WhenIdle().WaitAsync(TestContext.Current.CancellationToken);
+                detach();
+            }
+
+            Assert.Null(agents.Get(id));
+            Assert.Null(sessions.Get(id));
+            var persistence = app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)!;
+            using (var persisted = persistence.Open(id, SessionAccess.Read))
+            {
+                var turnEnd = Assert.Single(persisted.Read().Select(entry => entry.Data).OfType<TurnEndPayload>());
+                var aborted = Assert.IsType<TurnEndReason.Aborted>(turnEnd.Reason);
+                Assert.IsType<AgentCancelCause.Disposed>(aborted.Reason);
+            }
             await clientTransport.StopAsync();
             await serverTransport.StopAsync();
         }

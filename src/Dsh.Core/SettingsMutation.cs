@@ -11,7 +11,6 @@ public readonly record struct SettingsMutationRequest(string Path, string Before
 public interface ISettingsMutationGate
 {
     const string ServiceName = "settingsMutations";
-    const string SettingsPathProperty = "activeSettingsPath";
     string SettingsPath { get; }
     bool Owns(string path);
     Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default);
@@ -40,9 +39,9 @@ public static class SettingsMutation
         var token = fused.Token;
         var context = run.Agent?.Ctx ?? run.HostContext;
         var gate = context?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
-        var active = gate?.SettingsPath ?? context?.GetProp(ISettingsMutationGate.SettingsPathProperty) as string;
+        var active = gate?.SettingsPath ?? context?.GetProp(ISettingsMutationContext.SettingsPathProperty) as string;
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var isSettings = active is not null && comparer.Equals(global::Dsh.Transport.FilePathAccess.Canonicalize(path), global::Dsh.Transport.FilePathAccess.Canonicalize(active));
+        var isSettings = active is not null && comparer.Equals(CanonicalFilePath.Canonicalize(path), CanonicalFilePath.Canonicalize(active));
         if (isSettings)
             await RequireGate(run).CommitAsync(new(path, before, after, run),
                 (temporary, cancellation) => WriteFileAsync(temporary, after, FileMode.Create, cancellation), token).ConfigureAwait(false);

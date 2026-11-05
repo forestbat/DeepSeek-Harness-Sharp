@@ -1,38 +1,47 @@
 using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
-using Dsh.Core;
+using System.Runtime.CompilerServices;
 using Dsh.Runtime;
 using Dsh.Plugins;
-using Dsh.Transport;
 using Dsh.Llm;
 using Dsh.Runtime.Events;
 
-namespace Dsh.Boot;
+namespace Dsh.Core;
 
 /** The host owns operation identity; workers cannot select tool, session or call IDs. */
 public sealed class SafetyBoundary : Service, ISafetyBoundary
 {
-    private readonly Func<HarnessSettings> _read;
-    public SafetyBoundary(Context context, Func<HarnessSettings> read) : base(context, ISafetyBoundary.ServiceName)
+    private static readonly ConditionalWeakTable<SafetyPolicySource, Lazy<ISafetyBoundary>> Boundaries = new();
+    private readonly Func<ISafetyPolicySettings> _read;
+    public SafetyBoundary(Context context, Func<ISafetyPolicySettings> read) : base(context, ISafetyBoundary.ServiceName)
         => _read = read;
+
+    public static ISafetyBoundary? Resolve(Context? context, bool required = false)
+    {
+        if (context is null) return null;
+        var source = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName, false);
+        if (source is null) return context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, required);
+        // Each policy source owns one lazily initialized Core boundary for its context lifetime.
+        return Boundaries.GetValue(source, static policy => new Lazy<ISafetyBoundary>(() =>
+            policy.Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+            ?? new SafetyBoundary(policy.Ctx, policy.Read))).Value;
+    }
 
     private (PermissionRules Rules, string Namespace) Policy(ToolRunContext? run, bool scriptPermissions = false)
     {
-        var active = _read();
-        return scriptPermissions || run?.UsesScriptPermissions == true
-            ? (active.Scripts?.Permissions ?? new ScriptPermissions(), "scripts.permissions")
-            : (active.Safety ?? new SafetySettings(), "safety");
+        var scripts = scriptPermissions || run?.UsesScriptPermissions == true;
+        return (_read().GetSafetyRules(scripts), scripts ? "scripts.permissions" : "safety");
     }
 
     private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null)
         => new(run?.Name, run?.Arguments ?? default,
             run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory,
-            path is null ? null : Dsh.Transport.FilePathAccess.Canonicalize(path), intent,
+            path is null ? null : Dsh.Runtime.CanonicalFilePath.Canonicalize(path), intent,
             PathIsCanonical: path is not null);
 
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
-        => PermissionEngine.Decide(rules, input, static path => Dsh.Transport.FilePathAccess.Canonicalize(path));
+        => PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
 
     public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
     {
@@ -103,7 +112,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
     public async Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
         CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false)
     {
-        var canonical = Dsh.Transport.FilePathAccess.Canonicalize(path);
+        var canonical = Dsh.Runtime.CanonicalFilePath.Canonicalize(path);
         var (rules, space) = Policy(run);
         var input = Input(run, canonical, intent);
         var decision = Decide(rules, input);

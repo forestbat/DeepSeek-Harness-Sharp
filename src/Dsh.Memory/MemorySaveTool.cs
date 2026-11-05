@@ -90,11 +90,11 @@ public static class MemorySaveTool
         ToolRunContext exec,
         ProjectMemory memory)
     {
-        if (memory.Store is not FileMemoryStore && ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } operationSafety)
+        if (memory.Store is not FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } operationSafety)
             await operationSafety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
         if (!memory.IsEnabled)
         {
-            if (ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+            if (SafetyBoundary.Resolve(ctx) is { } safety)
                 await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
             return new MemorySaveResult("skip", [], [], 0, false, false, "project memory is off; run /memory on");
         }
@@ -121,7 +121,7 @@ public static class MemorySaveTool
                 var forgotten = await memory.ForgetAsync(BuildForgetRequest(key, keys, query, section, dryRun), "tool", exec.Signal, exec);
                 return new MemorySaveResult("forget", forgotten.Keys, forgotten.Sections, forgotten.Count, false, forgotten.DryRun);
             case "skip":
-                if (ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false) is { } safety)
+                if (SafetyBoundary.Resolve(ctx) is { } safety)
                     await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
                 var reason = GetString(args, "reason");
                 return new MemorySaveResult("skip", [], [], 0, false, false, string.IsNullOrWhiteSpace(reason) ? "out_of_scope" : reason);

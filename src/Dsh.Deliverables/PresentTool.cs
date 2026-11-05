@@ -127,7 +127,7 @@ public static class PresentTool
         for (var index = 0; index < delivery.Files.Count; index++)
         {
             var path = delivery.Files[index].Path;
-            delivery.Run.Agent?.Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+            SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx)
                 ?.DemandFileAuthorization(delivery.Run, path, "read");
             Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
         }

@@ -1,12 +1,12 @@
 using Dsh.Boot;
 using Dsh.Host;
-using Dsh.Plugins.Sandbox;
+using Dsh.Plugins;
 using Dsh.WebBridge;
 using Dsh.ScriptHost;
 
 global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
-if (args.Contains(PluginSandboxWorker.HostArgument))
-    return await PluginSandboxWorker.RunAsync(args);
+if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
+    return await worker;
 if (args.Contains(PtcScriptHost.HostArgument))
     return await PtcScriptHost.RunAsync(args);
 
