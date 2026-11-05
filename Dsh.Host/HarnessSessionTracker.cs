@@ -43,7 +43,7 @@ internal sealed class HarnessSessionTracker : IDisposable
             header.Title,
             StatusOf(agent.Status),
             header.CreatedAt,
-            events.Count == 0 ? header.CreatedAt : events[^1].Time,
+            events.LastOrDefault(IsUserActivity)?.Time ?? header.CreatedAt,
             0,
             null));
     }
@@ -63,9 +63,17 @@ internal sealed class HarnessSessionTracker : IDisposable
         var id = notification.Session.Id.Value;
         if (!_tracked.ContainsKey(id))
             return;
-        _registry.Touch(id, notification.Event.Time);
+        // 只有用户自己发起的一轮(提交消息/开始回合)才算"这个会话被用过"。
+        // LLM 的流式输出、工具调用同样会推事件; 若按每个事件刷新活动时间, 两个会话并发输出时,
+        // "最近会话"排序会随消息到达速度来回换序, 消息刷得越快切换越频繁。
+        if (IsUserActivity(notification.Event))
+            _registry.Touch(id, notification.Event.Time);
+        // 标题由首轮结束后的摘要更新产生, 与"谁在用"无关, 任何事件都要同步。
         _registry.SetTitle(id, notification.Session.Header.Title);
     }
+
+    private static bool IsUserActivity(SessionEvent sessionEvent)
+        => sessionEvent.Type is SessionEventTypes.UserMessage or SessionEventTypes.TurnStart;
 
     private void OnDisposed(AgentDisposedNotification notification)
     {
