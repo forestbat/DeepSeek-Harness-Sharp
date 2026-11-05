@@ -86,6 +86,17 @@ public sealed partial class MachineRowViewModel : ObservableObject
         Target = profile.Display;
     }
 
+    /** 手机内嵌 host: 没有地址也没有令牌, 它就跑在本进程里。 */
+    public MachineRowViewModel(string localName, string localTarget)
+    {
+        Name = localName;
+        Profile = new HostProfile(localName, HostTransportKind.Tcp, "local", 0, "", "", "");
+        Target = localTarget;
+        IsLocal = true;
+    }
+
+    public bool IsLocal { get; }
+
     public string Name { get; }
 
     public HostProfile Profile { get; private set; }
@@ -131,11 +142,13 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private readonly MachineStore _store;
     private readonly PhoneToolStore _phoneToolStore;
+    private readonly LocalAgentStore _localStore;
     private readonly MobileFleet _fleet;
     private readonly DispatcherBridge<RemoteSessionEvent> _events;
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _sessionLifetime;
     private PhoneMcpServer? _phoneServer;
+    private LocalHarness? _local;
     private SubagentTranscript _transcript = new();
     private string _openSessionId = "";
     private string _openMachine = "";
@@ -145,10 +158,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private string _editingName = "";
     private string _questionMachine = "";
 
-    public MobileShellViewModel(MachineStore store, PhoneToolStore phoneToolStore)
+    public MobileShellViewModel(MachineStore store, PhoneToolStore phoneToolStore, LocalAgentStore localStore)
     {
         _store = store;
         _phoneToolStore = phoneToolStore;
+        _localStore = localStore;
         _fleet = new MobileFleet(store);
         _fleet.Changed += OnFleetChanged;
         _events = new DispatcherBridge<RemoteSessionEvent>(ApplyEvents);
@@ -166,6 +180,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _phoneToolsUrl = string.Empty;
         if (settings.Enabled)
             _ = ApplyPhoneToolsAsync(true);
+        Machines.Add(new MachineRowViewModel(LocalHarness.MachineName, LocalHarness.MachineName));
+        var localSettings = localStore.Load();
+        _localProvider = localSettings.Provider;
+        _localModel = localSettings.Model;
+        _localBaseUrl = localSettings.BaseUrl;
+        _localApiKey = localSettings.ApiKey;
         foreach (var machine in store.Load())
             Machines.Add(new MachineRowViewModel(machine));
         // 保存过完整地址就自动连: 手机端没有稳定的桌面入口, 每次启动都要手点一次连接只会拖慢回到会话的速度。
@@ -314,6 +334,21 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private string _phoneToolsError = "";
 
     [ObservableProperty]
+    private string _localProvider = "";
+
+    [ObservableProperty]
+    private string _localModel = "";
+
+    [ObservableProperty]
+    private string _localBaseUrl = "";
+
+    [ObservableProperty]
+    private string _localApiKey = "";
+
+    [ObservableProperty]
+    private bool _localRunning;
+
+    [ObservableProperty]
     private bool _hasNoMachines = true;
 
     public string PhoneToolsToggleLabel => PhoneToolsEnabled ? "停用" : "启用";
@@ -393,6 +428,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         _fleet.Changed -= OnFleetChanged;
         await _lifetime.CancelAsync();
+        if (_local is not null)
+        {
+            _local.Changed -= OnLocalChanged;
+            await _local.DisposeAsync();
+            _local = null;
+        }
         await _fleet.DisposeAsync();
         _lifetime.Dispose();
     }
@@ -428,7 +469,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand]
     private void EditMachine(MachineRowViewModel? row)
     {
-        if (row is null)
+        if (row is null || row.IsLocal)
             return;
         _editingName = row.Name;
         MachineName = row.Name;
@@ -492,6 +533,13 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (row is null)
             return;
+        if (row.IsLocal)
+        {
+            await StartLocalAsync();
+            SelectedMachine = row;
+            Page = MobilePage.Sessions;
+            return;
+        }
         await _fleet.AttachAsync(row.Profile);
         SelectedMachine = row;
         Page = MobilePage.Sessions;
@@ -503,6 +551,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (row is null)
             return;
+        if (row.IsLocal)
+        {
+            await StopLocalAsync();
+            return;
+        }
         await _fleet.DetachAsync(row.Name);
         row.IsConnected = false;
         row.IsBusy = false;
@@ -517,6 +570,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (row is null)
             return;
+        if (row.IsLocal)
+        {
+            await StopLocalAsync();
+            return;
+        }
         await _fleet.DetachAsync(row.Name);
         _store.Save(_store.Load().Where(machine => machine.Name != row.Name).ToList());
         Machines.Remove(row);
@@ -524,6 +582,51 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             SelectedMachine = null;
         RefreshFromFleet();
     }
+
+    // ---- 手机本机 agent ----
+
+    /** 本机 host 与远端链路在 UI 上等价: 会话列表、审批、新建会话都走同一套逻辑。 */
+    private IReadOnlyList<IMachineLink> Links
+    {
+        get
+        {
+            List<IMachineLink> links = [.. _fleet.Links];
+            if (_local is not null)
+                links.Add(_local);
+            return links;
+        }
+    }
+
+    private IMachineLink? Find(string name) => Links.FirstOrDefault(link => link.Name == name);
+
+    [RelayCommand]
+    private async Task StartLocalAsync()
+    {
+        _localStore.Save(new LocalAgentSettings(
+            LocalProvider.Trim(), LocalModel.Trim(), LocalBaseUrl.Trim(), LocalApiKey.Trim()));
+        await StopLocalAsync();
+        var link = new LocalHarness(_localStore);
+        link.Changed += OnLocalChanged;
+        _local = link;
+        link.Start();
+        RefreshFromFleet();
+    }
+
+    [RelayCommand]
+    private async Task StopLocalAsync()
+    {
+        var link = _local;
+        _local = null;
+        if (link is not null)
+        {
+            link.Changed -= OnLocalChanged;
+            await link.DisposeAsync();
+        }
+        LocalRunning = false;
+        RefreshFromFleet();
+    }
+
+    private void OnLocalChanged() => Dispatcher.UIThread.Post(RefreshFromFleet);
 
     // ---- 会话 ----
 
@@ -543,7 +646,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         OnPropertyChanged(nameof(SessionScope));
         if (value is not null)
         {
-            var link = _fleet.Find(value.Name);
+            var link = Find(value.Name);
             if (link?.Info is { } info && NewSessionCwd.Trim().Length == 0)
                 NewSessionCwd = info.HomeRoot;
         }
@@ -565,7 +668,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             Error = "请填写工作目录";
             return;
         }
-        var link = _fleet.Find(row.Name);
+        var link = Find(row.Name);
         if (link is null)
         {
             Error = "这台机器还没连接";
@@ -642,7 +745,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         var text = Input.Trim();
         if ((text.Length == 0 && !HasAttachment) || _openSessionId.Length == 0)
             return;
-        var link = _fleet.Find(_openMachine);
+        var link = Find(_openMachine);
         if (link is null)
             return;
         IReadOnlyList<RemoteImageBlock> images = HasAttachment && AttachmentMediaType is { Length: > 0 } mediaType
@@ -703,7 +806,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private async Task RespondApprovalAsync(bool allow)
     {
-        if (_approvalRequestId.Length == 0 || _fleet.Find(_approvalMachine) is not { } link)
+        if (_approvalRequestId.Length == 0 || Find(_approvalMachine) is not { } link)
             return;
         try
         {
@@ -723,8 +826,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         foreach (var row in Machines)
         {
-            var link = _fleet.Find(row.Name);
-            row.Target = row.Profile.Display;
+            var link = Find(row.Name);
+            if (!row.IsLocal)
+                row.Target = row.Profile.Display;
             row.Status = link?.State switch
             {
                 MobileConnectionState.Connected => "已连接",
@@ -740,11 +844,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         RebuildSessions();
         RefreshPending();
         RefreshStatus();
+        LocalRunning = _local?.State == MobileConnectionState.Connected;
         HasNoMachines = Machines.Count == 0;
         OnPropertyChanged(nameof(IsConnected));
         if (SelectedMachine is { } selected
             && NewSessionCwd.Trim().Length == 0
-            && _fleet.Find(selected.Name)?.Info is { } info)
+            && Find(selected.Name)?.Info is { } info)
             NewSessionCwd = info.HomeRoot;
         if (Page == MobilePage.Machines && PhoneToolsEnabled)
             PhoneToolsError = _phoneServer?.Error ?? "";
@@ -754,9 +859,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private void RebuildSessions()
     {
         var scope = SelectedMachine?.Name;
-        var rows = _fleet.Links
-            .Where(link => scope is null || link.Profile.Name == scope)
-            .SelectMany(link => link.Sessions.Select(session => (link.Profile.Name, Session: session)))
+        var rows = Links
+            .Where(link => scope is null || link.Name == scope)
+            .SelectMany(link => link.Sessions.Select(session => (link.Name, Session: session)))
             .OrderByDescending(entry => entry.Session.LastActivityAt)
             .ToList();
         var present = new HashSet<string>(StringComparer.Ordinal);
@@ -790,8 +895,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private void RefreshPending()
     {
-        var approval = _fleet.Links
-            .Select(link => (link.Profile.Name, Approval: link.Pending.Approvals.FirstOrDefault()))
+        var approval = Links
+            .Select(link => (link.Name, Approval: link.Pending.Approvals.FirstOrDefault()))
             .FirstOrDefault(entry => entry.Approval is not null);
         _approvalRequestId = approval.Approval?.RequestId ?? "";
         _approvalMachine = _approvalRequestId.Length == 0 ? "" : approval.Name;
@@ -803,8 +908,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         ApprovalDetail = approval.Approval is not { } detail
             ? ""
             : (detail.Reason is { Length: > 0 } reason ? reason : detail.Arguments ?? "");
-        var question = _fleet.Links
-            .Select(link => (link.Profile.Name, Question: link.Pending.Questions.FirstOrDefault()))
+        var question = Links
+            .Select(link => (link.Name, Question: link.Pending.Questions.FirstOrDefault()))
             .FirstOrDefault(entry => entry.Question is not null);
         ApplyQuestions(question.Name, question.Question);
     }
@@ -850,7 +955,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand(CanExecute = nameof(CanSubmitAnswers))]
     private async Task SubmitAnswersAsync()
     {
-        if (QuestionRequestId.Length == 0 || _fleet.Find(_questionMachine) is not { } link)
+        if (QuestionRequestId.Length == 0 || Find(_questionMachine) is not { } link)
             return;
         IsSendingAnswers = true;
         try
@@ -898,7 +1003,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             Error = "终端会话请在桌面端操作";
             return;
         }
-        if (_fleet.Find(row.Machine) is not { } link)
+        if (Find(row.Machine) is not { } link)
             return;
 
         var lifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -924,7 +1029,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private async Task ReloadSnapshotAsync(MobileHostConnection link, string sessionId, CancellationToken cancellationToken)
+    private async Task ReloadSnapshotAsync(IMachineLink link, string sessionId, CancellationToken cancellationToken)
     {
         RemoteSessionSnapshot snapshot;
         try
@@ -977,7 +1082,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     /** 状态栏与常驻通知只显示一句汇总, 细节留给机器行。 */
     private void RefreshStatus()
     {
-        var links = _fleet.Links;
+        var links = Links;
         var connected = links.Count(link => link.State == MobileConnectionState.Connected);
         var busy = links.Count(link => link.State is MobileConnectionState.Connecting or MobileConnectionState.Reconnecting);
         var phone = PhoneToolsEnabled ? 1 : 0;
@@ -995,7 +1100,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     /** 连接或手机工具任一需要常驻时, 才让前台服务活着。 */
     private void RefreshServiceState()
     {
-        var active = _fleet.Links.Count > 0 || PhoneToolsEnabled;
+        var active = Links.Count > 0 || PhoneToolsEnabled;
         ConnectionStatusHub.Publish(Status, active);
         if (active)
         {

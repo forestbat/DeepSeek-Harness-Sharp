@@ -159,6 +159,22 @@
 
         <Border Classes="card" Background="#141A22" Margin="12,18,12,5">
           <StackPanel Spacing="8">
+            <TextBlock Text="本机 agent" FontSize="15" FontWeight="SemiBold" />
+            <TextBlock Classes="hint"
+                       Text="在手机上直接跑一个宿主：会话与工具都在本机执行，不需要连电脑。" />
+            <TextBox PlaceholderText="供应商，例如 deepseek" Text="{Binding LocalProvider}" />
+            <TextBox PlaceholderText="模型，例如 deepseek-chat" Text="{Binding LocalModel}" />
+            <TextBox PlaceholderText="接口地址，留空则用供应商默认地址" Text="{Binding LocalBaseUrl}" />
+            <TextBox PlaceholderText="API 密钥" Text="{Binding LocalApiKey}" PasswordChar="●" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="启动" Command="{Binding StartLocalCommand}" />
+              <Button Content="停止" Command="{Binding StopLocalCommand}" IsVisible="{Binding LocalRunning}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Background="#141A22" Margin="12,18,12,5">
+          <StackPanel Spacing="8">
             <Grid ColumnDefinitions="*,Auto">
               <StackPanel Grid.Column="0" Spacing="2">
                 <TextBlock Text="手机工具（MCP）" FontSize="15" FontWeight="SemiBold" />

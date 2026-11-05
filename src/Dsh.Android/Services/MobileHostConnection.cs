@@ -21,7 +21,7 @@ public enum MobileConnectionState
  * 传输可走局域网 TCP + 握手令牌, 或 SSH exec 通道里跑 `dsharp host serve --stdio`;
  * 订阅复用 RemoteHostSubscriptions, 因此断线后的续订从最后一条事件之后继续。
  */
-public sealed class MobileHostConnection : IAsyncDisposable
+public sealed class MobileHostConnection : IMachineLink
 {
     private const int TcpConnectTimeoutSeconds = 8;
     private const int SshConnectTimeoutSeconds = 20;
@@ -52,6 +52,8 @@ public sealed class MobileHostConnection : IAsyncDisposable
 
     public MobileConnectionState State { get; private set; } = MobileConnectionState.Offline;
 
+    public string Name => _profile.Name;
+    public string Target => _profile.Display;
     public HostProfile Profile => _profile;
 
     public string? Detail { get; private set; }

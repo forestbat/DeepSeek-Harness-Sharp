@@ -44,7 +44,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />
+    <ProjectReference Include="..\..\Dsh.Host\Dsh.Host.csproj" />
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Server\Dsh.RemoteHost.Server.csproj" />
     <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
   </ItemGroup>
 
