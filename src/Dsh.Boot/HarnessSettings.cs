@@ -1,4 +1,3 @@
-using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using System.Text.Encodings.Web;
@@ -89,7 +88,7 @@ public sealed class HarnessSettings
 
     public static HarnessSettings LoadForReview(HarnessHome home)
     {
-        var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
+        var canonical = CanonicalFilePath.Canonicalize(home.SettingsFile);
         if (PublicationPath.Value == canonical)
             return LoadSnapshot(home.SettingsFile, canonical);
         using var transaction = new SettingsWriteLock(home.SettingsFile);
@@ -143,7 +142,7 @@ public sealed class HarnessSettings
         if (saved is not null)
         {
             _savedDocument = saved;
-            _savedPath = global::Dsh.Transport.FilePathAccess.Canonicalize(home.SettingsFile);
+            _savedPath = CanonicalFilePath.Canonicalize(home.SettingsFile);
         }
     }
 
@@ -171,10 +170,10 @@ public sealed class HarnessSettings
     public static void UpdatePlugins(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
         => MutateDocument(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), backup: true);
 
-    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run = null)
+    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
         => UpdatePluginsAsync(home, [package], update, run);
 
-    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ToolRunContext? run = null)
+    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
     {
         if (run is not null)
             return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), run, backup: true);
@@ -215,7 +214,7 @@ public sealed class HarnessSettings
     /** Applies a raw document transform while owning the settings writer transaction. */
     internal static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
     {
-        var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(path);
+        var canonical = CanonicalFilePath.Canonicalize(path);
         using var transaction = new SettingsWriteLock(canonical);
         var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
         if (PrepareMutation(before, canonical, prepare) is not { } after)
@@ -224,29 +223,20 @@ public sealed class HarnessSettings
         return true;
     }
 
-    private static async Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare, ToolRunContext run, bool backup)
-    {
-        var gate = SettingsMutation.RequireGate(run);
-        if (!gate.Owns(path))
-            throw new InvalidOperationException("The mutation does not target the active settings document.");
-        var canonical = gate.SettingsPath;
-        string before;
-        string after;
-        using (var transaction = new SettingsWriteLock(canonical))
+    private static Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare, ISettingsMutationContext run, bool backup)
+        => run.CommitAsync(path, canonical =>
         {
-            before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
-            if (PrepareMutation(before, canonical, prepare) is not { } proposed)
-                return false;
-            after = proposed;
-        }
-        await gate.CommitAsync(new(canonical, before, after, run), (temporary, signal) =>
+            using var transaction = new SettingsWriteLock(canonical);
+            var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+            return PrepareMutation(before, canonical, prepare) is { } after
+                ? new SettingsMutationProposal(before, after)
+                : null;
+        }, (canonical, proposal, temporary, signal) =>
         {
-            if (backup && before != after && before.Length > 0)
-                WriteAtomic($"{canonical}.bak", before);
-            return File.WriteAllTextAsync(temporary, after, signal);
-        }, run.Signal).ConfigureAwait(false);
-        return true;
-    }
+            if (backup && proposal.Before != proposal.After && proposal.Before.Length > 0)
+                WriteAtomic($"{canonical}.bak", proposal.Before);
+            return File.WriteAllTextAsync(temporary, proposal.After, signal);
+        });
 
     private static string? PrepareMutation(string before, string canonical, Func<string, string, string?> prepare)
     {
@@ -341,7 +331,7 @@ public sealed class HarnessSettings
 
         public SettingsWriteLock(string path)
         {
-            var canonical = global::Dsh.Transport.FilePathAccess.Canonicalize(path);
+            var canonical = CanonicalFilePath.Canonicalize(path);
             CanonicalPath = canonical;
             if (PublicationPath.Value == canonical)
                 throw new InvalidOperationException("A settings commit callback cannot reenter settings persistence.");

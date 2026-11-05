@@ -5,7 +5,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Dsh.Tests" />
-    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
   </ItemGroup>

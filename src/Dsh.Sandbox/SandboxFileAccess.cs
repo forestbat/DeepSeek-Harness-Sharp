@@ -7,7 +7,7 @@ public static class SandboxFileAccess
 {
     public static void DemandOrdinaryFile(string path, bool allowMissing)
     {
-        FilePathAccess.DemandFilePath(path);
+        global::Dsh.Runtime.CanonicalFilePath.DemandFilePath(path);
         var exists = File.Exists(path);
         if (exists && !FilePathAccess.IsOrdinaryFile(path) || Directory.Exists(path))
             throw new NotSupportedException("Plugin file capabilities require an ordinary file.");

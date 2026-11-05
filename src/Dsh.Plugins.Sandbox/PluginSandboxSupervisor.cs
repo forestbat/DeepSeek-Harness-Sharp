@@ -18,7 +18,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
     private readonly Dictionary<string, PluginSandboxSource> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly string _pluginsDirectory = Path.TrimEndingDirectorySeparator(global::Dsh.Transport.FilePathAccess.Canonicalize(pluginsDirectory));
+    private readonly string _pluginsDirectory = Path.TrimEndingDirectorySeparator(CanonicalFilePath.Canonicalize(pluginsDirectory));
     private Domain? _domain;
     private bool _disposed;
 
@@ -175,7 +175,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         stagingDirectory = null;
         if (source.ArtifactPath is not { } artifact)
             return null;
-        var original = global::Dsh.Transport.FilePathAccess.Canonicalize(artifact);
+        var original = CanonicalFilePath.Canonicalize(artifact);
         SandboxFileAccess.DemandOrdinaryFile(original, allowMissing: false);
         stagingDirectory = Path.Combine(domain.Directory, Guid.NewGuid().ToString("N"));
         try

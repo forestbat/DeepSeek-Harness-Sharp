@@ -61,6 +61,8 @@ Approved content is published atomically through a private temporary file; exist
 Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
 Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
 Missing settings gate, session, or approval service fails closed for these model-originated updates.
+The startup layer consumes the runtime's `ISettingsMutationContext` capability without referencing agent, transport, or sandbox assemblies; the original tool call still submits every model-originated settings proposal to the existing approval and audit service.
+Canonical settings identity uses the shared symbolic-link-aware path resolver, while ordinary-file checks and platform access enforcement stay outside the startup and runtime layers.
 
 ```yaml
 safety:

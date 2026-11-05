@@ -16,7 +16,7 @@ internal static class PluginSandboxLaunch
     {
         if (artifactPath is null)
             return Dsh.Plugins.PluginForm.CompiledIn;
-        artifactPath = global::Dsh.Transport.FilePathAccess.Canonicalize(artifactPath);
+        artifactPath = global::Dsh.Runtime.CanonicalFilePath.Canonicalize(artifactPath);
         Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
         if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
             return Dsh.Plugins.PluginForm.NativeLibrary;
