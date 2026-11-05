@@ -45,6 +45,7 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
    ```
 
    TUI 终端窗格会将光标位置、终端状态和设备属性查询的应答写回所属 PTY，供交互式 shell 完成终端初始化。
+   后台 PTY 输出泵不继承调用方的任务调度器，嵌入单线程调度环境时仍可独立读取子进程输出。
 
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
