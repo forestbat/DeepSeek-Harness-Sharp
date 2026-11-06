@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
-/// <summary>Grants a unique AppContainer SID access to declared roots and removes those grants on disposal.</summary>
+/// <summary>Leases declared root access for an AppContainer SID and restores changes on disposal.</summary>
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsAclLease : IDisposable
 {
@@ -18,6 +18,7 @@ internal sealed class WindowsAclLease : IDisposable
     private const int WriteAccess = (Modify & ~ReadExecute) | DeleteChild;
     private static readonly Lock AclGate = new();
     private static readonly Dictionary<string, WritableLabel> WritableLabels = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly SecurityIdentifier RestrictedPackages = new("S-1-15-2-2");
     private readonly List<Entry> _entries = [];
     private readonly SecurityIdentifier _sid;
     private bool _disposed;
@@ -139,7 +140,11 @@ internal sealed class WindowsAclLease : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 using var handle = WindowsNative.OpenSecurityHandle(path, writable);
-                var acl = SetSidAccess(ReadAcl(handle), sid, access, deniedAccess, directory);
+                var acl = ReadAcl(handle);
+                // LPAC excludes ALL APPLICATION PACKAGES; reuse only existing restricted-package read inheritance.
+                if (!writable && directory && access == ReadExecute && HasRestrictedPackageReadAccess(acl, sid))
+                    return;
+                acl = SetSidAccess(acl, sid, access, deniedAccess, directory);
                 _sidGranted = true;
                 // Windows propagates inheritable ACEs; protected descendants can still reject actual process access.
                 WriteAcl(handle, acl, _unprotectedAcl is not null ? ProtectDacl : 0);
@@ -169,6 +174,38 @@ internal sealed class WindowsAclLease : IDisposable
                         WindowsNative.LocalFree(descriptor);
                 }
             }
+        }
+
+        private static bool HasRestrictedPackageReadAccess(RawAcl acl, SecurityIdentifier sid)
+        {
+            const uint genericRead = 0x80000000, genericExecute = 0x20000000;
+            const uint allowedReadMask = ReadExecute | genericRead | genericExecute;
+            const uint fileGenericRead = 0x120089, fileGenericExecute = 0x1200a0;
+            uint self = 0, files = 0, directories = 0;
+            for (var index = 0; index < acl.Count; index++)
+            {
+                if (acl[index] is not CommonAce ace || ace.IsCallback || ace.AceQualifier != AceQualifier.AccessAllowed
+                    || ace.SecurityIdentifier == sid)
+                    return false;
+                if (ace.SecurityIdentifier != RestrictedPackages)
+                    continue;
+                var mask = unchecked((uint)ace.AccessMask);
+                if ((mask & ~allowedReadMask) != 0)
+                    return false;
+                if ((mask & genericRead) != 0)
+                    mask |= fileGenericRead;
+                if ((mask & genericExecute) != 0)
+                    mask |= fileGenericExecute;
+                if ((ace.AceFlags & AceFlags.InheritOnly) == 0)
+                    self |= mask;
+                if ((ace.AceFlags & AceFlags.NoPropagateInherit) != 0)
+                    continue;
+                if ((ace.AceFlags & AceFlags.ObjectInherit) != 0)
+                    files |= mask;
+                if ((ace.AceFlags & AceFlags.ContainerInherit) != 0)
+                    directories |= mask;
+            }
+            return (self & files & directories & ReadExecute) == ReadExecute;
         }
 
         private RawAcl SetSidAccess(RawAcl acl, SecurityIdentifier sid, int access, int deniedAccess, bool directory)

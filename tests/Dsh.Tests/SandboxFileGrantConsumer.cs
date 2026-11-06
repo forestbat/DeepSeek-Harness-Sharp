@@ -6,18 +6,24 @@ internal static class SandboxFileGrantConsumer
     internal const string Argument = "--sandbox-file-grant-consumer";
     internal const string Input = "native-pipe";
     internal const string Readable = "readable\r\nsecond-readable-line\r\nlast-readable-line\r\n";
+    internal const string PackageReadable = "package-readable";
     private const int AccessDenied = unchecked((int)0x80070005);
 
     internal static async Task<int> RunAsync(string[] arguments)
     {
         try
         {
-            Assert.Equal(5, arguments.Length);
             Assert.Equal(Input, await Console.In.ReadLineAsync());
             await Console.Error.WriteLineAsync("stage=read");
             Assert.Equal(Readable, await File.ReadAllTextAsync(arguments[1]));
             await Console.Out.WriteLineAsync("read-complete:readable/second-readable-line/last-readable-line");
             await VerifyDeniedPathsAsync(arguments[1], arguments[2], arguments[3], bool.Parse(arguments[4]));
+            foreach (var path in arguments[5..^1])
+            {
+                Assert.Equal(PackageReadable, await File.ReadAllTextAsync(path));
+                await RequireDeniedAsync("package-write", () => File.AppendAllTextAsync(path, "forbidden"));
+            }
+            await RequireDeniedAsync("protected-package-read", async () => { _ = await File.ReadAllTextAsync(arguments[^1]); });
             await VerifyWritableDirectoryAsync();
             await Console.Out.WriteLineAsync(Input);
             await Console.Error.WriteLineAsync("diagnostic");
