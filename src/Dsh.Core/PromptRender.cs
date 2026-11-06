@@ -14,9 +14,13 @@ public static partial class PromptRender
     private static partial Regex GroupAt();
 
     public static string RenderPrompt(PromptAssembly assembly)
-        => string.Join("\n\n", assembly.Sections
-            .Select(section => Interpolate(section.Name, section.Text, assembly.Variables, "section"))
-            .Where(text => text.Length > 0));
+        => string.Join("\n\n", RenderSectionTexts(assembly).Select(section => section.Text));
+
+    /** 逐段渲染结果: in-history 判定靠它按段比对, 只把变化的段追加进历史。 */
+    public static IReadOnlyList<AssembledSection> RenderSectionTexts(PromptAssembly assembly)
+        => [.. assembly.Sections
+            .Select(section => section with { Text = Interpolate(section.Name, section.Text, assembly.Variables, "section") })
+            .Where(section => section.Text.Length > 0)];
 
     public static string RenderContextSnapshot(PromptAssembly assembly)
         => JoinContextSections(RenderContextSections(assembly));

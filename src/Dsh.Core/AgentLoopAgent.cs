@@ -55,6 +55,10 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     private PromptAssembly? _pendingAssembly;
     private string? _pendingReminder;
     private string? _lastDynamicText;
+    private IReadOnlyList<AssembledSection>? _lastSections;
+
+    /** in-history 路由下单次追加进历史的段文本上限; 超过就重发整份 prompt 重建基线。 */
+    private const int MaxInlinePromptUpdateChars = 16000;
 
     public AgentLoopAgent(Context loopCtx, SessionId id, AgentOptions options, Session session, Func<Session, int> lastTurnOf)
     {
@@ -546,7 +550,12 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         if (ResolveInHistory())
         {
             var startsSeries = startsRequestSeries || _requestSurfaceGeneration != Session.SurfaceManager.ReplaceGeneration;
-            CommitProjected(turn, step, PromptRender.RenderPrompt(assembly), inHistory: true, startsSeries);
+            var sections = PromptRender.RenderSectionTexts(assembly);
+            var delta = startsSeries ? null : SectionDelta(sections);
+            _lastSections = sections;
+            if (delta is { Length: 0 })
+                return;
+            CommitProjected(turn, step, delta ?? PromptRender.RenderPrompt(assembly), inHistory: true, startsSeries);
             return;
         }
         CommitProjected(turn, step, RenderSections(assembly, false));
@@ -556,6 +565,26 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             _lastDynamicText = dynamicText;
             _pendingReminder = dynamicText.Length == 0 ? null : $"<system-reminder>\n{dynamicText}\n</system-reminder>";
         }
+    }
+
+    /**
+     * 与上一次渲染逐段比对: 返回 null 表示必须重发整份 prompt(首次/有段消失/变化过大),
+     * 返回空串表示没有变化, 否则返回变化段的拼接文本。
+     */
+    private string? SectionDelta(IReadOnlyList<AssembledSection> sections)
+    {
+        if (_lastSections is null)
+            return null;
+        if (_lastSections.Any(previous => sections.All(current => current.Name != previous.Name)))
+            return null;
+        var changed = sections
+            .Where(current => _lastSections.All(previous => previous.Name != current.Name || previous.Text != current.Text))
+            .Select(section => section.Text)
+            .ToList();
+        if (changed.Count == 0)
+            return "";
+        var text = string.Join("\n\n", changed);
+        return text.Length > MaxInlinePromptUpdateChars ? null : text;
     }
 
     private void CommitProjected(int turn, int step, string rendered, bool inHistory = false, bool startsSeries = false)
