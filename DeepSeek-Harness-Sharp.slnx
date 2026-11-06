@@ -78,7 +78,7 @@
     <Project Path="tests/Dsh.GuiViewsHarness/Dsh.GuiViewsHarness.csproj" />
     <Project Path="tests/Dsh.IocAotSmoke/Dsh.IocAotSmoke.csproj" />
     <Project Path="tests/Dsh.ManagedPluginSample/Dsh.ManagedPluginSample.csproj" />
-    <Project Path="tests/Dsh.IsolatedPluginSample/Dsh.IsolatedPluginSample.csproj" />
+    <Project Path="tests/Dsh.SandboxPluginSample/Dsh.SandboxPluginSample.csproj" />
     <Project Path="tests/Dsh.McpResourceServerSample/Dsh.McpResourceServerSample.csproj" />
     <Project Path="tests/Dsh.Tests/Dsh.Tests.csproj" />
   </Folder>
