@@ -138,8 +138,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openssh-server openssh-sftp-server
+          if [[ "$(dpkg-query -W -f='${db:Status-Status}\n' openssh-server openssh-sftp-server 2>/dev/null)" != $'installed\ninstalled' ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends openssh-server openssh-sftp-server
+          else
+            echo "Real SSH server packages are already installed."
+          fi
           sudo mkdir -p /run/sshd
 
       - name: Build tests (Debug, plugin fixtures and fault probe)
@@ -303,6 +307,7 @@ jobs:
             -class Dsh.Tests.AcpClientTests
             -class Dsh.Tests.LspTests
             -class Dsh.Tests.SdkTests
+            -class Dsh.Tests.TempTreeTests
             -class Dsh.Tests.Mcp.McpResourceToolsTests
             -class Dsh.Tests.ProjectMemoryTests
             -class Dsh.Tests.SessionAutoRenameTests

@@ -52,6 +52,14 @@ internal static class TempTree
         Assert.True(onCi.Length <= MacOsSocketPathLimit, $"{onCi} has {onCi.Length} characters, macOS allows {MacOsSocketPathLimit}");
     }
 
+    /** Clears read-only files and deletes an owned tree once, propagating all cleanup failures. */
+    public static void DeleteOnce(string directory)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+        Directory.Delete(directory, true);
+    }
+
     /** 清只读 + 重试删除; 句柄/写盘滞后时不抛异常(交由后续重试或忽略残留)。 */
     public static void Delete(string directory)
     {
@@ -61,9 +69,7 @@ internal static class TempTree
         {
             try
             {
-                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                    File.SetAttributes(file, FileAttributes.Normal);
-                Directory.Delete(directory, true);
+                DeleteOnce(directory);
                 return;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
