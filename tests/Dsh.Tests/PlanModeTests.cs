@@ -230,7 +230,7 @@ public class PlanModeTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;

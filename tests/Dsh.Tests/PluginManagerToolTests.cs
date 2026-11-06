@@ -162,7 +162,7 @@ public sealed class PluginManagerToolTests
             var initiallyEnabled = action != "enable";
             var original = $"plugins:\n  \"@deepseek-ai/dsh-tool-todo\": {initiallyEnabled.ToString().ToLowerInvariant()}\n  \"@deepseek-ai/dsh-plugin-manager\": true\nsafety:\n  autoApprove: false\n";
             await File.WriteAllTextAsync(home.SettingsFile, original, TestContext.Current.CancellationToken);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: Path.Combine(root, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             using var answerer = allowed ? ApprovalAnswerers.AutoApprove(app.Ctx) : ApprovalAnswerers.DenyAll(app.Ctx);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             var session = Session.Create(id, null, new SessionHeader { Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false });
@@ -198,7 +198,7 @@ public sealed class PluginManagerToolTests
         {
             var home = HarnessHome.Resolve(Path.Combine(root, "home"));
             var plugins = Path.Combine(root, "plugins");
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: plugins));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: plugins), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             await manager.RemoveAsync("test/local");
             var before = await File.ReadAllTextAsync(home.SettingsFile, TestContext.Current.CancellationToken);

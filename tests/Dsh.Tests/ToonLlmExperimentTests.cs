@@ -31,7 +31,7 @@ public sealed class ToonLlmExperimentTests
             Provider: "deepseek-official",
             Model: "deepseek-flash",
             ReasoningEffort: "high");
-        using var app = await HarnessComposer.Compose(options);
+        using var app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         await Console.Error.WriteLineAsync(
             $"activations: {string.Join(", ", app.Composition!.Activations.Select(a => a.Name))}");
         var failures = new List<string>();

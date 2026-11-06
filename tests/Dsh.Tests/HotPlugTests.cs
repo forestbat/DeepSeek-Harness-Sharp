@@ -14,7 +14,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("@deepseek-ai/dsh-tool-todo", manager.PackageNames);
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
@@ -62,7 +62,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("not found", await manager.AddAsync("@deepseek-ai/dsh-missing"));
             Assert.Contains("not active", await manager.RemoveAsync("@deepseek-ai/dsh-missing"));
@@ -88,7 +88,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");
             Assert.True(File.Exists(pluginPath), $"plugin assembly not found: {pluginPath}");
@@ -157,7 +157,7 @@ public sealed class HotPlugTests
                 safety:
                   autoApprove: false
                 """, TestContext.Current.CancellationToken);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
             Assert.Null(tools.Get("todo_write"));

@@ -13,7 +13,7 @@ public static class ConfigBoot
     private const string NativeBridgeType = "Dsh.Plugins.Native.Host.NativePluginBridge";
     private const string NativeBridgeAssembly = "Dsh.Plugins.Native.Host";
 
-    public static async Task<HarnessApp> Compose(HarnessOptions options)
+    public static async Task<HarnessApp> Compose(HarnessOptions options, PluginRuntimeFactory? runtimeFactory = null)
     {
         await Task.Yield();
         options.Home.Ensure();
@@ -59,7 +59,7 @@ public static class ConfigBoot
         try
         {
             ctx.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
-            var execution = PluginExecutionRuntime.Create(ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
+            var execution = CreateRuntime(runtimeFactory, ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
                 pluginHost, pluginsDirectory, nativeBridge);
             if (execution is not null)
                 app.Track(execution);
@@ -88,7 +88,7 @@ public static class ConfigBoot
         return app;
     }
 
-    public static async Task<PluginCatalogInspection> InspectPluginsAsync(HarnessOptions options)
+    public static async Task<PluginCatalogInspection> InspectPluginsAsync(HarnessOptions options, PluginRuntimeFactory? runtimeFactory = null)
     {
         options.Home.Ensure();
         var settings = HarnessSettings.Load(options.Home);
@@ -103,12 +103,21 @@ public static class ConfigBoot
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
         var bridge = ResolveNativeBridge();
-        using var execution = PluginExecutionRuntime.Create(context,
+        using var execution = CreateRuntime(runtimeFactory, context,
             new PluginExecutionEnvironment(home, settings, options.Cwd), host, directory, bridge);
         var sandbox = execution?.Catalog;
         var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
         try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
         finally { host.Release(discovered); }
+    }
+
+    private static IPluginRuntime? CreateRuntime(PluginRuntimeFactory? factory, Context context,
+        IPluginExecutionEnvironment environment, PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
+    {
+        var runtime = factory?.Invoke(context, environment, host, directory, nativeBridge);
+        if (runtime is null && environment.ReadSettings().SandboxEnabled)
+            throw new RuntimeException("PLUGIN_SANDBOX_UNAVAILABLE", "Plugin sandbox support is not included in this application.");
+        return runtime;
     }
 
 

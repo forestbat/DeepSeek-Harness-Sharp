@@ -4,16 +4,11 @@ using Dsh.Runtime;
 namespace Dsh.Plugins.Sandbox;
 
 /// <summary>Connects the optional plugin sandbox implementation to the application composition root.</summary>
-public static class PluginSandboxModule
+public sealed class PluginSandboxModule : IPluginRuntime
 {
-    [DshPluginInitializer]
-    public static void Register()
-    {
-        PluginExecutionRuntime.Factory = CreateRuntime;
-        PluginExecutionRuntime.Worker = PluginSandboxWorker.TryRunAsync;
-    }
+    private readonly PluginCapabilityFactory _capabilities;
 
-    private static IPluginExecutionRuntime CreateRuntime(Context context, IPluginExecutionEnvironment environment,
+    private PluginSandboxModule(Context context, IPluginExecutionEnvironment environment,
         PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
     {
         var capabilities = new PluginCapabilityFactory(context, environment);
@@ -27,11 +22,11 @@ public static class PluginSandboxModule
                 Apply = (pluginContext, _, _) => Task.FromResult<object?>(
                     pluginContext.Provide(IPluginHostFactory.ServiceName, capabilities)),
             });
-            var catalog = environment.ReadSettings().SandboxEnabled
+            Catalog = environment.ReadSettings().SandboxEnabled
                 ? new PluginSandboxCatalog(environment, host, directory, nativeBridge,
                     new PluginSandboxSupervisor(context, environment, capabilities, directory))
                 : null;
-            return new Services(capabilities, catalog);
+            _capabilities = capabilities;
         }
         catch
         {
@@ -40,15 +35,18 @@ public static class PluginSandboxModule
         }
     }
 
-    private sealed class Services(PluginCapabilityFactory capabilities, IPluginExecutionCatalog? catalog)
-        : IPluginExecutionRuntime
-    {
-        public IPluginExecutionCatalog? Catalog => catalog;
+    public IPluginExecutionCatalog? Catalog { get; }
 
-        public void Dispose()
-        {
-            try { Catalog?.Dispose(); }
-            finally { capabilities.Dispose(); }
-        }
+    public static IPluginRuntime CreateRuntime(Context context, IPluginExecutionEnvironment environment,
+        PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
+        => new PluginSandboxModule(context, environment, host, directory, nativeBridge);
+
+    /// <summary>Returns null for ordinary arguments without creating an application context.</summary>
+    public static ValueTask<int>? TryRunWorkerAsync(string[] args) => PluginSandboxWorker.TryRunAsync(args);
+
+    public void Dispose()
+    {
+        try { Catalog?.Dispose(); }
+        finally { _capabilities.Dispose(); }
     }
 }
