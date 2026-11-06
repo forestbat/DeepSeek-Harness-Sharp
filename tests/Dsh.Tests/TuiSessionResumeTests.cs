@@ -72,7 +72,7 @@ public sealed class TuiSessionResumeTests
     {
         Directory.CreateDirectory(home.Root);
         await File.WriteAllTextAsync(home.SettingsFile, GuiTestEnvironment.HomeSettings, TestContext.Current.CancellationToken);
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, directory));
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var sessionId = SessionId.Create("session-resume-history");
         var handle = await agents.Create(new CreateAgentOptions(sessionId, directory, new AgentOptions("test", "test-model")));

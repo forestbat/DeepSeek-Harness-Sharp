@@ -23,8 +23,8 @@ public sealed class PluginWorkerEntrypointTests
         {
             foreach (var suffix in new[] { ".dll", ".deps.json" })
             {
-                var name = "Dsh.IsolatedPluginSample" + suffix;
-                File.Copy(Path.Combine(AppContext.BaseDirectory, "isolated-plugin", name), Path.Combine(root, name));
+                var name = "Dsh.SandboxPluginSample" + suffix;
+                File.Copy(Path.Combine(AppContext.BaseDirectory, "sandbox-plugin", name), Path.Combine(root, name));
             }
             process = Start(consumer, root, "--plugin-worker");
             var error = process.StandardError.ReadToEndAsync(signal);
@@ -59,17 +59,17 @@ public sealed class PluginWorkerEntrypointTests
             var unknown = await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync("sandbox/unknown", cancellationToken: signal));
             Assert.Equal(JsonRpcPeer.MethodNotFound, unknown.Code);
 
-            var artifact = Path.Combine(root, "Dsh.IsolatedPluginSample.dll");
+            var artifact = Path.Combine(root, "Dsh.SandboxPluginSample.dll");
             var inspection = (await peer.RequestAsync(PluginSandboxMethods.Inspect,
                 JsonSerializer.SerializeToElement(new PluginSandboxInspectRequest(artifact),
                     PluginSandboxJsonContext.Default.PluginSandboxInspectRequest), signal))!.Value
                 .Deserialize(PluginSandboxJsonContext.Default.PluginSandboxInspection)!;
             Assert.Empty(inspection.Errors);
             Assert.True(inspection.Released);
-            Assert.Equal(new[] { "test/isolated-alpha", "test/isolated-beta" }, inspection.Packages.Select(package => package.Package).Order());
+            Assert.Equal(new[] { "test/sandbox-alpha", "test/sandbox-beta" }, inspection.Packages.Select(package => package.Package).Order());
             using var configuration = JsonDocument.Parse("{}");
             using var arguments = JsonDocument.Parse("{\"operation\":\"identity\"}");
-            foreach (var package in new[] { "test/isolated-alpha", "test/isolated-beta" })
+            foreach (var package in new[] { "test/sandbox-alpha", "test/sandbox-beta" })
             {
                 var loaded = await peer.RequestAsync(PluginSandboxMethods.Load,
                     JsonSerializer.SerializeToElement(new PluginSandboxLoadRequest(artifact, package, configuration.RootElement),
@@ -101,46 +101,30 @@ public sealed class PluginWorkerEntrypointTests
     }
 
     [Theory(Timeout = 15000)]
-    [InlineData("tests", false)]
-    [InlineData("tests", true)]
-    [InlineData("cli", false)]
-    [InlineData("cli", true)]
-    [InlineData("web", false)]
-    [InlineData("web", true)]
-    public async Task WorkerArguments_RejectExtraAndUnknownArguments(string consumer, bool workerFirst)
+    [InlineData("tests", "--plugin-worker", "--unknown")]
+    [InlineData("tests", "--unknown", "--plugin-worker")]
+    [InlineData("cli", "--plugin-worker", "--unknown")]
+    [InlineData("cli", "--unknown", "--plugin-worker")]
+    [InlineData("web", "--plugin-worker", "--unknown")]
+    [InlineData("web", "--unknown", "--plugin-worker")]
+    [InlineData("cli", "--help", null)]
+    [InlineData("web", "--help", null)]
+    public async Task Arguments_ContinueNormalStartupOrRejectMalformedWorkerInvocation(string consumer, string first, string? second)
     {
         var root = TempTree.CreateDirectory("worker-args");
         Process? process = null;
         try
         {
-            process = Start(consumer, root, workerFirst ? ["--plugin-worker", "--unknown"] : ["--unknown", "--plugin-worker"]);
+            process = Start(consumer, root, second is null ? [first] : [first, second]);
             process.StandardInput.Close();
             var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(2, process.ExitCode);
-            Assert.Empty(await output);
-            Assert.Empty(await error);
-        }
-        finally { await StopAsync(process, root); }
-    }
-
-    [Theory(Timeout = 15000)]
-    [InlineData("cli")]
-    [InlineData("web")]
-    public async Task OrdinaryArguments_ContinueIntoConsumerStartup(string consumer)
-    {
-        var root = TempTree.CreateDirectory("worker-ordinary");
-        Process? process = null;
-        try
-        {
-            process = Start(consumer, root, "--help");
-            process.StandardInput.Close();
-            var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
-            var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
-            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(0, process.ExitCode);
-            Assert.Contains("usage:", await output, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(second is null ? 0 : 2, process.ExitCode);
+            if (second is null)
+                Assert.Contains("usage:", await output, StringComparison.OrdinalIgnoreCase);
+            else
+                Assert.Empty(await output);
             Assert.Empty(await error);
         }
         finally { await StopAsync(process, root); }

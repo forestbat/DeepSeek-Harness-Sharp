@@ -19,7 +19,7 @@ public sealed class DefaultCompositionTests
             using var app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
                 Cwd: directory,
-                IsTui: true));
+                IsTui: true), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             Assert.Equal(ActivationState.Active, app.Composition!.Find("@deepseek-ai/dsh-tui")?.State);
         }
         finally
@@ -48,7 +48,7 @@ public sealed class DefaultCompositionTests
             using var app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
                 Cwd: directory,
-                IsTui: true));
+                IsTui: true), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tui"));
         }
         finally

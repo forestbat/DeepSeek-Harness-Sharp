@@ -93,7 +93,7 @@ public sealed class SessionCommandTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var registry = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
             var sessions = app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
             var persistence = app.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)!;

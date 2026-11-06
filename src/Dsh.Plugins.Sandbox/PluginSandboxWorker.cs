@@ -246,7 +246,7 @@ internal static class PluginSandboxWorker
             }
             Artifact? artifact = null;
             PluginDefinition? definition = null;
-            PluginSandboxWorkerContext? lease = null;
+            Context? context = null;
             PluginSandboxWorkerHost? host = null;
             try
             {
@@ -284,13 +284,19 @@ internal static class PluginSandboxWorker
                 else
                 {
                     var managed = definition ?? throw new InvalidOperationException("Managed plugin definition is missing.");
-                    if (!PluginSandboxWorkerContext.Supports(managed.Inject, managed.InjectTypes))
+                    if (!Supports(managed.Inject, managed.InjectTypes))
                         throw new InvalidOperationException("The plugin requires services unavailable in the worker Context.");
-                    lease = new PluginSandboxWorkerContext(host);
-                    await lease.ActivateAsync(managed, configuration, cancellationToken).ConfigureAwait(false);
+                    context = new Context();
+                    context.Provide(IPluginHostFactory.ServiceName, host);
+                    var result = await managed.Apply(context, Configuration(configuration), cancellationToken).ConfigureAwait(false);
+                    if (result is IAsyncDisposable asynchronous)
+                        context.Effect(() => (Func<Task>)(() => asynchronous.DisposeAsync().AsTask()), $"apply({managed.Name})");
+                    else if (result is not null)
+                        context.Effect(() => result, $"apply({managed.Name})");
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 lock (_gate)
-                    _packages.Add(request.Package, new LoadedPackage(host, artifact, lease));
+                    _packages.Add(request.Package, new LoadedPackage(host, artifact, context));
             }
             catch (Exception activationError)
             {
@@ -303,8 +309,8 @@ internal static class PluginSandboxWorker
                 }
                 try
                 {
-                    if (lease is not null)
-                        await lease.DisposeAsync().ConfigureAwait(false);
+                    if (context is not null)
+                        await context.Activation.DeactivateAsync().ConfigureAwait(false);
                 }
                 catch (Exception error) { cleanupFailure ??= BoundedFailure(error); }
                 if (host is not null)
@@ -338,8 +344,8 @@ internal static class PluginSandboxWorker
             await package.Host.StopAsync().ConfigureAwait(false);
             try
             {
-                if (package.Lease is not null)
-                    await package.Lease.DisposeAsync().ConfigureAwait(false);
+                if (package.Context is not null)
+                    await package.Context.Activation.DeactivateAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -427,7 +433,7 @@ internal static class PluginSandboxWorker
             string? entry, Func<IDshPlugin> create)
         {
             var plugin = create();
-            try { return new PluginSandboxMetadata(package, form, entry, PluginSandboxWorkerContext.Supports(plugin.Inject, plugin.InjectTypes)); }
+            try { return new PluginSandboxMetadata(package, form, entry, Supports(plugin.Inject, plugin.InjectTypes)); }
             finally { await DisposeProbeAsync(plugin).ConfigureAwait(false); }
         }
 
@@ -471,7 +477,13 @@ internal static class PluginSandboxWorker
 
     }
 
-    private sealed record LoadedPackage(PluginSandboxWorkerHost Host, Artifact? Artifact, PluginSandboxWorkerContext? Lease);
+    private static bool Supports(IReadOnlyList<string> inject, IReadOnlyList<Type> injectTypes)
+        => (inject.Contains(IPluginHostFactory.ServiceName, StringComparer.Ordinal)
+                || injectTypes.Contains(typeof(IPluginHostFactory)))
+            && inject.All(static name => name == IPluginHostFactory.ServiceName)
+            && injectTypes.All(static type => type.IsAssignableFrom(typeof(PluginSandboxWorkerHost)));
+
+    private sealed record LoadedPackage(PluginSandboxWorkerHost Host, Artifact? Artifact, Context? Context);
 
     /** One artifact owns one ALC/library, independently of its active package leases. */
     private sealed class Artifact(string path, PluginHost? host, PluginLoadContext? context, NativePluginLibrary? native)

@@ -230,7 +230,7 @@ public sealed class EditorWorkflowTests
             """);
         try
         {
-            var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), Cwd: repository.Root, PluginsDirectory: Path.Combine(repository.Sandbox, "plugins")));
+            var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), Cwd: repository.Root, PluginsDirectory: Path.Combine(repository.Sandbox, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var firstLaunch = new TaskCompletionSource<EditorExecutionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             app.Ctx.Provide("editorTerminalHost", new Dsh.Ide.Launch.DelegateTerminalHost("fake-editor-argv-cwd-env", _ => true,
                 async (launch, signal) =>

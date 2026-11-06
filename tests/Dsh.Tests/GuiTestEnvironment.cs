@@ -98,7 +98,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
             {
                 var directory = TempTree.CreateSocketDirectory("g");
                 File.WriteAllText(Path.Combine(directory, "settings.yaml"), homeSettings);
-                shared.App = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(directory), directory));
+                shared.App = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(directory), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
                 shared.Home = directory;
                 shared.Settings = homeSettings;
                 shared.Presets = Snapshot(Path.Combine(directory, ".agent-presets"));
@@ -122,7 +122,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
     {
         var directory = TempTree.CreateSocketDirectory("g");
         File.WriteAllText(Path.Combine(directory, "settings.yaml"), homeSettings);
-        var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(directory), directory));
+        var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(directory), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var (agent, handle) = await CreateAgentAsync(app, directory);
         return new GuiTestEnvironment(directory, app, agent, agentHandle: handle.Dispose);
     }
@@ -193,7 +193,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
         App.Dispose();
         _ownsDirectory = false;
         var homePath = _directory;
-        var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), _directory));
+        var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), _directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var (agent, handle) = await CreateAgentAsync(app, _directory);
         return new GuiTestEnvironment(_directory, app, agent, agentHandle: handle.Dispose);
     });

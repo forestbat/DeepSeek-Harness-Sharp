@@ -34,7 +34,7 @@ public sealed class AcpTests
     public async Task NewSession_And_CloseSession_Lifecycle()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "acp-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -71,7 +71,7 @@ public sealed class AcpTests
     public async Task NewSession_RejectsAdditionalDirectories()
     {
         var home = Path.Combine(AppContext.BaseDirectory, "acp-test-home", Guid.NewGuid().ToString("N"));
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;

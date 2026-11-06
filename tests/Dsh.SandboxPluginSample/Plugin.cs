@@ -7,14 +7,14 @@ using System.Text.Json;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
-[assembly: DshPlugin("test/isolated-alpha")]
-[assembly: DshPlugin("test/isolated-beta")]
+[assembly: DshPlugin("test/sandbox-alpha")]
+[assembly: DshPlugin("test/sandbox-beta")]
 
-namespace Dsh.IsolatedPluginSample;
+namespace Dsh.SandboxPluginSample;
 
 internal static class ProcessProbe
 {
-    private const string MainExecutionMarkerKey = "Dsh.IsolatedPluginSample.MainExecutionMarker";
+    private const string MainExecutionMarkerKey = "Dsh.SandboxPluginSample.MainExecutionMarker";
     internal static readonly Guid Instance = Guid.NewGuid();
 
 #pragma warning disable CA2255 // Deliberately adversarial initialization, in an independently loaded test artifact.
@@ -75,8 +75,8 @@ public sealed class Plugin : IDshPlugin
         _configuration = configuration as PluginConfiguration ?? new();
         ProcessProbe.TryWrite(typeof(Plugin).Assembly.Location + $".{_name}-initialize-marker", "initialize executed");
         var registration = host.RegisterTool(new PluginToolDefinition(
-            "isolated_" + _name,
-            "Exercise real isolated SDK capabilities and adversarial direct operating-system access.",
+            "sandbox_" + _name,
+            "Exercise real sandbox SDK capabilities and adversarial direct operating-system access.",
             JsonSerializer.SerializeToElement(new
             {
                 type = "object",
@@ -116,16 +116,13 @@ public sealed class Plugin : IDshPlugin
             case "open-local-resource":
                 var localResourcePath = Path.GetFullPath(arguments.GetProperty("relativePath").GetString()!,
                     Path.GetDirectoryName(typeof(Plugin).Assembly.Location)!);
-                var localResourceOpened = false;
-                _context!.Plugin(PluginDefinition.From((_, _) =>
+                _context!.Effect(() =>
                 {
                     var resource = new LocalFileResource(localResourcePath);
                     LocalResources[_package] = (localResourcePath, new WeakReference<FileStream>(resource.Stream));
-                    localResourceOpened = true;
                     return resource;
-                }, name: $"{_package}:local-resource"));
-                await _context.Root.Scheduler.SettleAsync().WaitAsync(signal);
-                return JsonSerializer.SerializeToElement(new { opened = localResourceOpened });
+                }, $"{_package}:local-resource");
+                return JsonSerializer.SerializeToElement(new { opened = true });
             case "probe-local-resource":
                 var nestedResource = LocalResources[arguments.GetProperty("package").GetString()!];
                 var nestedResourceExists = File.Exists(nestedResource.Path);

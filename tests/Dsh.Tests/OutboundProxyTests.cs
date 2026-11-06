@@ -726,7 +726,7 @@ public sealed class OutboundProxyTests
             await File.WriteAllTextAsync(
                 Path.Combine(home.Root, "settings.yaml"),
                 $"{KeptComment}\nglobal_default_model: null\nproviders: {{}}\nlogging:\n  file: false\nsafety:\n  autoApprove: false\n  whitelist:\n    outbound-proxy-consumer:\n      tool: web_fetch\n{network}");
-            return new TestHarness(await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory)), directory);
+            return new TestHarness(await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime), directory);
         }
 
         public async Task<ToolExecutionResult> FetchAsync(string url)
