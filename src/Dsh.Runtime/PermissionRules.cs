@@ -172,7 +172,8 @@ public static class PermissionEngine
     /** Canonicalize the literal prefix, never ask the filesystem to resolve wildcard components. */
     public static string NormalizePattern(string pattern, string cwd, Func<string, string> physicalPath)
     {
-        var absolute = PathText(System.IO.Path.GetFullPath(pattern, cwd));
+        var absolute = System.IO.Path.GetFullPath(CanonicalFilePath.NormalizeNamespace(pattern), cwd);
+        absolute = PathText(CanonicalFilePath.NormalizeNamespace(absolute));
         var wildcard = absolute.IndexOfAny(['*', '?']);
         if (wildcard < 0) return PathText(physicalPath(absolute));
         var separator = absolute.LastIndexOf('/', wildcard);

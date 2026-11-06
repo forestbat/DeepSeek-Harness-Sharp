@@ -109,6 +109,57 @@ public sealed class PermissionRulesTests
         Assert.Equal(allowed ? "allow" : "notify", PermissionEngine.Decide(policy, input, Path.GetFullPath).Decision);
     }
 
+    [Fact]
+    public void WindowsExtendedPaths_MatchTheSameFileRulesAndPrecedence()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows extended-length file paths.");
+        var root = TempTree.CreateDirectory("permission-alias");
+        try
+        {
+            var nested = Directory.CreateDirectory(Path.Combine(root, "nested")).FullName;
+            var file = Path.Combine(nested, "protected.txt");
+            File.WriteAllText(file, "protected original");
+            var canonical = CanonicalFilePath.Canonicalize(file);
+            var extended = $@"\\?\{file}";
+            var forward = $"//?/{file.Replace('\\', '/')}";
+            foreach (var (pattern, workingDirectory, actual) in new[]
+            {
+                (file, root, extended),
+                (extended, root, file),
+                (Path.Combine(root, "**", "*.txt"), root, extended),
+                ($@"\\?\{root}\**\*.txt", root, file),
+                (Path.Combine("**", "*.txt"), $@"\\?\{root}", file),
+                (forward, root, file),
+                ($"//?/{root.Replace('\\', '/')}/**/*.txt", root, file),
+                (Path.Combine(root, "**", "*.txt"), root, forward),
+            })
+            {
+                var policy = new PermissionRules
+                {
+                    AutoApprove = true,
+                    Blacklist = new() { ["protected-file"] = new() { Path = pattern, Intent = "read" } },
+                    Whitelist = new() { ["allow-protected-read"] = new() { Path = pattern, Intent = "read" } },
+                };
+                var normalized = CanonicalFilePath.Canonicalize(actual);
+                Assert.Equal(canonical, normalized);
+                var input = new PermissionInput("read", default, workingDirectory, normalized, "read", PathIsCanonical: true);
+                var denied = PermissionEngine.Decide(policy, input, static path => CanonicalFilePath.Canonicalize(path));
+                Assert.Equal("deny", denied.Decision);
+                Assert.Equal("protected-file", denied.Match!.RuleId);
+                policy.AutoApprove = false;
+                denied = PermissionEngine.Decide(policy, input, static path => CanonicalFilePath.Canonicalize(path));
+                Assert.Equal("deny", denied.Decision);
+                Assert.Equal("protected-file", denied.Match!.RuleId);
+                policy.Blacklist.Clear();
+                var allowed = PermissionEngine.Decide(policy, input, static path => CanonicalFilePath.Canonicalize(path));
+                Assert.Equal("allow", allowed.Decision);
+                Assert.Equal("allow-protected-read", allowed.Match!.RuleId);
+            }
+        }
+        finally { TempTree.Delete(root); }
+    }
+
     private static PermissionDecision Decide(PermissionRules policy, string tool, object arguments)
         => PermissionEngine.Decide(policy, new PermissionInput(tool, JsonSerializer.SerializeToElement(arguments), Path.GetFullPath(".")), Path.GetFullPath);
 }

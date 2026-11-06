@@ -180,6 +180,17 @@ public sealed class SettingsMutationTests
         var ordinaryResult = await fixture.Execute("write", new JsonObject { ["file_path"] = ordinary, ["content"] = "synthetic ordinary content" });
         Assert.False(ordinaryResult.IsError);
         Assert.Equal("synthetic ordinary content", File.ReadAllText(ordinary));
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var filePath in new[] { $@"\\?\{fixture.Home.SettingsFile}", $"//?/{fixture.Home.SettingsFile.Replace('\\', '/')}" })
+            {
+                var extended = fixture.Arguments("write");
+                extended["file_path"] = filePath;
+                var aliasResult = await fixture.Execute("write", extended);
+                Assert.True(aliasResult.IsError);
+                Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
+            }
+        }
     }
 
     [Fact]
