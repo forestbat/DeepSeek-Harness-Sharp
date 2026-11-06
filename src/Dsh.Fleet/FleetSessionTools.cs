@@ -29,6 +29,13 @@ public sealed class FleetSessionTools : IDisposable
         _connect = connect;
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("tool runtime is not available");
+        // fleet 的 ssh 通道要外挂 ssh 程序; Android 上没有, 别把用不了的工具摆给模型看。
+        if (!SshAvailable())
+        {
+            ctx.LoggerFor("fleet").Info("skip session tools: no ssh executable on PATH");
+            _registrations = [];
+            return;
+        }
         _registrations =
         [
             tools.Register(Tool(SessionsTool,
@@ -166,6 +173,17 @@ public sealed class FleetSessionTools : IDisposable
 
     private static string? Text(JsonElement args, string name)
         => args.TryGetProperty(name, out var value) ? value.GetString() : null;
+
+    /** fleet 的 ssh 通道是外挂 OpenSSH 客户端进程; Android 上从来没有这个程序, 手机侧的同一能力由 App 自己的链路提供。 */
+    private static bool SshAvailable()
+    {
+        if (OperatingSystem.IsAndroid())
+            return false;
+        var executable = OperatingSystem.IsWindows() ? "ssh.exe" : "ssh";
+        return (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Any(directory => File.Exists(Path.Combine(directory, executable)));
+    }
 
     public void Dispose()
     {

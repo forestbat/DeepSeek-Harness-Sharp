@@ -12,8 +12,8 @@ namespace Dsh.Gui.Shared.Mobile;
  */
 public static class MachineSessionTools
 {
-    public const string SessionsTool = "machine_sessions";
-    public const string SendTool = "machine_send_message";
+    public const string SessionsTool = "desktop_sessions";
+    public const string SendTool = "desktop_send_message";
 
     private const int MaxListedSessions = 40;
 
