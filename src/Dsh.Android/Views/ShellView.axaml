@@ -62,7 +62,7 @@
     </Style>
   </UserControl.Styles>
 
-  <Grid RowDefinitions="Auto,*">
+  <Grid x:Name="ShellRoot" RowDefinitions="Auto,*">
 
     <Border Grid.Row="0" Background="#171A1F" Padding="14,10">
       <Grid ColumnDefinitions="Auto,*,Auto">
@@ -314,9 +314,10 @@
           <StackPanel Spacing="8">
             <TextBlock Text="{Binding ApprovalTitle}" FontSize="14" FontWeight="SemiBold" Foreground="#F2B94A" />
             <TextBlock Text="{Binding ApprovalDetail}" Classes="hint" MaxHeight="120" />
-            <Grid ColumnDefinitions="*,*">
-              <Button Grid.Column="0" Content="拒绝" Command="{Binding DenyCommand}" HorizontalAlignment="Stretch" Margin="0,0,4,0" />
-              <Button Grid.Column="1" Content="允许" Command="{Binding AllowCommand}" HorizontalAlignment="Stretch" Margin="4,0,0,0" />
+            <Grid ColumnDefinitions="*,*,*">
+              <Button Grid.Column="0" Content="不管" Command="{Binding IgnoreApprovalCommand}" HorizontalAlignment="Stretch" Margin="0,0,4,0" />
+              <Button Grid.Column="1" Content="拒绝" Command="{Binding DenyCommand}" HorizontalAlignment="Stretch" Margin="4,0,4,0" />
+              <Button Grid.Column="2" Content="允许" Command="{Binding AllowCommand}" HorizontalAlignment="Stretch" Margin="4,0,0,0" />
             </Grid>
           </StackPanel>
         </Border>
@@ -344,7 +345,10 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <Button Content="提交回答" Command="{Binding SubmitAnswersCommand}" HorizontalAlignment="Stretch" />
+              <Grid ColumnDefinitions="*,*">
+                <Button Grid.Column="0" Content="不管这条" Command="{Binding IgnoreQuestionsCommand}" HorizontalAlignment="Stretch" Margin="0,0,4,0" />
+                <Button Grid.Column="1" Content="提交回答" Command="{Binding SubmitAnswersCommand}" HorizontalAlignment="Stretch" Margin="4,0,0,0" />
+              </Grid>
             </StackPanel>
           </ScrollViewer>
         </Border>

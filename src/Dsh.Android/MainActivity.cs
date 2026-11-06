@@ -29,10 +29,26 @@ public class MainActivity : AvaloniaMainActivity
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
+        Window?.DecorView?.SetOnApplyWindowInsetsListener(new ImeInsetListener());
         if (OperatingSystem.IsAndroidVersionAtLeast(33)
             && CheckSelfPermission(global::Android.Manifest.Permission.PostNotifications) != Permission.Granted)
             RequestPermissions([global::Android.Manifest.Permission.PostNotifications], PostNotificationsRequest);
         HandleShare(Intent);
+    }
+
+    /** 窗口是 edge-to-edge 的, adjustResize 不会给 Avalonia 缩小客户区; 直接读 IME inset 交给界面自己抬底部。 */
+    private sealed class ImeInsetListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener
+    {
+        public WindowInsets? OnApplyWindowInsets(View? view, WindowInsets? insets)
+        {
+            if (insets is not null && Build.VERSION.SdkInt >= BuildVersionCodes.R)
+            {
+                var density = view?.Resources?.DisplayMetrics?.Density ?? 1f;
+                var bottom = insets.GetInsets(WindowInsets.Type.Ime()).Bottom / density;
+                KeyboardInset.Report(bottom);
+            }
+            return insets;
+        }
     }
 
     protected override void OnNewIntent(Intent? intent)

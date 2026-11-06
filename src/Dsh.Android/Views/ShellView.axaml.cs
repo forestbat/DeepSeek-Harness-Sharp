@@ -1,8 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Dsh.Android.Services;
 using Dsh.Android.ViewModels;
 using Dsh.Llm;
 
@@ -22,14 +24,22 @@ public sealed partial class ShellView : UserControl
     {
         base.OnAttachedToVisualTree(e);
         Attach();
+        KeyboardInset.Changed += OnKeyboardInset;
+        ApplyKeyboardInset(KeyboardInset.Bottom);
         Dispatcher.UIThread.Post(ScrollToEnd, DispatcherPriority.Loaded);
     }
 
     protected override void OnDetachedFromVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
     {
+        KeyboardInset.Changed -= OnKeyboardInset;
         Detach();
         base.OnDetachedFromVisualTree(e);
     }
+
+    private void OnKeyboardInset(double bottom) => Dispatcher.UIThread.Post(() => ApplyKeyboardInset(bottom));
+
+    /** 输入法弹起时把外壳底部顶高同样高度, 输入框就浮在键盘上方。 */
+    private void ApplyKeyboardInset(double bottom) => ShellRoot.Margin = new Thickness(0, 0, 0, bottom);
 
     private void Attach()
     {

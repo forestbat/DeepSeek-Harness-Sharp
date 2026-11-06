@@ -152,6 +152,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private readonly MobileFleet _fleet;
     private readonly DispatcherBridge<RemoteSessionEvent> _events;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly HashSet<string> _ignoredRequests = new(StringComparer.Ordinal);
     private CancellationTokenSource? _sessionLifetime;
     private PhoneMcpServer? _phoneServer;
     private LocalHarness? _local;
@@ -894,15 +895,21 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private static string KeyOf(string machine, string sessionId) => $"{machine}\u001f{sessionId}";
 
+    /**
+     * 待决请求只认当前打开的那个会话: 别的终端(桌面 GUI)正在处理的提问与审批不在这里重复弹出,
+     * 否则用户会在手机上答题、提交时才发现早被别人答了, 还把会话卡在弹窗上。
+     */
     private void RefreshPending()
     {
+        var scoped = _openSessionId.Length > 0 ? _openMachine : null;
         var approval = Links
-            .Select(link => (link.Name, Approval: link.Pending.Approvals.FirstOrDefault()))
+            .Where(link => scoped is null ? _openSessionId.Length == 0 : link.Name == scoped)
+            .Select(link => (link.Name, Approval: link.Pending.Approvals.FirstOrDefault(item =>
+                !_ignoredRequests.Contains(item.RequestId) && (_openSessionId.Length == 0 || item.SessionId == _openSessionId))))
             .FirstOrDefault(entry => entry.Approval is not null);
         _approvalRequestId = approval.Approval?.RequestId ?? "";
         _approvalMachine = _approvalRequestId.Length == 0 ? "" : approval.Name;
         HasApproval = _approvalRequestId.Length > 0;
-        // 待决列表是全局的: 标题里带上机器与会话名, 避免在 A 会话里误批 B 会话的请求。
         ApprovalTitle = approval.Approval is not { } request
             ? ""
             : $"{request.Tool} 请求批准 · {approval.Name} · {SessionTitle(approval.Name, request.SessionId)}";
@@ -910,7 +917,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             ? ""
             : (detail.Reason is { Length: > 0 } reason ? reason : detail.Arguments ?? "");
         var question = Links
-            .Select(link => (link.Name, Question: link.Pending.Questions.FirstOrDefault()))
+            .Where(link => scoped is null ? _openSessionId.Length == 0 : link.Name == scoped)
+            .Select(link => (link.Name, Question: link.Pending.Questions.FirstOrDefault(item =>
+                !_ignoredRequests.Contains(item.RequestId) && (_openSessionId.Length == 0 || item.SessionId == _openSessionId))))
             .FirstOrDefault(entry => entry.Question is not null);
         ApplyQuestions(question.Name, question.Question);
     }
@@ -948,6 +957,41 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     private void OnAnswerChanged() => SubmitAnswersCommand.NotifyCanExecuteChanged();
 
+    /** 不是我的问题就不答: 记下这条 requestId, 别再弹出来。 */
+    [RelayCommand]
+    private void IgnoreQuestions()
+    {
+        DismissQuestion(QuestionRequestId);
+        Error = "";
+    }
+
+    private void DismissQuestion(string requestId)
+    {
+        if (requestId.Length > 0)
+            _ignoredRequests.Add(requestId);
+        if (requestId != QuestionRequestId)
+            return;
+        foreach (var question in Questions)
+            question.Changed -= OnAnswerChanged;
+        Questions.Clear();
+        QuestionRequestId = "";
+        HasQuestions = false;
+        QuestionTitle = "";
+        SubmitAnswersCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private void IgnoreApproval()
+    {
+        if (_approvalRequestId.Length > 0)
+            _ignoredRequests.Add(_approvalRequestId);
+        _approvalRequestId = "";
+        _approvalMachine = "";
+        HasApproval = false;
+        ApprovalTitle = "";
+        ApprovalDetail = "";
+    }
+
     private bool CanSubmitAnswers()
         => !IsSendingAnswers
         && HasQuestions
@@ -969,7 +1013,14 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
                 .ToList();
             var lease = await link.WaitConnectedAsync(_lifetime.Token);
             var accepted = await lease.Client.RespondQuestionAsync(QuestionRequestId, answers, _lifetime.Token);
-            Error = accepted ? "" : "问题已被其他客户端回答";
+            if (accepted)
+            {
+                Error = "";
+                return;
+            }
+            // 别的终端先答了: 这条请求在本机不再有意义, 直接放掉, 别把会话卡在一个交不出去的弹窗上。
+            DismissQuestion(QuestionRequestId);
+            Error = "这条提问已经在别的终端回答过了";
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {

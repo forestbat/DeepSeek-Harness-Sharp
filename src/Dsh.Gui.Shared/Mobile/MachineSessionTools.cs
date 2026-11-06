@@ -45,7 +45,7 @@ public static class MachineSessionTools
                     ["properties"] = new JsonObject
                     {
                         ["machine"] = new JsonObject { ["type"] = "string", ["description"] = "机器名" },
-                        ["session"] = new JsonObject { ["type"] = "string", ["description"] = "会话 id，可省略" },
+                        ["session"] = new JsonObject { ["type"] = "string", ["description"] = "会话编号（desktop_sessions 列表里的 1、2、3）、标题片段或 id 前缀，可省略" },
                         ["text"] = new JsonObject { ["type"] = "string", ["description"] = "要发送的消息" },
                         ["cwd"] = new JsonObject { ["type"] = "string", ["description"] = "新会话的工作目录，省略时用那台机器的 home" },
                     },
@@ -70,32 +70,67 @@ public static class MachineSessionTools
                     : $"{target.Name} · 未连接");
                 continue;
             }
-            var sessions = target.Sessions;
+            var sessions = Ordered(target);
             lines.Add(sessions.Count == 0
                 ? $"{target.Name} · 已连接 · 没有会话"
                 : $"{target.Name} · 已连接 · {sessions.Count} 个会话");
-            lines.AddRange(sessions
-                .OrderByDescending(session => session.LastActivityAt)
-                .Take(MaxListedSessions)
-                .Select(session => $"  {session.SessionId} · {session.Title ?? session.Cwd} · {session.Status}"));
+            lines.AddRange(sessions.Select((session, index) => Describe(session, index + 1)));
         }
         return Task.FromResult(lines.Count == 0
             ? MobileToolAnswer.Failure("没有可用的机器")
             : MobileToolAnswer.Success(string.Join('\n', lines)));
     }
 
-    private static async Task<MobileToolAnswer> SendAsync(Func<IReadOnlyList<IAgentMachineLink>> machines, string? machine, string? sessionId, string text, string? cwd, CancellationToken cancellationToken)
+    private static async Task<MobileToolAnswer> SendAsync(Func<IReadOnlyList<IAgentMachineLink>> machines, string? machine, string? selector, string text, string? cwd, CancellationToken cancellationToken)
     {
         if (machine is not { Length: > 0 })
             return MobileToolAnswer.Failure("需要 machine 参数");
         if (text.Length == 0)
             return MobileToolAnswer.Failure("需要要发送的 text");
         var target = Find(machines, machine);
-        var session = sessionId is { Length: > 0 }
-            ? sessionId
+        var session = selector is { Length: > 0 }
+            ? ResolveSession(target, selector)
             : (await target.CreateSessionAsync(cwd is { Length: > 0 } ? cwd : "", cancellationToken).ConfigureAwait(false)).SessionId;
         await target.SendMessageAsync(session, text, cancellationToken).ConfigureAwait(false);
-        return MobileToolAnswer.Success($"已发送到 {target.Name}/{session}");
+        return MobileToolAnswer.Success($"已发送到 {target.Name}/{SessionLabel(target, session)}");
+    }
+
+    private static IReadOnlyList<RemoteSessionSummary> Ordered(IAgentMachineLink link)
+        => [.. link.Sessions.OrderByDescending(session => session.LastActivityAt).Take(MaxListedSessions)];
+
+    /** 列表里的编号就是发送时能用的选择器: 手机上打不出长 uuid, 编号与标题前缀才是可操作的。 */
+    private static string Describe(RemoteSessionSummary session, int index)
+        => $"  {index}) {TitleOf(session)} · {session.Status} · {Short(session.SessionId)}";
+
+    private static string TitleOf(RemoteSessionSummary session)
+        => session.Title is { Length: > 0 } title ? title : session.Cwd;
+
+    private static string Short(string sessionId)
+        => sessionId.Length <= 12 ? sessionId : sessionId[..8];
+
+    private static string SessionLabel(IAgentMachineLink link, string sessionId)
+        => Ordered(link).FirstOrDefault(session => session.SessionId == sessionId) is { } found
+            ? $"{TitleOf(found)}（{Short(sessionId)}）"
+            : sessionId;
+
+    /** 选择器可以是列表编号、标题片段或 id 前缀; 命中多条就直接报候选, 不替用户猜。 */
+    private static string ResolveSession(IAgentMachineLink link, string selector)
+    {
+        var sessions = Ordered(link);
+        if (int.TryParse(selector, out var index) && index >= 1 && index <= sessions.Count)
+            return sessions[index - 1].SessionId;
+        var byId = sessions.Where(session => session.SessionId.StartsWith(selector, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (byId.Count == 1)
+            return byId[0].SessionId;
+        var byTitle = sessions.Where(session => TitleOf(session).Contains(selector, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (byTitle.Count == 1)
+            return byTitle[0].SessionId;
+        if (byId.Count > 1 || byTitle.Count > 1)
+        {
+            var candidates = string.Join("、", (byId.Count > 1 ? byId : byTitle).Select(session => $"{Short(session.SessionId)}（{TitleOf(session)}）"));
+            throw new InvalidOperationException($"“{selector}” 对应多条会话: {candidates}");
+        }
+        throw new InvalidOperationException($"没有会话匹配“{selector}”; 先用 {SessionsTool} 看列表里的编号");
     }
 
     private static IAgentMachineLink Find(Func<IReadOnlyList<IAgentMachineLink>> machines, string machine)

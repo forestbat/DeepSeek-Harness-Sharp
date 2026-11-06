@@ -19,7 +19,7 @@ public sealed class MachineSessionToolsTests
 
         Assert.True(answer.Ok);
         Assert.Contains("桌面机 · 已连接 · 1 个会话", answer.Text, StringComparison.Ordinal);
-        Assert.Contains("s-1 · 修表格 · idle", answer.Text, StringComparison.Ordinal);
+        Assert.Contains("1) 修表格 · idle · s-1", answer.Text, StringComparison.Ordinal);
         Assert.Contains("工作站 · 已连接 · 没有会话", answer.Text, StringComparison.Ordinal);
     }
 
@@ -35,18 +35,45 @@ public sealed class MachineSessionToolsTests
     }
 
     [Fact]
-    public async Task SendsIntoTheGivenSession()
+    public async Task SendsIntoTheSessionPickedByNumber()
     {
-        var link = new FakeLink("桌面机", Session("s-1", "修表格"));
+        var link = new FakeLink("桌面机", Session("s-1", "修表格"), Session("s-2", "写文档"));
         var (ctx, tools) = Harness(link);
 
         var answer = await Execute(ctx, tools, MachineSessionTools.SendTool,
-            """{"machine":"桌面机","session":"s-1","text":"把表格补完"}""");
+            """{"machine":"桌面机","session":"2","text":"把表格补完"}""");
 
         Assert.True(answer.Ok);
-        Assert.Equal("已发送到 桌面机/s-1", answer.Text);
-        Assert.Equal(("s-1", "把表格补完"), Assert.Single(link.Sent));
+        Assert.Equal("已发送到 桌面机/写文档（s-2）", answer.Text);
+        Assert.Equal(("s-2", "把表格补完"), Assert.Single(link.Sent));
         Assert.Empty(link.Created);
+    }
+
+    [Fact]
+    public async Task SendsIntoTheSessionPickedByTitleFragment()
+    {
+        var link = new FakeLink("桌面机", Session("aaaaaaaa-1", "修表格"), Session("bbbbbbbb-2", "写文档"));
+        var (ctx, tools) = Harness(link);
+
+        var answer = await Execute(ctx, tools, MachineSessionTools.SendTool,
+            """{"machine":"桌面机","session":"文档","text":"开始写"}""");
+
+        Assert.True(answer.Ok);
+        Assert.Equal(("bbbbbbbb-2", "开始写"), Assert.Single(link.Sent));
+    }
+
+    [Fact]
+    public async Task AmbiguousSelectorReportsTheCandidates()
+    {
+        var link = new FakeLink("桌面机", Session("s-1", "修表格 A"), Session("s-2", "修表格 B"));
+        var (ctx, tools) = Harness(link);
+
+        var answer = await Execute(ctx, tools, MachineSessionTools.SendTool,
+            """{"machine":"桌面机","session":"修表格","text":"hi"}""");
+
+        Assert.False(answer.Ok);
+        Assert.Contains("对应多条会话", answer.Text, StringComparison.Ordinal);
+        Assert.Empty(link.Sent);
     }
 
     [Fact]
@@ -59,7 +86,7 @@ public sealed class MachineSessionToolsTests
             """{"machine":"桌面机","text":"先开个会话再发","cwd":"D:/work"}""");
 
         Assert.True(answer.Ok);
-        Assert.Equal("已发送到 桌面机/created-1", answer.Text);
+        Assert.Equal("已发送到 桌面机/新会话（created-1）", answer.Text);
         Assert.Equal(["D:/work"], link.Created);
         Assert.Equal(("created-1", "先开个会话再发"), Assert.Single(link.Sent));
     }
