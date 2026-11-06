@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Gui.Shared.Mobile;
 using Dsh.Host;
 using Dsh.RemoteHost;
 
@@ -74,7 +75,7 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
                 settings.BaseUrl is { Length: > 0 } ? settings.BaseUrl : null,
                 ApiKey: settings.ApiKey,
                 IsTui: false));
-            _tools = PhoneTools.Register(_app.Ctx, new AndroidPhoneDevice());
+            _tools = PhoneAgentTools.Register(_app.Ctx, new AndroidPhoneDevice());
             var (serverSide, clientSide) = LocalDuplex.Create();
             _backend = await HarnessRemoteHostBackend.CreateAsync(_app);
             _server = new RemoteHostServer(new RemoteHostServerOptions(), _backend);

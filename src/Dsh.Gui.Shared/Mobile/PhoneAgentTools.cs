@@ -1,17 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
-using Dsh.Gui.Shared.Mobile;
 using Dsh.Llm;
 using Dsh.Runtime;
 
-namespace Dsh.Android.Services;
+namespace Dsh.Gui.Shared.Mobile;
 
 /**
  * 把手机自身的能力注册成本机 agent 的原生工具。
  * 与 MCP 服务端共用同一份 IPhoneDevice 语义, 只是这里直接进 ToolRuntime, 不需要网络与协议。
  */
-public static class PhoneTools
+public static class PhoneAgentTools
 {
     public const string LauncherName = "android_launch_app";
     public const string ListAppsName = "android_list_apps";
@@ -20,7 +19,7 @@ public static class PhoneTools
 
     public static IDisposable Register(Context ctx, IPhoneDevice device)
     {
-        var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
+        var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName, false)
             ?? throw new InvalidOperationException("tool runtime is not available");
         return new Registrations(
         [
@@ -82,6 +81,7 @@ public static class PhoneTools
             : PhoneActionResult.Done(string.Join('\n', apps.Select(app => $"{app.Label} · {app.Package}")));
     }
 
+    /** 输出的形状在这里写死: 交给序列化器猜属性名, render 就找不到 text。 */
     private static ToolDefinition Tool(string name, string description, JsonObject parameters, Func<JsonElement, PhoneActionResult> run)
         => new()
         {
@@ -100,8 +100,12 @@ public static class PhoneTools
                         ["text"] = new JsonObject { ["type"] = "string", ["description"] = "给模型看的结果文本" },
                     },
                 },
-                (value, _) => [new TextBlock(value.GetProperty("text").GetString() ?? "")]),
-            Execute = (args, _) => Task.FromResult<object?>(run(args)),
+                (_, value) => [new TextBlock(value.GetProperty("text").GetString() ?? "")]),
+            Execute = (args, _) =>
+            {
+                var result = run(args);
+                return Task.FromResult<object?>(new JsonObject { ["ok"] = result.Ok, ["text"] = result.Text });
+            },
         };
 
     private static string? Text(JsonElement args, string name)
