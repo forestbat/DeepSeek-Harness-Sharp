@@ -29,6 +29,12 @@ internal static class WindowsNative
     [StructLayout(LayoutKind.Sequential)]
     internal struct SidAndAttributes { public nint Sid; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString { public ushort Length, MaximumLength; public nint Buffer; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ObjectAttributes { public int Length; public nint Root, Name; public uint Attributes; public nint Security, Quality; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatus { public nint Status; public nuint Information; }
+    [StructLayout(LayoutKind.Sequential)]
     internal struct JobBasicLimit
     {
         public long PerProcessTime, PerJobTime;
@@ -87,8 +93,6 @@ internal static class WindowsNative
     [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(nint list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateProcess(string executable, StringBuilder commandLine, nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, nint environment, string workingDirectory, ref StartupInfoEx startup, out ProcessInformation information);
-    internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
-        => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
     internal static string PathForNative(string path)
     {
         // Extended-length paths bypass Win32 separator normalization.
@@ -96,12 +100,35 @@ internal static class WindowsNative
         return path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path
             : path.StartsWith("\\\\", StringComparison.Ordinal) ? $"\\\\?\\UNC\\{path[2..]}" : $"\\\\?\\{path}";
     }
-    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
+    internal static unsafe SafeFileHandle OpenSecurityHandle(string path, bool writable)
+    {
+        const uint securityAccess = 0x160000, readAttributes = 0x80, writeOwner = 0x80000, shareAll = 7;
+        const uint caseInsensitive = 0x40, synchronousOpenReparsePoint = 0x200020;
+        var dosPath = path.Replace('/', '\\').AsSpan();
+        var nativePath = dosPath.StartsWith(@"\\?\", StringComparison.Ordinal) ? $@"\??\{dosPath[4..]}"
+            : dosPath.StartsWith(@"\\", StringComparison.Ordinal) ? $@"\??\UNC\{dosPath[2..]}" : $@"\??\{dosPath}";
+        fixed (char* text = nativePath)
+        {
+            var name = new UnicodeString { Length = checked((ushort)(nativePath.Length * 2)), MaximumLength = checked((ushort)(nativePath.Length * 2)), Buffer = (nint)text };
+            var attributes = new ObjectAttributes { Length = sizeof(ObjectAttributes), Name = (nint)(&name), Attributes = caseInsensitive };
+            // ACL operations use the caller's ordinary access check even when backup privileges are enabled.
+            // READ_ATTRIBUTES lets GetSecurityInfo retain the filesystem's inherited ACE metadata.
+            var status = NtOpenFile(out var handle, securityAccess | readAttributes | (writable ? writeOwner : 0), ref attributes, out _, shareAll, synchronousOpenReparsePoint);
+            if (status >= 0)
+                return handle;
+            handle.Dispose();
+            throw new System.ComponentModel.Win32Exception((int)RtlNtStatusToDosError(status), "Cannot open the declared path for its AppContainer filesystem grant.");
+        }
+    }
 
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [DllImport("ntdll.dll")]
+    private static extern int NtOpenFile(out SafeFileHandle handle, uint access, ref ObjectAttributes attributes, out IoStatus status, uint share, uint options);
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
+
+    [DllImport("advapi32.dll")]
     internal static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [DllImport("advapi32.dll")]
     internal static extern uint SetSecurityInfo(SafeFileHandle handle, int type, uint information, nint owner, nint group, nint dacl, nint sacl);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string descriptor, uint revision, out nint converted, out uint size);

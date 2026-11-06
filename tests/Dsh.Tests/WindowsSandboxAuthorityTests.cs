@@ -30,6 +30,26 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         File.WriteAllText(secret, "host-only");
         var settingsBytes = "unchanged"u8.ToArray();
         File.WriteAllBytes(denied, settingsBytes);
+        const AceFlags descendants = AceFlags.ObjectInherit | AceFlags.ContainerInherit | AceFlags.InheritOnly;
+        var packageRoots = new[]
+        {
+            PackageReadableRoot("restricted-package", "S-1-15-2-2", descendants),
+            PackageReadableRoot("ordinary-package", "S-1-15-2-1", descendants),
+            PackageReadableRoot("non-propagating-package", "S-1-15-2-2", descendants | AceFlags.NoPropagateInherit),
+        };
+        var packageFiles = packageRoots.Select(path => Path.Combine(path, "nested", "input.txt")).ToArray();
+        var packageAcls = packageRoots.Select(ReadDacl).ToArray();
+        var packageFileAcls = packageFiles.Select(ReadDacl).ToArray();
+        var protectedChild = Path.Combine(packageRoots[0], "protected.txt");
+        File.WriteAllText(protectedChild, "host-only");
+        using (var identity = WindowsIdentity.GetCurrent())
+        {
+            var security = new FileInfo(protectedChild).GetAccessControl(AccessControlSections.Access);
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.FullControl, AccessControlType.Allow));
+            new FileInfo(protectedChild).SetAccessControl(security);
+        }
+        var protectedChildAcl = ReadDacl(protectedChild);
         var originalParentAcl = ReadDacl(_root);
         var originalSecretAcl = ReadDacl(secret);
         var originalDirectoryAcl = ReadDacl(working);
@@ -39,12 +59,13 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         await using (var consumer = await SandboxedProcess.StartAsync(launch with
         {
             WorkingDirectory = working,
-            ReadOnlyPaths = [input],
+            ReadOnlyPaths = [input, .. packageRoots],
             WritablePaths = [working],
             DeniedWritePaths = [denied],
-            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, bool.FalseString],
+            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, bool.FalseString, .. packageFiles, protectedChild],
         }, TestContext.Current.CancellationToken))
         {
+            Assert.Equal(protectedChildAcl, ReadDacl(protectedChild));
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = new StreamReader(consumer.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
             await consumer.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
@@ -78,6 +99,13 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
         AssertDaclRestored(originalDirectoryAcl, working);
         AssertDaclRestored(originalInputAcl, input);
         AssertDaclRestored(originalDeniedAcl, denied);
+        for (var index = 0; index < packageRoots.Length; index++)
+        {
+            AssertDaclRestored(packageAcls[index], packageRoots[index]);
+            AssertDaclRestored(packageFileAcls[index], packageFiles[index]);
+            Assert.Equal(SandboxFileGrantConsumer.PackageReadable, File.ReadAllText(packageFiles[index]));
+        }
+        Assert.Equal(protectedChildAcl, ReadDacl(protectedChild));
         File.WriteAllText(denied, "host-write-after-disposal");
         Assert.Equal("host-write-after-disposal", File.ReadAllText(denied));
     }
@@ -123,6 +151,29 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             inaccessible.SetSecurityDescriptorSddlForm(originalReadableAcl, AccessControlSections.Access);
             readable.SetAccessControl(inaccessible);
         }
+    }
+
+    private string PackageReadableRoot(string name, string packageSid, AceFlags childFlags)
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_root, name));
+        using var identity = WindowsIdentity.GetCurrent();
+        var acl = new RawAcl(GenericAcl.AclRevision, 4);
+        acl.InsertAce(acl.Count, new CommonAce(AceFlags.ObjectInherit | AceFlags.ContainerInherit,
+            AceQualifier.AccessAllowed, (int)FileSystemRights.FullControl, identity.User!, false, null));
+        acl.InsertAce(acl.Count, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed,
+            (int)(FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize), new SecurityIdentifier(packageSid), false, null));
+        acl.InsertAce(acl.Count, new CommonAce(childFlags, AceQualifier.AccessAllowed,
+            unchecked((int)0xa0000000), new SecurityIdentifier(packageSid), false, null));
+        var descriptor = new RawSecurityDescriptor(ControlFlags.DiscretionaryAclPresent | ControlFlags.DiscretionaryAclProtected,
+            null, null, null, acl);
+        var bytes = new byte[descriptor.BinaryLength];
+        descriptor.GetBinaryForm(bytes, 0);
+        var security = directory.GetAccessControl(AccessControlSections.Access);
+        security.SetSecurityDescriptorBinaryForm(bytes, AccessControlSections.Access);
+        directory.SetAccessControl(security);
+        var nested = Directory.CreateDirectory(Path.Combine(directory.FullName, "nested"));
+        File.WriteAllText(Path.Combine(nested.FullName, "input.txt"), SandboxFileGrantConsumer.PackageReadable);
+        return directory.FullName;
     }
 
     private static void AssertDaclRestored(string expected, string path)
