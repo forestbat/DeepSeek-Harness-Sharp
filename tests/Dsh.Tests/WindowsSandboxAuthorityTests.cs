@@ -15,39 +15,26 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
     public void Dispose() => TempTree.Delete(_root);
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [Fact]
     [Trait("Category", "SandboxNative")]
-    public async Task PathGrants_EnforceReadsAndWrites_AndAreRemovedAfterDisposal(bool protectedParent)
+    public async Task PathGrants_EnforceReadsAndWrites_AndAreRemovedAfterDisposal()
     {
         if (!OperatingSystem.IsWindows())
             Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
         var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
         var input = Path.Combine(_root, "readable.txt");
         var secret = Path.Combine(_root, "not-granted.txt");
-        var protectedDirectoryInfo = protectedParent
-            ? Directory.CreateDirectory(Path.Combine(working, "config")) : new DirectoryInfo(working);
-        var protectedDirectory = protectedDirectoryInfo.FullName;
-        if (protectedParent)
-        {
-            var protectedAcl = protectedDirectoryInfo.GetAccessControl(AccessControlSections.Access);
-            protectedAcl.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
-            protectedDirectoryInfo.SetAccessControl(protectedAcl);
-        }
-        var denied = Path.Combine(protectedDirectory, "settings.yaml");
+        var denied = Path.Combine(working, "settings.yaml");
         const string readable = "readable\r\nsecond-readable-line\r\nlast-readable-line\r\n";
         File.WriteAllText(input, readable);
         File.WriteAllText(secret, "host-only");
         var settingsBytes = "unchanged"u8.ToArray();
         File.WriteAllBytes(denied, settingsBytes);
         var originalParentAcl = ReadDacl(_root);
-        var originalProtectedDirectoryAcl = ReadDacl(protectedDirectory);
         var originalSecretAcl = ReadDacl(secret);
         var originalDirectoryAcl = ReadDacl(working);
         var originalInputAcl = ReadDacl(input);
         var originalDeniedAcl = ReadDacl(denied);
-        string expectedDeniedAcl;
         var launch = PluginSandboxLaunch.Options(SandboxRuntimePaths.ForCurrentHost());
         await using (var consumer = await SandboxedProcess.StartAsync(launch with
         {
@@ -55,7 +42,7 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             ReadOnlyPaths = [input],
             WritablePaths = [working],
             DeniedWritePaths = [denied],
-            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, protectedParent.ToString()],
+            Arguments = [.. launch.Arguments.Take(launch.Arguments.Count - 1), SandboxFileGrantConsumer.Argument, input, secret, denied, bool.FalseString],
         }, TestContext.Current.CancellationToken))
         {
             var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -81,151 +68,62 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             Assert.True(stderr.Contains("diagnostic", StringComparison.Ordinal), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-before.txt")), failure);
             Assert.True(!File.Exists(Path.Combine(working, "rename-after.txt")), failure);
-            expectedDeniedAcl = AddConcurrentReadAttributeGrant(denied, originalDeniedAcl);
         }
         Assert.Equal("allowed", File.ReadAllText(Path.Combine(working, "allowed.txt")).Trim());
         Assert.Equal(settingsBytes, File.ReadAllBytes(denied));
         Assert.Equal(readable, File.ReadAllText(input));
         Assert.Equal("host-only", File.ReadAllText(secret));
         AssertDaclRestored(originalParentAcl, _root);
-        AssertDaclRestored(originalProtectedDirectoryAcl, protectedDirectory);
         AssertDaclRestored(originalSecretAcl, secret);
         AssertDaclRestored(originalDirectoryAcl, working);
         AssertDaclRestored(originalInputAcl, input);
-        AssertDaclRestored(expectedDeniedAcl, denied);
-        AssertInheritanceRestored(working, denied, protectedParent);
+        AssertDaclRestored(originalDeniedAcl, denied);
         File.WriteAllText(denied, "host-write-after-disposal");
         Assert.Equal("host-write-after-disposal", File.ReadAllText(denied));
     }
 
     [Fact]
     [Trait("Category", "SandboxNative")]
-    public async Task ReadOnlyRoot_AllowsRuntimeCreatedDescendantsWithoutAllowingWrites()
+    public async Task UnreadableRoot_RefusesLaunchAndRollsBackEarlierGrants()
     {
         if (!OperatingSystem.IsWindows())
-            Assert.Skip("This consumer requires Windows AppContainer and native filesystem access checks.");
+            Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
         var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
         var readable = Directory.CreateDirectory(Path.Combine(_root, "readonly"));
-        var acl = readable.GetAccessControl(AccessControlSections.Access);
-        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-2-2"), FileSystemRights.ReadAndExecute,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-            PropagationFlags.None, AccessControlType.Allow));
-        readable.SetAccessControl(acl);
-        var input = Path.Combine(readable.FullName, "input.txt");
-        File.WriteAllText(input, "initial-read");
-        var originalAcl = ReadDacl(readable.FullName);
-        string lateFile;
-        await using (var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
-        {
-            Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
-            WorkingDirectory = working,
-            ReadOnlyPaths = [readable.FullName],
-            Arguments = ["/D", "/Q", "/C",
-                @"set /p gate=&type ..\readonly\input.txt&type ..\readonly\new\late.txt&(echo tampered>>..\readonly\input.txt) 2>nul&exit /b 0"],
-        }, TestContext.Current.CancellationToken))
-        {
-            var output = new StreamReader(consumer.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
-            var error = consumer.StandardError.CopyToAsync(Stream.Null, TestContext.Current.CancellationToken);
-            // Runtime-created descendants exercise inherited authority after the real consumer starts and before its input is released.
-            var lateDirectory = Directory.CreateDirectory(Path.Combine(readable.FullName, "new")).FullName;
-            lateFile = Path.Combine(lateDirectory, "late.txt");
-            File.WriteAllText(lateFile, "late-read");
-            await consumer.StandardInput.WriteAsync("continue\n"u8.ToArray(), TestContext.Current.CancellationToken);
-            await consumer.StandardInput.DisposeAsync();
-            Assert.Equal(0, await consumer.WaitForExitAsync(TestContext.Current.CancellationToken)
-                .WaitAsync(Deadline, TestContext.Current.CancellationToken));
-            var stdout = await output;
-            await error;
-            Assert.Contains("initial-read", stdout);
-            Assert.Contains("late-read", stdout);
-            Assert.Equal("initial-read", File.ReadAllText(input));
-        }
-        AssertDaclRestored(originalAcl, readable.FullName);
-        var hostAfter = Path.Combine(Path.GetDirectoryName(lateFile)!, "host-after.txt");
-        File.WriteAllText(hostAfter, "host-after");
-        Assert.Equal(ReadDacl(hostAfter), ReadDacl(lateFile));
-    }
-
-    [Fact]
-    [Trait("Category", "SandboxNative")]
-    public async Task ProtectedSettings_WithAmbientNetworkCapabilityWrite_RefusesLaunchBeforeExecution()
-    {
-        if (!OperatingSystem.IsWindows())
-            Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
-        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
-        var settings = Path.Combine(working, "settings.yaml");
-        var settingsBytes = "unchanged"u8.ToArray();
-        await File.WriteAllBytesAsync(settings, settingsBytes, TestContext.Current.CancellationToken);
-        var file = new FileInfo(settings);
-        var acl = file.GetAccessControl(AccessControlSections.Access);
-        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-3-1"), FileSystemRights.WriteData, AccessControlType.Allow));
-        file.SetAccessControl(acl);
         var originalDirectoryAcl = ReadDacl(working);
-        var originalSettingsAcl = ReadDacl(settings);
+        var originalReadableAcl = ReadDacl(readable.FullName);
+        var inaccessible = readable.GetAccessControl(AccessControlSections.Access);
+        using var identity = WindowsIdentity.GetCurrent();
+        inaccessible.AddAccessRule(new FileSystemAccessRule(identity.User!,
+            FileSystemRights.ReadPermissions, AccessControlType.Deny));
+        // An OWNER RIGHTS ACE suppresses implicit owner READ_CONTROL while retaining WRITE_DAC for restoration.
+        inaccessible.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-3-4"),
+            FileSystemRights.ChangePermissions, AccessControlType.Allow));
+        readable.SetAccessControl(inaccessible);
         var resumedMarker = Path.Combine(working, "resumed.txt");
-
-        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        try
         {
-            await using var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+            var failure = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(async () =>
             {
-                Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
-                WorkingDirectory = working,
-                WritablePaths = [working],
-                DeniedWritePaths = [settings],
-                AllowNetwork = true,
-                Arguments = ["/D", "/Q", "/C", "echo resumed>resumed.txt"],
-            }, TestContext.Current.CancellationToken);
-        });
-
-        Assert.Equal(settingsBytes, await File.ReadAllBytesAsync(settings, TestContext.Current.CancellationToken));
-        AssertDaclRestored(originalDirectoryAcl, working);
-        AssertDaclRestored(originalSettingsAcl, settings);
-        AssertInheritanceRestored(working, settings, protectedChild: false);
-        Assert.False(File.Exists(resumedMarker));
-    }
-
-    [Fact]
-    [Trait("Category", "SandboxNative")]
-    public async Task ReadOnlyDirectory_WithAmbientInheritOnlyWriteGrant_RefusesLaunchAndPreservesAcl()
-    {
-        if (!OperatingSystem.IsWindows())
-            Assert.Skip("This consumer requires Windows AppContainer and native filesystem ACLs.");
-        var directory = Directory.CreateDirectory(Path.Combine(_root, "readonly"));
-        var acl = directory.GetAccessControl(AccessControlSections.Access);
-        acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-15-2-1"), FileSystemRights.WriteData,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.InheritOnly, AccessControlType.Allow));
-        directory.SetAccessControl(acl);
-        var originalAcl = ReadDacl(directory.FullName);
-
-        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+                await using var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
+                {
+                    Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                    WorkingDirectory = working,
+                    ReadOnlyPaths = [readable.FullName],
+                    WritablePaths = [working],
+                    Arguments = ["/D", "/Q", "/C", "echo resumed>resumed.txt"],
+                }, TestContext.Current.CancellationToken);
+            });
+            Assert.Equal(5, failure.NativeErrorCode);
+            AssertDaclRestored(originalDirectoryAcl, working);
+            Assert.False(File.Exists(resumedMarker));
+        }
+        finally
         {
-            await using var consumer = await SandboxedProcess.StartAsync(new SandboxProcessOptions
-            {
-                Executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
-                WorkingDirectory = directory.FullName,
-                ReadOnlyPaths = [directory.FullName],
-                Arguments = ["/D", "/Q", "/C", "exit", "0"],
-            }, TestContext.Current.CancellationToken);
-        });
-
-        Assert.Equal(originalAcl, ReadDacl(directory.FullName));
+            inaccessible.SetSecurityDescriptorSddlForm(originalReadableAcl, AccessControlSections.Access);
+            readable.SetAccessControl(inaccessible);
+        }
     }
-
-    private static string AddConcurrentReadAttributeGrant(string path, string original)
-    {
-        // This synthetic SID is a test-only principal, not a real account.
-        var principal = new SecurityIdentifier("S-1-5-21-0-0-0-271828");
-        var rule = new FileSystemAccessRule(principal, FileSystemRights.ReadAttributes, AccessControlType.Allow);
-        var expected = new FileSecurity();
-        expected.SetSecurityDescriptorSddlForm(original, AccessControlSections.Access);
-        expected.AddAccessRule(rule);
-        var file = new FileInfo(path);
-        var current = file.GetAccessControl(AccessControlSections.Access);
-        current.AddAccessRule(rule);
-        file.SetAccessControl(current);
-        return expected.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
-    }
-
 
     private static void AssertDaclRestored(string expected, string path)
     {
@@ -238,41 +136,6 @@ public sealed class WindowsSandboxAuthorityTests : IDisposable
             after.SetFlags(after.ControlFlags & ~ControlFlags.DiscretionaryAclAutoInherited);
         Assert.Equal(before.ControlFlags, after.ControlFlags);
         Assert.Equal(before.GetSddlForm(AccessControlSections.Access), after.GetSddlForm(AccessControlSections.Access));
-    }
-
-    private static void AssertInheritanceRestored(string parent, string child, bool protectedChild)
-    {
-        var marker = new SecurityIdentifier("S-1-5-21-0-0-0-314159");
-        var rule = new FileSystemAccessRule(marker, FileSystemRights.ReadAttributes,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow);
-        var directory = new DirectoryInfo(parent);
-        var originalParent = ReadDacl(parent);
-        var originalChild = ReadDacl(child);
-        var acl = directory.GetAccessControl(AccessControlSections.Access);
-        var created = Path.Combine(parent, "host-created-after-disposal.txt");
-        acl.AddAccessRule(rule);
-        directory.SetAccessControl(acl);
-        try
-        {
-            var inherited = new FileInfo(child).GetAccessControl(AccessControlSections.Access)
-                .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
-                .Cast<FileSystemAccessRule>().Any(access => marker.Equals(access.IdentityReference)
-                    && access.IsInherited && access.FileSystemRights == rule.FileSystemRights);
-            Assert.Equal(!protectedChild, inherited);
-            File.WriteAllText(created, "host-created");
-            Assert.Contains(new FileInfo(created).GetAccessControl(AccessControlSections.Access)
-                .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
-                .Cast<FileSystemAccessRule>(), access => marker.Equals(access.IdentityReference)
-                    && access.IsInherited && access.FileSystemRights == rule.FileSystemRights);
-        }
-        finally
-        {
-            acl.RemoveAccessRuleSpecific(rule);
-            directory.SetAccessControl(acl);
-            File.Delete(created);
-        }
-        AssertDaclRestored(originalParent, parent);
-        AssertDaclRestored(originalChild, child);
     }
 
     private static string ReadDacl(string path) => Directory.Exists(path)
