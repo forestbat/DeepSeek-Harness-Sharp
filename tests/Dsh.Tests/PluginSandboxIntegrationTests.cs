@@ -565,11 +565,11 @@ public sealed class PluginSandboxIntegrationTests
         }
         else
             await HarnessSettings.UpdatePluginAsync(fixture.Home, Alpha, existing => existing! with { Enabled = false });
-        var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
-        var files = Directory.GetFiles(fixture.Plugins, "*", SearchOption.AllDirectories).Order().ToArray();
         using var answerer = scenario == "rejected"
             ? fixture.AnswerSettingsDiff(allowed: false)
             : ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
+        var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        var files = Directory.GetFiles(fixture.Plugins, "*", SearchOption.AllDirectories).Order().ToArray();
 
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target }, TestContext.Current.CancellationToken);
 
