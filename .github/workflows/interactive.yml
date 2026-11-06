@@ -29,7 +29,8 @@ jobs:
   ssh:
     name: 交互会话（${{ matrix.os }}）
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.timeout_minutes }}
+    # Dispatches from the API or gh CLI deliver number inputs as strings.
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     strategy:
       fail-fast: false
       matrix:
