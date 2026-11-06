@@ -42,7 +42,6 @@
     <Project Path="src/Dsh.Memory/Dsh.Memory.csproj" />
     <Project Path="src/Dsh.Notifications/Dsh.Notifications.csproj" />
     <Project Path="src/Dsh.Persistence/Dsh.Persistence.csproj" />
-    <Project Path="src/Dsh.PlanMode/Dsh.PlanMode.csproj" />
     <Project Path="src/Dsh.Plugins.Abstractions/Dsh.Plugins.Abstractions.csproj" />
     <Project Path="src/Dsh.Plugins.Generator/Dsh.Plugins.Generator.csproj" />
     <Project Path="src/Dsh.Plugins.Host/Dsh.Plugins.Host.csproj" />

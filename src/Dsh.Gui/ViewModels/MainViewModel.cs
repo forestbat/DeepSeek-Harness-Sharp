@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Avalonia.Threading;
@@ -33,12 +32,6 @@ public enum ChatTab
 {
     Conversation,
     Trace,
-}
-
-public enum SessionMode
-{
-    Standard,
-    Plan,
 }
 
 /** 主窗口状态: 会话目录、会话流、轨迹、输入胶囊、页面切换与统一决策入口。 */
@@ -274,10 +267,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _hasReasoningEfforts;
 
     [ObservableProperty]
-    private SessionMode _mode = SessionMode.Standard;
-
-
-    [ObservableProperty]
     private bool _isDashboardPage;
 
     [ObservableProperty]
@@ -316,12 +305,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     public bool IsFileSystemView => WorkspaceView == GuiSettings.ViewFilesystem;
 
     public string WorkspaceViewLabel => IsFileSystemView ? "文件系统视图" : "解决方案视图";
-
-    public string ModeLabel => Mode switch
-    {
-        SessionMode.Plan => "计划模式",
-        _ => "标准模式",
-    };
 
 
     /** 只有这三页走懒加载的 ContentControl; 其他页面由各自的 Host 承载, ContentControl 必须隐藏, 否则会把枚举名画成 "Chat"/"WorkspacePage" 文本。 */
@@ -424,8 +407,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Gui.Save(Gui.Load() with { ShowOnlyWithSessions = value });
         RefreshSessions();
     }
-
-    partial void OnModeChanged(SessionMode value) => OnPropertyChanged(nameof(ModeLabel));
 
 
     partial void OnSelectedSessionChanged(SessionNodeViewModel? value)
@@ -960,25 +941,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     [RelayCommand]
-    private void SetMode(string mode)
-    {
-        if (mode == "plan")
-        {
-            _ = TogglePlanModeAsync();
-            return;
-        }
-
-        if (Mode == SessionMode.Plan)
-        {
-            _ = TogglePlanModeAsync();
-            return;
-        }
-
-        Mode = SessionMode.Standard;
-        StatusText = "标准模式";
-    }
-
-    [RelayCommand]
     private void InsertMention(string text)
     {
         var insert = $"@{text}";
@@ -1451,14 +1413,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task TogglePlanModeAsync()
-    {
-        var output = await _chat.RunAsync("/plan");
-        var enabled = output.Contains("on", StringComparison.OrdinalIgnoreCase);
-        Mode = enabled ? SessionMode.Plan : SessionMode.Standard;
-        StatusText = output;
-    }
-
     private void ShowSession()
     {
         UpdateCurrentWorkspace();
@@ -1479,53 +1433,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         SessionTitle = _chat.Header.Title ?? _chat.Id.Value;
         IsBusy = false;
         ApplyEvents(_chat.Events, replay: true);
-        RefreshMode();
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
-    }
-
-    private void RefreshMode()
-        => Mode = PlanActive(_chat.Events) ? SessionMode.Plan : SessionMode.Standard;
-
-
-    /** 计划模式状态持久在会话事件 `plan/mode` 里; 这里只读它, 不复制 PlanMode 插件的判定逻辑。 */
-    private static bool PlanActive(IReadOnlyList<SessionEvent> events)
-    {
-        var active = false;
-        foreach (var sessionEvent in events)
-        {
-            if (sessionEvent.Type != "plan/mode")
-                continue;
-            active = ReadBoolProperty(sessionEvent.Data, "Active") ?? active;
-        }
-        return active;
-    }
-
-    private static bool? ReadBoolProperty(SessionEventPayload payload, string name)
-        => ReadProperty<bool>(payload, name);
-
-
-    /** payload 经 DshJson(camelCase) 序列化后键名会变形, 故按忽略大小写匹配。 */
-    private static T? ReadProperty<T>(SessionEventPayload payload, string name)
-    {
-        try
-        {
-            if (JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options) is not JsonObject json)
-                return default;
-            foreach (var (key, value) in json)
-            {
-                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
-                    return value.GetValue<T>();
-            }
-            return default;
-        }
-        catch (Exception)
-        {
-            return default;
-        }
     }
 
     private void RefreshModelLabels()
