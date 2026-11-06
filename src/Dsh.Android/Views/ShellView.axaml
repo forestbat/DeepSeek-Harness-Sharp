@@ -131,7 +131,7 @@
                             CommandParameter="{Binding}" />
                     <Button Classes="small"
                             Content="断开"
-                            IsVisible="{Binding IsConnected}"
+                            IsVisible="{Binding CanDisconnect}"
                             Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).DetachMachineCommand}"
                             CommandParameter="{Binding}" />
                     <Button Classes="small"
@@ -141,10 +141,12 @@
                             CommandParameter="{Binding}" />
                     <Button Classes="small"
                             Content="编辑"
+                            IsVisible="{Binding CanManage}"
                             Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).EditMachineCommand}"
                             CommandParameter="{Binding}" />
                     <Button Classes="small"
                             Content="删除"
+                            IsVisible="{Binding CanManage}"
                             Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).RemoveMachineCommand}"
                             CommandParameter="{Binding}" />
                   </StackPanel>

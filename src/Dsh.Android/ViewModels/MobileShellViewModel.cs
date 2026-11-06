@@ -112,6 +112,7 @@ public sealed partial class MachineRowViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [NotifyPropertyChangedFor(nameof(CanDisconnect))]
     private bool _isConnected;
 
     [ObservableProperty]
@@ -123,7 +124,12 @@ public sealed partial class MachineRowViewModel : ObservableObject
     [ObservableProperty]
     private string _sessionSummary = "";
 
-    public bool CanConnect => !IsConnected && !IsBusy;
+    /** 本机 host 跟着 App 活着, 没有"连接/断开"这回事; 只有远端机器才需要选机器去连。 */
+    public bool CanConnect => !IsLocal && !IsConnected && !IsBusy;
+
+    public bool CanDisconnect => !IsLocal && IsConnected;
+
+    public bool CanManage => !IsLocal;
 
     public void Update(HostProfile profile)
     {
@@ -188,8 +194,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _localApiKey = localSettings.ApiKey;
         foreach (var machine in store.Load())
             Machines.Add(new MachineRowViewModel(machine));
-        // 保存过完整地址就自动连: 手机端没有稳定的桌面入口, 每次启动都要手点一次连接只会拖慢回到会话的速度。
-        _ = AttachAllAsync();
+        // 本机 host 随 App 启动; 其他机器保存过完整地址就自动连。
+        _ = StartMachinesAsync();
     }
 
     public ObservableCollection<MachineRowViewModel> Machines { get; } = [];
@@ -438,6 +444,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _lifetime.Dispose();
     }
 
+    private async Task StartMachinesAsync()
+    {
+        await StartLocalAsync();
+        await AttachAllAsync();
+    }
+
     private async Task AttachAllAsync()
     {
         foreach (var row in Machines.ToList())
@@ -533,14 +545,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     {
         if (row is null)
             return;
-        if (row.IsLocal)
-        {
-            await StartLocalAsync();
-            SelectedMachine = row;
-            Page = MobilePage.Sessions;
-            return;
-        }
-        await _fleet.AttachAsync(row.Profile);
+        // 本机 host 由 App 启动, 这里的"查看会话"只是换页。
+        if (!row.IsLocal)
+            await _fleet.AttachAsync(row.Profile);
         SelectedMachine = row;
         Page = MobilePage.Sessions;
         RefreshFromFleet();
@@ -549,13 +556,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand]
     private async Task DetachMachine(MachineRowViewModel? row)
     {
-        if (row is null)
+        if (row is null || row.IsLocal)
             return;
-        if (row.IsLocal)
-        {
-            await StopLocalAsync();
-            return;
-        }
         await _fleet.DetachAsync(row.Name);
         row.IsConnected = false;
         row.IsBusy = false;
@@ -568,13 +570,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     [RelayCommand]
     private async Task RemoveMachine(MachineRowViewModel? row)
     {
-        if (row is null)
+        if (row is null || row.IsLocal)
             return;
-        if (row.IsLocal)
-        {
-            await StopLocalAsync();
-            return;
-        }
         await _fleet.DetachAsync(row.Name);
         _store.Save(_store.Load().Where(machine => machine.Name != row.Name).ToList());
         Machines.Remove(row);
