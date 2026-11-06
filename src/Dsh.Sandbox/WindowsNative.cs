@@ -96,7 +96,7 @@ internal static class WindowsNative
     internal static string PathForNative(string path) => path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path : $"\\\\?\\{path}";
     internal static unsafe SafeFileHandle OpenSecurityHandle(string path, bool writable)
     {
-        const uint securityAccess = 0x160000, writeOwner = 0x80000, shareAll = 7;
+        const uint securityAccess = 0x160000, readAttributes = 0x80, writeOwner = 0x80000, shareAll = 7;
         const uint caseInsensitive = 0x40, synchronousOpenReparsePoint = 0x200020;
         var dosPath = path.AsSpan();
         if (dosPath.StartsWith(@"\\?\", StringComparison.Ordinal))
@@ -107,7 +107,8 @@ internal static class WindowsNative
             var name = new UnicodeString { Length = checked((ushort)(nativePath.Length * 2)), MaximumLength = checked((ushort)(nativePath.Length * 2)), Buffer = (nint)text };
             var attributes = new ObjectAttributes { Length = sizeof(ObjectAttributes), Name = (nint)(&name), Attributes = caseInsensitive };
             // ACL operations use the caller's ordinary access check even when backup privileges are enabled.
-            var status = NtOpenFile(out var handle, securityAccess | (writable ? writeOwner : 0), ref attributes, out _, shareAll, synchronousOpenReparsePoint);
+            // READ_ATTRIBUTES lets GetSecurityInfo retain the filesystem's inherited ACE metadata.
+            var status = NtOpenFile(out var handle, securityAccess | readAttributes | (writable ? writeOwner : 0), ref attributes, out _, shareAll, synchronousOpenReparsePoint);
             if (status >= 0)
                 return handle;
             handle.Dispose();
