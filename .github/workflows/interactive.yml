@@ -69,9 +69,10 @@ jobs:
         run: |
           set -euo pipefail
           native() { if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          posix() { if [ "$RUNNER_OS" = Windows ]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
           case "$RUNNER_OS" in Windows) platform=windows ;; Linux) platform=linux ;; macOS) platform=darwin ;; esac
           case "$RUNNER_ARCH" in X64) arch=amd64 ;; ARM64) arch=arm64 ;; esac
-          dir="$(if [ "$RUNNER_OS" = Windows ]; then cygpath -u "$RUNNER_TEMP"; else printf '%s' "$RUNNER_TEMP"; fi)/upterm"
+          dir="$(posix "$RUNNER_TEMP")/upterm"
           mkdir -p "$dir/handoff" "$dir/run"
           if [ "$RUNNER_OS" != Windows ]; then
             # macOS caps Unix socket paths at 104 bytes, so keep upterm's admin socket under the short runner temp path.
@@ -94,8 +95,10 @@ jobs:
             --known-hosts "$(native "$dir/known_hosts")" --server ssh://uptermd.upterm.dev:22 \
             --authorized-keys "$(native "$dir/authorized_keys")" --full-access -- bash -l > "$dir/session.json"
           jq -e '.open != true and (.sshCommand | length > 0)' "$dir/session.json" > /dev/null
-          jq -r '.sshCommand' "$dir/session.json" > "$dir/handoff/ssh-command.txt"
-          printf '%s\n' "$GITHUB_WORKSPACE" > "$dir/handoff/workspace.txt"
+          # jq on Windows ends lines with CRLF, which would corrupt the host name.
+          jq -r '.sshCommand' "$dir/session.json" | tr -d '\r' > "$dir/handoff/ssh-command.txt"
+          posix "$GITHUB_WORKSPACE" > "$dir/handoff/workspace.txt"
+          echo >> "$dir/handoff/workspace.txt"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "handoff=$(native "$dir/handoff")" >> "$GITHUB_OUTPUT"
 
