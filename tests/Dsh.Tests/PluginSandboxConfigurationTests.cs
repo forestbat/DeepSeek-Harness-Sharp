@@ -19,6 +19,9 @@ public sealed class PluginSandboxConfigurationTests
             ["unsigned"] = ulong.MaxValue,
             ["amount"] = decimal.MaxValue,
             ["ratio"] = 1e300,
+            ["small"] = 1e-30,
+            ["subnormal"] = double.Epsilon,
+            ["rounded"] = 1.2345678901234567e-28,
             ["missing"] = null,
             ["nested"] = new Dictionary<string, object?>
             {
@@ -36,26 +39,13 @@ public sealed class PluginSandboxConfigurationTests
         Assert.Equal(ulong.MaxValue, config.Unsigned);
         Assert.Equal(decimal.MaxValue, config.Amount);
         Assert.Equal(1e300, config.Ratio);
+        Assert.Equal(1e-30, config.Small);
+        Assert.Equal(double.Epsilon, config.Subnormal);
+        Assert.Equal(1.2345678901234567e-28, config.Rounded);
         Assert.Null(config.Missing);
         Assert.Equal(text, config.Nested.Label);
         Assert.Equal([1, -2, int.MaxValue], config.Nested.Numbers);
         Assert.False(config.Nested.Enabled);
-    }
-
-    [Fact]
-    public void FloatingPointConfiguration_PreservesTinyAndSubnormalValues()
-    {
-        var values = new Dictionary<string, object?>
-        {
-            ["small"] = 1e-30,
-            ["subnormal"] = double.Epsilon,
-            ["rounded"] = 1.2345678901234567e-28,
-        };
-        var wire = JsonSerializer.SerializeToElement(values, PluginConfigurationJsonContext.Default.Object);
-        var config = PluginConfigBinding.Bind<FloatingConfiguration>(PluginSandboxWorkerWire.Configuration(wire));
-        Assert.Equal(1e-30, config.Small);
-        Assert.Equal(double.Epsilon, config.Subnormal);
-        Assert.Equal(1.2345678901234567e-28, config.Rounded);
     }
 
     public sealed class WorkerConfiguration
@@ -67,6 +57,9 @@ public sealed class PluginSandboxConfigurationTests
         public ulong Unsigned { get; set; }
         public decimal Amount { get; set; }
         public double Ratio { get; set; }
+        public double Small { get; set; }
+        public double Subnormal { get; set; }
+        public double Rounded { get; set; }
         public string? Missing { get; set; } = "configured";
         public NestedConfiguration Nested { get; set; } = new();
     }
@@ -76,12 +69,5 @@ public sealed class PluginSandboxConfigurationTests
         public string Label { get; set; } = "";
         public int[] Numbers { get; set; } = [];
         public bool Enabled { get; set; } = true;
-    }
-
-    public sealed class FloatingConfiguration
-    {
-        public double Small { get; set; }
-        public double Subnormal { get; set; }
-        public double Rounded { get; set; }
     }
 }

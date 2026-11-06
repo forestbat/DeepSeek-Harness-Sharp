@@ -41,7 +41,7 @@
       因此产物文件用下面的 None 显式复制。
     -->
     <ProjectReference Include="..\Dsh.ManagedPluginSample\Dsh.ManagedPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
-    <ProjectReference Include="..\Dsh.IsolatedPluginSample\Dsh.IsolatedPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
+    <ProjectReference Include="..\Dsh.SandboxPluginSample\Dsh.SandboxPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <ProjectReference Include="..\..\templates\managed-plugin\DshPluginTemplate.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!-- 让 /plugins add 走与真实插件相同的 dll + deps 闭包路径。 -->
     <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.dll"
@@ -146,26 +146,26 @@
   </Target>
 
   <!-- Keep adversarial fixture code outside the host image and copy its actual deployment closure. -->
-  <Target Name="CopyIsolatedPluginRuntime" AfterTargets="Build">
+  <Target Name="CopySandboxPluginRuntime" AfterTargets="Build">
     <ItemGroup>
-      <_IsolatedPluginRuntime Include="$(MSBuildProjectDirectory)/../Dsh.IsolatedPluginSample/bin/$(Configuration)/$(TargetFramework)/**/*" />
+      <_SandboxPluginRuntime Include="$(MSBuildProjectDirectory)/../Dsh.SandboxPluginSample/bin/$(Configuration)/$(TargetFramework)/**/*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_IsolatedPluginRuntime)"
-          DestinationFiles="@(_IsolatedPluginRuntime->'$(TargetDir)isolated-plugin/%(RecursiveDir)%(Filename)%(Extension)')"
+    <Copy SourceFiles="@(_SandboxPluginRuntime)"
+          DestinationFiles="@(_SandboxPluginRuntime->'$(TargetDir)sandbox-plugin/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Build-only fixture copies must also participate in the self-contained publish manifest. -->
   <Target Name="PublishSandboxFixtureRuntimes" BeforeTargets="ComputeFilesToPublish"
-          DependsOnTargets="CopyMcpResourceServerRuntime;CopyIsolatedPluginRuntime">
+          DependsOnTargets="CopyMcpResourceServerRuntime;CopySandboxPluginRuntime">
     <ItemGroup>
       <ResolvedFileToPublish Include="@(_McpResourceServerRuntime)">
         <RelativePath>mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>
-      <ResolvedFileToPublish Include="@(_IsolatedPluginRuntime)">
-        <RelativePath>isolated-plugin/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+      <ResolvedFileToPublish Include="@(_SandboxPluginRuntime)">
+        <RelativePath>sandbox-plugin/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>
