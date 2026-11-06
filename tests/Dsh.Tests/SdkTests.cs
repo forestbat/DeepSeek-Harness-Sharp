@@ -172,7 +172,7 @@ public sealed class SdkTests
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
         var project = await CreateProjectAsync(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -208,7 +208,7 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -229,7 +229,7 @@ public sealed class SdkTests
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
         var project = await CreateProjectAsync(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -267,7 +267,7 @@ public sealed class SdkTests
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
         var project = await CreateProjectAsync(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -350,7 +350,7 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
         {
             var input = new StringReader("""
                 {"jsonrpc":"2.0","id":"1","method":"initialize","params":{"cwd":"C:\\work","provider":"deepseek-official","model":"deepseek-v4-flash"}}

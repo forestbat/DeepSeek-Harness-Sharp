@@ -21,7 +21,7 @@ internal static class TestProcessEntryPoint
         if (args.FirstOrDefault() == CheckpointTests.FilterConsumerArgument)
             return CheckpointTests.RunFilterConsumerAsync(args).GetAwaiter().GetResult();
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
-        if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
+        if (global::Dsh.Plugins.Generated.DshPluginCatalog.TryRunWorkerAsync(args) is { } worker)
             return worker.GetAwaiter().GetResult();
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
             return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
@@ -188,7 +188,8 @@ public sealed class PtcRuntimeTests
     public async Task PtcPlugin_ProjectsNativeToolsAndScopeVisibleSdk()
     {
         using var home = new CompositionHome("plugins: { \"@deepseek-ai/dsh-toon\": false }\n");
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var scope = new ScopeKey();
@@ -226,7 +227,8 @@ public sealed class PtcRuntimeTests
               "@deepseek-ai/dsh-ptc": false
               "@deepseek-ai/dsh-toon": false
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
 
         var assembly = await prompt.Assemble(new AssembleContext(new ScopeKey()));

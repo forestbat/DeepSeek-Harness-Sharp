@@ -643,7 +643,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
         gui.Save(gui.Load() with { Theme = GuiSettings.ThemeLight, FontSize = 15 });
         await using var hostRouteLease = await host.Environment.App.Ctx.Get<FleetService>(FleetService.ServiceName)!
             .OutboundRoute.AcquireAsync(Ct);
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, home.Root));
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var service = app.Ctx.Get<FleetService>(FleetService.ServiceName)!;
         var workspaceOptions = Options with
         {

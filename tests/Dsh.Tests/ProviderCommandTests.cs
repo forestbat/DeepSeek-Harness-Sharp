@@ -19,7 +19,7 @@ public sealed class ProviderCommandTests
                 global_default_model: null
                 providers: {}
                 """);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 
@@ -57,7 +57,7 @@ public sealed class ProviderCommandTests
                 $"\"provider-{index:00}\": {{\"id\": \"provider-{index:00}\", \"name\": \"Provider {index:00}\", "
                 + "\"npm\": \"@ai-sdk/openai-compatible\", \"models\": {}}");
             File.WriteAllText(ProviderCatalog.CacheFile(harnessHome), $"{{{string.Join(',', entries)}}}");
-            using var app = await HarnessComposer.Compose(new HarnessOptions(harnessHome, Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(harnessHome, Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 
@@ -100,7 +100,7 @@ public sealed class ProviderCommandTests
             var harnessHome = new HarnessHome(home);
             Directory.CreateDirectory(harnessHome.CachePath);
             File.WriteAllText(ProviderCatalog.CacheFile(harnessHome), ProviderCatalogTests.Fixture);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(harnessHome, Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(harnessHome, Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 
@@ -147,7 +147,7 @@ public sealed class ProviderCommandTests
                 global_default_model: null
                 providers: {}
                 """);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
             const string baseUrl = "https://api.kilo.ai/api/gateway/";
@@ -193,7 +193,7 @@ public sealed class ProviderCommandTests
                 global_default_model: null
                 providers: {}
                 """);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
             const string baseUrl = "https://api.kilo.ai/api/gateway/";
@@ -237,7 +237,7 @@ public sealed class ProviderCommandTests
                 global_default_model: null
                 providers: {}
                 """);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory()), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 

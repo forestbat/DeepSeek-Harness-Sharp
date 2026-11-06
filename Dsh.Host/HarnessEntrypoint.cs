@@ -11,7 +11,7 @@ public static class HarnessEntrypoint
     public static async Task<int> RunAsync(string[] args, string? defaultCommand = null)
     {
         global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
-        if (PluginExecutionRuntime.TryRunWorkerAsync(args) is { } worker)
+        if (global::Dsh.Plugins.Generated.DshPluginCatalog.TryRunWorkerAsync(args) is { } worker)
             return await worker;
         if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
@@ -103,7 +103,8 @@ public static class HarnessEntrypoint
         {
             var settings = HarnessSettings.Load(harnessHome);
             var discovery = await ConfigBoot.InspectPluginsAsync(
-                new HarnessOptions(harnessHome, Directory.GetCurrentDirectory(), IsTui: false));
+                new HarnessOptions(harnessHome, Directory.GetCurrentDirectory(), IsTui: false),
+                global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var lines = new List<string>
             {
                 $"dsh-home: {harnessHome.Root}",
@@ -179,7 +180,8 @@ public static class HarnessEntrypoint
                     return 1;
                 }
             case "headless":
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId);
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId,
+                    global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             case "storage":
                 return await RunStorageCommandAsync(harnessHome, positional.Skip(1).ToList());
             case "config":
@@ -189,7 +191,8 @@ public static class HarnessEntrypoint
             case null:
                 return await RunEntrypointAsync(harnessHome, "tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
             default:
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional), runtimeFactory:
+                    global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         }
     }
 
@@ -204,7 +207,8 @@ public static class HarnessEntrypoint
             return 0;
         }
 
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         await using var backend = await HarnessRemoteHostBackend.CreateAsync(app);
         var factory = app.Ctx.Get<Dsh.RemoteHost.RemoteHostServerFactory>(Dsh.RemoteHost.RemoteHostServerFactory.ServiceName, false)
             ?? throw new InvalidOperationException("remote-host-server 插件未加载，无法启动 host");
@@ -380,7 +384,7 @@ public static class HarnessEntrypoint
         string? gpuCapturePlan = null)
     {
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui");
-        using var app = await ConfigBoot.Compose(options);
+        using var app = await ConfigBoot.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(
             app.Home,
             Directory.GetCurrentDirectory(),
@@ -397,7 +401,8 @@ public static class HarnessEntrypoint
     private static int RunGuiOnMainThread(HarnessHome home, string? resumeSessionId)
     {
         var cwd = Directory.GetCurrentDirectory();
-        using var app = ConfigBoot.Compose(new HarnessOptions(home, cwd, IsTui: false)).GetAwaiter().GetResult();
+        using var app = ConfigBoot.Compose(new HarnessOptions(home, cwd, IsTui: false),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime).GetAwaiter().GetResult();
         return Dsh.Gui.GuiRunner.RunOnMainThread(app, cwd, resumeSessionId, StartLocalHostAsync);
     }
 

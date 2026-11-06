@@ -19,7 +19,7 @@ public sealed class PluginCommandTests
         try
         {
             using var app = await HarnessComposer.Compose(new HarnessOptions(
-                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: plugins));
+                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: plugins), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
             var agent = new FakeAgent(app.Ctx);
 
@@ -53,7 +53,7 @@ public sealed class PluginCommandTests
         try
         {
             using var app = await HarnessComposer.Compose(new HarnessOptions(
-                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: Path.Combine(root, "plugins")));
+                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
 
             var removed = await commands.Execute(new FakeAgent(app.Ctx), "/plugins remove --force", TestContext.Current.CancellationToken);

@@ -30,7 +30,7 @@ public sealed class RealLlmTurnSmokeTests
                 Cwd: Directory.GetCurrentDirectory(),
                 Provider: providerId,
                 Model: modelId);
-            using var app = await HarnessComposer.Compose(options);
+            using var app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var failures = new List<string>();
             app.Ctx.On<AgentErrorNotification>(notification =>
             {
@@ -88,7 +88,7 @@ public sealed class RealLlmTurnSmokeTests
         HarnessApp? app = null;
         try
         {
-            app = await HarnessComposer.Compose(options);
+            app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
             var agentOptions = new AgentOptions(providerId, modelId);
             var agent = (await agents.Create(new CreateAgentOptions(sessionId, directory, agentOptions), TestContext.Current.CancellationToken)).Agent;
@@ -100,7 +100,7 @@ public sealed class RealLlmTurnSmokeTests
                 app.Dispose();
                 app = null;
                 await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-                app = await HarnessComposer.Compose(options);
+                app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
                 agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                 agent = (await agents.Resume(new ResumeAgentOptions(sessionId, agentOptions), TestContext.Current.CancellationToken)).Agent;
             }
@@ -118,7 +118,7 @@ public sealed class RealLlmTurnSmokeTests
             Assert.Empty(ScheduleLedger.Of(agent.Session).Active);
             await app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(agent.Session);
             app.Dispose();
-            app = await HarnessComposer.Compose(options);
+            app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
             var resumed = (await agents.Resume(new ResumeAgentOptions(sessionId, agentOptions), TestContext.Current.CancellationToken)).Agent;
             await resumed.WhenIdle().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
