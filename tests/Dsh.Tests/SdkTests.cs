@@ -30,6 +30,15 @@ public sealed class SdkTests
             """);
     }
 
+    private static async Task<string> CreateProjectAsync(string home)
+    {
+        var project = Path.Combine(home, "project");
+        Directory.CreateDirectory(project);
+        await File.WriteAllTextAsync(Path.Combine(project, "checkpoint-input.txt"), "checkpoint input", TestContext.Current.CancellationToken);
+        await new ShadowGit(Path.Combine(project, ".git"), project).InitAsync(TestContext.Current.CancellationToken);
+        return project;
+    }
+
     [Fact(Timeout = 5000)]
     public async Task Transport_HandlesIncomingRequestAndWritesResponse()
     {
@@ -162,7 +171,8 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        var project = await CreateProjectAsync(home);
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
         {
             var pair = new DuplexTransportPair();
             await using var serverTransport = pair.Server;
@@ -174,7 +184,7 @@ public sealed class SdkTests
             await using var client = new HarnessClient(clientTransport);
 
             var initialize = await client.InitializeAsync(new InitializeParams(
-                Directory.GetCurrentDirectory(),
+                project,
                 "deepseek-official",
                 "deepseek-v4-flash"));
             Assert.Equal("deepseek-harness-sdk-runtime", initialize.ServerInfo.Name);
@@ -190,7 +200,7 @@ public sealed class SdkTests
             await clientTransport.StopAsync();
             await serverTransport.StopAsync();
         }
-        Directory.Delete(home, true);
+        TempTree.DeleteOnce(home);
     }
 
     [Fact]
@@ -210,7 +220,7 @@ public sealed class SdkTests
             Assert.Contains(providers.EnumerateArray(), entry => entry.GetProperty("id").GetString() == "deepseek-official");
 
         }
-        Directory.Delete(home, true);
+        TempTree.DeleteOnce(home);
     }
 
     [Fact]
@@ -218,10 +228,7 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        var project = Path.Combine(home, "project");
-        Directory.CreateDirectory(project);
-        File.WriteAllText(Path.Combine(project, "checkpoint-input.txt"), "checkpoint input");
-        await new ShadowGit(Path.Combine(project, ".git"), project).InitAsync(TestContext.Current.CancellationToken);
+        var project = await CreateProjectAsync(home);
         using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
         {
             var pair = new DuplexTransportPair();
@@ -251,7 +258,7 @@ public sealed class SdkTests
             await clientTransport.StopAsync();
             await serverTransport.StopAsync();
         }
-        Directory.Delete(home, true);
+        TempTree.DeleteOnce(home);
     }
 
     [Fact(Timeout = 5000)]
@@ -259,7 +266,8 @@ public sealed class SdkTests
     {
         var home = Path.Combine(AppContext.BaseDirectory, "sdk-test-home", Guid.NewGuid().ToString("N"));
         WriteProviderSettings(home);
-        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), Directory.GetCurrentDirectory())))
+        var project = await CreateProjectAsync(home);
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(new HarnessHome(home), project)))
         {
             var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -287,7 +295,7 @@ public sealed class SdkTests
             clientTransport.Start();
             await using var client = new HarnessClient(clientTransport);
             await client.InitializeAsync(new InitializeParams(
-                Directory.GetCurrentDirectory(),
+                project,
                 "deepseek-official",
                 "deepseek-v4-flash"));
             var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
@@ -334,7 +342,7 @@ public sealed class SdkTests
             await clientTransport.StopAsync();
             await serverTransport.StopAsync();
         }
-        Directory.Delete(home, true);
+        TempTree.DeleteOnce(home);
     }
 
     [Fact(Timeout = 5000)]
@@ -359,7 +367,7 @@ public sealed class SdkTests
                 document.RootElement.GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString());
             await transport.StopAsync();
         }
-        Directory.Delete(home, true);
+        TempTree.DeleteOnce(home);
     }
 
     [Fact]

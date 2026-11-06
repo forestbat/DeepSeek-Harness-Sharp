@@ -304,6 +304,7 @@ jobs:
             -class Dsh.Tests.AcpClientTests
             -class Dsh.Tests.LspTests
             -class Dsh.Tests.SdkTests
+            -class Dsh.Tests.TempTreeTests
             -class Dsh.Tests.Mcp.McpResourceToolsTests
             -class Dsh.Tests.ProjectMemoryTests
             -class Dsh.Tests.SessionAutoRenameTests
