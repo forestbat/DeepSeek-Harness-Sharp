@@ -1,28 +1,43 @@
-﻿name: 交互式 SSH（tmate）
+﻿name: 交互式 SSH（upterm）
 
-# 仅手动触发：需要人工在 runner 上敲命令时用（例如 macOS 上人工看 GUI 效果）。
+# 仅手动触发：需要在 runner 上敲命令时用（例如 macOS 上人工看 GUI 效果、Windows 上复现平台失败）。
 # 独立 workflow，不与 ci.yml 混写，避免污染常规 push/PR 流程。
 on:
   workflow_dispatch:
     inputs:
+      os:
+        description: '要启动的 runner'
+        type: choice
+        options: [all, windows-latest, ubuntu-latest, macos-latest]
+        default: all
+      ref:
+        description: '要检出的分支、tag 或 SHA（须已推送到本仓库）；留空则检出触发所在 ref'
+        required: false
+        default: ''
       timeout_minutes:
-        description: '会话超时时长（分钟）'
+        description: '作业总时长上限（分钟，最大 360），含环境准备与会话'
         type: number
-        default: 30
+        default: 60
 
 permissions:
   contents: read
+
+env:
+  UPTERM_VERSION: v0.41.1
 
 jobs:
   ssh:
     name: 交互会话（${{ matrix.os }}）
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ inputs.os == 'all' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON(format('["{0}"]', inputs.os)) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -32,6 +47,8 @@ jobs:
 
       - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -40,9 +57,60 @@ jobs:
             bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
           fi
 
-      - name: 启动 tmate 会话
-        uses: mxschmitt/action-tmate@v3
+      # upterm relays SSH through uptermd.upterm.dev; only listed public keys may join or run commands.
+      # Keys come from the triggering user's GitHub profile plus the optional repository variable INTERACTIVE_SSH_AUTHORIZED_KEYS.
+      - name: 启动 upterm 会话
+        id: upterm
+        shell: bash
+        env:
+          EXTRA_KEYS: ${{ vars.INTERACTIVE_SSH_AUTHORIZED_KEYS }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          native() { if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          case "$RUNNER_OS" in Windows) platform=windows ;; Linux) platform=linux ;; macOS) platform=darwin ;; esac
+          case "$RUNNER_ARCH" in X64) arch=amd64 ;; ARM64) arch=arm64 ;; esac
+          dir="$(if [ "$RUNNER_OS" = Windows ]; then cygpath -u "$RUNNER_TEMP"; else printf '%s' "$RUNNER_TEMP"; fi)/upterm"
+          mkdir -p "$dir/handoff" "$dir/run"
+          if [ "$RUNNER_OS" != Windows ]; then
+            # macOS caps Unix socket paths at 104 bytes, so keep upterm's admin socket under the short runner temp path.
+            export XDG_RUNTIME_DIR="$dir/run"
+            echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          fi
+          curl -fsSL "https://github.com/owenthereal/upterm/releases/download/$UPTERM_VERSION/upterm_${platform}_${arch}.tar.gz" | tar -xz -C "$dir"
+          native "$dir" >> "$GITHUB_PATH"
+          { curl -fsSL "https://github.com/$ACTOR.keys"; printf '%s\n' "$EXTRA_KEYS"; } | grep -E '^(ssh-|ecdsa-|sk-)' > "$dir/authorized_keys" || true
+          if [ ! -s "$dir/authorized_keys" ]; then
+            echo "::error::No authorized SSH keys: add one to the GitHub profile of $ACTOR or set INTERACTIVE_SSH_AUTHORIZED_KEYS."
+            exit 1
+          fi
+          printf '%s\n' \
+            '@cert-authority uptermd.upterm.dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICiecex8Dq718eSe1CCLgLvDmI7AagvCtax7brPFWkh4' \
+            '@cert-authority [uptermd.upterm.dev]:443 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICiecex8Dq718eSe1CCLgLvDmI7AagvCtax7brPFWkh4' \
+            > "$dir/known_hosts"
+          name="gha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$RUNNER_OS"
+          "$dir/upterm" host --detach --accept --output json --name "$name" \
+            --known-hosts "$(native "$dir/known_hosts")" --server ssh://uptermd.upterm.dev:22 \
+            --authorized-keys "$(native "$dir/authorized_keys")" --full-access -- bash -l > "$dir/session.json"
+          jq -e '.open != true and (.sshCommand | length > 0)' "$dir/session.json" > /dev/null
+          jq -r '.sshCommand' "$dir/session.json" > "$dir/handoff/ssh-command.txt"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$dir/handoff/workspace.txt"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "handoff=$(native "$dir/handoff")" >> "$GITHUB_OUTPUT"
+
+      # Job logs stay unreadable through the API until the job ends, but artifacts are downloadable right after upload.
+      - name: 交出连接命令
+        uses: actions/upload-artifact@v4
         with:
-          # 仅允许触发者用其 GitHub 注册的 SSH key 连接，避免暴露公开会话。
-          limit-access-to-actor: true
-        timeout-minutes: ${{ inputs.timeout_minutes }}
+          name: ssh-${{ matrix.os }}
+          path: ${{ steps.upterm.outputs.handoff }}
+          retention-days: 1
+
+      # The session lasts until someone creates a file named continue in the workspace, the session ends, or the job times out.
+      - name: 保持会话直到结束
+        shell: bash
+        run: |
+          echo "连接命令见 artifact ssh-${{ matrix.os }}；在 $GITHUB_WORKSPACE 下创建 continue 文件即可结束会话。"
+          while [ ! -e "$GITHUB_WORKSPACE/continue" ] && upterm session info "${{ steps.upterm.outputs.name }}" -o json > /dev/null 2>&1; do
+            sleep 10
+          done
