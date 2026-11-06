@@ -133,16 +133,23 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
         new Dsh.Fleet.MachineStore(home).Save(new FleetConfig(specs, new DeploySettings()));
     }
 
-    /** A2A 这条纯 HTTP 的路在手机上同样可用: 本机开服务端, 桌面机按约定端口当远端。 */
+    /**
+     * A2A 这条纯 HTTP 的路在手机上同样可用: 本机只认回环(对外开端口要配令牌, 那是另一档事),
+     * 桌面机按约定端口当远端, 令牌沿用 App 里给这台机器填的访问令牌。
+     */
     private void ConfigureA2a(HarnessHome home)
     {
         var settings = HarnessSettings.Load(home);
         var a2a = settings.A2a ?? new A2aSettings();
         a2a.Enabled = true;
-        a2a.Host = "0.0.0.0";
+        a2a.Host = "127.0.0.1";
         a2a.Port = A2aPort;
         foreach (var profile in RemoteMachines())
-            a2a.Remotes[profile.Name] = new A2aRemoteSettings { Url = $"http://{profile.Host}:{RemoteA2aPort}/" };
+            a2a.Remotes[profile.Name] = new A2aRemoteSettings
+            {
+                Url = $"http://{profile.Host}:{RemoteA2aPort}/",
+                Token = profile.Token.Length > 0 ? profile.Token : null,
+            };
         settings.A2a = a2a;
         settings.Save(home);
     }
@@ -162,17 +169,38 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
         return path;
     }
 
-    /** 模板在 APK 里只是资源; 首次启动先落到会话目录, Compose 才能按普通文件读出默认配置。 */
+    /**
+     * 模板在 APK 里只是资源; 首次启动要落成普通文件。
+     * 会话目录那份给 Compose 读, 程序集目录那份给直接问模板的插件(如由 settings 生成界面的 ide)。
+     */
     private static async Task EnsureSettingsTemplateAsync(HarnessHome home)
     {
-        if (File.Exists(home.SettingsFile))
-            return;
         var context = global::Android.App.Application.Context
             ?? throw new InvalidOperationException("应用上下文不可用");
+        var targets = new List<string>();
+        if (!File.Exists(home.SettingsFile))
+            targets.Add(home.SettingsFile);
+        var beside = Path.Combine(AppContext.BaseDirectory, SettingsTemplateAsset);
+        if (!File.Exists(beside))
+            targets.Add(beside);
+        if (targets.Count == 0)
+            return;
         await using var asset = context.Assets?.Open(SettingsTemplateAsset)
             ?? throw new InvalidOperationException("安装包缺少 settings.yaml 模板");
         using var reader = new StreamReader(asset);
-        await File.WriteAllTextAsync(home.SettingsFile, await reader.ReadToEndAsync());
+        var template = await reader.ReadToEndAsync();
+        foreach (var target in targets)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                await File.WriteAllTextAsync(target, template);
+            }
+            catch (Exception error) when (target != home.SettingsFile && error is IOException or UnauthorizedAccessException)
+            {
+                // 程序集目录只读时忽略: 那是锦上添花, 缺了只有个别插件读默认值失败。
+            }
+        }
     }
 
     private void SetState(MobileConnectionState state, string? detail)
