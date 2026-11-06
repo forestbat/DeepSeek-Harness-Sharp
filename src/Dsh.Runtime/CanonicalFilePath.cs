@@ -11,7 +11,7 @@ public static class CanonicalFilePath
 
     public static string Canonicalize(string path, bool allowNetwork = true)
     {
-        var full = Path.GetFullPath(path);
+        var full = Path.GetFullPath(NormalizeNamespace(path));
         for (var links = 0; links <= 40; links++)
         {
             DemandFilePath(full);
@@ -20,7 +20,7 @@ public static class CanonicalFilePath
             var resolved = ResolveFirstLink(full);
             if (resolved is null)
                 return OperatingSystem.IsWindows() ? full.ToUpperInvariant() : full;
-            full = resolved;
+            full = NormalizeNamespace(resolved);
         }
         throw new IOException("The file path exceeds the symbolic-link resolution limit.");
     }
@@ -53,6 +53,31 @@ public static class CanonicalFilePath
     public static bool IsNetworkPath(string path)
         => OperatingSystem.IsWindows() && (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)
             || path.StartsWith(@"\\", StringComparison.Ordinal) && !path.StartsWith(@"\\?\", StringComparison.Ordinal));
+
+    internal static string NormalizeNamespace(string path)
+    {
+        const string extendedPrefix = @"\\?\", uncPrefix = @"\\?\UNC\";
+        if (!OperatingSystem.IsWindows() || path.Length < extendedPrefix.Length
+            || path[0] is not ('\\' or '/') || path[1] is not ('\\' or '/')
+            || path[2] != '?' || path[3] is not ('\\' or '/'))
+            return path;
+        if (path.StartsWith("//?/", StringComparison.Ordinal))
+            path = path.Replace('/', '\\');
+        else if (path.Contains('/'))
+            throw new NotSupportedException("Extended-length file paths require consistent separators.");
+        var suffix = path.AsSpan(extendedPrefix.Length);
+        foreach (var range in suffix.Split('\\'))
+        {
+            var component = suffix[range];
+            if (!component.IsEmpty && component[^1] is ' ' or '.')
+                throw new NotSupportedException("Extended-length file paths with trailing spaces or dots cannot be normalized.");
+        }
+        if (path.StartsWith(uncPrefix, StringComparison.OrdinalIgnoreCase))
+            return $@"\\{path.AsSpan(uncPrefix.Length)}";
+        if (suffix.Length >= 3 && char.IsAsciiLetter(suffix[0]) && suffix[1] == ':' && suffix[2] == '\\')
+            return path[extendedPrefix.Length..];
+        throw new NotSupportedException("Unsupported Windows filesystem namespace.");
+    }
 
     private static void RejectDeviceNamespace(string path)
     {

@@ -64,6 +64,7 @@ Normal explicit human settings commands and GUI saves remain human operations, n
 Missing settings gate, session, or approval service fails closed for these model-originated updates.
 The startup layer consumes the runtime's `ISettingsMutationContext` capability without referencing agent, transport, or sandbox assemblies; the original tool call still submits every model-originated settings proposal to the existing approval and audit service.
 Canonical settings identity uses the shared symbolic-link-aware path resolver, while ordinary-file checks and platform access enforcement stay outside the startup and runtime layers.
+On Windows, ordinary drive/UNC paths and supported extended-length aliases share one settings identity; non-equivalent extended namespace forms are refused.
 
 ```yaml
 safety:
