@@ -15,6 +15,16 @@ public sealed class WindowsDirectoryCollectorTests : IDisposable
     public void Dispose() => TempTree.Delete(_root);
 
     [Fact]
+    public void SuccessfulQueryWithoutCompleteRecords_IsNotDirectoryCompletion()
+    {
+        const int insufficientBufferHResult = unchecked((int)0x8007007a);
+        var failure = Assert.Throws<IOException>(() =>
+            WindowsDirectoryCollector.HasCompleteDirectoryBatch(0, 0, _root));
+
+        Assert.Equal(insufficientBufferHResult, failure.HResult);
+    }
+
+    [Fact]
     public void CompleteTree_PreservesRecursiveEnumerationAndStableGrantOrder()
     {
         RequireWindows();
