@@ -3,7 +3,6 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
@@ -72,13 +71,14 @@ internal sealed class WindowsAclLease : IDisposable
             ProtectAncestors(grant.Source);
         }
         foreach (var denied in policy.Denied)
+            ProtectAncestors(denied);
+        foreach (var denied in policy.Denied)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (File.Exists(denied) || Directory.Exists(denied))
                 Grant(denied, ReadExecute, WriteAccess, Directory.Exists(denied), false, cancellationToken);
             else if (policy.Writable.Any(write => SandboxPolicy.Contains(write.Source, denied)))
                 throw new NotSupportedException("A denied path within a writable grant must exist before launch.");
-            ProtectAncestors(denied);
         }
 
         void ProtectAncestors(string protectedPath)
@@ -128,16 +128,6 @@ internal sealed class WindowsAclLease : IDisposable
         private WritableLabel? _label;
         private bool _sidGranted;
 
-        private SafeFileHandle Open(bool writable)
-        {
-            var handle = WindowsNative.CreateFile(path, writable ? 0xe0000u : 0x60000u, 7, 0, 3, 0x02000000, 0);
-            if (!handle.IsInvalid)
-                return handle;
-            var error = Marshal.GetLastPInvokeError();
-            handle.Dispose();
-            throw new Win32Exception(error, $"Cannot open an AppContainer filesystem grant (Win32 error {error}).");
-        }
-
         public void Grant(SecurityIdentifier sid, int access, int deniedAccess, bool directory, bool writable,
             CancellationToken cancellationToken)
         {
@@ -145,8 +135,7 @@ internal sealed class WindowsAclLease : IDisposable
             lock (AclGate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                using var handle = Open(writable);
-                var acl = ReadAcl(handle);
+                var acl = ReadAcl();
                 var inherited = directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None;
                 if (deniedAccess != 0)
                     acl.InsertAce(0, new CommonAce(inherited, AceQualifier.AccessDenied, deniedAccess, sid, false, null));
@@ -159,7 +148,7 @@ internal sealed class WindowsAclLease : IDisposable
                 }
                 _sidGranted = true;
                 // Windows propagates inheritable ACEs; protected descendants can still reject actual process access.
-                WriteAcl(handle, acl);
+                WriteAcl(acl);
                 if (!writable)
                     return;
                 if (WritableLabels.TryGetValue(path, out var shared))
@@ -168,7 +157,7 @@ internal sealed class WindowsAclLease : IDisposable
                     _label = shared;
                     return;
                 }
-                var originalLabel = ReadAclBytes(handle, 0x10);
+                var originalLabel = ReadAclBytes(0x10);
                 nint descriptor = 0;
                 try
                 {
@@ -178,7 +167,7 @@ internal sealed class WindowsAclLease : IDisposable
                         throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot read the AppContainer writable label.");
                     _label = new WritableLabel(originalLabel);
                     WritableLabels.Add(path, _label);
-                    WriteLabel(handle, sacl);
+                    WriteLabel(sacl);
                 }
                 finally
                 {
@@ -203,10 +192,9 @@ internal sealed class WindowsAclLease : IDisposable
                 }
                 if ((!_sidGranted && !restoreLabel) || !File.Exists(path) && !Directory.Exists(path))
                     return;
-                using var handle = Open(restoreLabel);
                 if (_sidGranted)
                 {
-                    var acl = ReadAcl(handle);
+                    var acl = ReadAcl();
                     var removedGrant = false;
                     for (var index = acl.Count - 1; index >= 0; index--)
                         if (acl[index] is KnownAce ace && ace.SecurityIdentifier == sid)
@@ -215,25 +203,25 @@ internal sealed class WindowsAclLease : IDisposable
                             removedGrant = true;
                         }
                     if (removedGrant)
-                        WriteAcl(handle, acl);
+                        WriteAcl(acl);
                 }
                 if (restoreLabel)
                 {
                     fixed (byte* label = originalLabel)
-                        WriteLabel(handle, (nint)label);
+                        WriteLabel((nint)label);
                 }
             }
         }
 
-        private static RawAcl ReadAcl(SafeFileHandle handle)
-            => new(ReadAclBytes(handle, 4) ?? throw new NotSupportedException("An AppContainer filesystem grant requires an explicit ACL."), 0);
+        private RawAcl ReadAcl()
+            => new(ReadAclBytes(4) ?? throw new NotSupportedException("An AppContainer filesystem grant requires an explicit ACL."), 0);
 
-        private static byte[]? ReadAclBytes(SafeFileHandle handle, uint information)
+        private byte[]? ReadAclBytes(uint information)
         {
             nint descriptor = 0;
             try
             {
-                Check(WindowsNative.GetSecurityInfo(handle, 1, information, out _, out _, out var dacl, out var sacl, out descriptor));
+                Check(WindowsNative.GetNamedSecurityInfo(WindowsNative.PathForNative(path), 1, information, out _, out _, out var dacl, out var sacl, out descriptor));
                 var pointer = information == 4 ? dacl : sacl;
                 if (pointer == 0)
                     return null;
@@ -248,16 +236,16 @@ internal sealed class WindowsAclLease : IDisposable
             }
         }
 
-        private static unsafe void WriteAcl(SafeFileHandle handle, RawAcl acl)
+        private unsafe void WriteAcl(RawAcl acl)
         {
             var bytes = new byte[acl.BinaryLength];
             acl.GetBinaryForm(bytes, 0);
             fixed (byte* pointer = bytes)
-                Check(WindowsNative.SetSecurityInfo(handle, 1, 4, 0, 0, (nint)pointer, 0));
+                Check(WindowsNative.SetNamedSecurityInfo(WindowsNative.PathForNative(path), 1, 4, 0, 0, (nint)pointer, 0));
         }
 
-        private static void WriteLabel(SafeFileHandle handle, nint label)
-            => Check(WindowsNative.SetSecurityInfo(handle, 1, 0x10, 0, 0, 0, label));
+        private void WriteLabel(nint label)
+            => Check(WindowsNative.SetNamedSecurityInfo(WindowsNative.PathForNative(path), 1, 0x10, 0, 0, 0, label));
 
         private static void Check(uint error)
         {

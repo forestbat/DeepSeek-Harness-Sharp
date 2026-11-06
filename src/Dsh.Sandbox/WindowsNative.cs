@@ -87,16 +87,12 @@ internal static class WindowsNative
     [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(nint list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateProcess(string executable, StringBuilder commandLine, nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, nint environment, string workingDirectory, ref StartupInfoEx startup, out ProcessInformation information);
-    internal static SafeFileHandle CreateFile(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template)
-        => CreateFileNative(PathForNative(path), access, share, attributes, disposition, flags, template);
     internal static string PathForNative(string path) => path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path : $"\\\\?\\{path}";
-    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileNative(string path, uint access, uint share, nint attributes, uint disposition, uint flags, nint template);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
-    internal static extern uint GetSecurityInfo(SafeFileHandle handle, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
-    [DllImport("advapi32.dll", SetLastError = true)]
-    internal static extern uint SetSecurityInfo(SafeFileHandle handle, int type, uint information, nint owner, nint group, nint dacl, nint sacl);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    internal static extern uint GetNamedSecurityInfo(string path, int type, uint information, out nint owner, out nint group, out nint dacl, out nint sacl, out nint descriptor);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    internal static extern uint SetNamedSecurityInfo(string path, int type, uint information, nint owner, nint group, nint dacl, nint sacl);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string descriptor, uint revision, out nint converted, out uint size);
     [DllImport("advapi32.dll", SetLastError = true)]
