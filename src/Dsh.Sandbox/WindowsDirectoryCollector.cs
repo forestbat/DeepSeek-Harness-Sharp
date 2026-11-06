@@ -25,6 +25,7 @@ internal static class WindowsDirectoryCollector
     private const int ErrorFileNotFound = 2;
     private const int ErrorPathNotFound = 3;
     private const int ErrorAccessDenied = 5;
+    private const int ErrorInsufficientBuffer = 122;
     private const int ErrorFilenameExceedsRange = 206;
     private const int ErrorOperationAborted = 995;
     private const int HResultHighWordMask = unchecked((int)0xffff0000);
@@ -129,11 +130,7 @@ internal static class WindowsDirectoryCollector
             work?.ThrowIfStopped();
             var status = NtQueryDirectoryFile(handle, 0, 0, 0, out var ioStatus, buffer, BufferSize,
                 FileFullDirectoryInformation, 0, 0, 0);
-            if (status is NoMoreFiles or NoSuchFile)
-                return;
-            if (status != 0)
-                throw DirectoryError((int)RtlNtStatusToDosError(status), directory.Path);
-            if (ioStatus.Information == 0)
+            if (!HasCompleteDirectoryBatch(status, ioStatus.Information, directory.Path))
                 return;
             var entry = (DirectoryInformation*)buffer;
             while (true)
@@ -152,6 +149,17 @@ internal static class WindowsDirectoryCollector
                 entry = (DirectoryInformation*)((byte*)entry + entry->NextEntryOffset);
             }
         }
+    }
+
+    internal static bool HasCompleteDirectoryBatch(int status, nuint byteCount, string path)
+    {
+        if (status is NoMoreFiles or NoSuchFile)
+            return false;
+        if (status != 0)
+            throw DirectoryError((int)RtlNtStatusToDosError(status), path);
+        if (byteCount == 0)
+            throw DirectoryError(ErrorInsufficientBuffer, path);
+        return true;
     }
 
     private static void PublishDirectory(DirectoryWork directory, Queue<DirectoryWork> pending,

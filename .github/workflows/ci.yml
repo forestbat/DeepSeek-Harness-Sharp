@@ -219,30 +219,38 @@ jobs:
       dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
       dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
   test-windows-quick:
-    name: 测试（windows-latest，quick）
+    name: 测试（windows-latest，quick-${{ matrix.cohort }}）
     needs: [changes, dryioc-feed, iroh-component-windows]
     if: ${{ !cancelled() && needs.dryioc-feed.result == 'success' && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-windows.result == 'success' || needs.iroh-component-windows.result == 'skipped') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
     uses: ./.github/workflows/ci-tests.yml
     with:
       os: windows-latest
       native-cc: cl
       native-cc-alt: clang-cl
       suite: quick
-      quick-cohort: all
+      quick-cohort: ${{ matrix.cohort }}
       dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
       dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
   test-linux-quick:
-    name: 测试（ubuntu-latest，quick）
+    name: 测试（ubuntu-latest，quick-${{ matrix.cohort }}）
     needs: [changes, dryioc-feed, iroh-component-linux]
     if: ${{ !cancelled() && needs.dryioc-feed.result == 'success' && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-linux.result == 'success' || needs.iroh-component-linux.result == 'skipped') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
     uses: ./.github/workflows/ci-tests.yml
     with:
       os: ubuntu-latest
       native-cc: clang
       native-cc-alt: ''
       suite: quick
-      quick-cohort: all
+      quick-cohort: ${{ matrix.cohort }}
       dryioc-commit: ${{ needs.dryioc-feed.outputs.commit }}
       dryioc-sha256: ${{ needs.dryioc-feed.outputs.sha256 }}
 
@@ -254,7 +262,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cohort: [fleet-iroh, remainder]
+        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
     uses: ./.github/workflows/ci-tests.yml
     with:
       os: macos-latest
