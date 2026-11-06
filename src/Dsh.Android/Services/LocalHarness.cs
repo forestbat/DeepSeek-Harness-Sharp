@@ -10,16 +10,21 @@ namespace Dsh.Android.Services;
  * 手机自己的 host: 在 App 进程内组合一份 harness, 把手机能力注册成原生工具,
  * 再用一对内存流接上标准 host 协议。这样"本机"会话与远端会话走同一套语义, agent 真正跑在手机上。
  */
-public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) : IMachineLink
+public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, Func<IReadOnlyList<IAgentMachineLink>> links) : IMachineLink
 {
     public const string MachineName = "本机";
     private const string ClientName = "dsh-phone";
     private const string SettingsTemplateAsset = "Profiles/Templates/settings.yaml";
 
+    /** 手机自己的 A2A 服务端口; 桌面机按同一个约定端口开放服务端。 */
+    private const int A2aPort = 47324;
+    private const int RemoteA2aPort = 41443;
+
     private readonly HostProjection _projection = new();
     private readonly CancellationTokenSource _lifetime = new();
     private HarnessApp? _app;
     private IDisposable? _tools;
+    private IDisposable? _machineTools;
     private HarnessRemoteHostBackend? _backend;
     private RemoteHostServer? _server;
     private RemoteHostClient? _client;
@@ -68,6 +73,7 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) :
             home.Ensure();
             await EnsureSettingsTemplateAsync(home);
             ConfigureFleet(home);
+            ConfigureA2a(home);
             var settings = store.Load();
             _app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
@@ -78,6 +84,7 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) :
                 ApiKey: settings.ApiKey,
                 IsTui: false));
             _tools = PhoneAgentTools.Register(_app.Ctx, new AndroidPhoneDevice());
+            _machineTools = MachineSessionTools.Register(_app.Ctx, links);
             var (serverSide, clientSide) = LocalDuplex.Create();
             _backend = await HarnessRemoteHostBackend.CreateAsync(_app);
             _server = new RemoteHostServer(new RemoteHostServerOptions(), _backend);
@@ -108,6 +115,7 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) :
         if (_client is not null)
             await _client.DisposeAsync();
         _tools?.Dispose();
+        _machineTools?.Dispose();
         if (_backend is not null)
             await _backend.DisposeAsync();
         _app?.Dispose();
@@ -117,15 +125,30 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) :
     /** 把 App 里配好的桌面机写进本机 host 的 fleet 段: 手机会话才能主动找到并驱动那些机器。 */
     private void ConfigureFleet(HarnessHome home)
     {
-        var remote = machines.Load()
-            .Where(profile => profile.Transport == HostTransportKind.Ssh && profile.Host.Length > 0)
-            .ToList();
+        var remote = RemoteMachines();
         var keyPath = remote.Count > 0 ? WriteSshKey(home, machines.LoadPrivateKey()) : null;
         var specs = remote
             .Select(profile => new MachineSpec(profile.Name, "ssh", profile.Host, profile.Port, profile.SshUser, SshAuth.Key, keyPath))
             .ToList();
         new Dsh.Fleet.MachineStore(home).Save(new FleetConfig(specs, new DeploySettings()));
     }
+
+    /** A2A 这条纯 HTTP 的路在手机上同样可用: 本机开服务端, 桌面机按约定端口当远端。 */
+    private void ConfigureA2a(HarnessHome home)
+    {
+        var settings = HarnessSettings.Load(home);
+        var a2a = settings.A2a ?? new A2aSettings();
+        a2a.Enabled = true;
+        a2a.Host = "0.0.0.0";
+        a2a.Port = A2aPort;
+        foreach (var profile in RemoteMachines())
+            a2a.Remotes[profile.Name] = new A2aRemoteSettings { Url = $"http://{profile.Host}:{RemoteA2aPort}/" };
+        settings.A2a = a2a;
+        settings.Save(home);
+    }
+
+    private IReadOnlyList<HostProfile> RemoteMachines()
+        => [.. machines.Load().Where(profile => profile.Transport == HostTransportKind.Ssh && profile.Host.Length > 0)];
 
     private static string? WriteSshKey(HarnessHome home, string? pem)
     {

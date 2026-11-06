@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Dsh.Gui.Shared.Mobile;
 using Dsh.RemoteHost;
 using Dsh.Transport;
 using Renci.SshNet;
@@ -21,7 +22,7 @@ public enum MobileConnectionState
  * 传输可走局域网 TCP + 握手令牌, 或 SSH exec 通道里跑 `dsharp host serve --stdio`;
  * 订阅复用 RemoteHostSubscriptions, 因此断线后的续订从最后一条事件之后继续。
  */
-public sealed class MobileHostConnection : IMachineLink
+public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
 {
     private const int TcpConnectTimeoutSeconds = 8;
     private const int SshConnectTimeoutSeconds = 20;
@@ -90,6 +91,27 @@ public sealed class MobileHostConnection : IMachineLink
 
     public IAsyncEnumerable<RemoteSessionEvent> SubscribeAsync(string sessionId, long fromSeq, CancellationToken cancellationToken)
         => _subscriptions.SubscribeAsync(sessionId, fromSeq, cancellationToken);
+
+    // ---- agent 眼里的这台机器: 与界面共用同一条已连好的链路 ----
+
+    public bool IsConnected => State == MobileConnectionState.Connected;
+
+    string? IAgentMachineLink.Detail => Detail;
+
+    public async Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken cancellationToken)
+    {
+        var lease = await WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
+        var directory = cwd.Length > 0 ? cwd : Info?.HomeRoot ?? "";
+        return await lease.Client.CreateSessionAsync(directory, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken)
+    {
+        var lease = await WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
+        // 与界面一致: 先恢复会话, agent 已退出时消息才不会丢。
+        await lease.Client.ResumeSessionAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        await lease.Client.SendMessageAsync(sessionId, text, [], cancellationToken).ConfigureAwait(false);
+    }
 
     public async ValueTask DisposeAsync()
     {
