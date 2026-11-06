@@ -605,7 +605,7 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         _localStore.Save(new LocalAgentSettings(
             LocalProvider.Trim(), LocalModel.Trim(), LocalBaseUrl.Trim(), LocalApiKey.Trim()));
         await StopLocalAsync();
-        var link = new LocalHarness(_localStore);
+        var link = new LocalHarness(_store, _localStore);
         link.Changed += OnLocalChanged;
         _local = link;
         link.Start();

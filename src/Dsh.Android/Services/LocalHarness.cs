@@ -2,6 +2,7 @@ using Dsh.Boot;
 using Dsh.Gui.Shared.Mobile;
 using Dsh.Host;
 using Dsh.RemoteHost;
+using Dsh.Workspace;
 
 namespace Dsh.Android.Services;
 
@@ -9,7 +10,7 @@ namespace Dsh.Android.Services;
  * 手机自己的 host: 在 App 进程内组合一份 harness, 把手机能力注册成原生工具,
  * 再用一对内存流接上标准 host 协议。这样"本机"会话与远端会话走同一套语义, agent 真正跑在手机上。
  */
-public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
+public sealed class LocalHarness(MachineStore machines, LocalAgentStore store) : IMachineLink
 {
     public const string MachineName = "本机";
     private const string ClientName = "dsh-phone";
@@ -66,6 +67,7 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
             var home = new HarnessHome(Path.Combine(files, "harness"));
             home.Ensure();
             await EnsureSettingsTemplateAsync(home);
+            ConfigureFleet(home);
             var settings = store.Load();
             _app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
@@ -110,6 +112,31 @@ public sealed class LocalHarness(LocalAgentStore store) : IMachineLink
             await _backend.DisposeAsync();
         _app?.Dispose();
         _lifetime.Dispose();
+    }
+
+    /** 把 App 里配好的桌面机写进本机 host 的 fleet 段: 手机会话才能主动找到并驱动那些机器。 */
+    private void ConfigureFleet(HarnessHome home)
+    {
+        var remote = machines.Load()
+            .Where(profile => profile.Transport == HostTransportKind.Ssh && profile.Host.Length > 0)
+            .ToList();
+        var keyPath = remote.Count > 0 ? WriteSshKey(home, machines.LoadPrivateKey()) : null;
+        var specs = remote
+            .Select(profile => new MachineSpec(profile.Name, "ssh", profile.Host, profile.Port, profile.SshUser, SshAuth.Key, keyPath))
+            .ToList();
+        new Dsh.Fleet.MachineStore(home).Save(new FleetConfig(specs, new DeploySettings()));
+    }
+
+    private static string? WriteSshKey(HarnessHome home, string? pem)
+    {
+        if (pem is not { Length: > 0 })
+            return null;
+        var path = Path.Combine(home.Root, "ssh", "id_rsa");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, pem);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return path;
     }
 
     /** 模板在 APK 里只是资源; 首次启动先落到会话目录, Compose 才能按普通文件读出默认配置。 */

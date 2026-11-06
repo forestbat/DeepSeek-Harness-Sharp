@@ -17,16 +17,29 @@ public sealed class Plugin : IDshPlugin
         var root = ctx.GetProp("dshHomePath") as string
             ?? throw new InvalidOperationException("the fleet plugin requires a harness home");
         var service = new FleetService(new HarnessHome(root), ctx);
+        FleetSessionTools? tools = null;
         try
         {
             ctx.Provide(FleetService.ServiceName, service);
             ctx.Provide(IOutboundRouteController.ServiceName, service.OutboundRoute);
-            return ctx.Get<WorkspaceService>(WorkspaceService.ServiceName)!.Register(ctx, service);
+            tools = new FleetSessionTools(ctx, () => service.CreateClient(new FleetOptions { ClientName = "dsh-fleet-tools" }));
+            var registration = ctx.Get<WorkspaceService>(WorkspaceService.ServiceName)!.Register(ctx, service);
+            return new Activation(tools, registration);
         }
         catch
         {
+            tools?.Dispose();
             service.Dispose();
             throw;
+        }
+    }
+
+    private sealed class Activation(FleetSessionTools tools, IDisposable registration) : IDisposable
+    {
+        public void Dispose()
+        {
+            tools.Dispose();
+            registration.Dispose();
         }
     }
 }
