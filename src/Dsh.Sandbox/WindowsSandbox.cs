@@ -85,8 +85,8 @@ internal sealed class WindowsSandbox : ISandboxLifetime
             try
             {
                 Check(WindowsNative.AssignProcessToJobObject(job, process), "assign the suspended process to its non-breakaway job");
-                // Apply the complete filesystem policy using the suspended process's actual token before any application code runs.
-                acl.Apply(policy, process, cancellationToken);
+                // Apply root filesystem grants before any application code runs.
+                acl.Apply(policy, cancellationToken);
                 input.Child.Dispose();
                 output.Child.Dispose();
                 error.Child.Dispose();
