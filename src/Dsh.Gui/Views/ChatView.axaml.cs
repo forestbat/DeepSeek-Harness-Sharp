@@ -240,26 +240,17 @@ public sealed partial class ChatView : UserControl
         if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
-        if (!layoutChanged && !_foldSession)
+        if (!layoutChanged)
         {
             // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
             // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
             // 否则一次布局增长就会把人拽回底部。
-            // 折叠会话期间不重判: 面板自己挪的那点位移不能被追认成"用户滚到了底部"。
             _scrollGeneration++;
             _sticky = IsAtBottom(scroll);
         }
-        // 折叠会话: 只要高度变了就把被点那条拉回原位, 不再要求"偏移量几乎没变"——
-        // 面板重估经常直接把偏移推几十像素(实测 48px), 那条严格判据会把它当成真正的滚动而放过去。
-        if (_foldSession && !_restoringAnchor && !_draggingThumb && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance)
-        {
-            RestoreAnchor(scroll);
-            if (--_foldSessionPasses <= 0)
-                _foldSession = false;
-        }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
-        else if (!_restoringAnchor && !_draggingThumb && !_sticky
+        if (!_restoringAnchor && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
             && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
@@ -412,7 +403,7 @@ public sealed partial class ChatView : UserControl
 
     private void RestoreAnchor(ScrollViewer scroll)
     {
-        var (index, anchorTop) = FoldOrViewportAnchor();
+        var index = ResolveAnchorIndex();
         if (index < 0)
             return;
         _restoringAnchor = true;
@@ -430,7 +421,7 @@ public sealed partial class ChatView : UserControl
                 if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
                     || item.TranslatePoint(default, scroll) is not { } position)
                     break;
-                var delta = position.Y - anchorTop;
+                var delta = position.Y - _anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
                 // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
@@ -501,17 +492,6 @@ public sealed partial class ChatView : UserControl
     /** 这一次布局变化来自折叠/展开: 不许顺手贴底, 否则用户刚点开的那条会被顶出视口。 */
     private bool _foldPending;
 
-    /** 折叠会话: 被点那条还没被按实测位置放回原处。 */
-    private bool _foldSession;
-
-    /** 折叠会话还剩几轮可用来纠正(每轮布局一次, 面板最多几轮收敛)。 */
-    private int _foldSessionPasses;
-
-    /** 折叠会话的锚点: 被点那条(数据项 + 下标 + 当时的屏幕位置)。 */
-    private object? _foldAnchorData;
-    private int _foldAnchorIndex = -1;
-    private double _foldAnchorTop;
-
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
     private object? _anchorData;
@@ -529,47 +509,9 @@ public sealed partial class ChatView : UserControl
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
     /** 折叠与展开只是视图操作: 位置不需要补偿(上方内容不动), 但要挡掉这一次的触底跟随。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => _foldPending = true;
 
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
-
-    /**
-     * 折叠会改变被点那条的高度, 而 VirtualizingStackPanel 在已实体化项高度变化时会重估整篇文档的坐标,
-     * 连"是否到底"都可能被它改掉。所以从点击这一刻起开一段"折叠会话": 关掉跟随, 并把**被点的那条**
-     * 而不是视口顶部那条当作锚点, 接下来几轮布局都按实测位置把它拉回原处。
-     */
-    private void BeginFoldSession(object? source)
-    {
-        _foldPending = true;
-        _sticky = false;
-        _foldSessionPasses = AnchorSettlePasses;
-        _foldSession = false;
-        if (MessageList.Scroll is not ScrollViewer scroll || MessageContainerOf(source) is not { } item)
-            return;
-        if (item.DataContext is not { } data || item.TranslatePoint(default, scroll) is not { } position)
-            return;
-        // 单独记一份: 还原过程中间的滚动事件会重记"视口顶部那条", 共用字段会被它覆盖掉。
-        _foldAnchorData = data;
-        _foldAnchorIndex = MessageList.IndexFromContainer(item);
-        _foldAnchorTop = position.Y;
-        _foldSession = true;
-    }
-
-    /** 折叠会话期间锚点是被点的那条, 其余时候是视口顶部那条。 */
-    private (int Index, double Top) FoldOrViewportAnchor()
-    {
-        if (!_foldSession)
-            return (ResolveAnchorIndex(), _anchorTop);
-        if (_foldAnchorData is { } data)
-        {
-            for (var index = 0; index < MessageList.ItemCount; index++)
-            {
-                if (ReferenceEquals(MessageList.Items[index], data))
-                    return (index, _foldAnchorTop);
-            }
-        }
-        return (_foldAnchorIndex >= 0 && _foldAnchorIndex < MessageList.ItemCount ? _foldAnchorIndex : -1, _foldAnchorTop);
-    }
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => _foldPending = true;
 
     /**
      * 右键一条消息: 只在它有事件序号时给出时间线动作(合成的界面行没有序号, 无从回退)。
