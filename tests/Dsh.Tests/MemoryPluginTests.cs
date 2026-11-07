@@ -177,43 +177,47 @@ public sealed class MemoryPluginTests
     [InlineData(true)]
     public async Task SaveTool_NonFileDryRun_AuthorizesBeforeBackendAccess(bool approved)
     {
-        var store = new NonFileMemoryAuthorizationProbe();
-        using var fixture = new ToolFixture(new SafetySettings { AutoApprove = false }, store);
-        _ = ApprovalService.Register(fixture.Context);
-        await fixture.Memory.RememberAsync("private-remote-key", "private-remote-value", "Facts", "command", TestContext.Current.CancellationToken);
-        var original = store.Text;
-        store.ResetObservations();
-        store.HasCallApproval = () => fixture.Session!.SnapshotEvents().Any(item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.Tool == "memory_save" && audit.CallId == fixture.LastCallId.Value && audit.Outcome == "approved");
-        using var answerer = approved ? ApprovalAnswerers.AutoApprove(fixture.Context) : ApprovalAnswerers.DenyAll(fixture.Context);
-
-        var result = await fixture.Execute("""{"action":"forget","query":"private-remote-value","dry_run":true}""");
-
-        var content = string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
-        Assert.Equal(!approved, result.IsError);
-        Assert.Equal(original, store.Text);
-        Assert.Equal(0, store.Writes);
-        Assert.False(store.ReadBeforeApproval);
-        if (approved)
+        var root = TempTree.CreateDirectory("memory-authorization");
+        try
         {
-            Assert.True(store.Reads > 0);
-            Assert.Contains("private-remote-key", content);
+            var backend = new FileMemoryStore(Path.Combine(root, "memory.md"));
+            var store = new NonFileMemoryAuthorizationProbe(backend);
+            using var fixture = new ToolFixture(new SafetySettings { AutoApprove = false }, store);
+            _ = ApprovalService.Register(fixture.Context);
+            await fixture.Memory.RememberAsync("private-remote-key", "private-remote-value", "Facts", "command", TestContext.Current.CancellationToken);
+            var original = await backend.GetAsync(TestContext.Current.CancellationToken);
+            store.ResetObservations();
+            store.HasCallApproval = () => fixture.Session!.SnapshotEvents().Any(item => item.Data is SafetyDecisionAuditPayload audit
+                && audit.Tool == "memory_save" && audit.CallId == fixture.LastCallId.Value && audit.Outcome == "approved");
+            using var answerer = approved ? ApprovalAnswerers.AutoApprove(fixture.Context) : ApprovalAnswerers.DenyAll(fixture.Context);
+
+            var result = await fixture.Execute("""{"action":"forget","query":"private-remote-value","dry_run":true}""");
+
+            var content = string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
+            Assert.Equal(!approved, result.IsError);
+            Assert.Equal(original, await backend.GetAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(0, store.Writes);
+            Assert.False(store.ReadBeforeApproval);
+            if (approved)
+            {
+                Assert.True(store.Reads > 0);
+                Assert.Contains("private-remote-key", content);
+            }
+            else
+            {
+                Assert.Equal(0, store.Reads);
+                Assert.DoesNotContain("private-remote-key", content);
+            }
+            Assert.Contains(fixture.Session!.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+                && audit.Decision == "notify" && audit.Outcome == (approved ? "approved" : "rejected")
+                && audit.Tool == "memory_save" && audit.SessionId == fixture.Session.Id.Value && audit.CallId == fixture.LastCallId.Value);
         }
-        else
-        {
-            Assert.Equal(0, store.Reads);
-            Assert.DoesNotContain("private-remote-key", content);
-        }
-        Assert.Contains(fixture.Session!.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.Decision == "notify" && audit.Outcome == (approved ? "approved" : "rejected")
-            && audit.Tool == "memory_save" && audit.SessionId == fixture.Session.Id.Value && audit.CallId == fixture.LastCallId.Value);
+        finally { TempTree.Delete(root); }
     }
 
-    // This backend is an authorization-order probe, not a MongoDB service substitute.
-    private sealed class NonFileMemoryAuthorizationProbe : IMemoryStore
+    private sealed class NonFileMemoryAuthorizationProbe(IMemoryStore store) : IMemoryStore
     {
-        public string Description => "non-file authorization probe";
-        public string? Text { get; private set; }
+        public string Description => store.Description;
         public int Reads { get; private set; }
         public int Writes { get; private set; }
         public bool ReadBeforeApproval { get; private set; }
@@ -221,18 +225,15 @@ public sealed class MemoryPluginTests
 
         public Task<string?> GetAsync(CancellationToken cancellationToken = default, ToolRunContext? run = null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             Reads++;
             ReadBeforeApproval |= HasCallApproval?.Invoke() == false;
-            return Task.FromResult(Text);
+            return store.GetAsync(cancellationToken, run);
         }
 
         public Task SetAsync(string text, CancellationToken cancellationToken = default, ToolRunContext? run = null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             Writes++;
-            Text = text;
-            return Task.CompletedTask;
+            return store.SetAsync(text, cancellationToken, run);
         }
 
         public void ResetObservations()

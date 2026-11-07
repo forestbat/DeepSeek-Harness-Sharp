@@ -466,6 +466,7 @@ public class SkillTests
     // This adapter observes real fixture filesystem I/O and an explicitly released asynchronous reader.
     private sealed class ObservedSkillFileSystem : ISkillFs
     {
+        private readonly Dsh.Tools.LocalFsService _local = new(new Context());
         public int Operations { get; private set; }
         public int Reads { get; private set; }
         public bool BlockReads { get; set; }
@@ -477,7 +478,7 @@ public class SkillTests
         public Task<SkillFsTarget> Resolve(string path)
         {
             Operations++;
-            return Task.FromResult(new SkillFsTarget(Path.GetFullPath(path)));
+            return Task.FromResult(new SkillFsTarget((string)_local.Resolve(path)));
         }
 
         public Task<IReadOnlyList<SkillFsDirEntry>> ListDir(SkillFsTarget target)
@@ -492,9 +493,9 @@ public class SkillTests
         {
             signal.ThrowIfCancellationRequested();
             Operations++;
-            SkillFsInfo? info = Directory.Exists(target.DisplayPath) ? new(SkillFsEntryTypes.Directory, 0)
-                : File.Exists(target.DisplayPath) ? new(SkillFsEntryTypes.File, new FileInfo(target.DisplayPath).Length) : null;
-            return Task.FromResult(info);
+            var info = (IDictionary<string, object?>?)_local.Stat(target.DisplayPath, signal);
+            return Task.FromResult<SkillFsInfo?>(info is null ? null : new SkillFsInfo((string)info["type"]!,
+                info.TryGetValue("size", out var size) ? (long)size! : 0));
         }
 
         public async Task<string> ReadText(SkillFsTarget target, CancellationToken signal)
