@@ -45,7 +45,6 @@ public sealed record RemoteQuestionItem(
     string? Header,
     IReadOnlyList<RemoteQuestionOption> Options,
     bool MultiSelect,
-    string? ApproveLabel,
     bool AllowCustom = true);
 
 public sealed record RemoteQuestionRequest(string RequestId, string SessionId, IReadOnlyList<RemoteQuestionItem> Questions);

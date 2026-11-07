@@ -194,7 +194,6 @@ public class ChatWindowMenuTests : IDisposable
         for (var y = layout.Main.Y; y < layout.Main.Bottom; y++)
         {
             var main = RowText(grid, y, layout.Main.X, layout.Main.Width);
-            Assert.DoesNotContain("使用 /plan 管理", main);
             Assert.DoesNotContain("Ctrl+X N 新会话", main);
             Assert.DoesNotContain("Git 变更", main);
             Assert.Equal('│', grid[divider, y].Character);
@@ -230,7 +229,6 @@ public class ChatWindowMenuTests : IDisposable
         for (var y = 0; y < effective.Main.Height; y++)
         {
             var main = RowText(grid, y, 0, effective.Main.Width);
-            Assert.DoesNotContain("使用 /plan 管理", main);
             Assert.DoesNotContain("Ctrl+X N 新会话", main);
         }
     }
@@ -259,7 +257,7 @@ public class ChatWindowMenuTests : IDisposable
             {
                 var main = RowText(grid, y, 0, layout.Main.Width);
                 Assert.True(
-                    !main.Contains("使用 /plan 管理") && !main.Contains("Ctrl+X N 新会话"),
+                    !main.Contains("Ctrl+X N 新会话"),
                     $"width={width} y={y} 正文区出现右栏内容: [{main}]");
             }
         }

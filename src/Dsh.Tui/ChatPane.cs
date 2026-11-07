@@ -873,7 +873,6 @@ public sealed class ChatPane : ITuiPane
             $"model: {provider}/{model}",
         ]);
         AddPanelSection(lines, "MCP", _window.McpLines());
-        AddPanelSection(lines, "计划", ["使用 /plan 管理"]);
         AddPanelSection(lines, "Git 变更", _window.GitLines());
         AddPanelSection(lines, "快捷键",
         [

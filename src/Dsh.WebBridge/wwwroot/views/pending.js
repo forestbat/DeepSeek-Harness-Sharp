@@ -116,7 +116,7 @@ function approvalBody(machineLink, request, isPending) {
 function questionBody(machineLink, request, isPending) {
   const canCancel = machineLink.supports(Capability.DecisionCancellation);
   const questions = request.Questions.map((question, index) => questionField(request.RequestId, index, question));
-  const submit = h('button', { type: 'submit', className: 'primary' }, request.Questions.find((question) => question.ApproveLabel)?.ApproveLabel ?? 'Submit');
+  const submit = h('button', { type: 'submit', className: 'primary' }, 'Submit');
   const cancel = h('button', { type: 'button', disabled: !canCancel, title: canCancel ? 'Dismiss this question' : 'Cancellation Unsupported by this Host', onClick: () => answer(true) }, 'Cancel');
   const fields = h('fieldset', {}, questions.map((question) => question.element), !canCancel ? h('p', { className: 'muted' }, 'Cancellation Unsupported by this Host; answering remains available.') : null, h('div', { className: 'actions' }, submit, cancel));
   const form = h('form', {
