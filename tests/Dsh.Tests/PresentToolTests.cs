@@ -322,44 +322,24 @@ public sealed class PresentToolTests
     [Fact]
     public async Task Present_ReplacedAfterPreparation_PublishesExactlyOnceFromTheExecutedRegistration()
     {
-        var root = TempTree.CreateDirectory("present-registration");
-        try
+        using var fixture = new ReplacementFixture(new Dsh.Boot.SafetySettings
         {
-            var context = new Context();
-            _ = new SystemPrompt(context, new SystemPromptConfig());
-            _ = new LlmRuntime(context);
-            var tools = new ToolRuntime(context);
-            var projections = new SessionProjectionRegistry(context);
-            projections.Register(TurnBoundaryProjectionDefinition.Instance);
-            _ = new Dsh.Boot.SafetyPolicySource(context, () => new Dsh.Boot.HarnessSettings
-            {
-                Safety = new() { Whitelist = new() { ["present-call"] = new() { Tool = [ToolName] } } },
-            });
-            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
-            var session = Session.Create(id, null, new SessionHeader
-            {
-                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
-            });
-            session.Append(new TurnStartPayload(1));
-            using var agent = new AgentLoopAgent(context, id, new AgentOptions(), session, _ => 0);
-            var path = await CreateFile(session, "replacement-report.txt");
-            using var original = PresentTool.Register(context);
-            var callId = ToolCallId.Create(Guid.NewGuid().ToString("N"));
-            var prepared = Assert.IsType<ScheduledToolPreparation.Dispatch>(await tools.PrepareScheduledExecution(new ToolExecutionInput
-            {
-                CallId = callId, Name = ToolName,
-                Arguments = JsonSerializer.SerializeToElement(new { files = new[] { new { path, description = "Approved replacement report" } } }),
-                Agent = agent, Signal = TestContext.Current.CancellationToken,
-            }));
-            original.Dispose();
-            using var replacement = PresentTool.Register(context);
-            var dispatched = Assert.IsType<ScheduledToolDispatch.PostResult>(await tools.DispatchScheduledExecution(prepared.Exec));
-            var result = await tools.FinalizeScheduledExecution(prepared.Exec, dispatched.Result);
-            Assert.False(result.IsError, TextOf(result));
-            Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<DeliverablesPresentedPayload>());
-            Assert.Equal([new PresentedFile(path, "Approved replacement report")], SessionDeliverables.Collect(session.SnapshotEvents()));
-        }
-        finally { TempTree.Delete(root); }
+            Whitelist = new() { ["present-call"] = new() { Tool = [ToolName] } },
+        });
+        var projections = new SessionProjectionRegistry(fixture.Context);
+        projections.Register(TurnBoundaryProjectionDefinition.Instance);
+        var path = await CreateFile(fixture.Session, "replacement-report.txt");
+        using var original = PresentTool.Register(fixture.Context);
+        var prepared = await fixture.Prepare(ToolName,
+            new { files = new[] { new { path, description = "Approved replacement report" } } });
+        original.Dispose();
+        using var replacement = PresentTool.Register(fixture.Context);
+        var dispatched = Assert.IsType<ScheduledToolDispatch.PostResult>(
+            await fixture.Tools.DispatchScheduledExecution(prepared.Exec));
+        var result = await fixture.Tools.FinalizeScheduledExecution(prepared.Exec, dispatched.Result);
+        Assert.False(result.IsError, TextOf(result));
+        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<DeliverablesPresentedPayload>());
+        Assert.Equal([new PresentedFile(path, "Approved replacement report")], SessionDeliverables.Collect(fixture.Session.SnapshotEvents()));
     }
 
     private static bool IsPresented(SessionEvent sessionEvent)

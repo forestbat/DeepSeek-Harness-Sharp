@@ -176,45 +176,17 @@ public class SkillTests
             var path = Path.Combine(directory, "SKILL.md");
             await File.WriteAllTextAsync(path, "---\nname: private-skill\ndescription: File read policy consumer\n---\nprivate-skill-body-marker\n",
                 TestContext.Current.CancellationToken);
-            var context = new Context();
-            _ = new SystemPrompt(context, new SystemPromptConfig());
-            _ = new LlmRuntime(context);
-            var tools = new ToolRuntime(context);
-            var registry = new SkillRegistry(context, new SkillRegistryConfig());
-            using var registration = SkillFilesystem.Apply(context, new SkillFilesystemConfig
-            {
-                ProviderName = "policy-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [root], Watch = false,
-            });
-            using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-invocation"] = new() { Tool = [SkillCatalog.ToolName] } } };
-            _ = new SafetyPolicySource(context, () => new HarnessSettings { Safety = policy });
-            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
-            var session = Session.Create(id, null, new SessionHeader
-            {
-                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
-            });
-            session.Append(new TurnStartPayload(1));
-            using var agent = new AgentLoopAgent(context, id, new AgentOptions(), session, _ => 0);
-            var input = new ToolExecutionInput
-            {
-                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Name = SkillCatalog.ToolName,
-                Arguments = System.Text.Json.JsonSerializer.SerializeToElement(new { name = "private-skill" }),
-                Agent = agent, Signal = TestContext.Current.CancellationToken,
-            };
-            var allowed = await tools.Execute(input);
+            await using var fixture = new DiscoveryFixture(root, [root], () => new HarnessSettings { Safety = policy });
+            var allowed = await fixture.Execute(TestContext.Current.CancellationToken, "private-skill");
             Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
             Assert.Contains("private-skill-body-marker", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
             policy.Blacklist["deny-skill-file"] = new() { Path = path, Intent = "read" };
-            var deniedCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
-            var denied = await tools.Execute(new ToolExecutionInput
-            {
-                CallId = deniedCall, Name = input.Name, Arguments = input.Arguments, Agent = agent,
-                Signal = TestContext.Current.CancellationToken,
-            });
+            var denied = await fixture.Execute(TestContext.Current.CancellationToken, "private-skill");
             Assert.True(denied.IsError);
             Assert.DoesNotContain("private-skill-body-marker", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
-            SafetyAssert.Denied(session, deniedCall.Value, "deny-skill-file", path, "read", SkillCatalog.ToolName);
-            var manual = await registry.Get("private-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
+            SafetyAssert.Denied(fixture.Session, fixture.LastCallId.Value, "deny-skill-file", path, "read", SkillCatalog.ToolName);
+            var manual = await fixture.Registry.Get("private-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
             Assert.NotNull(manual);
             Assert.Contains("private-skill-body-marker", manual.Content);
         }
@@ -253,44 +225,20 @@ public class SkillTests
                 Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
             }
 
-            var context = new Context();
-            _ = new SystemPrompt(context, new SystemPromptConfig());
-            _ = new LlmRuntime(context);
-            var tools = new ToolRuntime(context);
-            var registry = new SkillRegistry(context, new SkillRegistryConfig());
-            using var registration = SkillFilesystem.Apply(context, new SkillFilesystemConfig
-            {
-                ProviderName = "linked-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [skills], Watch = false,
-            });
-            using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
-            _ = new SafetyPolicySource(context, () => new HarnessSettings { Safety = policy });
-            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
-            var session = Session.Create(id, null, new SessionHeader
-            {
-                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
-            });
-            session.Append(new TurnStartPayload(1));
-            using var agent = new AgentLoopAgent(context, id, new AgentOptions(), session, _ => 0);
-            ToolExecutionInput Input() => new()
-            {
-                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Name = SkillCatalog.ToolName,
-                Arguments = System.Text.Json.JsonSerializer.SerializeToElement(new { name = "linked-skill" }),
-                Agent = agent, Signal = TestContext.Current.CancellationToken,
-            };
-            var manual = await registry.Get("linked-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
+            await using var fixture = new DiscoveryFixture(root, [skills], () => new HarnessSettings { Safety = policy });
+            var manual = await fixture.Registry.Get("linked-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
             Assert.NotNull(manual);
             Assert.Contains("linked-private-body", manual.Content);
-            var allowed = await tools.Execute(Input());
+            var allowed = await fixture.Execute(TestContext.Current.CancellationToken, "linked-skill");
             Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
             Assert.Contains("linked-private-body", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
 
             policy.Blacklist["deny-linked-target"] = new() { Path = target, Intent = "read" };
-            var deniedInput = Input();
-            var denied = await tools.Execute(deniedInput);
+            var denied = await fixture.Execute(TestContext.Current.CancellationToken, "linked-skill");
             Assert.True(denied.IsError);
             Assert.DoesNotContain("linked-private-body", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
-            SafetyAssert.Denied(session, deniedInput.CallId.Value, "deny-linked-target", target, "read", SkillCatalog.ToolName);
+            SafetyAssert.Denied(fixture.Session, fixture.LastCallId.Value, "deny-linked-target", target, "read", SkillCatalog.ToolName);
         }
         finally
         {
@@ -310,34 +258,9 @@ public class SkillTests
             await File.WriteAllTextAsync(Path.Combine(healthy, "SKILL.md"),
                 "---\nname: healthy-skill\ndescription: Healthy sibling consumer\n---\nhealthy-sibling-body\n",
                 TestContext.Current.CancellationToken);
-            var context = new Context();
-            _ = new SystemPrompt(context, new SystemPromptConfig());
-            _ = new LlmRuntime(context);
-            var tools = new ToolRuntime(context);
-            var registry = new SkillRegistry(context, new SkillRegistryConfig());
-            using var registration = SkillFilesystem.Apply(context, new SkillFilesystemConfig
-            {
-                ProviderName = "dangling-entry-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [root], Watch = false,
-            });
-            using var catalog = new SkillCatalog(context, registry);
-            _ = new SafetyPolicySource(context, () => new HarnessSettings
-            {
-                Safety = new() { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } },
-            });
-            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
-            var session = Session.Create(id, null, new SessionHeader
-            {
-                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
-            });
-            session.Append(new TurnStartPayload(1));
-            using var agent = new AgentLoopAgent(context, id, new AgentOptions(), session, _ => 0);
-            Task<ToolExecutionResult> Execute() => tools.Execute(new ToolExecutionInput
-            {
-                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Name = SkillCatalog.ToolName,
-                Arguments = System.Text.Json.JsonSerializer.SerializeToElement(new { name = "healthy-skill" }),
-                Agent = agent, Signal = TestContext.Current.CancellationToken,
-            });
-            var before = await Execute();
+            var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
+            await using var fixture = new DiscoveryFixture(root, [root], () => new HarnessSettings { Safety = policy });
+            var before = await fixture.Execute(TestContext.Current.CancellationToken, "healthy-skill");
             Assert.False(before.IsError, string.Concat(before.Content.OfType<TextBlock>().Select(block => block.Text)));
             Assert.Contains("healthy-sibling-body", string.Concat(before.Content.OfType<TextBlock>().Select(block => block.Text)));
             try
@@ -349,7 +272,7 @@ public class SkillTests
             {
                 Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
             }
-            var after = await Execute();
+            var after = await fixture.Execute(TestContext.Current.CancellationToken, "healthy-skill");
             Assert.False(after.IsError, string.Concat(after.Content.OfType<TextBlock>().Select(block => block.Text)));
             Assert.Contains("healthy-sibling-body", string.Concat(after.Content.OfType<TextBlock>().Select(block => block.Text)));
         }
@@ -428,48 +351,25 @@ public class SkillTests
     {
         private readonly ToolRuntime _tools;
         private readonly AgentLoopAgent _agent;
-        private readonly IDisposable _runtimeRegistration;
+        private readonly bool _ownsRoot;
+        private readonly IDisposable? _runtimeRegistration;
         private readonly IDisposable _filesystemRegistration;
-        private readonly IDisposable _providerRegistration;
+        private readonly IDisposable? _providerRegistration;
         private readonly FileSystemSkillProvider _filesystem;
         private readonly SkillCatalog _catalog;
-        private readonly EffectHandle _filesystemService;
+        private readonly EffectHandle? _filesystemService;
 
         public DiscoveryFixture(bool allowTool = false)
+            : this(TempTree.CreateDirectory("skill-discovery-policy"), allowTool: allowTool)
         {
-            Root = TempTree.CreateDirectory("skill-discovery-policy");
+            _ownsRoot = true;
             var custom = Directory.CreateDirectory(Path.Combine(Root, "custom")).FullName;
             var skill = Directory.CreateDirectory(Path.Combine(custom, "private-file-skill")).FullName;
             File.WriteAllText(Path.Combine(skill, "SKILL.md"), "---\nname: private-file-skill\ndescription: private discovery description\n---\nprivate-discovery-body\n");
             var providerPath = Path.Combine(Root, "provider-content.txt");
             File.WriteAllText(providerPath, "private-discovery-body");
-            Context = new Context();
-            _ = new SystemPrompt(Context, new SystemPromptConfig());
-            _ = new LlmRuntime(Context);
-            _tools = new ToolRuntime(Context);
-            _ = ApprovalService.Register(Context);
-            var home = HarnessHome.Resolve(Path.Combine(Root, "home"));
-            Directory.CreateDirectory(home.Root);
-            File.WriteAllText(home.SettingsFile, "safety:\n  autoApprove: false\n");
-            var settings = HarnessSettings.Load(home);
-            if (allowTool) (settings.Safety ??= new SafetySettings()).Whitelist["discovery-invocation"] = new() { Tool = [SkillCatalog.ToolName] };
-            settings.Save(home);
-            _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(home, settings));
-            Registry = new SkillRegistry(Context, new SkillRegistryConfig());
             FileSystem = new ObservedSkillFileSystem();
             _filesystemService = Context.Provide("fs", FileSystem);
-            FileSystemSkillProvider? filesystem = null;
-            SkillProviderControl? providerControl = null;
-            _filesystemRegistration = Registry.RegisterProvider(control =>
-            {
-                providerControl = control;
-                return filesystem = new FileSystemSkillProvider(Context, control, new SkillFilesystemConfig
-                {
-                    ProviderName = "observed-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [custom], Watch = false,
-                });
-            });
-            _filesystem = filesystem!;
-            ProviderControl = providerControl!;
             Provider = new ObservedSkillProvider(providerPath);
             _providerRegistration = Registry.RegisterProvider(_ => Provider);
             _runtimeRegistration = Registry.Register(new SkillRegistration
@@ -477,6 +377,42 @@ public class SkillTests
                 Name = "runtime-selected", Description = "Selected public runtime skill", Source = SkillSources.Runtime,
                 Content = "public-runtime-selected-body",
             });
+        }
+
+        public DiscoveryFixture(string root, IReadOnlyList<string>? customDirs = null,
+            Func<HarnessSettings>? readPolicy = null, bool allowTool = false)
+        {
+            Root = root;
+            Context = new Context();
+            _ = new SystemPrompt(Context, new SystemPromptConfig());
+            _ = new LlmRuntime(Context);
+            _tools = new ToolRuntime(Context);
+            _ = ApprovalService.Register(Context);
+            if (readPolicy is null)
+            {
+                var home = HarnessHome.Resolve(Path.Combine(Root, "home"));
+                Directory.CreateDirectory(home.Root);
+                File.WriteAllText(home.SettingsFile, "safety:\n  autoApprove: false\n");
+                var settings = HarnessSettings.Load(home);
+                if (allowTool) (settings.Safety ??= new SafetySettings()).Whitelist["discovery-invocation"] = new() { Tool = [SkillCatalog.ToolName] };
+                settings.Save(home);
+                readPolicy = HarnessSettings.CreatePolicyReader(home, settings);
+            }
+            _ = new SafetyPolicySource(Context, readPolicy);
+            Registry = new SkillRegistry(Context, new SkillRegistryConfig());
+            FileSystemSkillProvider? filesystem = null;
+            SkillProviderControl? providerControl = null;
+            _filesystemRegistration = Registry.RegisterProvider(control =>
+            {
+                providerControl = control;
+                return filesystem = new FileSystemSkillProvider(Context, control, new SkillFilesystemConfig
+                {
+                    ProviderName = "observed-filesystem", IncludeDefaultRoots = false,
+                    CustomSkillDirs = customDirs ?? [Path.Combine(Root, "custom")], Watch = false,
+                });
+            });
+            _filesystem = filesystem!;
+            ProviderControl = providerControl!;
             _catalog = new SkillCatalog(Context, Registry);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             Session = Session.Create(id, null, new SessionHeader
@@ -492,8 +428,8 @@ public class SkillTests
         public Session Session { get; }
         public SkillRegistry Registry { get; }
         public SkillProviderControl ProviderControl { get; }
-        public ObservedSkillFileSystem FileSystem { get; }
-        public ObservedSkillProvider Provider { get; }
+        public ObservedSkillFileSystem FileSystem { get; } = null!;
+        public ObservedSkillProvider Provider { get; } = null!;
         public ToolCallId LastCallId { get; private set; }
 
         public Task<ToolExecutionResult> Execute(CancellationToken signal, string name = "runtime-selected") => _tools.Execute(new ToolExecutionInput
@@ -510,17 +446,20 @@ public class SkillTests
 
         public async ValueTask DisposeAsync()
         {
-            FileSystem.ResumeRead.TrySetResult(true);
-            if (FileSystem.ReadEntered.Task.IsCompleted)
-                await FileSystem.ReadFinished.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (_filesystemService is not null)
+            {
+                FileSystem.ResumeRead.TrySetResult(true);
+                if (FileSystem.ReadEntered.Task.IsCompleted)
+                    await FileSystem.ReadFinished.Task.WaitAsync(TestContext.Current.CancellationToken);
+            }
             _catalog.Dispose();
-            _runtimeRegistration.Dispose();
-            _providerRegistration.Dispose();
+            _runtimeRegistration?.Dispose();
+            _providerRegistration?.Dispose();
             _filesystemRegistration.Dispose();
             await _filesystem.Dispose();
-            _filesystemService.Dispose();
+            _filesystemService?.Dispose();
             _agent.Dispose();
-            TempTree.Delete(Root);
+            if (_ownsRoot) TempTree.Delete(Root);
         }
     }
 
