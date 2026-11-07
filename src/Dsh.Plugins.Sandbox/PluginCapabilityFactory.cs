@@ -75,6 +75,8 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MaximumChunkBytes);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             CopyBufferBytes, FileOptions.Asynchronous);
+        if (OperatingSystem.IsLinux())
+            LinuxMountTable.DemandOrdinaryFile(stream.SafeFileHandle);
         stream.Position = offset;
         var buffer = ArrayPool<byte>.Shared.Rent(count);
         try
@@ -129,7 +131,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var options = new FileStreamOptions
         {
-            Mode = append ? FileMode.Append : FileMode.Create,
+            Mode = append ? FileMode.Append : OperatingSystem.IsLinux() ? FileMode.OpenOrCreate : FileMode.Create,
             Access = FileAccess.Write,
             Share = FileShare.Read | FileShare.Delete,
             Options = FileOptions.Asynchronous,
@@ -137,6 +139,12 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         await using var stream = new FileStream(path, options);
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxMountTable.DemandOrdinaryFile(stream.SafeFileHandle);
+            if (!append)
+                stream.SetLength(0);
+        }
         await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
     }
 
