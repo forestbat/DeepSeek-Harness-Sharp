@@ -205,20 +205,23 @@ public sealed class SafetyBoundary : Service
         PermissionDecision decision, string space, string? owner = null, string? outcome = null)
     {
         var fields = decision.Match?.Fields ?? [];
-        if (fields.Count == 0) Record(null);
-        else foreach (var field in fields) Record(field);
-        void Record(PermissionField? field)
+        var matchedFields = fields.Count == 0 ? Array.Empty<string>() : new string[fields.Count];
+        var matchedPatterns = fields.Count == 0 ? Array.Empty<string>() : new string[fields.Count];
+        for (var index = 0; index < fields.Count; index++)
         {
-            var payload = new SafetyDecisionAuditPayload(decision.Match?.RuleId, decision.Match?.RuleKind ?? "default",
-                decision.AutoApprove, decision.Decision, run?.Name, PermissionEngine.DialectName(PermissionEngine.DialectOf(run?.Name)),
-                field?.Field, field?.Pattern, input.Path, input.Intent, run?.Agent?.Session.Id.Value,
-                run?.CallId.Value, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), space, owner, outcome);
-            if (run?.Agent is { } agent) agent.Session.Append(payload);
-            else
-            {
-                context.LoggerFor("safety").Info("%s", DshJson.Serialize(payload));
-                context.Emit(new SafetyDecisionNotification(payload));
-            }
+            var field = fields[index];
+            matchedFields[index] = field.Field;
+            matchedPatterns[index] = field.Pattern;
+        }
+        var payload = new SafetyDecisionAuditPayload(decision.Match?.RuleId, decision.Match?.RuleKind ?? "default",
+            decision.AutoApprove, decision.Decision, run?.Name, PermissionEngine.DialectName(PermissionEngine.DialectOf(run?.Name)),
+            matchedFields, matchedPatterns, input.Path, input.Intent, run?.Agent?.Session.Id.Value,
+            run?.CallId.Value, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), space, owner, outcome);
+        if (run?.Agent is { } agent) agent.Session.Append(payload);
+        else
+        {
+            context.LoggerFor("safety").Info("%s", DshJson.Serialize(payload));
+            context.Emit(new SafetyDecisionNotification(payload));
         }
     }
 

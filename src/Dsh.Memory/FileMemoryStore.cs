@@ -1,5 +1,5 @@
 using Dsh.Core;
-using System.ComponentModel;
+using Dsh.Runtime;
 
 namespace Dsh.Memory;
 
@@ -17,9 +17,7 @@ public sealed class FileMemoryStore(string path) : IMemoryStore
             {
                 return await SafetyFileAccess.ReadTextAsync(path, run, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException
-                || error is Win32Exception native && (native.NativeErrorCode == 2
-                    || OperatingSystem.IsWindows() && native.NativeErrorCode == 3))
+            catch (Exception error) when (PathAbsence.IsAbsent(error))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 run.Signal.ThrowIfCancellationRequested();

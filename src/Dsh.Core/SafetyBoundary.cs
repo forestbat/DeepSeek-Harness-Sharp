@@ -5,7 +5,7 @@ using Dsh.Runtime;
 namespace Dsh.Core;
 
 public sealed record SafetyDecisionAuditPayload(string? RuleId, string RuleKind, bool AutoApprove,
-    string Decision, string? Tool, string? Dialect, string? MatchedField, string? MatchedPattern,
+    string Decision, string? Tool, string? Dialect, IReadOnlyList<string> MatchedField, IReadOnlyList<string> MatchedPattern,
     string? Path, string? Intent, string? SessionId, string? CallId, long Timestamp,
     string Namespace = "safety", string? LifecycleOwner = null, string? Outcome = null) : SessionEventPayload
 {

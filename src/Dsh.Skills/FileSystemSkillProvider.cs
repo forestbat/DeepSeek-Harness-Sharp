@@ -94,26 +94,23 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         signal.ThrowIfCancellationRequested();
         var roots = await Roots(options.Cwd, signal, run);
         var candidates = new List<SkillCandidate>();
-        // Model discovery is uncached and authorizes before observing new roots.
-        if (run is not null)
-            foreach (var root in roots)
-                candidates.AddRange(await DiscoverRoot(root, signal, run));
-        signal.ThrowIfCancellationRequested();
         var complete = true;
-        try
-        {
-            await _watchManager.ObserveRoots(roots);
-        }
-        catch
-        {
-            signal.ThrowIfCancellationRequested();
-            if (_disposal is not null) throw;
-            complete = false;
-        }
-        // Startup catalogs retain watcher-before-read ordering so changes cannot strand a stale cache.
+        // Startup discovery primes watchers before reading roots.
         if (run is null)
-            foreach (var root in roots)
-                candidates.AddRange(await DiscoverRoot(root, signal, run));
+        {
+            try
+            {
+                await _watchManager.ObserveRoots(roots);
+            }
+            catch
+            {
+                signal.ThrowIfCancellationRequested();
+                if (_disposal is not null) throw;
+                complete = false;
+            }
+        }
+        foreach (var root in roots)
+            candidates.AddRange(await DiscoverRoot(root, signal, run));
         signal.ThrowIfCancellationRequested();
         return new SkillProviderObservation(candidates, complete);
     }
@@ -447,15 +444,8 @@ public sealed class FileSystemSkillProvider : ISkillProvider
         }
     }
 
-    internal static bool IsAbsentPathError(Exception error)
-        => error is FileNotFoundException or DirectoryNotFoundException
-            || error is IOException { HResult: var hResult } && (hResult & 0xFFFF) == 267
-            || error is System.ComponentModel.Win32Exception native && (native.NativeErrorCode == 2
-                || OperatingSystem.IsWindows() && native.NativeErrorCode is 3 or 267
-                || !OperatingSystem.IsWindows() && native.NativeErrorCode == 20);
-
-    internal static bool IsAbsentSkillPathError(Exception error)
-        => IsAbsentPathError(error) || error is SkillFsException { IsAbsent: true };
+    private static bool IsAbsentSkillPathError(Exception error)
+        => PathAbsence.IsAbsent(error) || error is SkillFsException { IsAbsent: true };
 
     private void Warn(string message) => _ctx.LoggerFor(SkillFilesystem.PluginName).Warn(message);
 }

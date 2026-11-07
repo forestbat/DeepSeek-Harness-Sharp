@@ -1,5 +1,6 @@
 using Dsh.Boot;
 using Dsh.Core;
+using Dsh.Runtime;
 
 namespace Dsh.AgentInstructions;
 
@@ -67,15 +68,7 @@ public static class AgentInstructionsText
                 parts.Add("Optional directory instructions were not loaded because access was denied.");
                 continue;
             }
-            catch (IOException)
-            {
-                signal.ThrowIfCancellationRequested();
-                parts.Add("Optional directory instructions could not be loaded; no instructions from that file were added.");
-                continue;
-            }
-            catch (System.ComponentModel.Win32Exception error) when (error.NativeErrorCode == 2
-                || OperatingSystem.IsWindows() && error.NativeErrorCode is 3 or 267
-                || !OperatingSystem.IsWindows() && error.NativeErrorCode == 20)
+            catch (Exception error) when (error is IOException || PathAbsence.IsAbsent(error))
             {
                 signal.ThrowIfCancellationRequested();
                 parts.Add("Optional directory instructions could not be loaded; no instructions from that file were added.");

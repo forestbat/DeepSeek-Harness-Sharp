@@ -172,7 +172,7 @@ public sealed class MemoryPluginTests
         Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
             && audit.RuleId == ruleId && audit.RuleKind == "blacklist" && audit.Decision == "deny"
             && audit.Tool == "memory_save" && audit.SessionId == session.Id.Value && audit.CallId == fixture.LastCallId.Value
-            && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(target) && audit.Intent == intent && audit.MatchedField == "path");
+            && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(target) && audit.Intent == intent && audit.MatchedField.Contains("path"));
 
         var decisionCount = session.SnapshotEvents().Count(item => item.Data is SafetyDecisionAuditPayload);
         await fixture.Memory.RememberAsync("manual", "manual control-plane value", "Facts", "command", TestContext.Current.CancellationToken);
