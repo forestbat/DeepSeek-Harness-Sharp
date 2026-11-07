@@ -24,6 +24,7 @@ public sealed class SandboxProcessTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
             Assert.Skip("The Windows path consumer covers redirected native IO.");
+        await SandboxTestBackend.RequireAsync();
         var options = Options("/") with
         {
             Arguments = ["-c", "IFS= read -r value; printf '%s\\n' \"$value\"; printf '%s\\n' diagnostic >&2"]
@@ -38,7 +39,7 @@ public sealed class SandboxProcessTests : IDisposable
                 Executable = script, WorkingDirectory = _root, RuntimePaths = SandboxRuntimePaths.ForExecutable(script)
             };
         }
-        await using var sandbox = await StartNativeAsync(options);
+        await using var sandbox = await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken);
         await sandbox.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
         await sandbox.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
