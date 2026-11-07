@@ -1610,21 +1610,9 @@ public sealed partial class ChatWindow : IDisposable
     }
 
 
-    /** 本会话里用户自己发的消息(seq / 事件时间 / 文本), 供时间线与"IDE 时间点 → 最近消息"映射。 */
+    /** 本会话里用户自己发的消息(seq / 事件时间 / 文本); 过滤规则与 GUI 时间线共用 SessionTimeline。 */
     private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
-    {
-        var messages = new List<(long Seq, long Time, string Text)>();
-        foreach (var sessionEvent in session.SnapshotEvents())
-        {
-            if (sessionEvent.Data is not UserMessagePayload user || user.Message.Source is not UserMessageSource)
-                continue;
-            var text = UserFacingText.StripSystemReminders(
-                string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text)));
-            if (text.Length > 0)
-                messages.Add((sessionEvent.Seq, sessionEvent.Time, text));
-        }
-        return messages;
-    }
+        => [.. SessionTimeline.UserMessages(session).Select(entry => (entry.Seq, entry.Time, entry.Text))];
 
     /** jump: 只滚到该消息(不改会话/文件); 用消息首行文本在视口缓存里定位。 */
     private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq)
@@ -1712,11 +1700,7 @@ public sealed partial class ChatWindow : IDisposable
         return Task.CompletedTask;
     }
 
-    private static string Preview(string text)
-    {
-        var single = text.Replace('\n', ' ');
-        return single.Length <= 60 ? single : $"{single[..60]}~";
-    }
+    private static string Preview(string text) => SessionTimeline.Preview(text);
 
     private async Task NewSession(ChatPane pane, string text)
     {
