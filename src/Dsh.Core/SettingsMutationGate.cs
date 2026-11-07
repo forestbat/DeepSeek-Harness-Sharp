@@ -23,7 +23,7 @@ public sealed class SettingsMutationGate : IDisposable
     {
         this.context = context;
         this.home = home;
-        read = HarnessSettings.CreatePolicyReader(home);
+        read = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName)!.Read;
         registration = context.Provide(ServiceName, this);
     }
 

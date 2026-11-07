@@ -319,7 +319,7 @@ public sealed class SettingsMutationTests
         public SettingsMutationGate Gate { get; }
         private readonly List<IDisposable> _tools;
 
-        public Fixture(bool withApproval = true, SafetySettings? safety = null)
+        public Fixture(bool withApproval = true)
         {
             Home = HarnessHome.Resolve(Path.Combine(Root, "home"));
             Directory.CreateDirectory(Home.Root);
@@ -335,8 +335,8 @@ public sealed class SettingsMutationTests
             if (withApproval)
                 _ = ApprovalService.Register(Context);
             Context.SetOwn(HarnessHome.SettingsPathProperty, Home.SettingsFile);
+            _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(Home, HarnessSettings.Load(Home)));
             Gate = new SettingsMutationGate(Context, Home);
-            _ = new SafetyBoundary(Context, HarnessSettings.CreatePolicyReader(Home));
             _tools = [WriteTool.Register(Context), EditTool.Register(Context), StrReplaceEditorTool.Register(Context)];
         }
 
