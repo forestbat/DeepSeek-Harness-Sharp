@@ -8,7 +8,21 @@ namespace Dsh.Host;
 /** 入口组合根: 解析 CLI 参数并组合插件, 然后分发到 tui/gui/headless 分支。两个宿主 exe 的 Program 只做转发。 */
 public static class HarnessEntrypoint
 {
+    /** 配置坏了不是"未处理异常": 打一行能照着修的说明再退出, 而不是让用户读 YamlDotNet 的栈。 */
     public static async Task<int> RunAsync(string[] args)
+    {
+        try
+        {
+            return await RunCoreAsync(args);
+        }
+        catch (InvalidDataException error)
+        {
+            await Console.Error.WriteLineAsync($"dsharp: {error.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunCoreAsync(string[] args)
     {
         if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
