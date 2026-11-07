@@ -72,6 +72,75 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
         Assert.True(pane.StickToBottom);
     }
 
+    /** PageDown 到底也算用户回到末尾, 与滚轮向下同一判定: 之后的新输出必须继续贴底。 */
+    [Fact]
+    public async Task PageDownToTail_ResumesFollowing()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        for (var index = 0; index < 60; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
+        Draw(chat);
+
+        pane.HandleMouseWheel(3);
+        Draw(chat);
+        Assert.False(pane.StickToBottom);
+
+        for (var attempt = 0; attempt < 60 && !pane.StickToBottom; attempt++)
+        {
+            pane.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.PageDown, false, false, false));
+            Draw(chat);
+        }
+
+        Assert.True(pane.StickToBottom);
+    }
+
+    /** jump 只影响它自己那一帧: 用户随后发消息必须重新贴底(旧实现会把抑制留到下一次发送)。 */
+    [Fact]
+    public async Task JumpThenSend_ResumesFollowing()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        for (var index = 0; index < 60; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
+        Draw(chat);
+
+        Assert.True(pane.TryScrollToMessage("第 0 行"));
+        Draw(chat);
+        Assert.False(pane.StickToBottom);
+
+        pane.Input = "下一条";
+        pane.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        Draw(chat);
+
+        Assert.True(pane.StickToBottom);
+    }
+
+    /** 贴底时展开折叠: 那一帧不重新贴底, 否则被点的折叠头会被新高度顶走(GUI 的 _foldPending 同款)。 */
+    [Fact]
+    public async Task ExpandingFoldWhileAtTail_KeepsTheTranscriptInPlace()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        for (var index = 0; index < 40; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
+        pane.AppendRaw(string.Join('\n', Enumerable.Range(0, 40).Select(index => $"工具输出第 {index} 行")));
+        Draw(chat);
+        Assert.True(pane.StickToBottom);
+
+        var fold = Assert.Single(pane.Renderer.Folds);
+        var before = pane.ScrollOffset;
+        pane.ToggleFold(fold);
+        Draw(chat);
+
+        Assert.False(pane.StickToBottom);
+        Assert.Equal(before, pane.ScrollOffset);
+        Assert.True(pane.Renderer.Folds[0].Lines > 0);
+    }
+
     private static void Draw(ChatWindow chat)
     {
         chat.DrainUi();

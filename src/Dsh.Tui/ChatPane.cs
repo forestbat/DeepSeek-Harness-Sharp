@@ -123,7 +123,6 @@ public sealed class ChatPane : ITuiPane
             {
                 StickToBottom = false;
                 ScrollOffset = index;
-                _suppressStickOnce = true;
                 return true;
             }
         }
@@ -135,19 +134,10 @@ public sealed class ChatPane : ITuiPane
     /** 刚刚往下滚过: 下一帧知道 maxOffset 后决定是否恢复贴底(只有用户可以改判跟随)。 */
     private bool _resumeStickAtTail;
 
-    /** jump 后抑制一次“新内容贴底”, 让目标消息保持在顶上; 一次性, 之后恢复正常贴底。 */
-    private bool _suppressStickOnce;
+    /** 折叠刚被切换: 那一帧不重新贴底, 否则被点的折叠头会被新高度顶走。 */
+    private bool _foldPending;
 
-    private void RequestStickToBottom()
-    {
-        if (_suppressStickOnce)
-        {
-            _suppressStickOnce = false;
-            return;
-        }
-
-        StickToBottom = true;
-    }
+    private void RequestStickToBottom() => StickToBottom = true;
 
     public string? SelectedFoldKey { get; set; }
 
@@ -424,6 +414,8 @@ public sealed class ChatPane : ITuiPane
                 break;
             case ConsoleKey.PageDown:
                 ScrollOffset += 10;
+                // 与滚轮向下同一判定: 落到末尾就恢复跟随, 否则用 PageDown 到底后新输出会把视口留在旧位置。
+                _resumeStickAtTail = true;
                 break;
             default:
                 if (key.KeyChar >= ' ')
@@ -681,7 +673,13 @@ public sealed class ChatPane : ITuiPane
             wrapped.Add("");
 
         var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
-        if (StickToBottom)
+        if (_foldPending)
+        {
+            // 折叠那一帧不重新贴底: 否则展开会让被点的折叠头被新高度顶走 Δ 行。
+            _foldPending = false;
+            StickToBottom = false;
+        }
+        else if (StickToBottom)
             ScrollOffset = maxOffset;
         else if (_resumeStickAtTail)
         {
@@ -1876,6 +1874,7 @@ public sealed class ChatPane : ITuiPane
             fold.Collapsed = true;
             fold.Scroll = 0;
         }
+        _foldPending = true;
         Renderer.BumpVersion();
     }
 
