@@ -13,93 +13,51 @@ namespace Dsh.Tests;
 public sealed class SettingsMutationTests
 {
     [Theory]
-    [InlineData("write")]
-    [InlineData("edit")]
-    [InlineData("str_replace_editor")]
-    public async Task RejectedRealFileTools_LeaveSettingsUnchanged_AndAuditTheProposal(string tool)
+    [InlineData("write", false)]
+    [InlineData("edit", false)]
+    [InlineData("str_replace_editor", false)]
+    [InlineData("write", true)]
+    [InlineData("edit", true)]
+    [InlineData("str_replace_editor", true)]
+    public async Task RealFileTools_ApplyApprovalDecision_WithAuditedProposalAndOwnerOnlyPublication(string tool, bool approve)
     {
         using var fixture = new Fixture();
-        using var deny = ApprovalAnswerers.DenyAll(fixture.Context);
+        using var answer = approve ? ApprovalAnswerers.AutoApprove(fixture.Context) : ApprovalAnswerers.DenyAll(fixture.Context);
+        using var previous = approve ? new StreamReader(new FileStream(fixture.Home.SettingsFile, FileMode.Open,
+            FileAccess.Read, FileShare.Read | FileShare.Delete)) : null;
         var result = await fixture.Execute(tool, fixture.Arguments(tool));
 
-        Assert.True(result.IsError);
-        Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
+        Assert.Equal(!approve, result.IsError);
+        Assert.Equal(approve ? Fixture.Original.Replace("alpha/old", "alpha/new") : Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
         var audit = Assert.Single(fixture.Audits);
-        Assert.Equal("rejected", audit.Outcome);
-        Assert.Equal(tool, audit.ToolName);
-        Assert.Equal(audit.CallId, audit.RootCallId);
-        Assert.Equal(CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile), audit.Path);
-        Assert.DoesNotContain("credential-old-for-test", audit.Diff);
-        Assert.Contains("alpha/new", audit.Diff);
-        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
+        Assert.Equal(approve ? "committed" : "rejected", audit.Outcome);
         var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-        Assert.Equal(audit.CallId, asked.CallId);
-        Assert.DoesNotContain("credential-old-for-test", asked.Arguments);
-        Assert.Contains("+global_default_model: alpha/new", ApprovalHints.SettingsDiff(asked.Arguments));
+        if (approve)
+        {
+            Assert.Equal(Fixture.Original, await previous!.ReadToEndAsync(TestContext.Current.CancellationToken));
+            Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
+            Assert.DoesNotContain("credential-old-for-test", result.Meta?.GetRawText());
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(fixture.Home.SettingsFile));
+        }
+        else
+        {
+            Assert.Equal(tool, audit.ToolName);
+            Assert.Equal(audit.CallId, audit.RootCallId);
+            Assert.Equal(CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile), audit.Path);
+            Assert.DoesNotContain("credential-old-for-test", audit.Diff);
+            Assert.Contains("alpha/new", audit.Diff);
+            Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
+            Assert.Equal(audit.CallId, asked.CallId);
+            Assert.DoesNotContain("credential-old-for-test", asked.Arguments);
+            Assert.Contains("+global_default_model: alpha/new", ApprovalHints.SettingsDiff(asked.Arguments));
+        }
     }
 
     [Theory]
-    [InlineData("write")]
-    [InlineData("edit")]
-    [InlineData("str_replace_editor")]
-    public async Task ApprovedRealFileTools_CommitOnce_WithRedactedDiffAndOwnerOnlyPublication(string tool)
-    {
-        using var fixture = new Fixture();
-        using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
-        using var previous = new StreamReader(new FileStream(fixture.Home.SettingsFile, FileMode.Open,
-            FileAccess.Read, FileShare.Read | FileShare.Delete));
-        var result = await fixture.Execute(tool, fixture.Arguments(tool));
-
-        Assert.False(result.IsError);
-        Assert.Equal(Fixture.Original.Replace("alpha/old", "alpha/new"), File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal(Fixture.Original, await previous.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("committed", Assert.Single(fixture.Audits).Outcome);
-        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-        Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
-        Assert.DoesNotContain("credential-old-for-test", result.Meta?.GetRawText());
-        if (!OperatingSystem.IsWindows())
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(fixture.Home.SettingsFile));
-    }
-
-    [Fact]
-    public async Task RealFileProposal_ReleasesLock_AndRejectsConcurrentHumanChange()
-    {
-        using var fixture = new Fixture();
-        var asked = new TaskCompletionSource<ApprovalRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>((notification, _) =>
-        {
-            asked.TrySetResult(notification.Request);
-            return new(answer.Task);
-        }, new EventOptions { Global = true });
-        try
-        {
-            var pending = fixture.Execute("write", fixture.Arguments("write"));
-            await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
-            HarnessSettings.Update(fixture.Home, settings =>
-            {
-                settings.CompactionModel = "human/current";
-                return true;
-            });
-            answer.SetResult(ApprovalOutcome.AllowedOnce);
-            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
-
-            Assert.True(result.IsError);
-            var actual = HarnessSettings.Load(fixture.Home);
-            Assert.Equal("alpha/old", actual.GlobalDefaultModel);
-            Assert.Equal("human/current", actual.CompactionModel);
-            Assert.Equal("failed", Assert.Single(fixture.Audits).Outcome);
-            Assert.Contains("# keep this comment", File.ReadAllText(fixture.Home.SettingsFile));
-        }
-        finally
-        {
-            answer.TrySetResult(ApprovalOutcome.Cancelled);
-            remove();
-        }
-    }
-
-    [Fact]
-    public async Task CancelledProposal_NeverPublishes_AndAuditsCancellation()
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PendingProposal_ReleasesLock_AndNeverPublishesAfterConflictOrCancellation(bool cancel)
     {
         using var fixture = new Fixture();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -114,10 +72,28 @@ public sealed class SettingsMutationTests
         {
             var pending = fixture.Execute("write", fixture.Arguments("write"), cancellation.Token);
             await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
-            await cancellation.CancelAsync();
+            if (cancel)
+                await cancellation.CancelAsync();
+            else
+            {
+                HarnessSettings.Update(fixture.Home, settings =>
+                {
+                    settings.CompactionModel = "human/current";
+                    return true;
+                });
+                answer.SetResult(ApprovalOutcome.AllowedOnce);
+            }
             Assert.True((await pending.WaitAsync(TestContext.Current.CancellationToken)).IsError);
-            Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-            Assert.Equal("cancelled", Assert.Single(fixture.Audits).Outcome);
+            Assert.Equal(cancel ? "cancelled" : "failed", Assert.Single(fixture.Audits).Outcome);
+            if (cancel)
+                Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
+            else
+            {
+                var actual = HarnessSettings.Load(fixture.Home);
+                Assert.Equal("alpha/old", actual.GlobalDefaultModel);
+                Assert.Equal("human/current", actual.CompactionModel);
+                Assert.Contains("# keep this comment", File.ReadAllText(fixture.Home.SettingsFile));
+            }
         }
         finally
         {
@@ -127,39 +103,40 @@ public sealed class SettingsMutationTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task BlacklistWinsOverWhitelistAndAutoApprove(bool autoApprove)
+    [InlineData(false, true, false, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, true, true)]
+    public async Task SettingsPolicy_UsesToolGrammar_AndPreservesDenyPrecedence(bool autoApprove, bool blacklist, bool never, bool rejected)
     {
         using var fixture = new Fixture();
+        var tool = blacklist ? "write" : "edit";
         HarnessSettings.Update(fixture.Home, settings =>
         {
-            settings.Safety = new SafetySettings { AutoApprove = autoApprove, Whitelist = ["tool:write"], Blacklist = ["tool:write"] };
+            settings.Safety = new SafetySettings
+            {
+                AutoApprove = autoApprove, Whitelist = [$"tool:{tool}"],
+                Blacklist = blacklist ? [$"tool:{tool}"] : [],
+            };
             return true;
         });
+        if (never)
+            ApprovalService.SetApprovalPolicy(fixture.Session, ApprovalPolicy.Never);
         var before = File.ReadAllText(fixture.Home.SettingsFile);
-        var result = await fixture.Execute("write", fixture.Arguments("write"));
+        var result = await fixture.Execute(tool, fixture.Arguments(tool));
 
-        Assert.True(result.IsError);
-        Assert.Equal(before, File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
-    }
-
-    [Fact]
-    public async Task WhitelistUsesExistingToolGrammar_AndRecordsAuthoritativeDecision()
-    {
-        using var fixture = new Fixture();
-        HarnessSettings.Update(fixture.Home, settings =>
+        Assert.Equal(rejected, result.IsError);
+        if (rejected)
         {
-            settings.Safety = new SafetySettings { Whitelist = ["tool:edit"] };
-            return true;
-        });
-        var result = await fixture.Execute("edit", fixture.Arguments("edit"));
-
-        Assert.False(result.IsError);
-        Assert.Equal("alpha/new", HarnessSettings.Load(fixture.Home).GlobalDefaultModel);
-        var decision = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalDecidedPayload>());
-        Assert.Equal(ApprovalOutcome.AllowedOnce, decision.Outcome);
+            Assert.Equal(before, File.ReadAllText(fixture.Home.SettingsFile));
+            Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
+        }
+        else
+        {
+            Assert.Equal("alpha/new", HarnessSettings.Load(fixture.Home).GlobalDefaultModel);
+            var decision = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalDecidedPayload>());
+            Assert.Equal(ApprovalOutcome.AllowedOnce, decision.Outcome);
+        }
     }
 
     [Fact]
@@ -247,51 +224,20 @@ public sealed class SettingsMutationTests
     }
 
     [Fact]
-    public async Task NoAnswerer_FailsClosedForTheActualSettingsWrite()
+    public async Task MissingApprovalPrerequisites_NeverWriteSettings()
     {
-        using var fixture = new Fixture();
-        var result = await fixture.Execute("write", fixture.Arguments("write"));
-        Assert.True(result.IsError);
-        Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
-    }
-
-
-    [Fact]
-    public async Task MissingApprovalServiceOrModelSession_NeverWritesSettings()
-    {
-        using (var fixture = new Fixture(withApproval: false))
+        foreach (var missing in new[] { "answerer", "approval", "agent" })
         {
-            var result = await fixture.Execute("write", fixture.Arguments("write"));
+            using var fixture = new Fixture(withApproval: missing != "approval");
+            using var allow = missing == "agent" ? ApprovalAnswerers.AutoApprove(fixture.Context) : null;
+            var result = await fixture.Execute("write", fixture.Arguments("write"), withAgent: missing != "agent");
             Assert.True(result.IsError);
             Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
-            Assert.Equal("failed", Assert.Single(fixture.Audits).Outcome);
-        }
-        using (var fixture = new Fixture())
-        {
-            using var allow = ApprovalAnswerers.AutoApprove(fixture.Context);
-            var result = await fixture.Execute("write", fixture.Arguments("write"), withAgent: false);
-            Assert.True(result.IsError);
-            Assert.Equal(Fixture.Original, File.ReadAllText(fixture.Home.SettingsFile));
+            if (missing != "agent")
+                Assert.Equal(missing == "approval" ? "failed" : "rejected", Assert.Single(fixture.Audits).Outcome);
         }
     }
 
-    [Fact]
-    public async Task NeverPolicy_StillRejectsWhitelistedSettingsMutation()
-    {
-        using var fixture = new Fixture();
-        HarnessSettings.Update(fixture.Home, settings =>
-        {
-            settings.Safety = new SafetySettings { AutoApprove = true, Whitelist = ["tool:edit"] };
-            return true;
-        });
-        ApprovalService.SetApprovalPolicy(fixture.Session, ApprovalPolicy.Never);
-        var before = File.ReadAllText(fixture.Home.SettingsFile);
-        var result = await fixture.Execute("edit", fixture.Arguments("edit"));
-        Assert.True(result.IsError);
-        Assert.Equal(before, File.ReadAllText(fixture.Home.SettingsFile));
-        Assert.Equal("rejected", Assert.Single(fixture.Audits).Outcome);
-    }
 
 
     [Fact]
@@ -332,36 +278,28 @@ public sealed class SettingsMutationTests
         var before = Fixture.Original.Replace("credential-old-for-test", oldToken);
         var after = before.Replace(oldToken, newToken);
         await File.WriteAllTextAsync(fixture.Home.SettingsFile, before, TestContext.Current.CancellationToken);
-        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>((_, _) =>
-            new(approve ? ApprovalOutcome.AllowedOnce : ApprovalOutcome.Rejected), new EventOptions { Global = true });
-        try
+        using var answer = approve ? ApprovalAnswerers.AutoApprove(fixture.Context) : ApprovalAnswerers.DenyAll(fixture.Context);
+        var result = await fixture.Execute("write",
+            new JsonObject { ["file_path"] = fixture.Home.SettingsFile, ["content"] = after });
+        Assert.Equal(approve, !result.IsError);
+        Assert.Equal(approve ? after : before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        var audit = Assert.Single(fixture.Audits);
+        Assert.Equal(approve ? "committed" : "rejected", audit.Outcome);
+        Assert.NotEqual(audit.BeforeHash, audit.AfterHash);
+        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        foreach (var surface in new[]
         {
-            var result = await fixture.Execute("write",
-                new JsonObject { ["file_path"] = fixture.Home.SettingsFile, ["content"] = after });
-            Assert.Equal(approve, !result.IsError);
-            Assert.Equal(approve ? after : before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
-            var audit = Assert.Single(fixture.Audits);
-            Assert.Equal(approve ? "committed" : "rejected", audit.Outcome);
-            Assert.NotEqual(audit.BeforeHash, audit.AfterHash);
-            var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
-            foreach (var surface in new[]
-            {
-                audit.Diff, asked.Arguments, result.Meta?.GetRawText() ?? "",
-                result is ToolExecutionResult.Success success ? success.Value.GetRawText() : "",
-            })
-            {
-                Assert.DoesNotContain(oldToken, surface);
-                Assert.DoesNotContain(newToken, surface);
-            }
-            Assert.DoesNotContain("# keep this comment", audit.Diff);
-            Assert.DoesNotContain("# keep this comment", asked.Arguments);
-            Assert.Contains(audit.BeforeHash, ApprovalHints.SettingsDiff(asked.Arguments));
-            Assert.Contains(audit.AfterHash, ApprovalHints.SettingsDiff(asked.Arguments));
-        }
-        finally
+            audit.Diff, asked.Arguments, result.Meta?.GetRawText() ?? "",
+            result is ToolExecutionResult.Success success ? success.Value.GetRawText() : "",
+        })
         {
-            remove();
+            Assert.DoesNotContain(oldToken, surface);
+            Assert.DoesNotContain(newToken, surface);
         }
+        Assert.DoesNotContain("# keep this comment", audit.Diff);
+        Assert.DoesNotContain("# keep this comment", asked.Arguments);
+        Assert.Contains(audit.BeforeHash, ApprovalHints.SettingsDiff(asked.Arguments));
+        Assert.Contains(audit.AfterHash, ApprovalHints.SettingsDiff(asked.Arguments));
     }
 
     private sealed class Fixture : IDisposable

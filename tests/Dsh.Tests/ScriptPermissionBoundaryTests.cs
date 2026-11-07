@@ -29,7 +29,9 @@ public sealed class ScriptPermissionBoundaryTests
             Cwd = fixture.Workspace,
             Signal = TestContext.Current.CancellationToken,
         });
-        await child.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken);
+        var outcome = await child.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken);
+        if (read && !write)
+            Assert.NotEqual(0, outcome.ExitCode);
         Assert.Equal(read, child.StdoutReader.ReadFrom(0).Text.Contains("readable", StringComparison.Ordinal));
         Assert.Equal(write, File.Exists(fixture.Output));
     }
@@ -168,28 +170,19 @@ public sealed class ScriptPermissionBoundaryTests
     }
 
 
-    [Fact(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    public async Task ExplicitScriptEntry_DoesNotRequireAmbientModelState()
-    {
-        await RequireLinuxAsync();
-        using var fixture = new Fixture(true, true, false, false, TestContext.Current.CancellationToken);
-        using var handle = await fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
-        {
-            Argv = ["/bin/sh", "-c", "printf forbidden > script-output"],
-            Cwd = fixture.Workspace,
-            Signal = TestContext.Current.CancellationToken,
-        });
-        Assert.NotEqual(0, (await handle.Done.WaitAsync(TimeSpan.FromSeconds(45), TestContext.Current.CancellationToken)).ExitCode);
-        Assert.False(File.Exists(fixture.Output));
-    }
 
     [Fact(Timeout = 60000)]
     [Trait("Category", "SandboxNative")]
-    public async Task ScriptPrivateScratch_IsAHostGrantButGuestTmpDoesNotExposeHostTmp()
+    public async Task ScriptPrivateScratch_RejectsGuestTmpCwd_AndDoesNotExposeHostTmp()
     {
         await RequireLinuxAsync();
         using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
+        {
+            Argv = ["/bin/sh", "-c", "exit 0"],
+            Cwd = "/tmp",
+            Signal = TestContext.Current.CancellationToken,
+        }));
         var guestMarker = "/tmp/dsh-guest-only-" + Guid.NewGuid().ToString("N");
         Assert.False(File.Exists(guestMarker));
         string scratch;
@@ -226,19 +219,6 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.False(File.Exists(fixture.Output));
     }
 
-    [Fact(Timeout = 60000)]
-    [Trait("Category", "SandboxNative")]
-    public async Task GuestCwd_CannotReplaceThePrivateTmpRoot()
-    {
-        await RequireLinuxAsync();
-        using var fixture = new Fixture(true, false, false, false, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Processes.SpawnScriptAsync(new SubprocessSpawnSpec
-        {
-            Argv = ["/bin/sh", "-c", "exit 0"],
-            Cwd = "/tmp",
-            Signal = TestContext.Current.CancellationToken,
-        }));
-    }
 
     [Theory(Timeout = 60000)]
     [InlineData("scripts: false\n")]
