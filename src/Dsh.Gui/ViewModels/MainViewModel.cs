@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Avalonia.Threading;
@@ -33,12 +32,6 @@ public enum ChatTab
 {
     Conversation,
     Trace,
-}
-
-public enum SessionMode
-{
-    Standard,
-    Plan,
 }
 
 /** 主窗口状态: 会话目录、会话流、轨迹、输入胶囊、页面切换与统一决策入口。 */
@@ -274,10 +267,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _hasReasoningEfforts;
 
     [ObservableProperty]
-    private SessionMode _mode = SessionMode.Standard;
-
-
-    [ObservableProperty]
     private bool _isDashboardPage;
 
     [ObservableProperty]
@@ -316,12 +305,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     public bool IsFileSystemView => WorkspaceView == GuiSettings.ViewFilesystem;
 
     public string WorkspaceViewLabel => IsFileSystemView ? "文件系统视图" : "解决方案视图";
-
-    public string ModeLabel => Mode switch
-    {
-        SessionMode.Plan => "计划模式",
-        _ => "标准模式",
-    };
 
 
     /** 只有这三页走懒加载的 ContentControl; 其他页面由各自的 Host 承载, ContentControl 必须隐藏, 否则会把枚举名画成 "Chat"/"WorkspacePage" 文本。 */
@@ -424,8 +407,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Gui.Save(Gui.Load() with { ShowOnlyWithSessions = value });
         RefreshSessions();
     }
-
-    partial void OnModeChanged(SessionMode value) => OnPropertyChanged(nameof(ModeLabel));
 
 
     partial void OnSelectedSessionChanged(SessionNodeViewModel? value)
@@ -885,6 +866,41 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             ScrollRequested?.Invoke(message);
     }
 
+    /**
+     * 时间线的三个动作(GUI 入口): 跳转在本地做, 回退/分叉交给注册式会话命令 ,
+     * 因为会话的截断与派生必须发生在会话所在的那一侧。
+     */
+    [RelayCommand]
+    private void JumpToMessage(MessageViewModel? message)
+    {
+        if (message is not null)
+            ScrollRequested?.Invoke(message);
+    }
+
+    [RelayCommand]
+    private Task RevertToMessageAsync(MessageViewModel? message)
+        => RunTimelineCommandAsync(message, "revert", reload: true);
+
+    [RelayCommand]
+    private Task ForkAtMessageAsync(MessageViewModel? message)
+        => RunTimelineCommandAsync(message, "fork", reload: false);
+
+    private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool reload)
+    {
+        if (message?.Seq is not { } seq)
+            return;
+        var output = await _chat.RunAsync($"/timestamp {action} #{seq}");
+        if (output.Length > 0)
+            AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
+        if (reload)
+        {
+            // 会话已在服务端被截断: 重新取一份快照, 否则界面还留着一堆已经不存在的事件。
+            await _chat.ReloadAsync(forceReset: true);
+            return;
+        }
+        RefreshSessions();
+    }
+
     [RelayCommand]
     private void ToggleMessageFold(MessageViewModel? message)
     {
@@ -957,25 +973,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
         StatusText = "重新生成上一条回答";
         await _chat.SendAsync(lastUser.Text);
-    }
-
-    [RelayCommand]
-    private void SetMode(string mode)
-    {
-        if (mode == "plan")
-        {
-            _ = TogglePlanModeAsync();
-            return;
-        }
-
-        if (Mode == SessionMode.Plan)
-        {
-            _ = TogglePlanModeAsync();
-            return;
-        }
-
-        Mode = SessionMode.Standard;
-        StatusText = "标准模式";
     }
 
     [RelayCommand]
@@ -1170,8 +1167,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
 
-    private LlmCallConfig? CurrentRequestHeader()
-        => _chat.Events.Select(item => item.Data).OfType<RequestHeaderPayload>().LastOrDefault()?.Header.Config;
+    /**
+     * 当前请求头随事件流维护, 不再每次回扫整段历史。
+     * 重放时节点头会逐条到达, 而 RefreshModelLabels 与每条助手消息都要读它, 回扫会把重放变成 O(n²)。
+     */
+    private LlmCallConfig? CurrentRequestHeader() => _requestHeader;
+
+    private LlmCallConfig? _requestHeader;
 
     private IReadOnlyList<SessionNodeViewModel> AllSessions()
         => [.. Workspaces.SelectMany(workspace => workspace.Sessions).Concat(FileSystemNodes.SelectMany(node => node.Sessions))];
@@ -1451,14 +1453,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private async Task TogglePlanModeAsync()
-    {
-        var output = await _chat.RunAsync("/plan");
-        var enabled = output.Contains("on", StringComparison.OrdinalIgnoreCase);
-        Mode = enabled ? SessionMode.Plan : SessionMode.Standard;
-        StatusText = output;
-    }
-
     private void ShowSession()
     {
         UpdateCurrentWorkspace();
@@ -1478,54 +1472,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pendingToolCalls.Clear();
         SessionTitle = _chat.Header.Title ?? _chat.Id.Value;
         IsBusy = false;
+        // 统计是跨会话累积的, 换会话必须先清零: 紧接着的整段重放会把本会话的量重新算一遍,
+        // 否则新建会话会继承上一个会话的数字, 切回旧会话又会把 in/out 重复累加。
+        TokenStats.Reset();
+        _requestHeader = null;
         ApplyEvents(_chat.Events, replay: true);
-        RefreshMode();
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
-    }
-
-    private void RefreshMode()
-        => Mode = PlanActive(_chat.Events) ? SessionMode.Plan : SessionMode.Standard;
-
-
-    /** 计划模式状态持久在会话事件 `plan/mode` 里; 这里只读它, 不复制 PlanMode 插件的判定逻辑。 */
-    private static bool PlanActive(IReadOnlyList<SessionEvent> events)
-    {
-        var active = false;
-        foreach (var sessionEvent in events)
-        {
-            if (sessionEvent.Type != "plan/mode")
-                continue;
-            active = ReadBoolProperty(sessionEvent.Data, "Active") ?? active;
-        }
-        return active;
-    }
-
-    private static bool? ReadBoolProperty(SessionEventPayload payload, string name)
-        => ReadProperty<bool>(payload, name);
-
-
-    /** payload 经 DshJson(camelCase) 序列化后键名会变形, 故按忽略大小写匹配。 */
-    private static T? ReadProperty<T>(SessionEventPayload payload, string name)
-    {
-        try
-        {
-            if (JsonSerializer.SerializeToNode(payload, payload.GetType(), DshJson.Options) is not JsonObject json)
-                return default;
-            foreach (var (key, value) in json)
-            {
-                if (value is not null && string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
-                    return value.GetValue<T>();
-            }
-            return default;
-        }
-        catch (Exception)
-        {
-            return default;
-        }
     }
 
     private void RefreshModelLabels()
@@ -1559,6 +1515,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             _renderedSeq = sessionEvent.Seq + 1;
             ApplyEvent(sessionEvent, replay);
         }
+        if (!replay)
+            return;
+        // 重放时增量不排定时器(见 MessageViewModel.Append): 这里一次性把每条消息刷到最终文本。
+        foreach (var message in Messages)
+            message.FlushPending();
+        MessagesChanged?.Invoke();
     }
 
     private void RequestResync(long receivedSeq)
@@ -1617,12 +1579,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case UserMessagePayload user:
                 ApplyUserMessage(sessionEvent.Seq, user);
                 break;
-            case RequestHeaderPayload:
+            case RequestHeaderPayload header:
+                _requestHeader = header.Header.Config;
                 TokenStats.RequestStarted();
                 RefreshModelLabels();
                 break;
             case AssistantChunkPayload chunk:
-                ApplyChunk(sessionEvent.Seq, chunk.Chunk);
+                ApplyChunk(sessionEvent.Seq, chunk.Chunk, replay);
                 break;
             case AssistantMessagePayload assistant:
                 ApplyAssistant(SessionText.AssistantText(assistant.Message.Content));
@@ -1662,7 +1625,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case UserMessageSource:
                 if (text.Length == 0)
                     break;
-                var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false));
+                var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false) { Seq = seq });
                 _lastUserMessages.Add(user);
                 break;
             // 压缩检查点的正文已经由 compaction/summary 那一行渲染过, 再当成上下文注入会重复一遍摘要。
@@ -1741,7 +1704,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         IsBusy = false;
     }
 
-    private void ApplyChunk(long seq, StreamChunk chunk)
+    private void ApplyChunk(long seq, StreamChunk chunk, bool replay = false)
     {
         switch (chunk)
         {
@@ -1751,14 +1714,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case StreamChunk.ReasoningDelta delta when delta.Text.Length > 0:
                 TokenStats.FirstTokenArrived();
-                AppendReasoning(delta.Text);
+                AppendReasoning(delta.Text, replay);
                 break;
             case StreamChunk.BlockStart { BlockType: "text" }:
                 _openAssistant = null;
                 break;
             case StreamChunk.TextDelta delta when delta.Text.Length > 0:
                 TokenStats.FirstTokenArrived();
-                AppendAssistant(delta.Text);
+                AppendAssistant(delta.Text, replay);
                 break;
             case StreamChunk.Usage usage:
                 TokenStats.ObserveUsage(usage.Value);
@@ -1884,16 +1847,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);
     }
 
-    private void AppendAssistant(string delta)
+    private void AppendAssistant(string delta, bool replay = false)
     {
         _openAssistant ??= AppendMessage(new MessageViewModel(AssistantRole(), "", MessageKind.Assistant, true));
-        _openAssistant.Append(delta);
+        _openAssistant.Append(delta, coalesce: !replay);
     }
 
-    private void AppendReasoning(string delta)
+    private void AppendReasoning(string delta, bool replay = false)
     {
         _openReasoning ??= AppendMessage(new MessageViewModel("思考", "", MessageKind.Reasoning, true));
-        _openReasoning.Append(delta);
+        _openReasoning.Append(delta, coalesce: !replay);
     }
 
     private MessageViewModel AppendMessage(MessageViewModel message)

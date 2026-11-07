@@ -3,7 +3,6 @@ using Dsh.Core;
 using Dsh.Goal;
 using Dsh.Llm;
 using Dsh.Persistence;
-using Dsh.PlanMode;
 using Dsh.Runtime;
 using Dsh.SessionQuery;
 
@@ -120,15 +119,12 @@ public sealed class SessionTruncateTests : IDisposable
         var ctx = new Context();
         var projections = new SessionProjectionRegistry(ctx);
         projections.Register(TurnBoundaryProjectionDefinition.Instance);
-        projections.Register(PlanProjectionDefinition.Instance);
         projections.Register(GoalProjectionDefinition.Instance);
         var session = new SessionStore(ctx).Create(SessionId.Create(Guid.NewGuid().ToString("N")));
         session.Append(new TurnStartPayload(1));
-        session.Append(new PlanModePayload(true));
         session.Append(CreateGoal("goal-before-revert"));
         session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
         Assert.Null(projections.StateOf<TurnBoundaryProjection>(session, TurnBoundaryProjectionDefinition.Key)!.OpenTurnStartSeq);
-        Assert.True(projections.StateOf<PlanUnitState>(session, PlanProjectionDefinition.Key)!.Active);
         Assert.NotNull(projections.StateOf<GoalProjectionState>(session, GoalProjectionDefinition.Key)!.Current);
         return (session, projections);
     }
@@ -149,7 +145,6 @@ public sealed class SessionTruncateTests : IDisposable
         Assert.True(session.TryTruncateTo(1));
 
         Assert.Equal(0, projections.StateOf<TurnBoundaryProjection>(session, TurnBoundaryProjectionDefinition.Key)!.OpenTurnStartSeq);
-        Assert.False(projections.StateOf<PlanUnitState>(session, PlanProjectionDefinition.Key)!.Active);
         Assert.Null(projections.StateOf<GoalProjectionState>(session, GoalProjectionDefinition.Key)!.Current);
     }
 

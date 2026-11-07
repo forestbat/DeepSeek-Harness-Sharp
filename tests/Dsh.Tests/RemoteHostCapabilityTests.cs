@@ -136,7 +136,7 @@ public sealed class RemoteHostCapabilityTests
         }, Ct);
 
         var answer = backend.Pending.AskQuestionAsync(new RemoteQuestionRequest("q-1", "session-1",
-            [new RemoteQuestionItem("q1", "pick?", null, null, [new RemoteQuestionOption("A", null)], false, null)]), cancellationToken: TestContext.Current.CancellationToken);
+            [new RemoteQuestionItem("q1", "pick?", null, null, [new RemoteQuestionOption("A", null)], false)]), cancellationToken: TestContext.Current.CancellationToken);
         var question = await received.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         Assert.True(await fixture.Client.RespondQuestionAsync(question.RequestId, [new RemoteQuestionAnswerItem("q1", ["A"], null)], Ct));
         Assert.Equal(["A"], (await answer.WaitAsync(TimeSpan.FromSeconds(5), Ct))!.Answers[0].Selected);
@@ -178,7 +178,7 @@ public sealed class RemoteHostCapabilityTests
         await using var fixture = await MissingDecisionCapabilityRelay.CreateAsync(origin.Client, TestContext.Current.CancellationToken);
         Assert.False(fixture.Client.Supports(DecisionProtocol.Capability));
         var waiting = backend.Pending.AskQuestionAsync(new RemoteQuestionRequest("legacy-question", "session-1",
-            [new RemoteQuestionItem("choice", "Choose.", null, null, [new RemoteQuestionOption("A", null), new RemoteQuestionOption("B", null)], false, null)]), cancellationToken: TestContext.Current.CancellationToken);
+            [new RemoteQuestionItem("choice", "Choose.", null, null, [new RemoteQuestionOption("A", null), new RemoteQuestionOption("B", null)], false)]), cancellationToken: TestContext.Current.CancellationToken);
         var parameters = JsonSerializer.SerializeToElement(
             new RemoteQuestionResponse("legacy-question", [], "dismissed", "user_cancelled"),
             HostProtocolJsonContext.Default.RemoteQuestionResponse);

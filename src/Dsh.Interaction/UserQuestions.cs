@@ -7,13 +7,6 @@ namespace Dsh.Interaction;
 
 public sealed record AskUserQuestionOption(string Label, string? Description = null, string? Value = null, bool Disabled = false, bool Default = false);
 
-public enum AskUserQuestionIntentKind
-{
-    PlanReview
-}
-
-public sealed record AskUserQuestionIntent(AskUserQuestionIntentKind Kind, string Approve);
-
 public sealed record AskUserQuestionItem(
     string Id,
     string Question,
@@ -21,7 +14,6 @@ public sealed record AskUserQuestionItem(
     string? Header = null,
     IReadOnlyList<AskUserQuestionOption>? Options = null,
     bool MultiSelect = false,
-    AskUserQuestionIntent? Intent = null,
     bool AllowCustom = true);
 
 public sealed record AskUserQuestionAnswerItem(string Id, IReadOnlyList<string> Selected, string? Custom = null);
@@ -39,7 +31,6 @@ public sealed class UserQuestionException(string message, string code, Exception
 {
     public const string AskAborted = "ASK_ABORTED";
     public const string EmptyQuestions = "EMPTY_QUESTIONS";
-    public const string BadIntent = "BAD_INTENT";
     public const string NoProvider = "NO_PROVIDER";
     public const string CallerNotLive = "CALLER_NOT_LIVE";
     public const string DelegatedCaller = "DELEGATED_CALLER";
@@ -58,8 +49,6 @@ public sealed class UserQuestionService(Context ctx) : Service(ctx, ServiceName)
         if (request.Questions.Count == 0)
             throw new UserQuestionException("ask_user_question requires at least one question", UserQuestionException.EmptyQuestions);
         ValidateAgent(request.Agent);
-        foreach (var question in request.Questions)
-            ValidateIntent(question);
         try
         {
             var carrier = request.Agent is { } agent ? DshScope.ScopeTarget(Ctx, agent.ScopeKey) : Ctx;
@@ -101,25 +90,6 @@ public sealed class UserQuestionService(Context ctx) : Service(ctx, ServiceName)
                 "human interaction is unavailable while the calling agent is owned by another live agent; "
                 + "include the unresolved question or decision in the child agent's final result",
                 UserQuestionException.DelegatedCaller);
-        }
-    }
-
-    private static void ValidateIntent(AskUserQuestionItem question)
-    {
-        if (question.Intent is not { } intent)
-            return;
-        if (question.Options?.Any(option => option.Label == intent.Approve) != true)
-        {
-            throw new UserQuestionException(
-                $"question {question.Id} declares intent {intent.Kind} whose approve label "
-                + $"\"{intent.Approve}\" names none of its options",
-                UserQuestionException.BadIntent);
-        }
-        if (question.Detail is null)
-        {
-            throw new UserQuestionException(
-                $"question {question.Id} declares intent {intent.Kind} without the detail it reviews",
-                UserQuestionException.BadIntent);
         }
     }
 

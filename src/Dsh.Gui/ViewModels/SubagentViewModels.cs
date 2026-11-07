@@ -173,8 +173,9 @@ public sealed partial class SubagentPanelViewModel : ObservableObject, IDisposab
                 node.IsLive = entry.IsLive;
             }
             ordered.Add(node);
-            await _directory.LoadEventsAsync(id);
         }
+        // 历史是彼此独立的 RPC: 串行等 N 次往返纯属浪费, 并发取完再统一发布。
+        await Task.WhenAll(ordered.Select(node => _directory.LoadEventsAsync(node.Id)));
         if (_disposed || root != _root || generation != _refreshGeneration)
             return;
         foreach (var stale in _byId.Keys.Where(id => !seen.Contains(id)).ToList())

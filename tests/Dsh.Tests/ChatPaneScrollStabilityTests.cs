@@ -72,6 +72,52 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
         Assert.True(pane.StickToBottom);
     }
 
+    /** PageDown 到底也算用户回到末尾, 与滚轮向下同一判定: 之后的新输出必须继续贴底。 */
+    [Fact]
+    public async Task PageDownToTail_ResumesFollowing()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        for (var index = 0; index < 60; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
+        Draw(chat);
+
+        pane.HandleMouseWheel(3);
+        Draw(chat);
+        Assert.False(pane.StickToBottom);
+
+        for (var attempt = 0; attempt < 60 && !pane.StickToBottom; attempt++)
+        {
+            pane.HandleKey(new ConsoleKeyInfo('\0', ConsoleKey.PageDown, false, false, false));
+            Draw(chat);
+        }
+
+        Assert.True(pane.StickToBottom);
+    }
+
+    /** jump 只影响它自己那一帧: 用户随后发消息必须重新贴底(旧实现会把抑制留到下一次发送)。 */
+    [Fact]
+    public async Task JumpThenSend_ResumesFollowing()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        for (var index = 0; index < 60; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
+        Draw(chat);
+
+        Assert.True(pane.TryScrollToMessage("第 0 行"));
+        Draw(chat);
+        Assert.False(pane.StickToBottom);
+
+        pane.Input = "下一条";
+        pane.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        Draw(chat);
+
+        Assert.True(pane.StickToBottom);
+    }
+
     private static void Draw(ChatWindow chat)
     {
         chat.DrainUi();

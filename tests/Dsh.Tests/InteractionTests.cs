@@ -367,39 +367,6 @@ public class InteractionTests
         }
 
         [Fact]
-        public async Task BadIntent_Approve_Label_Not_An_Option_Throws()
-        {
-            using var harness = new Harness();
-            var service = UserQuestionService.Register(harness.Ctx);
-            var question = SampleQuestion with
-            {
-                Detail = "plan body",
-                Intent = new AskUserQuestionIntent(AskUserQuestionIntentKind.PlanReview, "gamma"),
-            };
-
-            var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([question]), TestContext.Current.CancellationToken));
-
-            Assert.Equal(UserQuestionException.BadIntent, error.Code);
-        }
-
-        [Fact]
-        public async Task BadIntent_Without_Detail_Throws()
-        {
-            using var harness = new Harness();
-            var service = UserQuestionService.Register(harness.Ctx);
-            var question = SampleQuestion with
-            {
-                Intent = new AskUserQuestionIntent(AskUserQuestionIntentKind.PlanReview, "alpha"),
-            };
-
-            var error = await Assert.ThrowsAsync<UserQuestionException>(
-                () => service.Ask(new AskUserQuestionRequest([question]), TestContext.Current.CancellationToken));
-
-            Assert.Equal(UserQuestionException.BadIntent, error.Code);
-        }
-
-        [Fact]
         public async Task Unregistered_Agent_Throws_CallerNotLive()
         {
             using var harness = new Harness();

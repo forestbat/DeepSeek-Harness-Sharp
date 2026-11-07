@@ -43,14 +43,18 @@ public sealed partial class MessageViewModel : ObservableObject
         Kind = kind;
         IsStreaming = streaming;
         // 工具/结果默认折叠, 只显示工具名; 其余可折叠消息在短文本时直接展开。
-        IsExpanded = Kind is MessageKind.Tool or MessageKind.Result
-            ? false
-            : !IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars);
+        IsExpanded = Kind is not (MessageKind.Tool or MessageKind.Result) && (!IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars));
         _buffer.Append(text);
         Text = text;
     }
 
     public string Role { get; }
+
+    /** 这条记录对应的事件序号; 时间线跳转/回退/分叉都按它定位(合成出来的界面行没有序号)。 */
+    public long? Seq { get; init; }
+
+    /** 时间线动作只对真实事件(有序号)开放。 */
+    public bool HasTimelineEntry => Seq is not null;
 
     public MessageKind Kind { get; }
 
@@ -203,10 +207,14 @@ public sealed partial class MessageViewModel : ObservableObject
     /** 文本发生变化(流式增量合并后)时触发, 供视图保持滚动到底部。 */
     public event Action<MessageViewModel>? Updated;
 
-    public void Append(string delta)
+    /**
+     * coalesce=false 用于历史重放: 那批增量是同一帧里连发过来的, 给每条消息排一个 16ms 定时器
+     * 只会把上千个回调堆到 UI 线程上; 重放完由调用方统一 FlushPending 一次即可。
+     */
+    public void Append(string delta, bool coalesce = true)
     {
         _buffer.Append(delta);
-        if (_flushScheduled)
+        if (_flushScheduled || !coalesce)
             return;
         _flushScheduled = true;
         DispatcherTimer.RunOnce(FlushPending, TimeSpan.FromMilliseconds(CoalesceMilliseconds));

@@ -14,7 +14,7 @@
 
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Background="{DynamicResource Brush.Bg.Chat}">
 
-    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto"
+    <Grid x:Name="ChatHeader" Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto"
           Classes="chatHeader" Classes.collapsed="{Binding !IsSidebarVisible}">
       <StackPanel Spacing="2">
         <TextBlock Text="{Binding SessionTitle}" Classes="Title" />
@@ -110,21 +110,7 @@
         </Button.Flyout>
       </Button>
 
-      <Button Grid.Column="3" Classes="Chip" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话模式">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Shield}" />
-          <TextBlock Text="{Binding ModeLabel}" />
-          <Path Classes="Icon" Width="12" Height="12" Data="{StaticResource Icon.ChevronDown}" />
-        </StackPanel>
-        <Button.Flyout>
-          <MenuFlyout Placement="BottomEdgeAlignedRight">
-            <MenuItem Header="标准模式" Command="{Binding SetModeCommand}" CommandParameter="standard" />
-            <MenuItem Header="计划模式（/plan）" Command="{Binding SetModeCommand}" CommandParameter="plan" />
-          </MenuFlyout>
-        </Button.Flyout>
-      </Button>
-
-      <Button Grid.Column="4" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
+      <Button Grid.Column="3" Classes="Ghost" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="会话日志">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Download}" />
           <TextBlock Text="Session log" />

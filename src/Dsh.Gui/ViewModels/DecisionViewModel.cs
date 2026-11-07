@@ -181,7 +181,6 @@ public sealed partial class DecisionQuestionViewModel : ObservableObject
     public bool HasHeader => Header.Length > 0;
     public bool MultiSelect => State.Prompt.MultiSelect;
     public bool AllowCustom => State.Prompt.AllowCustom;
-    public string ApproveLabel => Item.Intent?.Approve ?? "";
     public string CustomText
     {
         get => State.CustomText;

@@ -59,6 +59,51 @@ public sealed class EditorGuiTests
     });
 
     [Fact]
+    public async Task MovingAnEditorKeepsTheSelectionAndTheDetailPanel() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+        window.Show();
+        try
+        {
+            var main = window.ViewModel!;
+            main.ShowSettingsCommand.Execute(null);
+            var section = main.Preferences.Sections.Single(item => item.Section == SettingsSection.Ide);
+            section.SelectCommand!.Execute(section);
+            Dispatcher.UIThread.RunJobs();
+            var view = window.GetVisualDescendants().OfType<EditorSettingsView>().Single();
+            var ide = main.Preferences.Ide;
+            var list = view.GetVisualDescendants().OfType<ListBox>().First();
+            var target = ide.Editors[1];
+            var movedId = target.Id;
+
+            ide.SelectedEditor = target;
+            Dispatcher.UIThread.RunJobs();
+            Assert.Same(target, list.SelectedItem);
+
+            ide.MoveEditorUpCommand.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(movedId, ide.Editors[0].Id);
+            Assert.Same(target, ide.SelectedEditor);
+            Assert.Same(target, list.SelectedItem);
+
+            ide.MoveEditorDownCommand.Execute(null);
+            ide.MoveEditorDownCommand.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(movedId, ide.Editors[2].Id);
+            Assert.Same(target, ide.SelectedEditor);
+            Assert.Same(target, list.SelectedItem);
+            Assert.False(string.IsNullOrWhiteSpace(ide.SelectedEditor.Yaml));
+        }
+        finally
+        {
+            window.Close();
+            await window.ViewModel!.DisposeAsync();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Fact]
     public async Task Settings_Save_Ordered_Profiles_Triggers_Options_And_Unknown_Keys()
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
