@@ -1432,6 +1432,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pendingToolCalls.Clear();
         SessionTitle = _chat.Header.Title ?? _chat.Id.Value;
         IsBusy = false;
+        // 统计是跨会话累积的, 换会话必须先清零: 紧接着的整段重放会把本会话的量重新算一遍,
+        // 否则新建会话会继承上一个会话的数字, 切回旧会话又会把 in/out 重复累加。
+        TokenStats.Reset();
         ApplyEvents(_chat.Events, replay: true);
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
