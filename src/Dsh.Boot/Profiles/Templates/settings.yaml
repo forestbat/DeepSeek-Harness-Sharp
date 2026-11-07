@@ -492,26 +492,27 @@ plugins:
 #   default_model:
 # LLM 提供方
 # providers:
-#   适配器类型:openai-compatible | openai-compatible(response) | anthropic | deepseek
-#   type:
-#   适配器选项
-#   options:
-#     接口地址
-#     baseUrl:
-#     API key(明文)
-#     apiKey:
-#     API key 环境变量
-#     apiKeyEnv:
-#   模型覆盖(显示名/系统提示等)
-#   models:
-#     显示名
-#     name:
-#     是否支持工具调用
-#     tool_call:
-#     系统提示覆盖
-#     system_prompt_update:
-# 技能目录：扫描顺序 <项目根>/.dsh/skills -> <项目根>/.agents/skills -> paths/customSkillDirs
-# -> ~/.dsh/skills -> ~/.agents/skills -> bundledSkillDir(DSH_BUNDLED_SKILL_DIR)；同名先到先得
+#   <id>:
+#     适配器类型:openai-compatible | openai-compatible(response) | anthropic | deepseek
+#     type:
+#     适配器选项
+#     options:
+#       接口地址
+#       baseUrl:
+#       API key(明文)
+#       apiKey:
+#       API key 环境变量
+#       apiKeyEnv:
+#     模型覆盖(显示名/系统提示等)
+#     models:
+#       <id>:
+#         显示名
+#         name:
+#         是否支持工具调用
+#         tool_call:
+#         系统提示覆盖
+#         system_prompt_update:
+# 技能目录：扫描顺序 <项目根>/.dsh/skills -> <项目根>/.agents/skills -> paths/customSkillDirs -> ~/.dsh/skills -> ~/.agents/skills -> bundledSkillDir(DSH_BUNDLED_SKILL_DIR)；同名先到先得
 # skills:
 #   额外的本地目录列表(写绝对路径, 不展开 ~)
 #   paths: []
@@ -523,21 +524,18 @@ plugins:
 # rules: []
 # MCP 服务器
 # mcp:
-#   stdio | streamable-http | sse
-#   transport:
-#   stdio 启动命令
-#   command: []
-#   额外参数
-#   args: []
-#   HTTP 端点(transport: streamable-http 或 sse 时使用)
-#   url:
-#   是否启用
-#   enabled: true
-# 工具集行为
+#   <id>:
+#     Transport: stdio | streamable-http | sse.
+#     transport:
+#     command: []
+#     args: []
+#     url:
+#     enabled: true
+# Tool-set behavior
 # tools:
-#   是否启用工具渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开
+#   Opt in to progressive disclosure of grouped tool schemas through tool_router.
 #   progressive_disclosure:
-#   工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返
+#   Minimum group size for disclosure; smaller groups stay directly visible.
 #   disclosure_threshold:
 # A2A 服务
 # a2a:
@@ -561,12 +559,13 @@ plugins:
 #   skill_tags: []
 #   远端 A2A 服务
 #   remotes:
-#     远端 URL
-#     url:
-#     鉴权 token
-#     token:
-#     额外请求头
-#     headers: {}
+#     <id>:
+#       远端 URL
+#       url:
+#       鉴权 token
+#       token:
+#       额外请求头
+#       headers: {}
 # 自动压缩
 # compaction:
 #   上下文超限时自动压缩
@@ -575,12 +574,23 @@ plugins:
 #   prune: true
 # 安全设置
 # safety:
-#   自动批准所有工具调用
+#   无规则匹配时的默认决策：false 请求审批，true 允许。
 #   autoApprove:
-#   拒绝的工具/命令模式
-#   blacklist: []
-#   自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
-#   whitelist: []
+#   规则 ID 映射为 matcher，格式见 README「安全规则」。
+#   blacklist:
+#     <id>:
+#       tool: []
+#       dialect:
+#       path:
+#       intent:
+#       args: {}
+#   whitelist:
+#     <id>:
+#       tool: []
+#       dialect:
+#       path:
+#       intent:
+#       args: {}
 # 日志
 # logging:
 #   最低级别:trace | debug | info | warn | error | off
@@ -656,21 +666,37 @@ plugins:
 #     read: true
 #     write: true
 #     network: true
+#     autoApprove:
+#     blacklist:
+#       <id>:
+#         tool: []
+#         dialect:
+#         path:
+#         intent:
+#         args: {}
+#     whitelist:
+#       <id>:
+#         tool: []
+#         dialect:
+#         path:
+#         intent:
+#         args: {}
 # 插件开关
 # plugins:
-#   是否启用
-#   enabled: true
-#   插件参数
-#   parameters: {}
-#   权限(read/write/network)
-#   permissions:
-#     允许读取
-#     read: true
-#     允许写入
-#     write: true
-#     允许网络
-#     network: true
-#   execution:
+#   <id>:
+#     是否启用
+#     enabled: true
+#     插件参数
+#     parameters: {}
+#     权限(read/write/network)
+#     permissions:
+#       允许读取
+#       read: true
+#       允许写入
+#       write: true
+#       允许网络
+#       network: true
+#     execution:
 #
 # 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
 # 账号服务
@@ -741,12 +767,13 @@ plugins:
 #     providers: []
 #     各提供方存储位置
 #     discovery:
-#       用户配置目录
-#       roots: {}
-#       历史存储子目录
-#       store_paths: []
-#       设置文件名
-#       settings_file:
+#       <id>:
+#         用户配置目录
+#         roots: {}
+#         历史存储子目录
+#         store_paths: []
+#         设置文件名
+#         settings_file:
 #     是否读取时间线
 #     timeline:
 #     时间线条目上限
@@ -891,6 +918,18 @@ plugins:
 #   modelPolicies: []
 #   自动裁剪
 #   auto:
+#   thresholdRatio:
+#   retainRatio:
+#   retainTokens:
+#   保留的尾部"轮数": 数的是当前表面上最后 N 条真实用户消息(UserMessageSource), 不是请求数也不是 turn/start 次数
+#   tailTurns:
+#   summarizationProvider:
+#   summarizationModel:
+#   maxTokens:
+#   compactionRetries:
+#   maxOverflowRetries:
+#   摘要不可用(失败/比原文更大)时改为丢弃旧历史并保留的轮数上限(同样按表面上的用户消息数);
+#   degradedRetainTurns:
 #   触发字符数
 #   thresholdChars:
 #   头部保留字符数
@@ -995,11 +1034,9 @@ storage:
 
 # 安全设置
 safety:
-  # 自动批准所有工具调用
+  # 未匹配规则时是否自动批准。
   autoApprove: false
-  # 拒绝的工具/命令模式
-  blacklist: []
-  # 自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
-  # 仅支持现有 tool:<name> 与 shell-tool:<command-pattern>；不是 path/args/intent matcher
-  # 活动 settings.yaml 的修改包含真实脱敏 diff、审批结果与提交审计
-  whitelist: []
+  # 规则格式见 README「安全规则」。
+  blacklist: {}
+  # 示例：source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
+  whitelist: {}

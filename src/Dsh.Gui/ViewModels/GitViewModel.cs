@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Dsh.GitInspect;
 using Dsh.Gui.Services;
-using Dsh.Interaction;
+using Dsh.Core;
 using Dsh.RemoteHost;
 
 namespace Dsh.Gui.ViewModels;

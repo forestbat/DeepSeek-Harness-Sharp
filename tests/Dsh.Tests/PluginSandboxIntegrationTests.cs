@@ -24,6 +24,89 @@ public sealed class PluginSandboxIntegrationTests
     private const string Alpha = "test/sandbox-alpha";
     private const string Beta = "test/sandbox-beta";
 
+
+    [Fact]
+    public async Task BrokerSettingsAppend_ReadDenyRunsWithoutAmbientScopeBeforeDiffAndActualCommit()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        HarnessSettings.Update(fixture.Home, settings =>
+        {
+            settings.Safety!.Blacklist["deny-snapshot-read"] = new() { Path = fixture.Home.SettingsFile, Intent = "read" };
+            return true;
+        });
+        var expected = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        const string suffix = "\n# authorized broker append\n";
+        var denied = await fixture.Execute("alpha", "write", WriteArguments(fixture.Home.SettingsFile, suffix, append: true));
+        Assert.True(denied.IsError);
+        Assert.Equal(expected, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>().Select(audit => audit.Id));
+        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload
+            { RuleId: "deny-snapshot-read", Decision: "deny", Intent: "read", Tool: "sandbox_alpha" });
+        HarnessSettings.Update(fixture.Home, settings => { settings.Safety!.Blacklist.Remove("deny-snapshot-read"); return true; });
+        var before = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
+        var offset = fixture.Session.SnapshotEvents().Count;
+        var allowed = await fixture.Execute("alpha", "write", WriteArguments(fixture.Home.SettingsFile, suffix, append: true));
+        Assert.False(allowed.IsError);
+        Assert.Equal(before + suffix, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
+        var events = fixture.Session.SnapshotEvents().Skip(offset).Select(item => item.Data).ToArray();
+        Assert.Equal("committed", Assert.Single(events.OfType<SettingsMutationAuditPayload>()).Outcome);
+        var audits = events.OfType<SafetyDecisionAuditPayload>().ToArray();
+        Assert.Contains(audits, audit => audit.Intent == "read" && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile));
+        Assert.Contains(audits, audit => audit.Intent == "write" && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(fixture.Home.SettingsFile));
+        Assert.All(audits, audit => { Assert.Equal(fixture.Session.Id.Value, audit.SessionId); Assert.Equal("sandbox_alpha", audit.Tool); });
+        Assert.NotNull(Assert.Single(audits.Select(audit => audit.CallId).Distinct()));
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task BrokerHttp_NetworkRevocationDuringOperationApprovalPreventsTheActualRequest()
+    {
+        using var fixture = new Fixture();
+        await fixture.StartAsync();
+        await using var server = await PluginSdkHttpServer.StartAsync();
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var changed = 0;
+        var approvalRequests = 0;
+        var stopAdmission = fixture.App.Ctx.OnWaterfall<ToolPreExecuteNotification>((notification, _) =>
+        {
+            if (notification.Run.Name == "sandbox_alpha" && Interlocked.Exchange(ref changed, 1) == 0)
+                HarnessSettings.Update(fixture.Home, settings => { settings.Safety!.AutoApprove = false; return true; });
+            return ValueTask.FromResult<object?>(new PreToolDecision.Allow());
+        }, new EventOptions { Global = true });
+        var stopApproval = fixture.App.Ctx.OnWaterfall<ApprovalRequestNotification>((_, _) =>
+        {
+            Interlocked.Increment(ref approvalRequests);
+            asked.TrySetResult();
+            return new(answer.Task);
+        }, new EventOptions { Global = true });
+        try
+        {
+            var pending = fixture.Execute("alpha", "http", new
+            {
+                url = server.Url, method = "POST", body = Convert.ToBase64String(Encoding.UTF8.GetBytes("must not reach origin")),
+            });
+            await asked.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(1, Volatile.Read(ref changed));
+            Assert.Equal(0, server.Requests);
+            HarnessSettings.UpdatePlugin(fixture.Home, Alpha, current =>
+                (current ?? throw new InvalidOperationException("The real fixture plugin must exist.")) with
+                { Permissions = new PluginPermissions { Read = true, Write = true, Network = false } });
+            Assert.False(HarnessSettings.Load(fixture.Home).Plugins[Alpha].Permissions!.Network);
+            answer.SetResult(ApprovalOutcome.AllowedOnce);
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, server.Requests);
+            Assert.True(result.IsError);
+            Assert.Equal(1, Volatile.Read(ref approvalRequests));
+        }
+        finally
+        {
+            answer.TrySetResult(ApprovalOutcome.Cancelled);
+            stopAdmission();
+            stopApproval();
+        }
+    }
+
     [Fact]
     public async Task InspectionAndActivation_NeverConstructUntrustedCodeInMain_AndDirectAccessIsDenied()
     {
@@ -289,7 +372,7 @@ public sealed class PluginSandboxIntegrationTests
     {
         using var fixture = new Fixture();
         await fixture.StartAsync();
-        using var answerer = allowed ? ApprovalAnswerers.AutoApprove(fixture.App.Ctx) : ApprovalAnswerers.DenyAll(fixture.App.Ctx);
+        using var answerer = fixture.AnswerSettingsDiff(allowed);
         var before = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
         var after = before.Replace("sandbox-test/old", "sandbox-test/new", StringComparison.Ordinal);
         Assert.NotEqual(before, after);
@@ -298,7 +381,8 @@ public sealed class PluginSandboxIntegrationTests
 
         Assert.True(result.IsError == !allowed, result is ToolExecutionResult.Failure failure ? failure.Error.Message : "Unexpected tool success.");
         Assert.Equal(allowed ? after : before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
-        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>(),
+            request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0);
         Assert.Contains("sandbox-test/new", ApprovalHints.SettingsDiff(asked.Arguments));
         var audit = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>());
         Assert.Equal(allowed ? "committed" : "rejected", audit.Outcome);
@@ -320,7 +404,7 @@ public sealed class PluginSandboxIntegrationTests
                     settings.Plugins[package] = settings.Plugins[package] with { Execution = PluginExecution.Host };
         });
         await fixture.StartAsync();
-        using var answerer = ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
+        using var answerer = fixture.AnswerSettingsDiff(allowed: true);
         var identity = await fixture.Success("alpha", "identity");
         var instance = identity.GetProperty("instance").GetGuid();
         if (sandbox && !hostRole)
@@ -338,7 +422,8 @@ public sealed class PluginSandboxIntegrationTests
 
         Assert.False(background.GetProperty("committed").GetBoolean());
         Assert.Equal(before, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
-        Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        Assert.DoesNotContain(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>(),
+            request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0);
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<FileChangedPayload>());
         Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is SettingsMutationAuditPayload { Outcome: "committed" });
         Assert.Equal(instance, (await fixture.Success("alpha", "identity")).GetProperty("instance").GetGuid());
@@ -346,7 +431,8 @@ public sealed class PluginSandboxIntegrationTests
         await fixture.Success("alpha", "write", WriteArguments(fixture.Home.SettingsFile, after));
         Assert.Equal(after, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
         Assert.Equal(after, Decode(await fixture.Success("alpha", "read", new { path = fixture.Home.SettingsFile }), "data"));
-        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+        var asked = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>(),
+            request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0);
         var committed = Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>(),
             audit => audit.Outcome == "committed");
         Assert.Equal(asked.CallId, committed.CallId);
@@ -400,10 +486,11 @@ public sealed class PluginSandboxIntegrationTests
                 settings.Plugins[package] = settings.Plugins[package] with { Enabled = false };
         }, deployFixture: false);
         await fixture.StartAsync(expectFixtureActive: false);
-        using var answerer = ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
+        using var answerer = fixture.AnswerSettingsDiff(allowed: true);
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target = fixture.Artifact }, TestContext.Current.CancellationToken);
         var events = fixture.Session.SnapshotEvents().Select(item => item.Data).ToArray();
-        var approvals = events.OfType<ApprovalAskedPayload>().ToArray();
+        var approvals = events.OfType<ApprovalAskedPayload>()
+            .Where(request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0).ToArray();
         var decisions = events.OfType<ApprovalDecidedPayload>().ToArray();
         var audits = events.OfType<SettingsMutationAuditPayload>().ToArray();
         Assert.False(result.IsError);
@@ -413,8 +500,7 @@ public sealed class PluginSandboxIntegrationTests
         var asked = Assert.Single(approvals);
         using var approvalArguments = JsonDocument.Parse(asked.Arguments!);
         Assert.True(approvalArguments.RootElement.GetProperty("settingsMutation").GetBoolean());
-        var decided = Assert.Single(decisions);
-        Assert.Equal(asked.Id, decided.Id);
+        var decided = Assert.Single(decisions, decision => decision.Id == asked.Id);
         Assert.Equal(ApprovalOutcome.AllowedOnce, decided.Outcome);
         var audit = Assert.Single(audits);
         Assert.Equal("committed", audit.Outcome);
@@ -479,11 +565,11 @@ public sealed class PluginSandboxIntegrationTests
         }
         else
             await HarnessSettings.UpdatePluginAsync(fixture.Home, Alpha, existing => existing! with { Enabled = false });
+        using var answerer = scenario == "rejected"
+            ? fixture.AnswerSettingsDiff(allowed: false)
+            : ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
         var before = await File.ReadAllBytesAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
         var files = Directory.GetFiles(fixture.Plugins, "*", SearchOption.AllDirectories).Order().ToArray();
-        using var answerer = scenario == "rejected"
-            ? ApprovalAnswerers.DenyAll(fixture.App.Ctx)
-            : ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
 
         var result = await fixture.ExecuteTool("plugin_manager", new { action = "add", target }, TestContext.Current.CancellationToken);
 
@@ -494,11 +580,11 @@ public sealed class PluginSandboxIntegrationTests
         if (scenario == "rejected")
         {
             Assert.False(HarnessSettings.Load(fixture.Home).Plugins[Alpha].Enabled);
-            var asked = Assert.Single(events.OfType<ApprovalAskedPayload>());
+            var asked = Assert.Single(events.OfType<ApprovalAskedPayload>(),
+                request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0);
             using var approvalArguments = JsonDocument.Parse(asked.Arguments!);
             Assert.True(approvalArguments.RootElement.GetProperty("settingsMutation").GetBoolean());
-            var decided = Assert.Single(events.OfType<ApprovalDecidedPayload>());
-            Assert.Equal(asked.Id, decided.Id);
+            var decided = Assert.Single(events.OfType<ApprovalDecidedPayload>(), decision => decision.Id == asked.Id);
             Assert.Equal(ApprovalOutcome.Rejected, decided.Outcome);
             var audit = Assert.Single(events.OfType<SettingsMutationAuditPayload>());
             Assert.Equal("rejected", audit.Outcome);
@@ -606,7 +692,7 @@ public sealed class PluginSandboxIntegrationTests
             var settings = HarnessSettings.Load(Home);
             settings.GlobalDefaultModel = "sandbox-test/old";
             settings.Sandbox = new SandboxSettings { Enabled = true };
-            settings.Safety = new SafetySettings { AutoApprove = false, Blacklist = [], Whitelist = [] };
+            settings.Safety = new SafetySettings { AutoApprove = true };
             foreach (var registration in DshPluginCatalogRegistry.Snapshot())
                 settings.Plugins[registration.Package] = new PluginSetting
                 {
@@ -659,6 +745,20 @@ public sealed class PluginSandboxIntegrationTests
 
         public async Task<JsonElement> Success(string package, string operation, object? arguments = null)
             => Assert.IsType<ToolExecutionResult.Success>(await Execute(package, operation, arguments)).Value;
+
+        public IDisposable AnswerSettingsDiff(bool allowed)
+        {
+            HarnessSettings.Update(Home, settings => { settings.Safety!.AutoApprove = false; return true; });
+            var unsubscribe = App.Ctx.OnWaterfall<ApprovalRequestNotification>((notification, _) =>
+                ValueTask.FromResult<object?>(ApprovalHints.SettingsDiff(notification.Request.Arguments).Length == 0 || allowed
+                    ? ApprovalOutcome.AllowedOnce : ApprovalOutcome.Rejected), new EventOptions { Global = true });
+            return new ApprovalSubscription(unsubscribe);
+        }
+
+        private sealed class ApprovalSubscription(Func<bool> unsubscribe) : IDisposable
+        {
+            public void Dispose() => unsubscribe();
+        }
 
         public async Task<JsonElement> Identity(string package)
         {

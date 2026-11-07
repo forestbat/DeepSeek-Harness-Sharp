@@ -90,7 +90,9 @@ public sealed unsafe class NativeHostCallBufferTests
         var context = new Context();
         _ = new SystemPrompt(context, new SystemPromptConfig());
         _ = new ToolRuntime(context);
-        return new PluginCapabilityFactory(context, new PluginExecutionEnvironment(new HarnessHome(root), new HarnessSettings(), root))
+        var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
+        _ = new SafetyBoundary(context, () => settings);
+        return new PluginCapabilityFactory(context, new PluginExecutionEnvironment(new HarnessHome(root), settings, root))
             .Create("test.native-host-buffer", context);
     }
 

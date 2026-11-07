@@ -26,7 +26,7 @@ public sealed class HotPlugTests
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tool-todo"));
             Assert.False(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
-            var added = await manager.AddAsync("@deepseek-ai/dsh-tool-todo");
+            var added = await manager.AddAsync("@deepseek-ai/dsh-tool-todo", cancellationToken: TestContext.Current.CancellationToken);
             Assert.Contains("activated", added);
             Assert.NotNull(tools.Get("todo_write"));
             Assert.Equal(ActivationState.Active, app.Composition.Find("@deepseek-ai/dsh-tool-todo")!.State);
@@ -64,7 +64,7 @@ public sealed class HotPlugTests
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
-            Assert.Contains("not found", await manager.AddAsync("@deepseek-ai/dsh-missing"));
+            Assert.Contains("not found", await manager.AddAsync("@deepseek-ai/dsh-missing", cancellationToken: TestContext.Current.CancellationToken));
             Assert.Contains("not active", await manager.RemoveAsync("@deepseek-ai/dsh-missing"));
             Assert.Contains("not found", await manager.EnableAsync("@deepseek-ai/dsh-missing"));
         }
@@ -88,6 +88,10 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
+            // This lifecycle/ALC consumer explicitly trusts direct code loading without a model invocation.
+            var settings = HarnessSettings.Load(home);
+            settings.Safety = new SafetySettings { AutoApprove = true };
+            settings.Save(home);
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");
@@ -98,7 +102,7 @@ public sealed class HotPlugTests
             Assert.Contains("removed", await manager.RemoveAsync("test/local"));
             Assert.Null(app.Composition.Find("test/local"));
 
-            var added = await manager.AddAsync(pluginPath);
+            var added = await manager.AddAsync(pluginPath, cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Contains("activated", added);
             Assert.Equal(ActivationState.Active, app.Composition.Find("test/local")!.State);

@@ -124,7 +124,7 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
-    public void DynamicRenderSkipsInstructionsAlreadyLoadedByStaticPrompt()
+    public async Task DynamicRenderSkipsInstructionsAlreadyLoadedByStaticPrompt()
     {
         var root = Path.Combine(Path.GetTempPath(), "dsh-agents-md", Guid.NewGuid().ToString("N"));
         var sub = Path.Combine(root, "sub");
@@ -139,7 +139,7 @@ public sealed class AgentInstructionsTests
                 AgentInstructionsText.Discover(home, root),
                 StringComparer.Ordinal);
 
-            var rendered = AgentInstructionsText.RenderNew(home, sub, loaded);
+            var rendered = await AgentInstructionsText.RenderNewAsync(home, sub, loaded, null, TestContext.Current.CancellationToken);
 
             Assert.Contains("sub instructions", rendered);
             Assert.DoesNotContain("root instructions", rendered);

@@ -19,11 +19,14 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
     internal const int MaximumChunkBytes = 256 * 1024;
     internal const int MaximumRegistrations = PluginHostOperations.MaximumTools;
     private const int CopyBufferBytes = 16 * 1024;
+
     private readonly HttpClient _http = new(context.GetProp(OutboundProxy.PropName) is OutboundProxy proxy
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
-    public IPluginExecutionHost Create(string package, Context pluginContext)
+    private SafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
+        ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
+    public LocalHost Create(string package, Context pluginContext)
     {
         var host = new LocalHost(this, package, pluginContext);
         pluginContext.Effect(() => host, IPluginHostFactory.ServiceName);
@@ -39,7 +42,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         {
             PluginHostOperations.ReadFile => ReadFileAsync(package, arguments, execution, cancellationToken),
             PluginHostOperations.WriteFile => WriteFileAsync(package, arguments, execution, cancellationToken),
-            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, cancellationToken),
+            PluginHostOperations.SendHttp => SendHttpAsync(package, arguments, execution, cancellationToken),
             _ => throw new RuntimeException("PLUGIN_HOST_OPERATION_UNKNOWN", "The plugin requested an unsupported host operation."),
         };
 
@@ -73,6 +76,8 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MaximumChunkBytes);
+        await Safety.AuthorizeFileAsync(execution, path, "read", cancellationToken, package).ConfigureAwait(false);
+        Require(package, PluginPermission.Read);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             CopyBufferBytes, FileOptions.Asynchronous);
         if (OperatingSystem.IsLinux())
@@ -98,23 +103,29 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         var allowNetwork = Require(package, PluginPermission.Write);
         var path = ResolvePath(arguments, execution, allowNetwork);
         FilePathAccess.DemandOrdinaryFile(path, allowMissing: true);
-        var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
+        var gate = context.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
         if (gate?.Owns(path) == true || CanonicalFilePath.SameFile(path, environment.SettingsPath))
             await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
+        {
+            await Safety.AuthorizeFileAsync(execution, path, "write", cancellationToken, package).ConfigureAwait(false);
+            Require(package, PluginPermission.Write);
             await WriteBytesAsync(path, data, append, cancellationToken).ConfigureAwait(false);
+        }
         return JsonSerializer.SerializeToElement(new PluginFileWriteResult(data.Length),
             PluginBrokerJsonContext.Default.PluginFileWriteResult);
     }
 
     private async Task WriteSettingsAsync(string package, string path, byte[] data, bool append, ToolRunContext? execution,
-        ISettingsMutationGate? gate, CancellationToken cancellationToken)
+        SettingsMutationGate? gate, CancellationToken cancellationToken)
     {
         if (gate is null || execution is null)
             throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval service.");
         var target = gate.SettingsPath;
+        await Safety.AuthorizeFileAsync(execution, target, "read", cancellationToken, package,
+            settingsReview: true).ConfigureAwait(false);
         var before = File.Exists(target) ? await SettingsMutation.ReadTextAsync(target, cancellationToken).ConfigureAwait(false) : "";
         var text = Encoding.UTF8.GetString(data);
         var after = append ? $"{before}{text}" : text;
@@ -149,15 +160,17 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
     }
 
     private async ValueTask<JsonElement> SendHttpAsync(string package, JsonElement arguments,
-        CancellationToken cancellationToken)
+        ToolRunContext? execution, CancellationToken cancellationToken)
     {
         Require(package, PluginPermission.Network);
+        await Safety.AuthorizeOperationAsync(execution, cancellationToken, package).ConfigureAwait(false);
         var url = arguments.GetProperty("url").GetString() ?? throw new ArgumentException("The HTTP operation requires a URL.");
         var method = arguments.TryGetProperty("method", out var requested) ? requested.GetString() : null;
         using var request = new HttpRequestMessage(new HttpMethod(method ?? "GET"), url);
         if (arguments.TryGetProperty("body", out _))
             request.Content = new ByteArrayContent(DecodeBody(arguments, "body"));
         AddHeaders(request, arguments);
+        Require(package, PluginPermission.Network);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         var body = await ReadResponseAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var headers = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
@@ -219,8 +232,8 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
 
     public void Dispose() => _http.Dispose();
 
-    private sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
-        : IPluginExecutionHost, IDisposable
+    public sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
+        : IPluginHost, IDisposable
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];

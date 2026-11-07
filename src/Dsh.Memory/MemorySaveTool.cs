@@ -38,6 +38,7 @@ public static class MemorySaveTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = "Record-level operations on the project memory: remember, correct, forget (by key(s) or text query), or skip.",
             Parameters = JsonNode.Parse("""
                 {
@@ -78,18 +79,25 @@ public static class MemorySaveTool
                     }
                     """)!.AsObject(),
                 (_, value) => RenderResult(value)),
-            Execute = (args, exec) => Execute(args, exec, resolve(exec.Agent?.Session.Header.Cwd)),
+            Execute = (args, exec) => Execute(ctx, args, exec, resolve(exec.Agent?.Session.Header.Cwd)),
         });
         return new Registration(registration, section);
     }
 
     private static async Task<object?> Execute(
+        Context ctx,
         JsonElement args,
         ToolRunContext exec,
         ProjectMemory memory)
     {
+        if (memory.Store is not FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } operationSafety)
+            await operationSafety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
         if (!memory.IsEnabled)
+        {
+            if (memory.Store is FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } safety)
+                await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
             return new MemorySaveResult("skip", [], [], 0, false, false, "project memory is off; run /memory on");
+        }
         var action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
         var key = GetString(args, "key");
         var text = GetString(args, "text");
@@ -102,17 +110,19 @@ public static class MemorySaveTool
             case "remember":
                 Require(key, "key", action);
                 Require(text, "text", action);
-                var remembered = await memory.RememberAsync(key!, text!, section, "tool", exec.Signal);
+                var remembered = await memory.RememberAsync(key!, text!, section, "tool", exec.Signal, exec);
                 return new MemorySaveResult("remember", [remembered.Key], [remembered.Section], 1, remembered.Replaced, false);
             case "correct":
                 Require(key, "key", action);
                 Require(text, "text", action);
-                var corrected = await memory.CorrectAsync(key!, text!, "tool", exec.Signal);
+                var corrected = await memory.CorrectAsync(key!, text!, "tool", exec.Signal, exec);
                 return new MemorySaveResult("correct", [corrected.Key], [corrected.Section], 1, corrected.Replaced, false);
             case "forget":
-                var forgotten = await memory.ForgetAsync(BuildForgetRequest(key, keys, query, section, dryRun), "tool", exec.Signal);
+                var forgotten = await memory.ForgetAsync(BuildForgetRequest(key, keys, query, section, dryRun), "tool", exec.Signal, exec);
                 return new MemorySaveResult("forget", forgotten.Keys, forgotten.Sections, forgotten.Count, false, forgotten.DryRun);
             case "skip":
+                if (memory.Store is FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } safety)
+                    await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
                 var reason = GetString(args, "reason");
                 return new MemorySaveResult("skip", [], [], 0, false, false, string.IsNullOrWhiteSpace(reason) ? "out_of_scope" : reason);
             default:

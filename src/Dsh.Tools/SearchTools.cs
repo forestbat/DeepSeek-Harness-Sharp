@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dsh.Runtime;
 using Dsh.Core;
+using Dsh.Transport;
 using Dsh.Llm;
 using Microsoft.Extensions.FileSystemGlobbing;
 
@@ -65,34 +66,22 @@ internal static class SearchFiles
     internal static bool Matches(Matcher matcher, string relativePath)
         => matcher.Match(relativePath.Replace('\\', '/')).HasMatches;
 
-    internal static IEnumerable<string> EnumerateFiles(string root, bool includeHidden, CancellationToken signal)
+    internal static async IAsyncEnumerable<string> EnumerateFiles(string root, bool includeHidden, ToolRunContext exec)
     {
         var pending = new Stack<string>();
         pending.Push(root);
         while (pending.Count > 0)
         {
-            signal.ThrowIfCancellationRequested();
+            exec.Signal.ThrowIfCancellationRequested();
             var directory = pending.Pop();
-            IEnumerable<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(directory);
-            }
-            catch (Exception error) when (error is UnauthorizedAccessException or IOException)
-            {
-                continue;
-            }
+            var entries = await SafetyFileAccess.ReadDirectoryAsync(directory, exec).ConfigureAwait(false);
             foreach (var entry in entries)
             {
-                var name = Path.GetFileName(entry);
+                var name = Path.GetFileName(entry.Path);
                 if (VcsDirectories.Contains(name)) continue;
                 if (!includeHidden && name.StartsWith('.')) continue;
-                var info = new FileInfo(entry);
-                if (info.LinkTarget is not null) continue;
-                if (Directory.Exists(entry))
-                    pending.Push(entry);
-                else if (File.Exists(entry))
-                    yield return entry;
+                if (entry.IsDirectory) pending.Push(entry.Path);
+                else yield return entry.Path;
             }
         }
     }
@@ -105,19 +94,12 @@ internal static class SearchFiles
         return relative.Replace('\\', '/');
     }
 
-    internal static bool LooksBinary(string path)
+    internal static async Task<bool> LooksBinary(string path, ToolRunContext exec)
     {
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var buffer = new byte[8192];
-            var read = stream.Read(buffer, 0, buffer.Length);
-            return buffer.AsSpan(0, read).IndexOf((byte)0) >= 0;
-        }
-        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
-        {
-            return true;
-        }
+        await using var file = await SafetyFileAccess.OpenReadAsync(path, exec).ConfigureAwait(false);
+        var buffer = new byte[8192];
+        var read = await file.ReadAsync(buffer, exec.Signal).ConfigureAwait(false);
+        return buffer.AsSpan(0, read).IndexOf((byte)0) >= 0;
     }
 }
 
@@ -144,6 +126,8 @@ public static class GlobTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
             Description = "Find files whose paths match a glob pattern. Returns matching file paths — never directories — "
                 + "including hidden and ignored files (VCS metadata directories are excluded). "
                 + $"Up to {resolved.MaxResults} paths come back in modification-time order; a larger result returns the first {resolved.MaxResults} paths in modification-time order, "
@@ -181,7 +165,7 @@ public static class GlobTool
         return new CompositeDisposable(section, registration);
     }
 
-    private static Task<object?> Execute(JsonElement args, ToolRunContext exec)
+    private static async Task<object?> Execute(JsonElement args, ToolRunContext exec)
     {
         var pattern = args.GetProperty("pattern").GetString() ?? "";
         if (pattern.Trim().Length == 0)
@@ -198,11 +182,14 @@ public static class GlobTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
+        var canonicalRoot = Dsh.Runtime.CanonicalFilePath.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Runtime.CanonicalFilePath.Canonicalize(workdir);
+        root = canonicalRoot;
         if (!Directory.Exists(root))
             throw new HarnessException($"glob search failed (exit 2): the directory does not exist: \"{root}\"", "SEARCH_FAILED");
         var matcher = SearchFiles.CreateMatcher(pattern);
         var matches = new List<string>();
-        foreach (var file in SearchFiles.EnumerateFiles(root, includeHidden: true, exec.Signal))
+        await foreach (var file in SearchFiles.EnumerateFiles(root, includeHidden: true, exec))
         {
             if (SearchFiles.Matches(matcher, Path.GetRelativePath(root, file)))
                 matches.Add(file);
@@ -212,7 +199,7 @@ public static class GlobTool
             .Select(path => SearchFiles.DisplayPath(workdir, path))
             .ToList();
         var displayRoot = pathArg is null ? "." : SearchFiles.DisplayPath(workdir, root);
-        return Task.FromResult<object?>(new GlobResultValue(displayRoot, ordered));
+        return new GlobResultValue(displayRoot, ordered);
     }
 
     internal static string RenderGlobPaths(IReadOnlyList<string> paths, GlobToolCaps caps)
@@ -252,6 +239,8 @@ public static class GrepTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
             Description = "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. "
                 + $"Returns the first {resolved.MaxMatches} matches inline; a capped result reports where the complete match list was saved. "
                 + "Use read on a matched file for surrounding context.",
@@ -314,7 +303,7 @@ public static class GrepTool
         }
     }
 
-    private static Task<object?> Execute(JsonElement args, ToolRunContext exec)
+    private static async Task<object?> Execute(JsonElement args, ToolRunContext exec)
     {
         var pattern = args.GetProperty("pattern").GetString() ?? "";
         if (pattern.Length == 0)
@@ -345,6 +334,9 @@ public static class GrepTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
+        var canonicalRoot = Dsh.Runtime.CanonicalFilePath.Canonicalize(root);
+        workdir = root == workdir ? canonicalRoot : Dsh.Runtime.CanonicalFilePath.Canonicalize(workdir);
+        root = canonicalRoot;
         var includeMatcher = include is null ? null : SearchFiles.CreateMatcher(include);
         var matches = new List<GrepMatchValue>();
         IEnumerable<string> files;
@@ -354,7 +346,9 @@ public static class GrepTool
         }
         else if (Directory.Exists(root))
         {
-            files = SearchFiles.EnumerateFiles(root, includeHidden: false, exec.Signal).OrderBy(path => path, StringComparer.Ordinal);
+            var discovered = new List<string>();
+            await foreach (var file in SearchFiles.EnumerateFiles(root, includeHidden: false, exec)) discovered.Add(file);
+            files = discovered.OrderBy(path => path, StringComparer.Ordinal);
         }
         else
         {
@@ -365,16 +359,18 @@ public static class GrepTool
             exec.Signal.ThrowIfCancellationRequested();
             if (includeMatcher is not null && !SearchFiles.Matches(includeMatcher, Path.GetRelativePath(root, file)))
                 continue;
-            if (SearchFiles.LooksBinary(file))
+            if (await SearchFiles.LooksBinary(file, exec).ConfigureAwait(false))
                 continue;
-            ScanFile(file, regex, matches, workdir, exec.Signal);
+            await ScanFile(file, regex, matches, workdir, exec).ConfigureAwait(false);
         }
-        return Task.FromResult<object?>(new GrepResultValue(matches));
+        return new GrepResultValue(matches);
     }
 
-    private static void ScanFile(string file, Regex regex, List<GrepMatchValue> matches, string workdir, CancellationToken signal)
+    private static async Task ScanFile(string file, Regex regex, List<GrepMatchValue> matches, string workdir, ToolRunContext exec)
     {
-        using var reader = new StreamReader(file, new UTF8Encoding(false, false), detectEncodingFromByteOrderMarks: true);
+        var signal = exec.Signal;
+        await using var access = await SafetyFileAccess.OpenReadAsync(file, exec).ConfigureAwait(false);
+        using var reader = new StreamReader(access, new UTF8Encoding(false, false), detectEncodingFromByteOrderMarks: true);
         var lineNumber = 0;
         while (reader.ReadLine() is { } line)
         {

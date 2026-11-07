@@ -104,6 +104,7 @@ public sealed class ApprovalService : Service, IApprovalService
     }
 
     public ApprovalPolicy EffectivePolicy(Session session) => OverrideOf(session) ?? _config.Policy;
+    public bool IsDenied(IAgent agent) => EffectivePolicy(agent.Session) == ApprovalPolicy.Never;
 
     public void SetPolicy(IAgent agent, ApprovalPolicy policy)
     {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Host;
 using Dsh.Interaction;
@@ -311,6 +312,11 @@ public sealed class RemoteHostMultiClientTests
     public async Task Question_Dismissal_Reaches_Model_Facing_Tool_As_Structured_Success()
     {
         await using var host = await HarnessHostFixture.CreateAsync("mht", TestContext.Current.CancellationToken);
+        HarnessSettings.Update(host.Environment.App.Home, settings =>
+        {
+            (settings.Safety ??= new SafetySettings()).Whitelist["question-dismissal-consumer"] = new() { Tool = ["ask_user_question"] };
+            return true;
+        });
         var alice = await host.ConnectAsync("alice", Ct);
         var bob = await host.ConnectAsync("bob", Ct);
         var tools = host.Environment.App.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;

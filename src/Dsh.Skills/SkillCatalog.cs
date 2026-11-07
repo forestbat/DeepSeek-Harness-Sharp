@@ -121,6 +121,8 @@ public sealed class SkillCatalog : IDisposable
         return new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
+            FileIntent = _ => "read",
             Description = "Load the full instructions for a skill. Call it before acting on a task that names or clearly matches a skill in the session skill catalog.",
             Parameters = JsonNode.Parse("""
                 {
@@ -146,6 +148,7 @@ public sealed class SkillCatalog : IDisposable
                     Cwd = exec.Agent?.Session.WorkingDirectory,
                     Scope = exec.Agent?.ScopeKey,
                     Signal = exec.Signal,
+                    Run = exec,
                 }) ?? throw new InvalidOperationException($"skill \"{name}\" is unknown or no longer available");
                 if (!skill.Invocation.ModelInvocable)
                     throw new InvalidOperationException($"skill \"{name}\" is not available for model invocation");

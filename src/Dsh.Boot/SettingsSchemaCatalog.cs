@@ -71,7 +71,11 @@ public static class SettingsSchemaCatalog
                 builder.Append(" {}");
             builder.AppendLine();
             if (spec.Children is { Count: > 0 } children)
-                RenderSpecs(children, path, indent + 2, preserved, builder);
+            {
+                if (spec.DynamicKeys)
+                    builder.Append("# ").Append(pad).AppendLine("  <id>:");
+                RenderSpecs(children, path, indent + (spec.DynamicKeys ? 4 : 2), preserved, builder);
+            }
         }
     }
 
@@ -133,7 +137,7 @@ public static class SettingsSchemaCatalog
                 .Append(" | ").Append(spec.Kind)
                 .Append(" | ").Append(PublicDefault(spec) ?? "").AppendLine(" |");
             if (spec.Children is { Count: > 0 } children)
-                AppendMarkdown(provider, children, prefix + spec.Key + ".", builder);
+                AppendMarkdown(provider, children, prefix + spec.Key + (spec.DynamicKeys ? ".<id>." : "."), builder);
         }
     }
 
@@ -145,6 +149,8 @@ public static class SettingsSchemaCatalog
             builder.Append($",\"default\":{Quote(literal)}");
         if (spec.Description is not null)
             builder.Append($",\"description\":{Quote(spec.Description)}");
+        if (spec.DynamicKeys)
+            builder.Append(",\"dynamicKeys\":true");
         if (spec.Children is { Count: > 0 } children)
             builder.Append($",\"children\":[{string.Join(",", children.Select(SettingsJson))}]");
         return builder.Append('}').ToString();

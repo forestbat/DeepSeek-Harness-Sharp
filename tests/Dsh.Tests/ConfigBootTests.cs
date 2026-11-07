@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Dsh.Llm;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
@@ -63,6 +65,145 @@ public class ConfigBootTests
             {
             }
         }
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StartupImageTcb_ActivatesFileRulesAndEnforcesActualProductionTools()
+    {
+        foreach (var scalarTool in new[] { false, true })
+            await ExerciseStartupPolicyAsync(scalarTool, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task ExerciseStartupPolicyAsync(bool scalarTool, CancellationToken signal)
+    {
+        var root = TempTree.CreateDirectory("policy-product");
+        try
+        {
+            var home = new HarnessHome(Path.Combine(root, "home"));
+            Directory.CreateDirectory(home.Root);
+            var publicFile = Path.Combine(root, "public.txt");
+            var secretFile = Path.Combine(root, "secret.txt");
+            await File.WriteAllTextAsync(publicFile, "public original", signal);
+            await File.WriteAllTextAsync(secretFile, "secret original", signal);
+            var tool = scalarTool ? "read" : "[read]";
+            await File.WriteAllTextAsync(home.SettingsFile, $$"""
+                safety:
+                  autoApprove: false
+                  blacklist:
+                    private-file: { path: {{JsonSerializer.Serialize(secretFile)}}, intent: any }
+                  whitelist:
+                    workspace-read:
+                      tool: {{tool}}
+                      path: {{JsonSerializer.Serialize(Path.Combine(root, "**"))}}
+                      intent: read
+                    workspace-write:
+                      tool: [write, edit]
+                      path: {{JsonSerializer.Serialize(Path.Combine(root, "**"))}}
+                      intent: any
+                """, signal);
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root,
+                PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
+            var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+            var session = Session.Create(id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
+            });
+            using var agent = new AgentLoopAgent(app.Ctx, id, new AgentOptions(), session, _ => 0);
+            session.Append(new TurnStartPayload(1));
+            Task<ToolExecutionResult> Execute(string name, object arguments) => tools.Execute(new ToolExecutionInput
+            {
+                Name = name, Arguments = JsonSerializer.SerializeToElement(arguments), Agent = agent,
+                CallId = ToolCallId.Create(Guid.NewGuid().ToString("N")), Signal = signal,
+            });
+            var read = await Execute("read", new { file_path = publicFile });
+            Assert.False(read.IsError, string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("public original", string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
+            var write = await Execute("write", new { file_path = publicFile, content = "public replacement" });
+            Assert.False(write.IsError, string.Concat(write.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Equal("public replacement", await File.ReadAllTextAsync(publicFile, signal));
+            var deniedRead = await Execute("read", new { file_path = secretFile });
+            Assert.True(deniedRead.IsError);
+            Assert.DoesNotContain("secret original", string.Concat(deniedRead.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.True((await Execute("write", new { file_path = secretFile, content = "not committed" })).IsError);
+            Assert.Equal("secret original", await File.ReadAllTextAsync(secretFile, signal));
+            var editable = HarnessSettings.Load(home);
+            editable.Safety!.Blacklist["hot-read-deny"] = new() { Path = publicFile, Intent = "read" };
+            editable.Save(home);
+            Assert.True((await Execute("read", new { file_path = publicFile })).IsError);
+            var mutable = HarnessSettings.LoadForReview(home);
+            mutable.Safety!.Blacklist.Clear();
+            Assert.True((await Execute("read", new { file_path = publicFile })).IsError);
+            Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload
+                { RuleId: "hot-read-deny", Decision: "deny", Tool: "read", Intent: "read" });
+        }
+        finally { TempTree.Delete(root); }
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task WindowsExtendedAliases_ProductionFileRulesBlockReadsAndWritesWithOneAuditIdentity()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("This consumer requires Windows extended-length file paths.");
+        var signal = TestContext.Current.CancellationToken;
+        var root = TempTree.CreateDirectory("policy-alias");
+        try
+        {
+            var home = new HarnessHome(Path.Combine(root, "home"));
+            Directory.CreateDirectory(home.Root);
+            var file = Path.Combine(root, "protected.txt");
+            var extended = $@"\\?\{file}";
+            var forward = $"//?/{file.Replace('\\', '/')}";
+            await File.WriteAllTextAsync(file, "protected original", signal);
+            await File.WriteAllTextAsync(home.SettingsFile, $$"""
+                safety:
+                  autoApprove: true
+                  blacklist:
+                    private-file: { path: {{JsonSerializer.Serialize(file)}}, intent: any }
+                """, signal);
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root,
+                PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
+            var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
+            var id = SessionId.Create(Guid.NewGuid().ToString("N"));
+            var session = Session.Create(id, null, new SessionHeader
+            {
+                Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false,
+            });
+            using var agent = new AgentLoopAgent(app.Ctx, id, new AgentOptions(), session, _ => 0);
+            session.Append(new TurnStartPayload(1));
+            Task<ToolExecutionResult> Execute(string name, object arguments, ToolCallId callId) => tools.Execute(new ToolExecutionInput
+            {
+                Name = name, Arguments = JsonSerializer.SerializeToElement(arguments), Agent = agent,
+                CallId = callId, Signal = signal,
+            });
+            var canonical = CanonicalFilePath.Canonicalize(file);
+            foreach (var (pattern, actual) in new[] { (file, extended), (extended, file), (file, forward), (forward, file) })
+            {
+                var settings = HarnessSettings.Load(home);
+                settings.Safety!.Blacklist["private-file"] = new() { Path = pattern, Intent = "any" };
+                settings.Save(home);
+                var readCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+                var read = await Execute("read", new { file_path = actual }, readCall);
+                Assert.True(read.IsError);
+                Assert.DoesNotContain("protected original", string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
+                var writeCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+                Assert.True((await Execute("write", new { file_path = actual, content = "not committed" }, writeCall)).IsError);
+                Assert.Equal("protected original", await File.ReadAllTextAsync(file, signal));
+                var decisions = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
+                    .Where(decision => decision.RuleId == "private-file" && decision.Decision == "deny"
+                        && (decision.CallId == readCall.Value || decision.CallId == writeCall.Value)).ToArray();
+                Assert.Contains(decisions, decision => decision.CallId == readCall.Value && decision.Tool == "read" && decision.Intent == "read");
+                Assert.Contains(decisions, decision => decision.CallId == writeCall.Value && decision.Tool == "write" && decision.Intent == "write");
+                Assert.All(decisions, decision =>
+                {
+                    Assert.Equal(canonical, decision.Path);
+                    Assert.Equal(id.Value, decision.SessionId);
+                    Assert.Equal("blacklist", decision.RuleKind);
+                    Assert.True(decision.AutoApprove);
+                });
+            }
+        }
+        finally { TempTree.Delete(root); }
     }
 
     [Fact]

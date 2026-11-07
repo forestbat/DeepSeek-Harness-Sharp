@@ -34,16 +34,16 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
         internal volatile bool Retired;
     }
 
-    internal sealed class Binding(string package, IPluginExecutionHost host)
+    internal sealed class Binding(string package, PluginCapabilityFactory.LocalHost host)
     {
         internal string Package { get; } = package;
-        internal IPluginExecutionHost Host { get; } = host;
+        internal PluginCapabilityFactory.LocalHost Host { get; } = host;
         internal volatile bool Loading = true;
         private int _disposed;
         internal void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
-                (Host as IDisposable)?.Dispose();
+                Host.Dispose();
         }
     }
 

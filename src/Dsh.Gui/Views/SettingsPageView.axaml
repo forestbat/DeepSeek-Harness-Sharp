@@ -178,13 +178,13 @@
             <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
               <StackPanel Spacing="8">
                 <CheckBox Content="自动批准普通工具（autoApprove）" IsChecked="{Binding Preferences.AutoApprove, Mode=TwoWay}" />
-                <TextBlock Text="黑名单（每行一条）" Classes="Secondary" />
+                <TextBlock Text="Blacklist: YAML map from rule ID to matcher" Classes="Secondary" />
                 <TextBox AcceptsReturn="True" Height="160" TextWrapping="Wrap"
-                         PlaceholderText="每行一条，例如 bash: rm -rf /*"
+                         PlaceholderText="deny-delete: { dialect: posix, args: { command: 'rm -rf /*' } }"
                          Text="{Binding Preferences.BlacklistText, Mode=TwoWay}" />
-                <TextBlock Text="白名单（每行一条；与黑名单使用相同 tool:name / shell:pattern 语义，黑名单优先）" Classes="Secondary" TextWrapping="Wrap" />
+                <TextBlock Text="Whitelist: YAML map; dimensions are AND, rules are OR, deny wins" Classes="Secondary" TextWrapping="Wrap" />
                 <TextBox AcceptsReturn="True" Height="120" TextWrapping="Wrap"
-                         PlaceholderText="tool:write or bash:echo"
+                         PlaceholderText="allow-read: { tool: [read, read_image] }"
                          Text="{Binding Preferences.WhitelistText, Mode=TwoWay}" />
                 <TextBlock Text="修改活动 settings.yaml 时会显示真实脱敏 diff 并进入审批；白名单和 autoApprove 可自动批准，拒绝规则始终优先。" Classes="Tertiary" TextWrapping="Wrap" />
                 <Button Classes="Primary" HorizontalAlignment="Left" Content="保存"

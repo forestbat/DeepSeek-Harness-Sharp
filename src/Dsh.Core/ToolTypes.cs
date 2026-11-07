@@ -25,9 +25,15 @@ public sealed class ToolDefinition
     public Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? FinalizeContent { get; init; }
     public long? TimeoutMs { get; init; }
     public Func<JsonElement, bool>? IsConcurrencySafe { get; init; }
+    /** Trusted host file tools defer default notification to their actual mediated operations. */
+    public bool MediatesFileAccess { get; init; }
+    public Func<JsonElement, string>? FileIntent { get; init; }
+    /** Preliminary admission hints only; actual host-mediated operations are authorized separately. */
+    public Func<JsonElement, IEnumerable<string>>? FilePaths { get; init; }
+    public bool UsesScriptPermissions { get; init; }
     public ToolDisclosure? Disclosure { get; init; }
 
-    /** 平台能力判定: false 时工具仍可被内部调用, 但不出现在模型可见的 schema 里。 */
+    /** Unavailable tools remain callable internally but are omitted from model-visible schemas. */
     public Func<bool>? IsAvailable { get; init; }
 
     /**
@@ -90,6 +96,10 @@ public class ToolExecutionInput
     public object? Parent { get; init; }
     public required CancellationToken Signal { get; init; }
 
+    // Transient scheduler selection is consumed by preparation, never persisted or sent over RPC.
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal ToolRuntime.RegistrationSnapshot? ScheduledRegistration;
+
     // 以下投影由 dsh/service.call 桥按名字字符串访问(匹配不区分大小写)。
     public string name => Name;
     public JsonNode? arguments => Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
@@ -107,7 +117,7 @@ public class ToolExecution : ToolExecutionInput
     public CancellationToken WrapperSignal { get; set; }
 }
 
-public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutationContext
+public sealed class ToolRunContext : ToolExecution
 {
     private readonly List<UserMessage> _deferred = [];
 
@@ -120,8 +130,14 @@ public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutatio
     public bool BodyInvoked { get; internal set; }
 
     internal Dsh.Runtime.Context? HostContext { get; init; }
+    public string? SafetyApprovalRevision { get; set; }
+    public string? InitialFileIntent { get; internal set; }
+    public bool UsesScriptPermissions { get; internal set; }
+    private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
+    public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
+    public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
 
-    async Task<bool> Dsh.Runtime.ISettingsMutationContext.CommitAsync(string path,
+    public async Task<bool> CommitAsync(string path,
         Func<string, Dsh.Runtime.SettingsMutationProposal?> prepare,
         Func<string, Dsh.Runtime.SettingsMutationProposal, string, CancellationToken, Task> commit)
     {
@@ -129,6 +145,7 @@ public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutatio
         if (!gate.Owns(path))
             throw new InvalidOperationException("The mutation does not target the active settings document.");
         var canonical = gate.SettingsPath;
+        await SafetyFileAccess.AuthorizeAsync(canonical, "read", this, Signal, settingsReview: true).ConfigureAwait(false);
         if (prepare(canonical) is not { } proposal)
             return false;
         await gate.CommitAsync(new(canonical, proposal.Before, proposal.After, this),
@@ -148,7 +165,13 @@ public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutatio
                 $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}; beforeHash={audit.BeforeHash}; afterHash={audit.AfterHash}\n{audit.Diff}");
     }
 
-    internal Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? CapturedFinalizer { get; set; }
+    internal ToolRuntime.RegistrationSnapshot Registration { get; set; }
+
+    internal void ClearSafetyApprovals()
+    {
+        SafetyApprovalRevision = null;
+        _fileApprovals.Clear();
+    }
 
     public void ConcludeTurn() => ConcludedRequested = true;
 
@@ -203,3 +226,22 @@ public sealed class ToolOutputException : HarnessException
 }
 
 public sealed record ToolRestriction(IReadOnlyList<string>? Allow = null, IReadOnlyList<string>? Deny = null);
+
+public readonly struct FusedSignal : IDisposable
+{
+    private readonly CancellationTokenSource? _linked;
+    private FusedSignal(CancellationToken token, CancellationTokenSource? linked)
+    {
+        Token = token;
+        _linked = linked;
+    }
+    public CancellationToken Token { get; }
+    public static FusedSignal Fuse(CancellationToken caller, CancellationToken wrapper)
+    {
+        if (caller == wrapper || !wrapper.CanBeCanceled) return new(caller, null);
+        if (!caller.CanBeCanceled) return new(wrapper, null);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(caller, wrapper);
+        return new(linked.Token, linked);
+    }
+    public void Dispose() => _linked?.Dispose();
+}

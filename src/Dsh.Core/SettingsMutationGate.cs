@@ -3,24 +3,28 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
-using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Logging;
 
-namespace Dsh.Interaction;
+namespace Dsh.Core;
+
+public readonly record struct SettingsMutationRequest(string Path, string Before, string After, ToolRunContext Context);
 
 /** The single settings approval, publication and redacted audit service. */
-public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
+public sealed class SettingsMutationGate : IDisposable
 {
+    public const string ServiceName = "settingsMutations";
     private readonly Context context;
     private readonly HarnessHome home;
     private readonly EffectHandle registration;
+    private readonly Func<HarnessSettings> read;
 
     public SettingsMutationGate(Context context, HarnessHome home)
     {
         this.context = context;
         this.home = home;
-        registration = context.Provide(ISettingsMutationGate.ServiceName, this);
+        read = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName)!.Read;
+        registration = context.Provide(ServiceName, this);
     }
 
     public void Dispose() => registration.Dispose();
@@ -40,11 +44,22 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, run.Signal);
         try
         {
-            await ApproveAsync(request, target, diff, beforeHash, afterHash, linked.Token).ConfigureAwait(false);
+            var revision = await ApproveAsync(request, target, diff, beforeHash, afterHash, linked.Token).ConfigureAwait(false);
             await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
+                var rules = read().Safety ?? new SafetySettings();
+                var input = new PermissionInput(run.Name, run.Arguments, run.Agent!.Session.WorkingDirectory ?? Environment.CurrentDirectory,
+                    target, "write", PathIsCanonical: true);
+                var current = PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
+                if (current.Decision == "deny" || SafetyBoundary.Revision(rules) != revision && current.Decision != "allow")
+                {
+                    SafetyBoundary.RecordDecision(context, run, input, current, "safety", outcome: "policy-changed");
+                    throw new UnauthorizedAccessException("The settings policy changed while approval was pending; propose again.");
+                }
+                if (context.Get<IApprovalService>("approval", false)?.IsDenied(run.Agent!) == true)
+                    throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
                 return commit(temporary, signal);
             }, linked.Token).ConfigureAwait(false);
             run.RecordFileChange(target);
@@ -66,7 +81,7 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
         }
     }
 
-    private async Task ApproveAsync(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash, CancellationToken signal)
+    private async Task<string> ApproveAsync(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
         if (!Owns(request.Path))
@@ -75,9 +90,16 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
         var agent = run.Agent ?? throw new InvalidOperationException("Settings mutations require an active model session.");
         var approval = context.Get<IApprovalService>("approval", false)
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
-        var safety = HarnessSettings.LoadForReview(home).Safety;
-        if (SafetyCommandGuard.MatchingRule(safety?.Blacklist, run.Name, run.Arguments) is { } denied)
-            throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{denied}\".");
+        var safety = read().Safety ?? new SafetySettings();
+        var input = new PermissionInput(run.Name, run.Arguments, agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, target, "write", PathIsCanonical: true);
+        var permission = PermissionEngine.Decide(safety, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
+        SafetyBoundary.RecordDecision(context, run, input, permission, "safety");
+        if (permission.Decision == "deny")
+            throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{permission.Match!.RuleId}\".");
+        if (approval.IsDenied(agent))
+            throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
+        var revision = SafetyBoundary.Revision(safety);
+        if (permission.Decision == "allow") return revision;
         var arguments = new JsonObject
         {
             ["settingsMutation"] = true, ["path"] = target, ["diff"] = diff,
@@ -90,6 +112,7 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
             throw new OperationCanceledException("Settings mutation was cancelled.", signal);
         if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
             throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
+        return revision;
     }
 
     private static string CreateDiff(string before, string after)

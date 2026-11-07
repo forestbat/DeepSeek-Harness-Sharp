@@ -170,8 +170,10 @@ public sealed class NativePluginAbiTests
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         tools = new ToolRuntime(ctx);
+        var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
+        _ = new SafetyBoundary(ctx, () => settings);
         ctx.Provide(IPluginHostFactory.ServiceName,
-            new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(root), new HarnessSettings(), root)));
+            new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(root), settings, root)));
         return ctx;
     }
 
