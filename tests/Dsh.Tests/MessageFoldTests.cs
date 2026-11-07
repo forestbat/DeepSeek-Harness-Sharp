@@ -36,6 +36,14 @@ public sealed class MessageFoldTests
         return PickCard(scene, last: false);
     });
 
+    /** 底边附近(还没到底)展开: 被点的卡片不能被面板重估顶走 —— 用户报的"多余跳转"就是这个位置。 */
+    [Fact]
+    public Task ExpandingCardNearBottom_KeepsItInPlace() => Run(scene =>
+    {
+        ScrollToFraction(scene, 0.85);
+        return PickCard(scene, last: true);
+    });
+
     [Fact]
     public Task CollapsingExpandedCard_KeepsItInPlace() => Run(scene =>
     {

@@ -25,6 +25,9 @@ public sealed partial class ChatView : UserControl
     /** 一次还原里最多修几轮。 */
     private const int AnchorSettlePasses = 3;
 
+    /** 折叠锚点最多生效几次布局变化: 只够它自己那一次重估, 之后的流式增长不许再动视口。 */
+    private const int FoldAnchorPasses = 2;
+
     /** 一格滚轮在内层滚动区域里滚动的像素数(与常见 3 行文本高度相当)。 */
     private const double NestedWheelStepPixels = 60;
 
@@ -192,8 +195,13 @@ public sealed partial class ChatView : UserControl
     }
 
     /** 用户输入产生的位置变化才改判跟随意图; 程序/布局引起的位置变化不动它。 */
-    private void OnScrollInput(object? sender, RoutedEventArgs e) =>
+    private void OnScrollInput(object? sender, RoutedEventArgs e)
+    {
         _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
+        // 用户自己一动视口, 折叠锚点立刻作废: 它只负责"点开的那一下别让卡片乱跳"。
+        if (_scrollInput is not null && IsUserScrollInput(e))
+            _foldAnchorPasses = 0;
+    }
 
     /** 滚轮/键盘/拖动滚动条都属于用户自己在移动视口; 只读文本里的指针事件不算。 */
     private bool IsUserScrollInput(RoutedEventArgs e)
@@ -248,9 +256,15 @@ public sealed partial class ChatView : UserControl
             _scrollGeneration++;
             _sticky = IsAtBottom(scroll);
         }
+        // 折叠锚点优先: 面板这次重估能把被点那条甩出几百像素, 而下面的常规判据要求偏移量几乎没变,
+        // 那种情况下它不会出手。只在"用户没在跟随"时生效, 贴底时一律交给贴底逻辑。
+        if (_foldAnchorPasses > 0 && !_sticky && !_draggingThumb && !_restoringAnchor && layoutChanged)
+        {
+            QueueFoldRestore(scroll);
+        }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
-        if (!_restoringAnchor && !_draggingThumb && !_sticky
+        else if (!_restoringAnchor && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
             && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
@@ -402,8 +416,14 @@ public sealed partial class ChatView : UserControl
     }
 
     private void RestoreAnchor(ScrollViewer scroll)
+        => RestoreAnchor(scroll, ResolveAnchorIndex(), _anchorTop, allowLargeShift: false);
+
+    /**
+     * 按"某条消息 + 它当时的屏幕位置"还原视口。
+     * 折叠用被点那条做锚点: 面板重估会把它甩出几百像素, 按"视口顶部那条"还原对它无效。
+     */
+    private void RestoreAnchor(ScrollViewer scroll, int index, double anchorTop, bool allowLargeShift)
     {
-        var index = ResolveAnchorIndex();
         if (index < 0)
             return;
         _restoringAnchor = true;
@@ -421,11 +441,12 @@ public sealed partial class ChatView : UserControl
                 if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
                     || item.TranslatePoint(default, scroll) is not { } position)
                     break;
-                var delta = position.Y - _anchorTop;
+                var delta = position.Y - anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
                 // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
-                if (Math.Abs(delta) > scroll.Viewport.Height)
+                // 折叠例外: 面板重估本来就能把它甩出几屏, 而这个锚点只在点击后两次布局内有效、用户一动就作废。
+                if (!allowLargeShift && Math.Abs(delta) > scroll.Viewport.Height)
                 {
                     RememberAnchor(scroll);
                     break;
@@ -492,6 +513,11 @@ public sealed partial class ChatView : UserControl
     /** 这一次布局变化来自折叠/展开: 不许顺手贴底, 否则用户刚点开的那条会被顶出视口。 */
     private bool _foldPending;
 
+    /** 折叠锚点: 被点那条(数据项 + 点击时的屏幕位置), 只在紧接着的两次布局里用来把它放回原处。 */
+    private object? _foldAnchorData;
+    private double _foldAnchorTop;
+    private int _foldAnchorPasses;
+
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
     private object? _anchorData;
@@ -508,10 +534,56 @@ public sealed partial class ChatView : UserControl
     /** 每轮布局后检查视口是否空掉: 只检测、只投递, 绝不在布局回调里写 offset。 */
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
-    /** 折叠与展开只是视图操作: 位置不需要补偿(上方内容不动), 但要挡掉这一次的触底跟随。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => _foldPending = true;
+    /**
+     * 折叠/展开会改变被点那条的高度, 而面板在已实体化项高度变化时会重估整篇坐标, 一次能甩出几百像素。
+     * 所以点击时记下被点那条及其屏幕位置, 接下来两次布局按它还原; 用户一滚(或重新贴底)就作废。
+     */
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
 
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => _foldPending = true;
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
+
+    private void BeginFoldAnchor(object? source)
+    {
+        _foldPending = true;
+        _foldAnchorPasses = 0;
+        if (MessageList.Scroll is not ScrollViewer scroll
+            || MessageContainerOf(source)?.DataContext is not { } data)
+            return;
+        for (var index = 0; index < MessageList.ItemCount; index++)
+        {
+            if (!ReferenceEquals(MessageList.Items[index], data)
+                || MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
+                || item.TranslatePoint(default, scroll) is not { } position)
+                continue;
+            _foldAnchorData = data;
+            _foldAnchorTop = position.Y;
+            _foldAnchorPasses = FoldAnchorPasses;
+            return;
+        }
+    }
+
+    /**
+     * 折叠引起的重估要等这一轮布局结束才落定(滚动事件里读到的还是旧位置), 所以把还原投递到布局之后,
+     * 并且只投递有限次数: 之后的流式增长不许再动视口。
+     */
+    private void QueueFoldRestore(ScrollViewer scroll)
+    {
+        if (_foldAnchorPasses-- <= 0)
+            return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_sticky || _draggingThumb || _restoringAnchor || _foldAnchorData is not { } data)
+                return;
+            for (var index = 0; index < MessageList.ItemCount; index++)
+            {
+                if (ReferenceEquals(MessageList.Items[index], data))
+                {
+                    RestoreAnchor(scroll, index, _foldAnchorTop, allowLargeShift: true);
+                    return;
+                }
+            }
+        }, DispatcherPriority.Loaded);
+    }
 
     /**
      * 右键一条消息: 只在它有事件序号时给出时间线动作(合成的界面行没有序号, 无从回退)。

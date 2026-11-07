@@ -1,4 +1,5 @@
 using Avalonia.Headless;
+using Avalonia.VisualTree;
 using Avalonia.Controls;
 using Dsh.Gui.ViewModels;
 
@@ -166,6 +167,92 @@ public sealed class ChatScrollStabilityTests
             var after = scene.TopOf(scene.List, target);
             Assert.True(Math.Abs(after - before) <= PositionTolerance,
                 $"streaming moved the toggled message: {before:0} → {after:0}");
+        }
+    });
+
+    /** 底边附近(还没贴底)展开折叠, 之后继续流式输出: 被点那条不许被顶走。 */
+    [Fact]
+    public async Task TogglingNearTheBottomThenStreaming_KeepsTheToggledMessageInPlace() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var scene = await ChatScene.CreateAsync();
+        // 小窗口更接近用户实际的阅读区: 视口里只放得下几条, 虚拟化的边界效应更明显。
+        scene.Window.Width = 900;
+        scene.Window.Height = 520;
+        scene.Render();
+        var streaming = scene.LastStreamingMessage();
+        scene.ScrollToEnd();
+        scene.Render();
+        // 用真实滚轮滚到底边附近(不能用程序写 offset: 跟随意图只在用户输入时重判)。
+        var maximum = Math.Max(0, scene.Scroll.Extent.Height - scene.Scroll.Viewport.Height);
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (scene.Scroll.Offset.Y < maximum - 300)
+                break;
+            scene.Wheel(6);
+            scene.Render();
+        }
+        Assert.True(scene.Scroll.Offset.Y < maximum - 100,
+            $"precondition: the list must sit near, but not at, the tail (offset {scene.Scroll.Offset.Y:0}, max {maximum:0})");
+
+        var target = scene.List.GetVisualDescendants().OfType<Button>()
+            .Where(candidate => candidate is { IsEffectivelyVisible: true, DataContext: MessageViewModel { IsFoldable: true } })
+            .OrderBy(candidate => scene.TopOf(candidate))
+            .LastOrDefault(candidate => scene.TopOf(candidate) < scene.Scroll.Viewport.Height - 40);
+        Assert.NotNull(target);
+        var message = Assert.IsType<MessageViewModel>(target!.DataContext);
+
+        scene.ToggleAndAssertPosition(message, "near-bottom expand");
+        var before = scene.TopOf(scene.List, message);
+
+        for (var chunk = 0; chunk < 4; chunk++)
+        {
+            streaming.Append($"\n折叠后继续输出 {chunk}");
+            streaming.FlushPending();
+            scene.Render();
+            var after = scene.TopOf(scene.List, message);
+            Assert.True(Math.Abs(after - before) <= PositionTolerance,
+                $"streaming moved the toggled message: {before:0} → {after:0}");
+        }
+    });
+
+    /**
+     * 用户报的回归: 展开底部附近的折叠后再向上滚, 流式输出必须完全不影响视口
+     * (曾经表现为滚动条被消息刷新一路下拉)。
+     */
+    [Fact]
+    public async Task ScrollingUpAfterTogglingNearTheBottom_IsUntouchedByStreaming() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var scene = await ChatScene.CreateAsync();
+        scene.Window.Width = 900;
+        scene.Window.Height = 520;
+        scene.Render();
+        var streaming = scene.LastStreamingMessage();
+        scene.ScrollToEnd();
+        scene.Render();
+        var maximum = Math.Max(0, scene.Scroll.Extent.Height - scene.Scroll.Viewport.Height);
+        for (var attempt = 0; attempt < 40 && scene.Scroll.Offset.Y >= maximum - 300; attempt++)
+        {
+            scene.Wheel(6);
+            scene.Render();
+        }
+
+        var target = scene.List.GetVisualDescendants().OfType<Button>()
+            .Where(candidate => candidate is { IsEffectivelyVisible: true, DataContext: MessageViewModel { IsFoldable: true } })
+            .OrderBy(candidate => scene.TopOf(candidate))
+            .Last();
+        scene.Tap(target);
+        scene.Settle();
+
+        scene.Wheel(6);
+        scene.ScrollToMiddle();
+        var (anchor, anchorTop) = scene.TopVisible();
+
+        for (var chunk = 0; chunk < 4; chunk++)
+        {
+            streaming.Append($"\n展开后继续输出 {chunk}");
+            streaming.FlushPending();
+            scene.Render();
+            AssertStill(scene, anchor, anchorTop, $"streaming after toggle {chunk}", StreamingTolerance);
         }
     });
 
