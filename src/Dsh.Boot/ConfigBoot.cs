@@ -34,7 +34,6 @@ public static class ConfigBoot
             : null);
 
         var pluginsDirectory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
-        var nativeBridge = ResolveNativeBridge();
 
         // 零配置不兜底:没配 provider/model 就留空,启动照常,首次发起 LLM 请求时才报错。
         var defaultModel = settings.ResolveDefaultModel();
@@ -55,17 +54,13 @@ public static class ConfigBoot
         try
         {
             ctx.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
-            var sandbox = CreateRuntime(runtimeFactory, ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
-                pluginsDirectory, nativeBridge, app.Track);
-            var pluginHost = sandbox ?? new PluginHost();
-            pluginHost.RegisterCompiledIn();
-            pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, PluginHost.SharedPoolDirectoryName));
-            ctx.SetOwn("pluginCatalog", pluginHost.Catalog);
+            var (pluginHost, sandbox, nativeBridge) = CreateRuntime(runtimeFactory, ctx,
+                new PluginExecutionEnvironment(home, settings, options.Cwd), pluginsDirectory, app.Track);
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(pluginHost, discovery);
             foreach (var skip in discovery.Skipped)
                 ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
-            foreach (var notice in pluginHost.SharedPool.DrainNotices())
+            foreach (var notice in pluginHost.SharedPool!.DrainNotices())
                 ctx.LoggerFor("loader").Warn("%s", notice);
             var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
@@ -96,16 +91,11 @@ public static class ConfigBoot
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
         context.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
-        var bridge = ResolveNativeBridge();
         var owned = new List<IDisposable>();
         try
         {
-            var sandbox = CreateRuntime(runtimeFactory, context,
-                new PluginExecutionEnvironment(home, settings, options.Cwd), directory, bridge, owned.Add);
-            var host = sandbox ?? new PluginHost();
-            host.RegisterCompiledIn();
-            host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, PluginHost.SharedPoolDirectoryName));
-            context.SetOwn("pluginCatalog", host.Catalog);
+            var (host, sandbox, bridge) = CreateRuntime(runtimeFactory, context,
+                new PluginExecutionEnvironment(home, settings, options.Cwd), directory, owned.Add);
             var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(host, discovered);
             return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped);
@@ -123,14 +113,19 @@ public static class ConfigBoot
         }
     }
 
-    private static PluginHost? CreateRuntime(PluginRuntimeFactory? factory, Context context,
-        PluginExecutionEnvironment environment, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge,
-        Action<IDisposable> track)
+    private static (PluginHost Host, PluginHost? Runtime, Func<INativePlugin, IDshPlugin>? NativeBridge) CreateRuntime(
+        PluginRuntimeFactory? factory, Context context, PluginExecutionEnvironment environment,
+        string directory, Action<IDisposable> track)
     {
-        var host = factory?.Invoke(context, environment, directory, nativeBridge, track);
-        if (host is null && environment.ReadSettings().SandboxEnabled)
+        var nativeBridge = ResolveNativeBridge();
+        var runtime = factory?.Invoke(context, environment, directory, nativeBridge, track);
+        if (runtime is null && environment.ReadSettings().SandboxEnabled)
             throw new RuntimeException("PLUGIN_SANDBOX_UNAVAILABLE", "Plugin sandbox support is not included in this application.");
-        return host;
+        var host = runtime ?? new PluginHost();
+        host.RegisterCompiledIn();
+        host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, PluginHost.SharedPoolDirectoryName));
+        context.SetOwn("pluginCatalog", host.Catalog);
+        return (host, runtime, nativeBridge);
     }
 
 

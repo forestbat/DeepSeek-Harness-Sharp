@@ -9,8 +9,6 @@ namespace Dsh.Plugins.Sandbox;
 /** Discovers plugins in the shared worker and applies the same execution roles to every source. */
 internal sealed class PluginSandboxHost : PluginHost, IDisposable
 {
-    private const int MaximumPackagesPerArtifact = 256;
-    private const int MaximumPackageCharacters = 256;
     private readonly PluginExecutionEnvironment _environment;
     private readonly string _directory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
@@ -330,9 +328,9 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
 
     private static void Validate(PluginSandboxInspection inspection, string source)
     {
-        if (inspection.Packages.Length > MaximumPackagesPerArtifact
+        if (inspection.Packages.Length > PluginSandboxMethods.MaximumPackagesPerArtifact
             || inspection.Packages.Any(package => string.IsNullOrWhiteSpace(package.Package)
-                || package.Package.Length > MaximumPackageCharacters || package.Package.AsSpan().Trim().Length != package.Package.Length
+                || package.Package.Length > PluginSandboxMethods.MaximumPackageCharacters || package.Package.AsSpan().Trim().Length != package.Package.Length
                 || package.Package.Any(char.IsControl))
             || inspection.Packages.Select(package => package.Package).Distinct(StringComparer.Ordinal).Count() != inspection.Packages.Length)
             throw new RuntimeException("PLUGIN_INVALID_METADATA", "The isolated inspection returned invalid or duplicate package metadata.");

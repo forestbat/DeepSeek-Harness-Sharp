@@ -6,8 +6,6 @@ namespace Dsh.Plugins.Sandbox;
 /** JSON values use the protocol's single frame-size boundary. */
 internal static class PluginSandboxWorkerWire
 {
-    internal static JsonElement Element(JsonElement value) => value.Clone();
-
     internal static object? Configuration(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.Object => value.EnumerateObject().ToDictionary(

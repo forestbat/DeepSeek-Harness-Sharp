@@ -16,7 +16,9 @@ internal static class PluginSandboxWorker
     {
         if (Array.IndexOf(args, HostArgument) < 0)
             return null;
-        return args.Length == 1 ? new ValueTask<int>(RunAsync()) : new ValueTask<int>(2);
+        if (args.Length != 1)
+            throw new ArgumentException("The plugin worker requires only its worker argument.", nameof(args));
+        return new ValueTask<int>(RunAsync());
     }
 
     private static async Task<int> RunAsync()
@@ -463,7 +465,7 @@ internal static class PluginSandboxWorker
         private static string BoundedFailure(Exception error)
         {
             var message = error.GetBaseException().Message;
-            return message.Length <= 2048 ? message : message[..2048];
+            return message.Length <= PluginSandboxMethods.MaximumFailureCharacters ? message : message[..PluginSandboxMethods.MaximumFailureCharacters];
         }
 
         internal void Closed(Exception? failure)

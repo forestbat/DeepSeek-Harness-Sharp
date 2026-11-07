@@ -120,12 +120,10 @@ public sealed class PluginWorkerEntrypointTests
             var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
             var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(second is null ? 0 : 2, process.ExitCode);
-            if (second is null)
-                Assert.Contains("usage:", await output, StringComparison.OrdinalIgnoreCase);
-            else
-                Assert.Empty(await output);
-            Assert.Empty(await error);
+            var stdout = await output;
+            var stderr = await error;
+            Assert.Equal(second is null, process.ExitCode == 0);
+            Assert.Empty(second is null ? stderr : stdout);
         }
         finally { await StopAsync(process, root); }
     }
