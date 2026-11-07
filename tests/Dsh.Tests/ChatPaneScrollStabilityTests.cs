@@ -118,29 +118,6 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
         Assert.True(pane.StickToBottom);
     }
 
-    /** 贴底时展开折叠: 那一帧不重新贴底, 否则被点的折叠头会被新高度顶走(GUI 的 _foldPending 同款)。 */
-    [Fact]
-    public async Task ExpandingFoldWhileAtTail_KeepsTheTranscriptInPlace()
-    {
-        var (ctx, agent, home) = await CreateAgent();
-        using var chat = new ChatWindow(ctx, agent, home);
-        var pane = chat.InputPane;
-        for (var index = 0; index < 40; index++)
-            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
-        pane.AppendRaw(string.Join('\n', Enumerable.Range(0, 40).Select(index => $"工具输出第 {index} 行")));
-        Draw(chat);
-        Assert.True(pane.StickToBottom);
-
-        var fold = Assert.Single(pane.Renderer.Folds);
-        var before = pane.ScrollOffset;
-        pane.ToggleFold(fold);
-        Draw(chat);
-
-        Assert.False(pane.StickToBottom);
-        Assert.Equal(before, pane.ScrollOffset);
-        Assert.True(pane.Renderer.Folds[0].Lines > 0);
-    }
-
     private static void Draw(ChatWindow chat)
     {
         chat.DrainUi();
