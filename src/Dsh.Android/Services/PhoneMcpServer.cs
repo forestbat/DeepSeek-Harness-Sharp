@@ -11,7 +11,7 @@ namespace Dsh.Android.Services;
  */
 public sealed class PhoneMcpServer(int port, string token) : IAsyncDisposable
 {
-    private readonly PhoneMcpHttp _http = new(new PhoneMcpProtocol(new AndroidPhoneDevice()), token);
+    private readonly PhoneMcpHttp _http = new(new PhoneMcpProtocol(new AndroidPhoneDevice(), new PhoneUiAutomation()), token);
     private CancellationTokenSource? _lifetime;
     private Task? _loop;
 

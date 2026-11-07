@@ -28,7 +28,7 @@ public sealed record PhoneActionResult(bool Ok, string Text)
  * MCP 的无状态服务端: 只实现 initialize / tools / ping 这些电脑端 agent 真正会用到的方法。
  * 手机工具一律走 tools/call, 平台差异留在 IPhoneDevice 后面, 协议本身可以在桌面上被测。
  */
-public sealed class PhoneMcpProtocol(IPhoneDevice device)
+public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? automation = null)
 {
     public const string ServerName = "dsh-phone";
     public const string ServerVersion = "0.4.0";
@@ -102,6 +102,31 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device)
             Tool("open_url", "用系统默认浏览器打开一个 http/https 链接。",
                 new JsonObject { ["url"] = StringProperty("要打开的链接") },
                 "url"),
+            Tool("ui_dump", "读取当前界面节点: 编号、文本、类型与屏幕坐标; 点按优先用编号。",
+                new JsonObject { ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "最多返回多少节点，默认 60" } }),
+            Tool("ui_tap", "点按当前界面: 给 index 点某个节点, 或给 x/y 点坐标。",
+                new JsonObject
+                {
+                    ["index"] = new JsonObject { ["type"] = "integer", ["description"] = "ui_dump 里的编号" },
+                    ["x"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 x" },
+                    ["y"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 y" },
+                }),
+            Tool("ui_swipe", "在屏幕上滑动。",
+                new JsonObject
+                {
+                    ["from_x"] = new JsonObject { ["type"] = "integer", ["description"] = "起点 x" },
+                    ["from_y"] = new JsonObject { ["type"] = "integer", ["description"] = "起点 y" },
+                    ["to_x"] = new JsonObject { ["type"] = "integer", ["description"] = "终点 x" },
+                    ["to_y"] = new JsonObject { ["type"] = "integer", ["description"] = "终点 y" },
+                    ["duration_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "滑动时长，默认 300" },
+                },
+                "from_x", "from_y", "to_x", "to_y"),
+            Tool("ui_input", "往当前聚焦的输入框写文本; 先 ui_tap 点中输入框。",
+                new JsonObject { ["text"] = StringProperty("要写入的文本") },
+                "text"),
+            Tool("ui_key", "按系统键: back / home / recents / notifications。",
+                new JsonObject { ["action"] = StringProperty("back / home / recents / notifications") },
+                "action"),
         },
     };
 
@@ -115,6 +140,11 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device)
             "list_apps" => ListApps(arguments),
             "launch_app" => device.LaunchApp(TextOf(arguments["package"]) ?? ""),
             "open_url" => device.OpenUrl(TextOf(arguments["url"]) ?? ""),
+            "ui_dump" => UiDump(arguments),
+            "ui_tap" => UiTap(arguments),
+            "ui_swipe" => UiSwipe(arguments),
+            "ui_input" => UiInput(arguments),
+            "ui_key" => Ui().Global(TextOf(arguments["action"]) ?? "back"),
             _ => PhoneActionResult.Fail($"没有这个工具: {name}"),
         };
         return Success(id, new JsonObject
@@ -131,8 +161,60 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device)
         });
     }
 
-    private PhoneActionResult ListApps(JsonObject arguments)
+    private const int DefaultDumpLimit = 60;
+    private const int DefaultSwipeMillis = 300;
+
+    private IPhoneUiAutomation Ui()
+        => automation ?? throw new InvalidOperationException("无障碍服务不可用");
+
+    private bool UiMissing()
+        => automation is null || !automation.IsAvailable;
+
+    private const string NotRunning = "无障碍服务没有开启: 到系统设置 → 无障碍里打开 DSH, 之后才能读界面、点按、输入";
+
+    private PhoneActionResult UiDump(JsonObject arguments)
     {
+        if (UiMissing())
+            return PhoneActionResult.Fail(NotRunning);
+        var limit = arguments["limit"] is JsonValue value && value.TryGetValue<int>(out var parsed)
+            ? Math.Clamp(parsed, 1, 400)
+            : DefaultDumpLimit;
+        var nodes = automation!.DumpUi(limit);
+        if (nodes.Count == 0)
+            return PhoneActionResult.Fail("当前界面没有可读节点");
+        var lines = nodes.Select(node => $"{node.Index}) {(node.Text.Length > 0 ? node.Text : $"<{node.Kind?.Split('.').LastOrDefault()}>")} [{node.Left},{node.Top}]-[{node.Right},{node.Bottom}]");
+        return PhoneActionResult.Done($"前台应用: {automation.ForegroundApp}\n{string.Join('\n', lines)}");
+    }
+
+    private PhoneActionResult UiTap(JsonObject arguments)
+    {
+        if (UiMissing())
+            return PhoneActionResult.Fail(NotRunning);
+        if (arguments["index"] is JsonValue index && index.TryGetValue<int>(out var number))
+            return automation!.Click(number);
+        if (arguments["x"] is JsonValue x && x.TryGetValue<int>(out var px)
+            && arguments["y"] is JsonValue y && y.TryGetValue<int>(out var py))
+            return automation!.Tap(px, py);
+        return PhoneActionResult.Fail("需要 index, 或者 x 与 y");
+    }
+
+    private PhoneActionResult UiSwipe(JsonObject arguments)
+    {
+        if (UiMissing())
+            return PhoneActionResult.Fail(NotRunning);
+        if (arguments["from_x"] is not JsonValue fromX || !fromX.TryGetValue<int>(out var x1)
+            || arguments["from_y"] is not JsonValue fromY || !fromY.TryGetValue<int>(out var y1)
+            || arguments["to_x"] is not JsonValue toX || !toX.TryGetValue<int>(out var x2)
+            || arguments["to_y"] is not JsonValue toY || !toY.TryGetValue<int>(out var y2))
+            return PhoneActionResult.Fail("需要 from_x / from_y / to_x / to_y");
+        var duration = arguments["duration_ms"] is JsonValue value && value.TryGetValue<int>(out var parsed) ? parsed : DefaultSwipeMillis;
+        return automation!.Swipe(x1, y1, x2, y2, duration);
+    }
+
+    private PhoneActionResult UiInput(JsonObject arguments)
+        => UiMissing() ? PhoneActionResult.Fail(NotRunning) : automation!.SetText(TextOf(arguments["text"]) ?? "");
+
+    private PhoneActionResult ListApps(JsonObject arguments)    {
         var apps = device.ListApps(TextOf(arguments["filter"]));
         if (apps.Count == 0)
             return PhoneActionResult.Done("没有匹配的应用。");

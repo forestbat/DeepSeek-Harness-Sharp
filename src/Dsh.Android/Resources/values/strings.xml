@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="phone_automation_description">让 DSH 读取当前界面并执行点按、滑动与输入。关掉后 agent 只能启动应用，不能操作界面。</string>
+</resources>

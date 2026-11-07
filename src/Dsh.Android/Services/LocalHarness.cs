@@ -83,7 +83,7 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
                 settings.BaseUrl is { Length: > 0 } ? settings.BaseUrl : null,
                 ApiKey: settings.ApiKey,
                 IsTui: false));
-            _tools = PhoneAgentTools.Register(_app.Ctx, new AndroidPhoneDevice());
+            _tools = PhoneAgentTools.Register(_app.Ctx, new AndroidPhoneDevice(), new PhoneUiAutomation());
             _machineTools = MachineSessionTools.Register(_app.Ctx, links);
             var (serverSide, clientSide) = LocalDuplex.Create();
             _backend = await HarnessRemoteHostBackend.CreateAsync(_app);
