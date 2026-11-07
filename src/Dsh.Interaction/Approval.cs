@@ -105,6 +105,22 @@ public sealed class ApprovalService : Service, IApprovalService
 
     public ApprovalPolicy EffectivePolicy(Session session) => OverrideOf(session) ?? _config.Policy;
 
+    /**
+     * 只看事件流也能算出有效策略: 调用方(例如 host 给未加载会话出快照)手里只有事件,
+     * 为了一个策略值去 Session.FromRestore 重建整篇派生状态不值得。
+     */
+    public ApprovalPolicy EffectivePolicy(IReadOnlyList<SessionEvent> events) => OverrideOf(events) ?? _config.Policy;
+
+    public static ApprovalPolicy? OverrideOf(IReadOnlyList<SessionEvent> events)
+    {
+        for (var index = events.Count - 1; index >= 0; index--)
+        {
+            if (events[index].Data is ApprovalPolicyPayload payload)
+                return payload.Policy;
+        }
+        return null;
+    }
+
     public void SetPolicy(IAgent agent, ApprovalPolicy policy)
     {
         var previous = EffectivePolicy(agent.Session);

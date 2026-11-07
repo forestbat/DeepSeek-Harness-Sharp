@@ -207,10 +207,14 @@ public sealed partial class MessageViewModel : ObservableObject
     /** 文本发生变化(流式增量合并后)时触发, 供视图保持滚动到底部。 */
     public event Action<MessageViewModel>? Updated;
 
-    public void Append(string delta)
+    /**
+     * coalesce=false 用于历史重放: 那批增量是同一帧里连发过来的, 给每条消息排一个 16ms 定时器
+     * 只会把上千个回调堆到 UI 线程上; 重放完由调用方统一 FlushPending 一次即可。
+     */
+    public void Append(string delta, bool coalesce = true)
     {
         _buffer.Append(delta);
-        if (_flushScheduled)
+        if (_flushScheduled || !coalesce)
             return;
         _flushScheduled = true;
         DispatcherTimer.RunOnce(FlushPending, TimeSpan.FromMilliseconds(CoalesceMilliseconds));

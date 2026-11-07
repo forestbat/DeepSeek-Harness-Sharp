@@ -1167,8 +1167,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
 
-    private LlmCallConfig? CurrentRequestHeader()
-        => _chat.Events.Select(item => item.Data).OfType<RequestHeaderPayload>().LastOrDefault()?.Header.Config;
+    /**
+     * 当前请求头随事件流维护, 不再每次回扫整段历史。
+     * 重放时节点头会逐条到达, 而 RefreshModelLabels 与每条助手消息都要读它, 回扫会把重放变成 O(n²)。
+     */
+    private LlmCallConfig? CurrentRequestHeader() => _requestHeader;
+
+    private LlmCallConfig? _requestHeader;
 
     private IReadOnlyList<SessionNodeViewModel> AllSessions()
         => [.. Workspaces.SelectMany(workspace => workspace.Sessions).Concat(FileSystemNodes.SelectMany(node => node.Sessions))];
@@ -1470,6 +1475,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         // 统计是跨会话累积的, 换会话必须先清零: 紧接着的整段重放会把本会话的量重新算一遍,
         // 否则新建会话会继承上一个会话的数字, 切回旧会话又会把 in/out 重复累加。
         TokenStats.Reset();
+        _requestHeader = null;
         ApplyEvents(_chat.Events, replay: true);
         RefreshModelLabels();
         SelectedSession = FindSession(_chat.Id);
@@ -1509,6 +1515,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             _renderedSeq = sessionEvent.Seq + 1;
             ApplyEvent(sessionEvent, replay);
         }
+        if (!replay)
+            return;
+        // 重放时增量不排定时器(见 MessageViewModel.Append): 这里一次性把每条消息刷到最终文本。
+        foreach (var message in Messages)
+            message.FlushPending();
+        MessagesChanged?.Invoke();
     }
 
     private void RequestResync(long receivedSeq)
@@ -1567,12 +1579,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case UserMessagePayload user:
                 ApplyUserMessage(sessionEvent.Seq, user);
                 break;
-            case RequestHeaderPayload:
+            case RequestHeaderPayload header:
+                _requestHeader = header.Header.Config;
                 TokenStats.RequestStarted();
                 RefreshModelLabels();
                 break;
             case AssistantChunkPayload chunk:
-                ApplyChunk(sessionEvent.Seq, chunk.Chunk);
+                ApplyChunk(sessionEvent.Seq, chunk.Chunk, replay);
                 break;
             case AssistantMessagePayload assistant:
                 ApplyAssistant(SessionText.AssistantText(assistant.Message.Content));
@@ -1691,7 +1704,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         IsBusy = false;
     }
 
-    private void ApplyChunk(long seq, StreamChunk chunk)
+    private void ApplyChunk(long seq, StreamChunk chunk, bool replay = false)
     {
         switch (chunk)
         {
@@ -1701,14 +1714,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case StreamChunk.ReasoningDelta delta when delta.Text.Length > 0:
                 TokenStats.FirstTokenArrived();
-                AppendReasoning(delta.Text);
+                AppendReasoning(delta.Text, replay);
                 break;
             case StreamChunk.BlockStart { BlockType: "text" }:
                 _openAssistant = null;
                 break;
             case StreamChunk.TextDelta delta when delta.Text.Length > 0:
                 TokenStats.FirstTokenArrived();
-                AppendAssistant(delta.Text);
+                AppendAssistant(delta.Text, replay);
                 break;
             case StreamChunk.Usage usage:
                 TokenStats.ObserveUsage(usage.Value);
@@ -1834,16 +1847,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);
     }
 
-    private void AppendAssistant(string delta)
+    private void AppendAssistant(string delta, bool replay = false)
     {
         _openAssistant ??= AppendMessage(new MessageViewModel(AssistantRole(), "", MessageKind.Assistant, true));
-        _openAssistant.Append(delta);
+        _openAssistant.Append(delta, coalesce: !replay);
     }
 
-    private void AppendReasoning(string delta)
+    private void AppendReasoning(string delta, bool replay = false)
     {
         _openReasoning ??= AppendMessage(new MessageViewModel("思考", "", MessageKind.Reasoning, true));
-        _openReasoning.Append(delta);
+        _openReasoning.Append(delta, coalesce: !replay);
     }
 
     private MessageViewModel AppendMessage(MessageViewModel message)
