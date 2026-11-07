@@ -45,12 +45,9 @@ public sealed class SubagentDirectory(HostChatSession chat)
             return _events.GetValueOrDefault(id);
     }
 
-    /** 已取过的历史直接复用: 面板每次刷新都把每个子代理的整段历史重拉一遍是白等。 */
+    /** 每次都重新取: 刷新要能看到子代理刚产出的事件, 缓存住就会停在第一次的快照上。 */
     public async Task<IReadOnlyList<SessionEvent>> LoadEventsAsync(SessionId id)
     {
-        lock (_eventsGate)
-            if (_events.GetValueOrDefault(id) is { } cached)
-                return cached;
         var snapshot = await (await chat.ClientAsync()).GetSessionSnapshotAsync(id.Value);
         var events = snapshot.Events.ToList();
         lock (_eventsGate)
