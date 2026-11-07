@@ -148,6 +148,31 @@ public sealed class MainViewModelTests
         Assert.NotEqual(environment.Agent.Id, viewModel.SelectedSession!.SessionId);
     });
 
+    /** 时间线的 GUI 入口: 消息带序号, 跳转只在本地滚, 回退与分叉落到服务端命令。 */
+    [Fact]
+    public async Task TimelineActions_JumpRevertAndForkTakeTheMessageSeq() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("keep me")), new SurfaceOp.Append());
+        var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me")), new SurfaceOp.Append());
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me too")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
+
+        var message = Assert.Single(viewModel.Messages, item => item.Seq == target.Seq);
+        MessageViewModel? scrolled = null;
+        viewModel.ScrollRequested += requested => scrolled = requested;
+
+        viewModel.JumpToMessageCommand.Execute(message);
+        Assert.Same(message, scrolled);
+
+        await viewModel.RevertToMessageCommand.ExecuteAsync(message);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1);
+        Assert.Equal(["keep me"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
+    });
     [Fact]
     public async Task Sessions_GroupedByWorkspace_AndMarkCurrentSessionSelected() => await HeadlessGui.RunAsync(async () =>
     {
