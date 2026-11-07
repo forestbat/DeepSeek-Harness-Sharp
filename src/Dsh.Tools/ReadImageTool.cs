@@ -59,7 +59,6 @@ public static class ReadImageTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
             Description = $"Read a local image file ({AcceptedFormats}) and return the image itself to the model. Images whose long edge exceeds {resolved.MaxLongEdge}px are downscaled automatically; the result states the original size and the coordinate multiplier.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>

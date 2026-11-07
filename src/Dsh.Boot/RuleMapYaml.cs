@@ -15,7 +15,7 @@ public static class RuleMapYaml
         var map = new StaticDeserializerBuilder(new DshYamlStaticContext())
             .WithTypeConverter(new RuleToolsYamlConverter()).Build()
             .Deserialize<Dictionary<string, PermissionMatcher>>(text);
-        foreach (var matcher in map.Values) matcher.Validate();
+        PermissionRules.ValidateMap(map);
         return map;
     }
 
@@ -82,7 +82,7 @@ public static class RuleMapYaml
             throw new ArgumentException("Rules must be an ID-to-matcher YAML map; legacy lists are not supported.");
         foreach (var (id, rule) in map.Children)
         {
-            if (id is not YamlScalarNode { Value: { Length: > 0 } } || rule is not YamlMappingNode matcher)
+            if (id is not YamlScalarNode || rule is not YamlMappingNode matcher)
                 throw new ArgumentException("Each rule requires a nonempty ID and a matcher mapping.");
             foreach (var (keyNode, value) in matcher.Children)
             {
@@ -93,8 +93,7 @@ public static class RuleMapYaml
                 {
                     if (value is not YamlMappingNode args) throw new ArgumentException("args must be a string-pattern mapping.");
                     foreach (var (argument, pattern) in args.Children)
-                        if (argument is not YamlScalarNode || pattern is not YamlScalarNode
-                            || (argument as YamlScalarNode)?.Value is "path" or "file_path")
+                        if (argument is not YamlScalarNode || pattern is not YamlScalarNode)
                             throw new ArgumentException("args must contain string patterns; paths use the unified path field.");
                 }
                 else if (key == "tool")

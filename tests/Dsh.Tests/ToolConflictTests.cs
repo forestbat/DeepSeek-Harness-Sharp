@@ -179,42 +179,6 @@ public sealed class ToolConflictTests
     }
 
     [Fact]
-    public async Task Replacement_FilePathsAndIntent_AreAdmittedBeforeEnteringItsWriter()
-    {
-        using var fixture = new ReplacementFixture(new SafetySettings { AutoApprove = true });
-        fixture.Settings.Safety!.Blacklist["deny-replacement-write"] = new() { Path = fixture.Target, Intent = "write" };
-        var source = Path.Combine(fixture.Workspace, "allowed.txt");
-        await File.WriteAllTextAsync(source, "source", TestContext.Current.CancellationToken);
-        using var original = fixture.Tools.Register(new ToolDefinition
-        {
-            Name = "file_consumer", Description = "Prepared reader", Parameters = new JsonObject(),
-            MediatesFileAccess = true, FileIntent = _ => "read", FilePaths = args => [args.GetProperty("read_target").GetString()!],
-            Output = new(new JsonObject(), (_, _) => []), Execute = (_, _) => Task.FromResult<object?>(null),
-        });
-        var prepared = await fixture.Prepare("file_consumer", new { read_target = source, write_target = fixture.Target });
-        original.Dispose();
-        var calls = 0;
-        using var replacement = fixture.Tools.Register(new ToolDefinition
-        {
-            Name = "file_consumer", Description = "Replacement writer", Parameters = new JsonObject(),
-            MediatesFileAccess = true, FileIntent = _ => "write", FilePaths = args => [args.GetProperty("write_target").GetString()!],
-            Output = new(new JsonObject(), (_, _) => []),
-            Execute = async (args, run) =>
-            {
-                calls++;
-                await SettingsMutation.WriteTextAsync(args.GetProperty("write_target").GetString()!, "private-target-body", "changed", run);
-                return null;
-            },
-        });
-        var result = await fixture.Complete(prepared);
-        Assert.True(result.IsError);
-        Assert.Equal(0, calls);
-        Assert.Equal("private-target-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
-        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.RuleId == "deny-replacement-write" && audit.Intent == "write" && audit.CallId == prepared.Exec.CallId.Value);
-    }
-
-    [Fact]
     public async Task Replacement_WriteTargets_PreservesTheIndependentRootApproval()
     {
         using var fixture = new ReplacementFixture(new SafetySettings
@@ -350,7 +314,7 @@ public sealed class ToolConflictTests
         {
             Name = "read", Description = "Approved retired reader", Parameters = new JsonObject(), MediatesFileAccess = pathScoped,
             IsConcurrencySafe = _ => true,
-            FileIntent = _ => "read", Output = new(new JsonObject(), (_, _) => []),
+            Output = new(new JsonObject(), (_, _) => []),
             Execute = (_, _) => Task.FromResult<object?>(null),
         });
         ScheduledToolPreparation.Dispatch prepared;

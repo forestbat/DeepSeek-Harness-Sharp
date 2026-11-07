@@ -47,7 +47,6 @@ public static class StrReplaceEditorTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = args => IsView(args) ? "read" : "write",
             Description = description,
             Parameters = ToolSchemas.Parse("""
                 {

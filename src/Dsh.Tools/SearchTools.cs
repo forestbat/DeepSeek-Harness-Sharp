@@ -127,7 +127,6 @@ public static class GlobTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
             Description = "Find files whose paths match a glob pattern. Returns matching file paths — never directories — "
                 + "including hidden and ignored files (VCS metadata directories are excluded). "
                 + $"Up to {resolved.MaxResults} paths come back in modification-time order; a larger result returns the first {resolved.MaxResults} paths in modification-time order, "
@@ -240,7 +239,6 @@ public static class GrepTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
             Description = "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. "
                 + $"Returns the first {resolved.MaxMatches} matches inline; a capped result reports where the complete match list was saved. "
                 + "Use read on a matched file for surrounding context.",

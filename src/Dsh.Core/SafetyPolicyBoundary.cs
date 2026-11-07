@@ -57,25 +57,27 @@ public sealed class SafetyBoundary : Service
         return (rules, space, input, decision);
     }
 
-    public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
+    public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles)
     {
         var (rules, space, input, decision) = DecideAndRecord(run);
         if (mediatedFiles && run.Arguments.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in run.Arguments.EnumerateObject())
             {
-                if (property.Name is not ("path" or "file_path") || property.Value.ValueKind != JsonValueKind.String) continue;
-                var value = property.Value.GetString();
-                if (string.IsNullOrWhiteSpace(value)) continue;
-                DemandPreliminary(value);
+                if (property.Name is "path" or "file_path")
+                    DemandPreliminary(property.Value);
+                else if (property.Name == "files" && property.Value.ValueKind == JsonValueKind.Array)
+                    foreach (var item in property.Value.EnumerateArray())
+                        if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("path", out var path))
+                            DemandPreliminary(path);
             }
-            if (filePaths is not null)
-                foreach (var path in filePaths(run.Arguments))
-                    if (!string.IsNullOrWhiteSpace(path)) DemandPreliminary(path);
 
-            void DemandPreliminary(string value)
+            void DemandPreliminary(JsonElement path)
             {
-                var preliminary = Input(run, Dsh.Runtime.CanonicalFilePath.Canonicalize(Path.GetFullPath(value, input.WorkingDirectory)), run.InitialFileIntent);
+                if (path.ValueKind != JsonValueKind.String) return;
+                var value = path.GetString();
+                if (string.IsNullOrWhiteSpace(value)) return;
+                var preliminary = Input(run, Dsh.Runtime.CanonicalFilePath.Canonicalize(Path.GetFullPath(value, input.WorkingDirectory)));
                 var known = Decide(rules, preliminary);
                 if (known.Decision == "deny")
                 {
@@ -92,6 +94,12 @@ public sealed class SafetyBoundary : Service
         }
         run.SafetyApprovalRevision = await ApproveAsync(run, input, decision, space, Revision(rules), run.Signal).ConfigureAwait(false);
     }
+
+    public static Task AuthorizeInvocationAsync(Context? context, ToolRunContext? run, bool mediatesFileAccess,
+        CancellationToken signal)
+        => run is not null && !mediatesFileAccess && Resolve(context) is { } safety
+            ? safety.AuthorizeOperationAsync(run, signal)
+            : Task.CompletedTask;
 
     public async Task AuthorizeOperationAsync(ToolRunContext? run, CancellationToken signal, string? lifecycleOwner = null,
         bool? scriptPermissions = null, bool configuredLifecycle = false)

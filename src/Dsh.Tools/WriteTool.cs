@@ -24,7 +24,6 @@ public static class WriteTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "write",
             Description = "Create or fully replace a UTF-8 text file.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>

@@ -27,9 +27,6 @@ public sealed class ToolDefinition
     public Func<JsonElement, bool>? IsConcurrencySafe { get; init; }
     /** Trusted host file tools defer default notification to their actual mediated operations. */
     public bool MediatesFileAccess { get; init; }
-    public Func<JsonElement, string>? FileIntent { get; init; }
-    /** Preliminary admission hints only; actual host-mediated operations are authorized separately. */
-    public Func<JsonElement, IEnumerable<string>>? FilePaths { get; init; }
     public bool UsesScriptPermissions { get; init; }
     public ToolDisclosure? Disclosure { get; init; }
 
@@ -131,7 +128,6 @@ public sealed class ToolRunContext : ToolExecution
 
     internal Dsh.Runtime.Context? HostContext { get; init; }
     public string? SafetyApprovalRevision { get; set; }
-    public string? InitialFileIntent { get; internal set; }
     public bool UsesScriptPermissions { get; internal set; }
     private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
     public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));

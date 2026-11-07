@@ -122,7 +122,6 @@ public sealed class SkillCatalog : IDisposable
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
             Description = "Load the full instructions for a skill. Call it before acting on a task that names or clearly matches a skill in the session skill catalog.",
             Parameters = JsonNode.Parse("""
                 {

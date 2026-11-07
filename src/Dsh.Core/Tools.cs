@@ -127,8 +127,6 @@ public sealed class ToolRuntime : Service
                             TimeoutMs = definition.TimeoutMs,
                             IsConcurrencySafe = definition.IsConcurrencySafe,
                             MediatesFileAccess = definition.MediatesFileAccess,
-                            FileIntent = definition.FileIntent,
-                            FilePaths = definition.FilePaths,
                             UsesScriptPermissions = definition.UsesScriptPermissions,
                             Disclosure = definition.Disclosure,
                             IsAvailable = definition.IsAvailable,
@@ -583,7 +581,6 @@ public sealed class ToolRuntime : Service
     private void BindRegistration(ToolRunContext exec, RegistrationSnapshot registration)
     {
         exec.Registration = registration;
-        exec.InitialFileIntent = registration.Definition?.FileIntent?.Invoke(exec.Arguments);
         exec.UsesScriptPermissions = registration.Definition?.UsesScriptPermissions == true;
     }
 
@@ -637,7 +634,7 @@ public sealed class ToolRuntime : Service
             if (SafetyBoundary.Resolve(Ctx) is { } safety)
             {
                 var definition = exec.Registration.Definition;
-                await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true, definition?.FilePaths).ConfigureAwait(false);
+                await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true).ConfigureAwait(false);
             }
             var gate = WriteRootGate(exec, NormalizePreDecision(await Ctx.Events.Waterfall(
                 carrier, new ToolPreExecuteNotification(exec),

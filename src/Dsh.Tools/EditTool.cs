@@ -24,7 +24,6 @@ public static class EditTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "write",
             Description = "Edit an existing UTF-8 text file by replacing literal text.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>

@@ -47,8 +47,6 @@ public static class PresentTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
-            FilePaths = InputPaths,
             Description = Description,
             Parameters = Parameters,
             Output = new ToolOutputDefinition(OutputSchema, static (_, value) => [new TextBlock(Rendered(value))]),
@@ -77,7 +75,7 @@ public static class PresentTool
         var files = new List<PresentedFile>(requested.Count);
         foreach (var item in requested)
         {
-            var file = Resolve(item, cwd);
+            var file = await ResolveAsync(item, cwd, exec).ConfigureAwait(false);
             await using var access = await SafetyFileAccess.OpenReadAsync(file.Path, exec).ConfigureAwait(false);
             files.Add(file);
         }
@@ -86,17 +84,7 @@ public static class PresentTool
         return new PresentResult(boundary.LastTurn, files);
     }
 
-    private static IEnumerable<string> InputPaths(JsonElement args)
-    {
-        if (!args.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array
-            || files.GetArrayLength() > MaxFiles) yield break;
-        foreach (var item in files.EnumerateArray())
-            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("path", out var path)
-                && path.ValueKind == JsonValueKind.String && path.GetString() is { } value)
-                yield return value;
-    }
-
-    private static PresentedFile Resolve(JsonElement item, string cwd)
+    private static async ValueTask<PresentedFile> ResolveAsync(JsonElement item, string cwd, ToolRunContext exec)
     {
         var path = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("path", out var pathElement)
             && pathElement.ValueKind == JsonValueKind.String
@@ -105,6 +93,7 @@ public static class PresentTool
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("present requires a non-empty file path");
         var target = Path.GetFullPath(path, cwd);
+        await SafetyFileAccess.AuthorizeAsync(target, "read", exec, exec.Signal).ConfigureAwait(false);
         var info = new FileInfo(target);
         if (Directory.Exists(target) || info.LinkTarget is not null)
             throw new ArgumentException($"Cannot present {path}: not a regular file");

@@ -18,7 +18,13 @@ public class PermissionRules
 
     public void Validate()
     {
-        foreach (var (id, matcher) in Blacklist.Concat(Whitelist))
+        ValidateMap(Blacklist);
+        ValidateMap(Whitelist);
+    }
+
+    public static void ValidateMap(Dictionary<string, PermissionMatcher> rules)
+    {
+        foreach (var (id, matcher) in rules)
         {
             if (string.IsNullOrWhiteSpace(id) || matcher is null)
                 throw new ArgumentException("Permission rules require nonempty IDs and matcher mappings.");
@@ -73,8 +79,6 @@ public sealed class RuleToolsYamlConverter : IYamlTypeConverter
             while (!parser.TryConsume<SequenceEnd>(out _))
                 values.Add(parser.Consume<Scalar>().Value);
         }
-        if (values.Count == 0 || values.Any(string.IsNullOrWhiteSpace))
-            throw new YamlException("tool must contain at least one nonempty tool name.");
         return values;
     }
     public void WriteYaml(IEmitter emitter, object? value, Type type, ObjectSerializer serializer)

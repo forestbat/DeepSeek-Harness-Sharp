@@ -33,7 +33,6 @@ public static class ReadTool
         {
             Name = ToolName,
             MediatesFileAccess = true,
-            FileIntent = _ => "read",
             Description = "Read a UTF-8 text file and return line-numbered content. To inspect an image file, use read_image instead.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>

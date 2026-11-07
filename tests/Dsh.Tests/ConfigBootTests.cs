@@ -192,8 +192,8 @@ public class ConfigBootTests
                 var decisions = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
                     .Where(decision => decision.RuleId == "private-file" && decision.Decision == "deny"
                         && (decision.CallId == readCall.Value || decision.CallId == writeCall.Value)).ToArray();
-                Assert.Contains(decisions, decision => decision.CallId == readCall.Value && decision.Tool == "read" && decision.Intent == "read");
-                Assert.Contains(decisions, decision => decision.CallId == writeCall.Value && decision.Tool == "write" && decision.Intent == "write");
+                Assert.Contains(decisions, decision => decision.CallId == readCall.Value && decision.Tool == "read");
+                Assert.Contains(decisions, decision => decision.CallId == writeCall.Value && decision.Tool == "write");
                 Assert.All(decisions, decision =>
                 {
                     Assert.Equal(canonical, decision.Path);

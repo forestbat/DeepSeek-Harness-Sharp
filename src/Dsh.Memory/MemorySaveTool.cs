@@ -90,15 +90,13 @@ public static class MemorySaveTool
         ToolRunContext exec,
         ProjectMemory memory)
     {
-        if (memory.Store is not FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } operationSafety)
-            await operationSafety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
-        if (!memory.IsEnabled)
-        {
-            if (memory.Store is FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } safety)
-                await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
+        var fileBacked = memory.Store is FileMemoryStore;
+        var fileEnabled = fileBacked && memory.IsEnabled;
+        var action = fileEnabled && args.TryGetProperty("action", out var fileAction) ? fileAction.GetString() : null;
+        await SafetyBoundary.AuthorizeInvocationAsync(ctx, exec, fileEnabled && action != "skip", exec.Signal).ConfigureAwait(false);
+        if (fileBacked ? !fileEnabled : !memory.IsEnabled)
             return new MemorySaveResult("skip", [], [], 0, false, false, "project memory is off; run /memory on");
-        }
-        var action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
+        if (!fileBacked) action = args.TryGetProperty("action", out var actionElement) ? actionElement.GetString() : null;
         var key = GetString(args, "key");
         var text = GetString(args, "text");
         var section = GetString(args, "section");
@@ -121,8 +119,6 @@ public static class MemorySaveTool
                 var forgotten = await memory.ForgetAsync(BuildForgetRequest(key, keys, query, section, dryRun), "tool", exec.Signal, exec);
                 return new MemorySaveResult("forget", forgotten.Keys, forgotten.Sections, forgotten.Count, false, forgotten.DryRun);
             case "skip":
-                if (memory.Store is FileMemoryStore && SafetyBoundary.Resolve(ctx) is { } safety)
-                    await safety.AuthorizeOperationAsync(exec, exec.Signal).ConfigureAwait(false);
                 var reason = GetString(args, "reason");
                 return new MemorySaveResult("skip", [], [], 0, false, false, string.IsNullOrWhiteSpace(reason) ? "out_of_scope" : reason);
             default:
