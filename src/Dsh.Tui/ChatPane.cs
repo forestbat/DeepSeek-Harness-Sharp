@@ -134,9 +134,6 @@ public sealed class ChatPane : ITuiPane
     /** 刚刚往下滚过: 下一帧知道 maxOffset 后决定是否恢复贴底(只有用户可以改判跟随)。 */
     private bool _resumeStickAtTail;
 
-    /** 折叠刚被切换: 那一帧不重新贴底, 否则被点的折叠头会被新高度顶走。 */
-    private bool _foldPending;
-
     private void RequestStickToBottom() => StickToBottom = true;
 
     public string? SelectedFoldKey { get; set; }
@@ -673,13 +670,7 @@ public sealed class ChatPane : ITuiPane
             wrapped.Add("");
 
         var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
-        if (_foldPending)
-        {
-            // 折叠那一帧不重新贴底: 否则展开会让被点的折叠头被新高度顶走 Δ 行。
-            _foldPending = false;
-            StickToBottom = false;
-        }
-        else if (StickToBottom)
+        if (StickToBottom)
             ScrollOffset = maxOffset;
         else if (_resumeStickAtTail)
         {
@@ -1874,7 +1865,6 @@ public sealed class ChatPane : ITuiPane
             fold.Collapsed = true;
             fold.Scroll = 0;
         }
-        _foldPending = true;
         Renderer.BumpVersion();
     }
 
