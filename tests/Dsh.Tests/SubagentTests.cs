@@ -160,6 +160,63 @@ public class SubagentTests
     }
 
     [Fact]
+    public void OutputContract_AcceptsEveryShapeTheToolProduces()
+    {
+        using var fixture = new SubagentFixture([_ => TextAnswer("unused")]);
+        var tool = fixture.Tools.Get(SubagentTool.DefaultToolName);
+        Assert.NotNull(tool);
+        foreach (var (label, json) in new (string, string)[]
+        {
+            ("background with job", """{"kind":"background","runId":"run-1","jobId":"job-1"}"""),
+            ("background without job", """{"kind":"background","runId":"run-1"}"""),
+            ("foreground", """{"kind":"foreground","runId":"run-1","output":[{"type":"text","text":"done"}]}"""),
+        })
+        {
+            var value = JsonDocument.Parse(json).RootElement;
+            var violations = JsonSchemaValidator.Validate(tool!.Output.Schema, value, "value");
+            Assert.True(violations.Count == 0, $"{label}: {string.Join("; ", violations)}");
+            var rendered = Assert.Single(tool.Output.Render(default, value));
+            Assert.False(string.IsNullOrWhiteSpace(Assert.IsType<TextBlock>(rendered).Text), label);
+        }
+    }
+
+    [Fact]
+    public void OutputContract_RejectsShapesTheToolNeverProduces()
+    {
+        using var fixture = new SubagentFixture([_ => TextAnswer("upgraded")]);
+        var tool = fixture.Tools.Get(SubagentTool.DefaultToolName)!;
+        foreach (var (label, json) in new (string, string)[]
+        {
+            ("background without run id", """{"kind":"background","jobId":"job-1"}"""),
+            ("background without kind", """{"runId":"run-1"}"""),
+            ("unknown kind", """{"kind":"continuable","subagentId":"abc"}"""),
+            ("foreground without output", """{"kind":"foreground","runId":"run-1"}"""),
+            ("background with stray field", """{"kind":"background","runId":"run-1","extra":true}"""),
+        })
+        {
+            var value = JsonDocument.Parse(json).RootElement;
+            Assert.NotEmpty(JsonSchemaValidator.Validate(tool.Output.Schema, value, "value"));
+            _ = label;
+        }
+    }
+
+    [Fact]
+    public void OutputContract_BackgroundRenderNamesTheJobOnlyWhenOneExists()
+    {
+        using var fixture = new SubagentFixture([_ => TextAnswer("unused")]);
+        var tool = fixture.Tools.Get(SubagentTool.DefaultToolName)!;
+        string Render(string json)
+            => Assert.IsType<TextBlock>(Assert.Single(tool.Output.Render(
+                default,
+                JsonDocument.Parse(json).RootElement))).Text;
+
+        Assert.Contains("job-1", Render("""{"kind":"background","runId":"run-1","jobId":"job-1"}"""));
+        var withoutJob = Render("""{"kind":"background","runId":"run-1"}""");
+        Assert.Contains("run-1", withoutJob);
+        Assert.DoesNotContain("job null", withoutJob);
+    }
+
+    [Fact]
     public async Task SpawnDelegation_RunsChildAndReturnsFinalText()
     {
         using var fixture = new SubagentFixture(
