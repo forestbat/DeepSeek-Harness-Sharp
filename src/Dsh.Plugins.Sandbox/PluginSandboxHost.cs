@@ -136,7 +136,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
             yield break;
         foreach (var child in Directory.EnumerateDirectories(_directory).OrderBy(path => path, StringComparer.Ordinal))
         {
-            if (Path.GetFileName(child) == ".shared")
+            if (Path.GetFileName(child) == SharedPoolDirectoryName)
                 continue;
             foreach (var file in Directory.EnumerateFiles(child).OrderBy(path => path, StringComparer.Ordinal))
                 if (IsArtifact(file))
@@ -220,7 +220,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
                 ? PluginRoleResolver.Resolve(package, active.Plugins.GetValueOrDefault(package), _entries[package].Descriptor.Form)
                 : PluginExecution.Sandbox)))
             return new PluginCatalogLoadResult(known, new PluginScanResult([], [], []));
-        var form = PluginSandboxLaunch.InspectForm(path);
+        var form = InspectForm(path);
         var inspection = await _supervisor.InspectAsync(path, null, signal).ConfigureAwait(false);
         Validate(inspection, path);
         var hostPackages = new Dictionary<string, PluginSandboxMetadata>(StringComparer.Ordinal);
@@ -258,7 +258,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
         PluginExecutionSettings active, Dictionary<string, PluginSandboxMetadata> hostPackages, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
-        SharedPool ??= new SharedAssemblyPool(Path.Combine(_directory, ".shared"));
+        SharedPool ??= new SharedAssemblyPool(SharedPoolDirectory(path, _directory));
         var temporary = new PluginHost { SharedPool = SharedPool };
         var managed = new List<ManagedPlugin>();
         var native = new List<INativePlugin>();
@@ -301,7 +301,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
         PluginSandboxMetadata? metadata)
     {
         if (PluginRoleResolver.Resolve(package, active.Plugins.GetValueOrDefault(package),
-            metadata?.Form ?? PluginSandboxLaunch.InspectForm(source)) != PluginExecution.Host)
+            metadata?.Form ?? InspectForm(source)) != PluginExecution.Host)
             throw new RuntimeException("PLUGIN_HOST_ROLE_REQUIRED", "The file plugin is not configured for host execution.");
         DemandUnique(package, source);
         if (!temporary.Catalog.TryDescribe(package, out var descriptor) || !temporary.Catalog.TryGet(package, out var create))

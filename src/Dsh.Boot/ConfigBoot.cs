@@ -59,7 +59,7 @@ public static class ConfigBoot
                 pluginsDirectory, nativeBridge, app.Track);
             var pluginHost = sandbox ?? new PluginHost();
             pluginHost.RegisterCompiledIn();
-            pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
+            pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, PluginHost.SharedPoolDirectoryName));
             ctx.SetOwn("pluginCatalog", pluginHost.Catalog);
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(pluginHost, discovery);
@@ -104,7 +104,7 @@ public static class ConfigBoot
                 new PluginExecutionEnvironment(home, settings, options.Cwd), directory, bridge, owned.Add);
             var host = sandbox ?? new PluginHost();
             host.RegisterCompiledIn();
-            host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
+            host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, PluginHost.SharedPoolDirectoryName));
             context.SetOwn("pluginCatalog", host.Catalog);
             var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(host, discovered);

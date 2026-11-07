@@ -497,29 +497,17 @@ internal static class PluginSandboxWorker
 
         internal static Artifact Open(string path)
         {
-            if (RuntimeFeature.IsDynamicCodeSupported && System.IO.Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            if (RuntimeFeature.IsDynamicCodeSupported && PluginHost.InspectForm(path) == PluginForm.ManagedAssembly)
             {
-                var directory = System.IO.Path.GetDirectoryName(path)!;
-                var localPool = System.IO.Path.Combine(directory, ".shared");
-                var sharedDirectory = Directory.Exists(localPool)
-                    ? localPool
-                    : System.IO.Path.Combine(System.IO.Path.GetDirectoryName(directory) ?? directory, ".shared");
-                var host = new PluginHost { SharedPool = new SharedAssemblyPool(sharedDirectory) };
-                try
-                {
-                    var result = host.TryLoad(path);
-                    if (result.Context is not null && result.Packages.Count > 0 && result.Skipped.Count == 0)
-                        return new Artifact(path, host, result.Context, null) { SharedDependencies = result.SharedDependencies };
-                    foreach (var package in host.Catalog.PackageNames.ToArray())
-                        host.Catalog.Remove(package);
-                    host.SharedPool.Release(result.SharedDependencies);
-                    result.Context?.Unload();
-                    throw new InvalidOperationException("Managed artifact has no compatible plugin manifest.");
-                }
-                catch (BadImageFormatException)
-                {
-                    // Windows native ABI libraries also use .dll.
-                }
+                var host = new PluginHost { SharedPool = new SharedAssemblyPool(PluginHost.SharedPoolDirectory(path)) };
+                var result = host.TryLoad(path);
+                if (result.Context is not null && result.Packages.Count > 0 && result.Skipped.Count == 0)
+                    return new Artifact(path, host, result.Context, null) { SharedDependencies = result.SharedDependencies };
+                foreach (var package in host.Catalog.PackageNames.ToArray())
+                    host.Catalog.Remove(package);
+                host.SharedPool.Release(result.SharedDependencies);
+                result.Context?.Unload();
+                throw new InvalidOperationException("Managed artifact has no compatible plugin manifest.");
             }
             var native = NativePluginLibrary.TryLoad(path);
             if (!native.Succeeded)

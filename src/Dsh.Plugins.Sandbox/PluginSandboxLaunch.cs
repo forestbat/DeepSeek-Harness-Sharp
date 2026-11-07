@@ -1,4 +1,3 @@
-using System.Reflection.PortableExecutable;
 using Dsh.Sandbox;
 
 namespace Dsh.Plugins.Sandbox;
@@ -12,25 +11,6 @@ internal static class PluginSandboxLaunch
     internal static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(10);
     internal static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-    internal static Dsh.Plugins.PluginForm InspectForm(string? artifactPath)
-    {
-        if (artifactPath is null)
-            return Dsh.Plugins.PluginForm.CompiledIn;
-        artifactPath = global::Dsh.Runtime.CanonicalFilePath.Canonicalize(artifactPath);
-        global::Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
-        if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-            return Dsh.Plugins.PluginForm.NativeLibrary;
-        try
-        {
-            using var input = File.OpenRead(artifactPath);
-            using var image = new PEReader(input);
-            return image.HasMetadata ? Dsh.Plugins.PluginForm.ManagedAssembly : Dsh.Plugins.PluginForm.NativeLibrary;
-        }
-        catch (BadImageFormatException)
-        {
-            return Dsh.Plugins.PluginForm.NativeLibrary;
-        }
-    }
 
     internal static SandboxProcessOptions Options(IReadOnlyList<string> code)
     {

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 
 namespace Dsh.Plugins;
@@ -30,12 +31,41 @@ public class PluginHost
     public const string ManifestTypeName ="Dsh.Plugins.Generated.DshPluginManifest";
     private const string RegistrationsMethodName = "Registrations";
     private const string SharedDependenciesMethodName = "SharedDependencies";
-    private const string SharedPoolDirectoryName = ".shared";
+    public const string SharedPoolDirectoryName = ".shared";
 
     public PluginCatalog Catalog { get; } = new();
 
     /** 共享程序集池:由宿主在扫描前挂接,根目录为插件目录下的 .shared。 */
     public SharedAssemblyPool? SharedPool { get; set; }
+
+    public static string SharedPoolDirectory(string artifactPath, string? sharedRoot = null)
+    {
+        if (sharedRoot is not null)
+            return Path.Combine(sharedRoot, SharedPoolDirectoryName);
+        var directory = Path.GetDirectoryName(artifactPath)!;
+        var local = Path.Combine(directory, SharedPoolDirectoryName);
+        return Directory.Exists(local) ? local : Path.Combine(Path.GetDirectoryName(directory) ?? directory, SharedPoolDirectoryName);
+    }
+
+    public static PluginForm InspectForm(string? artifactPath)
+    {
+        if (artifactPath is null)
+            return PluginForm.CompiledIn;
+        artifactPath = global::Dsh.Runtime.CanonicalFilePath.Canonicalize(artifactPath);
+        global::Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
+        if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            return PluginForm.NativeLibrary;
+        try
+        {
+            using var input = File.OpenRead(artifactPath);
+            using var image = new PEReader(input);
+            return image.HasMetadata ? PluginForm.ManagedAssembly : PluginForm.NativeLibrary;
+        }
+        catch (BadImageFormatException)
+        {
+            return PluginForm.NativeLibrary;
+        }
+    }
 
     public virtual IReadOnlyList<PluginSkip> Failures
         => throw new NotSupportedException("This plugin host does not support isolated execution.");

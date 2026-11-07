@@ -174,12 +174,9 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
                 foreach (var file in System.IO.Directory.EnumerateFiles(sourceDirectory))
                     if (IsCodeFile(file))
                         CopyFile(file, Path.Combine(destination, Path.GetFileName(file)));
-            var localShared = Path.Combine(sourceDirectory, ".shared");
-            if (!installed && System.IO.Directory.Exists(localShared))
-                CopyDirectory(localShared, Path.Combine(destination, ".shared"));
-            if (installed && Path.GetDirectoryName(sourceDirectory) is { } parent
-                && System.IO.Directory.Exists(Path.Combine(parent, ".shared")))
-                CopyDirectory(Path.Combine(parent, ".shared"), Path.Combine(stagingDirectory, ".shared"));
+            var shared = PluginHost.SharedPoolDirectory(original, installed ? Path.GetDirectoryName(sourceDirectory)! : sourceDirectory);
+            if (System.IO.Directory.Exists(shared))
+                CopyDirectory(shared, PluginHost.SharedPoolDirectory(original, installed ? stagingDirectory : destination));
             return Path.Combine(destination, Path.GetFileName(original));
         }
         catch
