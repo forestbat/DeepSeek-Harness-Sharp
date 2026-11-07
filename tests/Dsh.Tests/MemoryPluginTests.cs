@@ -271,7 +271,7 @@ public sealed class MemoryPluginTests
             if (safety is not null)
             {
                 _ = new LlmRuntime(ctx);
-                _ = new SafetyBoundary(ctx, () => new HarnessSettings { Safety = safety });
+                _ = new SafetyPolicySource(ctx, () => new HarnessSettings { Safety = safety });
                 var id = SessionId.Create(Guid.NewGuid().ToString("N"));
                 var session = Session.Create(id, null, new SessionHeader
                 {

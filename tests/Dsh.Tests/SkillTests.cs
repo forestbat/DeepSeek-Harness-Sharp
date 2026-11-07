@@ -187,7 +187,7 @@ public class SkillTests
             });
             using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-invocation"] = new() { Tool = [SkillCatalog.ToolName] } } };
-            _ = new SafetyBoundary(context, () => new HarnessSettings { Safety = policy });
+            _ = new SafetyPolicySource(context, () => new HarnessSettings { Safety = policy });
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             var session = Session.Create(id, null, new SessionHeader
             {
@@ -268,7 +268,7 @@ public class SkillTests
             });
             using var catalog = new SkillCatalog(context, registry);
             var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
-            _ = new SafetyBoundary(context, () => new HarnessSettings { Safety = policy });
+            _ = new SafetyPolicySource(context, () => new HarnessSettings { Safety = policy });
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             var session = Session.Create(id, null, new SessionHeader
             {
@@ -328,7 +328,7 @@ public class SkillTests
                 ProviderName = "dangling-entry-filesystem", IncludeDefaultRoots = false, CustomSkillDirs = [root], Watch = false,
             });
             using var catalog = new SkillCatalog(context, registry);
-            _ = new SafetyBoundary(context, () => new HarnessSettings
+            _ = new SafetyPolicySource(context, () => new HarnessSettings
             {
                 Safety = new() { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } },
             });
@@ -462,7 +462,7 @@ public class SkillTests
             var settings = HarnessSettings.Load(home);
             if (allowTool) (settings.Safety ??= new SafetySettings()).Whitelist["discovery-invocation"] = new() { Tool = [SkillCatalog.ToolName] };
             settings.Save(home);
-            _ = new SafetyBoundary(Context, () => HarnessSettings.Load(home));
+            _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(home, settings));
             Registry = new SkillRegistry(Context, new SkillRegistryConfig());
             FileSystem = new ObservedSkillFileSystem();
             _filesystemService = Context.Provide("fs", FileSystem);

@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
-using System.Runtime.CompilerServices;
 using Dsh.Runtime;
 using Dsh.Plugins;
 using Dsh.Llm;
@@ -14,20 +13,17 @@ namespace Dsh.Core;
 public sealed class SafetyBoundary : Service
 {
     public const string ServiceName = "safetyBoundary";
-    private static readonly ConditionalWeakTable<SafetyPolicySource, Lazy<SafetyBoundary>> Boundaries = new();
     private readonly Func<HarnessSettings> _read;
-    public SafetyBoundary(Context context, Func<HarnessSettings> read) : base(context, ServiceName)
-        => _read = read;
+    private SafetyBoundary(SafetyPolicySource source) : base(source.Ctx, ServiceName)
+        => _read = source.Read;
 
-    public static SafetyBoundary? Resolve(Context? context, bool required = false)
+    public static SafetyBoundary? Resolve(Context? context)
     {
-        if (context is null) return null;
-        var source = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName, false);
-        if (source is null) return context.Get<SafetyBoundary>(ServiceName, required);
-        // Each policy source owns one lazily initialized Core boundary for its context lifetime.
-        return Boundaries.GetValue(source, static policy => new Lazy<SafetyBoundary>(() =>
-            policy.Ctx.Get<SafetyBoundary>(ServiceName, false)
-            ?? new SafetyBoundary(policy.Ctx, policy.Read))).Value;
+        var source = context?.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName, false);
+        if (source is null) return null;
+        // ServiceTable owns identity; serialize its get/register pair on the registered source.
+        lock (source)
+            return source.Ctx.Get<SafetyBoundary>(ServiceName, false) ?? new SafetyBoundary(source);
     }
 
     private (PermissionRules Rules, string Namespace) Policy(ToolRunContext? run, bool? scriptPermissions = null)

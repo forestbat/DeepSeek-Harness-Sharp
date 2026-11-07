@@ -88,7 +88,7 @@ public sealed class PermissionCommandTests
             BashTool.Register(_ctx);
             var safety = new SafetySettings { AutoApprove = true, Blacklist = new()
                 { ["deny-touch"] = new() { Dialect = "posix", Args = new() { ["command"] = $"touch {Canary}" } } } };
-            _ = new SafetyBoundary(_ctx, () => new HarnessSettings { Safety = safety });
+            _ = new SafetyPolicySource(_ctx, () => new HarnessSettings { Safety = safety });
         }
 
         private string Canary => Path.Combine(_directory, "canary");
@@ -166,7 +166,7 @@ public sealed class PermissionCommandTests
         {
             var safety = new SafetySettings { Blacklist = new()
                 { ["deny-command"] = new() { Dialect = dialect, Args = new() { ["command"] = pattern } } } };
-            _ = new SafetyBoundary(_ctx, () => new HarnessSettings { Safety = safety });
+            _ = new SafetyPolicySource(_ctx, () => new HarnessSettings { Safety = safety });
 
             var result = await _tools.Execute(new ToolExecutionInput
             {

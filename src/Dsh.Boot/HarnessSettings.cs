@@ -214,11 +214,11 @@ public sealed class HarnessSettings
         => MutateDocument(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), backup: true);
 
     public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
         => UpdatePluginsAsync(home, [package], update, commit);
 
     public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
     {
         if (commit is not null)
             return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), commit, backup: true);
@@ -269,7 +269,7 @@ public sealed class HarnessSettings
     }
 
     private static Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>> commit, bool backup)
+        SettingsCommit commit, bool backup)
         => commit(path, canonical =>
         {
             using var transaction = new SettingsWriteLock(canonical);

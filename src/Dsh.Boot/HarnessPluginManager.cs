@@ -80,7 +80,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     public async Task<string> AddAsync(string packageOrPath,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null,
+        SettingsCommit? commit = null,
         CancellationToken cancellationToken = default)
     {
         await _mutation.WaitAsync(cancellationToken);
@@ -89,7 +89,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     private async Task<string> AddCoreAsync(string packageOrPath,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit,
+        SettingsCommit? commit,
         CancellationToken cancellationToken)
     {
         var spec = packageOrPath.Trim();
@@ -103,7 +103,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     public async Task<string> RemoveAsync(string package, bool force = false,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
         try { return await RemoveCoreAsync(package, force, commit); }
@@ -111,7 +111,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     private async Task<string> RemoveCoreAsync(string package, bool force,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -170,7 +170,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     public async Task<string> DisableAsync(string package,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
         try { return await DisableCoreAsync(package, commit); }
@@ -178,7 +178,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     private async Task<string> DisableCoreAsync(string package,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -205,7 +205,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     public async Task<string> EnableAsync(string package,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
         try { return await EnableCoreAsync(package, commit); }
@@ -213,7 +213,7 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     private async Task<string> EnableCoreAsync(string package,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -234,7 +234,7 @@ public sealed class HarnessPluginManager : IDisposable
 
     public async Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed,
         CancellationToken cancellationToken = default,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit = null)
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync(cancellationToken);
         try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken, commit); }
@@ -243,7 +243,7 @@ public sealed class HarnessPluginManager : IDisposable
 
     private async Task<string> SetPermissionCoreAsync(string package, PluginPermission permission, bool allowed,
         CancellationToken cancellationToken,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         var key = PluginPermissions.KeyOf(permission);
@@ -270,7 +270,7 @@ public sealed class HarnessPluginManager : IDisposable
             || spec.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
 
     private async Task<string> AddFromPathAsync(string spec,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit,
+        SettingsCommit? commit,
         CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
@@ -556,14 +556,14 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         await HarnessSettings.UpdatePluginAsync(_home, package, update, commit);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 
     private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update,
-        Func<string, Func<string, SettingsMutationProposal?>, Func<string, SettingsMutationProposal, string, CancellationToken, Task>, Task<bool>>? commit)
+        SettingsCommit? commit)
     {
         await HarnessSettings.UpdatePluginsAsync(_home, packages, update, commit);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
