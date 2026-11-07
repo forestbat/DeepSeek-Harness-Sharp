@@ -45,15 +45,10 @@ public sealed class PresentToolTests
               tool: present
         """;
 
-    [Fact]
-    public Task Present_SecondTargetDeniedAfterAcceptingPostHook_FailsWithoutPublishing()
-        => PostHookChangedTarget(true);
-
-    [Fact]
-    public Task Present_SecondTargetDeletedAfterAcceptingPostHook_FailsWithoutPublishing()
-        => PostHookChangedTarget(false);
-
-    private static async Task PostHookChangedTarget(bool deny)
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Present_SecondTargetChangedAfterAcceptingPostHook_FailsWithoutPublishing(bool deny)
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
         var session = environment.Agent.Session;
@@ -176,28 +171,18 @@ public sealed class PresentToolTests
         Assert.Equal(1, presented.Turn);
     }
 
-    [Fact]
-    public async Task Present_MissingFile_FailsWithoutRecording()
+    [Theory]
+    [InlineData("missing.xlsx", false)]
+    [InlineData("out", true)]
+    public async Task Present_NonFileTarget_FailsWithoutRecording(string path, bool directory)
     {
         await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
+        if (directory)
+            Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, path));
         session.Append(new TurnStartPayload(1));
 
-        var result = await Present(environment, File("missing.xlsx"));
-
-        Assert.True(result.IsError);
-        Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
-    }
-
-    [Fact]
-    public async Task Present_Directory_FailsWithoutRecording()
-    {
-        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
-        var session = environment.Agent.Session;
-        Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, "out"));
-        session.Append(new TurnStartPayload(1));
-
-        var result = await Present(environment, File("out"));
+        var result = await Present(environment, File(path));
 
         Assert.True(result.IsError);
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);

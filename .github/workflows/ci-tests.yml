@@ -242,9 +242,6 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ]; then
             ARGS+=(-class- Dsh.Tests.TuiRawModeEndToEndTests)
           fi
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            ARGS+=(-reporter verbose)
-          fi
           # Complementary class cohorts preserve coverage under the existing per-run watchdog.
           if ${{ inputs.quick-cohort == 'fleet-iroh' }}; then
             ARGS+=(-class 'Dsh.Tests.Fleet*' -class 'Dsh.Tests.Iroh*')
