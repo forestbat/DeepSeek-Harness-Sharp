@@ -58,7 +58,7 @@ public sealed class SettingsMutationGate : IDisposable
                     SafetyBoundary.RecordDecision(context, run, input, current, "safety", outcome: "policy-changed");
                     throw new UnauthorizedAccessException("The settings policy changed while approval was pending; propose again.");
                 }
-                if (context.Get<IApprovalService>("approval", false) is IApprovalConstraints constraints && constraints.IsDenied(run.Agent!))
+                if (context.Get<IApprovalService>("approval", false)?.IsDenied(run.Agent!) == true)
                     throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
                 return commit(temporary, signal);
             }, linked.Token).ConfigureAwait(false);
@@ -96,7 +96,7 @@ public sealed class SettingsMutationGate : IDisposable
         SafetyBoundary.RecordDecision(context, run, input, permission, "safety");
         if (permission.Decision == "deny")
             throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{permission.Match!.RuleId}\".");
-        if (approval is IApprovalConstraints constraints && constraints.IsDenied(agent))
+        if (approval.IsDenied(agent))
             throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
         var revision = SafetyBoundary.Revision(safety);
         if (permission.Decision == "allow") return revision;

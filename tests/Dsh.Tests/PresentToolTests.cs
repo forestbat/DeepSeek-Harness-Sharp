@@ -355,7 +355,7 @@ public sealed class PresentToolTests
             var tools = new ToolRuntime(context);
             var projections = new SessionProjectionRegistry(context);
             projections.Register(TurnBoundaryProjectionDefinition.Instance);
-            _ = new Dsh.Runtime.SafetyPolicySource(context, () => new Dsh.Boot.HarnessSettings
+            _ = new Dsh.Boot.SafetyPolicySource(context, () => new Dsh.Boot.HarnessSettings
             {
                 Safety = new() { Whitelist = new() { ["present-call"] = new() { Tool = [ToolName] } } },
             });

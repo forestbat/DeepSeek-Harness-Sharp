@@ -50,7 +50,7 @@ public sealed record ApprovalPolicyPayload(ApprovalPolicy Policy, string? Source
 
 public sealed record ApprovalConfig(ApprovalPolicy Policy = ApprovalPolicy.Ask);
 
-public sealed class ApprovalService : Service, IApprovalService, IApprovalConstraints
+public sealed class ApprovalService : Service, IApprovalService
 {
     public const string ServiceName = "approval";
 

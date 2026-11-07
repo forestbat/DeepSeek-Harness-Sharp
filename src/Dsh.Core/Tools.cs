@@ -30,14 +30,8 @@ public sealed record ApprovalRequest(
 public interface IApprovalService
 {
     Task<ApprovalOutcome> Request(ApprovalRequest request, CancellationToken signal);
-}
-
-/** Explicit user denials remain authoritative even when a rule bypasses notification. */
-public interface IApprovalConstraints
-{
     bool IsDenied(IAgent agent);
 }
-
 public sealed record ToolView(
     IReadOnlyDictionary<string, ToolDefinition> Visible,
     IReadOnlySet<string> KnownNames,

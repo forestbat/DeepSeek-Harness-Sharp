@@ -10,7 +10,7 @@ namespace Dsh.Boot;
 
 /** 配置文件位置：%USERPROFILE%\.dsh\settings.yaml（即 $DSH_HOME/settings.yaml，默认 ~/.dsh/settings.yaml）。标记为 settings 文档: 生成器据此产出顶层配置面(schema/模板/校验共用)。 */
 [DshSettingsDocument]
-public sealed class HarnessSettings : ISafetyPolicySettings
+public sealed class HarnessSettings
 {
     [YamlMember(Alias = "global_default_model")]
     public string? GlobalDefaultModel { get; set; }
@@ -87,10 +87,6 @@ public sealed class HarnessSettings : ISafetyPolicySettings
         settings._savedPath = canonicalPath;
         return settings;
     }
-    PermissionRules ISafetyPolicySettings.GetSafetyRules(bool scriptPermissions)
-        => scriptPermissions ? Scripts?.Permissions ?? new ScriptPermissions() : Safety ?? new SafetySettings();
-
-
     /** Read current bytes every time; retain only one private parsed snapshot, never a public mutable Load DTO. */
     public static Func<HarnessSettings> CreatePolicyReader(HarnessHome home, HarnessSettings? fallback = null)
     {

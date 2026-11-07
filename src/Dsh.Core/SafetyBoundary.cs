@@ -4,18 +4,6 @@ using Dsh.Runtime;
 
 namespace Dsh.Core;
 
-public interface ISafetyBoundary
-{
-    const string ServiceName = "safetyBoundary";
-    Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null);
-    Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
-        CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false);
-    void DemandFileAuthorization(ToolRunContext run, string path, string intent);
-    Task AuthorizeOperationAsync(ToolRunContext? run, CancellationToken signal, string? lifecycleOwner = null,
-        bool scriptPermissions = false);
-    void AuthorizeConfiguredMcp(string lifecycleOwner, CancellationToken signal);
-}
-
 public sealed record SafetyDecisionAuditPayload(string? RuleId, string RuleKind, bool AutoApprove,
     string Decision, string? Tool, string? Dialect, string? MatchedField, string? MatchedPattern,
     string? Path, string? Intent, string? SessionId, string? CallId, long Timestamp,

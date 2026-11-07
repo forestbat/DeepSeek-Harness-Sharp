@@ -6,32 +6,36 @@ using Dsh.Runtime;
 using Dsh.Plugins;
 using Dsh.Llm;
 using Dsh.Runtime.Events;
+using Dsh.Boot;
 
 namespace Dsh.Core;
 
 /** The host owns operation identity; workers cannot select tool, session or call IDs. */
-public sealed class SafetyBoundary : Service, ISafetyBoundary
+public sealed class SafetyBoundary : Service
 {
-    private static readonly ConditionalWeakTable<SafetyPolicySource, Lazy<ISafetyBoundary>> Boundaries = new();
-    private readonly Func<ISafetyPolicySettings> _read;
-    public SafetyBoundary(Context context, Func<ISafetyPolicySettings> read) : base(context, ISafetyBoundary.ServiceName)
+    public const string ServiceName = "safetyBoundary";
+    private static readonly ConditionalWeakTable<SafetyPolicySource, Lazy<SafetyBoundary>> Boundaries = new();
+    private readonly Func<HarnessSettings> _read;
+    public SafetyBoundary(Context context, Func<HarnessSettings> read) : base(context, ServiceName)
         => _read = read;
 
-    public static ISafetyBoundary? Resolve(Context? context, bool required = false)
+    public static SafetyBoundary? Resolve(Context? context, bool required = false)
     {
         if (context is null) return null;
         var source = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName, false);
-        if (source is null) return context.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, required);
+        if (source is null) return context.Get<SafetyBoundary>(ServiceName, required);
         // Each policy source owns one lazily initialized Core boundary for its context lifetime.
-        return Boundaries.GetValue(source, static policy => new Lazy<ISafetyBoundary>(() =>
-            policy.Ctx.Get<ISafetyBoundary>(ISafetyBoundary.ServiceName, false)
+        return Boundaries.GetValue(source, static policy => new Lazy<SafetyBoundary>(() =>
+            policy.Ctx.Get<SafetyBoundary>(ServiceName, false)
             ?? new SafetyBoundary(policy.Ctx, policy.Read))).Value;
     }
 
     private (PermissionRules Rules, string Namespace) Policy(ToolRunContext? run, bool scriptPermissions = false)
     {
         var scripts = scriptPermissions || run?.UsesScriptPermissions == true;
-        return (_read().GetSafetyRules(scripts), scripts ? "scripts.permissions" : "safety");
+        var settings = _read();
+        return (scripts ? settings.Scripts?.Permissions ?? new ScriptPermissions() : settings.Safety ?? new SafetySettings(),
+            scripts ? "scripts.permissions" : "safety");
     }
 
     private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null)
@@ -150,7 +154,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
         PermissionDecision decision, string space)
     {
         var approval = Ctx.Get<IApprovalService>("approval", false);
-        if (run?.Agent is { } agent && approval is IApprovalConstraints constraints && constraints.IsDenied(agent))
+        if (run?.Agent is { } agent && approval?.IsDenied(agent) == true)
         {
             Audit(run, input, decision, space, outcome: "rejected");
             throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");

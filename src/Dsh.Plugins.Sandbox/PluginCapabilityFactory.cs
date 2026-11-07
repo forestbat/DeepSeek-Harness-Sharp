@@ -24,7 +24,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
-    private ISafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
+    private SafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
         ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
     public LocalHost Create(string package, Context pluginContext)
     {
