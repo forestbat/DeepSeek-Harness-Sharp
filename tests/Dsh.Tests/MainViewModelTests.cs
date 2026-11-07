@@ -152,7 +152,8 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task TimelineActions_JumpRevertAndForkTakeTheMessageSeq() => await HeadlessGui.RunAsync(async () =>
     {
-        await using var environment = await GuiTestEnvironment.CreateAsync();
+        // 回退会截断会话, 不能碰同类的共享组合: 用隔离环境, 否则会污染其它用例的事件流。
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
         var session = environment.Agent.Session;
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("keep me")), new SurfaceOp.Append());
         var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me")), new SurfaceOp.Append());
