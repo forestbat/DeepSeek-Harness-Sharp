@@ -115,7 +115,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         using var linked = invocation is null
             ? CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token, cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token, cancellationToken, invocation.Cancellation.Token);
-        var request = Serialize(new PluginSandboxHostCall(package, invocation?.Token, operation, Element(arguments)),
+        var request = Serialize(new PluginSandboxHostCall(package, invocation?.Token, operation, arguments.Clone()),
             PluginSandboxJsonContext.Default.PluginSandboxHostCall);
         return await session.Reverse(PluginSandboxMethods.HostCall, request, linked.Token).ConfigureAwait(false);
     }
@@ -159,7 +159,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
                 invocation.Cancellation.Token.ThrowIfCancellationRequested();
                 var result = await tool.Execute(arguments, invocation.Cancellation.Token).ConfigureAwait(false);
                 invocation.Cancellation.Token.ThrowIfCancellationRequested();
-                return Element(result);
+                return result.Clone();
             }
             finally
             {

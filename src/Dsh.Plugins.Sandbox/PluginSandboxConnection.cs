@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Runtime;
 using Dsh.Sandbox;
 using Dsh.Transport;
 
@@ -20,8 +21,8 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     private readonly SemaphoreSlim _outbound = new(PluginSandboxMethods.MaximumPendingRequests);
     private readonly Dictionary<(string Package, int Tool), IDisposable> _tools = [];
     private readonly ConcurrentDictionary<string, Invocation> _invocations = new(StringComparer.Ordinal);
-    private SandboxProcess? _process;
-    private Task<SandboxProcess>? _launching;
+    private OwnedProcess? _process;
+    private Task<OwnedProcess>? _launching;
     private JsonRpcPeer? _peer;
     private Task? _stderr;
     private Task? _cleanup;
@@ -144,9 +145,10 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         catch (Exception error) { _owner.Diagnostic($"A plugin log was rejected: {error.Message}"); }
     }
 
-    private PluginSandboxSupervisor.Binding Binding(string package)
+    private PluginSandboxSupervisor.Binding Binding(string package, bool checkAuthority = true)
     {
-        _owner.CheckAuthority(_domain, package);
+        if (checkAuthority)
+            _owner.CheckAuthority(_domain, package);
         return _domain.Bindings.GetValueOrDefault(package)
             ?? throw new UnauthorizedAccessException("The package is not bound to this worker.");
     }
@@ -164,7 +166,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
                 throw new ArgumentException("The isolated worker tool registration is invalid or exceeds the tool limit.");
             var definition = new PluginToolDefinition(request.Name, request.Description, request.Parameters,
                 (arguments, signal) => InvokeAsync(binding, request.ToolId, arguments, null, signal));
-            var lease = ((IPluginExecutionHost)binding.Host).RegisterTool(definition,
+            var lease = binding.Host.RegisterTool(definition,
                 (arguments, execution, signal) => InvokeAsync(binding, request.ToolId, arguments, execution, signal));
             _tools.Add((request.Package, request.ToolId), lease);
         }
@@ -218,17 +220,17 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     {
         var binding = Binding(request.Package);
         if (request.Invocation is not { } token)
-            return await ((IPluginExecutionHost)binding.Host).CallAsync(request.Operation, request.Arguments,
+            return await binding.Host.CallAsync(request.Operation, request.Arguments,
                 null, cancellationToken).ConfigureAwait(false);
         if (!_invocations.TryGetValue(token, out var invocation) || !ReferenceEquals(invocation.Binding, binding))
             throw new UnauthorizedAccessException("The invocation token is stale or belongs to another package.");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, invocation.Cancellation.Token);
-        return await ((IPluginExecutionHost)binding.Host).CallAsync(request.Operation, request.Arguments,
+        return await binding.Host.CallAsync(request.Operation, request.Arguments,
             invocation.Execution, linked.Token).ConfigureAwait(false);
     }
 
     private void Log(PluginSandboxLog message)
-        => Binding(message.Package).Host.Log(message.Level, message.Message);
+        => Binding(message.Package, checkAuthority: false).Host.Log(message.Level, message.Message);
 
     internal async Task<JsonElement?> RequestAsync<T>(string method, T value, JsonTypeInfo<T> type,
         CancellationToken cancellationToken)

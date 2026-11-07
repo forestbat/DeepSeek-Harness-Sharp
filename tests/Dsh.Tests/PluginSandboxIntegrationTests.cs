@@ -580,8 +580,8 @@ public sealed class PluginSandboxIntegrationTests
         if (scenario == "rejected")
         {
             Assert.False(HarnessSettings.Load(fixture.Home).Plugins[Alpha].Enabled);
-            var asked = Assert.Single(events.OfType<ApprovalAskedPayload>()
-                .Where(request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0));
+            var asked = Assert.Single(events.OfType<ApprovalAskedPayload>(),
+                request => ApprovalHints.SettingsDiff(request.Arguments).Length != 0);
             using var approvalArguments = JsonDocument.Parse(asked.Arguments!);
             Assert.True(approvalArguments.RootElement.GetProperty("settingsMutation").GetBoolean());
             var decided = Assert.Single(events.OfType<ApprovalDecidedPayload>(), decision => decision.Id == asked.Id);

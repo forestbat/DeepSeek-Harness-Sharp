@@ -2,12 +2,13 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using Dsh.Runtime;
 using Microsoft.Win32.SafeHandles;
 
 namespace Dsh.Sandbox;
 
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsSandbox : ISandboxLifetime
+internal sealed class WindowsSandbox : IChildProcessLifetime
 {
     private const uint DetachedProcess = 0x00000008;
     private readonly SafeFileHandle _process, _job;

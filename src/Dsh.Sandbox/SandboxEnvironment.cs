@@ -4,7 +4,7 @@ namespace Dsh.Sandbox;
 
 internal static class SandboxEnvironment
 {
-    private static readonly HashSet<string> PrivateDirectories = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> PrivateDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TMP", "TEMP", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"
     };
@@ -61,7 +61,7 @@ internal static class SandboxEnvironment
                 values.Remove(key);
                 continue;
             }
-            if (PrivateDirectories.Contains(key))
+            if (PrivateDirectoryNames.Contains(key))
                 ValidatePrivateDirectory(value, writable);
             values[key] = value;
         }
@@ -81,8 +81,12 @@ internal static class SandboxEnvironment
             throw new ArgumentException("Sandbox HOME, profile, cache, and temporary directories must be inside explicit writable grants, never the ambient user home or its ancestor.");
     }
 
-    private static bool IsLoaderInjection(string key) => key.StartsWith("LD_", StringComparison.OrdinalIgnoreCase)
+    internal static bool IsLoaderInjection(string key, bool overridingRuntime = false) => key.StartsWith("LD_", StringComparison.OrdinalIgnoreCase)
         || key.StartsWith("DYLD_", StringComparison.OrdinalIgnoreCase)
         || key.StartsWith("COMPLUS_", StringComparison.OrdinalIgnoreCase)
-        || LoaderVariables.Contains(key);
+        || (overridingRuntime
+            ? key.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)
+                || key.Equals("CORECLR_ENABLE_PROFILING", StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith("CORECLR_PROFILER", StringComparison.OrdinalIgnoreCase)
+            : LoaderVariables.Contains(key));
 }

@@ -44,15 +44,12 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
    dsharp (tui) attach <pty-id>  # 接回仍在运行的后台会话(`pty-id` 标识 daemon 管理的进程)，加入--gpu参数则在独立 GPU 窗口恢复
    ```
 
-   TUI 终端窗格会将光标位置、终端状态和设备属性查询的应答写回所属 PTY，供交互式 shell 完成终端初始化。
-   后台 PTY 输出泵不继承调用方的任务调度器，嵌入单线程调度环境时仍可独立读取子进程输出。
-
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
 3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
 4. dsharp日志默认位置为`<home>/logs/dsh-YYYYMMDD.log`，可以在 `settings.yaml`→`logging:` 中配置它们(TUI 下强制关闭)。
 
-### Settings mutation approvals
+### 设置变更审批
 
 Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
 The approval carries the canonical target, redacted changed-line diff, and before/after hashes; the audit records those fields plus the originating tool call, root call, decision, and commit outcome, not complete document snapshots.
@@ -425,43 +422,18 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 
 不提供退役预设包的配置或历史兼容；升级前请自行从 `plugins` 配置中删除 `@deepseek-ai/dsh-presets`。
 含旧预设事件且未标记为可忽略的会话，仍按通用未知事件规则拒绝读取。
-会话起始模板（`.agent-presets`）和计划模式不受影响。
+会话起始模板（`.agent-presets`）不受影响。
 
 #### 插件沙箱
 
-`sandbox.enabled` 默认关闭，保留原有运行方式；开启后，外部能力插件在共享的 OS 沙箱进程中运行，通过宿主中介读写文件和访问网络。
-编译进应用的插件默认在宿主执行；外部完整 `Context` 插件需要在 YAML 中显式设置 `execution: host`，这表示完整进程内信任。
-默认发行版仍按既有静态插件集合包含沙箱模块，关闭 `sandbox.enabled` 不改变该发行集合；自定义应用未引用此模块时，普通启动无需沙箱实现，显式开启沙箱则报告功能不可用。
-这不是运行时删掉默认发行包中任意 DLL 的容错机制，生成目录静态引用的模块仍须随包完整部署。
-
-```yaml
-sandbox:
-  enabled: true
-plugins:
-  "@example/report":
-    permissions:
-      read: true
-      write: false
-      network: false
-scripts:
-  permissions:
-    read: true
-    write: false
-    network: false
-```
-
-未指定的权限为允许，可通过 GUI 或 TUI 插件命令修改；脚本权限单独作用于 `run_csx` 和 `run_csharp_repl`。
-settings 变更审批始终启用，宿主角色的权限位只限制中介调用，不限制同进程代码的任意访问。
-开启沙箱不等于隔离所有工具，shell、PTC、PTY、编辑器和远程进程不会被自动接管。
-
-Linux 需要可用的 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程隔离；所需能力不可用时明确失败，不降级为普通进程。
-Windows 无法读取或设置声明路径的权限时拒绝启动，并撤销本次添加的临时权限。
-Windows 复用声明只读目录已有的受限应用包权限，其余路径仍按声明授权并在退出时撤销。
-受保护的 settings 路径禁止由沙箱进程写入、重命名或删除。
-隔离插件共享地址空间，必须相互信任；崩溃、超时或取消会影响整个共享进程，不自动重放调用，也不提供内存用量限制。
-切换沙箱总开关需要重启；已经加载进宿主的代码不能被追溯隔离。
-
-托管插件沿用 `IDshPlugin`，开发示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生插件保留 C ABI v1，见 [`templates/native-plugin`](templates/native-plugin)。
+`sandbox.enabled` 默认关闭，可在 YAML、GUI 或 TUI 中启用；切换总开关需重启。
+开启后，外部能力插件默认在共享的 OS 沙箱进程执行；编译进应用的插件默认在宿主执行，外部完整 `Context` 插件须显式设置 `execution: host`，代表完整进程内信任。
+`plugins.<包名>.permissions` 的 `read`、`write`、`network` 未指定时为允许；`scripts.permissions` 独立控制 `run_csx` 和 `run_csharp_repl`。
+Linux 需要 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程；能力不可用或声明路径授权失败时拒绝启动并撤销本次临时授权。
+隔离插件共享进程，必须相互信任；崩溃、超时或取消影响整个共享进程，不自动重放调用，也不提供内存预算。
+宿主角色的权限位只限制中介调用，不限制同进程代码；已加载的宿主代码不会被追溯隔离。
+开启沙箱不接管 shell、PTC、PTY、编辑器或远程进程；settings 写入规则见[设置变更审批](#设置变更审批)。
+托管插件沿用 `IDshPlugin`，示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生 C ABI v1 见 [`templates/native-plugin`](templates/native-plugin)。
 
 
 
@@ -475,9 +447,13 @@ plugins:
     file: ~/.dsh/memory/project.md
   "@deepseek-ai/dsh-checkpoints": false
   "@deepseek-ai/dsh-toon": false
+  "@example/report":
+    permissions: {read: true, write: false, network: false}
 
 sandbox:
   enabled: false
+scripts:
+  permissions: {read: true, write: false, network: false}
 ```
 </details>
 
@@ -501,16 +477,11 @@ sandbox:
 </details>
 
 <details>
-<summary><b>未发布</b> — 插件隔离与配置变更审批</summary>
+<summary><b>未发布</b> — 安全规则与实际访问授权</summary>
 
-- 增加默认关闭的插件沙箱；预置与用户插件使用同一显式执行角色、read/write/network 配置和权限修改入口。
-- 托管/原生能力插件共用一个 worker 和 broker，保留最小平台隔离及崩溃清理，不提供插件间内存隔离或内存预算。
-- 模型经内置写入工具、插件管理和 broker 修改活动 settings 时，共用一次 diff 审批与精简审计；人工保存和不受管的宿主执行路径保持明确边界。
 - safety 与真实脚本执行器使用带稳定 ID 的 matcher map；保留 AND/OR、deny 优先、布尔 autoApprove、tool/dialect/path/intent/args 语义，并明确普通路径中介与不受全局拦截的执行边界。
-- 原生 ABI 保留 v1 兼容与可选能力表长协商，脚本权限只作用于真实 C# 脚本执行器。
 - 工具在准备后被替换时，执行前按新注册重新授权，不复用旧注册的单次批准；授权中再次替换或与已排程并行模式不兼容时拒绝执行。
 - 修复首次创建工作树池时 `.gitignore` 的目录创建顺序，仍在写入授权后创建目录与文件。
-- Windows 沙箱仅对声明根授权和撤销，由系统继承目录权限；无法读取或修改声明根 ACL 时拒绝启动，已有受限应用包只读权限可直接复用。
 
 </details>
 

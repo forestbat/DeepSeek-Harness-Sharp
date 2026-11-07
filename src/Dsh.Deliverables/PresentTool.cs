@@ -129,7 +129,7 @@ public static class PresentTool
             var path = delivery.Files[index].Path;
             SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx)
                 ?.DemandFileAuthorization(delivery.Run, path, "read");
-            Dsh.Sandbox.SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+            Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         }
         execution.Signal.ThrowIfCancellationRequested();
         delivery.Session.Append(new DeliverablesPresentedPayload(delivery.Turn, execution.CallId, delivery.Files));

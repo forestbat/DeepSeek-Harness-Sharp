@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Dsh.Runtime;
 using Dsh.Sandbox;
 
 namespace Dsh.Tests;
@@ -10,7 +11,7 @@ public sealed class SandboxProcessTests : IDisposable
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(15);
     public void Dispose() => TempTree.Delete(_root);
 
-    private static async Task<SandboxProcess> StartNativeAsync(SandboxProcessOptions options)
+    private static async Task<OwnedProcess> StartNativeAsync(SandboxProcessOptions options)
     {
         await SandboxTestBackend.RequireAsync();
         return await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken);
@@ -19,14 +20,26 @@ public sealed class SandboxProcessTests : IDisposable
 
     [Fact]
     [Trait("Category", "SandboxNative")]
-    public async Task NativeStdio_RoundTripsWithoutProtocolPollution()
+    public async Task NativeStdio_WithRuntimeDirectoryRoots_RoundTripsWithoutProtocolPollution()
     {
         if (OperatingSystem.IsWindows())
             Assert.Skip("The Windows path consumer covers redirected native IO.");
-        await using var sandbox = await StartNativeAsync(Options("/") with
+        await SandboxTestBackend.RequireAsync();
+        var options = Options("/") with
         {
             Arguments = ["-c", "IFS= read -r value; printf '%s\\n' \"$value\"; printf '%s\\n' diagnostic >&2"]
-        });
+        };
+        if (OperatingSystem.IsLinux())
+        {
+            var script = Path.Combine(_root, "runtime-consumer.sh");
+            await File.WriteAllTextAsync(script, "#!/bin/sh\nexec /bin/sh \"$@\"\n", TestContext.Current.CancellationToken);
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            options = options with
+            {
+                Executable = script, WorkingDirectory = _root, RuntimePaths = SandboxRuntimePaths.ForExecutable(script)
+            };
+        }
+        await using var sandbox = await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken);
         await sandbox.StandardInput.WriteAsync("native-pipe\n"u8.ToArray(), TestContext.Current.CancellationToken);
         await sandbox.StandardInput.FlushAsync(TestContext.Current.CancellationToken);
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -35,31 +48,6 @@ public sealed class SandboxProcessTests : IDisposable
         Assert.True(exitCode == 0, $"Sandbox PID {sandbox.Id} exited with {exitCode}: {await error}");
         Assert.Equal("native-pipe\n", await output);
         Assert.Equal("diagnostic\n", await error);
-    }
-
-    [Fact]
-    [Trait("Category", "SandboxNative")]
-    public async Task LinuxRuntimeDirectoryRoots_RunDynamicShellAndOriginalShebangPath()
-    {
-        if (!OperatingSystem.IsLinux() || !File.Exists("/bin/sh"))
-        {
-            Assert.Skip("The runtime directory alias consumer requires Linux and its native shell.");
-            return;
-        }
-        await SandboxTestBackend.RequireAsync();
-        var script = Path.Combine(_root, "runtime-consumer.sh");
-        await File.WriteAllTextAsync(script, "#!/bin/sh\nexec /bin/sh -c 'printf runtime-aliases'\n", TestContext.Current.CancellationToken);
-        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        await using var sandbox = await SandboxedProcess.StartAsync(Options(_root) with
-        {
-            Executable = script,
-            RuntimePaths = SandboxRuntimePaths.ForExecutable(script),
-        }, TestContext.Current.CancellationToken);
-        var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
-        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-        var exitCode = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
-        Assert.True(exitCode == 0, $"The native runtime directory consumer exited with {exitCode}: {await error}");
-        Assert.Equal("runtime-aliases", await output);
     }
 
     [Fact]
@@ -189,7 +177,7 @@ public sealed class SandboxProcessTests : IDisposable
 
     [Fact]
     [Trait("Category", "SandboxNative")]
-    public async Task MacNativeIo_DeniesCanonicalAndSymbolicAliasWrites()
+    public async Task MacNativeIo_WithRuntimeTree_DeniesReadonlyAndSymbolicAliasWrites()
     {
         if (!OperatingSystem.IsMacOS())
             Assert.Skip("This test exercises native shell IO under Seatbelt without spawning a child process.");
@@ -197,17 +185,23 @@ public sealed class SandboxProcessTests : IDisposable
         var target = Path.Combine(working, "settings.yaml");
         var alias = Path.Combine(working, "settings-alias");
         var allowed = Path.Combine(working, "allowed.txt");
+        var readOnly = Path.Combine(_root, "readonly.txt");
+        File.WriteAllText(readOnly, "protected");
+        File.WriteAllText(allowed, "before");
         File.WriteAllText(target, "unchanged");
         File.CreateSymbolicLink(alias, target);
         const string script = """
             if printf forbidden > "$1"; then exit 91; fi
             if printf forbidden > "$2"; then exit 92; fi
+            if printf forbidden >> "$4"; then exit 93; fi
             printf allowed > "$3"
             printf 'protected\n'
             """;
         await using var sandbox = await StartNativeAsync(Options(working) with
         {
-            Arguments = ["-c", script, "sandbox", target, alias, allowed], WritablePaths = [working], DeniedWritePaths = [target]
+            RuntimePaths = [.. UnixRuntimePaths(), AppContext.BaseDirectory, System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()],
+            Arguments = ["-c", script, "sandbox", target, alias, allowed, readOnly], ReadOnlyPaths = [readOnly],
+            WritablePaths = [working], DeniedWritePaths = [target]
         });
         var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -216,6 +210,7 @@ public sealed class SandboxProcessTests : IDisposable
         Assert.Equal("protected\n", await output);
         Assert.Equal("unchanged", File.ReadAllText(target));
         Assert.Equal("allowed", File.ReadAllText(allowed));
+        Assert.Equal("protected", File.ReadAllText(readOnly));
     }
 
     [Fact]
@@ -239,33 +234,6 @@ public sealed class SandboxProcessTests : IDisposable
         Assert.Equal($"{sandbox.Id}\nfork-denied\n", await output);
     }
 
-    [Fact]
-    [Trait("Category", "SandboxNative")]
-    public async Task MacRuntimeTree_WithWritableWorkspace_PreservesReadonlyData()
-    {
-        if (!OperatingSystem.IsMacOS())
-            Assert.Skip("This consumer requires native macOS readonly runtime-tree grants.");
-        var working = Directory.CreateDirectory(Path.Combine(_root, "working")).FullName;
-        var writable = Path.Combine(working, "candidate.txt");
-        var readOnly = Path.Combine(_root, "readonly.txt");
-        await File.WriteAllTextAsync(writable, "before", TestContext.Current.CancellationToken);
-        await File.WriteAllTextAsync(readOnly, "protected", TestContext.Current.CancellationToken);
-        await using var sandbox = await StartNativeAsync(Options(working) with
-        {
-            Executable = "/usr/bin/perl",
-            RuntimePaths = [AppContext.BaseDirectory, System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory()],
-            ReadOnlyPaths = [readOnly], WritablePaths = [working],
-            Arguments = ["-e", """open(my $denied, '>>', $ARGV[0]) and die "readonly escaped"; open(my $allowed, '>', $ARGV[1]) or die "workspace denied"; print $allowed "written"; close($allowed) or die "close failed";""",
-                "--", readOnly, writable]
-        });
-        var output = new StreamReader(sandbox.StandardOutput).ReadToEndAsync(TestContext.Current.CancellationToken);
-        var error = new StreamReader(sandbox.StandardError).ReadToEndAsync(TestContext.Current.CancellationToken);
-        var exit = await sandbox.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(Deadline, TestContext.Current.CancellationToken);
-        Assert.True(exit == 0, $"Sandbox PID {sandbox.Id} exited with {exit}: {await error}");
-        _ = await output;
-        Assert.Equal("written", await File.ReadAllTextAsync(writable, TestContext.Current.CancellationToken));
-        Assert.Equal("protected", await File.ReadAllTextAsync(readOnly, TestContext.Current.CancellationToken));
-    }
 
 
     [Theory]

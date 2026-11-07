@@ -5,7 +5,7 @@ using Dsh.RemoteHost;
 namespace Dsh.Host;
 
 /** Plugin metadata, broker permissions and execution settings backed by the installed plugin manager. */
-internal sealed class HarnessRemotePluginsBackend(HarnessApp app, IPluginManager manager) : IRemotePluginsBackend
+internal sealed class HarnessRemotePluginsBackend(HarnessApp app, HarnessPluginManager manager) : IRemotePluginsBackend
 {
     public Task<IReadOnlyList<RemotePluginInfo>> ListPluginsAsync(CancellationToken cancellationToken)
     {

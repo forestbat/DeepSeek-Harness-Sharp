@@ -822,10 +822,6 @@ plugins:
 #     collection: "memory"
 #     加密 key
 #     key:
-# 计划模式
-# @deepseek-ai/dsh-plan-mode:
-#   计划模式提示词段
-#   section:
 # @deepseek-ai/dsh-ptc:
 #   debug_batching: false
 # 技能加载

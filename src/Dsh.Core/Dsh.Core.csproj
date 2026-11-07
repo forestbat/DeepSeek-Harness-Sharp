@@ -9,7 +9,6 @@
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
-    <ProjectReference Include="..\Dsh.Sandbox\Dsh.Sandbox.csproj" />
   </ItemGroup>
 
   <ItemGroup>

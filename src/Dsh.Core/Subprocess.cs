@@ -2,31 +2,13 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Dsh.Runtime;
-using Dsh.Sandbox;
 using Dsh.Transport;
 
 namespace Dsh.Core;
 
-public sealed record SubprocessCollect(int MaxBytes, int? SpillMaxBytes);
-
 public sealed record SubprocessOutputRead(string Text, long NextOffset, bool Lossy, string? SpillPath);
 
 public sealed record SubprocessOutcome(int? ExitCode, string? Signal);
-
-public sealed record SubprocessSpawnSpec
-{
-    public required IReadOnlyList<string> Argv { get; init; }
-    public required string Cwd { get; init; }
-    public IReadOnlyDictionary<string, string?>? Env { get; init; }
-    public SubprocessCollect Stdout { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
-    public SubprocessCollect Stderr { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
-    /** 后台进程始终隔离终端; 只有管道协议调用方保留可写 stdin, 其余立即发送 EOF。 */
-    public bool KeepStandardInputOpen { get; init; }
-    public CancellationToken Signal { get; init; }
-    public bool ProtocolOutput { get; init; }
-    public IReadOnlyList<string> AdditionalWritablePaths { get; init; } = [];
-    public IReadOnlyList<string> AdditionalReadOnlyPaths { get; init; } = [];
-}
 
 public sealed class SubprocessOutputReader
 {
@@ -145,7 +127,7 @@ internal sealed class StreamCollector : IDisposable
 public sealed class SubprocessHandle : IDisposable
 {
     private readonly Process? _process;
-    private readonly SandboxProcess? _sandbox;
+    private readonly OwnedProcess? _ownedProcess;
     private readonly StreamWriter _stdin;
     private readonly Stream _output;
     private readonly Stream _error;
@@ -173,10 +155,10 @@ public sealed class SubprocessHandle : IDisposable
             _abortRegistration = signal.Register(Terminate);
     }
 
-    internal SubprocessHandle(SandboxProcess process, StreamCollector stdout, StreamCollector stderr,
+    internal SubprocessHandle(OwnedProcess process, StreamCollector stdout, StreamCollector stderr,
         SubprocessSpawnSpec spec, string temporaryDirectory)
     {
-        _sandbox = process;
+        _ownedProcess = process;
         _temporaryDirectory = temporaryDirectory;
         // Match Process.StandardInput: interactive callers send complete commands without an explicit flush.
         _stdin = new StreamWriter(process.StandardInput, new UTF8Encoding(false)) { AutoFlush = true };
@@ -213,8 +195,8 @@ public sealed class SubprocessHandle : IDisposable
         if (Interlocked.Exchange(ref _terminateRequested, 1) != 0) return;
         try
         {
-            if (_sandbox is not null)
-                _sandbox.Kill();
+            if (_ownedProcess is not null)
+                _ownedProcess.Kill();
             else if (_process is { HasExited: false })
                 _process.Kill(entireProcessTree: true);
         }
@@ -228,8 +210,8 @@ public sealed class SubprocessHandle : IDisposable
         var drainStderr = PumpAsync(_error, _stderr);
         try
         {
-            var exitCode = _sandbox is not null
-                ? await _sandbox.WaitForExitAsync().ConfigureAwait(false)
+            var exitCode = _ownedProcess is not null
+                ? await _ownedProcess.WaitForExitAsync().ConfigureAwait(false)
                 : await WaitForOperatorExitAsync().ConfigureAwait(false);
             // WaitForExitAsync includes owned descendant teardown but leaves pipes open for draining.
             await Task.WhenAll(drainStdout, drainStderr).ConfigureAwait(false);
@@ -241,8 +223,8 @@ public sealed class SubprocessHandle : IDisposable
         }
         finally
         {
-            if (_sandbox is not null && !_protocolOutput)
-                await _sandbox.DisposeAsync().ConfigureAwait(false);
+            if (_ownedProcess is not null && !_protocolOutput)
+                await _ownedProcess.DisposeAsync().ConfigureAwait(false);
             _stdout.Finish();
             _stderr.Finish();
         }
@@ -298,8 +280,8 @@ public sealed class SubprocessHandle : IDisposable
         {
             try
             {
-                if (_sandbox is not null && _protocolOutput)
-                    _sandbox.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                if (_ownedProcess is not null && _protocolOutput)
+                    _ownedProcess.DisposeAsync().AsTask().GetAwaiter().GetResult();
             }
             finally
             {
@@ -320,6 +302,8 @@ public sealed class SubprocessService : Service, IDisposable
 {
     public const string ServiceName = "subprocess";
     public const string DshEnvPrefix = "DSH_";
+    public const string ScriptLauncherServiceName = "scriptProcessLauncher";
+    public const string ScriptPermissionsNotice = " scripts.permissions controls this executor's workspace read/write and network access while sandbox.enabled is ON; runtime inputs and private scratch are technical grants. Host-role plugins and other process tools are not constrained by these script permissions.";
 
     private static readonly Regex SensitiveEnvPattern = new("KEY|PASSWORD|SECRET|TOKEN", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly List<SubprocessHandle> _running = [];
@@ -374,16 +358,18 @@ public sealed class SubprocessService : Service, IDisposable
 
     public async Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec, ToolRunContext? run = null)
     {
-        var policy = Ctx.Get<IScriptExecutionPolicy>(IScriptExecutionPolicy.ServiceName, false);
-        if (policy is not null)
-            await policy.AuthorizeAsync(run, spec.Signal).ConfigureAwait(false);
-        return policy?.Enabled == true
-            ? await SpawnSandboxedAsync(spec, policy.CreateOptions).ConfigureAwait(false)
+        var launcher = Ctx.Get<Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>>(ScriptLauncherServiceName, false);
+        if (launcher is not null)
+            await (SafetyBoundary.Resolve(Ctx, required: true)
+                ?? throw new InvalidOperationException("Script execution requires the host safety boundary."))
+                .AuthorizeOperationAsync(run, spec.Signal, scriptPermissions: true).ConfigureAwait(false);
+        return launcher is not null
+            ? await launcher(this, spec).ConfigureAwait(false)
             : await SpawnAsync(spec).ConfigureAwait(false);
     }
 
-    public async Task<SubprocessHandle> SpawnSandboxedAsync(SubprocessSpawnSpec spec,
-        Func<SubprocessSpawnSpec, string, string, SandboxProcessOptions> createOptions)
+    public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec,
+        Func<SubprocessSpawnSpec, string, string, Task<OwnedProcess>> startAsync)
     {
         if (spec.Argv.Count == 0)
             throw new ArgumentException("subprocess: argv must be non-empty");
@@ -394,11 +380,10 @@ public sealed class SubprocessService : Service, IDisposable
         var executable = await ResolveExecutable(spec.Argv[0], executableEnvironment, spec.Signal).ConfigureAwait(false);
         var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"dsh-process-{Guid.NewGuid():N}");
         OwnerOnlyFiles.EnsureDirectory(temporaryDirectory);
-        SandboxProcess? process = null;
+        OwnedProcess? process = null;
         try
         {
-            var options = createOptions(spec, executable, temporaryDirectory);
-            process = await SandboxedProcess.StartAsync(options, spec.Signal).ConfigureAwait(false);
+            process = await startAsync(spec, executable, temporaryDirectory).ConfigureAwait(false);
             var handle = new SubprocessHandle(process,
                 new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
                 new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),

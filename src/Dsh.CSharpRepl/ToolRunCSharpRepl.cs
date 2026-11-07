@@ -35,7 +35,7 @@ public static class ToolRunCSharpRepl
                 + "This uses the ordinary CSharpRepl frontend, not the run_code tool SDK. "
                 + "Compilation and runtime failures are reported as tool errors with the frontend's output. "
                 + "CSharpRepl must already be installed; it is never downloaded automatically."
-                + IScriptExecutionPolicy.PermissionNotice,
+                + SubprocessService.ScriptPermissionsNotice,
             Parameters = JsonNode.Parse("""
                 {
                   "type": "object",

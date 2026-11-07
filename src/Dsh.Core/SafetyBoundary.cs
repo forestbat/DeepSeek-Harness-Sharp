@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using Dsh.Runtime;
-using Dsh.Sandbox;
 
 namespace Dsh.Core;
 
@@ -40,7 +39,7 @@ public static class SafetyFileAccess
     public static async Task<FileStream> OpenReadAsync(string path, ToolRunContext run, bool settingsReview = false)
     {
         await AuthorizeAsync(path, "read", run, run.Signal, settingsReview).ConfigureAwait(false);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             4096, FileOptions.Asynchronous);
     }
@@ -67,7 +66,7 @@ public static class SafetyFileAccess
     {
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
         await AuthorizeAsync(path, "read", run, fused.Token, settingsReview).ConfigureAwait(false);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             4096, FileOptions.Asynchronous);
         using var reader = new StreamReader(stream, new UTF8Encoding(false, false));

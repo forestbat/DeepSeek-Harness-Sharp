@@ -101,7 +101,6 @@
     <ProjectReference Include="..\..\src\Dsh.Interaction.AskUser\Dsh.Interaction.AskUser.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Mcp\Dsh.Mcp.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Skills\Dsh.Skills.csproj" />
-    <ProjectReference Include="..\..\src\Dsh.PlanMode\Dsh.PlanMode.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Workflow\Dsh.Workflow.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Ptc\Dsh.Ptc.csproj" />
     <ProjectReference Include="..\..\src\Dsh.ScriptHost\Dsh.ScriptHost.csproj" />

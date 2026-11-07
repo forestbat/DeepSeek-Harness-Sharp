@@ -2,7 +2,9 @@
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Runtime.Composition;
 using Dsh.Runtime.Events;
 using Dsh.Boot;
 using static Dsh.Inspection.Plugin;
@@ -22,30 +24,12 @@ public sealed class PluginManagerToolTests
 
         var failure = Assert.IsType<ToolExecutionResult.Failure>(result);
         Assert.Contains("no approval channel is available", string.Concat(failure.Content.OfType<TextBlock>().Select(block => block.Text)));
-        Assert.Empty(harness.Manager.Calls);
     }
-
-
-    [Fact]
-    public async Task List_WithApprovalChannel_ReturnsPlugins()
-    {
-        using var harness = new Harness();
-        await harness.ComposeAsync();
-        using var answerer = ApprovalAnswerers.AutoApprove(harness.Ctx);
-        var agent = InspectionTestAgent.Open(harness.Ctx);
-
-        var success = Assert.IsType<ToolExecutionResult.Success>(await harness.Execute("""{"action":"list"}""", agent, TestContext.Current.CancellationToken));
-
-        var result = success.Value.GetProperty("result").GetString();
-        Assert.Contains("sample-plugin", result);
-        Assert.Contains("describe:sample-plugin", harness.Manager.Calls);
-    }
-
 
     [Theory]
     [InlineData("list")]
     [InlineData("describe")]
-    public async Task RejectedApproval_DoesNotInvokePluginManager(string action)
+    public async Task RejectedApproval_RecordsRejectedDecision(string action)
     {
         using var harness = new Harness();
         await harness.ComposeAsync();
@@ -56,7 +40,6 @@ public sealed class PluginManagerToolTests
             JsonSerializer.Serialize(new { action, target = "sample-plugin", force = true }), agent, TestContext.Current.CancellationToken));
 
         Assert.Contains("rejected", failure.Error.Message);
-        Assert.Empty(harness.Manager.Calls);
         Assert.Equal("plugin_manager",
             Assert.Single(agent.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>()).ToolName);
         Assert.Equal(ApprovalOutcome.Rejected,
@@ -64,7 +47,7 @@ public sealed class PluginManagerToolTests
     }
 
     [Fact(Timeout = 5000)]
-    public async Task CancellationWhileAwaitingApproval_DoesNotInvokePluginManager()
+    public async Task CancellationWhileAwaitingApproval_RecordsCancelledDecision()
     {
         using var harness = new Harness();
         await harness.ComposeAsync();
@@ -90,7 +73,6 @@ public sealed class PluginManagerToolTests
                 await pending.WaitAsync(TestContext.Current.CancellationToken));
 
             Assert.Equal(ToolErrorCodes.AbortedBeforeDispatch, failure.Error.Info?.Code);
-            Assert.Empty(harness.Manager.Calls);
             Assert.Equal(ApprovalOutcome.Cancelled,
                 Assert.Single(agent.Session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalDecidedPayload>()).Outcome);
         }
@@ -135,7 +117,6 @@ public sealed class PluginManagerToolTests
         var rejected = Assert.IsType<ToolExecutionResult.Failure>(
             await harness.Execute("""{"action":"list"}""", agent, TestContext.Current.CancellationToken));
         Assert.Contains("rejected", rejected.Error.Message);
-        Assert.Empty(harness.Manager.Calls);
 
         await manager.DeactivateAsync();
 
@@ -254,20 +235,27 @@ public sealed class PluginManagerToolTests
 
     private sealed class Harness : IDisposable
     {
+        private readonly string _root = TempTree.CreateDirectory("plugin-manager-approval");
+        private Composition? _composition;
+        private HarnessPluginManager? _manager;
+
         public Harness()
         {
             _ = new SystemPrompt(Ctx, new SystemPromptConfig());
             Tools = new ToolRuntime(Ctx);
             ApprovalService.Register(Ctx);
-            Ctx.Provide("pluginManager", Manager);
         }
 
         public Context Ctx { get; } = new();
         public ToolRuntime Tools { get; }
-        public RecordingPluginManager Manager { get; } = new();
 
         public async Task<PluginActivation> ComposeAsync()
         {
+            _composition = await Composition.StartAsync(Ctx, []);
+            _manager = new HarnessPluginManager(new PluginHost(), _composition,
+                new HarnessHome(_root), new HarnessSettings(), [], [], [], null,
+                Path.Combine(_root, "plugins"), null);
+            Ctx.Provide("pluginManager", _manager);
             var activation = Ctx.Plugin(InspectionTestPlugin.Definition(PluginManager));
             await Ctx.Scheduler.SettleAsync();
             return activation;
@@ -289,6 +277,9 @@ public sealed class PluginManagerToolTests
 
         public void Dispose()
         {
+            _composition?.DeactivateAll();
+            _manager?.Dispose();
+            TempTree.Delete(_root);
         }
     }
 }

@@ -16,7 +16,9 @@ internal static class PluginSandboxWorker
     {
         if (Array.IndexOf(args, HostArgument) < 0)
             return null;
-        return args.Length == 1 ? new ValueTask<int>(RunAsync()) : new ValueTask<int>(2);
+        if (args.Length != 1)
+            throw new ArgumentException("The plugin worker requires only its worker argument.", nameof(args));
+        return new ValueTask<int>(RunAsync());
     }
 
     private static async Task<int> RunAsync()
@@ -463,7 +465,7 @@ internal static class PluginSandboxWorker
         private static string BoundedFailure(Exception error)
         {
             var message = error.GetBaseException().Message;
-            return message.Length <= 2048 ? message : message[..2048];
+            return message.Length <= PluginSandboxMethods.MaximumFailureCharacters ? message : message[..PluginSandboxMethods.MaximumFailureCharacters];
         }
 
         internal void Closed(Exception? failure)
@@ -497,29 +499,17 @@ internal static class PluginSandboxWorker
 
         internal static Artifact Open(string path)
         {
-            if (RuntimeFeature.IsDynamicCodeSupported && System.IO.Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            if (RuntimeFeature.IsDynamicCodeSupported && PluginHost.InspectForm(path) == PluginForm.ManagedAssembly)
             {
-                var directory = System.IO.Path.GetDirectoryName(path)!;
-                var localPool = System.IO.Path.Combine(directory, ".shared");
-                var sharedDirectory = Directory.Exists(localPool)
-                    ? localPool
-                    : System.IO.Path.Combine(System.IO.Path.GetDirectoryName(directory) ?? directory, ".shared");
-                var host = new PluginHost { SharedPool = new SharedAssemblyPool(sharedDirectory) };
-                try
-                {
-                    var result = host.TryLoad(path);
-                    if (result.Context is not null && result.Packages.Count > 0 && result.Skipped.Count == 0)
-                        return new Artifact(path, host, result.Context, null) { SharedDependencies = result.SharedDependencies };
-                    foreach (var package in host.Catalog.PackageNames.ToArray())
-                        host.Catalog.Remove(package);
-                    host.SharedPool.Release(result.SharedDependencies);
-                    result.Context?.Unload();
-                    throw new InvalidOperationException("Managed artifact has no compatible plugin manifest.");
-                }
-                catch (BadImageFormatException)
-                {
-                    // Windows native ABI libraries also use .dll.
-                }
+                var host = new PluginHost { SharedPool = new SharedAssemblyPool(PluginHost.SharedPoolDirectory(path)) };
+                var result = host.TryLoad(path);
+                if (result.Context is not null && result.Packages.Count > 0 && result.Skipped.Count == 0)
+                    return new Artifact(path, host, result.Context, null) { SharedDependencies = result.SharedDependencies };
+                foreach (var package in host.Catalog.PackageNames.ToArray())
+                    host.Catalog.Remove(package);
+                host.SharedPool.Release(result.SharedDependencies);
+                result.Context?.Unload();
+                throw new InvalidOperationException("Managed artifact has no compatible plugin manifest.");
             }
             var native = NativePluginLibrary.TryLoad(path);
             if (!native.Succeeded)

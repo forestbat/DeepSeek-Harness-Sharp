@@ -47,7 +47,6 @@ internal sealed class HarnessDecisionBridge : IDisposable
                 question.Header,
                 [.. (question.Options ?? []).Select(option => new RemoteQuestionOption(option.Label, option.Description, option.Value, option.Disabled, option.Default))],
                 question.MultiSelect,
-                question.Intent?.Approve,
                 question.AllowCustom))
             .ToList();
         var sessionId = request.Agent is { } agent ? RootSessionId(agent) : "";

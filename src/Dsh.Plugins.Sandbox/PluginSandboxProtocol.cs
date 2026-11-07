@@ -20,9 +20,11 @@ internal static class PluginSandboxMethods
     internal const int MaximumFrameBytes = PluginHostOperations.MaximumFrameBytes;
     internal const int MaximumTools = PluginHostOperations.MaximumTools;
     internal const int MaximumPendingRequests = 16;
+    internal const int MaximumPackagesPerArtifact = 256;
+    internal const int MaximumPackageCharacters = 256;
+    internal const int MaximumFailureCharacters = 2048;
 }
 
-internal sealed record PluginSandboxSource(PluginDescriptor Descriptor, string? ArtifactPath);
 internal sealed record PluginSandboxReady(int Version, int Pid);
 internal sealed record PluginSandboxInspectRequest(string? ArtifactPath, string? Package = null);
 internal sealed record PluginSandboxMetadata(string Package, PluginForm Form, string? Entry, bool SupportsCapabilities);

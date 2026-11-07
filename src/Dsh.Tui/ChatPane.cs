@@ -873,7 +873,6 @@ public sealed class ChatPane : ITuiPane
             $"model: {provider}/{model}",
         ]);
         AddPanelSection(lines, "MCP", _window.McpLines());
-        AddPanelSection(lines, "计划", ["使用 /plan 管理"]);
         AddPanelSection(lines, "Git 变更", _window.GitLines());
         AddPanelSection(lines, "快捷键",
         [
@@ -1148,7 +1147,7 @@ public sealed class ChatPane : ITuiPane
                 "type" => Candidates([.. KnownProviderTypes()]),
                 "action" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => Candidates("jump", "revert", "fork"),
                 "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(),
-                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<IPluginManager>("pluginManager", false)?.PackageNames ?? []]),
+                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames ?? []]),
                 _ => descriptor.Name switch
                 {
                     "model" => Candidates([.. settings.Providers

@@ -107,12 +107,13 @@ public sealed partial class DshPluginCatalogGenerator
                     ? "            => global::Dsh.Plugins.Sandbox.PluginSandboxModule.TryRunWorkerAsync(args);"
                     : "            => null;");
                 builder.AppendLine();
-                builder.AppendLine("        public static global::Dsh.Plugins.IPluginRuntime? CreatePluginRuntime(");
-                builder.AppendLine("            global::Dsh.Runtime.Context context, global::Dsh.Plugins.IPluginExecutionEnvironment environment,");
-                builder.AppendLine("            global::Dsh.Plugins.PluginHost host, string directory,");
-                builder.AppendLine("            global::System.Func<global::Dsh.Plugins.INativePlugin, global::Dsh.Plugins.IDshPlugin>? nativeBridge)");
+                builder.AppendLine("        public static global::Dsh.Plugins.PluginHost? CreatePluginRuntime(");
+                builder.AppendLine("            global::Dsh.Runtime.Context context, global::Dsh.Boot.PluginExecutionEnvironment environment,");
+                builder.AppendLine("            string directory,");
+                builder.AppendLine("            global::System.Func<global::Dsh.Plugins.INativePlugin, global::Dsh.Plugins.IDshPlugin>? nativeBridge,");
+                builder.AppendLine("            global::System.Action<global::System.IDisposable> track)");
                 builder.AppendLine(hasSandbox
-                    ? "            => global::Dsh.Plugins.Sandbox.PluginSandboxModule.CreateRuntime(context, environment, host, directory, nativeBridge);"
+                    ? "            => global::Dsh.Plugins.Sandbox.PluginSandboxModule.CreateRuntime(context, environment, directory, nativeBridge, track);"
                     : "            => null;");
             }
             builder.AppendLine("    }");

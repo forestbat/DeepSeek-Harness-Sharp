@@ -33,12 +33,7 @@ public static class ConfigBoot
             ? new ToolResultSpillOptions(toolResults.MaxBytes)
             : null);
 
-        var pluginHost = new PluginHost();
-        pluginHost.RegisterCompiledIn();
         var pluginsDirectory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
-        pluginHost.SharedPool = new SharedAssemblyPool(Path.Combine(pluginsDirectory, ".shared"));
-        var nativeBridge = ResolveNativeBridge();
-        ctx.SetOwn("pluginCatalog", pluginHost.Catalog);
 
         // 零配置不兜底:没配 provider/model 就留空,启动照常,首次发起 LLM 请求时才报错。
         var defaultModel = settings.ResolveDefaultModel();
@@ -60,16 +55,13 @@ public static class ConfigBoot
         {
             ctx.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
             _ = new SafetyPolicySource(ctx, HarnessSettings.CreatePolicyReader(home, settings));
-            var execution = CreateRuntime(runtimeFactory, ctx, new PluginExecutionEnvironment(home, settings, options.Cwd),
-                pluginHost, pluginsDirectory, nativeBridge);
-            if (execution is not null)
-                app.Track(execution);
-            var sandbox = execution?.Catalog;
+            var (pluginHost, sandbox, nativeBridge) = CreateRuntime(runtimeFactory, ctx,
+                new PluginExecutionEnvironment(home, settings, options.Cwd), pluginsDirectory, app.Track);
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
             using var discoveryOwnership = new PluginDiscoveryOwnership(pluginHost, discovery);
             foreach (var skip in discovery.Skipped)
                 ctx.LoggerFor("loader").Warn("%s", $"plugin skipped: {Path.GetFileName(skip.File)}: {skip.Reason}");
-            foreach (var notice in pluginHost.SharedPool.DrainNotices())
+            foreach (var notice in pluginHost.SharedPool!.DrainNotices())
                 ctx.LoggerFor("loader").Warn("%s", notice);
             var composition = await Composition.StartAsync(ctx, BuildEntries(ctx, pluginHost, settings));
             app.Composition = composition;
@@ -100,26 +92,42 @@ public static class ConfigBoot
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
         context.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
         _ = new SafetyPolicySource(context, HarnessSettings.CreatePolicyReader(home, settings));
-        var host = new PluginHost();
-        host.RegisterCompiledIn();
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
-        host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, ".shared"));
-        var bridge = ResolveNativeBridge();
-        using var execution = CreateRuntime(runtimeFactory, context,
-            new PluginExecutionEnvironment(home, settings, options.Cwd), host, directory, bridge);
-        var sandbox = execution?.Catalog;
-        var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
-        try { return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped); }
-        finally { host.Release(discovered); }
+        var owned = new List<IDisposable>();
+        try
+        {
+            var (host, sandbox, bridge) = CreateRuntime(runtimeFactory, context,
+                new PluginExecutionEnvironment(home, settings, options.Cwd), directory, owned.Add);
+            var discovered = sandbox is null ? host.Scan(directory, bridge) : await sandbox.ScanAsync().ConfigureAwait(false);
+            using var discoveryOwnership = new PluginDiscoveryOwnership(host, discovered);
+            return new PluginCatalogInspection(host.Catalog.Descriptors, discovered.Skipped);
+        }
+        finally
+        {
+            List<Exception>? errors = null;
+            for (var index = owned.Count - 1; index >= 0; index--)
+            {
+                try { owned[index].Dispose(); }
+                catch (Exception error) { (errors ??= []).Add(error); }
+            }
+            if (errors is not null)
+                throw new AggregateException("plugin inspection dispose failed", errors);
+        }
     }
 
-    private static IPluginRuntime? CreateRuntime(PluginRuntimeFactory? factory, Context context,
-        IPluginExecutionEnvironment environment, PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
+    private static (PluginHost Host, PluginHost? Runtime, Func<INativePlugin, IDshPlugin>? NativeBridge) CreateRuntime(
+        PluginRuntimeFactory? factory, Context context, PluginExecutionEnvironment environment,
+        string directory, Action<IDisposable> track)
     {
-        var runtime = factory?.Invoke(context, environment, host, directory, nativeBridge);
+        var nativeBridge = ResolveNativeBridge();
+        var runtime = factory?.Invoke(context, environment, directory, nativeBridge, track);
         if (runtime is null && environment.ReadSettings().SandboxEnabled)
             throw new RuntimeException("PLUGIN_SANDBOX_UNAVAILABLE", "Plugin sandbox support is not included in this application.");
-        return runtime;
+        var host = runtime ?? new PluginHost();
+        host.RegisterCompiledIn();
+        host.SharedPool = new SharedAssemblyPool(Path.Combine(directory, PluginHost.SharedPoolDirectoryName));
+        context.SetOwn("pluginCatalog", host.Catalog);
+        return (host, runtime, nativeBridge);
     }
 
 

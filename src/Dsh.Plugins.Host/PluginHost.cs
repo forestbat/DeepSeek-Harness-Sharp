@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 
 namespace Dsh.Plugins;
@@ -16,6 +17,8 @@ public sealed record PluginLoadResult(
     IReadOnlyList<string> SharedDependencies,
     PluginLoadContext? Context);
 
+public readonly record struct PluginCatalogLoadResult(IReadOnlyList<string> Packages, PluginScanResult Loaded);
+
 /** 托管插件的一次装载:包名、共享依赖声明、持有它的可回收加载上下文,以及装载来源目录 (仅在 per-plugin 布局下非空,供 remove 卸载)。 */
 public sealed record ManagedPlugin(
     string Package,
@@ -23,17 +26,65 @@ public sealed record ManagedPlugin(
     IReadOnlyList<string> SharedDependencies,
     string? InstallDirectory = null);
 
-public sealed class PluginHost
+public class PluginHost
 {
     public const string ManifestTypeName ="Dsh.Plugins.Generated.DshPluginManifest";
     private const string RegistrationsMethodName = "Registrations";
     private const string SharedDependenciesMethodName = "SharedDependencies";
-    private const string SharedPoolDirectoryName = ".shared";
+    public const string SharedPoolDirectoryName = ".shared";
 
     public PluginCatalog Catalog { get; } = new();
 
     /** 共享程序集池:由宿主在扫描前挂接,根目录为插件目录下的 .shared。 */
     public SharedAssemblyPool? SharedPool { get; set; }
+
+    public static string SharedPoolDirectory(string artifactPath, string? sharedRoot = null)
+    {
+        if (sharedRoot is not null)
+            return Path.Combine(sharedRoot, SharedPoolDirectoryName);
+        var directory = Path.GetDirectoryName(artifactPath)!;
+        var local = Path.Combine(directory, SharedPoolDirectoryName);
+        return Directory.Exists(local) ? local : Path.Combine(Path.GetDirectoryName(directory) ?? directory, SharedPoolDirectoryName);
+    }
+
+    public static PluginForm InspectForm(string? artifactPath)
+    {
+        if (artifactPath is null)
+            return PluginForm.CompiledIn;
+        artifactPath = global::Dsh.Runtime.CanonicalFilePath.Canonicalize(artifactPath);
+        global::Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
+        if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            return PluginForm.NativeLibrary;
+        try
+        {
+            using var input = File.OpenRead(artifactPath);
+            using var image = new PEReader(input);
+            return image.HasMetadata ? PluginForm.ManagedAssembly : PluginForm.NativeLibrary;
+        }
+        catch (BadImageFormatException)
+        {
+            return PluginForm.NativeLibrary;
+        }
+    }
+
+    public virtual IReadOnlyList<PluginSkip> Failures
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual string? ArtifactPath(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual PluginForm? Form(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual IReadOnlyList<string> DomainPackages(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual bool IsFaulted(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task RetireDomainAsync(string package, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<IReadOnlyList<string>> InspectPackagesAsync(string path, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<PluginCatalogLoadResult> LoadAsync(string path, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<PluginScanResult> ScanAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
 
     /** 镜像内插件:由生成目录在模块初始化时自注册。 */
     public void RegisterCompiledIn()

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
@@ -8,15 +9,13 @@ using Dsh.Sandbox;
 namespace Dsh.Plugins.Sandbox;
 
 /** Owns one co-trusted worker; plugins share memory and caller identity. */
-internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionEnvironment environment,
-    IPluginHostFactory capabilities, string pluginsDirectory) : IDisposable
+internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEnvironment environment,
+    PluginCapabilityFactory capabilities, string pluginsDirectory, PluginSandboxHost host) : IDisposable
 {
     private static readonly JsonElement EmptyConfiguration = JsonSerializer.SerializeToElement(
         new Dictionary<string, object?>(), PluginConfigurationJsonContext.Default.Object);
     private readonly Lock _sync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
-    private readonly Dictionary<string, PluginSandboxSource> _sources = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _failures = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _pluginsDirectory = Path.TrimEndingDirectorySeparator(CanonicalFilePath.Canonicalize(pluginsDirectory));
     private Domain? _domain;
@@ -27,7 +26,6 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         internal string Directory { get; } = System.IO.Directory.CreateTempSubdirectory("dsh-plugin-worker-").FullName;
         internal HashSet<string> Runtime { get; } = new(SandboxRuntimePaths.ForCurrentHost(), PluginSandboxLaunch.PathComparer);
         internal ConcurrentDictionary<string, Binding> Bindings { get; } = new(StringComparer.Ordinal);
-        internal HashSet<string> Members { get; } = new(StringComparer.Ordinal);
         internal CancellationTokenSource Cancellation { get; } = new();
         internal Dictionary<string, string> Artifacts { get; } = new(PluginSandboxLaunch.PathComparer);
         internal PluginSandboxConnection? Connection;
@@ -36,10 +34,10 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         internal volatile bool Retired;
     }
 
-    internal sealed class Binding(string package, IPluginHost host)
+    internal sealed class Binding(string package, IPluginExecutionHost host)
     {
         internal string Package { get; } = package;
-        internal IPluginHost Host { get; } = host;
+        internal IPluginExecutionHost Host { get; } = host;
         internal volatile bool Loading = true;
         private int _disposed;
         internal void Dispose()
@@ -49,29 +47,15 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         }
     }
 
-    public IReadOnlyList<PluginSkip> Failures
-    {
-        get { lock (_sync) return _failures.Select(pair => new PluginSkip(pair.Key, pair.Value)).ToArray(); }
-    }
-
-    public bool IsFaulted(string package)
-    {
-        lock (_sync) return _failures.ContainsKey(package);
-    }
-
-    public PluginSandboxSource? Source(string package)
-    {
-        lock (_sync) return _sources.GetValueOrDefault(package);
-    }
 
     public IReadOnlyList<string> DomainPackages(string package)
     {
         lock (_sync)
-            return _domain is { } domain && (domain.Members.Contains(package) || domain.Failure is not null)
-                ? domain.Members.Append(package).Distinct(StringComparer.Ordinal).ToArray() : [package];
+            return _domain is { } domain && (domain.Bindings.ContainsKey(package) || domain.Failure is not null)
+                ? domain.Bindings.Keys.Append(package).Distinct(StringComparer.Ordinal).ToArray() : [package];
     }
 
-    public void Register(PluginHost host, PluginSandboxSource source)
+    public void Register(PluginSandboxHost.PluginRuntimeEntry source)
     {
         var package = source.Descriptor.Package;
         lock (_sync)
@@ -79,7 +63,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_domain?.Bindings.ContainsKey(package) == true)
                 throw Failure("PLUGIN_SANDBOX_RESTART_REQUIRED", "Retire the shared worker before replacing an active source.");
-            _sources[package] = source;
+            host.RecordEntry(source);
             host.Catalog.Remove(package);
             host.Catalog.Register(source.Descriptor, () => new Proxy(this, package));
         }
@@ -90,7 +74,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
     private void DemandExecution(string package, PluginExecutionSettings active)
     {
         var configured = active.Plugins.GetValueOrDefault(package);
-        var form = Source(package)?.Descriptor.Form ?? PluginForm.ManagedAssembly;
+        var form = host.Entry(package)?.Descriptor.Form ?? PluginForm.ManagedAssembly;
         if (!active.SandboxEnabled || configured?.Enabled == false
             || PluginRoleResolver.Resolve(package, configured, form) != PluginExecution.Sandbox)
             throw Failure("PLUGIN_SANDBOX_PROFILE_CHANGED", "The isolated plugin's active execution profile changed; retire the shared worker.");
@@ -124,8 +108,8 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
                 return;
             domain.Failure = reason;
             bindings = domain.Bindings.Values.ToArray();
-            foreach (var package in domain.Members)
-                _failures[package] = reason;
+            foreach (var binding in bindings)
+                host.SetFailure(binding.Package, reason);
             domain.Retirement ??= Task.Run(() => RetireCoreAsync(domain));
         }
         domain.Connection?.Abort();
@@ -170,13 +154,13 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         return domain;
     }
 
-    private string? Stage(Domain domain, PluginSandboxSource source, out string? stagingDirectory)
+    private string? Stage(Domain domain, string? artifact, out string? stagingDirectory)
     {
         stagingDirectory = null;
-        if (source.ArtifactPath is not { } artifact)
+        if (artifact is null)
             return null;
         var original = CanonicalFilePath.Canonicalize(artifact);
-        SandboxFileAccess.DemandOrdinaryFile(original, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(original, allowMissing: false);
         stagingDirectory = Path.Combine(domain.Directory, Guid.NewGuid().ToString("N"));
         try
         {
@@ -190,12 +174,9 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
                 foreach (var file in System.IO.Directory.EnumerateFiles(sourceDirectory))
                     if (IsCodeFile(file))
                         CopyFile(file, Path.Combine(destination, Path.GetFileName(file)));
-            var localShared = Path.Combine(sourceDirectory, ".shared");
-            if (!installed && System.IO.Directory.Exists(localShared))
-                CopyDirectory(localShared, Path.Combine(destination, ".shared"));
-            if (installed && Path.GetDirectoryName(sourceDirectory) is { } parent
-                && System.IO.Directory.Exists(Path.Combine(parent, ".shared")))
-                CopyDirectory(Path.Combine(parent, ".shared"), Path.Combine(stagingDirectory, ".shared"));
+            var shared = PluginHost.SharedPoolDirectory(original, installed ? Path.GetDirectoryName(sourceDirectory)! : sourceDirectory);
+            if (System.IO.Directory.Exists(shared))
+                CopyDirectory(shared, PluginHost.SharedPoolDirectory(original, installed ? stagingDirectory : destination));
             return Path.Combine(destination, Path.GetFileName(original));
         }
         catch
@@ -218,7 +199,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
 
     private static void CopyFile(string source, string destination)
     {
-        SandboxFileAccess.DemandOrdinaryFile(source, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(source, allowMissing: false);
         System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Copy(source, destination);
         var attributes = File.GetAttributes(destination);
@@ -252,19 +233,19 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         try
         {
             DemandExecution(package, CurrentSettings());
-            PluginSandboxSource source;
+            PluginSandboxHost.PluginRuntimeEntry source;
             lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                if (_failures.ContainsKey(package))
+                if (host.IsFaulted(package))
                     throw Failure("PLUGIN_SANDBOX_FAULTED", "The isolated plugin failed; explicitly retire and reload the shared worker.");
-                source = _sources.GetValueOrDefault(package)
+                source = host.Entry(package)
                     ?? throw Failure("PLUGIN_SANDBOX_SOURCE_MISSING", "The isolated plugin has no registered source.");
             }
             domain = await SharedAsync(cancellationToken).ConfigureAwait(false);
-            var artifact = source.ArtifactPath is { } original && domain.Artifacts.TryGetValue(original, out var existing)
-                ? existing : Stage(domain, source, out _);
-            if (source.ArtifactPath is { } path && artifact is not null)
+            var artifact = source.Artifact is { } original && domain.Artifacts.TryGetValue(original, out var existing)
+                ? existing : Stage(domain, source.Artifact, out _);
+            if (source.Artifact is { } path && artifact is not null)
                 domain.Artifacts[path] = artifact;
             var binding = new Binding(package, capabilities.Create(package, pluginContext));
             lock (_sync)
@@ -274,7 +255,6 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
                     binding.Dispose();
                     throw Failure("PLUGIN_SANDBOX_ALREADY_ACTIVE", "The isolated plugin is already active.");
                 }
-                domain.Members.Add(package);
             }
             CheckAuthority(domain, package);
             var configurationJson = configuration is null ? EmptyConfiguration
@@ -299,7 +279,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
                     : "An isolated plugin could not initialize; explicit retirement and reload are required.");
             }
             lock (_sync)
-                _failures[package] = domain?.Failure ?? "The isolated worker could not be started.";
+                host.SetFailure(package, domain?.Failure ?? "The isolated worker could not be started.");
             throw;
         }
         finally { _lifecycle.Release(); }
@@ -314,8 +294,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         try
         {
             domain = await SharedAsync(cancellationToken).ConfigureAwait(false);
-            var source = new PluginSandboxSource(PluginDescriptor.For(package ?? "inspection", PluginSandboxLaunch.InspectForm(artifactPath)), artifactPath);
-            var staged = Stage(domain, source, out staging);
+            var staged = Stage(domain, artifactPath, out staging);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
             timeout.CancelAfter(PluginSandboxLaunch.InspectionBudget);
             var result = await domain.Connection!.RequestAsync(PluginSandboxMethods.Inspect,
@@ -345,9 +324,9 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         lock (_sync)
         {
             if (_domain is not { } current
-                || current.Members.Count != 0 && !current.Members.Contains(package) && current.Failure is null)
+                || !current.Bindings.IsEmpty && !current.Bindings.ContainsKey(package) && current.Failure is null)
             {
-                _failures.Remove(package);
+                host.SetFailure(package, null);
                 return;
             }
             domain = current;
@@ -359,7 +338,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
             if (ReferenceEquals(_domain, domain))
             {
                 _domain = null;
-                _failures.Clear();
+                host.ClearFailures();
             }
         cancellationToken.ThrowIfCancellationRequested();
     }
@@ -417,8 +396,6 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
             domain.Connection.ReleasePackage(package);
             if (domain.Bindings.TryRemove(package, out var binding))
                 binding.Dispose();
-            lock (_sync)
-                domain.Members.Remove(package);
         }
         catch
         {

@@ -5,7 +5,7 @@ using Dsh.Runtime.Composition;
 
 namespace Dsh.Boot;
 
-public sealed class HarnessPluginManager : IPluginManager, IDisposable
+public sealed class HarnessPluginManager : IDisposable
 {
     private readonly PluginHost _host;
     private readonly Composition _composition;
@@ -14,7 +14,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     private readonly string _pluginsDirectory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
     private readonly IReadOnlyList<PluginSkip> _loadFailures;
-    private readonly IPluginExecutionCatalog? _sandbox;
+    private readonly PluginHost? _sandbox;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
@@ -32,7 +32,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         IReadOnlyList<PluginSkip> loadFailures,
         Func<INativePlugin, IDshPlugin>? nativeBridge,
         string pluginsDirectory,
-        IPluginExecutionCatalog? sandbox)
+        PluginHost? sandbox)
     {
         _host = host;
         _composition = composition;
@@ -247,7 +247,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         var result = $"plugin {trimmed} {key} permission {(allowed ? "allowed" : "denied")}";
         if (_sandbox is null)
             return $"{result} in its future isolation profile (sandbox is off; no OS access restrictions are enforced)";
-        if (PluginRoleResolver.Resolve(trimmed, _settings.Plugins.GetValueOrDefault(trimmed), ExecutionForm(trimmed)) == PluginExecution.Host)
+        if (IsHostRole(trimmed))
             return $"{result} for broker calls; host-role code retains unrestricted in-process access";
         return $"{result}; the next broker operation uses the current permissions";
     }
@@ -417,8 +417,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
         }
         Track(await _sandbox.ScanAsync());
         foreach (var member in domain)
-            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false } setting
-                && PluginRoleResolver.Resolve(member, setting, ExecutionForm(member)) != PluginExecution.Host)
+            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false } && !IsHostRole(member))
                 _host.Catalog.Remove(member);
         var messages = await ActivatePackagesAsync(domain);
         return messages.Count == 0 ? Removed(package, leaked: false) : string.Join(';', messages);
@@ -494,7 +493,7 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
             native.Dispose();
         }
         if (removeRegistration && _sandbox is not null
-            && PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
+            && !IsHostRole(package))
             _host.Catalog.Remove(package);
         return null;
     }
@@ -515,6 +514,9 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
 
     private PluginForm ExecutionForm(string package)
         => Descriptor(package)?.Form ?? _sandbox?.Form(package) ?? PluginForm.ManagedAssembly;
+
+    private bool IsHostRole(string package)
+        => PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) == PluginExecution.Host;
 
     private static string FormName(PluginDescriptor descriptor)
     {
@@ -559,9 +561,8 @@ public sealed class HarnessPluginManager : IPluginManager, IDisposable
     {
         if (_sandbox is not null)
             foreach (var package in _host.Catalog.PackageNames.ToArray())
-                if (PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
+                if (!IsHostRole(package))
                     _host.Catalog.Remove(package);
-        _sandbox?.Dispose();
         foreach (var group in _loadedContexts.GroupBy(entry => entry.Value))
         {
             foreach (var entry in group)

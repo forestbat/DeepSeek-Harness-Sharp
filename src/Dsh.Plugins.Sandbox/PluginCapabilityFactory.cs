@@ -4,16 +4,16 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
-using Dsh.Sandbox;
 
 namespace Dsh.Plugins.Sandbox;
 
 /** Implements the same file, HTTP and tool capabilities for local and isolated plugin SDKs. */
-public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnvironment environment)
+public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvironment environment)
     : IPluginHostFactory, IDisposable
 {
     internal const int MaximumChunkBytes = 256 * 1024;
@@ -26,12 +26,14 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
 
     private ISafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
         ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
-    public IPluginHost Create(string package, Context pluginContext)
+    public IPluginExecutionHost Create(string package, Context pluginContext)
     {
         var host = new LocalHost(this, package, pluginContext);
         pluginContext.Effect(() => host, IPluginHostFactory.ServiceName);
         return host;
     }
+
+    IPluginHost IPluginHostFactory.Create(string package, Context pluginContext) => Create(package, pluginContext);
 
 
     internal ValueTask<JsonElement> ExecuteAsync(string package, string operation, JsonElement arguments,
@@ -68,7 +70,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     {
         var allowNetwork = Require(package, PluginPermission.Read);
         var path = ResolvePath(arguments, execution, allowNetwork);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         var offset = arguments.TryGetProperty("offset", out var position) ? position.GetInt64() : 0;
         var count = arguments.TryGetProperty("count", out var requested) ? requested.GetInt32() : MaximumChunkBytes;
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
@@ -78,6 +80,8 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
         Require(package, PluginPermission.Read);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             CopyBufferBytes, FileOptions.Asynchronous);
+        if (OperatingSystem.IsLinux())
+            LinuxMountTable.DemandOrdinaryFile(stream.SafeFileHandle);
         stream.Position = offset;
         var buffer = ArrayPool<byte>.Shared.Rent(count);
         try
@@ -98,7 +102,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     {
         var allowNetwork = Require(package, PluginPermission.Write);
         var path = ResolvePath(arguments, execution, allowNetwork);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: true);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: true);
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
@@ -138,7 +142,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var options = new FileStreamOptions
         {
-            Mode = append ? FileMode.Append : FileMode.Create,
+            Mode = append ? FileMode.Append : OperatingSystem.IsLinux() ? FileMode.OpenOrCreate : FileMode.Create,
             Access = FileAccess.Write,
             Share = FileShare.Read | FileShare.Delete,
             Options = FileOptions.Asynchronous,
@@ -146,6 +150,12 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         await using var stream = new FileStream(path, options);
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxMountTable.DemandOrdinaryFile(stream.SafeFileHandle);
+            if (!append)
+                stream.SetLength(0);
+        }
         await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
     }
 
@@ -223,7 +233,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     public void Dispose() => _http.Dispose();
 
     private sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
-        : IPluginHost, IPluginExecutionHost, IDisposable
+        : IPluginExecutionHost, IDisposable
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];
@@ -296,32 +306,26 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
             }
         }
 
-        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
-        {
-            ToolRunContext? run;
-            CancellationTokenSource linked;
-            lock (_sync)
-            {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                var invocation = _current.Value;
-                run = invocation is { Active: true } ? invocation.Execution : null;
-                linked = run is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
-                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, invocation!.Cancellation.Token);
-            }
-            using (linked)
-                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
-        }
+        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
+            => CallAsync(operation, arguments, null, cancellationToken, useAmbientInvocation: true);
 
-        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+            => CallAsync(operation, arguments, run, cancellationToken, useAmbientInvocation: false);
+
+        private async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run,
+            CancellationToken cancellationToken, bool useAmbientInvocation)
         {
             CancellationTokenSource linked;
             lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                linked = run is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
-                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, run.Signal);
+                var invocation = useAmbientInvocation && _current.Value is { Active: true } active ? active : null;
+                if (useAmbientInvocation)
+                    run = invocation?.Execution;
+                var signal = invocation?.Cancellation.Token ?? run?.Signal ?? default;
+                linked = signal.CanBeCanceled
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, signal)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
             }
             using (linked)
                 return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);

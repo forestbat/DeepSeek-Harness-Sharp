@@ -175,6 +175,5 @@ public sealed partial class PendingDecisionViewModel(FleetPendingItem item, Func
             item.Header,
             [.. item.Options.Select(option => new AskUserQuestionOption(option.Label, option.Description, option.Value, option.Disabled, option.Default))],
             item.MultiSelect,
-            item.ApproveLabel is { } approve ? new AskUserQuestionIntent(AskUserQuestionIntentKind.PlanReview, approve) : null,
             item.AllowCustom);
 }

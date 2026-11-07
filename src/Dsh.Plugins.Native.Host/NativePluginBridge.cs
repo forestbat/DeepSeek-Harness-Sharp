@@ -20,10 +20,11 @@ public static class NativePluginBridge
                 ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the tools service");
             var logger = ctx.LoggerFor("native-plugin");
             plugin.Configure(SettingsJson.Write(config));
-            var capabilities = new Lazy<IPluginHost>(() =>
+            var capabilities = new Lazy<IPluginExecutionHost>(() =>
                 (ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
                     ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the plugin capability service"))
-                .Create(plugin.Package, ctx));
+                .Create(plugin.Package, ctx) as IPluginExecutionHost
+                ?? throw new InvalidOperationException("native plugin capabilities require an execution-aware host"));
             var host = new Host(plugin, tools, logger, capabilities);
             try
             {
@@ -49,7 +50,7 @@ public static class NativePluginBridge
                 ? text.GetString() ?? ""
                 : value.GetRawText();
 
-    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<IPluginHost> capabilities) : INativePluginHost, IDisposable
+    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<IPluginExecutionHost> capabilities) : INativePluginHost, IDisposable
     {
         private readonly Dictionary<int, IDisposable> _registrations = [];
         private readonly Lock _sync = new();
@@ -107,10 +108,8 @@ public static class NativePluginBridge
             lock (_sync)
                 ObjectDisposedException.ThrowIf(_disposed, this);
             using var document = JsonDocument.Parse(argumentsJson);
-            var host = capabilities.Value as IPluginExecutionHost
-                ?? throw new InvalidOperationException("native plugin capabilities require an execution-aware host");
             var run = ReferenceEquals(_invokingThread, Thread.CurrentThread) ? _activeRun : null;
-            return host.CallAsync(operation, document.RootElement, run, run?.Signal ?? default)
+            return capabilities.Value.CallAsync(operation, document.RootElement, run, run?.Signal ?? default)
                 .AsTask().GetAwaiter().GetResult().GetRawText();
         }
 

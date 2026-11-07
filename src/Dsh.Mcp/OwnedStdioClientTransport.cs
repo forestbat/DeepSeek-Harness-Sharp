@@ -1,4 +1,6 @@
 using Dsh.Core;
+using Dsh.Runtime;
+using Dsh.Sandbox;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -17,7 +19,7 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
     {
         if (Volatile.Read(ref _terminal) != 0)
             throw new IOException("The owned MCP process is unavailable; it cannot be restarted.");
-        _process = await subprocess.SpawnSandboxedAsync(new SubprocessSpawnSpec
+        _process = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = [config.Command!, .. config.Arguments ?? []],
             Cwd = cwd,
@@ -25,8 +27,9 @@ internal sealed class OwnedStdioClientTransport(SubprocessService subprocess, Mc
             KeepStandardInputOpen = true,
             Stderr = new SubprocessCollect(64 * 1024, null),
             Signal = cancellationToken,
-        }, (spec, executable, temporaryDirectory) => SubprocessSandboxOptions.Create(
-            spec, executable, temporaryDirectory, true, true, true, settingsPath));
+        }, (spec, executable, temporaryDirectory) => SandboxedProcess.StartAsync(
+            SubprocessSandboxOptions.Create(spec, executable, temporaryDirectory, true, true, true, settingsPath),
+            spec.Signal));
         try
         {
             ThrowIfUnavailable();

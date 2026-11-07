@@ -1,7 +1,7 @@
-using Dsh.Sandbox;
+using Dsh.Runtime;
 using Dsh.Transport;
 
-namespace Dsh.Core;
+namespace Dsh.Sandbox;
 
 /// <summary>Builds child process options only for launchers that explicitly request an OS sandbox.</summary>
 public static class SubprocessSandboxOptions
@@ -20,15 +20,15 @@ public static class SubprocessSandboxOptions
         if (spec.Env is not null)
             foreach (var (name, value) in spec.Env)
             {
-                if (IsLoaderVariable(name))
+                if (SandboxEnvironment.IsLoaderInjection(name, overridingRuntime: true))
                     throw new InvalidOperationException("Sandboxed process environment cannot override runtime loader configuration.");
                 environment[name] = value;
             }
         // Child-only technical paths do not alter the operator's environment.
-        foreach (var name in new[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "DOTNET_CLI_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR" })
-            environment[name] = home;
-        foreach (var name in new[] { "TMPDIR", "TMP", "TEMP" })
-            environment[name] = temporaryDirectory;
+        foreach (var name in SandboxEnvironment.PrivateDirectoryNames)
+            if (name != "XDG_STATE_HOME")
+                environment[name] = name is "TMPDIR" or "TMP" or "TEMP" ? temporaryDirectory : home;
+        environment["DOTNET_CLI_HOME"] = home;
         if (SandboxRuntimePaths.DotnetRoot() is { } frameworkRoot)
             environment["DOTNET_ROOT"] = frameworkRoot;
         var runtimePaths = new HashSet<string>(SandboxRuntimePaths.ForExecutable(executable),
@@ -53,11 +53,4 @@ public static class SubprocessSandboxOptions
         };
     }
 
-    private static bool IsLoaderVariable(string name)
-        => name.StartsWith("LD_", StringComparison.OrdinalIgnoreCase)
-           || name.StartsWith("DYLD_", StringComparison.OrdinalIgnoreCase)
-           || name.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)
-           || name.StartsWith("COMPlus_", StringComparison.OrdinalIgnoreCase)
-           || name.Equals("CORECLR_ENABLE_PROFILING", StringComparison.OrdinalIgnoreCase)
-           || name.StartsWith("CORECLR_PROFILER", StringComparison.OrdinalIgnoreCase);
 }

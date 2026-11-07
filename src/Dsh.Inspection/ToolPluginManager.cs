@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
@@ -99,7 +100,7 @@ public static class ToolPluginManager
             ? targetElement.GetString()
             : null;
         var force = args.TryGetProperty("force", out var forceElement) && forceElement.ValueKind == JsonValueKind.True;
-        var manager = ctx.Get<IPluginManager>(ServiceName, false)
+        var manager = ctx.Get<HarnessPluginManager>(ServiceName, false)
             ?? throw new InvalidOperationException("plugin_manager is unavailable: the plugin manager service is not registered");
         var result = action switch
         {
@@ -119,7 +120,7 @@ public static class ToolPluginManager
         };
     }
 
-    private static string ListResult(IPluginManager manager)
+    private static string ListResult(HarnessPluginManager manager)
     {
         var names = manager.PackageNames;
         return names.Count == 0
