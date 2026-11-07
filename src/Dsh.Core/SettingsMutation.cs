@@ -22,7 +22,7 @@ public static class SettingsMutation
         return await reader.ReadToEndAsync(signal).ConfigureAwait(false);
     }
 
-    public static async Task WriteTextAsync(string path, string before, string after, ToolRunContext run,
+    public static async Task WriteTextAsync(string path, string? before, string after, ToolRunContext run,
         FileMode mode = FileMode.Create, CancellationToken? signal = null)
     {
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
@@ -33,8 +33,18 @@ public static class SettingsMutation
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var isSettings = active is not null && comparer.Equals(CanonicalFilePath.Canonicalize(path), CanonicalFilePath.Canonicalize(active));
         if (isSettings)
-            await RequireGate(run).CommitAsync(new(path, before, after, run),
+        {
+            var settings = RequireGate(run);
+            if (before is null)
+            {
+                before = File.Exists(path)
+                    ? await SafetyFileAccess.ReadTextAsync(path, run, token, settingsReview: true).ConfigureAwait(false)
+                    : "";
+                if (mode == FileMode.Append) after = $"{before}{after}";
+            }
+            await settings.CommitAsync(new(path, before, after, run),
                 (temporary, cancellation) => WriteFileAsync(temporary, after, FileMode.Create, cancellation), token).ConfigureAwait(false);
+        }
         else
         {
             await SafetyFileAccess.AuthorizeAsync(path, "write", run, token).ConfigureAwait(false);

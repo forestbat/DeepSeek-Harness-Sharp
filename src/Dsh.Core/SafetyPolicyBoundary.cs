@@ -30,9 +30,9 @@ public sealed class SafetyBoundary : Service
             ?? new SafetyBoundary(policy.Ctx, policy.Read))).Value;
     }
 
-    private (PermissionRules Rules, string Namespace) Policy(ToolRunContext? run, bool scriptPermissions = false)
+    private (PermissionRules Rules, string Namespace) Policy(ToolRunContext? run, bool? scriptPermissions = null)
     {
-        var scripts = scriptPermissions || run?.UsesScriptPermissions == true;
+        var scripts = scriptPermissions ?? run?.UsesScriptPermissions == true;
         var settings = _read();
         return (scripts ? settings.Scripts?.Permissions ?? new ScriptPermissions() : settings.Safety ?? new SafetySettings(),
             scripts ? "scripts.permissions" : "safety");
@@ -46,13 +46,24 @@ public sealed class SafetyBoundary : Service
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
         => PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
 
+    private (PermissionRules Rules, string Namespace, PermissionInput Input, PermissionDecision Decision) DecideAndRecord(
+        ToolRunContext? run, string? path = null, string? intent = null, string? lifecycleOwner = null,
+        bool? scriptPermissions = null, bool configuredLifecycle = false)
+    {
+        var (rules, space) = Policy(run, scriptPermissions);
+        var input = Input(run, path, intent);
+        var decision = Decide(rules, input);
+        var outcome = configuredLifecycle
+            ? decision.Decision == "deny" ? "rejected" : "configured-lifecycle-authorized"
+            : null;
+        RecordDecision(Ctx, run, input, decision, space, lifecycleOwner, outcome);
+        Reject(decision, space);
+        return (rules, space, input, decision);
+    }
+
     public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles, Func<JsonElement, IEnumerable<string>>? filePaths = null)
     {
-        var (rules, space) = Policy(run);
-        var input = Input(run);
-        var decision = Decide(rules, input);
-        RecordDecision(Ctx, run, input, decision, space);
-        Reject(decision, space);
+        var (rules, space, input, decision) = DecideAndRecord(run);
         if (mediatedFiles && run.Arguments.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in run.Arguments.EnumerateObject())
@@ -87,69 +98,46 @@ public sealed class SafetyBoundary : Service
     }
 
     public async Task AuthorizeOperationAsync(ToolRunContext? run, CancellationToken signal, string? lifecycleOwner = null,
-        bool scriptPermissions = false)
+        bool? scriptPermissions = null, bool configuredLifecycle = false)
     {
-        var (rules, space) = Policy(run, scriptPermissions);
-        var input = Input(run);
-        var decision = Decide(rules, input);
-        RecordDecision(Ctx, run, input, decision, space, lifecycleOwner);
-        Reject(decision, space);
+        configuredLifecycle &= run is null;
+        if (configuredLifecycle)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(lifecycleOwner);
+            signal.ThrowIfCancellationRequested();
+        }
+        var (rules, space, input, decision) = DecideAndRecord(run, lifecycleOwner: lifecycleOwner,
+            scriptPermissions: scriptPermissions, configuredLifecycle: configuredLifecycle);
+        if (configuredLifecycle) return;
         var revision = Revision(rules);
         var authorization = await ApproveAsync(run, input, decision, space, revision, signal,
             alreadyApproved: run?.SafetyApprovalRevision == $"{space}:{revision}", lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
         if (run is not null) run.SafetyApprovalRevision = authorization;
     }
 
-    public void AuthorizeConfiguredMcp(string lifecycleOwner, CancellationToken signal)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(lifecycleOwner);
-        signal.ThrowIfCancellationRequested();
-        var (rules, space) = Policy(null);
-        var input = Input(null);
-        var decision = Decide(rules, input);
-        RecordDecision(Ctx, null, input, decision, space, lifecycleOwner,
-            decision.Decision == "deny" ? "rejected" : "configured-lifecycle-authorized");
-        Reject(decision, space);
-        // The operator's configured connection authorizes discovery only, never a later model call.
-    }
 
     public async Task AuthorizeFileAsync(ToolRunContext? run, string path, string intent,
-        CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false)
+        CancellationToken signal, string? lifecycleOwner = null, bool settingsReview = false,
+        ApprovalRequest? settingsApproval = null, bool canApprove = true)
     {
         var canonical = Dsh.Runtime.CanonicalFilePath.Canonicalize(path);
-        var (rules, space) = Policy(run);
-        var input = Input(run, canonical, intent);
-        var decision = Decide(rules, input);
-        RecordDecision(Ctx, run, input, decision, space, lifecycleOwner);
-        Reject(decision, space);
+        var (rules, space, input, decision) = DecideAndRecord(run, canonical, intent, lifecycleOwner,
+            scriptPermissions: settingsApproval is not null ? false : null);
         // Proposal reads still obey denials; the one settings gate owns the diff notification.
         if (settingsReview && run is not null
             && Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
             return;
         var revision = Revision(rules);
         var authorization = $"{space}:{revision}";
-        var approved = run?.SafetyApprovalRevision == authorization
-            || run?.HasFileApproval(authorization, canonical, intent) == true;
+        var approved = (settingsApproval is null || !canApprove)
+            && (run?.SafetyApprovalRevision == authorization
+                || run?.HasFileApproval(authorization, canonical, intent) == true);
         await ApproveAsync(run, input, decision, space, revision, signal, alreadyApproved: approved,
-            lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
+            lifecycleOwner: lifecycleOwner, settingsApproval: settingsApproval, canApprove: canApprove).ConfigureAwait(false);
         if (!approved && run is not null && decision.Decision == "notify")
             run.RememberFileApproval(authorization, canonical, intent);
     }
 
-    public void DemandFileAuthorization(ToolRunContext run, string path, string intent)
-    {
-        run.Signal.ThrowIfCancellationRequested();
-        var (rules, space) = Policy(run);
-        var input = Input(run, Dsh.Runtime.CanonicalFilePath.Canonicalize(path), intent);
-        var decision = Decide(rules, input);
-        RecordDecision(Ctx, run, input, decision, space);
-        Reject(decision, space);
-        _ = DemandSessionPolicy(run, input, decision, space);
-        var revision = $"{space}:{Revision(rules)}";
-        if (decision.Decision != "allow" && run.SafetyApprovalRevision != revision
-            && !run.HasFileApproval(revision, input.Path!, intent))
-            throw new UnauthorizedAccessException("The file policy changed before publication; a new authorization is required.");
-    }
 
     private IApprovalService? DemandSessionPolicy(ToolRunContext? run, PermissionInput input,
         PermissionDecision decision, string space)
@@ -164,15 +152,18 @@ public sealed class SafetyBoundary : Service
     }
 
     private async Task<string> ApproveAsync(ToolRunContext? run, PermissionInput input, PermissionDecision decision,
-        string space, string revision, CancellationToken signal, bool alreadyApproved = false, string? lifecycleOwner = null)
+        string space, string revision, CancellationToken signal, bool alreadyApproved = false, string? lifecycleOwner = null,
+        ApprovalRequest? settingsApproval = null, bool canApprove = true)
     {
         signal.ThrowIfCancellationRequested();
         var approval = DemandSessionPolicy(run, input, decision, space);
         if (decision.Decision != "allow" && !alreadyApproved)
         {
+            if (!canApprove)
+                throw new UnauthorizedAccessException("The file policy changed before publication; a new authorization is required.");
             if (run?.Agent is null || approval is null)
                 throw new UnauthorizedAccessException("The operation requires approval with an active session and call; lifecycle operations cannot fabricate invocation context.");
-            var outcome = await approval.Request(new(run.Agent, run.Name, run.CallId,
+            var outcome = await approval.Request(settingsApproval ?? new(run.Agent, run.Name, run.CallId,
                 input.Path is null ? $"{space}: approve this entire tool call, including its actual file operations." : $"{space}: approve only {input.Intent} {input.Path}",
                 run.Arguments.GetRawText()), signal).ConfigureAwait(false);
             var name = outcome switch

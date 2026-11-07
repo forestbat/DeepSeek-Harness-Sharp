@@ -17,13 +17,11 @@ public sealed class SettingsMutationGate : IDisposable
     private readonly Context context;
     private readonly HarnessHome home;
     private readonly EffectHandle registration;
-    private readonly Func<HarnessSettings> read;
 
     public SettingsMutationGate(Context context, HarnessHome home)
     {
         this.context = context;
         this.home = home;
-        read = context.Get<SafetyPolicySource>(SafetyPolicySource.ServiceName)!.Read;
         registration = context.Provide(ServiceName, this);
     }
 
@@ -44,23 +42,17 @@ public sealed class SettingsMutationGate : IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, run.Signal);
         try
         {
-            var revision = await ApproveAsync(request, target, diff, beforeHash, afterHash, linked.Token).ConfigureAwait(false);
-            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, (temporary, signal) =>
+            var approval = CreateApprovalRequest(request, target, diff, beforeHash, afterHash);
+            var safety = SafetyBoundary.Resolve(context)
+                ?? throw new InvalidOperationException("Settings mutations require the active safety boundary.");
+            await safety.AuthorizeFileAsync(run, target, "write", linked.Token, settingsApproval: approval).ConfigureAwait(false);
+            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
-                var rules = read().Safety ?? new SafetySettings();
-                var input = new PermissionInput(run.Name, run.Arguments, run.Agent!.Session.WorkingDirectory ?? Environment.CurrentDirectory,
-                    target, "write", PathIsCanonical: true);
-                var current = PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
-                if (current.Decision == "deny" || SafetyBoundary.Revision(rules) != revision && current.Decision != "allow")
-                {
-                    SafetyBoundary.RecordDecision(context, run, input, current, "safety", outcome: "policy-changed");
-                    throw new UnauthorizedAccessException("The settings policy changed while approval was pending; propose again.");
-                }
-                if (context.Get<IApprovalService>("approval", false)?.IsDenied(run.Agent!) == true)
-                    throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
-                return commit(temporary, signal);
+                await safety.AuthorizeFileAsync(run, target, "write", signal,
+                    settingsApproval: approval, canApprove: false).ConfigureAwait(false);
+                await commit(temporary, signal).ConfigureAwait(false);
             }, linked.Token).ConfigureAwait(false);
             run.RecordFileChange(target);
             outcome = "committed";
@@ -81,38 +73,22 @@ public sealed class SettingsMutationGate : IDisposable
         }
     }
 
-    private async Task<string> ApproveAsync(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash, CancellationToken signal)
+    private ApprovalRequest CreateApprovalRequest(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash)
     {
-        signal.ThrowIfCancellationRequested();
         if (!Owns(request.Path))
             throw new InvalidOperationException("The mutation does not target the active settings document.");
         var run = request.Context;
         var agent = run.Agent ?? throw new InvalidOperationException("Settings mutations require an active model session.");
-        var approval = context.Get<IApprovalService>("approval", false)
+        _ = context.Get<IApprovalService>("approval", false)
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
-        var safety = read().Safety ?? new SafetySettings();
-        var input = new PermissionInput(run.Name, run.Arguments, agent.Session.WorkingDirectory ?? Environment.CurrentDirectory, target, "write", PathIsCanonical: true);
-        var permission = PermissionEngine.Decide(safety, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
-        SafetyBoundary.RecordDecision(context, run, input, permission, "safety");
-        if (permission.Decision == "deny")
-            throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{permission.Match!.RuleId}\".");
-        if (approval.IsDenied(agent))
-            throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
-        var revision = SafetyBoundary.Revision(safety);
-        if (permission.Decision == "allow") return revision;
         var arguments = new JsonObject
         {
             ["settingsMutation"] = true, ["path"] = target, ["diff"] = diff,
             ["beforeHash"] = beforeHash, ["afterHash"] = afterHash,
         };
-        var decision = await approval.Request(new(agent, run.Name, run.CallId,
+        return new(agent, run.Name, run.CallId,
             "Change active settings for all sessions. Review the redacted changed lines and document hashes.", arguments.ToJsonString())
-            { RuleArguments = run.Arguments }, signal).ConfigureAwait(false);
-        if (decision == ApprovalOutcome.Cancelled)
-            throw new OperationCanceledException("Settings mutation was cancelled.", signal);
-        if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
-            throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
-        return revision;
+            { RuleArguments = run.Arguments };
     }
 
     private static string CreateDiff(string before, string after)

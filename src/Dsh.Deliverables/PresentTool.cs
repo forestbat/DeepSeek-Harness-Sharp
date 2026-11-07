@@ -128,7 +128,7 @@ public static class PresentTool
         {
             var path = delivery.Files[index].Path;
             SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx)
-                ?.DemandFileAuthorization(delivery.Run, path, "read");
+                ?.AuthorizeFileAsync(delivery.Run, path, "read", execution.Signal, canApprove: false).GetAwaiter().GetResult();
             Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         }
         execution.Signal.ThrowIfCancellationRequested();

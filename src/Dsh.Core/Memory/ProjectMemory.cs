@@ -303,11 +303,7 @@ public sealed class ProjectMemory
         var line = JsonSerializer.Serialize(entry, DshCoreJsonContext.Default.MemoryAuditEntry) + "\n";
         if (run is not null)
         {
-            var gate = run.Agent?.Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
-            var before = gate?.Owns(AuditPath) == true
-                ? await SafetyFileAccess.ReadTextAsync(AuditPath, run, cancellationToken, settingsReview: true).ConfigureAwait(false)
-                : "";
-            await SettingsMutation.WriteTextAsync(AuditPath, before, before + line, run,
+            await SettingsMutation.WriteTextAsync(AuditPath, null, line, run,
                 FileMode.Append, cancellationToken).ConfigureAwait(false);
             return;
         }
