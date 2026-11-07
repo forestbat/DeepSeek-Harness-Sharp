@@ -410,7 +410,7 @@ public sealed partial class ChatView : UserControl
 
     private void RestoreAnchor(ScrollViewer scroll)
     {
-        var index = ResolveAnchorIndex();
+        var (index, anchorTop) = FoldOrViewportAnchor();
         if (index < 0)
             return;
         _restoringAnchor = true;
@@ -428,7 +428,7 @@ public sealed partial class ChatView : UserControl
                 if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
                     || item.TranslatePoint(default, scroll) is not { } position)
                     break;
-                var delta = position.Y - _anchorTop;
+                var delta = position.Y - anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
                 // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
@@ -505,6 +505,11 @@ public sealed partial class ChatView : UserControl
     /** 折叠会话还剩几轮可用来纠正(每轮布局一次, 面板最多几轮收敛)。 */
     private int _foldSessionPasses;
 
+    /** 折叠会话的锚点: 被点那条(数据项 + 下标 + 当时的屏幕位置)。 */
+    private object? _foldAnchorData;
+    private int _foldAnchorIndex = -1;
+    private double _foldAnchorTop;
+
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
     private object? _anchorData;
@@ -536,21 +541,32 @@ public sealed partial class ChatView : UserControl
         _foldPending = true;
         _sticky = false;
         _foldSessionPasses = AnchorSettlePasses;
+        _foldSession = false;
         if (MessageList.Scroll is not ScrollViewer scroll || MessageContainerOf(source) is not { } item)
-        {
-            _foldSession = false;
             return;
-        }
         if (item.DataContext is not { } data || item.TranslatePoint(default, scroll) is not { } position)
-        {
-            _foldSession = false;
             return;
-        }
-        _anchorData = data;
-        _anchorIndex = MessageList.IndexFromContainer(item);
-        _anchorCount = MessageList.ItemCount;
-        _anchorTop = position.Y;
+        // 单独记一份: 还原过程中间的滚动事件会重记"视口顶部那条", 共用字段会被它覆盖掉。
+        _foldAnchorData = data;
+        _foldAnchorIndex = MessageList.IndexFromContainer(item);
+        _foldAnchorTop = position.Y;
         _foldSession = true;
+    }
+
+    /** 折叠会话期间锚点是被点的那条, 其余时候是视口顶部那条。 */
+    private (int Index, double Top) FoldOrViewportAnchor()
+    {
+        if (!_foldSession)
+            return (ResolveAnchorIndex(), _anchorTop);
+        if (_foldAnchorData is { } data)
+        {
+            for (var index = 0; index < MessageList.ItemCount; index++)
+            {
+                if (ReferenceEquals(MessageList.Items[index], data))
+                    return (index, _foldAnchorTop);
+            }
+        }
+        return (_foldAnchorIndex >= 0 && _foldAnchorIndex < MessageList.ItemCount ? _foldAnchorIndex : -1, _foldAnchorTop);
     }
 
     private ListBoxItem? MessageContainerOf(object? source)
