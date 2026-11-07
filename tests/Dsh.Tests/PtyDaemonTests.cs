@@ -4,7 +4,7 @@ namespace Dsh.Tests;
 
 public class PtyDaemonTests(ITestOutputHelper output)
 {
-    private static readonly string TestRoot = Path.Combine(FindRepositoryRoot(), ".daemon-tests");
+    private static readonly string TestRoot = Path.Combine(TempTree.RepositoryRoot, ".daemon-tests");
     private static readonly TimeSpan ReadReleaseTimeout = TimeSpan.FromSeconds(5);
     private const int ExitCodeAfterOutputCloses = 7;
     private const int ExitDelayAfterOutputClosesSeconds = 1;
@@ -301,13 +301,6 @@ public class PtyDaemonTests(ITestOutputHelper output)
         return Path.Combine(TestRoot, name);
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.slnx")))
-            directory = directory.Parent;
-        return directory?.FullName ?? AppContext.BaseDirectory;
-    }
 
     private static void DeleteSocket(string socketPath)
     {

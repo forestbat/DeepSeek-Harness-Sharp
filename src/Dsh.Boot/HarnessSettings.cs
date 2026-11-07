@@ -60,11 +60,16 @@ public sealed class HarnessSettings
     [YamlMember(Alias = "sandbox")]
     public SandboxSettings? Sandbox { get; set; }
 
+    [YamlMember(Alias = "scripts")]
+    public ScriptsSettings? Scripts { get; set; }
+
     [YamlIgnore]
     public Dictionary<string, PluginSetting> Plugins { get; set; } = [];
 
     private string? _savedDocument;
     private string? _savedPath;
+    private static readonly AsyncLocal<string?> PublicationPath = new();
+    private static readonly AsyncLocal<string?> PreparationPath = new();
 
     public static string LoadTemplate(string? baseDirectory = null)
     {
@@ -81,6 +86,15 @@ public sealed class HarnessSettings
         return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
     }
 
+    public static HarnessSettings LoadForReview(HarnessHome home)
+    {
+        var canonical = CanonicalFilePath.Canonicalize(home.SettingsFile);
+        if (PublicationPath.Value == canonical)
+            return LoadSnapshot(home.SettingsFile, canonical);
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        return LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
+    }
+
     private static HarnessSettings LoadSnapshot(string path, string canonicalPath)
     {
         var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
@@ -92,23 +106,25 @@ public sealed class HarnessSettings
     }
 
     private static HarnessSettings Parse(string text)
-        => new StaticDeserializerBuilder(new DshYamlStaticContext())
+    {
+        ScriptsSettings.ValidateDocument(text);
+        return new StaticDeserializerBuilder(new DshYamlStaticContext())
             .WithAttemptingUnquotedStringTypeDeserialization()
             .IgnoreUnmatchedProperties()
             .Build()
             .Deserialize<HarnessSettings>(text);
-
-    /** Runs a synchronous mutation under one cross-process transaction; false leaves the document unchanged. */
-    public static bool Update(HarnessHome home, Func<HarnessSettings, bool> update)
-    {
-        using var transaction = new SettingsWriteLock(home.SettingsFile);
-        var settings = LoadSnapshot(home.SettingsFile, transaction.CanonicalPath);
-        if (!update(settings))
-            return false;
-        Directory.CreateDirectory(home.Root);
-        settings.SaveSnapshot(home.SettingsFile, transaction.CanonicalPath);
-        return true;
     }
+
+    /** Human updates stay transactional; tool updates release the lock while awaiting a decision. */
+    public static bool Update(HarnessHome home, Func<HarnessSettings, bool> update)
+        => MutateDocument(home.SettingsFile, (existing, canonical) =>
+        {
+            var settings = Parse(existing);
+            settings.Plugins = PluginSettingsSection.ParseDocument(existing);
+            settings._savedDocument = existing;
+            settings._savedPath = canonical;
+            return update(settings) ? settings.PrepareSnapshot(existing, canonical) : null;
+        });
 
     /** Initializes a migration destination without racing another settings writer or locking the source. */
     internal static void CopyIfMissing(HarnessHome source, HarnessHome destination)
@@ -121,49 +137,56 @@ public sealed class HarnessSettings
     /** Applies the caller's changed top-level sections without reverting other writers' unchanged sections. */
     public void Save(HarnessHome home)
     {
-        Directory.CreateDirectory(home.Root);
-        using var transaction = new SettingsWriteLock(home.SettingsFile);
-        SaveSnapshot(home.SettingsFile, transaction.CanonicalPath);
+        string? saved = null;
+        MutateDocument(home.SettingsFile, (existing, canonical) => saved = PrepareSnapshot(existing, canonical));
+        if (saved is not null)
+        {
+            _savedDocument = saved;
+            _savedPath = CanonicalFilePath.Canonicalize(home.SettingsFile);
+        }
     }
 
-    private void SaveSnapshot(string path, string canonicalPath)
+    private string PrepareSnapshot(string existing, string canonicalPath)
     {
-        // Strings that read back as another type (a password "null", a key "123") are quoted, or they would not round-trip.
         var serializer = new StaticSerializerBuilder(new DshYamlStaticContext())
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .WithQuotingNecessaryStrings()
             .Build();
-        var existing = File.Exists(path) ? ReadSettingsTextShared(path) : _savedPath == canonicalPath ? _savedDocument : null;
         var text = serializer.Serialize(this);
-        if (existing is null)
-        {
-            WriteAtomic(path, text);
-            _savedDocument = text;
-            _savedPath = canonicalPath;
-            return;
-        }
         var previous = _savedPath == canonicalPath ? _savedDocument ?? existing : existing;
         var updated = SettingsDocument.MergeTopLevel(existing, serializer.Serialize(Parse(previous)), text);
         _ = Parse(updated);
-        WriteAtomic(path, updated);
-        _savedDocument = text;
-        _savedPath = canonicalPath;
+        return updated;
     }
 
     public void SavePlugins(HarnessHome home)
+        => MutateDocument(home.SettingsFile, (existing, _) => SettingsDocument.MergePlugins(existing, Plugins), backup: true);
+
+    /** Changes one entry from the current locked document without replaying a stale plugin dictionary. */
+    public static void UpdatePlugin(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update)
+        => UpdatePlugins(home, [package], update);
+
+    /** Commits a multi-package install proposal against one current document and one approval. */
+    public static void UpdatePlugins(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
+        => MutateDocument(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), backup: true);
+
+    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
+        => UpdatePluginsAsync(home, [package], update, run);
+
+    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
     {
-        var path = Path.Combine(home.Root, "settings.yaml");
-        Directory.CreateDirectory(home.Root);
-        using var transaction = new SettingsWriteLock(path);
-        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
-        _ = Parse(text);
-        var updated = SettingsDocument.MergePlugins(text, Plugins);
-        _ = Parse(updated);
-        if (updated != text)
-        {
-            WriteAtomic($"{path}.bak", text);
-            WriteAtomic(path, updated);
-        }
+        if (run is not null)
+            return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), run, backup: true);
+        UpdatePlugins(home, packages, update);
+        return Task.CompletedTask;
+    }
+
+    private static string MergePluginUpdates(string existing, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
+    {
+        var plugins = PluginSettingsSection.ParseDocument(existing);
+        foreach (var package in packages.Distinct(StringComparer.Ordinal))
+            plugins[package] = update(plugins.GetValueOrDefault(package));
+        return SettingsDocument.MergePlugins(existing, plugins);
     }
 
     /** Validate independently, persist only the owned child, then publish the route to existing clients. */
@@ -177,14 +200,7 @@ public sealed class HarnessSettings
             .JsonCompatible()
             .Build()
             .Serialize(value).TrimEnd();
-        var path = home.SettingsFile;
-        Directory.CreateDirectory(home.Root);
-        using var transaction = new SettingsWriteLock(path);
-        var existing = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
-        _ = Parse(existing);
-        var updated = SettingsDocument.ReplaceMappingChild(existing, "network", "outbound_proxy", serialized);
-        _ = Parse(updated);
-        WriteAtomic(path, updated);
+        MutateDocument(home.SettingsFile, (existing, _) => SettingsDocument.ReplaceMappingChild(existing, "network", "outbound_proxy", serialized));
         proxy.Configure(value.Url, value.Bypass);
     }
 
@@ -192,15 +208,93 @@ public sealed class HarnessSettings
     public static void SaveBorrowedOutboundMachine(HarnessHome home, string? machine)
     {
         var serialized = machine is null ? null : $"\"{JavaScriptEncoder.Default.Encode(machine)}\"";
-        var path = home.SettingsFile;
-        Directory.CreateDirectory(home.Root);
-        using var transaction = new SettingsWriteLock(path);
-        var existing = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
-        _ = Parse(existing);
-        var updated = SettingsDocument.ReplaceMappingChild(existing, "network", "borrowed_outbound_machine", serialized);
-        _ = Parse(updated);
-        WriteAtomic(path, updated);
+        MutateDocument(home.SettingsFile, (existing, _) => SettingsDocument.ReplaceMappingChild(existing, "network", "borrowed_outbound_machine", serialized));
     }
+
+    /** Applies a raw document transform while owning the settings writer transaction. */
+    internal static bool MutateDocument(string path, Func<string, string, string?> prepare, bool backup = false)
+    {
+        var canonical = CanonicalFilePath.Canonicalize(path);
+        using var transaction = new SettingsWriteLock(canonical);
+        var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+        if (PrepareMutation(before, canonical, prepare) is not { } after)
+            return false;
+        Publish(canonical, before, after, backup);
+        return true;
+    }
+
+    private static Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare, ISettingsMutationContext run, bool backup)
+        => run.CommitAsync(path, canonical =>
+        {
+            using var transaction = new SettingsWriteLock(canonical);
+            var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+            return PrepareMutation(before, canonical, prepare) is { } after
+                ? new SettingsMutationProposal(before, after)
+                : null;
+        }, (canonical, proposal, temporary, signal) =>
+        {
+            if (backup && proposal.Before != proposal.After && proposal.Before.Length > 0)
+                WriteAtomic($"{canonical}.bak", proposal.Before);
+            return File.WriteAllTextAsync(temporary, proposal.After, signal);
+        });
+
+    private static string? PrepareMutation(string before, string canonical, Func<string, string, string?> prepare)
+    {
+        if (PreparationPath.Value == canonical)
+            throw new InvalidOperationException("A settings update callback cannot recursively persist settings.");
+        PreparationPath.Value = canonical;
+        try
+        {
+            var after = prepare(before.Length == 0 ? LoadTemplate() : before, canonical);
+            if (after is not null)
+                _ = Parse(after);
+            return after;
+        }
+        finally
+        {
+            PreparationPath.Value = null;
+        }
+    }
+
+    private static void Publish(string canonical, string before, string after, bool backup)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(canonical)!);
+        if (backup && before != after && before.Length > 0)
+            WriteAtomic($"{canonical}.bak", before);
+        WriteAtomic(canonical, after);
+    }
+
+    /** The mutex remains on its owning thread even when a broker's real commit callback is asynchronous. */
+    public static Task CommitApprovedMutationAsync(string path, string before, string after, Func<string, CancellationToken, Task> commit, CancellationToken signal)
+        => Task.Run(() =>
+        {
+            using var transaction = new SettingsWriteLock(path);
+            signal.ThrowIfCancellationRequested();
+            var current = File.Exists(path) ? ReadSettingsTextShared(path) : "";
+            if (current != before)
+                throw new InvalidOperationException("Settings changed while approval was pending; read the current settings and propose again.");
+            _ = Parse(after);
+            var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+            PublicationPath.Value = transaction.CanonicalPath;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                SettingsFilePermissions.Write(temporary, "");
+                commit(temporary, signal).GetAwaiter().GetResult();
+                signal.ThrowIfCancellationRequested();
+                if (ReadSettingsTextShared(temporary) != after)
+                    throw new IOException("The settings writer did not produce the approved document.");
+                if (File.Exists(path))
+                    File.Replace(temporary, path, destinationBackupFileName: null);
+                else
+                    File.Move(temporary, path);
+            }
+            finally
+            {
+                PublicationPath.Value = null;
+                File.Delete(temporary);
+            }
+        }, signal);
 
     /** Keep a complete snapshot while allowing WriteAtomic to replace settings.yaml on Windows. */
     private static string ReadSettingsTextShared(string path)
@@ -237,10 +331,10 @@ public sealed class HarnessSettings
 
         public SettingsWriteLock(string path)
         {
-            var canonical = Path.GetFullPath(path);
-            if (OperatingSystem.IsWindows())
-                canonical = canonical.ToUpperInvariant();
+            var canonical = CanonicalFilePath.Canonicalize(path);
             CanonicalPath = canonical;
+            if (PublicationPath.Value == canonical)
+                throw new InvalidOperationException("A settings commit callback cannot reenter settings persistence.");
             var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
             _mutex = new Mutex(false, $"Dsh.Settings.{digest}", new NamedWaitHandleOptions
             {
@@ -359,6 +453,9 @@ public sealed class SafetySettings
 
     [YamlMember(Alias = "blacklist")]
     public List<string> Blacklist { get; set; } = [];
+
+    [YamlMember(Alias = "whitelist")]
+    public List<string> Whitelist { get; set; } = [];
 }
 
 /** Plugin sandbox switch; per-plugin grants live under plugins."<package>".permissions. */

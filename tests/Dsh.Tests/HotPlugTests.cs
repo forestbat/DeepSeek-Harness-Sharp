@@ -14,7 +14,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("@deepseek-ai/dsh-tool-todo", manager.PackageNames);
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
@@ -24,23 +24,23 @@ public sealed class HotPlugTests
             Assert.Contains("removed", removed);
             Assert.Null(tools.Get("todo_write"));
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tool-todo"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": false", ReadSettings(home));
+            Assert.False(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var added = await manager.AddAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("activated", added);
             Assert.NotNull(tools.Get("todo_write"));
             Assert.Equal(ActivationState.Active, app.Composition.Find("@deepseek-ai/dsh-tool-todo")!.State);
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": true", ReadSettings(home));
+            Assert.True(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var disabled = await manager.DisableAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("disabled", disabled);
             Assert.Null(app.Composition.Find("@deepseek-ai/dsh-tool-todo"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": false", ReadSettings(home));
+            Assert.False(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
 
             var enabled = await manager.EnableAsync("@deepseek-ai/dsh-tool-todo");
             Assert.Contains("activated", enabled);
             Assert.NotNull(tools.Get("todo_write"));
-            Assert.Contains("\"@deepseek-ai/dsh-tool-todo\": true", ReadSettings(home));
+            Assert.True(HarnessSettings.Load(home).Plugins["@deepseek-ai/dsh-tool-todo"].Enabled);
         }
         finally
         {
@@ -62,7 +62,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             Assert.Contains("not found", await manager.AddAsync("@deepseek-ai/dsh-missing"));
             Assert.Contains("not active", await manager.RemoveAsync("@deepseek-ai/dsh-missing"));
@@ -88,7 +88,7 @@ public sealed class HotPlugTests
         try
         {
             var home = HarnessHome.Resolve(Path.Combine(dir, "home"));
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var pluginPath = Path.Combine(AppContext.BaseDirectory, "Dsh.ManagedPluginSample.dll");
             Assert.True(File.Exists(pluginPath), $"plugin assembly not found: {pluginPath}");
@@ -157,7 +157,7 @@ public sealed class HotPlugTests
                 safety:
                   autoApprove: false
                 """, TestContext.Current.CancellationToken);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir, PluginsDirectory: Path.Combine(dir, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
             Assert.Null(tools.Get("todo_write"));

@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Runtime;
@@ -81,6 +82,48 @@ public sealed class HarnessSettingsSaveTests
             Assert.Equal(["rm -rf"], reloaded.Safety.Blacklist);
             Assert.Equal(4100, reloaded.A2a!.Port);
             Assert.Equal("alpha-key", reloaded.Providers["alpha"].Options!.ApiKey);
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
+    [Fact]
+    public void MultiPackageUpdate_UsesCurrentDocument_AndRetainsUnrelatedPluginChanges()
+    {
+        var home = CreateHome("\n");
+        try
+        {
+            var stale = HarnessSettings.Load(home);
+            HarnessSettings.UpdatePlugin(home, "test/concurrent", _ => new PluginSetting
+            {
+                Enabled = false,
+                Parameters = new Dictionary<string, object?> { ["marker"] = "current" },
+            });
+            HarnessSettings.UpdatePlugin(home, "test/first", _ => new PluginSetting
+            {
+                Enabled = false,
+                Execution = PluginExecution.Sandbox,
+                Permissions = new PluginPermissions { Network = false },
+                Parameters = new Dictionary<string, object?> { ["limit"] = 7 },
+            });
+
+            HarnessSettings.UpdatePlugins(home, ["test/first", "test/second"], existing =>
+                (existing ?? new PluginSetting()) with { Enabled = true });
+
+            var actual = HarnessSettings.Load(home);
+            Assert.DoesNotContain("test/concurrent", stale.Plugins.Keys);
+            Assert.False(actual.Plugins["test/concurrent"].Enabled);
+            Assert.Equal("current", actual.Plugins["test/concurrent"].Parameters["marker"]);
+            Assert.True(actual.Plugins["test/first"].Enabled);
+            Assert.True(actual.Plugins["test/second"].Enabled);
+            Assert.Equal(PluginExecution.Sandbox, actual.Plugins["test/first"].Execution);
+            Assert.False(actual.Plugins["test/first"].Permissions!.Network);
+            Assert.Equal(7, PluginConfigBinding.Bind<LimitConfig>(actual.Plugins["test/first"].Parameters).Limit);
+            var text = ReadSettings(home);
+            Assert.Contains("# 用户注释: 保留", text);
+            Assert.Contains("custom_key: keep-me", text);
         }
         finally
         {
@@ -205,6 +248,11 @@ public sealed class HarnessSettingsSaveTests
         {
             TempTree.Delete(home.Root);
         }
+    }
+
+    public sealed class LimitConfig
+    {
+        public int Limit { get; set; }
     }
 
     private static HarnessHome CreateHome(string newline)

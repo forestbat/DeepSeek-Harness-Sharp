@@ -88,7 +88,9 @@ public sealed class CsxToolsTests
         await harness.RequireFrontend();
         using var registration = ToolRunCsx.Register(harness.Ctx, harness.Root);
         await File.WriteAllTextAsync(Path.Combine(harness.Root, "wait.csx"), """
-            await File.WriteAllTextAsync(Args[0], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var pending = $"{Args[0]}.pending";
+            await File.WriteAllTextAsync(pending, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            File.Move(pending, Args[0]);
             await Task.Delay(System.Threading.Timeout.Infinite);
             """, TestContext.Current.CancellationToken);
         var marker = Path.Combine(harness.Root, "ready.pid");
@@ -98,13 +100,13 @@ public sealed class CsxToolsTests
         {
             using var arrival = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             arrival.CancelAfter(TimeSpan.FromSeconds(60));
-            int pid;
-            while (!File.Exists(marker) || !int.TryParse(await File.ReadAllTextAsync(marker, arrival.Token), CultureInfo.InvariantCulture, out pid))
+            while (!File.Exists(marker))
             {
                 if (running.IsCompleted)
                     Assert.Fail($"dotnet-script exited before entering the script: {TextOf(await running)}");
                 await Task.Delay(25, arrival.Token);
             }
+            var pid = int.Parse(await File.ReadAllTextAsync(marker, arrival.Token), CultureInfo.InvariantCulture);
             using var frontend = Process.GetProcessById(pid);
             cancellation.Cancel();
 

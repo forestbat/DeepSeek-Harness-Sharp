@@ -97,7 +97,7 @@ public static class StrReplaceEditorTool
         });
     }
 
-    private static Task<object?> Execute(JsonElement args, ToolRunContext exec, StrReplaceEditorConfig config)
+    private static async Task<object?> Execute(JsonElement args, ToolRunContext exec, StrReplaceEditorConfig config)
     {
         var command = args.TryGetProperty("command", out var commandElement) && commandElement.ValueKind == JsonValueKind.String
             ? commandElement.GetString()
@@ -108,13 +108,13 @@ public static class StrReplaceEditorTool
         object result = command switch
         {
             "view" => ViewPath(path, args, config.MaxOutputChars, exec),
-            "create" => CreateFile(path, OptionalString(args, "file_text"), exec),
-            "str_replace" => ReplaceInFile(path, OptionalString(args, "old_str"), NewStrOf(args), exec),
-            "insert" => InsertInFile(path, OptionalInt(args, "insert_line"), OptionalString(args, "new_str"), exec),
+            "create" => await CreateFile(path, OptionalString(args, "file_text"), exec).ConfigureAwait(false),
+            "str_replace" => await ReplaceInFile(path, OptionalString(args, "old_str"), NewStrOf(args), exec).ConfigureAwait(false),
+            "insert" => await InsertInFile(path, OptionalInt(args, "insert_line"), OptionalString(args, "new_str"), exec).ConfigureAwait(false),
             // TS 由入参 schema 拦截未知 command;C# 侧运行时校验入参 schema 未接,这里等价拒绝。
             _ => throw new ArgumentException($"invalid command: expected one of `view`, `create`, `str_replace`, `insert`, got {(command is null ? "missing" : $"`{command}`")}"),
         };
-        return Task.FromResult<object?>(result);
+        return result;
     }
 
     private static bool IsView(JsonElement args)
@@ -251,22 +251,18 @@ public static class StrReplaceEditorTool
         }
     }
 
-    private static string CreateFile(string path, string? fileText, ToolRunContext exec)
+    private static async Task<string> CreateFile(string path, string? fileText, ToolRunContext exec)
     {
         var content = RequiredForCommand(fileText, "file_text", "create");
         var target = ResolveTarget(path);
         exec.Signal.ThrowIfCancellationRequested();
         if (File.Exists(target) || Directory.Exists(target))
             throw new ArgumentException($"File already exists at: {target}. Cannot overwrite files using command `create`.");
-        var directory = Path.GetDirectoryName(target);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-        File.WriteAllText(target, content, new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        await SettingsMutation.WriteTextAsync(target, "", content, exec, FileMode.CreateNew).ConfigureAwait(false);
         return $"New file created successfully at: {target}";
     }
 
-    private static string ReplaceInFile(string path, string? oldStr, (bool IsNull, string? Value) newStr, ToolRunContext exec)
+    private static async Task<string> ReplaceInFile(string path, string? oldStr, (bool IsNull, string? Value) newStr, ToolRunContext exec)
     {
         if (newStr.IsNull)
             throw new ArgumentException("Parameter `new_str` must be omitted or contain a string for command: str_replace");
@@ -277,7 +273,7 @@ public static class StrReplaceEditorTool
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
         var offsets = MatchOffsets(before, oldValue);
         if (offsets.Count == 0)
             throw new HarnessException($"No replacement was performed, old_str `{oldValue}` did not appear verbatim in {target}.", "FS_EDIT_NOT_FOUND");
@@ -287,12 +283,12 @@ public static class StrReplaceEditorTool
             throw new HarnessException($"No replacement was performed. Multiple occurrences of old_str `{oldValue}` in lines [{string.Join(", ", lines)}]. Please ensure it is unique", "FS_AMBIGUOUS_EDIT");
         }
         var offset = offsets[0];
-        File.WriteAllText(target, string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length)), new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        var after = string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length));
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 
-    private static string InsertInFile(string path, int? insertLine, string? newStr, ToolRunContext exec)
+    private static async Task<string> InsertInFile(string path, int? insertLine, string? newStr, ToolRunContext exec)
     {
         if (insertLine is null)
             throw new ArgumentException("Parameter `insert_line` is required for command: insert");
@@ -300,13 +296,12 @@ public static class StrReplaceEditorTool
         var target = ResolveTarget(path);
         StatExisting(target, "insert");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
         var lines = before.Split('\n');
         if (insertLine.Value < 0 || insertLine.Value > lines.Length)
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");
         var after = string.Join('\n', lines.Take(insertLine.Value).Concat(value.Split('\n')).Concat(lines.Skip(insertLine.Value)));
-        File.WriteAllText(target, after, new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 

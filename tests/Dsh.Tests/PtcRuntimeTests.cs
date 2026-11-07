@@ -1,30 +1,38 @@
-#pragma warning disable CA2255
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Plugins;
 using Dsh.Ptc;
 using Dsh.Runtime;
 using Dsh.ScriptHost;
 
 namespace Dsh.Tests;
 
-/** 测试宿主同时提供脚本宿主与独立原生 probe 入口;真实子进程复用当前 apphost/dotnet 入口,不启动 harness。 */
-internal static class PtcHostShim
+/** Dispatches owned child modes before the official xUnit runners. */
+internal static class TestProcessEntryPoint
 {
-    [ModuleInitializer]
-    internal static void Initialize()
+    public static int Main(string[] args)
     {
-        var args = Environment.GetCommandLineArgs();
+        if (args.FirstOrDefault() == SandboxFileGrantConsumer.Argument)
+            return SandboxFileGrantConsumer.RunAsync(args).GetAwaiter().GetResult();
+        if (args.FirstOrDefault() == CheckpointTests.FilterConsumerArgument)
+            return CheckpointTests.RunFilterConsumerAsync(args).GetAwaiter().GetResult();
+        global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
+        if (global::Dsh.Plugins.Generated.DshPluginCatalog.TryRunWorkerAsync(args) is { } worker)
+            return worker.GetAwaiter().GetResult();
         if (args.Any(argument => argument == PtyConsoleResizeTests.ProbeArgument))
-            Environment.Exit(PtyConsoleResizeTests.RunProbe(args));
+            return PtyConsoleResizeTests.RunProbe(Environment.GetCommandLineArgs());
         if (args.Any(argument => argument == UnixPtyDescriptorOwnershipTests.SpawnFailureProbeArgument))
-            Environment.Exit(UnixPtyDescriptorOwnershipTests.RunSpawnFailureProbe());
+            return UnixPtyDescriptorOwnershipTests.RunSpawnFailureProbe();
         if (args.Any(argument => argument == PtcScriptHost.HostArgument))
-            Environment.Exit(PtcScriptHost.RunAsync(args.Skip(1).ToArray()).GetAwaiter().GetResult());
+            return PtcScriptHost.RunAsync(args).GetAwaiter().GetResult();
+        return args.Any(argument => argument is "--server" or "--internal-msbuild-node")
+            ? global::Xunit.MicrosoftTestingPlatform.TestPlatformTestFramework.RunAsync(args,
+                global::Dsh.Tests.SelfRegisteredExtensions.AddSelfRegisteredExtensions).GetAwaiter().GetResult()
+            : global::Xunit.Runner.InProc.SystemConsole.ConsoleRunner.Run(args).GetAwaiter().GetResult();
     }
 }
 
@@ -180,7 +188,8 @@ public sealed class PtcRuntimeTests
     public async Task PtcPlugin_ProjectsNativeToolsAndScopeVisibleSdk()
     {
         using var home = new CompositionHome("plugins: { \"@deepseek-ai/dsh-toon\": false }\n");
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
         var scope = new ScopeKey();
@@ -218,7 +227,8 @@ public sealed class PtcRuntimeTests
               "@deepseek-ai/dsh-ptc": false
               "@deepseek-ai/dsh-toon": false
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var prompt = app.Ctx.Get<SystemPrompt>(SystemPrompt.ServiceName)!;
 
         var assembly = await prompt.Assemble(new AssembleContext(new ScopeKey()));

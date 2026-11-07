@@ -40,8 +40,8 @@ public sealed record McpServerStatus(
  * 常驻 MCP 服务:进程存活期内保持与各 server 的连接,并把每个 MCP 工具注册为 agent 原生工具。
  * 至少有一个 server 在册时, 另注册按 server 名取资源的三个共享资源工具。
  */
-public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSettings.DefaultDisclosureThreshold)
-    : Service(ctx, ServiceName), IAsyncDisposable
+public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSettings.DefaultDisclosureThreshold,
+    string? workingDirectory = null) : Service(ctx, ServiceName), IAsyncDisposable
 {
     public const string ServiceName = "mcp";
 
@@ -64,7 +64,7 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
     public async Task ConnectAsync(IReadOnlyList<McpServerConfig> servers, CancellationToken signal = default)
     {
         foreach (var server in servers)
-            await ConnectOneAsync(server, () => CreateTransport(server, OutboundProxy.FromContext(Ctx)), signal);
+            await ConnectOneAsync(server, () => CreateTransport(server), signal);
     }
 
     internal async Task ConnectAsync(McpServerConfig server, IClientTransport transport, CancellationToken signal = default)
@@ -139,18 +139,24 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
         }
     }
 
-    private static IClientTransport CreateTransport(McpServerConfig server, OutboundProxy proxy)
+
+    private IClientTransport CreateTransport(McpServerConfig server)
     {
         if (server.Transport == "stdio")
         {
             if (string.IsNullOrWhiteSpace(server.Command))
                 throw new ArgumentException($"mcp server \"{server.Name}\" requires a command for stdio transport");
-            return new StdioClientTransport(new StdioClientTransportOptions
-            {
-                Name = server.Name,
-                Command = server.Command,
-                Arguments = [.. server.Arguments ?? []],
-            });
+            var home = Ctx.GetProp("dshHomePath") is string root ? new HarnessHome(root) : null;
+            if (home is null || HarnessSettings.LoadForReview(home).Sandbox?.Enabled != true)
+                return new StdioClientTransport(new StdioClientTransportOptions
+                {
+                    Name = server.Name,
+                    Command = server.Command,
+                    Arguments = [.. server.Arguments ?? []],
+                });
+            var subprocess = Ctx.Get<SubprocessService>(SubprocessService.ServiceName, false)
+                ?? throw new InvalidOperationException("Owned MCP stdio requires the subprocess service.");
+            return new OwnedStdioClientTransport(subprocess, server, workingDirectory ?? Environment.CurrentDirectory, home.SettingsFile);
         }
 
         if (server.Transport is "streamable-http" or "sse")
@@ -158,13 +164,8 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
             if (string.IsNullOrWhiteSpace(server.Url))
                 throw new ArgumentException($"mcp server \"{server.Name}\" requires a url for {server.Transport} transport");
             return new HttpClientTransport(
-                new HttpClientTransportOptions
-                {
-                    Name = server.Name,
-                    Endpoint = new Uri(server.Url),
-                },
-                new HttpClient(proxy.CreateHandler()),
-                ownsHttpClient: true);
+                new HttpClientTransportOptions { Name = server.Name, Endpoint = new Uri(server.Url) },
+                new HttpClient(OutboundProxy.FromContext(Ctx).CreateHandler()), ownsHttpClient: true);
         }
 
         throw new ArgumentException($"mcp server \"{server.Name}\" has unsupported transport \"{server.Transport}\"");

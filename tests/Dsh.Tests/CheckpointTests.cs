@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.IO.Pipes;
 using Dsh.Checkpoints;
 using Dsh.Core;
 using Dsh.Llm;
@@ -7,6 +10,96 @@ namespace Dsh.Tests;
 
 public sealed class CheckpointTests
 {
+    internal const string FilterConsumerArgument = "--checkpoint-filter-consumer";
+
+    internal static async Task<int> RunFilterConsumerAsync(string[] args)
+    {
+        using var pipe = new NamedPipeClientStream(".", args[1], PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync();
+        using var reader = new StreamReader(pipe, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+        await writer.WriteLineAsync(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        await reader.ReadLineAsync();
+        File.WriteAllText(args[2], "filter completed");
+        await Console.Out.WriteAsync(await Console.In.ReadToEndAsync());
+        return 0;
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task ShadowGit_CancelledStageClosesItsNativeFilterBeforeReturning()
+    {
+        var home = TempTree.CreateDirectory("checkpoint-cancellation");
+        var project = Path.Combine(home, "project");
+        var repository = Path.Combine(home, "repo.git");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, "input.txt"), "checkpoint input");
+        var git = new ShadowGit(repository, project);
+        await git.InitAsync(TestContext.Current.CancellationToken);
+        var marker = Path.Combine(repository, "filter-completed");
+        var pipeName = $"cpg-{Guid.NewGuid():N}";
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using var reader = new StreamReader(pipe, leaveOpen: true);
+        var executable = Path.Combine(AppContext.BaseDirectory,
+            $"Dsh.Tests{(OperatingSystem.IsWindows() ? ".exe" : "")}");
+        string[] filterArguments = [executable, FilterConsumerArgument, pipeName, marker];
+        if (OperatingSystem.IsWindows())
+            filterArguments = filterArguments.Select(argument => argument.Replace('\\', '/')).ToArray();
+        var command = string.Join(" ", filterArguments.Select(argument => $"'{argument.Replace("'", "'\\''")}'"));
+        Assert.True((await git.RunAsync(["config", "filter.lifetime.clean", command],
+            TestContext.Current.CancellationToken)).Ok);
+        Assert.True((await git.RunAsync(["config", "filter.lifetime.required", "true"],
+            TestContext.Current.CancellationToken)).Ok);
+        Directory.CreateDirectory(Path.Combine(repository, "info"));
+        File.WriteAllText(Path.Combine(repository, "info", "attributes"), "input.txt filter=lifetime\n");
+        using var cancellation = new CancellationTokenSource();
+        Process? filter = null;
+        Task<string?>? filterClosed = null;
+        var stage = git.StageTreeAsync(cancellation.Token);
+        try
+        {
+            await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+            var pid = int.Parse((await reader.ReadLineAsync(TestContext.Current.CancellationToken))!,
+                CultureInfo.InvariantCulture);
+            filter = Process.GetProcessById(pid);
+            TestProcessScope.Track(filter);
+            filterClosed = reader.ReadLineAsync(CancellationToken.None).AsTask();
+
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stage);
+
+            // The filter cannot finish normally while its release pipe remains open and receives no command.
+            Assert.Null(await filterClosed.WaitAsync(TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(marker));
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            if (filter is not null && (filterClosed is null || !filterClosed.IsCompletedSuccessfully || (await filterClosed) is not null))
+            {
+                try
+                {
+                    filter.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The filter exited between the pipe check and the termination request.
+                }
+                if (filterClosed is { IsCompleted: false })
+                    await filterClosed;
+            }
+            filter?.Dispose();
+            try
+            {
+                await stage;
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+            }
+        }
+        Directory.Delete(home, true);
+    }
+
     [Fact]
     public async Task Service_RecordsPointOnToolResultAndSkipsUnchangedContent()
     {

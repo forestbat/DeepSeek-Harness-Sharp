@@ -107,6 +107,7 @@ public sealed partial class ChatView : UserControl
 
     private void Detach()
     {
+        _foldPending = false;
         if (_composer is not null)
             _composer.PropertyChanged -= OnComposerPropertyChanged;
         _composer = null;
@@ -215,11 +216,13 @@ public sealed partial class ChatView : UserControl
     // Observe manual offset changes before ScrollChanged combines them with layout changes.
     private void OnScrollPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs change)
     {
-        if (change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
+        if (_restoringAnchor || change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
             return;
-        if (_scrollInput is not { } input || !IsUserScrollInput(input))
+        if (!_draggingThumb && (_scrollInput is not { } input || !IsUserScrollInput(input)))
             return;
-        _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
+        _scrollGeneration++;
+        _foldPending = false;
+        _sticky = IsAtBottom(scroll);
     }
 
     /**
@@ -229,43 +232,42 @@ public sealed partial class ChatView : UserControl
      * 因为内容一增长, 当前位置立刻就不算底部了。
      * 在这一条之上, 跟随还要同时满足: 意图仍为跟随、没有折叠对齐在飞、没在拖滚动条。
      *
-     * 意图只在"视口自己动了"时重新判定(用户滚动、程序性跳转、我们自己的贴底)。
-     * 内容高度变化(流式输出、虚拟化重估、折叠)一律不改判: 否则每一帧的 extent 抖动都会把跟随
-     * 自己打开又关掉, 表现为滚动条高频小幅乱跳、拖到底又弹回上面、点折叠没反应。
+     * 意图在真实用户滚动时按落点重新判定; 程序性跳到中途只停止跟随。
+     * 内容高度变化和虚拟化锚点修正都不能重新开启跟随, 即使它们只发出 offset delta。
+     * 否则面板重估碰巧触底时会把刚滚开的读者重新拽回末尾。
      */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
-        if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
+        if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll) || _restoringAnchor)
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
         if (!layoutChanged)
         {
-            // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
-            // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
-            // 否则一次布局增长就会把人拽回底部。
+            // ScrollChanged 在布局结束后才发出, 无 extent delta 也可能只是面板的锚点修正。
+            // 程序性跳到中途可以停止跟随, 但只有真正的用户滚动才能重新开启跟随。
             _scrollGeneration++;
-            _sticky = IsAtBottom(scroll);
+            _sticky &= IsAtBottom(scroll);
         }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
-        if (!_restoringAnchor && !_draggingThumb && !_sticky
+        if (!_foldPending && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
-            && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
         {
             RestoreAnchor(scroll);
         }
         // 没有折叠在还原时: 布局变化顺手把视口推了几像素是面板重估 + 布局取整的噪声, 不是滚动, 原样退回。
         // 这两条必须互斥 —— 否则上一行的锚点修正会被这一行按旧 offset 撤销, 流式期间就一直漂。
-        else if (layoutChanged && !_sticky && !_draggingThumb
+        else if (layoutChanged && !_foldPending && !_sticky && !_draggingThumb
             && Math.Abs(e.OffsetDelta.Y) > 0 && Math.Abs(e.OffsetDelta.Y) < SubPixelDrift)
         {
             scroll.Offset = new Vector(scroll.Offset.X, _lastScroll.Offset);
         }
-        RememberAnchor(scroll);
+        if (!_foldPending)
+            RememberAnchor(scroll);
         // 面板重估偶尔会把实体化窗口整个丢到视口之外(实测: 视口里一条都没有, 已实体化项的 top 全是 -1100 之类),
         // 这时按锚点把它找回来。只在滚动事件里做一次, 不在布局回调里做, 不会递归。
-        if (!_restoringAnchor && !HasVisibleItem(scroll) && LastRealizedIndex() is var blank && blank >= 0)
+        if (!_foldPending && !HasVisibleItem(scroll) && LastRealizedIndex() is var blank && blank >= 0)
         {
             _restoringAnchor = true;
             try
@@ -285,11 +287,7 @@ public sealed partial class ChatView : UserControl
         var wasAtBottom = _lastScroll.IsAtBottom(StickyTolerance);
         if (layoutChanged && _sticky && wasAtBottom && !_draggingThumb && !_foldPending && !_restoringAnchor)
             StickToEnd(scroll);
-        if (layoutChanged)
-            _foldPending = false;
         _lastScroll = new ScrollSnapshot(scroll.Offset.Y, scroll.Viewport.Height, scroll.Extent.Height);
-        // 一个滚动周期结束: 下个周期没有新的输入事件就说明这次的位移来自布局, 不是用户。
-        _scrollInput = null;
     }
 
     /**
@@ -340,6 +338,7 @@ public sealed partial class ChatView : UserControl
         _anchorIndex = MessageList.IndexFromContainer(anchor);
         _anchorCount = MessageList.ItemCount;
         _anchorTop = top;
+        _anchorGeneration = _scrollGeneration;
     }
 
 
@@ -403,7 +402,7 @@ public sealed partial class ChatView : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             _blankRecoveryPosted = false;
-            if (_restoringAnchor || MessageList.Scroll is not ScrollViewer scroll || HasVisibleItem(scroll))
+            if (_restoringAnchor || _foldPending || MessageList.Scroll is not ScrollViewer scroll || HasVisibleItem(scroll))
                 return;
             if (LastRealizedIndex() is var index && index >= 0)
             {
@@ -441,6 +440,8 @@ public sealed partial class ChatView : UserControl
 
     private void RestoreAnchor(ScrollViewer scroll)
     {
+        if (!_foldPending && _anchorGeneration != _scrollGeneration)
+            return;
         var index = ResolveAnchorIndex();
         if (index < 0)
             return;
@@ -462,8 +463,8 @@ public sealed partial class ChatView : UserControl
                 var delta = position.Y - _anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
-                // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
-                if (Math.Abs(delta) > scroll.Viewport.Height)
+                // Restore large layout shifts only for the captured message identity.
+                if (!_foldPending && Math.Abs(delta) > scroll.Viewport.Height && !ReferenceEquals(item.DataContext, _anchorData))
                 {
                     RememberAnchor(scroll);
                     break;
@@ -536,6 +537,7 @@ public sealed partial class ChatView : UserControl
     private int _anchorIndex = -1;
     private int _anchorCount = -1;
     private double _anchorTop;
+    private long _anchorGeneration;
 
     /** 正在还原锚点; 期间产生的滚动事件不再参与判断。 */
     private bool _restoringAnchor;
@@ -546,10 +548,46 @@ public sealed partial class ChatView : UserControl
     /** 每轮布局后检查视口是否空掉: 只检测、只投递, 绝不在布局回调里写 offset。 */
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
-    /** 折叠与展开只是视图操作: 位置不需要补偿(上方内容不动), 但要挡掉这一次的触底跟随。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => _foldPending = true;
+    /** 点击前固定被操作消息的身份和位置, 不用布局后的顶部项覆盖它。 */
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldAnchor(sender as Visual);
 
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => _foldPending = true;
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source as Visual);
+
+    private void BeginFoldAnchor(Visual? source)
+    {
+        if (MessageList.Scroll is not ScrollViewer scroll
+            || source?.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: { } data } item)
+            return;
+        var index = MessageList.IndexFromContainer(item);
+        if (index < 0 || !ReferenceEquals(MessageList.ContainerFromIndex(index), item)
+            || item.TranslatePoint(default, scroll) is not { } position)
+            return;
+        _sticky = false;
+        _scrollGeneration++;
+        _anchorData = data;
+        _anchorIndex = index;
+        _anchorCount = MessageList.ItemCount;
+        _anchorTop = position.Y;
+        if (_foldPending)
+            return;
+        _foldPending = true;
+        // Loaded 在布局之后执行; 只还原这次点击, 沿用有界修正, 不在每帧重新追逐锚点。
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_foldPending || MessageList.Scroll is not ScrollViewer live)
+                return;
+            try
+            {
+                RestoreAnchor(live);
+            }
+            finally
+            {
+                _foldPending = false;
+                RememberAnchor(live);
+                _lastScroll = new ScrollSnapshot(live.Offset.Y, live.Viewport.Height, live.Extent.Height);
+            }
+        }, DispatcherPriority.Loaded);
+    }
 
     /** SelectableTextBlock 点击后不会自动获得焦点, 而 Ctrl+C 只有在其拥有焦点时才生效; 选中文字即意味着在阅读, 同时停止触底跟随。 */
     private void OnSelectablePointerPressed(object? sender, PointerPressedEventArgs e)
@@ -568,6 +606,7 @@ public sealed partial class ChatView : UserControl
             return;
         if (!_viewModel.Messages.Contains(message))
             return;
+        _foldPending = false;
         _sticky = true;
         Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(message));
     }

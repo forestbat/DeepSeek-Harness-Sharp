@@ -109,7 +109,7 @@ public class SessionAutoRenameTests
                 "logging:\n  file: false\n",
                 TestContext.Current.CancellationToken);
 
-            using (var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: cwd)))
+            using (var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: cwd), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
             {
                 var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
                 var adapter = new TitleAdapter();

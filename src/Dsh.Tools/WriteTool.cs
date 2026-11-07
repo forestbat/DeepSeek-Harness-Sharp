@@ -93,24 +93,10 @@ public static class WriteTool
         var operation = "create";
         if (File.Exists(target))
         {
-            before = await File.ReadAllTextAsync(target, new UTF8Encoding(false, false), exec.Signal);
+            before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
             operation = "update";
         }
-        var directory = Path.GetDirectoryName(target);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-        var tempPath = $"{target}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            await File.WriteAllTextAsync(tempPath, content, new UTF8Encoding(false, false), exec.Signal);
-            File.Move(tempPath, target, true);
-            exec.RecordFileChange(target);
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
+        await SettingsMutation.WriteTextAsync(target, before ?? "", content, exec).ConfigureAwait(false);
         return new WriteResultValue(target, operation, before, content);
     }
 }

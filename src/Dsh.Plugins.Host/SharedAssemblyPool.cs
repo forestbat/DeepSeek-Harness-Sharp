@@ -13,6 +13,7 @@ public sealed class SharedAssemblyPool
     private readonly List<string> _notices = [];
     private SharedLoadContext _context;
     private bool _unloaded;
+    private readonly Lock _sync = new();
 
     public SharedAssemblyPool(string directory)
     {
@@ -31,14 +32,16 @@ public sealed class SharedAssemblyPool
     /** 解析共享依赖:已在池中则做主版本一致性检查;不在则从 .shared 目录或插件自带副本(提升)装载。 */
     public Assembly? ResolveOrLoad(AssemblyName name, Func<string?> privatePath)
     {
+        lock (_sync)
+            return ResolveOrLoadCore(name, privatePath);
+    }
+
+    private Assembly? ResolveOrLoadCore(AssemblyName name, Func<string?> privatePath)
+    {
         if (name.Name is null)
             return null;
-        if (_unloaded)
-        {
-            _context = new SharedLoadContext(_directory);
-            _unloaded = false;
-        }
-        if (_byName.TryGetValue(name.Name, out var existing))
+        var existing = PluginLoadContext.ResolveHostAssembly(name) ?? _byName.GetValueOrDefault(name.Name);
+        if (existing is not null)
         {
             if (name.Version is not null
                 && existing.GetName().Version is { } have
@@ -47,7 +50,13 @@ public sealed class SharedAssemblyPool
                 throw new InvalidOperationException(
                     $"shared assembly {name.Name}: requested version {name.Version}, but the pool already has {have}; side-by-side loading is refused because split type identity is harder to debug than a load failure");
             }
+            _byName.TryAdd(name.Name, existing);
             return existing;
+        }
+        if (_unloaded)
+        {
+            _context = new SharedLoadContext(_directory);
+            _unloaded = false;
         }
         var pooled = Path.Combine(_directory, name.Name + ".dll");
         var source = File.Exists(pooled) ? pooled : privatePath();
@@ -63,7 +72,14 @@ public sealed class SharedAssemblyPool
         return assembly;
     }
 
+
     public void AddReferences(IEnumerable<string> names)
+    {
+        lock (_sync)
+            AddReferencesCore(names);
+    }
+
+    private void AddReferencesCore(IEnumerable<string> names)
     {
         foreach (var name in names)
             _references[name] = _references.GetValueOrDefault(name) + 1;
@@ -71,6 +87,12 @@ public sealed class SharedAssemblyPool
 
     /** 插件卸载时归还引用;全零即回收池上下文,回收失败由调用方按 leaked 语义上报。 */
     public void Release(IEnumerable<string> names)
+    {
+        lock (_sync)
+            ReleaseCore(names);
+    }
+
+    private void ReleaseCore(IEnumerable<string> names)
     {
         foreach (var name in names)
         {
@@ -89,26 +111,21 @@ public sealed class SharedAssemblyPool
         }
     }
 
-    /** 池内程序集的解析:先 .shared 目录,再绑定宿主镜像。 */
+    /** Host identities precede private shared dependencies, including transitive references. */
     private sealed class SharedLoadContext(string directory) : AssemblyLoadContext("dsh-shared", isCollectible: true)
     {
         protected override Assembly? Load(AssemblyName assemblyName)
         {
+            if (PluginLoadContext.ResolveHostAssembly(assemblyName) is { } host)
+                return host;
             if (assemblyName.Name is not null)
             {
                 var candidate = Path.Combine(directory, assemblyName.Name + ".dll");
                 if (File.Exists(candidate))
                     return LoadFromAssemblyPath(candidate);
             }
-            try
-            {
-                _ = Default.LoadFromAssemblyName(assemblyName);
-                return null;
-            }
-            catch (Exception)
-            {
-                return null;
-            }
+            return null;
         }
+
     }
 }

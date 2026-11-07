@@ -20,7 +20,7 @@ public sealed class ProviderRegistrationTests
                   baseUrl: https://example.invalid
                   apiKeyEnv: DSH_TEST_MISSING_KEY
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Empty(llm.ListProviders());
@@ -40,7 +40,7 @@ public sealed class ProviderRegistrationTests
                   baseUrl: https://example.invalid
                   apiKey: sk-test
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         var provider = Assert.Single(llm.ListProviders());
@@ -59,7 +59,7 @@ public sealed class ProviderRegistrationTests
                   baseUrl: https://example.invalid
                   apiKey: sk-test
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Empty(llm.ListProviders());
@@ -77,7 +77,7 @@ public sealed class ProviderRegistrationTests
                   baseUrl: https://example.invalid
                   apiKey: sk-test
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Equal("no-type", Assert.Single(llm.ListProviders()).Id);
@@ -94,7 +94,7 @@ public sealed class ProviderRegistrationTests
                 options:
                   apiKey: sk-test
             """);
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Equal("ds", Assert.Single(llm.ListProviders()).Id);
@@ -110,7 +110,7 @@ public sealed class ProviderRegistrationTests
             home.Root,
             Provider: "cli-provider",
             BaseUrl: "https://example.invalid",
-            ApiKey: "sk-test"));
+            ApiKey: "sk-test"), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         var provider = Assert.Single(llm.ListProviders());
@@ -122,7 +122,7 @@ public sealed class ProviderRegistrationTests
     public async Task Compose_NoProvidersStartsAndFailsOnlyAtCallTime()
     {
         using var home = new TestHome("plugins: {}\n");
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Empty(llm.ListProviders());

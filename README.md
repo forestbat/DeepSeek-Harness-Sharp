@@ -46,8 +46,17 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
-3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，就可以自动加载并启用该插件。插件编写示例可见 `tests/Dsh.NativePluginSample`。
+3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
 4. dsharp日志默认位置为`<home>/logs/dsh-YYYYMMDD.log`，可以在 `settings.yaml`→`logging:` 中配置它们(TUI 下强制关闭)。
+
+### 设置变更审批
+
+模型通过 `write`、`edit`、`str_replace_editor`、`plugin_manager` 修改当前 `settings.yaml` 时，统一请求脱敏 diff 审批并记录结果。
+拒绝、取消或审批期间检测到人工改动时不发布旧提案；脱敏仅识别常见凭据字段和令牌格式，确认前仍须检查自定义秘密。
+人工命令和 GUI 保存不触发模型审批；缺少会话或审批服务时拒绝模型更新。
+`safety.whitelist` 使用既有工具/命令语法自动放行，如 `tool:write`、`bash:<command-pattern>`；`blacklist` 优先于白名单和 `autoApprove`，会话的 `never` 策略仍然拒绝。
+两张列表可在 GUI safety 页面编辑；匹配不是路径权限或 OS 隔离。
+设置审批独立于 `sandbox.enabled`，不接管宿主代码、shell、PTC、编辑器、Git 或远程进程的任意写入。
 
 ## 不同于原版 DSH 的功能
 
@@ -88,6 +97,8 @@ plugins:
 ### GUI
 
 本项目的 GUI 使用 Avalonia UI 原生实现，与 TUI 共用配置、会话和命令，双击安装包里的`dsh-gui.exe`即可打开，也可以从命令行启动。
+流式输出默认跟随底部；使用滚轮或 PageUp 离开底部后，新增输出保留当前文字的屏幕位置，回到底部后恢复跟随。
+展开或折叠消息时保留当前阅读位置。
 
 ```bash
 Dsh.GuiHost/bin/Debug/net10.0/dsh-gui.exe   # Windows
@@ -270,7 +281,9 @@ storage:
 
 ### 插件与扩展
 
-支持 C# JIT 编译和 AOT 编译两种插件，使用 `/plugins` 命令管理，将符合规范的插件放入 `<安装目录>/plugins/` 也可以自动加载。
+支持托管 JIT 插件与原生 NativeAOT 共享库插件，使用 `/plugins` 命令管理，也可以按 `plugins/<目录>/` 布局部署到安装目录。是否能加载、在哪个进程执行，以及可用的能力，由明确配置与实际平台后端决定；放入目录不等于授予宿主权限。
+
+插件进入卸载后，新的名称或类型依赖不再基于该提供者激活；等待中的依赖插件会在替代服务可用后继续激活。
 
 交互能力通过现有插件独立启用，不再选择四种互斥预设，也不再提供 `/preset` 命令。
 
@@ -282,7 +295,7 @@ storage:
 | `@deepseek-ai/dsh-tool-creative` | `creative_inspect_list`、`creative_inspect_query` 只读检查服务、配置和工具 | 事件检查仍不可用 |
 | `@deepseek-ai/dsh-plugin-manager` | `plugin_manager` 管理插件 | 保留既有审批门禁，不由检查插件自动启用 |
 
-通过 C# SDK 发起的工具子调用仍遵循当前 scope、审批与审计；`run_code` 本身不是 C# 安全沙箱，也不限制用户项目采用的外部工具链。
+通过 PTC 工具 SDK 发起的子调用仍遵循当前 scope、审批与审计；它与下面面向插件的 `IPluginHost` 能力 SDK 是不同接口。`run_code` 本身不是 C# 安全沙箱，也不受独立的 `scripts.permissions` 接管；不要用子工具的审批语义推断任意 PTC/BCL 代码也被隔离。
 SDK 返回的 JSON 根节点可以直接组合进新的 `JsonObject` 或 `JsonArray`；工具返回的图片会作为模型上下文单独交付。
 
 PTC 的临时调试开关默认关闭，启用后会提示模型优先将独立、非交互的工具操作归并到一次 C# `run_code`，而不是分别发起原生调用（包括并行调用）。
@@ -316,6 +329,8 @@ plugins:
 `run_csx` 接收 `script` 文件路径与可选的 `arguments` 数组，`run_csharp_repl` 接收 `code` 和 `description`；两者支持 `workdir`、`timeoutMs`，均不提供 `run_code` 的工具 SDK。
 Windows 的 `run_csx` 在可写的 `workdir` 内创建临时 `.dsh-csx-*` 目录，通过真实 `#load` 执行未经改写的原文件，并在原脚本执行前初始化 UTF-8 脚本输出；引导目录随执行结束清理，编译缓存由原生前端管理。
 CSharpRepl 工具保留 OS 退出码和完整托管退出码，避免 Unix 截断错误码后将异常当作成功；普通 stderr 输出不会被误判为失败。
+开启沙箱时，dotnet-script 的原生 `dotnet restore` 也受脚本网络权限约束；依赖尚未满足时，`network: false` 会在恢复阶段明确失败，而不是借用宿主私有缓存或凭据绕过限制。
+需要在线恢复依赖时，应审查后显式允许脚本网络访问；前端安装、依赖恢复与脚本文件写权限是独立条件。
 
 Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：独立子进程、构建输出与中间目录，以及不共享现有实例状态的运行时 home。
 模型默认通过 `ask_user_question` 询问进程处理方式，可选择隔离新实例、重启明确授权的自有实例，或为当前任务预授权自动处理；原有工具审批仍然生效。
@@ -324,6 +339,18 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 不提供退役预设包的配置或历史兼容；升级前请自行从 `plugins` 配置中删除 `@deepseek-ai/dsh-presets`。
 含旧预设事件且未标记为可忽略的会话，仍按通用未知事件规则拒绝读取。
 会话起始模板（`.agent-presets`）不受影响。
+
+#### 插件沙箱
+
+`sandbox.enabled` 默认关闭，可在 YAML、GUI 或 TUI 中启用；切换总开关需重启。
+开启后，外部能力插件默认在共享的 OS 沙箱进程执行；编译进应用的插件默认在宿主执行，外部完整 `Context` 插件须显式设置 `execution: host`，代表完整进程内信任。
+`plugins.<包名>.permissions` 的 `read`、`write`、`network` 未指定时为允许；`scripts.permissions` 独立控制 `run_csx` 和 `run_csharp_repl`。
+Linux 需要 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程；能力不可用或声明路径授权失败时拒绝启动并撤销本次临时授权。
+隔离插件共享进程，必须相互信任；崩溃、超时或取消影响整个共享进程，不自动重放调用，也不提供内存预算。
+宿主角色的权限位只限制中介调用，不限制同进程代码；已加载的宿主代码不会被追溯隔离。
+开启沙箱不接管 shell、PTC、PTY、编辑器或远程进程；settings 写入规则见[设置变更审批](#设置变更审批)。
+托管插件沿用 `IDshPlugin`，示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生 C ABI v1 见 [`templates/native-plugin`](templates/native-plugin)。
+
 
 <details>
 <summary>插件配置</summary>
@@ -335,9 +362,13 @@ plugins:
     file: ~/.dsh/memory/project.md
   "@deepseek-ai/dsh-checkpoints": false
   "@deepseek-ai/dsh-toon": false
+  "@example/report":
+    permissions: {read: true, write: false, network: false}
 
 sandbox:
   enabled: false
+scripts:
+  permissions: {read: true, write: false, network: false}
 ```
 </details>
 
@@ -355,8 +386,11 @@ sandbox:
 - TUI 问答与既有审批共用键鼠选择控件，支持多选、自定义输入、禁用/默认、中文折行命中、长内容滚动和草稿光标恢复。
 - 问答整组取消返回结构化 `dismissed`，审批保留当前会话工具授权边界，GUI/Web 复用选择与结果契约及 Host 先答者生效生命周期。
 - 决策取消采用显式 Host 能力门禁：旧 v2 Host 不会把取消误读为空答案或拒绝；GUI/Web 显示 Unsupported、保留未决项，既有回答与拒绝继续可用。
+- SDK 的 `session/prompt` 只确认消息入队；释放宿主前须先完成 `shutdown`，它会取消并等待代理收尾，再刷盘和释放会话日志；并发或重复关闭等待同一次收尾并共享其成功或失败结果。
+- 检查点关闭或 Git 操作取消时，会终止并等待自有 Git 进程树退出、收完输出，再完成释放，避免后台进程继续写入检查点目录。
 
 </details>
+
 
 <details>
 <summary><b>未发布</b> — 交互模式能力化</summary>
@@ -378,6 +412,8 @@ sandbox:
 - 工作区作为独立插件管理后端连接，不依赖 IDE 插件；未启用 IDE 时仍可使用会话、终端和文件能力。
 - 新增 Kilo Code 内置适配器，支持 ACP 会话与交互终端入口。
 - 内置 Host 新建或恢复会话时继承启动默认模型与 reasoning；持久化的会话选择仍优先，完全未配置模型时仍明确报错。
+- SSH 借用出口区分跳板 `-W` 目标连接失败与本机转发监听失败，避免将 `stdio forwarding failed` 误报为本机端口绑定冲突。
+- 修复 SSH 退出与连接关闭并发时的回收死锁；故障请求仍不自动重放，只由新的请求重建出口。
 
 </details>
 

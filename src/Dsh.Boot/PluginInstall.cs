@@ -7,10 +7,19 @@ namespace Dsh.Boot;
  *  同名文件内容一致则跳过,不一致则拒绝——插件目录是重启后的唯一发现入口,内容分歧必须显式。 */
 public static class PluginInstall
 {
+    private const int MaximumDependencyManifestBytes = 4 * 1024 * 1024;
     public static string Install(string sourcePath, string pluginsRoot)
     {
         var staging = Path.Combine(pluginsRoot, Path.GetFileNameWithoutExtension(sourcePath));
         Directory.CreateDirectory(staging);
+        foreach (var file in ArtifactFiles(sourcePath))
+            CopyIfChanged(file, Path.Combine(staging, Path.GetFileName(file)));
+        return Path.Combine(staging, Path.GetFileName(sourcePath));
+    }
+
+    /** Selects the artifact and its declared runtime dependencies for installation. */
+    private static IReadOnlyList<string> ArtifactFiles(string sourcePath)
+    {
         var hostImage = HostImageNames();
         var files = new List<string> { sourcePath };
         var depsJson = Path.ChangeExtension(sourcePath, ".deps.json");
@@ -20,9 +29,7 @@ public static class PluginInstall
             files.AddRange(RuntimeDependencies(depsJson, Path.GetDirectoryName(sourcePath)!)
                 .Where(file => !hostImage.Contains(Path.GetFileNameWithoutExtension(file))));
         }
-        foreach (var file in files.Distinct(StringComparer.Ordinal))
-            CopyIfChanged(file, Path.Combine(staging, Path.GetFileName(file)));
-        return Path.Combine(staging, Path.GetFileName(sourcePath));
+        return files.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     /** 删除 add 落盘的插件目录;只允许 plugins 根下的每插件子目录,拒绝删根或根外路径。 */
@@ -47,7 +54,7 @@ public static class PluginInstall
 
     private static IEnumerable<string> RuntimeDependencies(string depsJsonPath, string sourceDir)
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(depsJsonPath));
+        using var document = ReadDependencyManifest(depsJsonPath);
         if (!document.RootElement.TryGetProperty("targets", out var targets))
             yield break;
         foreach (var target in targets.EnumerateObject())
@@ -62,6 +69,18 @@ public static class PluginInstall
                     yield return candidate;
             }
         }
+    }
+
+    private static JsonDocument ReadDependencyManifest(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        if (stream.Length > MaximumDependencyManifestBytes)
+            throw new InvalidDataException("The plugin dependency manifest exceeds the bounded deployment limit.");
+        var bytes = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1)
+            throw new IOException("The plugin dependency manifest changed during inspection.");
+        return JsonDocument.Parse(bytes);
     }
 
     private static void CopyIfChanged(string source, string destination)

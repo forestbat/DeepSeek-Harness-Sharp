@@ -9,4 +9,8 @@
     <RootNamespace>Dsh.Plugins.Native</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+  </ItemGroup>
+
 </Project>

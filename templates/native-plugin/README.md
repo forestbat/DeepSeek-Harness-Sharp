@@ -1,12 +1,13 @@
 # 原生（AOT）插件作者指南
 
 本目录只有文档，没有模板工程：原生插件没有需要复制的骨架工程，**样例是 `tests/Dsh.NativePluginSample/`**（`Dsh.NativePluginSample.csproj` + `SamplePlugin.cs` 两个文件，直接复制改造即可）。
-托管插件的写法见 `templates/managed-plugin/README.md`；两者的差别见本文末尾的对照表。
+托管插件的写法见 [`templates/managed-plugin`](../managed-plugin)。
 
 ## 一句话定位
 
-原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主之间只有一条 **C ABI v1** 契约：**日志 + 工具**。
-它跑在自己的原生镜像里，看不到宿主的服务表、类型与会话——想提供/消费服务、配置、提示词段、入口点的插件必须走托管通道。
+原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主通过 **C ABI v1** 交换日志、工具、配置及可选的宿主能力调用。
+执行角色与权限见主文档[插件沙箱](../../README.md#插件沙箱)，settings 写入规则见[设置变更审批](../../README.md#设置变更审批)。
+原有 v1 二进制可以继续加载、配置和调用；新回调不要求旧插件重新编译。
 
 ## 最小骨架
 
@@ -50,36 +51,42 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 ## 生成器已经替你做掉的（不要手写）
 
-- 导出 `dsh_plugin_package` 与 `dsh_plugin_entry` 两个 C 符号与握手；
-- 句柄表、两段式缓冲协议（放不下时先报长度并保留结果，宿主再取时直接交付，工具只执行一次）、NUL 结尾的 UTF-8 编解码；
+- 保留 `dsh_plugin_package` 与原有 `dsh_plugin_entry(host, plugin)` C 符号，另导出可选的 `dsh_plugin_entry_with_host_size(host, hostApiSize, plugin)`；
+- NUL 结尾的 UTF-8 编解码、句柄表与缓冲交换；当前宿主一次提供完整协议帧，不为取回结果再次执行工具；
 - 工具注册与调用派发，以及两侧的异常拦截（异常不会穿过 ABI 边界）；
-- 日志 sink 安装（`DshNativePluginRuntime.LogSink`）。
+- 日志、配置、工具表和 `DshNativePluginRuntime.CallHost` 的激活／撤销。
 你只声明 `Package` 与 `Tools`；手写导出会与生成物重复定义。
 
 ## 除胶水之外，必须自己注意的
 
 **构建与分发**
 - `PublishAot` + `NativeLib=Shared` + **具体 RID**：一个平台/架构一份产物，跨平台要各编一份（改 `RuntimeIdentifier` 或按 RID 分别发布）。
-- 只依赖 `Dsh.Plugins.Native`。宿主其它模块（`Dsh.Core`、`Dsh.Runtime` 等）不属于原生契约，依赖它们等于把宿主实现细节编进插件。
-- 不需要 `deps.json`，也没有托管依赖闭包；**额外的原生依赖要靠操作系统解析**（插件目录不会自动加进搜索路径，必要时用 `$ORIGIN`/RPATH 或放进系统库路径）。
+- 作者工程直接引用 `Dsh.Plugins.Native`，通过 C 函数表、UTF-8 与 JSON 调用宿主；不要额外引用 `Dsh.Core`、宿主配置或 YAML 模块。
+- NativeAOT 把可达的托管依赖编入原生映像，分发共享库时不依赖托管 `deps.json` 或运行期 DLL 装载闭包；**额外的原生依赖要靠操作系统解析**（插件目录不会自动加进搜索路径，必要时用 `$ORIGIN`/RPATH 或放进系统库路径）。
 - 插件自身也是 AOT 代码：不用反射与动态代码；JSON 用 `JsonDocument`/`JsonNode`（样例如此）或源生成上下文，不要无上下文地 `JsonSerializer.Serialize<T>`。
 
-**能力面（ABI v1 只有日志与工具）**
-- 没有 `Inject`/服务提供、没有 `ConfigType` 配置绑定、没有提示词段、没有会话事件、没有 `[DshEntrypoint]`。
-- 工具集合不再定死：除 `Activate` 时遍历一次 `Tools` 外，可在运行期增删——
-  `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 返回句柄，
-  `DshNativePluginRuntime.UnregisterTool(handle)` 撤销；宿主侧 `ToolRuntime` 即时生效。
-  反注册走 ABI v1 的**可选回调** `unregister_tool`：旧宿主该指针为 null，`UnregisterTool` 返回 false（工具无法撤销），
-  插件应据此降级；`dsh_plugin_abi_version` 是独立的可选导出，供宿主在握手前精确区分「版本不符」与「其它拒绝」。
+**能力面（ABI v1 的可选尾部）**
+- 没有 `Inject`/服务提供、没有 `ConfigType` 配置绑定、没有提示词段、没有会话事件、没有 `[DshEntrypoint]`；`DshNativePluginRuntime.Config` 返回本插件 JSON 配置。
+- 工具可通过 `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 登记、通过 `UnregisterTool(handle)` 撤销，宿主侧即时生效。新宿主优先调用带大小的入口；旧宿主调用原入口时，新插件只读取原始函数表前缀，仍能使用日志、工具及配置，不能调用缺失的能力回调。
+- `DshNativePluginRuntime.CallHost(PluginHostOperations.ReadFile, inputJson)` 返回 JSON 文本：`{path, offset?, count?}` → `{data, length, eof}`，`data` 为 base64。
+- `PluginHostOperations.WriteFile`：`{path, data, append?}` → `{bytesWritten}`，`data` 为 base64。
+- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` → `{status, headers, body}`，请求和响应 `body` 为 base64。
+- `CallHost` 必须处于激活期；操作拒绝／取消／失败以异常传回，不返回空对象冒充成功。样例的 `native_read_file`、`native_write_file`、`native_http` 是这三条真实调用路径。
+
+**缓冲与副作用**
+- `host_call` 的参数为 context、NUL 结尾的 operation/arguments、output、capacity。返回 UTF-8 字节长度，负数表示协议失败；内部响应为 `{"result": ...}` 或 `{"error": "..."}`，公开 `CallHost` 负责解包并传播错误。
+- output 必须指向调用者实际拥有的至少一个完整协议帧（1 MiB）缓冲；空指针或短缓冲在执行操作前直接拒绝，不支持探测长度、保留回复或重试。SDK 每次只调用一次；超出帧大小的回复明确失败，不自动重放可能已发生的写入或网络请求。
+- 宿主只在调用期间写入 output，从不持有该指针；成功返回写入长度，调用者只能读取这部分字节。配置沿用原 v1 的只读长度探测；插件侧仅为旧宿主保留原 v1 工具结果重取语义。
+- 原生调用是同步的，ABI 没有独立取消令牌；宿主可通过其工具调用和 worker 生命周期取消真实操作。不要启动不受插件生命周期管理的回调线程。
 
 **工具契约**
 - 名字/描述/JSON Schema 都是字符串：Schema **必须能被解析**，否则激活失败（不是工具失败）。
 - 调用是 JSON 进、JSON 出；返回值必须是 JSON 对象，其中 `{"text": "..."}` 才会作为文本展示给模型，否则原样输出 JSON；返回 null 或抛错都算工具失败。
 - 工具名沿用与托管插件相同的命名规则（合法标识符才能在 PTC 里直接调用；重名由宿主自动改名并 WARN）。
-- `Invoke` **可能被并发调用**（宿主并行调度工具时），要自己保证线程安全。
+- 当前桥接逐插件序列化同步工具调用，并只在实际调用线程上传递该次真实工具上下文；初始化和后台线程没有工具审批身份。插件自己的后台状态仍需自行保证线程安全。
 
 **线程与生命周期**
-- `Deactivate` 之后共享库会被 `NativeLibrary.Free`：在这里停掉后台线程/定时器，此后再调用宿主回调即属未定义行为。
+- `Deactivate` 停止工具与回调；插件必须在这里停掉后台线程/定时器，此后再调用宿主回调即属未定义行为。NativeAOT 不支持 `dlclose`/`FreeLibrary`，共享库映像保留至承载进程退出。
 - 日志统一走 `DshNativePluginRuntime.Log(level, message)`（激活前是静默的），不要写控制台。
 
 **握手失败不再静默**
@@ -91,12 +98,7 @@ public sealed class SamplePlugin : IDshNativePlugin
 - 主要分发方式是**放进 `<安装目录>/plugins/<目录>/` 启动加载**（原生库与托管插件同目录规则：目录名不参与识别）。
 - `/plugins add <路径>` 现在**支持原生插件**：按扩展名（`.so`/`.dylib`，Windows 下的原生 `.dll`）与导出符号识别原生库，路由到原生装载；AOT 宿主不能热载托管 dll，但加载原生库可行。
 - 更新与托管插件同规矩：**同名文件内容不一致不覆盖**。先 `/plugins remove <包名>`（或直接停宿主）→ 删掉旧目录 → 放入新库 → 重启。
-- 卸载原生插件是 `Deactivate` + `NativeLibrary.Free`，没有可回收 ALC，因此没有托管那种"回收校验/leaked"标记。
-
-**稳定性与崩溃隔离（进程内、按插件）**
-- 每个原生插件对应一个 `NativePluginLoadContext`（`NativeLibrary` 句柄 + 导出绑定 + 在飞调用线程清单 + `Deactivate`/`Free` 路径），与托管侧 `PluginLoadContext` 结构对称。
-- 宿主包装每次工具调用：捕获**可捕获的异常/ABI 错误**（如返回 null、JSON 解析失败）后，标记该插件 `Faulted` → 立即移除其全部工具并尽力卸载 → 静默写日志；同类故障**第二次**出现即加入 quarantine，此后 `TryLoad` 直接拒绝并可读原因。
-- **诚实边界**：进程内遏制**不能**捕获原生段错误/访问违例（那需要 Windows VEH 或 POSIX `sigaction` + `sigsetjmp/siglongjmp`，本期**未落地**）；若真发生越界崩溃仍会带走整个宿主进程。当前策略是「调用包装 + Faulted 标记 + 卸载 + 二次即禁」，不是内存安全保证；插件仍须自己兜住异常与边界条件。
+- 原生插件停用会撤销工具和回调，映像随宿主或 worker 进程退出回收，没有可回收 ALC，也没有托管那种“回收校验/leaked”标记。
 
 ## 编译期诊断
 
@@ -106,15 +108,3 @@ public sealed class SamplePlugin : IDshNativePlugin
 | DSHABI002 | Error | ABI 协议结构体缺少某个角色字段（改动协议本身时才会遇到）。 |
 | DSHABI003 | Warning | 协议里出现了生成器不认识的角色，该函数不会进入函数表。 |
 
-## 与托管插件的对照
-
-| 维度 | 托管（`templates/managed-plugin`） | 原生（本文） |
-| --- | --- | --- |
-| 产物 | 托管 dll + deps.json 闭包 | 每 RID 一份原生共享库 |
-| 契约 | `IDshPlugin`（.NET 类型） | C ABI v1（日志 + 工具） |
-| 能力面 | 服务/工具/提示词段/事件/入口点/配置 | 仅工具 + 日志 |
-| 装载 | 启动扫描 + `/plugins add` 热装载托管 dll | 启动扫描 + `/plugins add` 热装载原生库 |
-| 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate` + `NativeLibrary.Free` |
-| 版本闸门 | 清单 `DescriptorVersion` | ABI 版本（不符即结构化失败，`/plugins doctor` 可查） |
-| 故障隔离 | ALC 隔离托管崩溃；原生依赖按 ALC 规则 | 进程内调用包装 + Faulted 卸载 + 二次 quarantine；原生段错误仍会带走进程（VEH/sigaction 未落地） |
-| AOT 宿主 | 不能在运行期装载 | 正常加载 |

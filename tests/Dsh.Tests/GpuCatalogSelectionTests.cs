@@ -7,6 +7,7 @@ namespace Dsh.Tests;
  * 选卡: 设置值的保存/读回、候选匹配、Linux 的"适配器 → /dev/dri/cardN"by-path 映射、Windows 的进程级偏好。
  * 适配器枚举 Windows(注册表)/Linux(sysfs)各一套, 纯逻辑跨平台, 平台专属断言按 OS 分支, 不再整条测试跳过。
  */
+[Collection(SerialProcessCollection.Name)]
 public class GpuCatalogSelectionTests
 {
     [Fact]

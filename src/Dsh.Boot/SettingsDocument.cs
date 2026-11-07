@@ -281,10 +281,10 @@ internal static partial class SettingsDocument
         return builder.ToString();
     }
 
-    /** A bare boolean when the entry only carries enabled; otherwise the {enabled, permissions, ...parameters} mapping. */
+    /** Render reserved authority fields separately from plugin-owned parameters. */
     private static void RenderPlugin(StringBuilder builder, string name, PluginSetting setting)
     {
-        if (setting.Parameters.Count == 0 && setting.Permissions is null)
+        if (setting.Parameters.Count == 0 && setting.Permissions is null && setting.Execution is null)
         {
             builder.Append('\n').Append(Indent).Append(Quote(name)).Append(": ").Append(Bool(setting.Enabled));
             return;
@@ -292,6 +292,9 @@ internal static partial class SettingsDocument
         const string entryIndent = Indent + Indent;
         builder.Append('\n').Append(Indent).Append(Quote(name)).Append(':');
         builder.Append('\n').Append(entryIndent).Append(PluginSetting.EnabledKey).Append(": ").Append(Bool(setting.Enabled));
+        if (setting.Execution is { } execution)
+            builder.Append('\n').Append(entryIndent).Append(PluginSetting.ExecutionKey).Append(": ")
+                .Append(execution == PluginExecution.Host ? "host" : "sandbox");
         if (setting.Permissions is { } permissions)
         {
             builder.Append('\n').Append(entryIndent).Append(PluginSetting.PermissionsKey).Append(':');

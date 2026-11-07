@@ -4,19 +4,21 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Dsh.Runtime;
+using Dsh.Plugins;
 
 namespace Dsh.Boot;
 
 public static class BootCli
 {
-    public static async Task<int> RunHeadlessAsync(HarnessHome home, string task, string? resumeSessionId = null)
+    public static async Task<int> RunHeadlessAsync(HarnessHome home, string task, string? resumeSessionId = null,
+        PluginRuntimeFactory? runtimeFactory = null)
     {
         if (string.IsNullOrWhiteSpace(task))
         {
             await Console.Error.WriteLineAsync("error: a task is required, for example: dsharp headless \"run the tests\"");
             return 1;
         }
-        using var app = await HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()));
+        using var app = await HarnessComposer.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory()), runtimeFactory);
         using var autoApprove = InvokeStaticDisposable("Dsh.Interaction.ApprovalAnswerers", "Dsh.Interaction", "AutoApprove", app.Ctx);
         var agents = app.Ctx.Get("agents")!;
         var agentOptions = Activator.CreateInstance(RequireType("Dsh.Core.AgentOptions", "Dsh.Core"), app.Provider, app.Model, null, null)!;

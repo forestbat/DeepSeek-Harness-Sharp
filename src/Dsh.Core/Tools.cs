@@ -21,7 +21,11 @@ public sealed record ApprovalRequest(
     string ToolName,
     ToolCallId CallId,
     string? Reason = null,
-    string? Arguments = null);
+    string? Arguments = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public JsonElement? RuleArguments { get; init; }
+}
 
 public interface IApprovalService
 {
@@ -87,6 +91,16 @@ public sealed class ToolRuntime : Service
 
     /** Registers a tool for a scope and its descendants. */
     public IDisposable Register(ToolDefinition definition, ScopeKey? scope)
+        => RegisterCore(definition, scope, PluginApplyScope.CurrentPlugin);
+
+    /** Trusted supervisor ownership metadata; this does not grant OS authority. */
+    public IDisposable RegisterForPlugin(string package, ToolDefinition definition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(package);
+        return RegisterCore(definition, null, package);
+    }
+
+    private IDisposable RegisterCore(ToolDefinition definition, ScopeKey? scope, string? owner)
     {
         if (definition.TimeoutMs is <= 0)
             throw new ArgumentException($"tool \"{definition.Name}\" timeoutMs must be a positive finite number");
@@ -95,7 +109,6 @@ public sealed class ToolRuntime : Service
             Ctx.LoggerFor("tools").Warn(
                 $"tool \"{definition.Name}\" is not a C# identifier; programs can call it as tools.call(\"{definition.Name}\", args)");
         }
-        var owner = PluginApplyScope.CurrentPlugin;
         var registeredName = definition.Name;
         var registrationId = Guid.NewGuid();
         return _layers.Effect(Ctx, scope,
@@ -549,6 +562,7 @@ public sealed class ToolRuntime : Service
             Agent = input.Agent,
             Parent = input.Parent,
             Signal = input.Signal,
+            HostContext = Ctx,
         };
         var visible = Get(input.Name, input.Agent?.ScopeKey);
         runContext.CapturedFinalizer = visible?.FinalizeContent;
@@ -600,6 +614,9 @@ public sealed class ToolRuntime : Service
             return gate;
         var tool = Get(exec.Name, agent.ScopeKey);
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
+        // The actual settings writer requests its own diff decision instead of a second root-only decision.
+        if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
+            targets = targets.Where(path => !settings.Owns(path)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
         return new PreToolDecision.Ask(gate is PreToolDecision.Ask { Reason: { } earlier } ? $"{reason}; {earlier}" : reason);
@@ -761,6 +778,15 @@ public sealed class ToolRuntime : Service
     private ToolExecutionResult CreateSuccessResult(ToolRunContext exec, ToolDefinition tool, object? candidate)
     {
         var value = SnapshotValue(tool.Name, candidate);
+        if (exec.LastSettingsMutation is not null && value.ValueKind == JsonValueKind.Object)
+        {
+            var document = JsonNode.Parse(value.GetRawText())!.AsObject();
+            if (document.ContainsKey("before"))
+                document["before"] = Dsh.Runtime.Logging.Redaction.Apply(document["before"]?.GetValue<string>() ?? "");
+            if (document.ContainsKey("after"))
+                document["after"] = Dsh.Runtime.Logging.Redaction.Apply(document["after"]?.GetValue<string>() ?? "");
+            value = JsonDocument.Parse(document.ToJsonString()).RootElement;
+        }
         var violations = JsonSchemaValidator.Validate(tool.Output.Schema, value, "value");
         if (violations.Count > 0)
             throw new ToolOutputException(tool.Name, violations);
@@ -785,6 +811,15 @@ public sealed class ToolRuntime : Service
                 throw new ToolOutputException(tool.Name, [$"output.presentationMeta failed: {error.Message}"]);
             }
         }
+        if (exec.LastSettingsMutation is { } mutation)
+            meta = JsonDocument.Parse(new JsonObject
+            {
+                ["card"] = "diff",
+                ["title"] = $"settings {mutation.Outcome}: {mutation.Path}",
+                ["patch"] = mutation.Diff,
+                ["beforeHash"] = mutation.BeforeHash,
+                ["afterHash"] = mutation.AfterHash,
+            }.ToJsonString()).RootElement;
         return new ToolExecutionResult.Success
         {
             IsError = false,

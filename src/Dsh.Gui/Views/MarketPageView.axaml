@@ -72,7 +72,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Text="启用/禁用、移除与读/写/网络权限会立即写入 settings.yaml（plugins.&quot;包名&quot;.permissions）；权限的强制执行随插件沙箱提供。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
+            <TextBlock Text="权限变更立即保存到 Host 的 settings.yaml。沙箱开启时，权限开关约束宿主中介操作，不限制 Host 插件的直接进程内访问。外部完整 Context 插件可在 YAML 中设置 execution: host，此角色具有完整进程内信任。插件参数在「设置 → 插件与 MCP」中查看。" Classes="Tertiary" TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

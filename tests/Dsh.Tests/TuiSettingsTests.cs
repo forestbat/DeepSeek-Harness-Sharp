@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Pty;
 using Dsh.Tui;
 using Dsh.Tui.Services;

@@ -107,7 +107,7 @@ public class ToolExecution : ToolExecutionInput
     public CancellationToken WrapperSignal { get; set; }
 }
 
-public sealed class ToolRunContext : ToolExecution
+public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutationContext
 {
     private readonly List<UserMessage> _deferred = [];
 
@@ -118,6 +118,35 @@ public sealed class ToolRunContext : ToolExecution
     public bool ConcludedRequested { get; private set; }
 
     public bool BodyInvoked { get; internal set; }
+
+    internal Dsh.Runtime.Context? HostContext { get; init; }
+
+    async Task<bool> Dsh.Runtime.ISettingsMutationContext.CommitAsync(string path,
+        Func<string, Dsh.Runtime.SettingsMutationProposal?> prepare,
+        Func<string, Dsh.Runtime.SettingsMutationProposal, string, CancellationToken, Task> commit)
+    {
+        var gate = SettingsMutation.RequireGate(this);
+        if (!gate.Owns(path))
+            throw new InvalidOperationException("The mutation does not target the active settings document.");
+        var canonical = gate.SettingsPath;
+        if (prepare(canonical) is not { } proposal)
+            return false;
+        await gate.CommitAsync(new(canonical, proposal.Before, proposal.After, this),
+            (temporary, signal) => commit(canonical, proposal, temporary, signal), Signal).ConfigureAwait(false);
+        return true;
+    }
+
+    public SettingsMutationAuditPayload? LastSettingsMutation { get; private set; }
+
+    public void RecordSettingsMutation(SettingsMutationAuditPayload audit, Dsh.Runtime.Context? fallback = null)
+    {
+        LastSettingsMutation = audit;
+        if (Agent is { } agent)
+            agent.Session.Append(audit);
+        else
+            fallback?.LoggerFor("settings-mutation").Warn(
+                $"settings {audit.Outcome}; tool={audit.ToolName}; call={audit.CallId.Value}; root={audit.RootCallId.Value}; target={audit.Path}; beforeHash={audit.BeforeHash}; afterHash={audit.AfterHash}\n{audit.Diff}");
+    }
 
     internal Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? CapturedFinalizer { get; set; }
 

@@ -11,6 +11,8 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class CSharpReplToolsTests
 {
+    private const long BlockingEvaluationTimeoutMs = 5_000;
+
     [Fact(Timeout = 60000)]
     public async Task MultilineProgram_PreservesStateAndPrintsFinalExpression()
     {
@@ -127,7 +129,7 @@ public sealed class CSharpReplToolsTests
     {
         using var harness = await Harness.CreateAsync();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var pending = harness.RunAsync(BlockingProgram, cancellation.Token, timeoutMs: 30_000);
+        var pending = harness.RunAsync(BlockingProgram, cancellation.Token, timeoutMs: BlockingEvaluationTimeoutMs);
         try
         {
             var pid = await harness.WaitForPidAsync(pending);
@@ -159,7 +161,8 @@ public sealed class CSharpReplToolsTests
     }
 
     private const string BlockingProgram = """
-        await System.IO.File.WriteAllTextAsync("frontend.pid", System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await System.IO.File.WriteAllTextAsync("frontend.pid.tmp", System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        System.IO.File.Move("frontend.pid.tmp", "frontend.pid");
         await System.Threading.Tasks.Task.Delay(System.Threading.Timeout.Infinite);
         """;
 
@@ -176,6 +179,8 @@ public sealed class CSharpReplToolsTests
     {
         Assert.True(result.IsError, Text(result));
         var failure = Assert.IsType<ToolExecutionResult.Failure>(result);
+        if (!string.Equals(code, failure.Error.Info?.Code, StringComparison.Ordinal))
+            TestContext.Current.TestOutputHelper?.WriteLine(Text(result));
         Assert.Equal(code, failure.Error.Info?.Code);
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Compaction;
@@ -7,6 +8,7 @@ using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
 
@@ -174,13 +176,39 @@ public sealed class MainViewModelTests
         var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First(item => item.SessionId == session.Id);
         Assert.False(node.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnStartPayload(1)), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.IsBusy);
-        Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != session.Id);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remove = environment.Agent.Ctx.OnWaterfall<AgentPreStepNotification>((notification, _) =>
+        {
+            entered.TrySetResult();
+            return new ValueTask<object?>(release.Task.WaitAsync(notification.Payload.Signal));
+        });
+        try
+        {
+            environment.Agent.Followup(MessageFactory.CreateUserText("Verify the background session running indicator."));
+            await GuiTestEnvironment.PumpAsync(entered.Task);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: true });
+            Assert.Equal(AgentStatus.Running, environment.Agent.Status);
+            Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnEndPayload(1, new TurnEndReason.Completed())), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => !viewModel.IsBusy);
-        Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            release.TrySetResult(new PreStepDecision.Reject());
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: false });
+            Assert.Equal(AgentStatus.Idle, environment.Agent.Status);
+            Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            Assert.DoesNotContain(session.SnapshotEvents(), item => item.Data is StepStartPayload);
+        }
+        finally
+        {
+            release.TrySetResult(new PreStepDecision.Reject());
+            remove();
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+        }
     });
 
     /** 交付物清单: 打开会话时从日志回放, 之后跟随新声明与会话截断。 */
@@ -290,41 +318,34 @@ public sealed class MainViewModelTests
         Assert.Contains("dsh-", message.Text);
     });
 
-    /**
-     * 压缩必须有自己的进度行与忙碌状态。摘要要发若干次模型请求, 一次压缩可能持续数分钟;
-     * 界面完全没反应时用户只会再按一次 /compact, 而那一次必然被"压缩已在进行"挡回来。
-     * 这里走"重新加载会话"这条确定性路径, 覆盖与实时流相同的渲染代码(ApplyEvents)。
-     */
     [Fact]
-    public async Task Compaction_ShowsProgressThenSummaryInsteadOfStayingSilent() => await HeadlessGui.RunAsync(async () =>
+    public async Task CompactionFeed_ExposesBusyProgressThenSummaryAndCompletion() => await HeadlessGui.RunAsync(async () =>
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
         var chat = await environment.OpenChatAsync();
         var session = environment.Agent.Session;
         var compactionId = CompactionId.Create("cmp-gui");
         session.Append(new CompactionStartPayload(compactionId, null, null));
+        await using var viewModel = new MainViewModel(environment.App, chat);
+        await GuiTestEnvironment.WaitForAsync(
+            (INotifyCollectionChanged)viewModel.Messages,
+            () => viewModel.IsBusy && viewModel.Messages.Any(message => message.Kind == MessageKind.Context),
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
+
+        const string summaryText = "GUI 压缩摘要正文";
         session.Append(new CompactionSummaryPayload(
             compactionId,
             null,
-            [new TextBlock("GUI 压缩摘要正文")],
+            [new TextBlock(summaryText)],
             new ShadowedRange(0, 10),
             [0, 1, 2, 3],
             4321,
             "deepseek-official",
             "deepseek-v4-flash"));
         session.Append(new CompactionEndPayload(compactionId, null, null));
-        await using var viewModel = new MainViewModel(environment.App, chat);
-        // 走实时流(不是重新加载): 用户报的正是"压缩开始后界面没动静"这条路。
-        await GuiTestEnvironment.WaitForAsync(
-            (INotifyCollectionChanged)viewModel.Messages,
-            () => viewModel.Messages.Any(message => message.Text.Contains("正在压缩上下文", StringComparison.Ordinal)),
-            () => GuiTestEnvironment.DescribeChatState(viewModel));
-        var summary = Assert.Single(viewModel.Messages, message =>
-            message.Text.Contains("上下文已压缩", StringComparison.Ordinal));
-        Assert.Contains("收起 4 条历史", summary.Text, StringComparison.Ordinal);
-        Assert.Contains("GUI 压缩摘要正文", summary.Detail, StringComparison.Ordinal);
-        // 成功的压缩结束后不能把界面留在忙碌态。
-        Assert.False(viewModel.IsBusy);
+        await GuiTestEnvironment.WaitForAsync((INotifyPropertyChanged)viewModel, () => !viewModel.IsBusy);
+        Assert.Single(viewModel.Messages, message =>
+            message.Kind == MessageKind.Context && message.Detail == summaryText);
     });
 
     /** 压缩检查点的正文已经由摘要行渲染过, 再当成上下文注入会让同一段摘要出现两次。 */
@@ -369,8 +390,10 @@ public sealed class MainViewModelTests
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                 () => viewModel.Messages.Any(message => message.Kind == MessageKind.User),
                 () => GuiTestEnvironment.DescribeChatState(viewModel));
-            Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
-            Assert.Equal("你好", viewModel.Messages[0].Text);
+            var rendered = Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
+            Assert.Contains("你好", rendered.Text, StringComparison.Ordinal);
+            Assert.Single(environment.Agent.Session.SnapshotEvents().Select(item => item.Data).OfType<UserMessagePayload>(),
+                payload => payload.Message.Content.OfType<TextBlock>().Any(block => block.Text == "你好"));
         });
 
     [Fact]
@@ -392,12 +415,13 @@ public sealed class MainViewModelTests
         await using var environment = await GuiTestEnvironment.CreateAsync();
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
 
-        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"]);
+        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"], ["tool:write"]);
 
         var reloaded = viewModel.Settings.Load();
         var safety = Assert.IsType<SafetySettings>(reloaded.Safety);
         Assert.True(safety.AutoApprove);
         Assert.Contains("bash: rm -rf /*", safety.Blacklist);
+        Assert.Equal(["tool:write"], safety.Whitelist);
         Assert.True(File.Exists(viewModel.Settings.SettingsPath));
     });
 

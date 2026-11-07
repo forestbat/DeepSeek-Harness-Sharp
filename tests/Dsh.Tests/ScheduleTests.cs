@@ -604,7 +604,7 @@ public static class ScheduleTests
             var overdue = new ScheduleRecord("schedule-overdue", "check", "check the build", new ScheduleRule(ScheduleKind.At, DateTimeOffset.UtcNow.AddMinutes(-5)));
             try
             {
-                using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory)))
+                using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
                 {
                     var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                     var created = await agents.Create(new CreateAgentOptions(sessionId, directory, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);
@@ -620,7 +620,7 @@ public static class ScheduleTests
                           "@deepseek-ai/dsh-schedule": false
                           "@deepseek-ai/dsh-tool-schedule": false
                         """, TestContext.Current.CancellationToken);
-                    using (var disabled = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory)))
+                    using (var disabled = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
                     {
                         Assert.Null(disabled.Ctx.Get<ScheduleService>(ScheduleService.ServiceName));
                         var agents = disabled.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
@@ -632,7 +632,7 @@ public static class ScheduleTests
                     await File.WriteAllTextAsync(Path.Combine(home, "settings.yaml"), GuiTestEnvironment.HomeSettings, TestContext.Current.CancellationToken);
                 }
 
-                using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory)))
+                using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(home), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
                 {
                     var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                     var resumed = (await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken)).Agent;

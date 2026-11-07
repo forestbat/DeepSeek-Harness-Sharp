@@ -73,6 +73,17 @@ public sealed class SafetyCommandGuardTests
         Assert.False(pattern.Matches(ShellCommandSegments.Split("echo shutdown-notes.txt", ShellDialect.Posix)));
     }
 
+    [Theory]
+    [InlineData("tool:write", "write", "{}")]
+    [InlineData("bash:rm -rf /*", "bash_persistent", "{\"command\":\"sudo rm -r -f /*\"}")]
+    [InlineData("wsl:rm -rf /*", "bash", "{\"command\":\"true && rm -fr /*\"}")]
+    [InlineData("pwsh:Remove-Item -Recurse canary", "pwsh_persistent", """{"command":"remove-item -recurse 'canary'"}""")]
+    public void SharedSafetyListEvaluator_UsesCurrentToolAndCommandGrammar(string rule, string tool, string arguments)
+    {
+        using var document = JsonDocument.Parse(arguments);
+        Assert.Equal(rule, SafetyCommandGuard.MatchingRule([rule], tool, document.RootElement));
+    }
+
     public sealed class Bash : IDisposable
     {
         private readonly Context _ctx = new();
@@ -86,7 +97,8 @@ public sealed class SafetyCommandGuardTests
             _tools = new ToolRuntime(_ctx);
             _ = new SubprocessService(_ctx);
             BashTool.Register(_ctx);
-            _guard = SafetyCommandGuard.Register(_ctx, new SafetySettings { Blacklist = [$"bash: touch {Canary}"] });
+            var safety = new SafetySettings { Blacklist = [$"bash: touch {Canary}"] };
+            _guard = SafetyCommandGuard.Register(_ctx, () => safety);
         }
 
         private string Canary => Path.Combine(_directory, "canary");
@@ -163,7 +175,8 @@ public sealed class SafetyCommandGuardTests
         [InlineData("powershell: Remove-Item canary", "pwsh", "Get-Date; Remove-Item canary")]
         public async Task ShellRule_BlocksEveryToolOfTheSameDialect(string rule, string tool, string command)
         {
-            using var guard = SafetyCommandGuard.Register(_ctx, new SafetySettings { Blacklist = [rule] });
+            var safety = new SafetySettings { Blacklist = [rule] };
+            using var guard = SafetyCommandGuard.Register(_ctx, () => safety);
 
             var result = await _tools.Execute(new ToolExecutionInput
             {

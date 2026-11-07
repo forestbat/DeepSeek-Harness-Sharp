@@ -156,7 +156,7 @@ public sealed class OutboundProxySmokeTests
         {
             var home = new HarnessHome(directory);
             File.Copy(Path.Combine(configuredHome.Root, "settings.yaml"), Path.Combine(directory, "settings.yaml"));
-            using var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: Directory.GetCurrentDirectory(), Provider: providerId, Model: modelId));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: Directory.GetCurrentDirectory(), Provider: providerId, Model: modelId), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             await using var server = new TestForwardProxy(forward: true);
             var facade = new Dsh.Gui.Services.SettingsFacade(app.Ctx, home);
             facade.UpdateOutboundProxy(new OutboundProxySettings { Url = $"http://127.0.0.1:{server.Port}" });

@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using Dsh.Gui.Services;
 using Dsh.Interaction;
@@ -564,7 +565,7 @@ public sealed class NetworkSettingsPersistenceTests
             TempTree.AssertFitsMacOsSocketLimit(Path.Combine(directory, "run", "dsh-acp.sock"));
             var home = new HarnessHome(directory);
             await File.WriteAllTextAsync(home.SettingsFile, text, TestContext.Current.CancellationToken);
-            var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory));
+            var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var handle = await app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: directory));
             return new Fixture(app, directory, handle.Agent);
         }

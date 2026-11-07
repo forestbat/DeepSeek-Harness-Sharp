@@ -57,6 +57,7 @@ public sealed class PluginActivation
 
     internal EffectScope Effects { get; } = new();
     internal bool PendingUnload { get; set; }
+    internal bool IsRetiring { get; set; }
 
     /** 外部输入入口:并发提交在此串行化。 */
     public void SendInput(in PluginActivationInput input)
@@ -140,14 +141,15 @@ public sealed class PluginActivation
     }
 
     /** 调度器同步驱动:Apply 成败以 ActivateCompleted 输入回灌状态机。 */
-    internal bool TryStartExclusive(Func<PluginActivation, bool> canActivate)
+    internal bool TryStartExclusive()
     {
         lock (_activationSync)
         {
-            if (State != ActivationState.Pending || !canActivate(this))
+            if (State != ActivationState.Pending)
                 return false;
-            StartActivation();
-            return true;
+            var scheduler = Ctx.Root.Scheduler;
+            var (available, version) = scheduler.ActivationEligibility(this);
+            return available && scheduler.TryCommitActivation(this, version);
         }
     }
 
@@ -198,7 +200,8 @@ public sealed class PluginActivation
         }
         foreach (var type in InjectTypes)
         {
-            if (!Ctx.Root.IsServiceInjectable(type))
+            var name = Ctx.Root.ServiceTable.ResolveName(type);
+            if (name is null || !providers.ContainsKey(name))
                 return false;
         }
         return true;

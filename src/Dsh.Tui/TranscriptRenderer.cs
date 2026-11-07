@@ -228,6 +228,15 @@ public sealed class TranscriptRenderer
 
                     break;
                 }
+            case ApprovalAskedPayload asked when ApprovalHints.SettingsDiff(asked.Arguments) is { Length: > 0 } diff:
+                Append($"\nSettings approval · {asked.ToolName}\n{ApprovalHints.PrimaryArgument(asked.ToolName, asked.Arguments)}\n{diff}\n");
+                break;
+            case ApprovalDecidedPayload decided:
+                Append($"  approval: {decided.Outcome}\n");
+                break;
+            case SettingsMutationAuditPayload mutation:
+                Append($"  settings {mutation.Outcome} · {mutation.ToolName} · {mutation.Path}\n");
+                break;
             case DeliverablesPresentedPayload presented:
                 AppendDeliverables(presented);
                 break;

@@ -22,6 +22,7 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     private readonly SemaphoreSlim _reconnectGate = new(1, 1);
     private Live? _live;
+    private int _ownedProcess;
     private long _version;
     private long _resourceListChanges;
     private long _resourceListSeen;
@@ -33,6 +34,8 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     public long Version => Volatile.Read(ref _version);
 
     public bool Connected => Volatile.Read(ref _live) is not null;
+
+    public bool HasOwnedProcess => Volatile.Read(ref _live)?.OwnedTransport is not null;
 
     public int ToolCount => Volatile.Read(ref _live)?.Tools.Count ?? 0;
 
@@ -51,6 +54,8 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     public async Task<IList<McpClientTool>> ConnectAsync(CancellationToken signal)
     {
+        if (Volatile.Read(ref _ownedProcess) != 0)
+            throw new IOException("An owned MCP connection cannot be restarted; the operation was not replayed.");
         var acknowledged = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new McpClientOptions
         {
@@ -67,12 +72,26 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
                 ],
             },
         };
-        var client = await McpClient.CreateAsync(transportFactory(), options, NullLoggerFactory.Instance, signal);
+        var transport = transportFactory();
+        if (transport is OwnedStdioClientTransport)
+            Volatile.Write(ref _ownedProcess, 1);
+        McpClient client;
+        try
+        {
+            client = await McpClient.CreateAsync(transport, options, NullLoggerFactory.Instance, signal);
+        }
+        catch
+        {
+            if (transport is IAsyncDisposable owned)
+                await owned.DisposeAsync();
+            throw;
+        }
         Live? live = null;
         try
         {
             var tools = await client.ListToolsAsync(cancellationToken: signal);
-            live = new Live(client, tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal), new CancellationTokenSource());
+            live = new Live(client, tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal), new CancellationTokenSource(),
+                transport as OwnedStdioClientTransport);
             Volatile.Write(ref _live, live);
             _error = null;
             if (Interlocked.Increment(ref _version) > 1)
@@ -95,12 +114,50 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
                 await CloseAsync(live);
             }
             else
-                await client.DisposeAsync();
+            {
+                try
+                {
+                    await client.DisposeAsync();
+                }
+                finally
+                {
+                    if (transport is IAsyncDisposable owned)
+                        await owned.DisposeAsync();
+                }
+            }
             throw;
         }
     }
 
     public void MarkError(string message) => _error = message;
+
+    public async ValueTask<CallToolResult> CallOwnedToolAsync(string toolName,
+        IReadOnlyDictionary<string, object?>? arguments, CancellationToken signal)
+    {
+        var live = Volatile.Read(ref _live);
+        if (live?.OwnedTransport is not { } owned)
+        {
+            if (Volatile.Read(ref _ownedProcess) != 0)
+                throw new IOException("The owned MCP connection is unavailable; the operation was not replayed.");
+            return await McpToolBridge.CallWithReconnectAsync(this, toolName, arguments, signal);
+        }
+        if (!live.Tools.TryGetValue(toolName, out var tool))
+            throw new IOException("The owned MCP tool is unavailable; the failed operation was not replayed.");
+        using var cancellation = signal.Register(owned.Terminate);
+        try
+        {
+            owned.ThrowIfUnavailable();
+            signal.ThrowIfCancellationRequested();
+            // An opaque tool may have committed a side effect before losing its reply. Never replay it.
+            return await tool.CallAsync(arguments, null, null, signal);
+        }
+        finally
+        {
+            // SDK cancellation can unwind this scope and unregister our callback before that callback runs.
+            if (signal.IsCancellationRequested)
+                owned.Terminate();
+        }
+    }
 
     public bool TryGetTool(string toolName, out McpClientTool? tool, out long version)
     {
@@ -111,13 +168,33 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         return live is not null && live.Tools.TryGetValue(toolName, out tool);
     }
 
-    /** 在声明了 resources 能力的当前会话上执行一次资源请求; 陈旧会话失败时重连一次并重试一次。 */
+    /** Owned operations execute once; unprotected transports keep their reconnect behavior. */
     public async ValueTask<T> CallResourcesAsync<T>(Func<McpClient, ValueTask<T>> call, CancellationToken signal)
-        => await McpToolBridge.CallWithReconnectAsync(
-            invoke: () => call(ResourcesClient()),
+    {
+        var live = Volatile.Read(ref _live);
+        if (live?.OwnedTransport is { } owned)
+        {
+            using var cancellation = signal.Register(owned.Terminate);
+            try
+            {
+                owned.ThrowIfUnavailable();
+                signal.ThrowIfCancellationRequested();
+                return await call(ResourcesClient(live));
+            }
+            finally
+            {
+                if (signal.IsCancellationRequested)
+                    owned.Terminate();
+            }
+        }
+        if (Volatile.Read(ref _ownedProcess) != 0)
+            throw new IOException("The owned MCP connection is unavailable; the operation was not replayed.");
+        return await McpToolBridge.CallWithReconnectAsync(
+            invoke: () => call(ResourcesClient(Volatile.Read(ref _live))),
             usedVersion: () => Version,
             reconnect: version => ReconnectIfVersionAsync(version, signal),
             signal: signal);
+    }
 
     /** 只有完整列举才消费对应列表的通知; 单页不代表模型看到了整个列表。请求期间的新通知仍未读。 */
     public async ValueTask<T> CallListingAsync<T>(Func<McpClient, ValueTask<T>> call, bool templates, bool complete, CancellationToken signal)
@@ -145,11 +222,15 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     // 只在"调用时用的版本仍是最新"时才重连, 使并发调用共享一次重连。
     public async Task ReconnectIfVersionAsync(long usedVersion, CancellationToken signal)
     {
+        if (Volatile.Read(ref _ownedProcess) != 0)
+            throw new IOException("An owned MCP connection cannot reconnect; the operation was not replayed.");
         if (Volatile.Read(ref _version) != usedVersion)
             return;
         await _reconnectGate.WaitAsync(signal);
         try
         {
+            if (Volatile.Read(ref _ownedProcess) != 0)
+                throw new IOException("An owned MCP connection cannot reconnect; the operation was not replayed.");
             if (Volatile.Read(ref _version) != usedVersion)
                 return;
             // 已重启的 server 可能拒绝旧 session 的 DELETE, 关闭旧会话只尽力而为。
@@ -176,9 +257,8 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         _reconnectGate.Dispose();
     }
 
-    private McpClient ResourcesClient()
+    private McpClient ResourcesClient(Live? live)
     {
-        var live = Volatile.Read(ref _live);
         ThrowIfNotificationsEnded(live);
         var client = live?.Client
             ?? throw new HarnessException($"mcp server \"{Config.Name}\" is not connected: {_error ?? "connection closed"}", UnavailableCode);
@@ -243,6 +323,7 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     {
         if (live is null)
             return;
+        live.OwnedTransport?.Terminate();
         await live.Listen.CancelAsync();
         if (live.ListenTask is { } listenTask)
             await listenTask;
@@ -255,9 +336,15 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         {
             // 尽最大努力释放。
         }
+        finally
+        {
+            if (live.OwnedTransport is not null)
+                await live.OwnedTransport.DisposeAsync();
+        }
     }
 
-    private sealed record Live(McpClient Client, IReadOnlyDictionary<string, McpClientTool> Tools, CancellationTokenSource Listen)
+    private sealed record Live(McpClient Client, IReadOnlyDictionary<string, McpClientTool> Tools,
+        CancellationTokenSource Listen, OwnedStdioClientTransport? OwnedTransport)
     {
         public Task? ListenTask { get; set; }
         public volatile McpNotificationStreamEndedException? NotificationError;

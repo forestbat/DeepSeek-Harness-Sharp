@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Dsh.Pty;
@@ -19,6 +20,10 @@ public static class ConsoleTunnel
     /** Smallest size worth reporting; anything below comes from a terminal that is not really there. */
     private const int MinimumRows = 4;
     private const int MinimumColumns = 20;
+
+    private const uint GenericRead = 0x80000000;
+    private const uint ShareReadWrite = 0x00000003;
+    private const uint OpenExisting = 3;
 
     /**
      * Runs tunnel(input, output, token) on the raw terminal until the tunnel ends or the user presses the detach key.
@@ -57,14 +62,16 @@ public static class ConsoleTunnel
     /** Reports the current terminal size, then every change; report failures are left to the callback, which may retry on the next change. */
     internal static async Task WatchSizeAsync(Func<int, int, CancellationToken, Task> report, CancellationToken cancellationToken, bool reportInitial = true)
     {
-        if (ReadSize() is not var (columns, rows))
+        var initial = ReadSize();
+        if (initial is not var (columns, rows))
             return;
         if (reportInitial)
             await report(columns, rows, cancellationToken);
         while (true)
         {
             await Task.Delay(SizePollMilliseconds, cancellationToken);
-            if (ReadSize() is not var (currentColumns, currentRows) || (currentColumns == columns && currentRows == rows))
+            var current = ReadSize();
+            if (current is not var (currentColumns, currentRows) || (currentColumns == columns && currentRows == rows))
                 continue;
             (columns, rows) = (currentColumns, currentRows);
             await report(columns, rows, cancellationToken);
@@ -80,16 +87,52 @@ public static class ConsoleTunnel
         }
         if (Console.IsOutputRedirected)
             return null;
+        // STDOUT may still name the main screen after the tunnel enters an alternate screen.
+        // Open the active screen for each sample; retaining a handle would bind the watcher to the screen that was active at attach time.
+        var output = CreateFileW("CONOUT$", GenericRead, ShareReadWrite, 0, OpenExisting, 0, 0);
+        if (output == 0 || output == -1)
+            return null;
         try
         {
-            var (columns, rows) = (Console.WindowWidth, Console.WindowHeight);
+            if (!GetConsoleScreenBufferInfo(output, out var info))
+                return null;
+            var columns = info.Window.Right - info.Window.Left + 1;
+            var rows = info.Window.Bottom - info.Window.Top + 1;
             return rows >= MinimumRows && columns >= MinimumColumns ? (columns, rows) : null;
         }
-        catch (Exception error) when (error is IOException or ArgumentOutOfRangeException)
+        finally
         {
-            return null;
+            CloseHandle(output);
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SmallRect
+    {
+        public short Left;
+        public short Top;
+        public short Right;
+        public short Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScreenBufferInfo
+    {
+        public WindowsConsoleRecord.Coord Size;
+        public WindowsConsoleRecord.Coord CursorPosition;
+        public ushort Attributes;
+        public SmallRect Window;
+        public WindowsConsoleRecord.Coord MaximumWindowSize;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CreateFileW(string fileName, uint access, uint shareMode, nint securityAttributes, uint creationDisposition, uint flags, nint template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleScreenBufferInfo(nint output, out ScreenBufferInfo info);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(nint handle);
 
     private static async Task IgnoreCancellationAsync(Task task)
     {

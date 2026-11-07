@@ -20,7 +20,12 @@ public static class NativePluginBridge
                 ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the tools service");
             var logger = ctx.LoggerFor("native-plugin");
             plugin.Configure(SettingsJson.Write(config));
-            var host = new Host(plugin, tools, logger);
+            var capabilities = new Lazy<IPluginExecutionHost>(() =>
+                (ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
+                    ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the plugin capability service"))
+                .Create(plugin.Package, ctx) as IPluginExecutionHost
+                ?? throw new InvalidOperationException("native plugin capabilities require an execution-aware host"));
+            var host = new Host(plugin, tools, logger, capabilities);
             try
             {
                 plugin.Activate(host);
@@ -45,10 +50,13 @@ public static class NativePluginBridge
                 ? text.GetString() ?? ""
                 : value.GetRawText();
 
-    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger) : INativePluginHost, IDisposable
+    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<IPluginExecutionHost> capabilities) : INativePluginHost, IDisposable
     {
         private readonly Dictionary<int, IDisposable> _registrations = [];
         private readonly Lock _sync = new();
+        private readonly Lock _invocationSync = new();
+        private ToolRunContext? _activeRun;
+        private Thread? _invokingThread;
         private bool _disposed;
 
         public void Log(int level, string message)
@@ -89,10 +97,20 @@ public static class NativePluginBridge
                 Description = description,
                 Parameters = parameters,
                 Output = new ToolOutputDefinition(ResultSchema, (_, value) => [new TextBlock(Render(value))]),
-                Execute = (args, _) => ExecuteTool(name, invoke, args),
+                Execute = (args, run) => ExecuteTool(name, invoke, args, run),
             });
             lock (_sync)
                 _registrations[handle] = registration;
+        }
+
+        public string CallHost(string operation, string argumentsJson)
+        {
+            lock (_sync)
+                ObjectDisposedException.ThrowIf(_disposed, this);
+            using var document = JsonDocument.Parse(argumentsJson);
+            var run = ReferenceEquals(_invokingThread, Thread.CurrentThread) ? _activeRun : null;
+            return capabilities.Value.CallAsync(operation, document.RootElement, run, run?.Signal ?? default)
+                .AsTask().GetAwaiter().GetResult().GetRawText();
         }
 
         public bool UnregisterTool(int handle)
@@ -107,24 +125,38 @@ public static class NativePluginBridge
             return true;
         }
 
-        private Task<object?> ExecuteTool(string name, Func<string, string?> invoke, JsonElement args)
+        private Task<object?> ExecuteTool(string name, Func<string, string?> invoke, JsonElement args, ToolRunContext run)
         {
-            if (plugin.State == NativePluginState.Faulted)
-                throw new InvalidOperationException($"native plugin \"{plugin.Package}\" is faulted and no longer callable");
-            string? result;
-            try
+            lock (_invocationSync)
             {
-                result = invoke(args.GetRawText());
+                if (plugin.State == NativePluginState.Faulted)
+                    throw new InvalidOperationException($"native plugin \"{plugin.Package}\" is faulted and no longer callable");
+                string? result;
+                try
+                {
+                    _activeRun = run;
+                    _invokingThread = Thread.CurrentThread;
+                    try
+                    {
+                        result = invoke(args.GetRawText());
+                    }
+                    finally
+                    {
+                        _invokingThread = null;
+                        _activeRun = null;
+                    }
+                }
+                catch (NativePluginFaultException error)
+                {
+                    logger.Error("%s", $"native plugin \"{plugin.Package}\" tool \"{name}\" invoke failed: {error.Message}");
+                    Fault(name, error);
+                    throw;
+                }
+                if (result is null)
+                    throw new InvalidOperationException($"native plugin \"{plugin.Package}\" tool \"{name}\" failed");
+                using var document = JsonDocument.Parse(result);
+                return Task.FromResult<object?>(document.RootElement.Clone());
             }
-            catch (NativePluginFaultException error)
-            {
-                logger.Error("%s", $"native plugin \"{plugin.Package}\" tool \"{name}\" invoke failed: {error.Message}");
-                Fault(name, error);
-                throw;
-            }
-            if (result is null)
-                throw new InvalidOperationException($"native plugin \"{plugin.Package}\" tool \"{name}\" failed");
-            return Task.FromResult<object?>(JsonDocument.Parse(result).RootElement.Clone());
         }
 
         /** 故障遏制(进程内、按插件):标记 Faulted + 移除其全部工具 + 尽力卸载;二次同类故障由 quarantine 禁装。 */
@@ -169,7 +201,7 @@ public static class NativePluginBridge
 
     private sealed class NativePluginAdapter(INativePlugin plugin) : IDshPlugin
     {
-        public string[] Inject => [];
+        public string[] Inject => [ToolRuntime.ServiceName, IPluginHostFactory.ServiceName];
 
         public async Task<IDisposable?> ApplyAsync(Context ctx, object? config, CancellationToken cancellationToken = default)
             => await CreateDefinition(plugin).Apply(ctx, config, cancellationToken).ConfigureAwait(false) as IDisposable;

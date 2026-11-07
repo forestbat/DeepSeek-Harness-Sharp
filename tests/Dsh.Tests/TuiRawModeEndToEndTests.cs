@@ -118,6 +118,18 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
         private VtScreen _screen = new(140, 40);
         private int _mode;
         private bool _hasRenderedFrame;
+        private readonly Stopwatch _observationClock = Stopwatch.StartNew();
+        private int _observations;
+        private int _transcriptLength;
+        private bool _modeObserved;
+        private long? _terminalReadyAt;
+        private long? _alternateScreenAt;
+        private long? _rawModeAt;
+        private long? _frameStartedAt;
+        private long? _completedFrameAt;
+        private long _maxTranscriptMilliseconds;
+        private long _maxScreenMilliseconds;
+        private long _maxSttyMilliseconds;
 
         public void WaitForRawInput()
         {
@@ -195,19 +207,44 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
                 Observe();
                 if (predicate()) return;
             } while (Stopwatch.GetTimestamp() < deadline);
-            Assert.Fail(failure); // Never publish the terminal stream or private configuration on failure.
+            // Only fixed phase names, counters and flags are published, never terminal/configuration text.
+            Assert.Fail($"""
+                {failure} Phase evidence: elapsedMs={_observationClock.ElapsedMilliseconds}; observations={_observations};
+                terminalReadyMs={_terminalReadyAt?.ToString() ?? "unseen"}; alternateScreenMs={_alternateScreenAt?.ToString() ?? "unseen"};
+                rawModeMs={_rawModeAt?.ToString() ?? "unseen"}; frameStartedMs={_frameStartedAt?.ToString() ?? "unseen"}; completedFrameMs={_completedFrameAt?.ToString() ?? "unseen"};
+                alternateScreen={_screen.IsAlternateScreen}; modeObserved={_modeObserved}; modeBits={_mode}; completedFrame={_hasRenderedFrame};
+                transcriptCharacters={_transcriptLength}; outputPumpStarted={terminal.OutputPumpStarted}; outputPumpStatus={terminal.OutputPumpStatus};
+                maxTranscriptMs={_maxTranscriptMilliseconds}; maxScreenMs={_maxScreenMilliseconds}; maxSttyMs={_maxSttyMilliseconds};
+                ownerStatus={terminal.Session.Status}; cliExitPublished={File.Exists(Path.Combine(terminal.Home, "exit-code"))};
+                mainMarkerVisible={ContainsVisible("DSH-RAW-MAIN-SCREEN")}; inputPromptVisible={InputContains(">")}.
+                """);
         }
 
         private void Observe()
         {
             TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            _observations++;
+            var phaseStart = Stopwatch.GetTimestamp();
             // Certify completion before copying the production VT state. Checking the live transcript
             // afterwards could validate an older, half-painted first frame as the empty-input baseline.
-            _hasRenderedFrame = terminal.Snapshot().Contains("\u001b[?2026l", StringComparison.Ordinal);
+            var transcript = terminal.Snapshot();
+            _transcriptLength = transcript.Length;
+            _hasRenderedFrame = transcript.Contains("\u001b[?2026l", StringComparison.Ordinal);
+            _maxTranscriptMilliseconds = Math.Max(_maxTranscriptMilliseconds, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+            if (_frameStartedAt is null && transcript.Contains("\u001b[?2026h", StringComparison.Ordinal))
+                _frameStartedAt = _observationClock.ElapsedMilliseconds;
+            if (_hasRenderedFrame)
+                _completedFrameAt ??= _observationClock.ElapsedMilliseconds;
+            phaseStart = Stopwatch.GetTimestamp();
             _screen = terminal.ReadTerminalScreen();
+            _maxScreenMilliseconds = Math.Max(_maxScreenMilliseconds, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+            if (_screen.IsAlternateScreen)
+                _alternateScreenAt ??= _observationClock.ElapsedMilliseconds;
             var ttyPath = Path.Combine(terminal.Home, "terminal");
             if (!File.Exists(ttyPath))
                 return;
+            _terminalReadyAt ??= _observationClock.ElapsedMilliseconds;
+            phaseStart = Stopwatch.GetTimestamp();
             var info = new ProcessStartInfo("stty",
                 [OperatingSystem.IsMacOS() ? "-f" : "-F", File.ReadAllText(ttyPath).Trim(), "-a"])
             {
@@ -220,8 +257,14 @@ public sealed class TuiRawModeEndToEndTests(ITestOutputHelper output)
             var state = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
             Assert.Equal(0, process.ExitCode);
+            _maxSttyMilliseconds = Math.Max(_maxSttyMilliseconds, (long)Stopwatch.GetElapsedTime(phaseStart).TotalMilliseconds);
+            _modeObserved = true;
             _mode = ModeBits(state);
-            if (_mode == 0) _rawSeen = true;
+            if (_mode == 0)
+            {
+                _rawSeen = true;
+                _rawModeAt ??= _observationClock.ElapsedMilliseconds;
+            }
             if (_rawSeen && !_exitSent)
                 Assert.True(_mode == 0, $"The TUI lost raw input before normal exit (ICANON/ECHO/ISIG bits={_mode}).");
         }

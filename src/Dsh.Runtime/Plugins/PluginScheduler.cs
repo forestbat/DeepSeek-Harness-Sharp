@@ -11,7 +11,6 @@ public sealed class PluginScheduler
     private readonly Lock _sync = new();
     private readonly List<PluginActivation> _activations = [];
     private readonly Dictionary<string, PluginActivation> _providers = new(StringComparer.Ordinal);
-    private readonly Func<PluginActivation, bool> _canActivate;
     /** 注意: `TryRequestRebuildExclusive` 的入参是"依赖仍然新鲜"判据(取反后的 IsStale), 别传成 IsStale。 */
     private readonly Func<PluginActivation, bool> _dependencyFresh;
     private Dictionary<string, PluginActivation>? _providerSnapshot;
@@ -24,8 +23,7 @@ public sealed class PluginScheduler
     public PluginScheduler(Context root)
     {
         _root = root;
-        // 解析循环里每次评估都会用到这两个委托: 缓存起来, 免得每轮新建闭包(实测启动期 ~3000 次分配)。
-        _canActivate = CanActivate;
+        // Cache the dependency predicate used by each scheduler pass.
         _dependencyFresh = activation => !IsStale(activation);
     }
 
@@ -102,10 +100,25 @@ public sealed class PluginScheduler
         }
     }
 
+    private PluginActivation? ReserveRetirement(string name)
+    {
+        lock (_sync)
+        {
+            var activation = _activations.FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal));
+            if (activation is not null && !activation.IsRetiring)
+            {
+                activation.IsRetiring = true;
+                _providersVersion++;
+                _providerSnapshot = null;
+            }
+            return activation;
+        }
+    }
+
     /** 协作式卸载:逆序停依赖方 → 等待被卸载插件 settle(默认超时仅作安全阀)。 */
     public async Task<PluginActivation?> UnloadAsync(string name, TimeSpan? timeout = null, bool force = false)
     {
-        var activation = Find(name);
+        var activation = ReserveRetirement(name);
         if (activation is null)
             return null;
         foreach (var dependent in DependentsOf(activation).AsEnumerable().Reverse())
@@ -190,7 +203,12 @@ public sealed class PluginScheduler
         {
             if (_providerSnapshot is null || _providerSnapshotVersion != _providersVersion)
             {
-                _providerSnapshot = new Dictionary<string, PluginActivation>(_providers, StringComparer.Ordinal);
+                _providerSnapshot = new Dictionary<string, PluginActivation>(_providers.Count, StringComparer.Ordinal);
+                foreach (var (name, owner) in _providers)
+                {
+                    if (!owner.IsRetiring)
+                        _providerSnapshot.Add(name, owner);
+                }
                 _providerSnapshotVersion = _providersVersion;
             }
 
@@ -198,7 +216,30 @@ public sealed class PluginScheduler
         }
     }
 
-    private bool CanActivate(PluginActivation activation) => activation.DependenciesAvailable(ProviderSnapshot());
+    internal (bool Available, long Version) ActivationEligibility(PluginActivation activation)
+    {
+        Dictionary<string, PluginActivation> providers;
+        long version;
+        lock (_sync)
+        {
+            providers = ProviderSnapshot();
+            version = _providersVersion;
+        }
+        // Service checks run outside the scheduler lock; their provider version is validated at admission.
+        return (activation.DependenciesAvailable(providers), version);
+    }
+
+    internal bool TryCommitActivation(PluginActivation activation, long version)
+    {
+        lock (_sync)
+        {
+            if (activation.IsRetiring || version != _providersVersion || activation.State != ActivationState.Pending)
+                return false;
+            activation.StartActivation();
+            _epoch++;
+            return true;
+        }
+    }
 
     private bool IsStale(PluginActivation activation) => activation.IsStale(ProviderSnapshot());
 
@@ -299,13 +340,7 @@ public sealed class PluginScheduler
     }
 
     private bool TryActivate(PluginActivation activation)
-    {
-        if (!activation.TryStartExclusive(_canActivate))
-            return false;
-        lock (_sync)
-            _epoch++;
-        return true;
-    }
+        => activation.TryStartExclusive();
 
     private void RebuildDependentsOf(string serviceName)
     {
