@@ -1148,7 +1148,7 @@ public sealed class ChatPane : ITuiPane
                 "type" => Candidates([.. KnownProviderTypes()]),
                 "action" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => Candidates("jump", "revert", "fork"),
                 "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(),
-                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<IPluginManager>("pluginManager", false)?.PackageNames ?? []]),
+                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames ?? []]),
                 _ => descriptor.Name switch
                 {
                     "model" => Candidates([.. settings.Providers

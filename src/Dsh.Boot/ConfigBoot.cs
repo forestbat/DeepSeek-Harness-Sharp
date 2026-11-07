@@ -112,7 +112,7 @@ public static class ConfigBoot
     }
 
     private static IPluginRuntime? CreateRuntime(PluginRuntimeFactory? factory, Context context,
-        IPluginExecutionEnvironment environment, PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
+        PluginExecutionEnvironment environment, PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
     {
         var runtime = factory?.Invoke(context, environment, host, directory, nativeBridge);
         if (runtime is null && environment.ReadSettings().SandboxEnabled)

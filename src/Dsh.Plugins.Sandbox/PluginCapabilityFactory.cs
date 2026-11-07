@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
@@ -12,7 +13,7 @@ using Dsh.Runtime;
 namespace Dsh.Plugins.Sandbox;
 
 /** Implements the same file, HTTP and tool capabilities for local and isolated plugin SDKs. */
-public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnvironment environment)
+public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvironment environment)
     : IPluginHostFactory, IDisposable
 {
     internal const int MaximumChunkBytes = 256 * 1024;

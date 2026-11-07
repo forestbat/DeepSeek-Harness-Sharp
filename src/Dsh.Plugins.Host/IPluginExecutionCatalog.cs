@@ -1,11 +1,6 @@
-using Dsh.Runtime;
-
 namespace Dsh.Plugins;
 
 public readonly record struct PluginCatalogLoadResult(IReadOnlyList<string> Packages, PluginScanResult Loaded);
-
-public delegate IPluginRuntime? PluginRuntimeFactory(Context context,
-    IPluginExecutionEnvironment environment, PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge);
 
 public interface IPluginRuntime : IDisposable
 {

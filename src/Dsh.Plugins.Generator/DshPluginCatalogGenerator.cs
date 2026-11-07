@@ -116,7 +116,7 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
             if (assembly.GetTypeByMetadataName($"{NamespaceFor(assembly.Name)}{SchemaTypeSuffix}") is { } schema)
                 schemas.Add(schema.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
         }
-        var hasRuntime = compilation.GetTypeByMetadataName("Dsh.Plugins.IPluginRuntime") is not null;
+        var hasRuntime = compilation.GetTypeByMetadataName("Dsh.Boot.PluginRuntimeFactory") is not null;
         var hasSandbox = compilation.GetTypeByMetadataName("Dsh.Plugins.Sandbox.PluginSandboxModule") is not null;
         if (registrations.Count == 0 && bootstraps.Count == 0 && schemas.Count == 0 && !hasRuntime)
             return;

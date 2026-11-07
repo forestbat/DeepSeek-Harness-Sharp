@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 
@@ -8,7 +9,7 @@ public sealed class PluginSandboxModule : IPluginRuntime
 {
     private readonly PluginCapabilityFactory _capabilities;
 
-    private PluginSandboxModule(Context context, IPluginExecutionEnvironment environment,
+    private PluginSandboxModule(Context context, PluginExecutionEnvironment environment,
         PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
     {
         var capabilities = new PluginCapabilityFactory(context, environment);
@@ -37,7 +38,7 @@ public sealed class PluginSandboxModule : IPluginRuntime
 
     public IPluginExecutionCatalog? Catalog { get; }
 
-    public static IPluginRuntime CreateRuntime(Context context, IPluginExecutionEnvironment environment,
+    public static IPluginRuntime CreateRuntime(Context context, PluginExecutionEnvironment environment,
         PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
         => new PluginSandboxModule(context, environment, host, directory, nativeBridge);
 

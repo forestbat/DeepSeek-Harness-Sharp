@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Sandbox;
@@ -5,7 +6,7 @@ using Dsh.Sandbox;
 namespace Dsh.Plugins.Sandbox;
 
 /// <summary>Reads script permissions for explicit C# script launches, without intercepting other tools.</summary>
-public sealed class ScriptExecutionPolicy(IPluginExecutionEnvironment environment) : IScriptExecutionPolicy
+public sealed class ScriptExecutionPolicy(PluginExecutionEnvironment environment) : IScriptExecutionPolicy
 {
     public bool Enabled => environment.ReadSettings().SandboxEnabled;
 

@@ -2,8 +2,11 @@ using Dsh.Plugins;
 
 namespace Dsh.Boot;
 
-internal sealed class PluginExecutionEnvironment(HarnessHome home, HarnessSettings settings, string? workingDirectory)
-    : IPluginExecutionEnvironment
+public readonly record struct PluginExecutionSettings(bool SandboxEnabled,
+    IReadOnlyDictionary<string, PluginSetting> Plugins, (bool Read, bool Write, bool Network) ScriptPermissions);
+
+/// <summary>Host-owned paths and freshly reviewed settings without exposing the application composition root.</summary>
+public sealed class PluginExecutionEnvironment(HarnessHome home, HarnessSettings settings, string? workingDirectory)
 {
     public string SettingsPath => home.SettingsFile;
     public string WorkingDirectory => workingDirectory ?? Environment.CurrentDirectory;

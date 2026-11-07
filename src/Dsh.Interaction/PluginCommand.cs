@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using Dsh.Runtime;
 using Dsh.Plugins;
 using System.Runtime.CompilerServices;
@@ -18,7 +19,7 @@ public static class PluginCommand
             Handler = invocation =>
             {
                 var tokens = invocation.RawInput.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var manager = ctx.Get<IPluginManager>("pluginManager", false);
+                var manager = ctx.Get<HarnessPluginManager>("pluginManager", false);
                 if (tokens.Length == 0 || tokens[0] == "list")
                 {
                     var names = (manager?.PackageNames ?? catalog.PackageNames)

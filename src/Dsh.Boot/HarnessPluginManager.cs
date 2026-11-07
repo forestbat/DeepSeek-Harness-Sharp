@@ -5,7 +5,7 @@ using Dsh.Runtime.Composition;
 
 namespace Dsh.Boot;
 
-public sealed class HarnessPluginManager : IPluginManager, IDisposable
+public sealed class HarnessPluginManager : IDisposable
 {
     private readonly PluginHost _host;
     private readonly Composition _composition;

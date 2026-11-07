@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
@@ -8,7 +9,7 @@ using Dsh.Sandbox;
 namespace Dsh.Plugins.Sandbox;
 
 /** Owns one co-trusted worker; plugins share memory and caller identity. */
-internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionEnvironment environment,
+internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEnvironment environment,
     IPluginHostFactory capabilities, string pluginsDirectory) : IDisposable
 {
     private static readonly JsonElement EmptyConfiguration = JsonSerializer.SerializeToElement(

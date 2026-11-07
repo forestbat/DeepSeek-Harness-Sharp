@@ -3,7 +3,6 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Memory;
-using Dsh.Plugins;
 
 namespace Dsh.Tests;
 
@@ -232,36 +231,6 @@ public sealed class MemoryCommandTests
         {
             Directory.Delete(root, true);
         }
-    }
-
-    private sealed class FakePluginManager : IPluginManager
-    {
-        public List<string> Calls { get; } = [];
-
-        public IReadOnlyList<string> PackageNames => [];
-
-        public IReadOnlyList<PluginSkip> LoadFailures => [];
-
-        public string Describe(string package) => "unknown";
-
-        public Task<string> AddAsync(string packageOrPath, ISettingsMutationContext? run = null) => Task.FromResult("");
-
-        public Task<string> RemoveAsync(string package, bool force = false, ISettingsMutationContext? run = null) => Task.FromResult("");
-
-        public Task<string> DisableAsync(string package, ISettingsMutationContext? run = null)
-        {
-            Calls.Add($"disable:{package}");
-            return Task.FromResult("disabled");
-        }
-
-        public Task<string> EnableAsync(string package, ISettingsMutationContext? run = null)
-        {
-            Calls.Add($"enable:{package}");
-            return Task.FromResult("enabled");
-        }
-
-        public Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed, CancellationToken cancellationToken = default, ISettingsMutationContext? run = null) => Task.FromResult("");
-
     }
 
     private sealed class FakeAgent : IAgent

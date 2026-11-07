@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Dsh.Boot;
 using Dsh.Plugins;
 using Dsh.Runtime;
 
@@ -9,7 +10,7 @@ internal sealed class PluginSandboxCatalog : IPluginExecutionCatalog
 {
     private const int MaximumPackagesPerArtifact = 256;
     private const int MaximumPackageCharacters = 256;
-    private readonly IPluginExecutionEnvironment _environment;
+    private readonly PluginExecutionEnvironment _environment;
     private readonly PluginHost _host;
     private readonly string _directory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
@@ -22,7 +23,7 @@ internal sealed class PluginSandboxCatalog : IPluginExecutionCatalog
     private readonly CancellationTokenSource _shutdown = new();
     private bool _disposed;
 
-    internal PluginSandboxCatalog(IPluginExecutionEnvironment environment, PluginHost host, string directory,
+    internal PluginSandboxCatalog(PluginExecutionEnvironment environment, PluginHost host, string directory,
         Func<INativePlugin, IDshPlugin>? nativeBridge, PluginSandboxSupervisor supervisor)
     {
         _environment = environment;

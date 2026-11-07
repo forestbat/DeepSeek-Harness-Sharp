@@ -108,7 +108,7 @@ public sealed partial class DshPluginCatalogGenerator
                     : "            => null;");
                 builder.AppendLine();
                 builder.AppendLine("        public static global::Dsh.Plugins.IPluginRuntime? CreatePluginRuntime(");
-                builder.AppendLine("            global::Dsh.Runtime.Context context, global::Dsh.Plugins.IPluginExecutionEnvironment environment,");
+                builder.AppendLine("            global::Dsh.Runtime.Context context, global::Dsh.Boot.PluginExecutionEnvironment environment,");
                 builder.AppendLine("            global::Dsh.Plugins.PluginHost host, string directory,");
                 builder.AppendLine("            global::System.Func<global::Dsh.Plugins.INativePlugin, global::Dsh.Plugins.IDshPlugin>? nativeBridge)");
                 builder.AppendLine(hasSandbox
