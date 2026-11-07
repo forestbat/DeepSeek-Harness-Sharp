@@ -51,35 +51,26 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 ### 设置变更审批
 
-Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
-The approval carries the canonical target, redacted changed-line diff, and before/after hashes; the audit records those fields plus the originating tool call, root call, decision, and commit outcome, not complete document snapshots.
-Redaction recognizes common credential field names and known token formats; arbitrary custom secret names or formats may not be recognized.
-The writer releases the settings lock while waiting for approval, then reacquires it and rejects a stale proposal rather than overwriting a concurrent human edit.
-Approved content is published atomically through a private temporary file; existing readers that allow file deletion retain their previous snapshot.
-Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
-Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
-Missing settings gate, session, or approval service fails closed for these model-originated updates.
-The startup layer receives the original tool call's commit delegate without referencing agent, transport, or sandbox assemblies; every model-originated settings proposal still passes through the concrete Core approval and audit service before publication and runtime updates.
-Canonical settings identity uses the shared symbolic-link-aware path resolver, while ordinary-file checks and platform access enforcement stay outside the startup and runtime layers.
-On Windows, ordinary drive/UNC paths and supported extended-length aliases share one canonical identity for settings, file rules (including glob patterns), and audits; non-equivalent extended namespace forms are refused.
+模型通过文件工具或 `plugin_manager` 修改活动 `settings.yaml` 时，统一进入设置变更审批。
+审批显示规范化目标、脱敏差异及前后哈希，审计记录调用、决策和提交结果，不保存完整文档快照。
+脱敏只识别常见凭据字段和令牌格式，自定义秘密名称或格式仍需自行检查。
+审批后若文档已改变就拒绝提交，不覆盖并发编辑；设置更新原子发布，文件工具写入失败或取消时保留原文件。
+白名单和 `autoApprove` 可以自动批准，但不会跳过真实差异、审计或会话 `never`；缺少设置审批所需的服务或会话时拒绝操作。
+显式的人类配置命令和 GUI 保存不视为模型工具调用。
+设置变更审批不依赖 `sandbox.enabled`，仅覆盖上述工具/API 入口，不拦截任意宿主代码或其他进程的写入。
 
-### Permission rules
+### 安全规则
+
+`safety` 与 `scripts.permissions` 分别配置普通工具和真实 C# 脚本工具的规则：
 
 ```yaml
 safety:
   autoApprove: false
   blacklist:
-    deny-delete:
-      dialect: posix
-      args: { command: "rm -rf /*" }
-    protect-secrets:
-      path: "**/.env"
-      intent: read
+    deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
+    protect-secrets: { path: "**/.env", intent: read }
   whitelist:
-    allow-source-read:
-      tool: [read, read_image, glob, grep]
-      path: "src/**"
-      intent: read
+    allow-source-read: { tool: [read, read_image, glob, grep], path: "src/**", intent: read }
 scripts:
   permissions:
     read: true
@@ -91,56 +82,28 @@ scripts:
       allow-example: { tool: run_csharp_repl, args: { code: "Console.WriteLine(*)*" } }
 ```
 
-`blacklist` and `whitelist` are mappings from stable rule IDs to typed matchers, not lists of `tool:pattern` strings.
-A matcher supports `tool` (one name or a nonempty list), `dialect` (`posix` or `powershell`), `path`, `intent` (`read`, `write`, or `any`), and `args` (string argument patterns).
-Dimensions within one matcher are AND; separate rules are OR; a matching blacklist always wins over whitelist and `autoApprove`.
-With no matching rule, `autoApprove: false` requires notification/approval and `true` allows the operation.
-A whitelist can bypass safety notification, including notification for a settings proposal, but cannot override explicit session never or blacklist denial.
-Settings mutations still pass through the mandatory gate, which constructs and audits the real redacted diff and obtains the authoritative approval result; a rule allow or automatic policy can approve without a human prompt.
+- `blacklist`/`whitelist` 为规则 ID 到 matcher 的映射，不接受旧的字符串列表。
+- matcher 支持 `tool`（名称或非空列表）、`dialect`（`posix`/`powershell`）、`path`、`intent`（`read`/`write`/`any`）和字符串参数映射 `args`。
+- 同一规则各维度 AND，规则之间 OR；blacklist 和会话 never 优先于白名单及自动批准，无规则匹配时由布尔 `autoApprove` 决定是否询问。
+- 路径 `*` 不跨目录，`**` 可跨目录，相对模式使用调用的工作目录；`args.path`/`args.file_path` 不合法，统一使用 `path`。
+- 文件中介按解析符号链接后的目标和实际读写意图检查，目录列举/搜索逐个检查结果；Windows 路径大小写不敏感并统一受支持的扩展路径别名，Unix 按原字符比较且反斜杠仍是普通字符。
 
-Path `*` matches within one segment and `**` crosses segments.
-Relative patterns use the invocation working directory. Host-mediated access resolves ordinary canonical paths, including existing symbolic links; Windows comparisons are case-insensitive and Unix comparisons are ordinal.
-On Unix, a backslash in a filename remains an ordinary character; Windows rule paths may use either separator.
-These checks do not pin objects, identify hard-link aliases, infer per-directory case-folding behavior or prevent a concurrent path replacement.
-`args.path` and `args.file_path` are rejected: use the single `path` dimension.
-Other argument patterns match strings; `args.command` with a shell dialect reuses the existing token/wrapper parser, unordered options and short-option clusters.
-Command matching is not an OS security boundary.
+文件型 memory、技能读取、动态指令和插件中介也检查实际目标；非文件型 memory/技能提供者在访问后端前按整个调用审批，手工及启动目录仍是宿主操作。
+显式选择的技能链接须通过真实目标授权，缺失链接单独跳过而不隐藏其他技能，普通 glob/目录列举默认不跟随链接；拒绝或缺失的可选指令不注入，取消继续传播。
+`present` 在接受 post-hook 后重新检查实际文件、权限和存在性，全部检查通过才发布列表。
+单次路径批准不授权其他目标或写入，策略变更使原批准在下个检查点失效；已开始的普通写入/追加不承诺事务回滚。
+这些路径检查不提供文件 ID、硬链接别名、目录独立大小写规则或 TOCTOU 保证。
 
-Tool admission evaluates known denials before approval.
-Each prepared call binds one registration identity, owner, execution mode and permission namespace.
-A same-name replacement before dispatch receives fresh admission and approval without inheriting the retired registration's call or path approvals; authoritative session grants remain intact.
-Another registration change during renewed approval, retirement without replacement, or a changed execution mode fails before the body runs and requires a new call, without automatic retries or replay.
-Once a body starts, output validation, post-hook value rendering and final publication use that executed registration even if it is subsequently unloaded or replaced.
-Trusted filesystem tools and plugin SDK file brokers evaluate the current policy for the actual canonical target and real read/write intent before their ordinary file operations.
-Directory search/listing checks each exposed target, not only the search root. Native skill discovery and body reads, memory file updates and audit appends, and dynamically discovered instructions carry the actual tool invocation explicitly; there is no ambient settings or execution scope.
-Non-file memory and skill providers use whole-call approval before backend access, not a claim that their arbitrary host code has a native file boundary.
-Model skill discovery propagates cancellation and policy rejection and does not reuse the control-plane catalog cache to bypass current authorization. Manual and startup catalogs remain host operations.
-Native discovery follows explicitly selected links through canonical-target authorization; ordinary glob and directory-listing defaults do not follow links. Missing linked targets are skipped individually without hiding healthy sibling skills.
-Denied or removed optional instructions are not injected; the permitted read remains available with a skipped-instructions notice, while cancellation propagates.
-Present validates actual regular-file targets and rechecks current policy and existence after accepting post-hooks before publishing the complete list.
-Path-specific approval covers only that path and intent, not later writes or another target in the same call. A policy change invalidates earlier grants at the next authorization boundary; settings proposals also recheck before publication and reject a stale document.
-Denial or cancellation before IO starts prevents that operation. An already-started ordinary write or append is not a rollback transaction. These checks do not provide file-identity, hard-link-alias or TOCTOU guarantees.
+同名工具被替换后须重新授权，不继承旧注册的单次批准；再度替换、卸载或执行方式变化时拒绝执行，不自动重放。
+已经开始执行的调用仍使用该次实际工具的结果验证、渲染和发布，不转交给后来注册的同名工具。
+仅 `run_csx`/`run_csharp_repl` 使用 `scripts.permissions`；`run_code` 属于 PTC，脚本的 `read`/`write`/`network` 是启用沙箱后的独立 OS 限制，规则允许不覆盖结构性拒绝。
+脚本内部的任意文件访问仅受结构性沙箱权限限制，不逐次匹配 `path` 规则。
+自有本地 MCP stdio 沿用显式沙箱启动及不可用时拒绝，启动/发现不赋予后续模型调用权限；远程和非自有 MCP 不变。
+宿主角色代码、shell、持久 shell、PTC、PTY、Git、编辑器和触发器不受逐次文件规则的全局拦截，shell 命令匹配也不等于 OS 隔离；沙箱边界见[插件沙箱](#插件沙箱)。
 
-Ordinary tools, command admission, MCP tools and plugin broker operations use `safety`.
-Only actual C# script executors (`run_csx` and `run_csharp_repl`) use the independent `scripts.permissions` rule maps; `run_code` is PTC and remains outside that script policy.
-Both namespaces use the same matcher engine and boolean `autoApprove` semantics. Script invocation rules match the tool and its string arguments; `read`/`write`/`network` are separate workspace-level OS restrictions when sandboxing is enabled.
-A rule allow does not grant a structurally denied capability. Arbitrary filesystem opens made inside script code have no per-open matcher callback; use the structural script permissions for those operations rather than assuming a `path` rule intercepts arbitrary BCL/native IO.
+决策审计包含规则 ID/类型、autoApprove、决策、匹配维度、路径/意图、工具及实际存在的会话/调用 ID 和时间，审批及提交结果另行记录。
+GUI 安全页编辑真实 YAML 规则；TUI 没有独立安全编辑器，请编辑 `settings.yaml` 并使用现有审批界面。
 
-Owned local MCP stdio retains its explicit OS-sandboxed launch path when sandboxing is enabled, including refusal when the required backend is unavailable. Configured startup/discovery does not invent a model session or grant authority to subsequent tool calls.
-Shell, persistent shell, PTC, PTY, Git, editor launches and triggers, remote MCP and unowned MCP keep their ordinary behavior. This rule engine does not globally intercept their processes or arbitrary BCL/native file access.
-Compiled-in and directory plugins use the same explicit execution roles and permission declarations. Host-role code retains unrestricted in-process BCL/native authority; its broker calls are checked, but file rules do not revoke its other access or prevent live policy edits.
-There are no artifact/image/digest grants, retained full-host authority snapshots or rejected-policy activation status. Each mediated operation reads the current settings policy; editing a separately returned settings DTO does not change the runtime reader's private parsed snapshot.
-
-Each safety decision records rule ID/kind, `autoApprove`, `allow`/`deny`/`notify`, tool, dialect, matched field/pattern, normalized path, real intent, session/call IDs when present, and timestamp.
-Approval/commit outcome is recorded separately from the policy decision.
-Session decisions use the normal ignorable-metadata event codec and persistence; lifecycle decisions are recorded in the diagnostic log without invented session/call IDs.
-
-The GUI safety page edits real YAML matcher maps.
-There is no TUI safety editor: edit `settings.yaml` and use the existing authoritative TUI/GUI approval surfaces.
-Human settings commands and GUI saves remain explicit human operations.
-
-
-The trusted settings diff gate is always enabled for these tool/API paths, independently of `sandbox.enabled`. It does not intercept arbitrary BCL/native writes by host-role code, shell, PTC, editor, Git, remote MCP, or other unconfined processes. Enabling the plugin sandbox does not turn those paths into a universal settings-write boundary.
 
 ## 不同于原版 DSH 的功能
 
@@ -432,7 +395,7 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 Linux 需要 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程；能力不可用或声明路径授权失败时拒绝启动并撤销本次临时授权。
 隔离插件共享进程，必须相互信任；崩溃、超时或取消影响整个共享进程，不自动重放调用，也不提供内存预算。
 宿主角色的权限位只限制中介调用，不限制同进程代码；已加载的宿主代码不会被追溯隔离。
-开启沙箱不接管 shell、PTC、PTY、编辑器或远程进程；settings 写入规则见[设置变更审批](#设置变更审批)。
+未隔离路径与设置审批范围见[安全规则](#安全规则)和[设置变更审批](#设置变更审批)。
 托管插件沿用 `IDshPlugin`，示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生 C ABI v1 见 [`templates/native-plugin`](templates/native-plugin)。
 
 
@@ -476,14 +439,6 @@ scripts:
 
 </details>
 
-<details>
-<summary><b>未发布</b> — 安全规则与实际访问授权</summary>
-
-- safety 与真实脚本执行器使用带稳定 ID 的 matcher map；保留 AND/OR、deny 优先、布尔 autoApprove、tool/dialect/path/intent/args 语义，并明确普通路径中介与不受全局拦截的执行边界。
-- 工具在准备后被替换时，执行前按新注册重新授权，不复用旧注册的单次批准；授权中再次替换或与已排程并行模式不兼容时拒绝执行。
-- 修复首次创建工作树池时 `.gitignore` 的目录创建顺序，仍在写入授权后创建目录与文件。
-
-</details>
 
 <details>
 <summary><b>未发布</b> — 交互模式能力化</summary>

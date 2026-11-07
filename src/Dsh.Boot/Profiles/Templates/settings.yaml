@@ -574,9 +574,9 @@ plugins:
 #   prune: true
 # 安全设置
 # safety:
-#   Default decision when no rule matches: false requests approval, true allows.
+#   无规则匹配时的默认决策：false 请求审批，true 允许。
 #   autoApprove:
-#   Stable rule IDs map to typed matchers; dimensions AND, rules OR, deny wins.
+#   规则 ID 映射为 matcher，格式见 README「安全规则」。
 #   blacklist:
 #     <id>:
 #       tool: []
@@ -1034,12 +1034,9 @@ storage:
 
 # 安全设置
 safety:
-  # Default tool notification/approval; explicit deny always wins.
+  # 未匹配规则时是否自动批准。
   autoApprove: false
-  # ID -> matcher: tool (scalar/list), dialect, path, intent, args (string map).
-  # Path * stays in one segment; ** crosses segments; args.path is forbidden.
-  # Example: deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
+  # 规则格式见 README「安全规则」。
   blacklist: {}
-  # Example: source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
-  # Allows can skip notification, never explicit deny or the redacted diff/audit/authoritative approval gate.
+  # 示例：source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
   whitelist: {}
