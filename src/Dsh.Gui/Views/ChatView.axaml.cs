@@ -238,17 +238,26 @@ public sealed partial class ChatView : UserControl
         if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
-        if (!layoutChanged)
+        if (!layoutChanged && !_foldSession)
         {
             // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
             // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
             // 否则一次布局增长就会把人拽回底部。
+            // 折叠会话期间不重判: 面板自己挪的那点位移不能被追认成"用户滚到了底部"。
             _scrollGeneration++;
             _sticky = IsAtBottom(scroll);
         }
+        // 折叠会话: 只要高度变了就把被点那条拉回原位, 不再要求"偏移量几乎没变"——
+        // 面板重估经常直接把偏移推几十像素(实测 48px), 那条严格判据会把它当成真正的滚动而放过去。
+        if (_foldSession && !_restoringAnchor && !_draggingThumb && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance)
+        {
+            RestoreAnchor(scroll);
+            if (--_foldSessionPasses <= 0)
+                _foldSession = false;
+        }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
-        if (!_restoringAnchor && !_draggingThumb && !_sticky
+        else if (!_restoringAnchor && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
             && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
@@ -490,6 +499,12 @@ public sealed partial class ChatView : UserControl
     /** 这一次布局变化来自折叠/展开: 不许顺手贴底, 否则用户刚点开的那条会被顶出视口。 */
     private bool _foldPending;
 
+    /** 折叠会话: 被点那条还没被按实测位置放回原处。 */
+    private bool _foldSession;
+
+    /** 折叠会话还剩几轮可用来纠正(每轮布局一次, 面板最多几轮收敛)。 */
+    private int _foldSessionPasses;
+
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
     private object? _anchorData;
@@ -507,9 +522,46 @@ public sealed partial class ChatView : UserControl
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
     /** 折叠与展开只是视图操作: 位置不需要补偿(上方内容不动), 但要挡掉这一次的触底跟随。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => _foldPending = true;
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
 
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => _foldPending = true;
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
+
+    /**
+     * 折叠会改变被点那条的高度, 而 VirtualizingStackPanel 在已实体化项高度变化时会重估整篇文档的坐标,
+     * 连"是否到底"都可能被它改掉。所以从点击这一刻起开一段"折叠会话": 关掉跟随, 并把**被点的那条**
+     * 而不是视口顶部那条当作锚点, 接下来几轮布局都按实测位置把它拉回原处。
+     */
+    private void BeginFoldSession(object? source)
+    {
+        _foldPending = true;
+        _sticky = false;
+        _foldSessionPasses = AnchorSettlePasses;
+        if (MessageList.Scroll is not ScrollViewer scroll || MessageContainerOf(source) is not { } item)
+        {
+            _foldSession = false;
+            return;
+        }
+        if (item.DataContext is not { } data || item.TranslatePoint(default, scroll) is not { } position)
+        {
+            _foldSession = false;
+            return;
+        }
+        _anchorData = data;
+        _anchorIndex = MessageList.IndexFromContainer(item);
+        _anchorCount = MessageList.ItemCount;
+        _anchorTop = position.Y;
+        _foldSession = true;
+    }
+
+    private ListBoxItem? MessageContainerOf(object? source)
+    {
+        for (var visual = source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is ListBoxItem item)
+                return item;
+        }
+        return null;
+    }
 
     /** SelectableTextBlock 点击后不会自动获得焦点, 而 Ctrl+C 只有在其拥有焦点时才生效; 选中文字即意味着在阅读, 同时停止触底跟随。 */
     private void OnSelectablePointerPressed(object? sender, PointerPressedEventArgs e)
