@@ -729,10 +729,10 @@ public sealed partial class ChatView : UserControl
         switch (e.Key)
         {
             case Key.PageUp when !composerScrolls:
-                ScrollTranscriptBy(-scroll.Viewport.Height, follow: false);
+                ScrollTranscriptBy(-scroll.Viewport.Height);
                 break;
             case Key.PageDown when !composerScrolls:
-                ScrollTranscriptBy(scroll.Viewport.Height, follow: true);
+                ScrollTranscriptBy(scroll.Viewport.Height);
                 break;
             case Key.Home or Key.End when jumpToStart || jumpToEnd:
                 ScrollTranscriptTo(jumpToEnd ? double.MaxValue : 0);
@@ -744,18 +744,21 @@ public sealed partial class ChatView : UserControl
         return true;
     }
 
-    /** 写偏移用具体像素(禁用 ScrollToEnd): 到底时按"这次落点是否在末尾"重定跟随意图。 */
-    private void ScrollTranscriptBy(double delta, bool follow)
-        => ScrollTranscriptTo((MessageList.Scroll?.Offset.Y ?? 0) + delta, follow);
+    private void ScrollTranscriptBy(double delta)
+        => ScrollTranscriptTo((MessageList.Scroll?.Offset.Y ?? 0) + delta);
 
-    private void ScrollTranscriptTo(double target, bool? follow = null)
+    /**
+     * 写偏移用具体像素(禁用 ScrollToEnd); 跟随意图只按**落点**判定, 由调用方指定的方向一律不作数。
+     * 否则(例如把 PageDown 当成"恢复跟随")用户停在半途时会被下一帧流式输出拽回底部。
+     */
+    private void ScrollTranscriptTo(double target)
     {
         if (MessageList.Scroll is not { } scroll)
             return;
         var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
         var offset = Math.Clamp(target, 0, maxOffset);
         scroll.Offset = new Vector(scroll.Offset.X, offset);
-        _sticky = follow ?? offset >= maxOffset - AnchorTolerance;
+        _sticky = offset >= maxOffset - AnchorTolerance;
     }
 
     /** 剪贴板有图片 -> 转附件; 否则退回把剪贴板文本插到光标处(替代 TextBox 默认粘贴, 以便优先识别图片)。 */
