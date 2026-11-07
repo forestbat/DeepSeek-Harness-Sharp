@@ -1,26 +1,17 @@
-using System.Text;
+using Dsh.Boot;
 using Dsh.Llm;
+using System.Text;
 using Dsh.Runtime;
 using Dsh.Transport;
 
 namespace Dsh.Core;
 
-public readonly record struct SettingsMutationRequest(string Path, string Before, string After, ToolRunContext Context);
-
-public interface ISettingsMutationGate
-{
-    const string ServiceName = "settingsMutations";
-    string SettingsPath { get; }
-    bool Owns(string path);
-    Task CommitAsync(SettingsMutationRequest request, Func<string, CancellationToken, Task> commit, CancellationToken cancellationToken = default);
-}
-
 public static class SettingsMutation
 {
     private const int ReadBufferBytes = 4096;
 
-    public static ISettingsMutationGate RequireGate(ToolRunContext run)
-        => (run.Agent?.Ctx ?? run.HostContext)?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)
+    public static SettingsMutationGate RequireGate(ToolRunContext run)
+        => (run.Agent?.Ctx ?? run.HostContext)?.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
 
     public static async Task<string> ReadTextAsync(string path, CancellationToken signal)
@@ -35,8 +26,8 @@ public static class SettingsMutation
         FileMode mode = FileMode.Create)
     {
         var context = run.Agent?.Ctx ?? run.HostContext;
-        var gate = context?.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
-        var active = gate?.SettingsPath ?? context?.GetProp(ISettingsMutationContext.SettingsPathProperty) as string;
+        var gate = context?.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
+        var active = gate?.SettingsPath ?? context?.GetProp(HarnessHome.SettingsPathProperty) as string;
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var isSettings = active is not null && comparer.Equals(CanonicalFilePath.Canonicalize(path), CanonicalFilePath.Canonicalize(active));
         if (isSettings)

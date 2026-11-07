@@ -53,7 +53,7 @@ public static class ConfigBoot
 
         try
         {
-            ctx.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
+            ctx.SetOwn(HarnessHome.SettingsPathProperty, home.SettingsFile);
             var (pluginHost, sandbox, nativeBridge) = CreateRuntime(runtimeFactory, ctx,
                 new PluginExecutionEnvironment(home, settings, options.Cwd), pluginsDirectory, app.Track);
             var discovery = sandbox is null ? pluginHost.Scan(pluginsDirectory, nativeBridge) : await sandbox.ScanAsync().ConfigureAwait(false);
@@ -89,7 +89,7 @@ public static class ConfigBoot
         context.SetOwn("dshHomePath", home.Root);
         context.SetOwn("harnessOptions", options with { Home = home });
         context.SetOwn(OutboundProxy.PropName, CreateOutboundProxy(context, settings.Network));
-        context.SetOwn(ISettingsMutationContext.SettingsPathProperty, home.SettingsFile);
+        context.SetOwn(HarnessHome.SettingsPathProperty, home.SettingsFile);
         var directory = options.PluginsDirectory ?? Path.Combine(AppContext.BaseDirectory, "plugins");
         var owned = new List<IDisposable>();
         try

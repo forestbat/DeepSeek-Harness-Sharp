@@ -81,7 +81,7 @@ public sealed class SafetyCommandGuardTests
     public void SharedSafetyListEvaluator_UsesCurrentToolAndCommandGrammar(string rule, string tool, string arguments)
     {
         using var document = JsonDocument.Parse(arguments);
-        Assert.Equal(rule, SafetyCommandGuard.MatchingRule([rule], tool, document.RootElement));
+        Assert.Equal(rule, ShellCommandPattern.MatchingRule([rule], tool, document.RootElement));
     }
 
     public sealed class Bash : IDisposable

@@ -1,4 +1,6 @@
-namespace Dsh.Interaction;
+using System.Text.Json;
+
+namespace Dsh.Core;
 
 /**
  * A blacklist pattern such as "rm -rf /*" matched against the simple commands of a command line.
@@ -8,6 +10,8 @@ namespace Dsh.Interaction;
  */
 public sealed class ShellCommandPattern
 {
+    private const string ToolPrefix = "tool:";
+
     private readonly IReadOnlyList<IReadOnlyList<string>> _segments;
     private readonly ShellDialect _dialect;
     private readonly StringComparer _comparer;
@@ -73,4 +77,42 @@ public sealed class ShellCommandPattern
             && argument.Length > 1
             && argument[0] == '-'
             && argument.Skip(1).All(char.IsAsciiLetter);
+
+    /** Whitelist and blacklist deliberately share the current tool/command grammar. */
+    public static string? MatchingRule(IReadOnlyList<string>? rules, string toolName, JsonElement arguments)
+    {
+        if (rules is null || rules.Count == 0)
+            return null;
+        var command = ShellToolDialects.ByToolName.TryGetValue(toolName, out var dialect)
+            && arguments.ValueKind == JsonValueKind.Object
+            && arguments.TryGetProperty("command", out var value)
+            && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        var segments = command is null ? [] : ShellCommandSegments.Split(command, dialect);
+        return rules.OrderBy(rule => rule.Length).Select(SafetyRule.Parse)
+            .FirstOrDefault(rule => rule.Matches(toolName, segments))?.Text;
+    }
+
+    /**
+     * "tool:<name>" blocks a tool by name.
+     * "<shell tool>:<pattern>" (e.g. "bash:", "pwsh:") blocks matching commands in every shell tool of that tool's dialect, so a POSIX rule also covers bash_persistent and wsl.
+     */
+    private sealed record SafetyRule(string Text, string? ToolName, ShellDialect? Dialect, ShellCommandPattern? Pattern)
+    {
+        public static SafetyRule Parse(string text)
+        {
+            if (text.StartsWith(ToolPrefix, StringComparison.OrdinalIgnoreCase))
+                return new SafetyRule(text, text[ToolPrefix.Length..], null, null);
+            foreach (var (tool, dialect) in ShellToolDialects.ByToolName)
+            {
+                if (text.StartsWith($"{tool}:", StringComparison.OrdinalIgnoreCase))
+                    return new SafetyRule(text, null, dialect, ShellCommandPattern.Parse(text[(tool.Length + 1)..], dialect));
+            }
+            return new SafetyRule(text, null, null, null);
+        }
+
+        public bool Matches(string toolName, IReadOnlyList<IReadOnlyList<string>> segments)
+            => Pattern is null
+                ? ToolName == toolName
+                : ShellToolDialects.ByToolName.TryGetValue(toolName, out var dialect) && dialect == Dialect && Pattern.Matches(segments);
+    }
 }

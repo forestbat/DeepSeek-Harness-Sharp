@@ -330,7 +330,7 @@ public sealed class SettingsMutationTests
             Session.Append(new TurnStartPayload(1));
             if (withApproval)
                 _ = ApprovalService.Register(Context);
-            Context.SetOwn(ISettingsMutationContext.SettingsPathProperty, Home.SettingsFile);
+            Context.SetOwn(HarnessHome.SettingsPathProperty, Home.SettingsFile);
             Gate = new SettingsMutationGate(Context, Home);
             _safetyApprovals = SafetyCommandGuard.RegisterApprovals(Context, () => HarnessSettings.LoadForReview(Home).Safety);
             _tools = [WriteTool.Register(Context), EditTool.Register(Context), StrReplaceEditorTool.Register(Context)];

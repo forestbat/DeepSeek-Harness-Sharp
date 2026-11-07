@@ -615,7 +615,7 @@ public sealed class ToolRuntime : Service
         var tool = Get(exec.Name, agent.ScopeKey);
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
         // The actual settings writer requests its own diff decision instead of a second root-only decision.
-        if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
+        if (Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false) is { } settings)
             targets = targets.Where(path => !settings.Owns(path)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
