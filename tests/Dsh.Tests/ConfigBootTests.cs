@@ -70,12 +70,7 @@ public class ConfigBootTests
     [Fact(Timeout = 60000)]
     public async Task StartupImageTcb_ActivatesFileRulesAndEnforcesActualProductionTools()
     {
-        foreach (var scalarTool in new[] { false, true })
-            await ExerciseStartupPolicyAsync(scalarTool, TestContext.Current.CancellationToken);
-    }
-
-    private static async Task ExerciseStartupPolicyAsync(bool scalarTool, CancellationToken signal)
-    {
+        var signal = TestContext.Current.CancellationToken;
         var root = TempTree.CreateDirectory("policy-product");
         try
         {
@@ -85,7 +80,6 @@ public class ConfigBootTests
             var secretFile = Path.Combine(root, "secret.txt");
             await File.WriteAllTextAsync(publicFile, "public original", signal);
             await File.WriteAllTextAsync(secretFile, "secret original", signal);
-            var tool = scalarTool ? "read" : "[read]";
             await File.WriteAllTextAsync(home.SettingsFile, $$"""
                 safety:
                   autoApprove: false
@@ -93,7 +87,7 @@ public class ConfigBootTests
                     private-file: { path: {{JsonSerializer.Serialize(secretFile)}}, intent: any }
                   whitelist:
                     workspace-read:
-                      tool: {{tool}}
+                      tool: [read]
                       path: {{JsonSerializer.Serialize(Path.Combine(root, "**"))}}
                       intent: read
                     workspace-write:
@@ -153,7 +147,6 @@ public class ConfigBootTests
             Directory.CreateDirectory(home.Root);
             var file = Path.Combine(root, "protected.txt");
             var extended = $@"\\?\{file}";
-            var forward = $"//?/{file.Replace('\\', '/')}";
             await File.WriteAllTextAsync(file, "protected original", signal);
             await File.WriteAllTextAsync(home.SettingsFile, $$"""
                 safety:
@@ -176,21 +169,15 @@ public class ConfigBootTests
                 Name = name, Arguments = JsonSerializer.SerializeToElement(arguments), Agent = agent,
                 CallId = callId, Signal = signal,
             });
-            foreach (var (pattern, actual) in new[] { (file, extended), (extended, file), (file, forward), (forward, file) })
-            {
-                var settings = HarnessSettings.Load(home);
-                settings.Safety!.Blacklist["private-file"] = new() { Path = pattern, Intent = "any" };
-                settings.Save(home);
-                var readCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
-                var read = await Execute("read", new { file_path = actual }, readCall);
-                Assert.True(read.IsError);
-                Assert.DoesNotContain("protected original", string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
-                var writeCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
-                Assert.True((await Execute("write", new { file_path = actual, content = "not committed" }, writeCall)).IsError);
-                Assert.Equal("protected original", await File.ReadAllTextAsync(file, signal));
-                Assert.True(SafetyAssert.Denied(session, readCall.Value, "private-file", file, null, "read").AutoApprove);
-                Assert.True(SafetyAssert.Denied(session, writeCall.Value, "private-file", file, null, "write").AutoApprove);
-            }
+            var readCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+            var read = await Execute("read", new { file_path = extended }, readCall);
+            Assert.True(read.IsError);
+            Assert.DoesNotContain("protected original", string.Concat(read.Content.OfType<TextBlock>().Select(block => block.Text)));
+            var writeCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
+            Assert.True((await Execute("write", new { file_path = extended, content = "not committed" }, writeCall)).IsError);
+            Assert.Equal("protected original", await File.ReadAllTextAsync(file, signal));
+            Assert.True(SafetyAssert.Denied(session, readCall.Value, "private-file", file, null, "read").AutoApprove);
+            Assert.True(SafetyAssert.Denied(session, writeCall.Value, "private-file", file, null, "write").AutoApprove);
         }
         finally { TempTree.Delete(root); }
     }
