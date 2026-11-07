@@ -134,14 +134,26 @@ public sealed partial class EditorSettingsViewModel : ObservableObject
     }
     [RelayCommand] private void RemoveEditor() { if (SelectedEditor is { } row) Editors.Remove(row); SelectedEditor = Editors.FirstOrDefault(); }
     [RelayCommand] private void RemoveTrigger() { if (SelectedTrigger is { } row) Triggers.Remove(row); SelectedTrigger = Triggers.FirstOrDefault(); }
-    [RelayCommand] private void MoveEditorUp() => Move(Editors, SelectedEditor, -1);
-    [RelayCommand] private void MoveEditorDown() => Move(Editors, SelectedEditor, 1);
-    [RelayCommand] private void MoveTriggerUp() => Move(Triggers, SelectedTrigger, -1);
-    [RelayCommand] private void MoveTriggerDown() => Move(Triggers, SelectedTrigger, 1);
-    private static void Move(ObservableCollection<EditorConfigurationRow> rows, EditorConfigurationRow? row, int delta)
+    [RelayCommand] private void MoveEditorUp() => Reselect(Editors, SelectedEditor, -1, row => SelectedEditor = row);
+    [RelayCommand] private void MoveEditorDown() => Reselect(Editors, SelectedEditor, 1, row => SelectedEditor = row);
+    [RelayCommand] private void MoveTriggerUp() => Reselect(Triggers, SelectedTrigger, -1, row => SelectedTrigger = row);
+    [RelayCommand] private void MoveTriggerDown() => Reselect(Triggers, SelectedTrigger, 1, row => SelectedTrigger = row);
+
+    /**
+     * 上移/下移后必须把选中项重新写回: ObservableCollection.Move 在 Avalonia 的 SelectionModel 里
+     * 被拆成 remove + add, 选中索引因此变成 -1 并回写 null 到 VM, 之后再不重设就丢了高亮。
+     */
+    private static void Reselect(
+        ObservableCollection<EditorConfigurationRow> rows,
+        EditorConfigurationRow? row,
+        int delta,
+        Action<EditorConfigurationRow> select)
     {
         var index = row is null ? -1 : rows.IndexOf(row);
-        if (index >= 0 && index + delta >= 0 && index + delta < rows.Count) rows.Move(index, index + delta);
+        if (index < 0 || index + delta < 0 || index + delta >= rows.Count)
+            return;
+        rows.Move(index, index + delta);
+        select(row!);
     }
     private static void LoadRows(ObservableCollection<EditorConfigurationRow> rows, object? raw)
     {
