@@ -29,7 +29,7 @@ public static class RuleMapYaml
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         var stream = Load(text);
-        if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root) return;
+        if (stream.Documents[0].RootNode is not YamlMappingNode root) return;
         ValidatePolicy(Get(root, "safety"), structural: false);
         var scriptNode = Get(root, "scripts");
         if (scriptNode is null || scriptNode is YamlScalarNode { Value: null or "" or "null" or "~" }) return;

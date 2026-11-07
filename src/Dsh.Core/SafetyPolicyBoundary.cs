@@ -38,11 +38,10 @@ public sealed class SafetyBoundary : Service
             scripts ? "scripts.permissions" : "safety");
     }
 
-    private static PermissionInput Input(ToolRunContext? run, string? path = null, string? intent = null)
+    private static PermissionInput Input(ToolRunContext? run, string? canonicalPath = null, string? intent = null)
         => new(run?.Name, run?.Arguments ?? default,
             run?.Agent?.Session.WorkingDirectory ?? Environment.CurrentDirectory,
-            path is null ? null : Dsh.Runtime.CanonicalFilePath.Canonicalize(path), intent,
-            PathIsCanonical: path is not null);
+            canonicalPath, intent, PathIsCanonical: canonicalPath is not null);
 
     private PermissionDecision Decide(PermissionRules rules, PermissionInput input)
         => PermissionEngine.Decide(rules, input, static path => Dsh.Runtime.CanonicalFilePath.Canonicalize(path));
@@ -52,7 +51,7 @@ public sealed class SafetyBoundary : Service
         var (rules, space) = Policy(run);
         var input = Input(run);
         var decision = Decide(rules, input);
-        Audit(run, input, decision, space);
+        RecordDecision(Ctx, run, input, decision, space);
         Reject(decision, space);
         if (mediatedFiles && run.Arguments.ValueKind == JsonValueKind.Object)
         {
@@ -69,11 +68,11 @@ public sealed class SafetyBoundary : Service
 
             void DemandPreliminary(string value)
             {
-                var preliminary = Input(run, Path.GetFullPath(value, input.WorkingDirectory), run.InitialFileIntent);
+                var preliminary = Input(run, Dsh.Runtime.CanonicalFilePath.Canonicalize(Path.GetFullPath(value, input.WorkingDirectory)), run.InitialFileIntent);
                 var known = Decide(rules, preliminary);
                 if (known.Decision == "deny")
                 {
-                    Audit(run, preliminary, known, space);
+                    RecordDecision(Ctx, run, preliminary, known, space);
                     Reject(known, space);
                 }
             }
@@ -93,10 +92,11 @@ public sealed class SafetyBoundary : Service
         var (rules, space) = Policy(run, scriptPermissions);
         var input = Input(run);
         var decision = Decide(rules, input);
-        Audit(run, input, decision, space, lifecycleOwner);
+        RecordDecision(Ctx, run, input, decision, space, lifecycleOwner);
         Reject(decision, space);
-        var authorization = await ApproveAsync(run, input, decision, space, Revision(rules), signal,
-            alreadyApproved: run?.SafetyApprovalRevision == AuthorizationRevision(rules, space), lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
+        var revision = Revision(rules);
+        var authorization = await ApproveAsync(run, input, decision, space, revision, signal,
+            alreadyApproved: run?.SafetyApprovalRevision == $"{space}:{revision}", lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
         if (run is not null) run.SafetyApprovalRevision = authorization;
     }
 
@@ -107,7 +107,7 @@ public sealed class SafetyBoundary : Service
         var (rules, space) = Policy(null);
         var input = Input(null);
         var decision = Decide(rules, input);
-        Audit(null, input, decision, space, lifecycleOwner,
+        RecordDecision(Ctx, null, input, decision, space, lifecycleOwner,
             decision.Decision == "deny" ? "rejected" : "configured-lifecycle-authorized");
         Reject(decision, space);
         // The operator's configured connection authorizes discovery only, never a later model call.
@@ -120,16 +120,17 @@ public sealed class SafetyBoundary : Service
         var (rules, space) = Policy(run);
         var input = Input(run, canonical, intent);
         var decision = Decide(rules, input);
-        Audit(run, input, decision, space, lifecycleOwner);
+        RecordDecision(Ctx, run, input, decision, space, lifecycleOwner);
         Reject(decision, space);
         // Proposal reads still obey denials; the one settings gate owns the diff notification.
         if (settingsReview && run is not null
             && Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
             return;
-        var authorization = AuthorizationRevision(rules, space);
+        var revision = Revision(rules);
+        var authorization = $"{space}:{revision}";
         var approved = run?.SafetyApprovalRevision == authorization
             || run?.HasFileApproval(authorization, canonical, intent) == true;
-        await ApproveAsync(run, input, decision, space, Revision(rules), signal, alreadyApproved: approved,
+        await ApproveAsync(run, input, decision, space, revision, signal, alreadyApproved: approved,
             lifecycleOwner: lifecycleOwner).ConfigureAwait(false);
         if (!approved && run is not null && decision.Decision == "notify")
             run.RememberFileApproval(authorization, canonical, intent);
@@ -139,12 +140,12 @@ public sealed class SafetyBoundary : Service
     {
         run.Signal.ThrowIfCancellationRequested();
         var (rules, space) = Policy(run);
-        var input = Input(run, path, intent);
+        var input = Input(run, Dsh.Runtime.CanonicalFilePath.Canonicalize(path), intent);
         var decision = Decide(rules, input);
-        Audit(run, input, decision, space);
+        RecordDecision(Ctx, run, input, decision, space);
         Reject(decision, space);
         _ = DemandSessionPolicy(run, input, decision, space);
-        var revision = AuthorizationRevision(rules, space);
+        var revision = $"{space}:{Revision(rules)}";
         if (decision.Decision != "allow" && run.SafetyApprovalRevision != revision
             && !run.HasFileApproval(revision, input.Path!, intent))
             throw new UnauthorizedAccessException("The file policy changed before publication; a new authorization is required.");
@@ -156,7 +157,7 @@ public sealed class SafetyBoundary : Service
         var approval = Ctx.Get<IApprovalService>("approval", false);
         if (run?.Agent is { } agent && approval?.IsDenied(agent) == true)
         {
-            Audit(run, input, decision, space, outcome: "rejected");
+            RecordDecision(Ctx, run, input, decision, space, outcome: "rejected");
             throw new UnauthorizedAccessException("The session explicitly denies approval-requiring operations.");
         }
         return approval;
@@ -180,7 +181,7 @@ public sealed class SafetyBoundary : Service
                 ApprovalOutcome.Cancelled => "cancelled",
                 _ => "rejected",
             };
-            Audit(run, input, decision, space, lifecycleOwner, name);
+            RecordDecision(Ctx, run, input, decision, space, lifecycleOwner, name);
             if (outcome == ApprovalOutcome.Cancelled)
                 throw new OperationCanceledException("The permission request was cancelled.", signal);
             if (name != "approved")
@@ -191,25 +192,19 @@ public sealed class SafetyBoundary : Service
         var latest = Decide(current, input);
         var currentRevision = Revision(current);
         if (latest.Decision == "deny" || currentRevision != revision)
-            Audit(run, input, latest, currentSpace, lifecycleOwner, "policy-changed");
+            RecordDecision(Ctx, run, input, latest, currentSpace, lifecycleOwner, "policy-changed");
         Reject(latest, currentSpace);
         _ = DemandSessionPolicy(run, input, latest, currentSpace);
         if (currentRevision != revision && latest.Decision != "allow")
             throw new UnauthorizedAccessException("The policy changed while approval was pending; a new authorization is required.");
-        return AuthorizationRevision(current, currentSpace);
+        return $"{currentSpace}:{currentRevision}";
     }
-
-    internal static string AuthorizationRevision(PermissionRules rules, string space) => $"{space}:{Revision(rules)}";
 
     private static void Reject(PermissionDecision decision, string space)
     {
         if (decision.Decision == "deny")
             throw new UnauthorizedAccessException($"Blocked by {space}.blacklist rule \"{decision.Match!.RuleId}\".");
     }
-
-    private void Audit(ToolRunContext? run, PermissionInput input, PermissionDecision decision, string space,
-        string? owner = null, string? outcome = null)
-        => RecordDecision(Ctx, run, input, decision, space, owner, outcome);
 
     public static void RecordDecision(Context context, ToolRunContext? run, PermissionInput input,
         PermissionDecision decision, string space, string? owner = null, string? outcome = null)
