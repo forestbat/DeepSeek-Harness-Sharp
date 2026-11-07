@@ -145,9 +145,10 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         catch (Exception error) { _owner.Diagnostic($"A plugin log was rejected: {error.Message}"); }
     }
 
-    private PluginSandboxSupervisor.Binding Binding(string package)
+    private PluginSandboxSupervisor.Binding Binding(string package, bool checkAuthority = true)
     {
-        _owner.CheckAuthority(_domain, package);
+        if (checkAuthority)
+            _owner.CheckAuthority(_domain, package);
         return _domain.Bindings.GetValueOrDefault(package)
             ?? throw new UnauthorizedAccessException("The package is not bound to this worker.");
     }
@@ -229,7 +230,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     }
 
     private void Log(PluginSandboxLog message)
-        => Binding(message.Package).Host.Log(message.Level, message.Message);
+        => Binding(message.Package, checkAuthority: false).Host.Log(message.Level, message.Message);
 
     internal async Task<JsonElement?> RequestAsync<T>(string method, T value, JsonTypeInfo<T> type,
         CancellationToken cancellationToken)
