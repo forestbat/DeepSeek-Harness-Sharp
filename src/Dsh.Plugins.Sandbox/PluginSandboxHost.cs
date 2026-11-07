@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Dsh.Boot;
 using Dsh.Plugins;
@@ -14,9 +15,9 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
     private readonly string _directory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
     private readonly PluginSandboxSupervisor _supervisor;
-    private readonly Dictionary<string, PluginRuntimeEntry> _entries = new(StringComparer.Ordinal);
-    private readonly record struct PluginRuntimeEntry(string? Artifact, PluginDescriptor Descriptor,
-        PluginExecution Execution, PluginSandboxMetadata? Metadata);
+    private readonly ConcurrentDictionary<string, PluginRuntimeEntry> _entries = new(StringComparer.Ordinal);
+    internal readonly record struct PluginRuntimeEntry(string? Artifact, PluginDescriptor Descriptor,
+        PluginExecution Execution, PluginSandboxMetadata? Metadata, string? Failure = null);
     private PluginSkip[] _failures = [];
     private readonly SemaphoreSlim _loading = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -29,15 +30,38 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
         _directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         _nativeBridge = nativeBridge;
         Directory.CreateDirectory(_directory);
-        _supervisor = new PluginSandboxSupervisor(context, environment, capabilities, _directory);
+        _supervisor = new PluginSandboxSupervisor(context, environment, capabilities, _directory, this);
     }
 
-    public override IReadOnlyList<PluginSkip> Failures => [.. Volatile.Read(ref _failures), .. _supervisor.Failures];
+    internal PluginRuntimeEntry? Entry(string package)
+        => _entries.TryGetValue(package, out var entry) ? entry : null;
+
+    internal void RecordEntry(PluginRuntimeEntry entry)
+        => _entries.AddOrUpdate(entry.Descriptor.Package, static (_, replacement) => replacement,
+            static (_, current, replacement) => replacement with { Failure = current.Failure }, entry);
+
+    internal void SetFailure(string package, string? reason)
+    {
+        while (_entries.TryGetValue(package, out var entry)
+            && !_entries.TryUpdate(package, entry with { Failure = reason }, entry))
+        {
+        }
+    }
+
+    internal void ClearFailures()
+    {
+        foreach (var entry in _entries)
+            if (entry.Value.Failure is not null)
+                SetFailure(entry.Key, null);
+    }
+
+    public override IReadOnlyList<PluginSkip> Failures => [.. Volatile.Read(ref _failures),
+        .. _entries.Where(entry => entry.Value.Failure is not null).Select(entry => new PluginSkip(entry.Key, entry.Value.Failure!))];
     public override string? ArtifactPath(string package) => _entries.GetValueOrDefault(package).Artifact;
     public override PluginForm? Form(string package)
         => _entries.TryGetValue(package, out var entry) ? entry.Descriptor.Form : null;
     public override IReadOnlyList<string> DomainPackages(string package) => _supervisor.DomainPackages(package);
-    public override bool IsFaulted(string package) => _supervisor.IsFaulted(package);
+    public override bool IsFaulted(string package) => Entry(package)?.Failure is not null;
     public override Task RetireDomainAsync(string package, CancellationToken cancellationToken = default)
         => _supervisor.RetireDomainAsync(package, cancellationToken);
 
@@ -165,6 +189,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
         {
             Catalog.Remove(registration.Package);
             Catalog.Register(descriptor, registration.Create);
+            RecordEntry(new PluginRuntimeEntry(null, descriptor, role, metadata));
         }
         else
         {
@@ -176,9 +201,8 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
                     ?? throw new RuntimeException("PLUGIN_INSPECTION_MISMATCH", "The compiled plugin inspection did not describe the requested package.");
                 _ = Role(metadata, setting);
             }
-            _supervisor.Register(this, new PluginSandboxSource(descriptor, null));
+            _supervisor.Register(new PluginRuntimeEntry(null, descriptor, role, metadata));
         }
-        _entries[registration.Package] = new PluginRuntimeEntry(null, descriptor, role, metadata);
     }
 
     private PluginExecutionSettings CurrentSettings() => _environment.ReadSettings();
@@ -224,8 +248,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
                 continue;
             }
             var descriptor = PluginDescriptor.For(metadata.Package, form);
-            _supervisor.Register(this, new PluginSandboxSource(descriptor, path));
-            _entries[metadata.Package] = new PluginRuntimeEntry(path, descriptor, PluginExecution.Sandbox, metadata);
+            _supervisor.Register(new PluginRuntimeEntry(path, descriptor, PluginExecution.Sandbox, metadata));
             packages.Add(metadata.Package);
         }
         return new PluginCatalogLoadResult(packages, hosted.Loaded);
@@ -285,7 +308,7 @@ internal sealed class PluginSandboxHost : PluginHost, IDisposable
             throw new RuntimeException("PLUGIN_HOST_LOAD_FAILED", "The explicitly trusted plugin has no registered implementation.");
         Catalog.Remove(package);
         Catalog.Register(descriptor, create);
-        _entries[package] = new PluginRuntimeEntry(source, descriptor, PluginExecution.Host, metadata);
+        RecordEntry(new PluginRuntimeEntry(source, descriptor, PluginExecution.Host, metadata));
     }
 
     private string? InstallDirectory(string path)

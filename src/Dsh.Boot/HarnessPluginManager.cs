@@ -247,7 +247,7 @@ public sealed class HarnessPluginManager : IDisposable
         var result = $"plugin {trimmed} {key} permission {(allowed ? "allowed" : "denied")}";
         if (_sandbox is null)
             return $"{result} in its future isolation profile (sandbox is off; no OS access restrictions are enforced)";
-        if (PluginRoleResolver.Resolve(trimmed, _settings.Plugins.GetValueOrDefault(trimmed), ExecutionForm(trimmed)) == PluginExecution.Host)
+        if (IsHostRole(trimmed))
             return $"{result} for broker calls; host-role code retains unrestricted in-process access";
         return $"{result}; the next broker operation uses the current permissions";
     }
@@ -417,8 +417,7 @@ public sealed class HarnessPluginManager : IDisposable
         }
         Track(await _sandbox.ScanAsync());
         foreach (var member in domain)
-            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false } setting
-                && PluginRoleResolver.Resolve(member, setting, ExecutionForm(member)) != PluginExecution.Host)
+            if (_settings.Plugins.GetValueOrDefault(member) is { Enabled: false } && !IsHostRole(member))
                 _host.Catalog.Remove(member);
         var messages = await ActivatePackagesAsync(domain);
         return messages.Count == 0 ? Removed(package, leaked: false) : string.Join(';', messages);
@@ -494,7 +493,7 @@ public sealed class HarnessPluginManager : IDisposable
             native.Dispose();
         }
         if (removeRegistration && _sandbox is not null
-            && PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
+            && !IsHostRole(package))
             _host.Catalog.Remove(package);
         return null;
     }
@@ -515,6 +514,9 @@ public sealed class HarnessPluginManager : IDisposable
 
     private PluginForm ExecutionForm(string package)
         => Descriptor(package)?.Form ?? _sandbox?.Form(package) ?? PluginForm.ManagedAssembly;
+
+    private bool IsHostRole(string package)
+        => PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) == PluginExecution.Host;
 
     private static string FormName(PluginDescriptor descriptor)
     {
@@ -559,7 +561,7 @@ public sealed class HarnessPluginManager : IDisposable
     {
         if (_sandbox is not null)
             foreach (var package in _host.Catalog.PackageNames.ToArray())
-                if (PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
+                if (!IsHostRole(package))
                     _host.Catalog.Remove(package);
         foreach (var group in _loadedContexts.GroupBy(entry => entry.Value))
         {

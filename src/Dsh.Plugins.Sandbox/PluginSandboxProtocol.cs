@@ -22,7 +22,6 @@ internal static class PluginSandboxMethods
     internal const int MaximumPendingRequests = 16;
 }
 
-internal sealed record PluginSandboxSource(PluginDescriptor Descriptor, string? ArtifactPath);
 internal sealed record PluginSandboxReady(int Version, int Pid);
 internal sealed record PluginSandboxInspectRequest(string? ArtifactPath, string? Package = null);
 internal sealed record PluginSandboxMetadata(string Package, PluginForm Form, string? Entry, bool SupportsCapabilities);
