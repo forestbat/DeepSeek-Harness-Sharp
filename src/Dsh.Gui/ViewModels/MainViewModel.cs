@@ -866,6 +866,41 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             ScrollRequested?.Invoke(message);
     }
 
+    /**
+     * 时间线的三个动作(GUI 入口): 跳转在本地做, 回退/分叉交给注册式会话命令 ,
+     * 因为会话的截断与派生必须发生在会话所在的那一侧。
+     */
+    [RelayCommand]
+    private void JumpToMessage(MessageViewModel? message)
+    {
+        if (message is not null)
+            ScrollRequested?.Invoke(message);
+    }
+
+    [RelayCommand]
+    private Task RevertToMessageAsync(MessageViewModel? message)
+        => RunTimelineCommandAsync(message, "revert", reload: true);
+
+    [RelayCommand]
+    private Task ForkAtMessageAsync(MessageViewModel? message)
+        => RunTimelineCommandAsync(message, "fork", reload: false);
+
+    private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool reload)
+    {
+        if (message?.Seq is not { } seq)
+            return;
+        var output = await _chat.RunAsync($"/timestamp {action} #{seq}");
+        if (output.Length > 0)
+            AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
+        if (reload)
+        {
+            // 会话已在服务端被截断: 重新取一份快照, 否则界面还留着一堆已经不存在的事件。
+            await _chat.ReloadAsync(forceReset: true);
+            return;
+        }
+        RefreshSessions();
+    }
+
     [RelayCommand]
     private void ToggleMessageFold(MessageViewModel? message)
     {
@@ -1577,7 +1612,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case UserMessageSource:
                 if (text.Length == 0)
                     break;
-                var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false));
+                var user = AppendMessage(new MessageViewModel("你", text, MessageKind.User, false) { Seq = seq });
                 _lastUserMessages.Add(user);
                 break;
             // 压缩检查点的正文已经由 compaction/summary 那一行渲染过, 再当成上下文注入会重复一遍摘要。

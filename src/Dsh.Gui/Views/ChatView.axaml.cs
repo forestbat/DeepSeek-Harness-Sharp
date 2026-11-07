@@ -72,6 +72,8 @@ public sealed partial class ChatView : UserControl
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         LayoutUpdated += OnLayoutUpdatedGuard;
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
+        // 时间线入口: 右键消息就是"跳到这里 / 回退到这里 / 从这里分叉"。
+        MessageList.AddHandler(ContextRequestedEvent, OnMessageContextRequested, RoutingStrategies.Tunnel);
         MessageList.PropertyChanged += (_, change) =>
         {
             if (change.Property != ListBox.ScrollProperty)
@@ -567,6 +569,38 @@ public sealed partial class ChatView : UserControl
             }
         }
         return (_foldAnchorIndex >= 0 && _foldAnchorIndex < MessageList.ItemCount ? _foldAnchorIndex : -1, _foldAnchorTop);
+    }
+
+    /**
+     * 右键一条消息: 只在它有事件序号时给出时间线动作(合成的界面行没有序号, 无从回退)。
+     * 菜单在代码里建:  Flyout 的内容不参与模板绑定, XAML 里无法把消息当参数递给命令。
+     */
+    private void OnMessageContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (_viewModel is not { } viewModel
+            || MessageContainerOf(e.Source)?.DataContext is not MessageViewModel { HasTimelineEntry: true } message)
+            return;
+        e.Handled = true;
+        MenuFlyout menu = new();
+        menu.Items.Add(MenuItem("跳到此消息", () => viewModel.JumpToMessageCommand.Execute(message)));
+        menu.Items.Add(MenuItem("回退到此消息", () =>
+        {
+            if (viewModel.RevertToMessageCommand.CanExecute(message))
+                _ = ExecuteViewCommandAsync(viewModel, viewModel.RevertToMessageCommand, message);
+        }));
+        menu.Items.Add(MenuItem("从此消息分叉", () =>
+        {
+            if (viewModel.ForkAtMessageCommand.CanExecute(message))
+                _ = ExecuteViewCommandAsync(viewModel, viewModel.ForkAtMessageCommand, message);
+        }));
+        menu.ShowAt(MessageContainerOf(e.Source)!, showAtPointer: true);
+    }
+
+    private static MenuItem MenuItem(string header, Action action)
+    {
+        MenuItem item = new() { Header = header };
+        item.Click += (_, _) => action();
+        return item;
     }
 
     private ListBoxItem? MessageContainerOf(object? source)

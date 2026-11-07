@@ -43,14 +43,18 @@ public sealed partial class MessageViewModel : ObservableObject
         Kind = kind;
         IsStreaming = streaming;
         // 工具/结果默认折叠, 只显示工具名; 其余可折叠消息在短文本时直接展开。
-        IsExpanded = Kind is MessageKind.Tool or MessageKind.Result
-            ? false
-            : !IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars);
+        IsExpanded = Kind is not (MessageKind.Tool or MessageKind.Result) && (!IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars));
         _buffer.Append(text);
         Text = text;
     }
 
     public string Role { get; }
+
+    /** 这条记录对应的事件序号; 时间线跳转/回退/分叉都按它定位(合成出来的界面行没有序号)。 */
+    public long? Seq { get; init; }
+
+    /** 时间线动作只对真实事件(有序号)开放。 */
+    public bool HasTimelineEntry => Seq is not null;
 
     public MessageKind Kind { get; }
 
