@@ -41,8 +41,7 @@ public sealed class PluginSandboxIntegrationTests
         Assert.True(denied.IsError);
         Assert.Equal(expected, await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken));
         Assert.Empty(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>().Select(audit => audit.Id));
-        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload
-            { RuleId: "deny-snapshot-read", Decision: "deny", Intent: "read", Tool: "sandbox_alpha" });
+        SafetyAssert.Denied(fixture.Session, null, "deny-snapshot-read", fixture.Home.SettingsFile, "read", "sandbox_alpha");
         HarnessSettings.Update(fixture.Home, settings => { settings.Safety!.Blacklist.Remove("deny-snapshot-read"); return true; });
         var before = await File.ReadAllTextAsync(fixture.Home.SettingsFile, TestContext.Current.CancellationToken);
         var offset = fixture.Session.SnapshotEvents().Count;

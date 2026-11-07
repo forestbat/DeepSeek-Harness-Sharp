@@ -158,21 +158,13 @@ public sealed class MemoryPluginTests
         Assert.DoesNotContain("private-first-key", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
         if (operation == "audit")
         {
-            var committed = File.ReadAllText(fixture.MemoryPath);
-            if (!committed.Contains("approved-second-value", StringComparison.Ordinal))
-                Assert.Fail("The expected memory update was not committed before the audit rejection.\n"
-                    + string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)) + "\n"
-                    + string.Join("\n", fixture.Session!.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
-                        .Where(audit => audit.CallId == fixture.LastCallId.Value).Select(audit => audit.ToString())));
+            Assert.Contains("approved-second-value", File.ReadAllText(fixture.MemoryPath), StringComparison.Ordinal);
         }
         else
             Assert.Equal(before, File.ReadAllText(fixture.MemoryPath));
         Assert.Equal(auditBefore, File.ReadAllText(fixture.AuditPath));
         var session = Assert.IsType<Session>(fixture.Session);
-        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.RuleId == ruleId && audit.RuleKind == "blacklist" && audit.Decision == "deny"
-            && audit.Tool == "memory_save" && audit.SessionId == session.Id.Value && audit.CallId == fixture.LastCallId.Value
-            && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(target) && audit.Intent == intent && audit.MatchedField.Contains("path"));
+        Assert.Contains("path", SafetyAssert.Denied(session, fixture.LastCallId.Value, ruleId, target, intent, "memory_save").MatchedField);
 
         var decisionCount = session.SnapshotEvents().Count(item => item.Data is SafetyDecisionAuditPayload);
         await fixture.Memory.RememberAsync("manual", "manual control-plane value", "Facts", "command", TestContext.Current.CancellationToken);

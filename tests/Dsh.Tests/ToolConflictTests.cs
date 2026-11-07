@@ -174,8 +174,7 @@ public sealed class ToolConflictTests
         Assert.True(result.IsError);
         Assert.Equal(0, calls);
         Assert.Equal("private-target-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
-        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.RuleId == "deny-new-namespace" && audit.Decision == "deny" && audit.CallId == prepared.Exec.CallId.Value);
+        SafetyAssert.Denied(fixture.Session, prepared.Exec.CallId.Value, "deny-new-namespace", null, null, "namespace_consumer");
     }
 
     [Fact]

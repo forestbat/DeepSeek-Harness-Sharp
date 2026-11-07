@@ -29,10 +29,7 @@ public sealed class PresentToolTests
         var result = await Present(environment, File("private-delivery.txt"));
         Assert.True(result.IsError);
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
-        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.RuleId == "deny-delivery-read" && audit.Decision == "deny" && audit.Intent == "read"
-            && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(path) && audit.Tool == ToolName
-            && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+        SafetyAssert.Denied(session, null, "deny-delivery-read", path, "read", ToolName);
     }
 
     private const string HomeSettings = """
@@ -84,10 +81,7 @@ public sealed class PresentToolTests
             Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
             Assert.Equal("first-accepted.txt", await System.IO.File.ReadAllTextAsync(first, TestContext.Current.CancellationToken));
             if (deny)
-                Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-                    && audit.RuleId == "deny-after-present-hook" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(second) && audit.Tool == ToolName
-                    && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+                SafetyAssert.Denied(session, null, "deny-after-present-hook", second, "read", ToolName);
         }
         finally
         {
@@ -148,10 +142,7 @@ public sealed class PresentToolTests
         var denied = await Present(environment, File("report.txt"));
         Assert.True(denied.IsError);
         Assert.Equal(beforeDenied, session.SnapshotEvents().Where(IsPresented).ToArray());
-        Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
-            && audit.RuleId == "deny-effective-report" && audit.Decision == "deny" && audit.Intent == "read"
-            && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(nested) && audit.Tool == ToolName
-            && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
+        SafetyAssert.Denied(session, null, "deny-effective-report", nested, "read", ToolName);
     }
 
     [Fact]

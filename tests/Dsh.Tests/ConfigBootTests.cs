@@ -133,9 +133,9 @@ public class ConfigBootTests
             Assert.True((await Execute("read", new { file_path = publicFile })).IsError);
             var mutable = HarnessSettings.LoadForReview(home);
             mutable.Safety!.Blacklist.Clear();
+            var beforeDenied = session.SnapshotEvents().Count;
             Assert.True((await Execute("read", new { file_path = publicFile })).IsError);
-            Assert.Contains(session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload
-                { RuleId: "hot-read-deny", Decision: "deny", Tool: "read", Intent: "read" });
+            SafetyAssert.Denied(session, null, "hot-read-deny", publicFile, "read", "read", since: beforeDenied);
         }
         finally { TempTree.Delete(root); }
     }
@@ -176,7 +176,6 @@ public class ConfigBootTests
                 Name = name, Arguments = JsonSerializer.SerializeToElement(arguments), Agent = agent,
                 CallId = callId, Signal = signal,
             });
-            var canonical = CanonicalFilePath.Canonicalize(file);
             foreach (var (pattern, actual) in new[] { (file, extended), (extended, file), (file, forward), (forward, file) })
             {
                 var settings = HarnessSettings.Load(home);
@@ -189,18 +188,8 @@ public class ConfigBootTests
                 var writeCall = ToolCallId.Create(Guid.NewGuid().ToString("N"));
                 Assert.True((await Execute("write", new { file_path = actual, content = "not committed" }, writeCall)).IsError);
                 Assert.Equal("protected original", await File.ReadAllTextAsync(file, signal));
-                var decisions = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
-                    .Where(decision => decision.RuleId == "private-file" && decision.Decision == "deny"
-                        && (decision.CallId == readCall.Value || decision.CallId == writeCall.Value)).ToArray();
-                Assert.Contains(decisions, decision => decision.CallId == readCall.Value && decision.Tool == "read");
-                Assert.Contains(decisions, decision => decision.CallId == writeCall.Value && decision.Tool == "write");
-                Assert.All(decisions, decision =>
-                {
-                    Assert.Equal(canonical, decision.Path);
-                    Assert.Equal(id.Value, decision.SessionId);
-                    Assert.Equal("blacklist", decision.RuleKind);
-                    Assert.True(decision.AutoApprove);
-                });
+                Assert.True(SafetyAssert.Denied(session, readCall.Value, "private-file", file, null, "read").AutoApprove);
+                Assert.True(SafetyAssert.Denied(session, writeCall.Value, "private-file", file, null, "write").AutoApprove);
             }
         }
         finally { TempTree.Delete(root); }

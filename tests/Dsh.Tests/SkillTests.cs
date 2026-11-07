@@ -213,11 +213,7 @@ public class SkillTests
             });
             Assert.True(denied.IsError);
             Assert.DoesNotContain("private-skill-body-marker", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
-            var deniedAudit = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
-                .FirstOrDefault(audit => audit.RuleId == "deny-skill-file" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(path)
-                    && audit.Tool == SkillCatalog.ToolName && audit.SessionId == id.Value && audit.CallId == deniedCall.Value);
-            if (deniedAudit is null) Assert.Fail(CallSafetyFailure(session, deniedCall, denied));
+            SafetyAssert.Denied(session, deniedCall.Value, "deny-skill-file", path, "read", SkillCatalog.ToolName);
             var manual = await registry.Get("private-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
             Assert.NotNull(manual);
             Assert.Contains("private-skill-body-marker", manual.Content);
@@ -294,11 +290,7 @@ public class SkillTests
             var denied = await tools.Execute(deniedInput);
             Assert.True(denied.IsError);
             Assert.DoesNotContain("linked-private-body", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
-            var deniedAudit = session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
-                .FirstOrDefault(audit => audit.RuleId == "deny-linked-target" && audit.Decision == "deny" && audit.Intent == "read"
-                    && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(target)
-                    && audit.Tool == SkillCatalog.ToolName && audit.SessionId == id.Value && audit.CallId == deniedInput.CallId.Value);
-            if (deniedAudit is null) Assert.Fail(CallSafetyFailure(session, deniedInput.CallId, denied));
+            SafetyAssert.Denied(session, deniedInput.CallId.Value, "deny-linked-target", target, "read", SkillCatalog.ToolName);
         }
         finally
         {
@@ -660,8 +652,4 @@ public class SkillTests
         Assert.Contains("demo-skill", Assert.IsType<TextBlock>(message.Content[0]).Text);
     }
 
-    private static string CallSafetyFailure(Session session, ToolCallId callId, ToolExecutionResult result)
-        => string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)) + "\n"
-            + string.Join("\n", session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>()
-                .Where(audit => audit.CallId == callId.Value).Select(audit => audit.ToString()));
 }
