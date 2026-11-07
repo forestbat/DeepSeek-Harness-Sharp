@@ -11,18 +11,18 @@
 
 `Inject` / `InjectTypes` 声明服务依赖；本模板依赖 `SystemPrompt`、`ToolRuntime` 和 `IPluginHostFactory`。`ConfigType` 声明 `TemplateConfig`，其 `Message` 从插件配置绑定；`Apply` 注册提示词与工具，返回的 `IDisposable` 在卸载时逆序撤销这些效果。原有接口没有替换，也没有新增兼容方法。
 
-`ctx.Get<IPluginHostFactory>()!.Create(package, ctx)` 为原有 `IDshPlugin` 提供同一组宿主中介能力，包名应与程序集声明一致。模板保留完整 `Context` 组合能力，因此不是隔离 worker 插件；启用沙箱时必须显式授予相应制品宿主权限，不会自动回退到不受保护执行。使用宿主中介不等于使进程内任意代码成为受限代码。
+`ctx.Get<IPluginHostFactory>()!.Create(package, ctx)` 提供宿主中介能力，包名应与程序集声明一致。
+启用沙箱时，本模板需要 `execution: host`；执行角色与权限见主文档[插件沙箱](../../README.md#插件沙箱)，settings 写入规则见[设置变更审批](../../README.md#设置变更审批)。
 
 - `host.RegisterTool(new PluginToolDefinition(name, description, parameters, execute))` 返回可释放的注册；`execute` 获得 JSON 参数及真实取消令牌。
 - `await host.CallAsync(PluginHostOperations.ReadFile, arguments, cancellationToken)`：`{path, offset?, count?}` 返回 `{data, length, eof}`；`data` 为 base64。宿主限制单片大小。
-- `PluginHostOperations.WriteFile`：`{path, data, append?}` 返回 `{bytesWritten}`；`data` 为 base64。对 settings 的写入也必须经过宿主审批 gate，不能直接写配置文件绕开审批。
-- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` 返回 `{status, headers, body}`；请求和响应 `body` 都为 base64。宿主应用网络权限、代理配置及响应大小限额。
+- `PluginHostOperations.WriteFile`：`{path, data, append?}` 返回 `{bytesWritten}`；`data` 为 base64。
+- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` 返回 `{status, headers, body}`；请求和响应 `body` 都为 base64，遵循宿主代理配置及响应大小限额。
 - `host.Log(level, message)` 通过宿主 logger 记录日志。
 
 需要受限 worker 的插件同样实现 `IDshPlugin`，在 `Inject` / `InjectTypes` 中声明 `IPluginHostFactory`，并只依赖 worker 能提供的服务。
 正常的 `Apply` / `ApplyAsync` 通过能力工厂创建 `IPluginHost`，`ConfigType` 按普通配置绑定，返回的 `IDisposable` 由运行时释放。
-此时收到的是 worker 本地 `Context`，不能取得父进程的 `Context`、agent、服务对象或凭据，也不把透明 RPC 当作进程内 API。
-自定义宿主使用宿主能力 SDK 或隔离 worker 时，引用 `Dsh.Plugins.Sandbox`，并在组合前调用已有的生成式 `DshPluginCatalog.RegisterAll()`，接入能力工厂与同一进程入口的 worker 模式。
+受限 worker 插件不能取得宿主服务、会话或凭据。
 
 ## 编译期诊断
 

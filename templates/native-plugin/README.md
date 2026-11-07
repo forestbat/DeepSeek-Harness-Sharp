@@ -1,13 +1,12 @@
 # 原生（AOT）插件作者指南
 
 本目录只有文档，没有模板工程：原生插件没有需要复制的骨架工程，**样例是 `tests/Dsh.NativePluginSample/`**（`Dsh.NativePluginSample.csproj` + `SamplePlugin.cs` 两个文件，直接复制改造即可）。
-托管插件的写法见 `templates/managed-plugin/README.md`；两者的差别见本文末尾的对照表。
+托管插件的写法见 [`templates/managed-plugin`](../managed-plugin)。
 
 ## 一句话定位
 
 原生插件是一个 **NativeAOT 编译出来的共享库**（`.so`/`.dylib`/`.dll`），与宿主通过 **C ABI v1** 交换日志、工具、配置及可选的宿主能力调用。
-它看不到父进程的服务表、类型或会话。
-文件和网络操作与托管 `IDshPlugin` 通过 `IPluginHostFactory` 取得的能力使用同一组 `Dsh.Plugins.Abstractions` 操作常量，不把完整 Context 伪装成远程对象。
+执行角色与权限见主文档[插件沙箱](../../README.md#插件沙箱)，settings 写入规则见[设置变更审批](../../README.md#设置变更审批)。
 原有 v1 二进制可以继续加载、配置和调用；新回调不要求旧插件重新编译。
 
 ## 最小骨架
@@ -62,7 +61,7 @@ public sealed class SamplePlugin : IDshNativePlugin
 
 **构建与分发**
 - `PublishAot` + `NativeLib=Shared` + **具体 RID**：一个平台/架构一份产物，跨平台要各编一份（改 `RuntimeIdentifier` 或按 RID 分别发布）。
-- 作者工程只需直接引用 `Dsh.Plugins.Native`。能力 DTO 来自它引用的 `Dsh.Plugins.Abstractions`，后者还引用 `Dsh.Runtime`，因此不能把整个传递依赖闭包描述为仅含 BCL。原生调用仍只交换 C 函数表、UTF-8 与 JSON，不向插件提供宿主 Context；不要额外引用 `Dsh.Core`、宿主配置或 YAML 模块。
+- 作者工程直接引用 `Dsh.Plugins.Native`，通过 C 函数表、UTF-8 与 JSON 调用宿主；不要额外引用 `Dsh.Core`、宿主配置或 YAML 模块。
 - NativeAOT 把可达的托管依赖编入原生映像，分发共享库时不依赖托管 `deps.json` 或运行期 DLL 装载闭包；**额外的原生依赖要靠操作系统解析**（插件目录不会自动加进搜索路径，必要时用 `$ORIGIN`/RPATH 或放进系统库路径）。
 - 插件自身也是 AOT 代码：不用反射与动态代码；JSON 用 `JsonDocument`/`JsonNode`（样例如此）或源生成上下文，不要无上下文地 `JsonSerializer.Serialize<T>`。
 
@@ -70,8 +69,8 @@ public sealed class SamplePlugin : IDshNativePlugin
 - 没有 `Inject`/服务提供、没有 `ConfigType` 配置绑定、没有提示词段、没有会话事件、没有 `[DshEntrypoint]`；`DshNativePluginRuntime.Config` 返回本插件 JSON 配置。
 - 工具可通过 `DshNativePluginRuntime.RegisterTool(name, description, parametersJson, invoke)` 登记、通过 `UnregisterTool(handle)` 撤销，宿主侧即时生效。新宿主优先调用带大小的入口；旧宿主调用原入口时，新插件只读取原始函数表前缀，仍能使用日志、工具及配置，不能调用缺失的能力回调。
 - `DshNativePluginRuntime.CallHost(PluginHostOperations.ReadFile, inputJson)` 返回 JSON 文本：`{path, offset?, count?}` → `{data, length, eof}`，`data` 为 base64。
-- `PluginHostOperations.WriteFile`：`{path, data, append?}` → `{bytesWritten}`，`data` 为 base64；写 settings 同样受宿主审批 gate 约束。
-- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` → `{status, headers, body}`；请求和响应 `body` 为 base64。网络权限、代理及响应限额由共同宿主实现。
+- `PluginHostOperations.WriteFile`：`{path, data, append?}` → `{bytesWritten}`，`data` 为 base64。
+- `PluginHostOperations.SendHttp`：`{url, method?, headers?, body?}` → `{status, headers, body}`，请求和响应 `body` 为 base64。
 - `CallHost` 必须处于激活期；操作拒绝／取消／失败以异常传回，不返回空对象冒充成功。样例的 `native_read_file`、`native_write_file`、`native_http` 是这三条真实调用路径。
 
 **缓冲与副作用**
@@ -101,10 +100,6 @@ public sealed class SamplePlugin : IDshNativePlugin
 - 更新与托管插件同规矩：**同名文件内容不一致不覆盖**。先 `/plugins remove <包名>`（或直接停宿主）→ 删掉旧目录 → 放入新库 → 重启。
 - 原生插件停用会撤销工具和回调，映像随宿主或 worker 进程退出回收，没有可回收 ALC，也没有托管那种“回收校验/leaked”标记。
 
-**稳定性与进程边界**
-- 每个原生插件拥有 `NativePluginLoadContext`；工具运行失败会向调用者返回错误，原生故障按既有 guard、Faulted 与 quarantine 路径处理。
-- 这些进程内防护不等于 OS 权限隔离。共享 worker 中的插件互相信任同一进程内存，broker 仍逐插件检查权限，但不能声称同进程恶意代码无法冒用其他插件身份。显式进程内插件拥有宿主进程权限，不能声称已被沙箱保护。
-
 ## 编译期诊断
 
 | 诊断码 | 级别 | 含义与处理 |
@@ -112,17 +107,4 @@ public sealed class SamplePlugin : IDshNativePlugin
 | DSHABI001 | Error | 一个程序集有多个 `IDshNativePlugin` 实现。一个程序集只能有一个。 |
 | DSHABI002 | Error | ABI 协议结构体缺少某个角色字段（改动协议本身时才会遇到）。 |
 | DSHABI003 | Warning | 协议里出现了生成器不认识的角色，该函数不会进入函数表。 |
-
-## 与托管插件的对照
-
-| 维度 | 托管（`templates/managed-plugin`） | 原生（本文） |
-| --- | --- | --- |
-| 产物 | 托管 dll + deps.json 闭包 | 每 RID 一份原生共享库 |
-| 契约 | `IDshPlugin`；worker 使用本地 `Context` 与 `IPluginHostFactory` | C ABI v1 + 可选带大小入口 |
-| 能力面 | 显式工具/日志/文件/网络；完全信任接口另有服务组合 | 显式工具/日志/配置/文件/网络 |
-| 装载 | 启动扫描 + `/plugins add` 热装载托管 dll | 启动扫描 + `/plugins add` 热装载原生库 |
-| 卸载 | 协作式卸载 + 可回收 ALC（有 leaked 校验） | `Deactivate`；映像随承载进程退出 |
-| 版本闸门 | 清单 `DescriptorVersion` | ABI 版本（不符即结构化失败，`/plugins doctor` 可查） |
-| 故障隔离 | OS worker 才是权限边界；ALC 不是安全边界 | OS worker 才是权限边界；进程内 guard 不是沙箱 |
-| AOT 宿主 | 不能在运行期装载 | 正常加载 |
 

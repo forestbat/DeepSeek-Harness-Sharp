@@ -44,41 +44,19 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
    dsharp (tui) attach <pty-id>  # 接回仍在运行的后台会话(`pty-id` 标识 daemon 管理的进程)，加入--gpu参数则在独立 GPU 窗口恢复
    ```
 
-   TUI 终端窗格会将光标位置、终端状态和设备属性查询的应答写回所属 PTY，供交互式 shell 完成终端初始化。
-   后台 PTY 输出泵不继承调用方的任务调度器，嵌入单线程调度环境时仍可独立读取子进程输出。
-
    注意：Linux 上 `vk` 后端要求 glibc >= 2.33(ppy.SDL3-CS 要求), 老系统请用 `gl` 或升级 glibc; GPU 后端不可用时 dsharp 会自动回退到 CPU 模式。
 
 3. 使用 `/plugins` 命令族添加、卸载和管理插件；也可以将插件放进 `<安装目录>/plugins/`，启动时按当前执行角色、权限与沙箱设置发现和加载。托管插件模板见 `templates/managed-plugin`，原生示例见 `tests/Dsh.NativePluginSample`。
 4. dsharp日志默认位置为`<home>/logs/dsh-YYYYMMDD.log`，可以在 `settings.yaml`→`logging:` 中配置它们(TUI 下强制关闭)。
 
-### Settings mutation approvals
+### 设置变更审批
 
-Model tools that change the active `HarnessHome.SettingsFile` share one settings mutation gate, including `write`, `edit`, `str_replace_editor`, and typed settings updates from `plugin_manager`.
-The approval carries the canonical target, redacted changed-line diff, and before/after hashes; the audit records those fields plus the originating tool call, root call, decision, and commit outcome, not complete document snapshots.
-Redaction recognizes common credential field names and known token formats; arbitrary custom secret names or formats may not be recognized.
-The writer releases the settings lock while waiting for approval, then reacquires it and rejects a stale proposal rather than overwriting a concurrent human edit.
-Approved content is published atomically through a private temporary file; existing readers that allow file deletion retain their previous snapshot.
-Ordinary file tools also stage replacements before publication; write failures and cancellation preserve the previous target without recording a committed file change.
-Normal explicit human settings commands and GUI saves remain human operations, not model tool calls.
-Missing settings gate, session, or approval service fails closed for these model-originated updates.
-The startup layer consumes the runtime's `ISettingsMutationContext` capability without referencing agent, transport, or sandbox assemblies; the original tool call still submits every model-originated settings proposal to the existing approval and audit service.
-Canonical settings identity uses the shared symbolic-link-aware path resolver, while ordinary-file checks and platform access enforcement stay outside the startup and runtime layers.
-On Windows, ordinary drive/UNC paths and supported extended-length aliases share one settings identity; non-equivalent extended namespace forms are refused.
-
-```yaml
-safety:
-  autoApprove: false
-  blacklist: ["bash:rm -rf /*"]
-  whitelist: ["tool:write"]
-```
-
-`whitelist` automatically approves matching requests using exactly the existing blacklist tool/command grammar: `tool:<name>` and `<shell-tool>:<command-pattern>`.
-Blacklist denial always wins, including when `autoApprove` is true; the session's `never` approval policy still rejects requests.
-These patterns are not a path/arguments/intent permission engine, and shell command matching is not an OS isolation boundary.
-Use the GUI safety page to edit both lists; TUI and GUI share the same authoritative approval result.
-
-The trusted settings diff gate is always enabled for these tool/API paths, independently of `sandbox.enabled`. It does not intercept arbitrary BCL/native writes by host-role code, shell, PTC, editor, Git, remote MCP, or other unconfined processes. Enabling the plugin sandbox does not turn those paths into a universal settings-write boundary.
+模型通过 `write`、`edit`、`str_replace_editor`、`plugin_manager` 修改当前 `settings.yaml` 时，统一请求脱敏 diff 审批并记录结果。
+拒绝、取消或审批期间检测到人工改动时不发布旧提案；脱敏仅识别常见凭据字段和令牌格式，确认前仍须检查自定义秘密。
+人工命令和 GUI 保存不触发模型审批；缺少会话或审批服务时拒绝模型更新。
+`safety.whitelist` 使用既有工具/命令语法自动放行，如 `tool:write`、`bash:<command-pattern>`；`blacklist` 优先于白名单和 `autoApprove`，会话的 `never` 策略仍然拒绝。
+两张列表可在 GUI safety 页面编辑；匹配不是路径权限或 OS 隔离。
+设置审批独立于 `sandbox.enabled`，不接管宿主代码、shell、PTC、编辑器、Git 或远程进程的任意写入。
 
 ## 不同于原版 DSH 的功能
 
@@ -364,39 +342,14 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 
 #### 插件沙箱
 
-`sandbox.enabled` 默认关闭，保留原有运行方式；开启后，外部能力插件在共享的 OS 沙箱进程中运行，通过宿主中介读写文件和访问网络。
-编译进应用的插件默认在宿主执行；外部完整 `Context` 插件需要在 YAML 中显式设置 `execution: host`，这表示完整进程内信任。
-默认发行版仍按既有静态插件集合包含沙箱模块，关闭 `sandbox.enabled` 不改变该发行集合；自定义应用未引用此模块时，普通启动无需沙箱实现，显式开启沙箱则报告功能不可用。
-这不是运行时删掉默认发行包中任意 DLL 的容错机制，生成目录静态引用的模块仍须随包完整部署。
-
-```yaml
-sandbox:
-  enabled: true
-plugins:
-  "@example/report":
-    permissions:
-      read: true
-      write: false
-      network: false
-scripts:
-  permissions:
-    read: true
-    write: false
-    network: false
-```
-
-未指定的权限为允许，可通过 GUI 或 TUI 插件命令修改；脚本权限单独作用于 `run_csx` 和 `run_csharp_repl`。
-settings 变更审批始终启用，宿主角色的权限位只限制中介调用，不限制同进程代码的任意访问。
-开启沙箱不等于隔离所有工具，shell、PTC、PTY、编辑器和远程进程不会被自动接管。
-
-Linux 需要可用的 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程隔离；所需能力不可用时明确失败，不降级为普通进程。
-Windows 无法读取或设置声明路径的权限时拒绝启动，并撤销本次添加的临时权限。
-Windows 复用声明只读目录已有的受限应用包权限，其余路径仍按声明授权并在退出时撤销。
-受保护的 settings 路径禁止由沙箱进程写入、重命名或删除。
-隔离插件共享地址空间，必须相互信任；崩溃、超时或取消会影响整个共享进程，不自动重放调用，也不提供内存用量限制。
-切换沙箱总开关需要重启；已经加载进宿主的代码不能被追溯隔离。
-
-托管插件沿用 `IDshPlugin`，开发示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生插件保留 C ABI v1，见 [`templates/native-plugin`](templates/native-plugin)。
+`sandbox.enabled` 默认关闭，可在 YAML、GUI 或 TUI 中启用；切换总开关需重启。
+开启后，外部能力插件默认在共享的 OS 沙箱进程执行；编译进应用的插件默认在宿主执行，外部完整 `Context` 插件须显式设置 `execution: host`，代表完整进程内信任。
+`plugins.<包名>.permissions` 的 `read`、`write`、`network` 未指定时为允许；`scripts.permissions` 独立控制 `run_csx` 和 `run_csharp_repl`。
+Linux 需要 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程；能力不可用或声明路径授权失败时拒绝启动并撤销本次临时授权。
+隔离插件共享进程，必须相互信任；崩溃、超时或取消影响整个共享进程，不自动重放调用，也不提供内存预算。
+宿主角色的权限位只限制中介调用，不限制同进程代码；已加载的宿主代码不会被追溯隔离。
+开启沙箱不接管 shell、PTC、PTY、编辑器或远程进程；settings 写入规则见[设置变更审批](#设置变更审批)。
+托管插件沿用 `IDshPlugin`，示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生 C ABI v1 见 [`templates/native-plugin`](templates/native-plugin)。
 
 
 <details>
@@ -409,9 +362,13 @@ plugins:
     file: ~/.dsh/memory/project.md
   "@deepseek-ai/dsh-checkpoints": false
   "@deepseek-ai/dsh-toon": false
+  "@example/report":
+    permissions: {read: true, write: false, network: false}
 
 sandbox:
   enabled: false
+scripts:
+  permissions: {read: true, write: false, network: false}
 ```
 </details>
 
@@ -434,16 +391,6 @@ sandbox:
 
 </details>
 
-<details>
-<summary><b>未发布</b> — 插件隔离与配置变更审批</summary>
-
-- 增加默认关闭的插件沙箱；预置与用户插件使用同一显式执行角色、read/write/network 配置和权限修改入口。
-- 托管/原生能力插件共用一个 worker 和 broker，保留最小平台隔离及崩溃清理，不提供插件间内存隔离或内存预算。
-- 模型经内置写入工具、插件管理和 broker 修改活动 settings 时，共用一次 diff 审批与精简审计；人工保存和不受管的宿主执行路径保持明确边界。
-- 原生 ABI 保留 v1 兼容与可选能力表长协商，脚本权限只作用于真实 C# 脚本执行器。
-- Windows 沙箱在目录枚举无法返回完整记录时明确报错，避免把未完成的目录树误当作枚举完成。
-
-</details>
 
 <details>
 <summary><b>未发布</b> — 交互模式能力化</summary>
