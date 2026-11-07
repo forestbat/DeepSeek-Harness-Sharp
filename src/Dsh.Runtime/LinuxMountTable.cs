@@ -1,8 +1,9 @@
-namespace Dsh.Sandbox;
+namespace Dsh.Runtime;
 
 /// <summary>Rejects grants exposing kernel and control filesystems.</summary>
-internal static class LinuxMountTable
+public static class LinuxMountTable
 {
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     private sealed record Mount(string Target, string FileSystem);
     private static readonly HashSet<string> KernelFileSystems = new(StringComparer.Ordinal)
     {
@@ -16,25 +17,27 @@ internal static class LinuxMountTable
         foreach (var line in File.ReadLines("/proc/self/mountinfo"))
         {
             var mount = Parse(line);
-            if (SandboxPolicy.Contains(mount.Target, path) && (containing is null || mount.Target.Length > containing.Target.Length))
+            if (Contains(mount.Target, path) && (containing is null || mount.Target.Length > containing.Target.Length))
                 containing = mount;
         }
         if (containing is null || KernelFileSystems.Contains(containing.FileSystem))
             throw new NotSupportedException("Plugin file capabilities cannot access kernel, process, device or control filesystems.");
     }
 
-    public static void Validate(SandboxPolicy policy)
+    public static void Validate(IEnumerable<string> roots)
     {
-        var grants = policy.Readable.Concat(policy.Writable);
         var mounts = File.ReadLines("/proc/self/mountinfo").Select(Parse).OrderByDescending(static mount => mount.Target.Length).ToArray();
-        foreach (var grant in grants)
+        foreach (var root in roots)
         {
-            var containing = mounts.FirstOrDefault(mount => SandboxPolicy.Contains(mount.Target, grant.Source))
+            var containing = mounts.FirstOrDefault(mount => Contains(mount.Target, root))
                 ?? throw new NotSupportedException("A sandbox path cannot be related to a visible Linux mount.");
-            if (KernelFileSystems.Contains(containing.FileSystem) || mounts.Any(mount => KernelFileSystems.Contains(mount.FileSystem) && SandboxPolicy.Contains(grant.Source, mount.Target)))
+            if (KernelFileSystems.Contains(containing.FileSystem) || mounts.Any(mount => KernelFileSystems.Contains(mount.FileSystem) && Contains(root, mount.Target)))
                 throw new NotSupportedException("A Linux grant exposes a kernel/control filesystem, directly or through a nested mount; provide an ordinary filesystem subtree.");
         }
     }
+
+    private static bool Contains(string parent, string child) => string.Equals(parent, child, PathComparison)
+        || child.StartsWith(Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar, PathComparison);
 
     private static Mount Parse(string line)
     {

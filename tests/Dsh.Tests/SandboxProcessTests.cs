@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Dsh.Runtime;
 using Dsh.Sandbox;
 
 namespace Dsh.Tests;
@@ -10,7 +11,7 @@ public sealed class SandboxProcessTests : IDisposable
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(15);
     public void Dispose() => TempTree.Delete(_root);
 
-    private static async Task<SandboxProcess> StartNativeAsync(SandboxProcessOptions options)
+    private static async Task<OwnedProcess> StartNativeAsync(SandboxProcessOptions options)
     {
         await SandboxTestBackend.RequireAsync();
         return await SandboxedProcess.StartAsync(options, TestContext.Current.CancellationToken);

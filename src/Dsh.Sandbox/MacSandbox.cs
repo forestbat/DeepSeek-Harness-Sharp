@@ -1,11 +1,12 @@
 using System.Runtime.Versioning;
 using System.Text;
+using Dsh.Runtime;
 
 namespace Dsh.Sandbox;
 
 /// <summary>Seatbelt enforces filesystem and network policy for an owned process.</summary>
 [SupportedOSPlatform("macos")]
-internal sealed class MacSandbox : ISandboxLifetime
+internal sealed class MacSandbox : IChildProcessLifetime
 {
     private readonly UnixChildProcess _child;
     public int Id => _child.Id;

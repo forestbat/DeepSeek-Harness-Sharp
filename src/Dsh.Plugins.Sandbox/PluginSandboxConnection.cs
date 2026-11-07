@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Runtime;
 using Dsh.Sandbox;
 using Dsh.Transport;
 
@@ -20,8 +21,8 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     private readonly SemaphoreSlim _outbound = new(PluginSandboxMethods.MaximumPendingRequests);
     private readonly Dictionary<(string Package, int Tool), IDisposable> _tools = [];
     private readonly ConcurrentDictionary<string, Invocation> _invocations = new(StringComparer.Ordinal);
-    private SandboxProcess? _process;
-    private Task<SandboxProcess>? _launching;
+    private OwnedProcess? _process;
+    private Task<OwnedProcess>? _launching;
     private JsonRpcPeer? _peer;
     private Task? _stderr;
     private Task? _cleanup;

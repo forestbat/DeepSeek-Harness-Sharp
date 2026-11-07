@@ -1,6 +1,8 @@
+using Dsh.Runtime;
+
 namespace Dsh.Sandbox;
 
-internal sealed class LinuxSandbox : ISandboxLifetime
+internal sealed class LinuxSandbox : IChildProcessLifetime
 {
     private static readonly Lazy<string> Backend = new(FindBackend);
     internal static string BackendExecutablePath => Backend.Value;
@@ -16,7 +18,7 @@ internal sealed class LinuxSandbox : ISandboxLifetime
     public static LinuxSandbox Start(SandboxPolicy policy)
     {
         var bubblewrap = BackendExecutablePath;
-        LinuxMountTable.Validate(policy);
+        LinuxMountTable.Validate(policy.Readable.Concat(policy.Writable).Select(static path => path.Source));
         var arguments = new List<string>
         {
             "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL", "--clearenv"

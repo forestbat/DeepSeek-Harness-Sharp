@@ -176,7 +176,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
         if (source.ArtifactPath is not { } artifact)
             return null;
         var original = CanonicalFilePath.Canonicalize(artifact);
-        SandboxFileAccess.DemandOrdinaryFile(original, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(original, allowMissing: false);
         stagingDirectory = Path.Combine(domain.Directory, Guid.NewGuid().ToString("N"));
         try
         {
@@ -218,7 +218,7 @@ internal sealed class PluginSandboxSupervisor(Context context, IPluginExecutionE
 
     private static void CopyFile(string source, string destination)
     {
-        SandboxFileAccess.DemandOrdinaryFile(source, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(source, allowMissing: false);
         System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Copy(source, destination);
         var attributes = File.GetAttributes(destination);

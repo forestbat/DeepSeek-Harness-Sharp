@@ -1,7 +1,6 @@
 using System.Text;
 using Dsh.Llm;
 using Dsh.Runtime;
-using Dsh.Sandbox;
 using Dsh.Transport;
 
 namespace Dsh.Core;
@@ -58,7 +57,7 @@ public static class SettingsMutation
             return;
         }
         signal.ThrowIfCancellationRequested();
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
         var temporary = Path.Combine(directory, $".{Guid.NewGuid():N}.tmp");
@@ -93,7 +92,7 @@ public static class SettingsMutation
     private static async Task WriteFileAsync(string path, string text, FileMode mode, CancellationToken signal)
     {
         signal.ThrowIfCancellationRequested();
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: mode != FileMode.Open);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var options = new FileStreamOptions
         {

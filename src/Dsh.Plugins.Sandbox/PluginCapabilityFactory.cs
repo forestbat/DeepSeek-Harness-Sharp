@@ -8,7 +8,6 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
-using Dsh.Sandbox;
 
 namespace Dsh.Plugins.Sandbox;
 
@@ -65,7 +64,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     {
         var allowNetwork = Require(package, PluginPermission.Read);
         var path = ResolvePath(arguments, execution, allowNetwork);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: false);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         var offset = arguments.TryGetProperty("offset", out var position) ? position.GetInt64() : 0;
         var count = arguments.TryGetProperty("count", out var requested) ? requested.GetInt32() : MaximumChunkBytes;
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
@@ -93,7 +92,7 @@ public sealed class PluginCapabilityFactory(Context context, IPluginExecutionEnv
     {
         var allowNetwork = Require(package, PluginPermission.Write);
         var path = ResolvePath(arguments, execution, allowNetwork);
-        SandboxFileAccess.DemandOrdinaryFile(path, allowMissing: true);
+        FilePathAccess.DemandOrdinaryFile(path, allowMissing: true);
         var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();

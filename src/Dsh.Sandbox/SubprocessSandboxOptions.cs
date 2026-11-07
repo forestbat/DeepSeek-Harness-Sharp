@@ -1,7 +1,7 @@
-using Dsh.Sandbox;
+using Dsh.Runtime;
 using Dsh.Transport;
 
-namespace Dsh.Core;
+namespace Dsh.Sandbox;
 
 /// <summary>Builds child process options only for launchers that explicitly request an OS sandbox.</summary>
 public static class SubprocessSandboxOptions

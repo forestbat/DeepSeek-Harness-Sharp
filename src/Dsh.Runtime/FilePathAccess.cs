@@ -1,11 +1,27 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace Dsh.Transport;
+namespace Dsh.Runtime;
 
 /// <summary>Ordinary filesystem object checks shared by host services.</summary>
 public static class FilePathAccess
 {
+    public static void DemandOrdinaryFile(string path, bool allowMissing)
+    {
+        CanonicalFilePath.DemandFilePath(path);
+        var exists = File.Exists(path);
+        if (exists && !IsOrdinaryFile(path) || Directory.Exists(path))
+            throw new NotSupportedException("Plugin file capabilities require an ordinary file.");
+        if (!exists && !allowMissing)
+            throw new FileNotFoundException("The requested plugin file does not exist.");
+        if (!OperatingSystem.IsLinux())
+            return;
+        var probe = exists ? path : Path.GetDirectoryName(path);
+        while (probe is not null && !Directory.Exists(probe) && !File.Exists(probe))
+            probe = Path.GetDirectoryName(probe);
+        LinuxMountTable.DemandOrdinaryPath(probe ?? Path.GetPathRoot(path)!);
+    }
+
     public static unsafe bool IsOrdinaryFile(string path)
     {
         if (OperatingSystem.IsWindows())
