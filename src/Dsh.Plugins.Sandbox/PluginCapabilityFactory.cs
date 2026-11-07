@@ -26,7 +26,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
 
     private ISafetyBoundary Safety => SafetyBoundary.Resolve(context, required: true)
         ?? throw new InvalidOperationException("Plugin operations require the host safety boundary.");
-    public IPluginExecutionHost Create(string package, Context pluginContext)
+    public LocalHost Create(string package, Context pluginContext)
     {
         var host = new LocalHost(this, package, pluginContext);
         pluginContext.Effect(() => host, IPluginHostFactory.ServiceName);
@@ -103,7 +103,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         var allowNetwork = Require(package, PluginPermission.Write);
         var path = ResolvePath(arguments, execution, allowNetwork);
         FilePathAccess.DemandOrdinaryFile(path, allowMissing: true);
-        var gate = context.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false);
+        var gate = context.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
         if (gate?.Owns(path) == true || CanonicalFilePath.SameFile(path, environment.SettingsPath))
@@ -119,7 +119,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
     }
 
     private async Task WriteSettingsAsync(string package, string path, byte[] data, bool append, ToolRunContext? execution,
-        ISettingsMutationGate? gate, CancellationToken cancellationToken)
+        SettingsMutationGate? gate, CancellationToken cancellationToken)
     {
         if (gate is null || execution is null)
             throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval service.");
@@ -232,8 +232,8 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
 
     public void Dispose() => _http.Dispose();
 
-    private sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
-        : IPluginExecutionHost, IDisposable
+    public sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
+        : IPluginHost, IDisposable
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];

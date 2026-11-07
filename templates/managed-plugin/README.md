@@ -12,6 +12,7 @@
 `Inject` / `InjectTypes` 声明服务依赖；本模板依赖 `SystemPrompt`、`ToolRuntime` 和 `IPluginHostFactory`。`ConfigType` 声明 `TemplateConfig`，其 `Message` 从插件配置绑定；`Apply` 注册提示词与工具，返回的 `IDisposable` 在卸载时逆序撤销这些效果。原有接口没有替换，也没有新增兼容方法。
 
 `ctx.Get<IPluginHostFactory>()!.Create(package, ctx)` 提供宿主中介能力，包名应与程序集声明一致。
+`IPluginHostFactory` / `IPluginHost` 分别由宿主和受限 worker 的实际能力实现提供；插件共用这两个 SDK 契约，不依赖宿主内部的具体能力类型或设置审批实现。
 启用沙箱时，本模板需要 `execution: host`；执行角色与权限见主文档[插件沙箱](../../README.md#插件沙箱)，settings 写入规则见[设置变更审批](../../README.md#设置变更审批)。
 
 - `host.RegisterTool(new PluginToolDefinition(name, description, parameters, execute))` 返回可释放的注册；`execute` 获得 JSON 参数及真实取消令牌。

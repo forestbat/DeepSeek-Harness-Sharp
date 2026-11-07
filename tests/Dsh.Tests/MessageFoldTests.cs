@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.VisualTree;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
-using Dsh.Interaction;
+using Dsh.Core;
 
 namespace Dsh.Tests;
 

@@ -34,7 +34,7 @@ public sealed class FileMemoryStore(string path) : IMemoryStore
         cancellationToken.ThrowIfCancellationRequested();
         if (run is not null)
         {
-            var before = run.Agent?.Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)?.Owns(path) == true && File.Exists(path)
+            var before = run.Agent?.Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)?.Owns(path) == true && File.Exists(path)
                 ? await SafetyFileAccess.ReadTextAsync(path, run, cancellationToken, settingsReview: true).ConfigureAwait(false)
                 : "";
             await SettingsMutation.WriteTextAsync(path, before, text, run, signal: cancellationToken).ConfigureAwait(false);

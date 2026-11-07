@@ -117,7 +117,7 @@ public class ToolExecution : ToolExecutionInput
     public CancellationToken WrapperSignal { get; set; }
 }
 
-public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutationContext
+public sealed class ToolRunContext : ToolExecution
 {
     private readonly List<UserMessage> _deferred = [];
 
@@ -137,7 +137,7 @@ public sealed class ToolRunContext : ToolExecution, Dsh.Runtime.ISettingsMutatio
     public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
     public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
 
-    async Task<bool> Dsh.Runtime.ISettingsMutationContext.CommitAsync(string path,
+    public async Task<bool> CommitAsync(string path,
         Func<string, Dsh.Runtime.SettingsMutationProposal?> prepare,
         Func<string, Dsh.Runtime.SettingsMutationProposal, string, CancellationToken, Task> commit)
     {

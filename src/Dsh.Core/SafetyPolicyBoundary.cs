@@ -120,7 +120,7 @@ public sealed class SafetyBoundary : Service, ISafetyBoundary
         Reject(decision, space);
         // Proposal reads still obey denials; the one settings gate owns the diff notification.
         if (settingsReview && run is not null
-            && Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
+            && Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
             return;
         var authorization = AuthorizationRevision(rules, space);
         var approved = run?.SafetyApprovalRevision == authorization
