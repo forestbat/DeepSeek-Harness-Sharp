@@ -5,49 +5,40 @@ using Dsh.Runtime;
 namespace Dsh.Plugins.Sandbox;
 
 /// <summary>Connects the optional plugin sandbox implementation to the application composition root.</summary>
-public sealed class PluginSandboxModule : IPluginRuntime
+public static class PluginSandboxModule
 {
-    private readonly PluginCapabilityFactory _capabilities;
-
-    private PluginSandboxModule(Context context, PluginExecutionEnvironment environment,
-        PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
+    public static PluginHost? CreateRuntime(Context context, PluginExecutionEnvironment environment,
+        string directory, Func<INativePlugin, IDshPlugin>? nativeBridge, Action<IDisposable> track)
     {
         var capabilities = new PluginCapabilityFactory(context, environment);
-        try
-        {
-            context.Provide(IScriptExecutionPolicy.ServiceName, new ScriptExecutionPolicy(environment));
-            context.Plugin(new PluginDefinition
-            {
-                Name = IPluginHostFactory.ServiceName,
-                Inject = [ToolRuntime.ServiceName],
-                Apply = (pluginContext, _, _) => Task.FromResult<object?>(
-                    pluginContext.Provide(IPluginHostFactory.ServiceName, capabilities)),
-            });
-            Catalog = environment.ReadSettings().SandboxEnabled
-                ? new PluginSandboxCatalog(environment, host, directory, nativeBridge,
-                    new PluginSandboxSupervisor(context, environment, capabilities, directory))
-                : null;
-            _capabilities = capabilities;
-        }
+        try { track(capabilities); }
         catch
         {
             capabilities.Dispose();
             throw;
         }
+        context.Provide(SubprocessService.ScriptLauncherServiceName,
+            (Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>)new ScriptExecutionPolicy(environment).SpawnAsync);
+        context.Plugin(new PluginDefinition
+        {
+            Name = IPluginHostFactory.ServiceName,
+            Inject = [ToolRuntime.ServiceName],
+            Apply = (pluginContext, _, _) => Task.FromResult<object?>(
+                pluginContext.Provide(IPluginHostFactory.ServiceName, capabilities)),
+        });
+        if (!environment.ReadSettings().SandboxEnabled)
+            return null;
+        var host = new PluginSandboxHost(context, environment, directory, nativeBridge, capabilities);
+        try { track(host); }
+        catch
+        {
+            host.Dispose();
+            throw;
+        }
+        return host;
     }
 
-    public IPluginExecutionCatalog? Catalog { get; }
-
-    public static IPluginRuntime CreateRuntime(Context context, PluginExecutionEnvironment environment,
-        PluginHost host, string directory, Func<INativePlugin, IDshPlugin>? nativeBridge)
-        => new PluginSandboxModule(context, environment, host, directory, nativeBridge);
 
     /// <summary>Returns null for ordinary arguments without creating an application context.</summary>
     public static ValueTask<int>? TryRunWorkerAsync(string[] args) => PluginSandboxWorker.TryRunAsync(args);
-
-    public void Dispose()
-    {
-        try { Catalog?.Dispose(); }
-        finally { _capabilities.Dispose(); }
-    }
 }

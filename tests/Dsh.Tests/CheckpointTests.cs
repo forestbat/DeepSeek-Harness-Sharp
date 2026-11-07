@@ -75,7 +75,7 @@ public sealed class CheckpointTests
         finally
         {
             await cancellation.CancelAsync();
-            if (filter is not null && (filterClosed is null || !filterClosed.IsCompletedSuccessfully || filterClosed.Result is not null))
+            if (filter is not null && (filterClosed is null || !filterClosed.IsCompletedSuccessfully || (await filterClosed) is not null))
             {
                 try
                 {

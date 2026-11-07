@@ -126,23 +126,3 @@ public sealed class SamplePlugin : IDshNativePlugin
 | 故障隔离 | OS worker 才是权限边界；ALC 不是安全边界 | OS worker 才是权限边界；进程内 guard 不是沙箱 |
 | AOT 宿主 | 不能在运行期装载 | 正常加载 |
 
-## v1 布局与真实二进制兼容回归
-
-ABI 胶水由 SDK 生成，不需要另行维护手写头文件；原始 v1 兼容契约冻结在下述独立 C 消费者中。
-调用约定保持 Cdecl，原入口写入调用者提供的插件函数表，`DshPluginApi` 布局未变化。
-新入口只按实际宿主表长读取可选尾部，原入口始终按原前缀大小处理，不能以 `Version == 1` 推断尾部存在。
-
-`tests/Dsh.NativePluginV1Fixture/v1.h` 是冻结的原始 v1 契约，不依赖当前 SDK；`plugin.c` 产出真实旧插件，`host.c` 产出真实旧宿主。后者把宿主表紧贴不可读保护页，加载新 NativeAOT 样例，执行 echo、读取配置、拒绝缺失的 HostCall 并停用，读取尾部会令独立消费者进程失败。所有输入均为合成测试数据，不使用真实配置或模型。
-
-在仓库根目录执行以下 Linux 命令，产物只写入被忽略的项目 `bin` 目录：
-
-```sh
-mkdir -p tests/Dsh.NativePluginV1Fixture/bin
-cc -std=c11 -O2 -fPIC -shared tests/Dsh.NativePluginV1Fixture/plugin.c -o tests/Dsh.NativePluginV1Fixture/bin/liblegacy_v1.so
-cc -std=c11 -D_DEFAULT_SOURCE -O2 tests/Dsh.NativePluginV1Fixture/host.c -ldl -o tests/Dsh.NativePluginV1Fixture/bin/legacy_host
-dotnet publish tests/Dsh.NativePluginSample -c Release
-tests/Dsh.NativePluginV1Fixture/bin/legacy_host tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish/Dsh.NativePluginSample.so
-dotnet test tests/Dsh.Tests/Dsh.Tests.csproj -c Release --filter 'FullyQualifiedName~NativePluginAbiTests|FullyQualifiedName~NativeHostCallBufferTests|FullyQualifiedName~NativePluginBridgeTests'
-```
-
-旧插件回归通过真实 `NativePluginLibrary`、配置桥接和工具运行时验证加载、配置、一次执行、停用和再激活；新插件回归另外通过真实文件及 HTTP broker 验证一次性副作用和失败传播。尚未编译 fixture 或发布样例时相应用例明确 skip，不代表二进制兼容已通过。macOS 可用 `cc -dynamiclib` 生成 `liblegacy_v1.dylib`、以 `cc host.c -o bin/legacy_host` 编译旧宿主；Windows 在 C++ 开发环境用 `cl /TC /LD plugin.c /Fe:bin/legacy_v1.dll` 与 `cl /TC host.c /Fe:bin/legacy_host.exe`，原有 v1 插件回归会按平台选择产物。

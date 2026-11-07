@@ -14,7 +14,7 @@ public sealed class HarnessPluginManager : IDisposable
     private readonly string _pluginsDirectory;
     private readonly Func<INativePlugin, IDshPlugin>? _nativeBridge;
     private readonly IReadOnlyList<PluginSkip> _loadFailures;
-    private readonly IPluginExecutionCatalog? _sandbox;
+    private readonly PluginHost? _sandbox;
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
@@ -32,7 +32,7 @@ public sealed class HarnessPluginManager : IDisposable
         IReadOnlyList<PluginSkip> loadFailures,
         Func<INativePlugin, IDshPlugin>? nativeBridge,
         string pluginsDirectory,
-        IPluginExecutionCatalog? sandbox)
+        PluginHost? sandbox)
     {
         _host = host;
         _composition = composition;
@@ -561,7 +561,6 @@ public sealed class HarnessPluginManager : IDisposable
             foreach (var package in _host.Catalog.PackageNames.ToArray())
                 if (PluginRoleResolver.Resolve(package, _settings.Plugins.GetValueOrDefault(package), ExecutionForm(package)) != PluginExecution.Host)
                     _host.Catalog.Remove(package);
-        _sandbox?.Dispose();
         foreach (var group in _loadedContexts.GroupBy(entry => entry.Value))
         {
             foreach (var entry in group)

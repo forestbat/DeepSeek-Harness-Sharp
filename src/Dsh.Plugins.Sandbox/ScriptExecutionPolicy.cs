@@ -6,11 +6,12 @@ using Dsh.Sandbox;
 namespace Dsh.Plugins.Sandbox;
 
 /// <summary>Reads script permissions for explicit C# script launches, without intercepting other tools.</summary>
-public sealed class ScriptExecutionPolicy(PluginExecutionEnvironment environment) : IScriptExecutionPolicy
+public sealed class ScriptExecutionPolicy(PluginExecutionEnvironment environment)
 {
-    public bool Enabled => environment.ReadSettings().SandboxEnabled;
+    public Task<SubprocessHandle> SpawnAsync(SubprocessService subprocess, SubprocessSpawnSpec spec)
+        => environment.ReadSettings().SandboxEnabled ? subprocess.SpawnAsync(spec, StartAsync) : subprocess.SpawnAsync(spec);
 
-    public Task<OwnedProcess> StartAsync(SubprocessSpawnSpec spec, string executable, string temporaryDirectory)
+    private Task<OwnedProcess> StartAsync(SubprocessSpawnSpec spec, string executable, string temporaryDirectory)
     {
         var active = environment.ReadSettings();
         if (!active.SandboxEnabled)

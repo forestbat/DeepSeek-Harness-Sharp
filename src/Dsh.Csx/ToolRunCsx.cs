@@ -39,7 +39,7 @@ public sealed class ToolRunCsx
                 + "Use C# script statements, declarations, #load and #r directives, not a run_code method body. "
                 + "Script arguments are available through Args, and #load paths retain their normal script-file semantics. "
                 + "Returns stdout, stderr and exit status; frontend failures are errors. "
-                + "It does not provide run_code tool bindings." + IScriptExecutionPolicy.PermissionNotice,
+                + "It does not provide run_code tool bindings." + SubprocessService.ScriptPermissionsNotice,
             Parameters = Parameters(),
             Output = new ToolOutputDefinition(OutputSchema(), (_, value) => [new TextBlock(Render(value))]),
             Execute = tool.ExecuteAsync,

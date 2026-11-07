@@ -304,8 +304,9 @@ public sealed class ScriptPermissionBoundaryTests
             _ = new SystemPrompt(Context, new SystemPromptConfig());
             Processes = new SubprocessService(Context);
             Tools = new ToolRuntime(Context);
-            Context.Provide(IScriptExecutionPolicy.ServiceName,
-                new ScriptExecutionPolicy(new PluginExecutionEnvironment(Home, HarnessSettings.Load(Home), Home.Root)));
+            Context.Provide(SubprocessService.ScriptLauncherServiceName,
+                (Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>)new ScriptExecutionPolicy(
+                    new PluginExecutionEnvironment(Home, HarnessSettings.Load(Home), Home.Root)).SpawnAsync);
         }
 
 

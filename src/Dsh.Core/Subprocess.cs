@@ -302,6 +302,8 @@ public sealed class SubprocessService : Service, IDisposable
 {
     public const string ServiceName = "subprocess";
     public const string DshEnvPrefix = "DSH_";
+    public const string ScriptLauncherServiceName = "scriptProcessLauncher";
+    public const string ScriptPermissionsNotice = " scripts.permissions controls this executor's workspace read/write and network access while sandbox.enabled is ON; runtime inputs and private scratch are technical grants. Host-role plugins and other process tools are not constrained by these script permissions.";
 
     private static readonly Regex SensitiveEnvPattern = new("KEY|PASSWORD|SECRET|TOKEN", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly List<SubprocessHandle> _running = [];
@@ -356,10 +358,8 @@ public sealed class SubprocessService : Service, IDisposable
 
     public Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec)
     {
-        var policy = Ctx.Get<IScriptExecutionPolicy>(IScriptExecutionPolicy.ServiceName, false);
-        return policy?.Enabled == true
-            ? SpawnAsync(spec, policy.StartAsync)
-            : SpawnAsync(spec);
+        var launcher = Ctx.Get<Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>>(ScriptLauncherServiceName, false);
+        return launcher is not null ? launcher(this, spec) : SpawnAsync(spec);
     }
 
     public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec,
