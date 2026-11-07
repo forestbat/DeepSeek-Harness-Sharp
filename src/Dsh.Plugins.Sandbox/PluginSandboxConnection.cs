@@ -166,7 +166,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
                 throw new ArgumentException("The isolated worker tool registration is invalid or exceeds the tool limit.");
             var definition = new PluginToolDefinition(request.Name, request.Description, request.Parameters,
                 (arguments, signal) => InvokeAsync(binding, request.ToolId, arguments, null, signal));
-            var lease = ((IPluginExecutionHost)binding.Host).RegisterTool(definition,
+            var lease = binding.Host.RegisterTool(definition,
                 (arguments, execution, signal) => InvokeAsync(binding, request.ToolId, arguments, execution, signal));
             _tools.Add((request.Package, request.ToolId), lease);
         }
@@ -220,12 +220,12 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     {
         var binding = Binding(request.Package);
         if (request.Invocation is not { } token)
-            return await ((IPluginExecutionHost)binding.Host).CallAsync(request.Operation, request.Arguments,
+            return await binding.Host.CallAsync(request.Operation, request.Arguments,
                 null, cancellationToken).ConfigureAwait(false);
         if (!_invocations.TryGetValue(token, out var invocation) || !ReferenceEquals(invocation.Binding, binding))
             throw new UnauthorizedAccessException("The invocation token is stale or belongs to another package.");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, invocation.Cancellation.Token);
-        return await ((IPluginExecutionHost)binding.Host).CallAsync(request.Operation, request.Arguments,
+        return await binding.Host.CallAsync(request.Operation, request.Arguments,
             invocation.Execution, linked.Token).ConfigureAwait(false);
     }
 

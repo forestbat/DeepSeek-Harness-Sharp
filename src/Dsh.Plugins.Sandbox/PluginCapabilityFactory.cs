@@ -23,12 +23,14 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ? proxy.CreateHandler(useCookies: false)
         : new HttpClientHandler { UseCookies = false, UseProxy = false });
 
-    public IPluginHost Create(string package, Context pluginContext)
+    public IPluginExecutionHost Create(string package, Context pluginContext)
     {
         var host = new LocalHost(this, package, pluginContext);
         pluginContext.Effect(() => host, IPluginHostFactory.ServiceName);
         return host;
     }
+
+    IPluginHost IPluginHostFactory.Create(string package, Context pluginContext) => Create(package, pluginContext);
 
 
     internal ValueTask<JsonElement> ExecuteAsync(string package, string operation, JsonElement arguments,
@@ -210,7 +212,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
     public void Dispose() => _http.Dispose();
 
     private sealed class LocalHost(PluginCapabilityFactory factory, string package, Context pluginContext)
-        : IPluginHost, IPluginExecutionHost, IDisposable
+        : IPluginExecutionHost, IDisposable
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<int, ToolLease> _registrations = [];
@@ -283,32 +285,26 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
             }
         }
 
-        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
-        {
-            ToolRunContext? run;
-            CancellationTokenSource linked;
-            lock (_sync)
-            {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                var invocation = _current.Value;
-                run = invocation is { Active: true } ? invocation.Execution : null;
-                linked = run is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
-                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, invocation!.Cancellation.Token);
-            }
-            using (linked)
-                return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);
-        }
+        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
+            => CallAsync(operation, arguments, null, cancellationToken, useAmbientInvocation: true);
 
-        public async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+        public ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run, CancellationToken cancellationToken)
+            => CallAsync(operation, arguments, run, cancellationToken, useAmbientInvocation: false);
+
+        private async ValueTask<JsonElement> CallAsync(string operation, JsonElement arguments, ToolRunContext? run,
+            CancellationToken cancellationToken, bool useAmbientInvocation)
         {
             CancellationTokenSource linked;
             lock (_sync)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                linked = run is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken)
-                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, run.Signal);
+                var invocation = useAmbientInvocation && _current.Value is { Active: true } active ? active : null;
+                if (useAmbientInvocation)
+                    run = invocation?.Execution;
+                var signal = invocation?.Cancellation.Token ?? run?.Signal ?? default;
+                linked = signal.CanBeCanceled
+                    ? CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken, signal)
+                    : CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, cancellationToken);
             }
             using (linked)
                 return await factory.ExecuteAsync(package, operation, arguments, run, linked.Token).ConfigureAwait(false);

@@ -10,7 +10,7 @@ namespace Dsh.Plugins.Sandbox;
 
 /** Owns one co-trusted worker; plugins share memory and caller identity. */
 internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEnvironment environment,
-    IPluginHostFactory capabilities, string pluginsDirectory) : IDisposable
+    PluginCapabilityFactory capabilities, string pluginsDirectory) : IDisposable
 {
     private static readonly JsonElement EmptyConfiguration = JsonSerializer.SerializeToElement(
         new Dictionary<string, object?>(), PluginConfigurationJsonContext.Default.Object);
@@ -37,10 +37,10 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
         internal volatile bool Retired;
     }
 
-    internal sealed class Binding(string package, IPluginHost host)
+    internal sealed class Binding(string package, IPluginExecutionHost host)
     {
         internal string Package { get; } = package;
-        internal IPluginHost Host { get; } = host;
+        internal IPluginExecutionHost Host { get; } = host;
         internal volatile bool Loading = true;
         private int _disposed;
         internal void Dispose()
