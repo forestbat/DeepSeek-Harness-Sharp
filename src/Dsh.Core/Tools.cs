@@ -60,10 +60,16 @@ public sealed class ToolRuntime : Service
 
     private sealed class ToolLayer
     {
-        public Dictionary<string, ToolEntry> Tools { get; } = new(StringComparer.Ordinal);
+        public NamedEntries<ToolEntry> Tools { get; }
         public AnonymousEntries<ToolRestriction> Restrictions { get; } = new();
         public AnonymousEntries<Func<ToolExecution, string?>> Guards { get; } = new();
-        public Lock RegistrationGate { get; } = new();
+
+        public ToolLayer(ScopeKey? scope)
+        {
+            Tools = new NamedEntries<ToolEntry>(scope is null
+                ? static name => new InvalidOperationException($"tool \"{name}\" is already registered (for a per-agent variant, register through that agent's agent.ctx instead)")
+                : static name => new InvalidOperationException($"tool \"{name}\" is already registered in this scope"));
+        }
 
         public bool Admits(string name)
             => Restrictions.Values.All(filter =>
@@ -76,7 +82,7 @@ public sealed class ToolRuntime : Service
     public ToolRuntime(Context ctx) : base(ctx, ServiceName)
     {
         _progressiveDisclosure = ctx.GetProp(ToolDisclosureSwitch.PropName) is true;
-        _layers = new ScopedLayers<ToolLayer>(static _ => new ToolLayer(), () => ctx.Emit(new ToolChangeNotification()));
+        _layers = new ScopedLayers<ToolLayer>(static scope => new ToolLayer(scope), () => ctx.Emit(new ToolChangeNotification()));
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
         systemPrompt.Tools(WireSchemas);
@@ -110,9 +116,9 @@ public sealed class ToolRuntime : Service
         return _layers.Effect(Ctx, scope,
             layer =>
             {
-                lock (layer.RegistrationGate)
+                lock (layer.Tools.SyncRoot)
                 {
-                    if (layer.Tools.TryGetValue(registeredName, out var existing))
+                    if (layer.Tools.GetValueOrDefault(registeredName) is { } existing)
                         registeredName = ResolveNameConflict(registeredName, owner, existing, layer);
                     var entry = registeredName == definition.Name
                         ? new ToolEntry(definition, owner, registrationId)
@@ -132,14 +138,14 @@ public sealed class ToolRuntime : Service
                             IsAvailable = definition.IsAvailable,
                             WriteTargets = definition.WriteTargets,
                         }, owner, registrationId);
-                    layer.Tools.Add(registeredName, entry);
+                    layer.Tools.Insert(registeredName, entry);
                 }
             },
             layer =>
             {
-                lock (layer.RegistrationGate)
+                lock (layer.Tools.SyncRoot)
                 {
-                    if (layer.Tools.TryGetValue(registeredName, out var current)
+                    if (layer.Tools.GetValueOrDefault(registeredName) is { } current
                         && current.RegistrationId == registrationId)
                         layer.Tools.Remove(registeredName);
                 }
@@ -154,9 +160,9 @@ public sealed class ToolRuntime : Service
     {
         var suffix = owner?.Split('/')[^1];
         if (suffix is null || existing.Owner == owner)
-            throw new InvalidOperationException($"tool \"{name}\" is already registered");
+            throw layer.Tools.Conflict(name);
         var renamed = $"{suffix}-{name}";
-        if (layer.Tools.ContainsKey(renamed))
+        if (layer.Tools.GetValueOrDefault(renamed) is not null)
             throw new InvalidOperationException($"tool \"{name}\" is already registered, and the renamed form \"{renamed}\" is taken as well");
         Ctx.LoggerFor("tools").Warn(
             $"tool \"{name}\" from <{owner}> conflicts with the one from <{existing.Owner ?? "unknown"}>; it is now visible as \"{renamed}\" — both authors should pick distinct names");
@@ -215,23 +221,18 @@ public sealed class ToolRuntime : Service
     {
         var layers = _layers.ChainLayers(scope);
         var own = scope is null ? null : _layers.LayerFor(scope);
-        List<string> inheritedNames;
+        List<string> inheritedNames = [];
         var restrictableNames = new HashSet<string>();
-        lock (_layers.Global.RegistrationGate)
+        foreach (var (name, _) in _layers.Global.Tools.Entries)
         {
-            inheritedNames = new List<string>(_layers.Global.Tools.Count);
-            foreach (var name in _layers.Global.Tools.Keys)
-            {
-                restrictableNames.Add(name);
-                inheritedNames.Add(name);
-            }
+            restrictableNames.Add(name);
+            inheritedNames.Add(name);
         }
         foreach (var layer in layers)
         {
             if (ReferenceEquals(layer, own)) continue;
-            lock (layer.RegistrationGate)
-                foreach (var name in layer.Tools.Keys)
-                    if (restrictableNames.Add(name)) inheritedNames.Add(name);
+            foreach (var (name, _) in layer.Tools.Entries)
+                if (restrictableNames.Add(name)) inheritedNames.Add(name);
         }
         var visible = new Dictionary<string, ToolDefinition>();
         var knownNames = new HashSet<string>(restrictableNames);
@@ -243,10 +244,7 @@ public sealed class ToolRuntime : Service
         }
         if (own is not null)
         {
-            List<string> ownNames;
-            lock (own.RegistrationGate)
-                ownNames = [.. own.Tools.Keys];
-            foreach (var name in ownNames)
+            foreach (var (name, _) in own.Tools.Entries)
             {
                 knownNames.Add(name);
                 if (ResolveEntry(name, layers, own).Entry is { } entry)
@@ -590,13 +588,13 @@ public sealed class ToolRuntime : Service
     private (ToolEntry? Entry, bool InheritedVisible) ResolveEntry(string name, IReadOnlyList<ToolLayer> layers,
         ToolLayer? own, bool includeInheritedVisibility = false)
     {
-        var inherited = Find(_layers.Global);
+        var inherited = _layers.Global.Tools.GetValueOrDefault(name);
         foreach (var layer in layers)
         {
             if (ReferenceEquals(layer, own)) continue;
-            if (Find(layer) is { } entry) inherited = entry;
+            if (layer.Tools.GetValueOrDefault(name) is { } entry) inherited = entry;
         }
-        var local = own is null ? null : Find(own);
+        var local = own?.Tools.GetValueOrDefault(name);
         if (local is not null && !includeInheritedVisibility)
             return (local, false);
         var inheritedVisible = inherited is not null;
@@ -610,12 +608,6 @@ public sealed class ToolRuntime : Service
             }
         }
         return (local ?? (inheritedVisible ? inherited : null), inheritedVisible);
-
-        ToolEntry? Find(ToolLayer layer)
-        {
-            lock (layer.RegistrationGate)
-                return layer.Tools.GetValueOrDefault(name);
-        }
     }
 
     public Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
