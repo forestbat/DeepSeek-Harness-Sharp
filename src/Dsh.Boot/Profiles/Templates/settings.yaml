@@ -525,17 +525,21 @@ plugins:
 # MCP 服务器
 # mcp:
 #   <id>:
-#     Transport: stdio | streamable-http | sse.
+#     stdio | streamable-http | sse
 #     transport:
+#     stdio 启动命令
 #     command: []
+#     额外参数
 #     args: []
+#     HTTP 端点(transport: streamable-http 或 sse 时使用)
 #     url:
+#     是否启用
 #     enabled: true
-# Tool-set behavior
+# 工具集行为
 # tools:
-#   Opt in to progressive disclosure of grouped tool schemas through tool_router.
+#   是否启用工具渐进式披露: 成组的大工具集默认对模型不可见, 由 tool_router 展开
 #   progressive_disclosure:
-#   Minimum group size for disclosure; smaller groups stay directly visible.
+#   工具数达到该阈值才整组隐藏; 更小的组直接可见, 不值得多一次路由往返
 #   disclosure_threshold:
 # A2A 服务
 # a2a:
@@ -576,7 +580,7 @@ plugins:
 # safety:
 #   无规则匹配时的默认决策：false 请求审批，true 允许。
 #   autoApprove:
-#   规则 ID 映射为 matcher，格式见 README「安全规则」。
+#   拒绝的工具/命令模式，按规则 ID 配置。
 #   blacklist:
 #     <id>:
 #       tool: []
@@ -584,6 +588,7 @@ plugins:
 #       path:
 #       intent:
 #       args: {}
+#   自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
 #   whitelist:
 #     <id>:
 #       tool: []
@@ -1036,7 +1041,17 @@ storage:
 safety:
   # 未匹配规则时是否自动批准。
   autoApprove: false
-  # 规则格式见 README「安全规则」。
+  # 拒绝的工具/命令模式；使用规则 ID 映射，原字符串列表需迁移。
+  # 每条规则可配置 tool(名称或非空列表)、dialect(posix/powershell)、path、intent(read/write/any) 和字符串参数映射 args。
+  # 同一规则的条件须同时满足，规则之间任一命中即匹配；blacklist 和会话 never 优先于白名单及 autoApprove。
+  # path 中 * 不跨目录，** 可跨目录；相对路径基于调用工作目录，符号链接按真实目标匹配。
+  # 文件目标统一使用 path，不接受 args.path 或 args.file_path。
+  # 示例：deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
+  # 示例：protect-secrets: { path: "**/.env", intent: read }
   blacklist: {}
+  # 自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
+  # 活动 settings.yaml 的修改包含真实脱敏 diff、审批结果与提交审计
   # 示例：source-read: { tool: [read, glob, grep], path: "src/**", intent: read }
   whitelist: {}
+  # 脚本规则独立使用 scripts.permissions 的 autoApprove/blacklist/whitelist，仅用于 run_csx 和 run_csharp_repl，不用于 run_code。
+  # 规则匹配不等同于 OS 隔离；脚本内部文件访问受启用沙箱后的 read/write 权限约束，不逐次匹配 path。

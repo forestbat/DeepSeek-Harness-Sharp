@@ -51,58 +51,11 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 ### 设置变更审批
 
-模型通过文件工具或 `plugin_manager` 修改活动 `settings.yaml` 时，统一进入设置变更审批。
-脱敏只识别常见凭据字段和令牌格式，自定义秘密名称或格式仍需自行检查。
-审批后若文档已改变就拒绝提交，不覆盖并发编辑；设置更新原子发布，文件工具写入失败或取消时保留原文件。
-白名单和 `autoApprove` 可以自动批准，但不会跳过真实差异、审计或会话 `never`；缺少设置审批所需的服务或会话时拒绝操作。
-显式的人类配置命令和 GUI 保存不视为模型工具调用。
-设置变更审批不依赖 `sandbox.enabled`，仅覆盖上述工具/API 入口，不拦截任意宿主代码或其他进程的写入。
+模型通过文件工具或 `plugin_manager` 修改当前 `settings.yaml` 时，按安全规则审批并展示脱敏 diff；拒绝、取消或文件已被人工修改时，不写入旧提案。
+确认前请检查自定义秘密，自动脱敏不覆盖所有名称或格式。
+人工配置命令和 GUI 保存不触发模型审批。
 
-### 安全规则
-
-`safety` 与 `scripts.permissions` 分别配置普通工具和真实 C# 脚本工具的规则：
-
-```yaml
-safety:
-  autoApprove: false
-  blacklist:
-    deny-delete: { dialect: posix, args: { command: "rm -rf /*" } }
-    protect-secrets: { path: "**/.env", intent: read }
-  whitelist:
-    allow-source-read: { tool: [read, read_image, glob, grep], path: "src/**", intent: read }
-scripts:
-  permissions:
-    read: true
-    write: false
-    network: false
-    autoApprove: false
-    blacklist: {}
-    whitelist:
-      allow-example: { tool: run_csharp_repl, args: { code: "Console.WriteLine(*)*" } }
-```
-
-- `blacklist`/`whitelist` 为规则 ID 到 matcher 的映射，不接受旧的字符串列表。
-- matcher 支持 `tool`（名称或非空列表）、`dialect`（`posix`/`powershell`）、`path`、`intent`（`read`/`write`/`any`）和字符串参数映射 `args`。
-- 同一规则各维度 AND，规则之间 OR；blacklist 和会话 never 优先于白名单及自动批准，无规则匹配时由布尔 `autoApprove` 决定是否询问。
-- 路径 `*` 不跨目录，`**` 可跨目录，相对模式使用调用的工作目录；`args.path`/`args.file_path` 不合法，统一使用 `path`。
-- 文件中介按解析符号链接后的目标和实际读写意图检查，目录列举/搜索逐个检查结果；Windows 路径大小写不敏感并统一受支持的扩展路径别名，Unix 按原字符比较且反斜杠仍是普通字符。
-
-文件型 memory、技能读取、动态指令和插件中介也检查实际目标；非文件型 memory/技能提供者在访问后端前按整个调用审批，手工及启动目录仍是宿主操作。
-显式选择的技能链接须通过真实目标授权，缺失链接单独跳过而不隐藏其他技能，普通 glob/目录列举默认不跟随链接；拒绝或缺失的可选指令不注入，取消继续传播。
-`present` 在接受 post-hook 后重新检查实际文件、权限和存在性，全部检查通过才发布列表。
-单次路径批准不授权其他目标或写入，策略变更使原批准在下个检查点失效；已开始的普通写入/追加不承诺事务回滚。
-这些路径检查不提供文件 ID、硬链接别名、目录独立大小写规则或 TOCTOU 保证。
-
-同名工具被替换后须重新授权，不继承旧注册的单次批准；再度替换、卸载或执行方式变化时拒绝执行，不自动重放。
-已经开始执行的调用仍使用该次实际工具的结果验证、渲染和发布，不转交给后来注册的同名工具。
-仅 `run_csx`/`run_csharp_repl` 使用 `scripts.permissions`；`run_code` 属于 PTC，脚本的 `read`/`write`/`network` 是启用沙箱后的独立 OS 限制，规则允许不覆盖结构性拒绝。
-脚本内部的任意文件访问仅受结构性沙箱权限限制，不逐次匹配 `path` 规则。
-自有本地 MCP stdio 沿用显式沙箱启动及不可用时拒绝，启动/发现不赋予后续模型调用权限；远程和非自有 MCP 不变。
-宿主角色代码、shell、持久 shell、PTC、PTY、Git、编辑器和触发器不受逐次文件规则的全局拦截，shell 命令匹配也不等于 OS 隔离；沙箱边界见[插件沙箱](#插件沙箱)。
-
-决策审计包含规则 ID/类型、autoApprove、决策、匹配维度、路径/意图、工具及实际存在的会话/调用 ID 和时间，审批及提交结果另行记录。
-GUI 安全页编辑真实 YAML 规则；TUI 没有独立安全编辑器，请编辑 `settings.yaml` 并使用现有审批界面。
-
+安全规则与配置示例见[配置模板](src/Dsh.Boot/Profiles/Templates/settings.yaml)，可在 GUI 安全页或直接编辑 `settings.yaml` 配置。
 
 ## 不同于原版 DSH 的功能
 
@@ -394,9 +347,8 @@ Creative 对用户插件和预置 `Dsh.*` 插件使用相同的开发指导：�
 Linux 需要 bubblewrap，Windows 使用 AppContainer，macOS 需要 `sandbox-exec` 且仅支持单进程；能力不可用或声明路径授权失败时拒绝启动并撤销本次临时授权。
 隔离插件共享进程，必须相互信任；崩溃、超时或取消影响整个共享进程，不自动重放调用，也不提供内存预算。
 宿主角色的权限位只限制中介调用，不限制同进程代码；已加载的宿主代码不会被追溯隔离。
-未隔离路径与设置审批范围见[安全规则](#安全规则)和[设置变更审批](#设置变更审批)。
+开启沙箱不接管 shell、PTC、PTY、编辑器或远程进程；settings 写入规则见[设置变更审批](#设置变更审批)。
 托管插件沿用 `IDshPlugin`，示例见 [`templates/managed-plugin`](templates/managed-plugin)；原生 C ABI v1 见 [`templates/native-plugin`](templates/native-plugin)。
-
 
 
 <details>
