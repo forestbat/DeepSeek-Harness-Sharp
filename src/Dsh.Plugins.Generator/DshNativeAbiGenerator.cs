@@ -67,7 +67,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         if (spec is null)
             return;
         ReportUnknownRoles(context, hostApiType, pluginApiType, constants, [
-            "log", "register_tool", "unregister_tool", "get_config", "package", "activate", "deactivate", "invoke_tool",
+            "log", "register_tool", "unregister_tool", "get_config", "host_call", "package", "activate", "deactivate", "invoke_tool",
         ]);
 
         var pluginInterface = compilation.GetTypeByMetadataName(NativePluginInterfaceMetadataName);
@@ -107,6 +107,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         {
             Version = Constant(constants, "Version", 0),
             EntryExport = Constant(constants, "EntryPoint", ""),
+            SizedEntryExport = Constant(constants, "SizedEntryPoint", ""),
             PackageExport = Constant(constants, "PackageExport", ""),
             VersionExport = Constant(constants, "VersionExport", ""),
             SettingsSchemaExport = Constant(constants, "SettingsSchemaExport", ""),
@@ -122,6 +123,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
             HostRegisterToolField = Field(hostApiType, roleAttribute, "register_tool"),
             HostUnregisterToolField = Field(hostApiType, roleAttribute, "unregister_tool"),
             HostGetConfigField = Field(hostApiType, roleAttribute, "get_config"),
+            HostCallField = Field(hostApiType, roleAttribute, "host_call"),
         };
         foreach (var (type, role, field) in new[]
         {
@@ -133,6 +135,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
             (hostApiType.Name, "register_tool", spec.HostRegisterToolField),
             (hostApiType.Name, "unregister_tool", spec.HostUnregisterToolField),
             (hostApiType.Name, "get_config", spec.HostGetConfigField),
+            (hostApiType.Name, "host_call", spec.HostCallField),
         })
         {
             if (field.Length == 0)
@@ -209,7 +212,7 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         }
     }
 
-    /** ABI v1 协议在生成器侧的投影:常量值 + 各角色对应字段名。 */
+    /** Generator projection of the ABI constants and role-attributed function table. */
     private sealed class AbiSpec
     {
         public int Version { get; set; }
@@ -239,6 +242,9 @@ public sealed partial class DshNativeAbiGenerator : IIncrementalGenerator
         public string PluginInvokeToolField { get; set; } = "";
 
         public string HostLogField { get; set; } = "";
+        public string SizedEntryExport { get; set; } = "";
+        public string HostCallField { get; set; } = "";
+
 
         public string HostRegisterToolField { get; set; } = "";
 

@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 
 namespace Dsh.Gui.Services;
 

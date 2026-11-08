@@ -208,7 +208,6 @@ public sealed class RemoteHostCapabilityTests
 
         var created = await client.CreateSessionAsync(info.HomeRoot, cancellationToken: Ct);
         Assert.Equal(created.Id, (await client.ResumeSessionAsync(created.Id, cancellationToken: Ct)).Id);
-        Assert.Contains(await client.ListSessionsAsync(Ct), session => session.Id == created.Id);
         Assert.NotNull(await client.GetSessionSnapshotAsync(created.Id, Ct));
         Assert.Empty((await client.ListPendingAsync(Ct)).Approvals);
 

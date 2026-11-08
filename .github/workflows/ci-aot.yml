@@ -12,20 +12,39 @@ on:
       native-cc:
         required: true
         type: string
+      dryioc-commit:
+        required: true
+        type: string
+      dryioc-sha256:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   publish:
-    name: Publish and validate product entries (${{ inputs.rid }})
+    name: Publish ${{ matrix.entry }} (${{ inputs.rid }})
     runs-on: ${{ inputs.os }}
-    # Windows runs three full ILC passes before regression checks and artifact upload.
-    timeout-minutes: ${{ startsWith(inputs.rid, 'win-') && 60 || 40 }}
+    # Each hosted runner performs one product ILC pass without sharing its memory.
+    timeout-minutes: ${{ startsWith(inputs.rid, 'win-') && 50 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - entry: cli
+            project: DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj
+            publish-root: DeepSeek-Harness-Sharp/bin/Release/net10.0
+          - entry: gui
+            project: Dsh.GuiHost/Dsh.GuiHost.csproj
+            publish-root: Dsh.GuiHost/bin/Release/net10.0
+          - entry: web
+            project: Dsh.WebHost/Dsh.WebHost.csproj
+            publish-root: Dsh.WebHost/bin/Release/net10.0
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' && format('refs/pull/{0}/merge', github.event.number) || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Check PR merge checkout contains the current head
@@ -43,15 +62,17 @@ jobs:
           cache: true
           cache-dependency-path: '**/*.csproj'
 
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
       - name: Prepare local NuGet feed
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install AOT toolchain on Linux
         if: inputs.rid == 'linux-x64'
@@ -59,17 +80,17 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev
+          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev build-essential
 
       - name: Publish native plugin sample before product builds
-        if: inputs.rid == 'linux-x64'
+        if: inputs.rid == 'linux-x64' && matrix.entry == 'cli'
         shell: bash
         run: |
           set -euo pipefail
-          # Keep the generator's cold restore covered before product builds warm it.
+          # Keep the generator's cold restore covered before this runner builds a product.
           dotnet publish tests/Dsh.NativePluginSample -c Release --nologo -v m
 
-      - name: Publish the product's three NativeAOT entries
+      - name: Publish the product NativeAOT entry
         shell: bash
         run: |
           set -euo pipefail
@@ -80,9 +101,115 @@ jobs:
             -p:DshNativeCompiler='${{ inputs.native-cc }}' -p:DshShipFaultProbe=true
             --nologo -v m
           )
-          dotnet publish DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj "${PUBLISH_ARGS[@]}"
-          dotnet publish Dsh.GuiHost/Dsh.GuiHost.csproj "${PUBLISH_ARGS[@]}"
-          dotnet publish Dsh.WebHost/Dsh.WebHost.csproj "${PUBLISH_ARGS[@]}"
+          dotnet publish '${{ matrix.project }}' "${PUBLISH_ARGS[@]}"
+
+      - name: Archive the complete publish root for validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          RID='${{ inputs.rid }}'
+          ROOT='${{ matrix.publish-root }}'/"$RID/publish"
+          test -d "$ROOT"
+          rm -f "$ROOT"/*.pdb "$ROOT"/*.dbg
+          mkdir -p artifacts
+          TAR="tar"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TAR="$(cygpath -u "$WINDIR")/System32/tar.exe"
+          fi
+          # Archive each complete entry root before artifact upload changes Unix modes.
+          "$TAR" -cf "artifacts/aot-$RID-${{ matrix.entry }}.tar" -C "$ROOT" .
+          if [ "$RID" = "linux-x64" ] && [ '${{ matrix.entry }}' = "cli" ]; then
+            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish"
+            test -f "$SAMPLE/Dsh.NativePluginSample.so"
+            "$TAR" -cf "artifacts/native-plugin-$RID.tar" -C "$SAMPLE" .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot-intermediate-${{ inputs.rid }}-${{ matrix.entry }}
+          path: artifacts/*.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  validate:
+    name: Validate product entries (${{ inputs.rid }})
+    needs: publish
+    runs-on: ${{ inputs.os }}
+    # The join keeps the original critical-path ceiling without extending consumer deadlines.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Check PR merge checkout contains the current head
+        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PR_HEAD_SHA" HEAD
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
+      - name: Prepare local NuGet feed
+        shell: pwsh
+        run: |
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install AOT toolchain on Linux
+        if: inputs.rid == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld zlib1g-dev build-essential
+
+      - name: Download this run's complete publish archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aot-intermediate-${{ inputs.rid }}-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Restore the three publish roots and cold native plugin fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          RID='${{ inputs.rid }}'
+          TAR="tar"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TAR="$(cygpath -u "$WINDIR")/System32/tar.exe"
+          fi
+          for ENTRY in cli gui web; do
+            case "$ENTRY" in
+              cli) PROJECT="DeepSeek-Harness-Sharp" ;;
+              gui) PROJECT="Dsh.GuiHost" ;;
+              web) PROJECT="Dsh.WebHost" ;;
+            esac
+            ROOT="$PROJECT/bin/Release/net10.0/$RID/publish"
+            mkdir -p "$ROOT"
+            "$TAR" -xf "artifacts/aot-$RID-$ENTRY.tar" -C "$ROOT"
+          done
+          if [ "$RID" = "linux-x64" ]; then
+            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish"
+            mkdir -p "$SAMPLE"
+            "$TAR" -xf "artifacts/native-plugin-$RID.tar" -C "$SAMPLE"
+            test -f "$SAMPLE/Dsh.NativePluginSample.so"
+          fi
 
       - name: Assert NativeAOT output and smoke test the product's three entries
         shell: bash
@@ -150,7 +277,7 @@ jobs:
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
-          "$EXE" -noColor "${CLASSES[@]}" -failSkips
+          "$EXE" -noColor "${CLASSES[@]}"
 
       - name: Archive the product's three complete publish roots
         shell: bash

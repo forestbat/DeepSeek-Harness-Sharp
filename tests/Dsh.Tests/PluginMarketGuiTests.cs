@@ -7,13 +7,14 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
 using Dsh.Interaction;
 
 namespace Dsh.Tests;
 
-/** Plugin market page rendered headlessly: library picker button, permission toggles shared with /plugins, and the remove button. */
+/** The rendered plugin market manages installed packages and broker permissions through the host. */
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class PluginMarketGuiTests
 {

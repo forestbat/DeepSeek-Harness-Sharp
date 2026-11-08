@@ -416,13 +416,15 @@ public sealed partial class ChatView : UserControl
     }
 
     private void RestoreAnchor(ScrollViewer scroll)
-        => RestoreAnchor(scroll, ResolveAnchorIndex(), _anchorTop, allowLargeShift: false);
+        => RestoreAnchor(scroll, ResolveAnchorIndex(), _anchorTop);
 
     /**
      * 按"某条消息 + 它当时的屏幕位置"还原视口。
      * 折叠用被点那条做锚点: 面板重估会把它甩出几百像素, 按"视口顶部那条"还原对它无效。
+     * 位移多大都照样拉回: 面板重估一次能甩出一屏以上(实测追加内容后锚点位移 561px),
+     * 那不是用户滚动, 按它自己报的坐标重新记锚点等于把读者正在读的位置丢掉。
      */
-    private void RestoreAnchor(ScrollViewer scroll, int index, double anchorTop, bool allowLargeShift)
+    private void RestoreAnchor(ScrollViewer scroll, int index, double anchorTop)
     {
         if (index < 0)
             return;
@@ -444,13 +446,6 @@ public sealed partial class ChatView : UserControl
                 var delta = position.Y - anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
-                // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
-                // 折叠例外: 面板重估本来就能把它甩出几屏, 而这个锚点只在点击后两次布局内有效、用户一动就作废。
-                if (!allowLargeShift && Math.Abs(delta) > scroll.Viewport.Height)
-                {
-                    RememberAnchor(scroll);
-                    break;
-                }
                 var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
                 scroll.Offset = new Vector(scroll.Offset.X, Math.Clamp(scroll.Offset.Y + delta, 0, maximum));
                 MessageList.UpdateLayout();
@@ -578,7 +573,7 @@ public sealed partial class ChatView : UserControl
             {
                 if (ReferenceEquals(MessageList.Items[index], data))
                 {
-                    RestoreAnchor(scroll, index, _foldAnchorTop, allowLargeShift: true);
+                    RestoreAnchor(scroll, index, _foldAnchorTop);
                     return;
                 }
             }

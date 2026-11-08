@@ -32,23 +32,3 @@ public enum PluginPermission
     Network,
 }
 
-public interface IPluginManager
-{
-    IReadOnlyList<string> PackageNames { get; }
-
-    /** 启动扫描期间逐文件的跳过/失败清单(含原生装载失败的结构化原因)。 */
-    IReadOnlyList<PluginSkip> LoadFailures { get; }
-
-    string Describe(string package);
-
-    Task<string> AddAsync(string packageOrPath);
-
-    Task<string> RemoveAsync(string package, bool force = false);
-
-    Task<string> DisableAsync(string package);
-
-    Task<string> EnableAsync(string package);
-
-    /** Writes plugins."<package>".permissions.<permission> back to settings.yaml and returns a status line. */
-    string SetPermission(string package, PluginPermission permission, bool allowed);
-}

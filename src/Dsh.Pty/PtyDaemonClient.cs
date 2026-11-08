@@ -450,7 +450,8 @@ public static class PtyDaemonClient
         string? portFile,
         CancellationToken cancellationToken)
     {
-        if (ConsoleTunnel.ReadSize() is not var (columns, rows))
+        var size = ConsoleTunnel.ReadSize();
+        if (size is not var (columns, rows))
             return;
         try
         {
@@ -478,7 +479,7 @@ public static class PtyDaemonClient
         request.Token = (endpoint is null ? null : LocalEndpointToken.Read(endpoint))
             ?? throw new InvalidOperationException(
                 $"the dsharp tui daemon at {endpoint} issued no access token ({LocalEndpointToken.PathFor(endpoint ?? socketPath)}); it was started by an older build, stop that daemon process and retry");
-        var json = JsonSerializer.Serialize(request, PtyDaemonJson.Options) + "\n";
+        var json = $"{JsonSerializer.Serialize(request, PtyDaemonJsonContext.Default.PtyDaemonRequest)}\n";
         await stream.WriteAsync(Encoding.UTF8.GetBytes(json), cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }
@@ -487,7 +488,7 @@ public static class PtyDaemonClient
     {
         var line = await ReadLineAsync(stream, cancellationToken)
             ?? throw new IOException("daemon closed the connection");
-        var response = JsonSerializer.Deserialize<PtyDaemonResponse>(line, PtyDaemonJson.Options)
+        var response = JsonSerializer.Deserialize(line, PtyDaemonJsonContext.Default.PtyDaemonResponse)
             ?? throw new InvalidOperationException("daemon returned an invalid response");
         if (!response.Ok)
             throw new InvalidOperationException(response.Error ?? "daemon request failed");

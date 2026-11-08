@@ -643,7 +643,7 @@ public sealed class NetworkSettingsGuiTests : IDisposable
         gui.Save(gui.Load() with { Theme = GuiSettings.ThemeLight, FontSize = 15 });
         await using var hostRouteLease = await host.Environment.App.Ctx.Get<FleetService>(FleetService.ServiceName)!
             .OutboundRoute.AcquireAsync(Ct);
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, home.Root));
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var service = app.Ctx.Get<FleetService>(FleetService.ServiceName)!;
         var workspaceOptions = Options with
         {
@@ -784,27 +784,38 @@ public sealed class NetworkSettingsGuiTests : IDisposable
     [InlineData(true)]
     public async Task BorrowedDraftProbe_Classifies404And407WithoutSavingOrReplacingTheCurrentRoute(bool rejectAuthentication)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Mark(string stage) => TestContext.Current.TestOutputHelper?.WriteLine(
+            $"borrowed-draft stage={stage} elapsed-ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}");
+        Mark("start");
         FleetSshEndToEndTests.RequireEnvironment();
         await using var ssh = await TestSshServer.StartAsync(Ct);
+        Mark("ssh-ready");
         await using var target = new TestForwardProxy(statusCode: HttpStatusCode.NotFound,
             requiredCredential: rejectAuthentication ? "required:credential" : null);
         await using var host = await CreateHostAsync("ngbe", TestContext.Current.CancellationToken);
+        Mark("host-ready");
         var observer = await host.ConnectAsync("borrowed-draft-observer", Ct);
+        Mark("observer-ready");
         var home = host.Environment.App.Home;
         var route = OutboundProxy.FromContext(host.Environment.App.Ctx);
         HarnessSettings.SaveOutboundProxy(home, new() { ProbeUrl = ProbeTarget }, route);
+        Mark("route-saved");
         var machine = ssh.Machine("borrowed-draft", home.Root) with
         {
             OutboundTunnel = new("proxyCommand", LocalSettings(target).Url!),
         };
         new MachineStore(home).Upsert(machine);
+        Mark("machine-saved");
         var vm = SettingsViewModel(host.Environment.App, observer);
         try
         {
             vm.SelectedBorrowedOutboundMachine = machine.Name;
             var file = await File.ReadAllTextAsync(home.SettingsFile, Ct);
             var captured = route.CaptureRoute(new Uri(ProbeTarget));
+            Mark("probe-start");
             await vm.ValidateBorrowedOutboundCommand.ExecuteAsync(null);
+            Mark("probe-returned");
             var result = Assert.IsType<ProxyProbeResult>(vm.BorrowedOutboundProbe.Result);
             Assert.Equal((rejectAuthentication ? ProxyProbeOutcome.Failed : ProxyProbeOutcome.Passed,
                     rejectAuthentication ? ProxyProbeStage.ProxyAuth : ProxyProbeStage.HttpTarget,
@@ -817,8 +828,15 @@ public sealed class NetworkSettingsGuiTests : IDisposable
             Assert.Equal((captured.Generation, captured.ProxyUri, captured.CancellationToken),
                 (after.Generation, after.ProxyUri, after.CancellationToken));
             Assert.True(await observer.PingAsync(Ct) > 0);
+            Mark("assertions-complete");
         }
-        finally { await CloseAsync(vm); }
+        finally
+        {
+            Mark("view-close-start");
+            await CloseAsync(vm);
+            Mark("view-closed");
+        }
+        Mark("body-complete");
     }
 
     [Theory(Timeout = TestTimeout)]

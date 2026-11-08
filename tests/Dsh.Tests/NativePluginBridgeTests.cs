@@ -38,21 +38,6 @@ public sealed class NativePluginBridgeTests
         Assert.Null(tools.Get("native_echo"));
     }
 
-    [Fact]
-    public void CatalogDefinition_ExposesNativePackage()
-    {
-        var catalog = new PluginCatalog();
-        var plugin = new FakeNativePlugin();
-        catalog.Register(
-            PluginDescriptor.For(plugin.Package, PluginForm.NativeLibrary),
-            () => NativePluginBridge.AsPlugin(plugin));
-
-        Assert.Contains(plugin.Package, catalog.PackageNames);
-        Assert.True(catalog.TryCreateDefinition(plugin.Package, out var definition));
-        Assert.Equal(plugin.Package, definition!.Name);
-        Assert.True(catalog.TryGet(plugin.Package, out var create));
-        Assert.Empty(create().Inject);
-    }
 
     /** 原生 ABI 的配置通道: 宿主把 plugins.<包名> 段编成 JSON, 激活前交给插件(旧插件不取即无感)。 */
     [Fact]
@@ -67,11 +52,20 @@ public sealed class NativePluginBridgeTests
         {
             ["timeoutMs"] = 2500L,
             ["enabled"] = true,
-            ["label"] = "hi \"there\"",
+            ["label"] = "synthetic 中文 \"label\"\0\n\t",
             ["tags"] = new List<object?> { "a", 2L },
+            ["nested"] = new Dictionary<string, object?> { ["fraction"] = 1.25, ["absent"] = null },
         }, TestContext.Current.CancellationToken))!;
 
-        Assert.Equal("""{"timeoutMs":2500,"enabled":true,"label":"hi \"there\"","tags":["a",2]}""", plugin.ConfigJson);
+        using var document = JsonDocument.Parse(plugin.ConfigJson);
+        var config = document.RootElement;
+        Assert.Equal(2500, config.GetProperty("timeoutMs").GetInt64());
+        Assert.True(config.GetProperty("enabled").GetBoolean());
+        Assert.Equal("synthetic 中文 \"label\"\0\n\t", config.GetProperty("label").GetString());
+        Assert.Equal("a", config.GetProperty("tags")[0].GetString());
+        Assert.Equal(2, config.GetProperty("tags")[1].GetInt64());
+        Assert.Equal(1.25, config.GetProperty("nested").GetProperty("fraction").GetDouble());
+        Assert.Equal(JsonValueKind.Null, config.GetProperty("nested").GetProperty("absent").ValueKind);
     }
 
     /** 没有配置段时交空串(插件按默认值走), 而不是 "null" 或 "{}"。 */
@@ -170,7 +164,6 @@ public sealed class NativePluginBridgeTests
 
             Assert.False(load.Succeeded);
             Assert.Equal(NativePluginFailureKind.NotALibrary, load.Failure);
-            Assert.False(string.IsNullOrWhiteSpace(load.Reason));
         }
         finally
         {

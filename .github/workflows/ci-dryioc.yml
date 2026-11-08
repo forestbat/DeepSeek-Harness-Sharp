@@ -1,0 +1,70 @@
+name: Prepare shared DryIoc feed
+
+on:
+  workflow_call:
+    inputs:
+      checkout-ref:
+        required: true
+        type: string
+    outputs:
+      commit:
+        value: ${{ jobs.prepare.outputs.commit }}
+      sha256:
+        value: ${{ jobs.prepare.outputs.sha256 }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare DryIoc.dll once for this run
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      commit: ${{ steps.feed.outputs.commit }}
+      sha256: ${{ steps.feed.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout-ref }}
+          fetch-depth: 0
+      - name: Verify the checkout contains the current PR head
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git merge-base --is-ancestor "$EXPECTED_HEAD_SHA" HEAD
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare and verify the exact upstream package
+        id: feed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Older release tags still use this run's verifier and their own PackageReference.
+          $fetchScript = git show '${{ github.workflow_sha }}:scripts/fetch-dryioc-feed.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content -LiteralPath scripts/fetch-dryioc-feed.ps1 -Value $fetchScript -Encoding utf8
+          & ./scripts/fetch-dryioc-feed.ps1 -UseGhArtifact -Force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $packages = @(Get-ChildItem -LiteralPath packages -Filter 'DryIoc.dll.*.nupkg' -File)
+          if ($packages.Count -ne 1) { throw 'Expected exactly one DryIoc.dll package.' }
+          $package = $packages[0].FullName
+          $commit = (Get-Content -LiteralPath "$package.commit" -Raw).Trim()
+          $sha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+          & ./scripts/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit $commit -ExpectedSha256 $sha256
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          Copy-Item -LiteralPath scripts/fetch-dryioc-feed.ps1 -Destination packages/fetch-dryioc-feed.ps1
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dryioc-feed
+          path: |
+            packages/DryIoc.dll.*.nupkg
+            packages/DryIoc.dll.*.nupkg.commit
+            packages/fetch-dryioc-feed.ps1
+          if-no-files-found: error
+          retention-days: 7

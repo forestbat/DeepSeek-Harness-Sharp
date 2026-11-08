@@ -35,10 +35,10 @@ public static class McpToolBridge
             Disclosure = disclosure,
         };
 
-    // 绑定可换句柄: 调用时解析当前 McpClientTool, 陈旧会话失败则重连一次并重试一次。
+    // Owned opaque tool calls are never replayed after cancellation, transport loss or process failure.
     internal static ToolDefinition Wrap(McpServerHandle handle, McpClientTool tool, ToolDisclosure? disclosure = null)
         => Wrap(handle.Config.Name, tool.Name, tool.Description, tool.JsonSchema,
-            (arguments, signal) => CallWithReconnectAsync(handle, tool.Name, arguments, signal), disclosure);
+            (arguments, signal) => handle.CallOwnedToolAsync(tool.Name, arguments, signal), disclosure);
 
     internal static async ValueTask<CallToolResult> CallWithReconnectAsync(
         McpServerHandle handle,

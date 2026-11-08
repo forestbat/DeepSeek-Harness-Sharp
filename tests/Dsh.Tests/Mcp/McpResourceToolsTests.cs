@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Mcp;
@@ -11,12 +11,13 @@ using ModelContextProtocol.Protocol;
 namespace Dsh.Tests.Mcp;
 
 /** Connects one McpService to two real child processes of the test-only Dsh.McpResourceServerSample: "res" serves resources, "plain" serves only a tool. */
+/** Requests orderly sample shutdown before the SDK's original transport cleanup, including reconnect disposal. */
 public sealed class McpResourceServerFixture : IAsyncLifetime
 {
     public const string ResourceServer = "res";
     public const string PlainServer = "plain";
 
-    private const string SampleDll = "Dsh.McpResourceServerSample.dll";
+    private const string SampleName = "Dsh.McpResourceServerSample";
     private const string NoResourcesFlag = "--no-resources";
 
     public Context Ctx { get; } = new();
@@ -31,13 +32,12 @@ public sealed class McpResourceServerFixture : IAsyncLifetime
 
     public McpService Service { get; private set; } = null!;
 
-    /** Launches the sample through the dotnet host that runs this test process, so no apphost or PATH lookup is involved. */
+    /** Launches the copied sample apphost without assuming a shared-runtime directory layout. */
     public static McpServerConfig ServerConfig(string name, bool withResources = true, params string[] arguments)
     {
-        var dotnetRoot = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", ".."));
-        var muxer = Path.Combine(dotnetRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-        var dll = Path.Combine(AppContext.BaseDirectory, "mcp-resource-server", SampleDll);
-        return new McpServerConfig(name, "stdio", muxer, withResources ? [dll, .. arguments] : [dll, NoResourcesFlag, .. arguments]);
+        var executable = Path.Combine(AppContext.BaseDirectory, "mcp-resource-server",
+            OperatingSystem.IsWindows() ? $"{SampleName}.exe" : SampleName);
+        return new McpServerConfig(name, "stdio", executable, withResources ? arguments : [NoResourcesFlag, .. arguments]);
     }
 
     public static async Task ConnectAsync(McpService service, params McpServerConfig[] servers)
@@ -75,12 +75,41 @@ public sealed class McpResourceServerFixture : IAsyncLifetime
                     await transport.MessageReader.Completion;
                     throw new IOException("MCP resource sample exited before its message loop was ready.");
                 }
-                return transport;
+                return new GracefulSessionTransport(transport);
             }
             catch
             {
                 await transport.DisposeAsync();
                 throw;
+            }
+        }
+    }
+
+    private sealed class GracefulSessionTransport(ITransport transport) : ITransport
+    {
+        private const string ShutdownNotification = "notifications/test/shutdown";
+        private int _disposed;
+
+        public string? SessionId => transport.SessionId;
+
+        public ChannelReader<JsonRpcMessage> MessageReader => transport.MessageReader;
+
+        public Task SendMessageAsync(JsonRpcMessage message, CancellationToken cancellationToken = default)
+            => transport.SendMessageAsync(message, cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            try
+            {
+                // The SDK waits for process exit before killing it, so stop the real server first.
+                if (!MessageReader.Completion.IsCompleted)
+                    await transport.SendMessageAsync(new JsonRpcNotification { Method = ShutdownNotification });
+            }
+            finally
+            {
+                await transport.DisposeAsync();
             }
         }
     }

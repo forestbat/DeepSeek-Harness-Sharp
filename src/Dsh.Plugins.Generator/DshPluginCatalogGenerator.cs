@@ -116,9 +116,12 @@ public sealed partial class DshPluginCatalogGenerator : IIncrementalGenerator
             if (assembly.GetTypeByMetadataName($"{NamespaceFor(assembly.Name)}{SchemaTypeSuffix}") is { } schema)
                 schemas.Add(schema.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
         }
-        if (registrations.Count == 0 && bootstraps.Count == 0 && schemas.Count == 0)
+        var hasRuntime = compilation.GetTypeByMetadataName("Dsh.Boot.PluginRuntimeFactory") is not null;
+        var hasSandbox = compilation.GetTypeByMetadataName("Dsh.Plugins.Sandbox.PluginSandboxModule") is not null;
+        if (registrations.Count == 0 && bootstraps.Count == 0 && schemas.Count == 0 && !hasRuntime)
             return;
-        context.AddSource(CatalogHintName, Templates.RenderCatalog(Deduplicate(registrations), bootstraps, schemas));
+        context.AddSource(CatalogHintName, Templates.RenderCatalog(Deduplicate(registrations), bootstraps, schemas,
+            hasRuntime, hasSandbox));
     }
 
     /** 汇编级显式注册:源生成 JSON 上下文 + 标了 DshPluginInitializer 的静态方法(字典序保证确定性)。 */

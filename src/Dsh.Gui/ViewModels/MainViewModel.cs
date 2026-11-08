@@ -1610,6 +1610,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case ApprovalGrantedPayload granted:
                 AddTrace(sessionEvent.Seq, TraceKind.Approval, $"本会话不再询问 {granted.ToolName}");
                 break;
+            case ApprovalDecidedPayload decided:
+                AddTrace(sessionEvent.Seq, TraceKind.Approval, $"审批结果 {decided.Outcome}");
+                break;
+            case SettingsMutationAuditPayload mutation:
+                AddTrace(sessionEvent.Seq, TraceKind.Approval, $"settings {mutation.Outcome} · {mutation.ToolName}",
+                    $"{mutation.Path}\n{mutation.Diff}\nbeforeHash={mutation.BeforeHash}\nafterHash={mutation.AfterHash}");
+                if (!replay)
+                    SetStatus($"settings {mutation.Outcome}: {mutation.Path}");
+                break;
             case DeliverablesPresentedPayload presented:
                 Deliverables.Observe(sessionEvent);
                 AddTrace(sessionEvent.Seq, TraceKind.Tool, $"交付物 {presented.Files.Count} 个", string.Join('\n', presented.Files.Select(file => file.Path)));

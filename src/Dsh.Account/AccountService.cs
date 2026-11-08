@@ -1,4 +1,5 @@
 ﻿using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Core;

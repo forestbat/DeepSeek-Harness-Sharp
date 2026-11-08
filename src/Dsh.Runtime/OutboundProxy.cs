@@ -226,8 +226,9 @@ public sealed partial class OutboundProxy : IWebProxy, ICredentials, IDisposable
     /// <summary>Creates a handler whose sends capture a generation and reuse its connection pools.</summary>
     public HttpMessageHandler CreateHandler(
         bool allowAutoRedirect = true,
-        DecompressionMethods automaticDecompression = DecompressionMethods.None)
-        => new OutboundHttpHandler(this, allowAutoRedirect, automaticDecompression);
+        DecompressionMethods automaticDecompression = DecompressionMethods.None,
+        bool useCookies = true)
+        => new OutboundHttpHandler(this, allowAutoRedirect, automaticDecompression, useCookies);
 
     /// <summary>Captures routing and credentials before asynchronous destination validation begins.</summary>
     public RouteSnapshot CaptureRoute(Uri destination)
@@ -316,8 +317,12 @@ public sealed partial class OutboundProxy : IWebProxy, ICredentials, IDisposable
 
         internal SocketsHttpHandler CreatePooledHandler(
             bool allowAutoRedirect, DecompressionMethods decompression,
-            OutboundResourceLifetime connections, CookieContainer cookies)
-            => CreateHandlerCore(allowAutoRedirect, decompression, null, connections, true, cookies);
+            OutboundResourceLifetime connections, CookieContainer? cookies)
+        {
+            var handler = CreateHandlerCore(allowAutoRedirect, decompression, null, connections, true, cookies);
+            handler.UseCookies = cookies is not null;
+            return handler;
+        }
 
         private SocketsHttpHandler CreateHandlerCore(
             bool allowAutoRedirect,

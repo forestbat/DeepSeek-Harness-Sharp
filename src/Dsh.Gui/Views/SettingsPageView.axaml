@@ -182,6 +182,11 @@
                 <TextBox AcceptsReturn="True" Height="160" TextWrapping="Wrap"
                          PlaceholderText="每行一条，例如 bash: rm -rf /*"
                          Text="{Binding Preferences.BlacklistText, Mode=TwoWay}" />
+                <TextBlock Text="白名单（每行一条；与黑名单使用相同 tool:name / shell:pattern 语义，黑名单优先）" Classes="Secondary" TextWrapping="Wrap" />
+                <TextBox AcceptsReturn="True" Height="120" TextWrapping="Wrap"
+                         PlaceholderText="tool:write or bash:echo"
+                         Text="{Binding Preferences.WhitelistText, Mode=TwoWay}" />
+                <TextBlock Text="修改活动 settings.yaml 时会显示真实脱敏 diff 并进入审批；白名单和 autoApprove 可自动批准，拒绝规则始终优先。" Classes="Tertiary" TextWrapping="Wrap" />
                 <Button Classes="Primary" HorizontalAlignment="Left" Content="保存"
                         Command="{Binding Preferences.SaveSafetyCommand}" />
               </StackPanel>

@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using System.Diagnostics;
 using System.Net;
@@ -167,7 +168,7 @@ public sealed class BorrowedOutboundProxyTests
             settings.Plugins["@deepseek-ai/dsh-fleet"] = new PluginSetting { Enabled = false };
             settings.Save(home);
             settings.SavePlugins(home);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             using var consumer = new HttpClient(OutboundProxy.FromContext(app.Ctx).CreateHandler());
             Assert.NotNull(await Record.ExceptionAsync(() => consumer.GetStringAsync("http://example.com/disabled-fleet", Ct)));
             var agent = (await app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: root), TestContext.Current.CancellationToken)).Agent;
@@ -202,7 +203,7 @@ public sealed class BorrowedOutboundProxyTests
             settings.Plugins["@deepseek-ai/dsh-fleet"] = new PluginSetting { Enabled = true };
             settings.Save(home);
             settings.SavePlugins(home);
-            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root));
+            using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var fleet = Assert.IsType<FleetService>(app.Ctx.Get<FleetService>(FleetService.ServiceName));
             await using var frontend = fleet.CreateClient(new FleetOptions());
             using var consumer = new HttpClient(fleet.OutboundRoute.Proxy.CreateHandler());

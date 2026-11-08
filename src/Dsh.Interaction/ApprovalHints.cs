@@ -65,6 +65,28 @@ public static class ApprovalHints
             ? $"智能体请求执行工具 {request.ToolName}"
             : $"智能体请求执行工具 {request.ToolName} · {Trim(request.Reason, MaxImpactReasonChars)}";
 
+    public static string SettingsDiff(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "";
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("settingsMutation", out var marker) || marker.ValueKind != JsonValueKind.True)
+                return "";
+            var patch = root.TryGetProperty("diff", out var diff) && diff.ValueKind == JsonValueKind.String
+                ? diff.GetString() ?? "" : "";
+            return $"{patch}\nbeforeHash={TryRead(root, "beforeHash")}\nafterHash={TryRead(root, "afterHash")}";
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
+    }
+
+
     private static string? TryRead(JsonElement element, string key)
     {
         foreach (var property in element.EnumerateObject())

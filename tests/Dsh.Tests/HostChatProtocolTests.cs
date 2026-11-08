@@ -1,8 +1,10 @@
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
+using Dsh.Transport;
 
 namespace Dsh.Tests;
 
@@ -81,6 +83,16 @@ public sealed class HostChatProtocolTests
         Assert.False(changed.NetworkAllowed);
         await editor.Plugins.SetPluginPermissionAsync(package, "network", true, Ct);
         Assert.True(Assert.Single(await observer.Plugins.ListPluginsAsync(Ct), plugin => plugin.Package == package).NetworkAllowed);
+
+        await editor.Plugins.SetPluginPermissionAsync(package, "read", false, Ct);
+        await editor.Plugins.SetPluginPermissionAsync(package, "write", false, Ct);
+        await editor.Plugins.SetPluginPermissionAsync(package, "network", false, Ct);
+        await editor.Plugins.SetPluginPermissionAsync(package, "read", true, Ct);
+        var independent = Assert.Single(await observer.Plugins.ListPluginsAsync(Ct), plugin => plugin.Package == package);
+        Assert.True(independent.ReadAllowed);
+        Assert.False(independent.WriteAllowed);
+        Assert.False(independent.NetworkAllowed);
     }
+
 }
 

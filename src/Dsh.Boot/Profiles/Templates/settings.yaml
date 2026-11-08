@@ -96,6 +96,10 @@ sandbox:
 
 # 插件开关:false 关闭;permissions(read/write/network)是保留键
 plugins:
+  # Omitted execution defaults to host for compiled-in plugins and sandbox for external files.
+  # Explicit sandbox requires the capability SDK; host grants full in-process trust.
+  # "example/full-context-plugin":
+  #   execution: host
   # Debug-only preference for batching independent tool calls in run_code.
   "@deepseek-ai/dsh-ptc":
     debug_batching: false
@@ -106,11 +110,13 @@ plugins:
   "@deepseek-ai/dsh-csharprepl":
     executable: csharprepl
   # 项目记忆；参数 file/backend/capture/mongo
-  "@deepseek-ai/dsh-memory": false
+  "@deepseek-ai/dsh-memory":
+    enabled: false
   # TOON 编码；参数 output/input
   "@deepseek-ai/dsh-toon": false
   # 快照恢复点；参数 max_points/keep_days
-  "@deepseek-ai/dsh-checkpoints": false
+  "@deepseek-ai/dsh-checkpoints":
+    enabled: false
   # IDE 集成
   "@deepseek-ai/dsh-ide":
     # 默认编辑器:auto 或编辑器 id
@@ -443,6 +449,7 @@ plugins:
   # 自定义插件示例:
   # "@acme/foo":
   #   enabled: true
+  #   execution: sandbox
   #   permissions:
   #     read: true
   #     write: false
@@ -572,6 +579,8 @@ plugins:
 #   autoApprove:
 #   拒绝的工具/命令模式
 #   blacklist: []
+#   自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
+#   whitelist: []
 # 日志
 # logging:
 #   最低级别:trace | debug | info | warn | error | off
@@ -642,6 +651,11 @@ plugins:
 # sandbox:
 #   是否启用
 #   enabled:
+# scripts:
+#   permissions:
+#     read: true
+#     write: true
+#     network: true
 # 插件开关
 # plugins:
 #   是否启用
@@ -656,6 +670,7 @@ plugins:
 #     write: true
 #     允许网络
 #     network: true
+#   execution:
 #
 # 插件参数(plugins."<包名>": {enabled, permissions, ...参数}; 未列出的插件发现即启用):
 # 账号服务
@@ -772,8 +787,8 @@ plugins:
 #   capture: true
 #   MongoDB 连接
 #   mongo:
-#     连接字符串
-#     connectionString: "mongodb://localhost:27017"
+#     MongoDB connection string for the actual deployment.
+#     connectionString:
 #     数据库名
 #     database: "dsh_memory"
 #     集合名
@@ -984,3 +999,7 @@ safety:
   autoApprove: false
   # 拒绝的工具/命令模式
   blacklist: []
+  # 自动批准的工具/命令模式；与 blacklist 语义相同，blacklist 优先
+  # 仅支持现有 tool:<name> 与 shell-tool:<command-pattern>；不是 path/args/intent matcher
+  # 活动 settings.yaml 的修改包含真实脱敏 diff、审批结果与提交审计
+  whitelist: []

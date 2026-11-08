@@ -56,11 +56,33 @@ public sealed class ShadowGit
         info.Environment["GIT_WORK_TREE"] = _workTree;
         using var process = new Process();
         process.StartInfo = info;
+        signal.ThrowIfCancellationRequested();
         process.Start();
-        process.StandardInput.Close();
-        var outputTask = process.StandardOutput.ReadToEndAsync(signal);
-        var errorTask = process.StandardError.ReadToEndAsync(signal);
-        await process.WaitForExitAsync(signal);
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        try
+        {
+            process.StandardInput.Close();
+            await process.WaitForExitAsync(signal);
+        }
+        finally
+        {
+            // Cancelling the wait does not stop Git from modifying its repository.
+            // The command owns its process tree and both output drains until teardown completes.
+            if (!process.HasExited)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException) when (process.HasExited)
+                {
+                    // Git exited between the exit check and the termination request.
+                }
+                await process.WaitForExitAsync();
+            }
+            await Task.WhenAll(outputTask, errorTask);
+        }
         return new GitResult(process.ExitCode, (await outputTask).Trim(), (await errorTask).Trim());
     }
 

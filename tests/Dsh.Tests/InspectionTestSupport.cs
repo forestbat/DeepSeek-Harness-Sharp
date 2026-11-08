@@ -1,6 +1,5 @@
 ﻿using Dsh.Core;
 using Dsh.Llm;
-using Dsh.Plugins;
 using Dsh.Runtime;
 
 namespace Dsh.Tests;
@@ -55,49 +54,4 @@ internal sealed class InspectionTestAgent : IAgent
     public void Followup(UserMessage message) { }
     public void Steer(UserMessage message) { }
     public void Inject(UserMessage message) { }
-}
-
-internal sealed class RecordingPluginManager : IPluginManager
-{
-    public List<string> Calls { get; } = [];
-
-    public IReadOnlyList<string> PackageNames => ["sample-plugin"];
-
-    public IReadOnlyList<PluginSkip> LoadFailures => [];
-
-    public string Describe(string package)
-    {
-        Calls.Add($"describe:{package}");
-        return "active [compiled-in]";
-    }
-
-    public Task<string> AddAsync(string packageOrPath)
-    {
-        Calls.Add($"add:{packageOrPath}");
-        return Task.FromResult($"plugin {packageOrPath} activated");
-    }
-
-    public Task<string> RemoveAsync(string package, bool force = false)
-    {
-        Calls.Add($"remove:{package}:{force}");
-        return Task.FromResult($"plugin {package} removed");
-    }
-
-    public Task<string> DisableAsync(string package)
-    {
-        Calls.Add($"disable:{package}");
-        return Task.FromResult($"plugin {package} disabled");
-    }
-
-    public Task<string> EnableAsync(string package)
-    {
-        Calls.Add($"enable:{package}");
-        return Task.FromResult($"plugin {package} enabled");
-    }
-
-    public string SetPermission(string package, PluginPermission permission, bool allowed)
-    {
-        Calls.Add($"permission:{package}:{permission}:{allowed}");
-        return $"plugin {package} {permission} {allowed}";
-    }
 }

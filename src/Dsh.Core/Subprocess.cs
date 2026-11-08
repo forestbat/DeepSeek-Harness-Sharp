@@ -2,26 +2,13 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Dsh.Runtime;
+using Dsh.Transport;
 
 namespace Dsh.Core;
-
-public sealed record SubprocessCollect(int MaxBytes, int? SpillMaxBytes);
 
 public sealed record SubprocessOutputRead(string Text, long NextOffset, bool Lossy, string? SpillPath);
 
 public sealed record SubprocessOutcome(int? ExitCode, string? Signal);
-
-public sealed record SubprocessSpawnSpec
-{
-    public required IReadOnlyList<string> Argv { get; init; }
-    public required string Cwd { get; init; }
-    public IReadOnlyDictionary<string, string?>? Env { get; init; }
-    public SubprocessCollect Stdout { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
-    public SubprocessCollect Stderr { get; init; } = new(64 * 1024, 64 * 1024 * 1024);
-    /** 后台进程始终隔离终端; 只有管道协议调用方保留可写 stdin, 其余立即发送 EOF。 */
-    public bool KeepStandardInputOpen { get; init; }
-    public CancellationToken Signal { get; init; }
-}
 
 public sealed class SubprocessOutputReader
 {
@@ -139,17 +126,27 @@ internal sealed class StreamCollector : IDisposable
 
 public sealed class SubprocessHandle : IDisposable
 {
-    private readonly Process _process;
+    private readonly Process? _process;
+    private readonly OwnedProcess? _ownedProcess;
+    private readonly StreamWriter _stdin;
+    private readonly Stream _output;
+    private readonly Stream _error;
+    private readonly bool _protocolOutput;
+    private readonly string? _temporaryDirectory;
     private readonly StreamCollector _stdout;
     private readonly StreamCollector _stderr;
     private readonly CancellationTokenRegistration _abortRegistration;
     private int _terminateRequested;
+    private int _disposed;
 
     internal SubprocessHandle(Process process, StreamCollector stdout, StreamCollector stderr, CancellationToken signal)
     {
         _process = process;
         _stdout = stdout;
         _stderr = stderr;
+        _stdin = process.StandardInput;
+        _output = process.StandardOutput.BaseStream;
+        _error = process.StandardError.BaseStream;
         Pid = process.Id;
         StdoutReader = new SubprocessOutputReader(stdout);
         StderrReader = new SubprocessOutputReader(stderr);
@@ -158,13 +155,38 @@ public sealed class SubprocessHandle : IDisposable
             _abortRegistration = signal.Register(Terminate);
     }
 
+    internal SubprocessHandle(OwnedProcess process, StreamCollector stdout, StreamCollector stderr,
+        SubprocessSpawnSpec spec, string temporaryDirectory)
+    {
+        _ownedProcess = process;
+        _temporaryDirectory = temporaryDirectory;
+        // Match Process.StandardInput: interactive callers send complete commands without an explicit flush.
+        _stdin = new StreamWriter(process.StandardInput, new UTF8Encoding(false)) { AutoFlush = true };
+        _output = process.StandardOutput;
+        _error = process.StandardError;
+        _protocolOutput = spec.ProtocolOutput;
+        _stdout = stdout;
+        _stderr = stderr;
+        Pid = process.Id;
+        StdoutReader = new SubprocessOutputReader(stdout);
+        StderrReader = new SubprocessOutputReader(stderr);
+        Done = RunCompletion();
+        if (spec.Signal.CanBeCanceled)
+            _abortRegistration = spec.Signal.Register(Terminate);
+    }
+
     public int Pid { get; }
 
     public SubprocessOutputReader StdoutReader { get; }
 
     public SubprocessOutputReader StderrReader { get; }
 
-    public StreamWriter StandardInput => _process.StandardInput;
+    public StreamWriter StandardInput => _stdin;
+
+    /// <summary>Available only to an explicit protocol owner; collectors never consume this stream.</summary>
+    public Stream StandardOutput => _protocolOutput
+        ? _output
+        : throw new InvalidOperationException("subprocess: stdout belongs to the output collector");
 
     public Task<SubprocessOutcome> Done { get; }
 
@@ -173,7 +195,9 @@ public sealed class SubprocessHandle : IDisposable
         if (Interlocked.Exchange(ref _terminateRequested, 1) != 0) return;
         try
         {
-            if (!_process.HasExited)
+            if (_ownedProcess is not null)
+                _ownedProcess.Kill();
+            else if (_process is { HasExited: false })
                 _process.Kill(entireProcessTree: true);
         }
         catch (InvalidOperationException) { }
@@ -182,18 +206,34 @@ public sealed class SubprocessHandle : IDisposable
 
     private async Task<SubprocessOutcome> RunCompletion()
     {
-        var drainStdout = PumpAsync(_process.StandardOutput.BaseStream, _stdout);
-        var drainStderr = PumpAsync(_process.StandardError.BaseStream, _stderr);
-        await _process.WaitForExitAsync().ConfigureAwait(false);
-        await Task.WhenAll(drainStdout, drainStderr).ConfigureAwait(false);
-        _stdout.Finish();
-        _stderr.Finish();
-        var exitCode = _process.ExitCode;
-        if (_terminateRequested != 0)
-            return new SubprocessOutcome(null, "SIGKILL");
-        if (exitCode > 128 && !OperatingSystem.IsWindows())
-            return new SubprocessOutcome(null, SignalName(exitCode - 128));
-        return new SubprocessOutcome(exitCode, null);
+        var drainStdout = _protocolOutput ? Task.CompletedTask : PumpAsync(_output, _stdout);
+        var drainStderr = PumpAsync(_error, _stderr);
+        try
+        {
+            var exitCode = _ownedProcess is not null
+                ? await _ownedProcess.WaitForExitAsync().ConfigureAwait(false)
+                : await WaitForOperatorExitAsync().ConfigureAwait(false);
+            // WaitForExitAsync includes owned descendant teardown but leaves pipes open for draining.
+            await Task.WhenAll(drainStdout, drainStderr).ConfigureAwait(false);
+            if (_terminateRequested != 0)
+                return new SubprocessOutcome(null, "SIGKILL");
+            if (exitCode > 128 && !OperatingSystem.IsWindows())
+                return new SubprocessOutcome(null, SignalName(exitCode - 128));
+            return new SubprocessOutcome(exitCode, null);
+        }
+        finally
+        {
+            if (_ownedProcess is not null && !_protocolOutput)
+                await _ownedProcess.DisposeAsync().ConfigureAwait(false);
+            _stdout.Finish();
+            _stderr.Finish();
+        }
+    }
+
+    private async Task<int> WaitForOperatorExitAsync()
+    {
+        await _process!.WaitForExitAsync().ConfigureAwait(false);
+        return _process.ExitCode;
     }
 
     private static async Task PumpAsync(Stream stream, StreamCollector collector)
@@ -227,10 +267,34 @@ public sealed class SubprocessHandle : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         _abortRegistration.Dispose();
-        _process.Dispose();
-        _stdout.Dispose();
-        _stderr.Dispose();
+        if (!Done.IsCompleted)
+            Terminate();
+        try
+        {
+            Done.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            try
+            {
+                if (_ownedProcess is not null && _protocolOutput)
+                    _ownedProcess.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            finally
+            {
+                try { _stdin.Dispose(); }
+                catch (IOException) { }
+                catch (ObjectDisposedException) { }
+                _process?.Dispose();
+                _stdout.Dispose();
+                _stderr.Dispose();
+                if (_temporaryDirectory is not null)
+                    Directory.Delete(_temporaryDirectory, recursive: true);
+            }
+        }
     }
 }
 
@@ -238,6 +302,8 @@ public sealed class SubprocessService : Service, IDisposable
 {
     public const string ServiceName = "subprocess";
     public const string DshEnvPrefix = "DSH_";
+    public const string ScriptLauncherServiceName = "scriptProcessLauncher";
+    public const string ScriptPermissionsNotice = " scripts.permissions controls this executor's workspace read/write and network access while sandbox.enabled is ON; runtime inputs and private scratch are technical grants. Host-role plugins and other process tools are not constrained by these script permissions.";
 
     private static readonly Regex SensitiveEnvPattern = new("KEY|PASSWORD|SECRET|TOKEN", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly List<SubprocessHandle> _running = [];
@@ -287,9 +353,56 @@ public sealed class SubprocessService : Service, IDisposable
         }
         throw new FileNotFoundException($"subprocess: executable \"{command}\" not found on PATH");
     }
+    public Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec)
+        => Task.FromResult(SpawnDirect(spec));
 
-    public SubprocessHandle Spawn(SubprocessSpawnSpec spec)
+    public Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec)
     {
+        var launcher = Ctx.Get<Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>>(ScriptLauncherServiceName, false);
+        return launcher is not null ? launcher(this, spec) : SpawnAsync(spec);
+    }
+
+    public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec,
+        Func<SubprocessSpawnSpec, string, string, Task<OwnedProcess>> startAsync)
+    {
+        if (spec.Argv.Count == 0)
+            throw new ArgumentException("subprocess: argv must be non-empty");
+        spec.Signal.ThrowIfCancellationRequested();
+        IReadOnlyDictionary<string, string>? executableEnvironment = null;
+        if (spec.Env?.TryGetValue("PATH", out var searchPath) == true && searchPath is not null)
+            executableEnvironment = new Dictionary<string, string> { ["PATH"] = searchPath };
+        var executable = await ResolveExecutable(spec.Argv[0], executableEnvironment, spec.Signal).ConfigureAwait(false);
+        var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"dsh-process-{Guid.NewGuid():N}");
+        OwnerOnlyFiles.EnsureDirectory(temporaryDirectory);
+        OwnedProcess? process = null;
+        try
+        {
+            process = await startAsync(spec, executable, temporaryDirectory).ConfigureAwait(false);
+            var handle = new SubprocessHandle(process,
+                new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
+                new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),
+                spec, temporaryDirectory);
+            if (!spec.KeepStandardInputOpen)
+                handle.StandardInput.Close();
+            Track(handle);
+            return handle;
+        }
+        catch
+        {
+            if (process is not null)
+                await process.DisposeAsync().ConfigureAwait(false);
+            Directory.Delete(temporaryDirectory, recursive: true);
+            throw;
+        }
+    }
+
+
+    public SubprocessHandle Spawn(SubprocessSpawnSpec spec) => SpawnDirect(spec);
+
+    private SubprocessHandle SpawnDirect(SubprocessSpawnSpec spec)
+    {
+        if (spec.ProtocolOutput)
+            throw new InvalidOperationException("Protocol subprocesses require the owned model process boundary.");
         if (spec.Argv.Count == 0)
             throw new ArgumentException("subprocess: argv must be non-empty");
         spec.Signal.ThrowIfCancellationRequested();
@@ -324,12 +437,17 @@ public sealed class SubprocessService : Service, IDisposable
             new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
             new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),
             spec.Signal);
+        Track(handle);
+        return handle;
+    }
+
+    private void Track(SubprocessHandle handle)
+    {
         lock (_gate) _running.Add(handle);
         _ = handle.Done.ContinueWith(_ =>
         {
             lock (_gate) _running.Remove(handle);
         }, TaskContinuationOptions.ExecuteSynchronously);
-        return handle;
     }
 
     public void Dispose()
@@ -338,5 +456,7 @@ public sealed class SubprocessService : Service, IDisposable
         lock (_gate) running = [.. _running];
         foreach (var handle in running)
             handle.Terminate();
+        foreach (var handle in running)
+            handle.Dispose();
     }
 }

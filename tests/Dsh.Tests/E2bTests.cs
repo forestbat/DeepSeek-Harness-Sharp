@@ -71,7 +71,7 @@ public sealed class E2bTests
                         baseUrl: https://e2b.test
                     """);
                 var home = HarnessHome.Resolve(root);
-                using var app = await ConfigBoot.Compose(new HarnessOptions(home, root));
+                using var app = await ConfigBoot.Compose(new HarnessOptions(home, root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
                 var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
                 Assert.NotNull(tools.Get("e2b_run"));

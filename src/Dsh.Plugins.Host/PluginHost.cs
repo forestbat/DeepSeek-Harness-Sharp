@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 
 namespace Dsh.Plugins;
@@ -16,6 +17,8 @@ public sealed record PluginLoadResult(
     IReadOnlyList<string> SharedDependencies,
     PluginLoadContext? Context);
 
+public readonly record struct PluginCatalogLoadResult(IReadOnlyList<string> Packages, PluginScanResult Loaded);
+
 /** 托管插件的一次装载:包名、共享依赖声明、持有它的可回收加载上下文,以及装载来源目录 (仅在 per-plugin 布局下非空,供 remove 卸载)。 */
 public sealed record ManagedPlugin(
     string Package,
@@ -23,17 +26,65 @@ public sealed record ManagedPlugin(
     IReadOnlyList<string> SharedDependencies,
     string? InstallDirectory = null);
 
-public sealed class PluginHost
+public class PluginHost
 {
     public const string ManifestTypeName ="Dsh.Plugins.Generated.DshPluginManifest";
     private const string RegistrationsMethodName = "Registrations";
     private const string SharedDependenciesMethodName = "SharedDependencies";
-    private const string SharedPoolDirectoryName = ".shared";
+    public const string SharedPoolDirectoryName = ".shared";
 
     public PluginCatalog Catalog { get; } = new();
 
     /** 共享程序集池:由宿主在扫描前挂接,根目录为插件目录下的 .shared。 */
     public SharedAssemblyPool? SharedPool { get; set; }
+
+    public static string SharedPoolDirectory(string artifactPath, string? sharedRoot = null)
+    {
+        if (sharedRoot is not null)
+            return Path.Combine(sharedRoot, SharedPoolDirectoryName);
+        var directory = Path.GetDirectoryName(artifactPath)!;
+        var local = Path.Combine(directory, SharedPoolDirectoryName);
+        return Directory.Exists(local) ? local : Path.Combine(Path.GetDirectoryName(directory) ?? directory, SharedPoolDirectoryName);
+    }
+
+    public static PluginForm InspectForm(string? artifactPath)
+    {
+        if (artifactPath is null)
+            return PluginForm.CompiledIn;
+        artifactPath = global::Dsh.Runtime.CanonicalFilePath.Canonicalize(artifactPath);
+        global::Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(artifactPath, allowMissing: false);
+        if (!Path.GetExtension(artifactPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+            return PluginForm.NativeLibrary;
+        try
+        {
+            using var input = File.OpenRead(artifactPath);
+            using var image = new PEReader(input);
+            return image.HasMetadata ? PluginForm.ManagedAssembly : PluginForm.NativeLibrary;
+        }
+        catch (BadImageFormatException)
+        {
+            return PluginForm.NativeLibrary;
+        }
+    }
+
+    public virtual IReadOnlyList<PluginSkip> Failures
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual string? ArtifactPath(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual PluginForm? Form(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual IReadOnlyList<string> DomainPackages(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual bool IsFaulted(string package)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task RetireDomainAsync(string package, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<IReadOnlyList<string>> InspectPackagesAsync(string path, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<PluginCatalogLoadResult> LoadAsync(string path, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
+    public virtual Task<PluginScanResult> ScanAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This plugin host does not support isolated execution.");
 
     /** 镜像内插件:由生成目录在模块初始化时自注册。 */
     public void RegisterCompiledIn()
@@ -42,73 +93,91 @@ public sealed class PluginHost
             Catalog.Register(Descriptor(registration, PluginForm.CompiledIn), registration.Create);
     }
 
+    public void Release(PluginScanResult loaded)
+    {
+        foreach (var managed in loaded.Managed)
+            Catalog.Remove(managed.Package);
+        foreach (var native in loaded.Native)
+        {
+            Catalog.Remove(native.Package);
+            native.Dispose();
+        }
+        var contexts = new HashSet<PluginLoadContext>();
+        foreach (var managed in loaded.Managed)
+            if (contexts.Add(managed.Context))
+            {
+                SharedPool?.Release(managed.SharedDependencies);
+                managed.Context.Unload();
+            }
+    }
+
     /** 从文件装载托管插件:按类型名读取插件自带的生成清单,不反射遍历插件类型。 */
     public PluginLoadResult TryLoad(string path)
     {
         var fullPath = Path.GetFullPath(path);
         var context = new PluginLoadContext(fullPath);
-        Assembly assembly;
+        IReadOnlyList<string> sharedDependencies = [];
+        var referencesAdded = false;
+        var retained = false;
         try
         {
-            assembly = context.LoadFromAssemblyPath(fullPath);
-        }
-        catch
-        {
-            context.Unload();
-            throw;
-        }
-        var registrations = ReadManifest(assembly, out var failure);
-        if (failure is not null)
-        {
-            context.Unload();
-            return new PluginLoadResult([], [new PluginSkip(fullPath, failure)], [], null);
-        }
-        if (registrations.Count == 0)
-        {
-            context.Unload();
-            // 宿主镜像程序集的私有副本不随插件打包:没有清单且名字已在镜像里,显式提示删除。
-            if (HostImageNames().Contains(Path.GetFileNameWithoutExtension(fullPath)))
-                return new PluginLoadResult([], [new PluginSkip(fullPath, "该程序集随宿主镜像分发,不随插件打包;请从插件目录删除")], [], null);
-            return new PluginLoadResult([], [], [], null);
-        }
-        var sharedDependencies = ReadSharedDependencies(assembly);
-        context.ConfigureShared(SharedPool, sharedDependencies);
-        SharedPool?.AddReferences(sharedDependencies);
-        var packages = new List<string>();
-        var skipped = new List<PluginSkip>();
-        foreach (var registration in registrations)
-        {
-            if (registration.DescriptorVersion != PluginDescriptor.CurrentVersion)
+            var assembly = context.LoadFromAssemblyPath(fullPath);
+            var registrations = ReadManifest(assembly, out var failure);
+            if (failure is not null)
+                return new PluginLoadResult([], [new PluginSkip(fullPath, failure)], [], null);
+            if (registrations.Count == 0)
             {
-                skipped.Add(new PluginSkip(fullPath,
-                    $"插件描述符版本 {registration.DescriptorVersion} 与宿主 {PluginDescriptor.CurrentVersion} 不兼容"));
-                continue;
+                // Host image assemblies are not plugin-private dependencies.
+                if (HostImageNames().Contains(Path.GetFileNameWithoutExtension(fullPath)))
+                    return new PluginLoadResult([], [new PluginSkip(fullPath, "该程序集随宿主镜像分发,不随插件打包;请从插件目录删除")], [], null);
+                return new PluginLoadResult([], [], [], null);
             }
-            try
+            sharedDependencies = ReadSharedDependencies(assembly);
+            context.ConfigureShared(SharedPool, sharedDependencies);
+            SharedPool?.AddReferences(sharedDependencies);
+            referencesAdded = true;
+            var packages = new List<string>();
+            var skipped = new List<PluginSkip>();
+            foreach (var registration in registrations)
             {
-                Catalog.Register(Descriptor(registration, PluginForm.ManagedAssembly), registration.Create);
+                if (registration.DescriptorVersion != PluginDescriptor.CurrentVersion)
+                {
+                    skipped.Add(new PluginSkip(fullPath,
+                        $"插件描述符版本 {registration.DescriptorVersion} 与宿主 {PluginDescriptor.CurrentVersion} 不兼容"));
+                    continue;
+                }
+                try
+                {
+                    Catalog.Register(Descriptor(registration, PluginForm.ManagedAssembly), registration.Create);
+                }
+                catch (InvalidOperationException) when (Catalog.TryDescribe(registration.Package, out var existing)
+                    && existing.Form == PluginForm.CompiledIn)
+                {
+                    // File artifacts can replace compiled-in registrations, but not another file artifact.
+                    Catalog.Remove(registration.Package);
+                    Catalog.Register(Descriptor(registration, PluginForm.ManagedAssembly), registration.Create);
+                }
+                catch (InvalidOperationException error)
+                {
+                    skipped.Add(new PluginSkip(fullPath, error.Message));
+                    continue;
+                }
+                packages.Add(registration.Package);
             }
-            catch (InvalidOperationException) when (Catalog.TryDescribe(registration.Package, out var existing)
-                && existing.Form == PluginForm.CompiledIn)
-            {
-                // 文件形态可替换 compiled-in 登记:镜像内插件的热修复通道;其余重复一律拒绝。
-                Catalog.Remove(registration.Package);
-                Catalog.Register(Descriptor(registration, PluginForm.ManagedAssembly), registration.Create);
-            }
-            catch (InvalidOperationException error)
-            {
-                skipped.Add(new PluginSkip(fullPath, error.Message));
-                continue;
-            }
-            packages.Add(registration.Package);
+            if (packages.Count == 0)
+                return new PluginLoadResult(packages, skipped, sharedDependencies, null);
+            retained = true;
+            return new PluginLoadResult(packages, skipped, sharedDependencies, context);
         }
-        if (packages.Count == 0)
+        finally
         {
-            SharedPool?.Release(sharedDependencies);
-            context.Unload();
-            return new PluginLoadResult(packages, skipped, sharedDependencies, null);
+            if (!retained)
+            {
+                if (referencesAdded)
+                    SharedPool?.Release(sharedDependencies);
+                context.Unload();
+            }
         }
-        return new PluginLoadResult(packages, skipped, sharedDependencies, context);
     }
 
     /** 统一扫描插件目录:每插件一个子目录(兼容期仍读平铺并 WARN);托管进可回收上下文,原生库经 nativeBridge 登记。 */

@@ -13,7 +13,7 @@ public static class TuiProxy
     public static async Task<int> RunAsync(HarnessApp app, bool startShell, bool gpu = false, string? gpuCard = null, string? resumeSessionId = null)
     {
         await PtyDaemonClient.EnsureRunningAsync();
-        var (columns, rows) = ConsoleSize();
+        var (columns, rows) = ConsoleTunnel.ReadSize() ?? (80, 24);
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("failed to resolve the current executable to start the resident TUI session");
         var arguments = new List<string>();
@@ -42,8 +42,7 @@ public static class TuiProxy
             // 终端形态: 接管本终端, 输出即会话画面, 输入原样进会话; 常驻会话发 detach 标记或退出时本进程就结束。
             try
             {
-                await PtyDaemonClient.AttachConsoleAsync(
-                    session.Id, Console.OpenStandardOutput(), CancellationToken.None);
+                await PtyDaemonClient.AttachConsoleAsync(session.Id, Console.OpenStandardOutput(), CancellationToken.None);
             }
             catch (InvalidOperationException)
             {
@@ -127,21 +126,5 @@ public static class TuiProxy
         if (startShell)
             arguments.Add("--shell");
         return arguments;
-    }
-
-    private static (int Columns, int Rows) ConsoleSize()
-    {
-        try
-        {
-            return (Math.Max(20, Console.WindowWidth), Math.Max(4, Console.WindowHeight));
-        }
-        catch (IOException)
-        {
-            return (80, 24);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return (80, 24);
-        }
     }
 }

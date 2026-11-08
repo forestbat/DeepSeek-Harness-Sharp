@@ -405,7 +405,7 @@ internal sealed class TestSshServer : IAsyncDisposable
 
     private string ClientKey => Path.Combine(Root, "client_key");
 
-    public static async Task<TestSshServer> StartAsync(CancellationToken cancellationToken)
+    public static async Task<TestSshServer> StartAsync(CancellationToken cancellationToken, bool allowTcpForwarding = true)
     {
         var root = TempTree.CreateDirectory("sshd");
         Directory.CreateDirectory(Path.Combine(root, "home"));
@@ -414,7 +414,7 @@ internal sealed class TestSshServer : IAsyncDisposable
         File.Copy(Path.Combine(root, "client_key.pub"), Path.Combine(root, "authorized_keys"));
         var port = FreePort();
         var config = Path.Combine(root, "sshd_config");
-        await File.WriteAllTextAsync(config, Config(root, port), cancellationToken);
+        await File.WriteAllTextAsync(config, Config(root, port, allowTcpForwarding), cancellationToken);
         var process = TestProcessScope.Start(new ProcessStartInfo("/usr/sbin/sshd", ["-D", "-e", "-f", config])
         {
             UseShellExecute = false,
@@ -476,7 +476,7 @@ internal sealed class TestSshServer : IAsyncDisposable
         TempTree.Delete(Root);
     }
 
-    private static string Config(string root, int port) => $"""
+    private static string Config(string root, int port, bool allowTcpForwarding) => $"""
         Port {port}
         ListenAddress 127.0.0.1
         HostKey {Path.Combine(root, "host_key")}
@@ -487,6 +487,7 @@ internal sealed class TestSshServer : IAsyncDisposable
         PasswordAuthentication no
         KbdInteractiveAuthentication no
         PubkeyAuthentication yes
+        AllowTcpForwarding {(allowTcpForwarding ? "yes" : "no")}
         Subsystem sftp {SftpServer}
         SetEnv HOME={Path.Combine(root, "home")} DOTNET_ROOT={DotnetRoot}
         ForceCommand cd "$HOME" && PATH={RemoteShell.Quote(Environment.GetEnvironmentVariable("PATH") ?? "")} exec "$SHELL" -c "$SSH_ORIGINAL_COMMAND"

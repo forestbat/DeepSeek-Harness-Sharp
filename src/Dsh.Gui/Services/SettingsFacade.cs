@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Workspace;
 using Dsh.Runtime;
 
@@ -29,13 +30,14 @@ public sealed class SettingsFacade(Context ctx, HarnessHome home, FleetWorkspace
         return settings;
     }
 
-    public void UpdateSafety(bool autoApprove, IReadOnlyList<string> blacklist)
+    public void UpdateSafety(bool autoApprove, IReadOnlyList<string> blacklist, IReadOnlyList<string> whitelist)
     {
         var settings = Load();
         settings.Safety = new SafetySettings
         {
             AutoApprove = autoApprove,
             Blacklist = [.. blacklist],
+            Whitelist = [.. whitelist],
         };
         settings.Save(home);
         Changed?.Invoke();

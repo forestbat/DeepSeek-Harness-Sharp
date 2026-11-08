@@ -19,7 +19,7 @@ public sealed class SessionResumeTests
             var homePath = PrepareHome(directory);
             var sessionId = SessionId.Create($"session-{Guid.NewGuid()}");
             int eventCount;
-            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
+            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
             {
                 var agent = await CreateSessionAsync(app, sessionId, directory);
                 agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("hello")), new SurfaceOp.Append());
@@ -27,7 +27,7 @@ public sealed class SessionResumeTests
                 await app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(agent.Session);
             }
 
-            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
+            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
             {
                 var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                 var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);
@@ -69,7 +69,7 @@ public sealed class SessionResumeTests
             var homePath = PrepareHome(directory);
             var sessionId = SessionId.Create($"session-{Guid.NewGuid()}");
             int eventCount;
-            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
+            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
             {
                 var agent = await CreateSessionAsync(app, sessionId, directory);
                 agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("hello")), new SurfaceOp.Append());
@@ -78,7 +78,7 @@ public sealed class SessionResumeTests
                 await app.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(agent.Session);
             }
 
-            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory)))
+            using (var app = await ConfigBoot.Compose(new HarnessOptions(HarnessHome.Resolve(homePath), directory), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
             {
                 var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                 var handle = await agents.Resume(new ResumeAgentOptions(sessionId, new AgentOptions("test", "test-model")), TestContext.Current.CancellationToken);

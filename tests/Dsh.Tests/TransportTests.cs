@@ -322,6 +322,28 @@ public sealed class JsonRpcPeerTests
         Assert.True(after!.Value.GetProperty("ok").GetBoolean());
     }
 
+    [Fact]
+    public async Task OversizedLocalRequestOrNotification_IsRejectedBeforeWriting_AndKeepsTheConnection()
+    {
+        await using var fixture = await DuplexFixture.CreateAsync(Ct, maxFrameBytes: 256 * 1024);
+        var calls = 0;
+        fixture.Client.RequestHandler = (_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return ValueTask.FromResult<JsonElement?>(Parse("""{"ok":true}"""));
+        };
+        var large = Parse($"\"{new string('x', 512 * 1024)}\"");
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => fixture.Server.RequestAsync("large", large, Ct));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => fixture.Server.NotifyAsync("large", large, Ct));
+        var after = await fixture.Server.RequestAsync("ping", cancellationToken: Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        Assert.True(after!.Value.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, Volatile.Read(ref calls));
+        Assert.False(fixture.Server.IsClosed);
+        Assert.False(fixture.Client.IsClosed);
+    }
+
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     /** 一对经 TCP loopback 相连的 peer, 保证真实双工流(非同进程回调)。 */

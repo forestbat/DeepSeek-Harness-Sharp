@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dsh.Plugins;
 using Dsh.Plugins.Native;
 
 namespace Dsh.NativePluginSample;
@@ -24,10 +25,28 @@ public sealed class SamplePlugin : IDshNativePlugin
         }
         """;
 
+    private const string ReadSchema = """
+        {"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"count":{"type":"integer","minimum":0}},"additionalProperties":false}
+        """;
+    private const string WriteSchema = """
+        {"type":"object","required":["path","data"],"properties":{"path":{"type":"string"},"data":{"type":"string"},"append":{"type":"boolean"}},"additionalProperties":false}
+        """;
+    private const string HttpSchema = """
+        {"type":"object","required":["url"],"properties":{"url":{"type":"string"},"method":{"type":"string"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{"type":"string"}},"additionalProperties":false}
+        """;
+
     private static readonly NativePluginTool[] RegisteredTools =
     [
         new("native_echo", "Echo the given message back (native ABI sample).", EchoSchema, Echo),
         new("native_length", "Return the length of the given message (native ABI sample).", LengthSchema, Length),
+        new("native_read_file", "Read a bounded file chunk through the host capability.", ReadSchema,
+            input => DshNativePluginRuntime.CallHost(PluginHostOperations.ReadFile, input)),
+        new("native_write_file", "Write base64 bytes through the host capability.", WriteSchema,
+            input => DshNativePluginRuntime.CallHost(PluginHostOperations.WriteFile, input)),
+        new("native_http", "Send HTTP through the host network capability.", HttpSchema,
+            input => DshNativePluginRuntime.CallHost(PluginHostOperations.SendHttp, input)),
+        new("native_config", "Return this activation's JSON configuration and owning PID namespace.", """{"type":"object","additionalProperties":false}""",
+            _ => new JsonObject { ["config"] = DshNativePluginRuntime.Config, ["pidNamespace"] = OperatingSystem.IsLinux() ? new FileInfo("/proc/self/ns/pid").LinkTarget : null }.ToJsonString()),
     ];
 
     public string Package => "sample.native-echo";

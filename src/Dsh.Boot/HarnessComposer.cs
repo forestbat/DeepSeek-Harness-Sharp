@@ -96,7 +96,7 @@ public sealed class HarnessApp : IDisposable
 
 public static class HarnessComposer
 {
-    public static async Task<HarnessApp> Compose(HarnessOptions options)
-        => await ConfigBoot.Compose(options);
+    public static async Task<HarnessApp> Compose(HarnessOptions options, PluginRuntimeFactory? runtimeFactory = null)
+        => await ConfigBoot.Compose(options, runtimeFactory);
 }
 

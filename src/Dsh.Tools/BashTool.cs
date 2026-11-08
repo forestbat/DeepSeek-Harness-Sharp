@@ -171,7 +171,7 @@ public static class BashTool
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeoutSignal.Token);
         timeoutSignal.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
         var launch = dialect.Launch(command, args, envs);
-        var handle = subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = launch.Argv,
             Cwd = workdir,

@@ -63,7 +63,7 @@ public static class SettingsSchemaCatalog
                         builder.Append("# ").Append(pad).AppendLine(text);
             builder.Append("# ").Append(pad).Append(spec.Key).Append(':');
             if (spec.Kind is not (PluginSettingKind.List or PluginSettingKind.Mapping)
-                && spec.DefaultLiteral is { Length: > 0 } literal && IsLiteral(literal))
+                && PublicDefault(spec) is { Length: > 0 } literal && IsLiteral(literal))
                 builder.Append(' ').Append(literal.Replace("\n", " ").Replace("\r", ""));
             else if (spec.Kind == PluginSettingKind.List)
                 builder.Append(" []");
@@ -73,6 +73,17 @@ public static class SettingsSchemaCatalog
             if (spec.Children is { Count: > 0 } children)
                 RenderSpecs(children, path, indent + 2, preserved, builder);
         }
+    }
+
+    private static string? PublicDefault(PluginSettingSpec spec)
+        => IsSensitiveKey(spec.Key) ? null : spec.DefaultLiteral;
+
+    private static bool IsSensitiveKey(string key)
+    {
+        var name = key.Replace("_", "").Replace("-", "").ToLowerInvariant();
+        return name.Contains("password") || name.Contains("secret") || name.Contains("token")
+            || name.Contains("apikey") || name.Contains("accesskey") || name.Contains("connectionstring")
+            || name is "key" or "authorization" or "credential" or "credentials" or "privatekey" or "cookie" or "setcookie";
     }
 
     private static bool IsLiteral(string literal)
@@ -120,7 +131,7 @@ public static class SettingsSchemaCatalog
         {
             builder.Append("| ").Append(provider.Package).Append(" | ").Append(prefix).Append(spec.Key)
                 .Append(" | ").Append(spec.Kind)
-                .Append(" | ").Append(spec.DefaultLiteral ?? "").AppendLine(" |");
+                .Append(" | ").Append(PublicDefault(spec) ?? "").AppendLine(" |");
             if (spec.Children is { Count: > 0 } children)
                 AppendMarkdown(provider, children, prefix + spec.Key + ".", builder);
         }
@@ -130,8 +141,8 @@ public static class SettingsSchemaCatalog
     {
         var builder = new StringBuilder();
         builder.Append($"{{\"key\":{Quote(spec.Key)},\"kind\":\"{spec.Kind}\"");
-        if (spec.DefaultLiteral is not null)
-            builder.Append($",\"default\":{Quote(spec.DefaultLiteral)}");
+        if (PublicDefault(spec) is { } literal)
+            builder.Append($",\"default\":{Quote(literal)}");
         if (spec.Description is not null)
             builder.Append($",\"description\":{Quote(spec.Description)}");
         if (spec.Children is { Count: > 0 } children)

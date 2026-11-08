@@ -21,7 +21,7 @@ description: "通过 interactive.yml 在 GitHub 托管的 Windows、macOS 或 Li
 ## 开会话
 
 ```bash
-bash .agent/skills/interactive-ssh/scripts/open-session.sh \
+bash .agents/skills/interactive-ssh/scripts/open-session.sh \
   --repo <owner>/<repo> --key <私钥路径> --os windows-latest --ref <分支或SHA> --timeout 60
 ```
 

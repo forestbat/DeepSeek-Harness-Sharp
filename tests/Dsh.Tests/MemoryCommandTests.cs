@@ -3,7 +3,6 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Memory;
-using Dsh.Plugins;
 
 namespace Dsh.Tests;
 
@@ -232,35 +231,6 @@ public sealed class MemoryCommandTests
         {
             Directory.Delete(root, true);
         }
-    }
-
-    private sealed class FakePluginManager : IPluginManager
-    {
-        public List<string> Calls { get; } = [];
-
-        public IReadOnlyList<string> PackageNames => [];
-
-        public IReadOnlyList<PluginSkip> LoadFailures => [];
-
-        public string Describe(string package) => "unknown";
-
-        public Task<string> AddAsync(string packageOrPath) => Task.FromResult("");
-
-        public Task<string> RemoveAsync(string package, bool force = false) => Task.FromResult("");
-
-        public Task<string> DisableAsync(string package)
-        {
-            Calls.Add($"disable:{package}");
-            return Task.FromResult("disabled");
-        }
-
-        public Task<string> EnableAsync(string package)
-        {
-            Calls.Add($"enable:{package}");
-            return Task.FromResult("enabled");
-        }
-
-        public string SetPermission(string package, PluginPermission permission, bool allowed) => "";
     }
 
     private sealed class FakeAgent : IAgent

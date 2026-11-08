@@ -31,9 +31,10 @@ public static class ToolRunCSharpRepl
             Description = "Evaluate C# using the independently installed CSharpRepl frontend and return stdout, stderr and the final expression. "
                 + "Submit one complete multiline C# script; declarations and state are shared within that program, not between calls. "
                 + "The process receives the program through redirected stdin followed by EOF, without an interactive prompt. "
-                + "This is ordinary local code execution, not a sandbox or the run_code tool SDK. "
+                + "This uses the ordinary CSharpRepl frontend, not the run_code tool SDK. "
                 + "Compilation and runtime failures are reported as tool errors with the frontend's output. "
-                + "CSharpRepl must already be installed; it is never downloaded automatically.",
+                + "CSharpRepl must already be installed; it is never downloaded automatically."
+                + SubprocessService.ScriptPermissionsNotice,
             Parameters = JsonNode.Parse("""
                 {
                   "type": "object",
@@ -111,12 +112,13 @@ public static class ToolRunCSharpRepl
         using var status = new CSharpReplExitStatus();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var fused = CancellationTokenSource.CreateLinkedTokenSource(exec.Signal, timeout.Token);
-        using var handle = subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
         {
             Argv = [executable, status.PreloadPath],
             Cwd = workdir,
             KeepStandardInputOpen = true,
             Signal = fused.Token,
+            AdditionalWritablePaths = [Path.GetDirectoryName(status.PreloadPath)!],
         });
         try
         {

@@ -21,7 +21,8 @@ internal static class HostStdio
             return 0;
         }
 
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false)).ConfigureAwait(false);
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime).ConfigureAwait(false);
         if (app.Ctx.Get<LspServer>(LspServer.ServiceName, false) is not { } server)
         {
             await Console.Error.WriteLineAsync("dsharp: LSP capability is not active; enable @deepseek-ai/dsh-lsp.");

@@ -130,7 +130,7 @@ public static class WorktreeTool
 
     private static async Task<string> Git(SubprocessService subprocess, string repository, IReadOnlyList<string> arguments, CancellationToken signal)
     {
-        using var handle = subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = ["git", .. arguments],
             Cwd = repository,

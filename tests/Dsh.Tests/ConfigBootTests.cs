@@ -35,7 +35,7 @@ public class ConfigBootTests
                     maxOutputChars: 16000
                 """, TestContext.Current.CancellationToken);
 
-            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
             var missing = new[] { "bash", "read", "write", "edit", "glob", "grep", "todo_write", "str_replace_editor" }
@@ -80,7 +80,7 @@ public class ConfigBootTests
                   "@deepseek-ai/dsh-tool-todo": false
                 """, TestContext.Current.CancellationToken);
 
-            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-tool-todo"));
             var tools = app.Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
@@ -119,7 +119,7 @@ public class ConfigBootTests
                   "@deepseek-ai/dsh-core": true
                 """, TestContext.Current.CancellationToken);
 
-            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir));
+            app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: dir), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
             Assert.Equal(Path.GetFullPath(target), app.Home.Root);
             Assert.Equal(Path.GetFullPath(target), (string)app.Ctx.GetProp("dshHomePath")!);

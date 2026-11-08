@@ -16,6 +16,8 @@ public sealed class HarnessSessionActivityTests
         var created = await client.CreateSessionAsync(host.Environment.App.Home.Root, Ct);
         var agent = RemoteHostMultiClientTests.Agent(host, created.Id);
         var registry = host.Backend.Sessions;
+        // A historical activity time distinguishes real updates even when events share one wall-clock millisecond.
+        registry.Register(created with { LastActivityAt = DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds() });
         var start = registry.Get(created.Id)!.LastActivityAt;
 
         // 模型输出与工具调用: 会话在"工作", 但不是"被用户使用"。

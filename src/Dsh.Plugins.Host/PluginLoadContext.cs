@@ -17,6 +17,7 @@ public sealed class PluginLoadContext : AssemblyLoadContext
         _resolver = new AssemblyDependencyResolver(pluginPath);
     }
 
+
     /** 清单读出后调用:声明共享的依赖名进共享池解析,其余维持目录私有。 */
     internal void ConfigureShared(SharedAssemblyPool? pool, IEnumerable<string> sharedNames)
     {
@@ -29,9 +30,9 @@ public sealed class PluginLoadContext : AssemblyLoadContext
         var name = assemblyName.Name;
         if (name is null)
             return null;
-        // 宿主镜像(框架与 compiled-in 模块)自带即绑定 Default:返回 null 交给默认回退。
-        if (TryHostResolve(assemblyName))
-            return null;
+        // Host contracts keep their Default identity.
+        if (ResolveHostAssembly(assemblyName) is { } host)
+            return host;
         if (_pool is not null && _sharedNames.Contains(name))
             return _pool.ResolveOrLoad(assemblyName, () => _resolver.ResolveAssemblyToPath(assemblyName));
         var path = _resolver.ResolveAssemblyToPath(assemblyName);
@@ -44,15 +45,16 @@ public sealed class PluginLoadContext : AssemblyLoadContext
         return path is null ? IntPtr.Zero : LoadUnmanagedDllFromPath(path);
     }
 
-    private static bool TryHostResolve(AssemblyName assemblyName)
+    internal static Assembly? ResolveHostAssembly(AssemblyName assemblyName)
     {
         try
         {
-            return Default.LoadFromAssemblyName(assemblyName) is not null;
+            return Default.LoadFromAssemblyName(assemblyName);
         }
-        catch (Exception)
+        catch (FileNotFoundException)
         {
-            return false;
+            return null;
         }
     }
+
 }

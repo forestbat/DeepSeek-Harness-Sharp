@@ -16,11 +16,11 @@ public interface IOutboundTransportLifetime
 internal sealed class OutboundHttpHandler(
     OutboundProxy proxy,
     bool allowAutoRedirect,
-    DecompressionMethods automaticDecompression) : HttpMessageHandler
+    DecompressionMethods automaticDecompression, bool useCookies) : HttpMessageHandler
 {
     private readonly object _gate = new();
     private readonly Dictionary<(long Generation, Uri? Endpoint), Pool> _pools = [];
-    private readonly CookieContainer _cookies = new();
+    private readonly CookieContainer? _cookies = useCookies ? new CookieContainer() : null;
     private bool _disposed;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

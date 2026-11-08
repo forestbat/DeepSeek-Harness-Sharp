@@ -239,6 +239,7 @@ public sealed class TerminalSessionService : Service
         public required Action<Exception?> Release { get; init; }
     }
 
+
     private void AssertActive()
     {
         if (_disposing)
