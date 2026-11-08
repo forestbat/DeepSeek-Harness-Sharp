@@ -52,7 +52,6 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 ### 设置变更审批
 
 模型通过文件工具或 `plugin_manager` 修改活动 `settings.yaml` 时，统一进入设置变更审批。
-审批显示规范化目标、脱敏差异及前后哈希，审计记录调用、决策和提交结果，不保存完整文档快照。
 脱敏只识别常见凭据字段和令牌格式，自定义秘密名称或格式仍需自行检查。
 审批后若文档已改变就拒绝提交，不覆盖并发编辑；设置更新原子发布，文件工具写入失败或取消时保留原文件。
 白名单和 `autoApprove` 可以自动批准，但不会跳过真实差异、审计或会话 `never`；缺少设置审批所需的服务或会话时拒绝操作。
