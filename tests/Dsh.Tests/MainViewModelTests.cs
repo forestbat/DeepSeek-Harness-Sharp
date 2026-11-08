@@ -176,6 +176,27 @@ public sealed class MainViewModelTests
             () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1);
         Assert.Equal(["keep me"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
     });
+    /** 分叉要经 host 的 /timestamp 命令真的落盘, 并且分叉出的会话能直接打开(不是让用户自己去翻列表)。 */
+    [Fact]
+    public async Task ForkAtMessage_CreatesASessionAndOpensIt() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("first")), new SurfaceOp.Append());
+        var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("second")), new SurfaceOp.Append());
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("third")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
+        var message = Assert.Single(viewModel.Messages, item => item.Seq == target.Seq);
+
+        await viewModel.ForkAtMessageCommand.ExecuteAsync(message);
+
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } node && node.SessionId.Value != session.Id.Value);
+        Assert.Contains($"fork of {session.Id}", viewModel.SelectedSession!.Title, StringComparison.Ordinal);
+    });
+
     [Fact]
     public async Task Sessions_GroupedByWorkspace_AndMarkCurrentSessionSelected() => await HeadlessGui.RunAsync(async () =>
     {

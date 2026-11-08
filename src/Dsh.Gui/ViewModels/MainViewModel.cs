@@ -898,7 +898,24 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             await _chat.ReloadAsync(forceReset: true);
             return;
         }
+        // 分叉出的会话只写在磁盘上, host 的会话表里还没有它: 丢掉磁盘快照缓存才看得见,
+        // 看见之后直接打开它, 否则用户分叉完还得自己去侧栏找。
+        _catalog.InvalidateDiskCache();
         RefreshSessions();
+        if (ForkedSessionId(output) is { } forked && FindSession(SessionId.Create(forked)) is { } node)
+            SelectedSession = node;
+    }
+
+    /** 分叉命令的结果形如 "forked -> <sessionId>: use /resume ..."; 取出新会话 id 用来打开它。 */
+    private static string? ForkedSessionId(string output)
+    {
+        const string marker = "forked -> ";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+        var rest = output[(start + marker.Length)..];
+        var end = rest.IndexOfAny([' ', '\r', '\n', ':']);
+        return end < 0 ? rest : rest[..end];
     }
 
     [RelayCommand]
