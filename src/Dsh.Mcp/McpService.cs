@@ -156,8 +156,7 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
                 });
             var subprocess = Ctx.Get<SubprocessService>(SubprocessService.ServiceName, false)
                 ?? throw new InvalidOperationException("Owned MCP stdio requires the subprocess service.");
-            SafetyBoundary.Resolve(Ctx)?.AuthorizeOperationAsync(null, signal, server.Name,
-                configuredLifecycle: true).GetAwaiter().GetResult();
+            SafetyBoundary.Resolve(Ctx)?.AuthorizeConfiguredLifecycle(SafetyBoundary.SafetyNamespace, server.Name, signal);
             return new OwnedStdioClientTransport(subprocess, server, workingDirectory ?? Environment.CurrentDirectory, home.SettingsFile);
         }
 

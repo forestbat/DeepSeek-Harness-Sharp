@@ -129,8 +129,10 @@ public sealed class ToolRunContext : ToolExecution
     internal Dsh.Runtime.Context? HostContext { get; init; }
     public string? SafetyApprovalRevision { get; set; }
     public bool UsesScriptPermissions { get; internal set; }
+    public string PermissionNamespace => UsesScriptPermissions ? SafetyBoundary.ScriptsNamespace : SafetyBoundary.SafetyNamespace;
     private readonly HashSet<(string Revision, string Path, string Intent)> _fileApprovals = [];
-    public bool HasFileApproval(string revision, string path, string intent) => _fileApprovals.Contains((revision, path, intent));
+    public bool HasFileApproval(string revision, string path, string intent)
+        => SafetyApprovalRevision == revision || _fileApprovals.Contains((revision, path, intent));
     public void RememberFileApproval(string revision, string path, string intent) => _fileApprovals.Add((revision, path, intent));
 
     public async Task<bool> CommitAsync(string path,
@@ -141,7 +143,7 @@ public sealed class ToolRunContext : ToolExecution
         if (!gate.Owns(path))
             throw new InvalidOperationException("The mutation does not target the active settings document.");
         var canonical = gate.SettingsPath;
-        await SafetyFileAccess.AuthorizeAsync(canonical, "read", this, Signal, settingsReview: true).ConfigureAwait(false);
+        await SafetyFileAccess.AuthorizeAsync(canonical, "read", this, Signal, new SettingsApproval()).ConfigureAwait(false);
         if (prepare(canonical) is not { } proposal)
             return false;
         await gate.CommitAsync(new(canonical, proposal.Before, proposal.After, this),

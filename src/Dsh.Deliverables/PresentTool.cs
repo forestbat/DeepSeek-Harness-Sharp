@@ -106,23 +106,23 @@ public static class PresentTool
         return new PresentedFile(target, string.IsNullOrEmpty(description) ? null : description);
     }
 
-    private static async ValueTask<IReadOnlyList<ContentBlock>?> PublishAsync(ToolExecution execution, ToolExecutionResult result,
+    private static ValueTask<IReadOnlyList<ContentBlock>?> PublishAsync(ToolExecution execution, ToolExecutionResult result,
         ConditionalWeakTable<ToolExecution, Staged> staged)
     {
-        if (!staged.TryGetValue(execution, out var delivery)) return null;
+        if (!staged.TryGetValue(execution, out var delivery)) return default;
         staged.Remove(execution);
-        if (result.IsError) return null;
+        if (result.IsError) return default;
         execution.Signal.ThrowIfCancellationRequested();
         for (var index = 0; index < delivery.Files.Count; index++)
         {
             var path = delivery.Files[index].Path;
             if (SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx) is { } safety)
-                await safety.AuthorizeFileAsync(delivery.Run, path, "read", execution.Signal, canApprove: false).ConfigureAwait(false);
+                safety.RevalidateFile(delivery.Run.PermissionNamespace, delivery.Run, path, "read", execution.Signal);
             Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         }
         execution.Signal.ThrowIfCancellationRequested();
         delivery.Session.Append(new DeliverablesPresentedPayload(delivery.Turn, execution.CallId, delivery.Files));
-        return null;
+        return default;
     }
 
     private static string Rendered(JsonElement value)

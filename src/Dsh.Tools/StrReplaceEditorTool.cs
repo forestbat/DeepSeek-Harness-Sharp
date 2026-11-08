@@ -270,7 +270,7 @@ public static class StrReplaceEditorTool
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settingsReview: true).ConfigureAwait(false);
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var offsets = MatchOffsets(before, oldValue);
         if (offsets.Count == 0)
             throw new HarnessException($"No replacement was performed, old_str `{oldValue}` did not appear verbatim in {target}.", "FS_EDIT_NOT_FOUND");
@@ -293,7 +293,7 @@ public static class StrReplaceEditorTool
         var target = ResolveTarget(path);
         StatExisting(target, "insert");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settingsReview: true).ConfigureAwait(false);
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var lines = before.Split('\n');
         if (insertLine.Value < 0 || insertLine.Value > lines.Length)
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");

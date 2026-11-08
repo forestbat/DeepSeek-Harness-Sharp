@@ -38,7 +38,7 @@ public static class SettingsMutation
             if (before is null)
             {
                 before = File.Exists(path)
-                    ? await SafetyFileAccess.ReadTextAsync(path, run, token, settingsReview: true).ConfigureAwait(false)
+                    ? await SafetyFileAccess.ReadTextAsync(path, run, token, settings: new SettingsApproval()).ConfigureAwait(false)
                     : "";
                 if (mode == FileMode.Append) after = $"{before}{after}";
             }

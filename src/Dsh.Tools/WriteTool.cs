@@ -94,7 +94,7 @@ public static class WriteTool
         var operation = "create";
         if (File.Exists(target))
         {
-            before = await SafetyFileAccess.ReadTextAsync(target, exec, settingsReview: true).ConfigureAwait(false);
+            before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
             operation = "update";
         }
         await SettingsMutation.WriteTextAsync(target, before ?? "", content, exec).ConfigureAwait(false);

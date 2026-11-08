@@ -17,16 +17,16 @@ public sealed record SafetyDecisionAuditPayload(string? RuleId, string RuleKind,
 public static class SafetyFileAccess
 {
     public static Task AuthorizeAsync(string path, string intent, ToolRunContext run,
-        CancellationToken signal, bool settingsReview = false)
+        CancellationToken signal, SettingsApproval? settings = null)
     {
         signal.ThrowIfCancellationRequested();
         var safety = SafetyBoundary.Resolve(run.Agent?.Ctx ?? run.HostContext);
-        return safety?.AuthorizeFileAsync(run, path, intent, signal, settingsReview: settingsReview) ?? Task.CompletedTask;
+        return safety?.AuthorizeFileAsync(run.PermissionNamespace, run, path, intent, signal, settings: settings) ?? Task.CompletedTask;
     }
 
-    public static async Task<FileStream> OpenReadAsync(string path, ToolRunContext run, bool settingsReview = false)
+    public static async Task<FileStream> OpenReadAsync(string path, ToolRunContext run, SettingsApproval? settings = null)
     {
-        await AuthorizeAsync(path, "read", run, run.Signal, settingsReview).ConfigureAwait(false);
+        await AuthorizeAsync(path, "read", run, run.Signal, settings).ConfigureAwait(false);
         FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             4096, FileOptions.Asynchronous);
@@ -50,10 +50,10 @@ public static class SafetyFileAccess
     }
 
     public static async Task<string> ReadTextAsync(string path, ToolRunContext run, CancellationToken? signal = null,
-        bool settingsReview = false)
+        SettingsApproval? settings = null)
     {
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
-        await AuthorizeAsync(path, "read", run, fused.Token, settingsReview).ConfigureAwait(false);
+        await AuthorizeAsync(path, "read", run, fused.Token, settings).ConfigureAwait(false);
         FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             4096, FileOptions.Asynchronous);

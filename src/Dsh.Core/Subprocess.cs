@@ -362,7 +362,7 @@ public sealed class SubprocessService : Service, IDisposable
         if (launcher is not null)
             await (SafetyBoundary.Resolve(Ctx)
                 ?? throw new InvalidOperationException("Script execution requires the host safety boundary."))
-                .AuthorizeOperationAsync(run, spec.Signal).ConfigureAwait(false);
+                .AuthorizeOperationAsync(SafetyBoundary.ScriptsNamespace, run, spec.Signal).ConfigureAwait(false);
         return launcher is not null
             ? await launcher(this, spec).ConfigureAwait(false)
             : await SpawnAsync(spec).ConfigureAwait(false);

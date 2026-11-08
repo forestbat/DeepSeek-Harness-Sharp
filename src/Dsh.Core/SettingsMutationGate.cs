@@ -45,13 +45,13 @@ public sealed class SettingsMutationGate : IDisposable
             var approval = CreateApprovalRequest(request, target, diff, beforeHash, afterHash);
             var safety = SafetyBoundary.Resolve(context)
                 ?? throw new InvalidOperationException("Settings mutations require the active safety boundary.");
-            await safety.AuthorizeFileAsync(run, target, "write", linked.Token, settingsApproval: approval).ConfigureAwait(false);
+            await safety.AuthorizeFileAsync(SafetyBoundary.SafetyNamespace, run, target, "write", linked.Token,
+                settings: new SettingsApproval(approval)).ConfigureAwait(false);
             await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
-                await safety.AuthorizeFileAsync(run, target, "write", signal,
-                    settingsApproval: approval, canApprove: false).ConfigureAwait(false);
+                safety.RevalidateFile(SafetyBoundary.SafetyNamespace, run, target, "write", signal);
                 await commit(temporary, signal).ConfigureAwait(false);
             }, linked.Token).ConfigureAwait(false);
             run.RecordFileChange(target);

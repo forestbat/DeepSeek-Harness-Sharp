@@ -346,7 +346,7 @@ public sealed class FileSystemSkillProvider : ISkillProvider
     {
         signal.ThrowIfCancellationRequested();
         return run is not null && SafetyBoundary.Resolve(_ctx) is { } safety
-            ? safety.AuthorizeOperationAsync(run, signal)
+            ? safety.AuthorizeOperationAsync(run.PermissionNamespace, run, signal)
             : Task.CompletedTask;
     }
 

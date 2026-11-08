@@ -73,7 +73,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MaximumChunkBytes);
-        await Safety.AuthorizeFileAsync(execution, path, "read", cancellationToken, package).ConfigureAwait(false);
+        await Safety.AuthorizeFileAsync(execution?.PermissionNamespace ?? SafetyBoundary.SafetyNamespace, execution, path, "read", cancellationToken, package).ConfigureAwait(false);
         Require(package, PluginPermission.Read);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
             CopyBufferBytes, FileOptions.Asynchronous);
@@ -107,7 +107,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
             await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
         {
-            await Safety.AuthorizeFileAsync(execution, path, "write", cancellationToken, package).ConfigureAwait(false);
+            await Safety.AuthorizeFileAsync(execution?.PermissionNamespace ?? SafetyBoundary.SafetyNamespace, execution, path, "write", cancellationToken, package).ConfigureAwait(false);
             Require(package, PluginPermission.Write);
             await WriteBytesAsync(path, data, append, cancellationToken).ConfigureAwait(false);
         }
@@ -121,8 +121,8 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         if (gate is null || execution is null)
             throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval service.");
         var target = gate.SettingsPath;
-        await Safety.AuthorizeFileAsync(execution, target, "read", cancellationToken, package,
-            settingsReview: true).ConfigureAwait(false);
+        await Safety.AuthorizeFileAsync(SafetyBoundary.SafetyNamespace, execution, target, "read", cancellationToken, package,
+            settings: new SettingsApproval()).ConfigureAwait(false);
         var before = File.Exists(target) ? await SettingsMutation.ReadTextAsync(target, cancellationToken).ConfigureAwait(false) : "";
         var text = Encoding.UTF8.GetString(data);
         var after = append ? $"{before}{text}" : text;
@@ -160,7 +160,7 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         ToolRunContext? execution, CancellationToken cancellationToken)
     {
         Require(package, PluginPermission.Network);
-        await Safety.AuthorizeOperationAsync(execution, cancellationToken, package).ConfigureAwait(false);
+        await Safety.AuthorizeOperationAsync(execution?.PermissionNamespace ?? SafetyBoundary.SafetyNamespace, execution, cancellationToken, package).ConfigureAwait(false);
         var url = arguments.GetProperty("url").GetString() ?? throw new ArgumentException("The HTTP operation requires a URL.");
         var method = arguments.TryGetProperty("method", out var requested) ? requested.GetString() : null;
         using var request = new HttpRequestMessage(new HttpMethod(method ?? "GET"), url);
