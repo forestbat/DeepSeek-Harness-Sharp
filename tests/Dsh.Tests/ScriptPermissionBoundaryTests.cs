@@ -166,7 +166,7 @@ public sealed class ScriptPermissionBoundaryTests
         Assert.True(reloaded.Plugins["permission-probe"].Permissions!.Read);
         Assert.True(reloaded.Plugins["permission-probe"].Permissions!.Write);
         Assert.True(reloaded.Safety!.AutoApprove);
-        Assert.Contains("*", reloaded.Safety.Whitelist);
+        Assert.Contains("allow-all", reloaded.Safety.Whitelist.Keys);
     }
 
 
@@ -268,12 +268,13 @@ public sealed class ScriptPermissionBoundaryTests
                   enabled: {{enabled.ToString().ToLowerInvariant()}}
                 scripts:
                   permissions:
+                    autoApprove: true
                     read: {{read.ToString().ToLowerInvariant()}}
                     write: {{write.ToString().ToLowerInvariant()}}
                     network: {{network.ToString().ToLowerInvariant()}}
                 safety:
                   autoApprove: true
-                  whitelist: ["*"]
+                  whitelist: { allow-all: {} }
                 plugins:
                   permission-probe:
                     permissions:
@@ -284,9 +285,11 @@ public sealed class ScriptPermissionBoundaryTests
             _ = new SystemPrompt(Context, new SystemPromptConfig());
             Processes = new SubprocessService(Context);
             Tools = new ToolRuntime(Context);
+            var settings = HarnessSettings.Load(Home);
+            _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(Home, settings));
             Context.Provide(SubprocessService.ScriptLauncherServiceName,
                 (Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>)new ScriptExecutionPolicy(
-                    new PluginExecutionEnvironment(Home, HarnessSettings.Load(Home), Home.Root)).SpawnAsync);
+                    new PluginExecutionEnvironment(Home, settings, Home.Root)).SpawnAsync);
         }
 
 

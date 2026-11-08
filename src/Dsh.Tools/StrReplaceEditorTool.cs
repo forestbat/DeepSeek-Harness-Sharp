@@ -14,8 +14,8 @@ public sealed record StrReplaceEditorConfig
     public string? Description { get; init; }
 }
 
-// 逐字移植 packages/fs/tool-str-replace-editor/src/index.ts。
-// 与 TS 的差异:C# 侧没有 sandbox fs 服务,直接做本地文件 I/O;
+// 命令语义移植自 packages/fs/tool-str-replace-editor/src/index.ts。
+// C# 侧读取经 SafetyFileAccess、写入经 SettingsMutation 统一授权与发布。
 // fs/write-intent、fs/edit-intent waterfall 与 fs/observed 事件没有本地消费者,不发。
 public static class StrReplaceEditorTool
 {
@@ -49,6 +49,7 @@ public static class StrReplaceEditorTool
         return tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = description,
             Parameters = ToolSchemas.Parse("""
                 {
@@ -107,7 +108,7 @@ public static class StrReplaceEditorTool
             : "";
         object result = command switch
         {
-            "view" => ViewPath(path, args, config.MaxOutputChars, exec),
+            "view" => await ViewPath(path, args, config.MaxOutputChars, exec).ConfigureAwait(false),
             "create" => await CreateFile(path, OptionalString(args, "file_text"), exec).ConfigureAwait(false),
             "str_replace" => await ReplaceInFile(path, OptionalString(args, "old_str"), NewStrOf(args), exec).ConfigureAwait(false),
             "insert" => await InsertInFile(path, OptionalInt(args, "insert_line"), OptionalString(args, "new_str"), exec).ConfigureAwait(false),
@@ -188,18 +189,18 @@ public static class StrReplaceEditorTool
     private static string MaybeTruncate(string content, int maxOutputChars)
         => content.Length <= maxOutputChars ? content : string.Concat(content.AsSpan(0, maxOutputChars), TruncatedMessage);
 
-    private static string ViewPath(string path, JsonElement args, int maxOutputChars, ToolRunContext exec)
+    private static async Task<string> ViewPath(string path, JsonElement args, int maxOutputChars, ToolRunContext exec)
     {
         var target = ResolveTarget(path);
         if (StatExisting(target, "view"))
         {
             if (args.TryGetProperty("view_range", out var rangeElement) && rangeElement.ValueKind != JsonValueKind.Null)
                 throw new ArgumentException("The `view_range` parameter is not allowed when `path` points to a directory.");
-            return ListDirectory(target, maxOutputChars);
+            return await ListDirectory(target, maxOutputChars, exec).ConfigureAwait(false);
         }
         var viewRange = ParseViewRange(args);
         exec.Signal.ThrowIfCancellationRequested();
-        var content = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var content = await SafetyFileAccess.ReadTextAsync(target, exec).ConfigureAwait(false);
         return FormatFileView(target, content, maxOutputChars, viewRange);
     }
 
@@ -227,10 +228,10 @@ public static class StrReplaceEditorTool
         return MaybeTruncate($"{prompt}:\n{numbered}\n", maxOutputChars);
     }
 
-    private static string ListDirectory(string target, int maxOutputChars)
+    private static async Task<string> ListDirectory(string target, int maxOutputChars, ToolRunContext exec)
     {
         var rows = new List<string> { $"d\t{target}" };
-        Visit(target, 1, rows);
+        await Visit(target, 1, rows, exec).ConfigureAwait(false);
         rows.Sort((left, right) => string.CompareOrdinal(RowKey(left), RowKey(right)));
         var listing = MaybeTruncate(string.Join('\n', rows) + '\n', maxOutputChars);
         return $"Here're the files and directories up to 2 levels deep in {target}, excluding hidden items, node_modules, and Python cache directories:\n{listing}\n";
@@ -238,16 +239,15 @@ public static class StrReplaceEditorTool
         static string RowKey(string row) => row[(row.IndexOf('\t') + 1)..];
     }
 
-    private static void Visit(string directory, int depth, List<string> rows)
+    private static async Task Visit(string directory, int depth, List<string> rows, ToolRunContext exec)
     {
-        foreach (var entry in Directory.GetFileSystemEntries(directory))
+        foreach (var entry in await SafetyFileAccess.ReadDirectoryAsync(directory, exec).ConfigureAwait(false))
         {
-            var name = Path.GetFileName(entry);
+            var name = Path.GetFileName(entry.Path);
             if (name.StartsWith('.') || name is "node_modules" or "__pycache__") continue;
-            var isDirectory = Directory.Exists(entry);
-            rows.Add($"{(isDirectory ? "d" : "f")}\t{entry}");
-            if (isDirectory && depth < 2)
-                Visit(entry, depth + 1, rows);
+            rows.Add($"{(entry.IsDirectory ? "d" : "f")}\t{entry.Path}");
+            if (entry.IsDirectory && depth < 2)
+                await Visit(entry.Path, depth + 1, rows, exec).ConfigureAwait(false);
         }
     }
 
@@ -273,7 +273,7 @@ public static class StrReplaceEditorTool
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var offsets = MatchOffsets(before, oldValue);
         if (offsets.Count == 0)
             throw new HarnessException($"No replacement was performed, old_str `{oldValue}` did not appear verbatim in {target}.", "FS_EDIT_NOT_FOUND");
@@ -296,7 +296,7 @@ public static class StrReplaceEditorTool
         var target = ResolveTarget(path);
         StatExisting(target, "insert");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = await SettingsMutation.ReadTextAsync(target, exec.Signal).ConfigureAwait(false);
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var lines = before.Split('\n');
         if (insertLine.Value < 0 || insertLine.Value > lines.Length)
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");

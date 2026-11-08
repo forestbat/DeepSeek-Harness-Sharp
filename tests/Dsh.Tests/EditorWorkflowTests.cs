@@ -94,6 +94,11 @@ public sealed class EditorWorkflowTests
     public async Task Structured_Test_Failures_Open_The_Location_Regardless_Of_Tool_Error_Status(bool isError)
     {
         using var fixture = await CreateFixtureAsync("open_file", "test.failure");
+        HarnessSettings.Update(fixture.App.Home, settings =>
+        {
+            (settings.Safety ??= new SafetySettings()).Whitelist["structured-test-runner"] = new() { Tool = ["test-runner"] };
+            return true;
+        });
         fixture.Repository.Write("source.cs", "source");
         var handle = await fixture.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Create(new CreateAgentOptions(Cwd: fixture.Repository.Root), TestContext.Current.CancellationToken);
         using var lease = handle.Dispose;
@@ -173,6 +178,7 @@ public sealed class EditorWorkflowTests
         Assert.Contains("untrusted.cmd", userResult.PrintableCommand);
     }
 
+
     private static async Task<Fixture> CreateFixtureAsync(string action, string on = "manual", string environmentValue = "fixture", string fallback = "none")
     {
         var repository = new GitTestRepository();
@@ -182,6 +188,15 @@ public sealed class EditorWorkflowTests
         var selectedOutput = JsonSerializer.Serialize(editor.Output);
         var globalOutput = JsonSerializer.Serialize(Path.Combine(editor.Root, "global.txt"));
         File.WriteAllText(Path.Combine(homePath, "settings.yaml"), $$"""
+            safety:
+              autoApprove: false
+              whitelist:
+                editor-workflow-open:
+                  tool: ide
+                  args: { action: open }
+                editor-workflow-reveal:
+                  tool: ide
+                  args: { action: reveal }
             plugins:
               "@deepseek-ai/dsh-ide":
                 fallback: {{fallback}}

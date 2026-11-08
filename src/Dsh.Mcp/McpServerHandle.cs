@@ -35,7 +35,6 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     public bool Connected => Volatile.Read(ref _live) is not null;
 
-    public bool HasOwnedProcess => Volatile.Read(ref _live)?.OwnedTransport is not null;
 
     public int ToolCount => Volatile.Read(ref _live)?.Tools.Count ?? 0;
 
@@ -256,6 +255,7 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         await CloseAsync(Interlocked.Exchange(ref _live, null));
         _reconnectGate.Dispose();
     }
+
 
     private McpClient ResourcesClient(Live? live)
     {

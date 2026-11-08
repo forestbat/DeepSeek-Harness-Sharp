@@ -199,10 +199,10 @@ public static class TerminalTools
 
         disposables.Add(systemPrompt.Section(PromptSection.Literal("tool:pty", SectionText, ToolNames: ["terminal_open", "terminal_send", "terminal_read", "terminal_signal", "terminal_close", "terminal_list"])));
 
-        IReadOnlyList<ContentBlock>? FinalizeContent(ToolExecution _, ToolExecutionResult result)
+        ValueTask<IReadOnlyList<ContentBlock>?> FinalizeContent(ToolExecution _, ToolExecutionResult result)
         {
             var raw = RawContentText(result.Content);
-            return raw is null ? null : [new TextBlock(TerminalRendering.BoundTerminalText(raw, maxResultBytes))];
+            return ValueTask.FromResult<IReadOnlyList<ContentBlock>?>(raw is null ? null : [new TextBlock(TerminalRendering.BoundTerminalText(raw, maxResultBytes))]);
         }
 
         disposables.Add(tools.Register(new ToolDefinition

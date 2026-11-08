@@ -104,6 +104,7 @@ public sealed class ApprovalService : Service, IApprovalService
     }
 
     public ApprovalPolicy EffectivePolicy(Session session) => OverrideOf(session) ?? _config.Policy;
+    public bool IsDenied(IAgent agent) => EffectivePolicy(agent.Session) == ApprovalPolicy.Never;
 
     /**
      * 只看事件流也能算出有效策略: 调用方(例如 host 给未加载会话出快照)手里只有事件,

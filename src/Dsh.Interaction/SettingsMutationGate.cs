@@ -10,7 +10,7 @@ using Dsh.Runtime.Logging;
 namespace Dsh.Interaction;
 
 /** The single settings approval, publication and redacted audit service. */
-public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
+public sealed class SettingsMutationGate : IDisposable
 {
     private readonly Context context;
     private readonly HarnessHome home;
@@ -20,7 +20,8 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
     {
         this.context = context;
         this.home = home;
-        registration = context.Provide(ISettingsMutationGate.ServiceName, this);
+        registration = context.Provide(SettingsMutation.ServiceName,
+            (Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>)CommitAsync);
     }
 
     public void Dispose() => registration.Dispose();
@@ -40,12 +41,17 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, run.Signal);
         try
         {
-            await ApproveAsync(request, target, diff, beforeHash, afterHash, linked.Token).ConfigureAwait(false);
-            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, (temporary, signal) =>
+            var approval = CreateApprovalRequest(request, target, diff, beforeHash, afterHash);
+            var safety = SafetyBoundary.Resolve(context)
+                ?? throw new InvalidOperationException("Settings mutations require the active safety boundary.");
+            await safety.AuthorizeFileAsync(SafetyBoundary.SafetyNamespace, run, target, "write", linked.Token,
+                settings: new SettingsApproval(approval)).ConfigureAwait(false);
+            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");
-                return commit(temporary, signal);
+                safety.RevalidateFile(SafetyBoundary.SafetyNamespace, run, target, "write", signal);
+                await commit(temporary, signal).ConfigureAwait(false);
             }, linked.Token).ConfigureAwait(false);
             run.RecordFileChange(target);
             outcome = "committed";
@@ -66,30 +72,22 @@ public sealed class SettingsMutationGate : ISettingsMutationGate, IDisposable
         }
     }
 
-    private async Task ApproveAsync(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash, CancellationToken signal)
+    private ApprovalRequest CreateApprovalRequest(SettingsMutationRequest request, string target, string diff, string beforeHash, string afterHash)
     {
-        signal.ThrowIfCancellationRequested();
         if (!Owns(request.Path))
             throw new InvalidOperationException("The mutation does not target the active settings document.");
         var run = request.Context;
         var agent = run.Agent ?? throw new InvalidOperationException("Settings mutations require an active model session.");
-        var approval = context.Get<IApprovalService>("approval", false)
+        _ = context.Get<IApprovalService>("approval", false)
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
-        var safety = HarnessSettings.LoadForReview(home).Safety;
-        if (SafetyCommandGuard.MatchingRule(safety?.Blacklist, run.Name, run.Arguments) is { } denied)
-            throw new UnauthorizedAccessException($"Settings mutation blocked by safety.blacklist rule \"{denied}\".");
         var arguments = new JsonObject
         {
             ["settingsMutation"] = true, ["path"] = target, ["diff"] = diff,
             ["beforeHash"] = beforeHash, ["afterHash"] = afterHash,
         };
-        var decision = await approval.Request(new(agent, run.Name, run.CallId,
+        return new(agent, run.Name, run.CallId,
             "Change active settings for all sessions. Review the redacted changed lines and document hashes.", arguments.ToJsonString())
-            { RuleArguments = run.Arguments }, signal).ConfigureAwait(false);
-        if (decision == ApprovalOutcome.Cancelled)
-            throw new OperationCanceledException("Settings mutation was cancelled.", signal);
-        if (decision is not (ApprovalOutcome.AllowedOnce or ApprovalOutcome.AllowedForSession))
-            throw new UnauthorizedAccessException($"Settings mutation was not approved ({decision}).");
+            { RuleArguments = run.Arguments };
     }
 
     private static string CreateDiff(string before, string after)

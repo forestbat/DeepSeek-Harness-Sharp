@@ -356,10 +356,16 @@ public sealed class SubprocessService : Service, IDisposable
     public Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec)
         => Task.FromResult(SpawnDirect(spec));
 
-    public Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec)
+    public async Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec, ToolRunContext? run = null)
     {
         var launcher = Ctx.Get<Func<SubprocessService, SubprocessSpawnSpec, Task<SubprocessHandle>>>(ScriptLauncherServiceName, false);
-        return launcher is not null ? launcher(this, spec) : SpawnAsync(spec);
+        if (launcher is not null)
+            await (SafetyBoundary.Resolve(Ctx)
+                ?? throw new InvalidOperationException("Script execution requires the host safety boundary."))
+                .AuthorizeOperationAsync(SafetyBoundary.ScriptsNamespace, run, spec.Signal).ConfigureAwait(false);
+        return launcher is not null
+            ? await launcher(this, spec).ConfigureAwait(false)
+            : await SpawnAsync(spec).ConfigureAwait(false);
     }
 
     public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec,

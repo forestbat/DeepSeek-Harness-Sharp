@@ -144,7 +144,7 @@ public sealed class PluginManagerToolTests
             var original = $"plugins:\n  \"@deepseek-ai/dsh-tool-todo\": {initiallyEnabled.ToString().ToLowerInvariant()}\n  \"@deepseek-ai/dsh-plugin-manager\": true\nsafety:\n  autoApprove: false\n";
             await File.WriteAllTextAsync(home.SettingsFile, original, TestContext.Current.CancellationToken);
             using var app = await ConfigBoot.Compose(new HarnessOptions(home, Cwd: root, PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
-            using var answerer = allowed ? ApprovalAnswerers.AutoApprove(app.Ctx) : ApprovalAnswerers.DenyAll(app.Ctx);
+            using var answerer = ApprovalAssert.AnswerSettingsDiff(app.Ctx, allowed);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             var session = Session.Create(id, null, new SessionHeader { Version = SessionHeader.SessionFormatVersion, Id = id, Cwd = root, CreatedAt = 0, IsSeeded = false });
             using var agent = new AgentLoopAgent(app.Ctx, id, new AgentOptions(), session, _ => 0);
@@ -158,7 +158,8 @@ public sealed class PluginManagerToolTests
             }));
 
             Assert.Equal(!allowed, result.IsError);
-            var asked = Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+            var asked = Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>(),
+                approval => ApprovalAssert.IsSettingsDiff(approval.Arguments));
             Assert.NotEmpty(ApprovalHints.SettingsDiff(asked.Arguments));
             Assert.Equal(allowed ? "committed" : "rejected", Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<SettingsMutationAuditPayload>()).Outcome);
             Assert.Equal(allowed ? !initiallyEnabled : initiallyEnabled, tools.Get("todo_write") is not null);
@@ -183,7 +184,7 @@ public sealed class PluginManagerToolTests
             var manager = app.Ctx.Get<HarnessPluginManager>("pluginManager")!;
             await manager.RemoveAsync("test/local");
             var before = await File.ReadAllTextAsync(home.SettingsFile, TestContext.Current.CancellationToken);
-            using var answerer = ApprovalAnswerers.DenyAll(app.Ctx);
+            using var answerer = ApprovalAssert.AnswerSettingsDiff(app.Ctx, allowed: false);
             var id = SessionId.Create(Guid.NewGuid().ToString("N"));
             var session = Session.Create(id, null, new SessionHeader
             {
@@ -210,7 +211,8 @@ public sealed class PluginManagerToolTests
             Assert.Null(app.Composition!.Find("test/local"));
             Assert.Equal("rejected", Assert.Single(session.SnapshotEvents().Select(item => item.Data)
                 .OfType<SettingsMutationAuditPayload>()).Outcome);
-            Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>());
+            Assert.Single(session.SnapshotEvents().Select(item => item.Data).OfType<ApprovalAskedPayload>(),
+                approval => ApprovalAssert.IsSettingsDiff(approval.Arguments));
         }
         finally
         {

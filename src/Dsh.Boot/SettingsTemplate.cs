@@ -96,13 +96,21 @@ public static class SettingsTemplate
                 {
                     var frame = stack[index];
                     stack.RemoveRange(index + 1, stack.Count - index - 1);
+                    if (frame.DynamicKeys)
+                    {
+                        pending.Clear();
+                        keys.Add(body);
+                        stack.Add(new Frame(indent + 2, frame.Path, frame.Children));
+                        continue;
+                    }
                     var path = frame.Path.Length == 0 ? key : $"{frame.Path}.{key}";
                     if (pending.Count > 0)
                         comments[path] = string.Join("\n", pending);
                     pending.Clear();
-                    keys.Add(body.Trim());
-                    if (frame.Children.First(setting => setting.Key == key).Children is { Count: > 0 } children)
-                        stack.Add(new Frame(indent + 2, path, children));
+                    keys.Add(body);
+                    var setting = frame.Children.First(setting => setting.Key == key);
+                    if (setting.Children is { Count: > 0 } children)
+                        stack.Add(new Frame(indent + 2, path, children, setting.DynamicKeys));
                     continue;
                 }
             }
@@ -123,7 +131,9 @@ public static class SettingsTemplate
     private static int FindFrame(List<Frame> stack, int indent, string key)
     {
         for (var index = stack.Count - 1; index >= 0; index--)
-            if (stack[index].Indent == indent && stack[index].Children.Any(setting => setting.Key == key))
+            if (stack[index].Indent == indent && (stack[index].DynamicKeys
+                ? key == "<id>"
+                : stack[index].Children.Any(setting => setting.Key == key)))
                 return index;
         return -1;
     }
@@ -146,5 +156,5 @@ public static class SettingsTemplate
 
     private readonly record struct BlockParse(IReadOnlyDictionary<string, string> Comments, IReadOnlyList<string> Keys);
 
-    private readonly record struct Frame(int Indent, string Path, IReadOnlyList<PluginSettingSpec> Children);
+    private readonly record struct Frame(int Indent, string Path, IReadOnlyList<PluginSettingSpec> Children, bool DynamicKeys = false);
 }

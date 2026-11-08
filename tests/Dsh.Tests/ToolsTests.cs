@@ -413,6 +413,44 @@ public partial class ToolsTests : IDisposable
             Assert.DoesNotContain(paths, p => p!.Contains(".git"));
         }
 
+        [Theory]
+        [InlineData("glob")]
+        [InlineData("grep")]
+        public async Task Search_DirectoryAliasKeepsBasenameFiltersAndWorkingDirectoryRelativePaths(string tool)
+        {
+            var target = Directory.CreateDirectory(_outer.TempPath("storage")).FullName;
+            File.WriteAllText(Path.Combine(target, "report.txt"), "alias-visible-needle\n");
+            File.WriteAllText(Path.Combine(target, "excluded.md"), "alias-visible-needle\n");
+            var alias = _outer.TempPath("workspace");
+            try
+            {
+                Directory.CreateSymbolicLink(alias, target);
+            }
+            catch (Exception error) when (OperatingSystem.IsWindows()
+                && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+            {
+                Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+            }
+            var agent = new FakeAgent(_outer._ctx, alias);
+            var arguments = tool == "glob"
+                ? JsonSerializer.Serialize(new { pattern = "*.txt", path = "." }, DshJson.Options)
+                : JsonSerializer.Serialize(new { pattern = "alias-visible-needle", include = "*.txt", path = "." }, DshJson.Options);
+            var result = await _outer.Execute(tool, arguments, agent);
+            Assert.False(result.IsError, TextOf(result));
+            var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+            if (tool == "glob")
+            {
+                Assert.Equal(".", value.GetProperty("root").GetString());
+                Assert.Equal(["report.txt"], value.GetProperty("paths").EnumerateArray().Select(item => item.GetString()));
+            }
+            else
+            {
+                var match = Assert.Single(value.GetProperty("matches").EnumerateArray());
+                Assert.Equal("report.txt", match.GetProperty("path").GetString());
+                Assert.Equal("alias-visible-needle", match.GetProperty("line").GetString());
+            }
+        }
+
         [Fact]
         public async Task Glob_NoMatches_RendersNoFilesFound()
         {

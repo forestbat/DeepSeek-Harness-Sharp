@@ -21,7 +21,8 @@ public sealed record PluginSettingSpec(
     PluginSettingKind Kind,
     string? DefaultLiteral = null,
     string? Description = null,
-    IReadOnlyList<PluginSettingSpec>? Children = null);
+    IReadOnlyList<PluginSettingSpec>? Children = null,
+    bool DynamicKeys = false);
 
 /**
  * 插件的配置面: 生成器在插件程序集里按 ConfigType 或 [DshPluginSettings] 标注的类型产出实现

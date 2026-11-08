@@ -1,4 +1,4 @@
-namespace Dsh.Interaction;
+namespace Dsh.Runtime;
 
 /**
  * A blacklist pattern such as "rm -rf /*" matched against the simple commands of a command line.

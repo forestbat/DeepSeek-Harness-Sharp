@@ -42,7 +42,7 @@ public sealed class HarnessSettingsTests
               prune: true
             safety:
               autoApprove: true
-              blacklist: []
+              blacklist: {}
             """);
         try
         {

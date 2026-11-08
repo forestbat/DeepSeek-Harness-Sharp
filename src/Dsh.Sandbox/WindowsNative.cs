@@ -93,15 +93,20 @@ internal static class WindowsNative
     [DllImport("kernel32.dll")] internal static extern void DeleteProcThreadAttributeList(nint list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool CreateProcess(string executable, StringBuilder commandLine, nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, nint environment, string workingDirectory, ref StartupInfoEx startup, out ProcessInformation information);
-    internal static string PathForNative(string path) => path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path : $"\\\\?\\{path}";
+    internal static string PathForNative(string path)
+    {
+        // Extended-length paths bypass Win32 separator normalization.
+        path = path.Replace('/', '\\');
+        return path.StartsWith("\\\\?\\", StringComparison.Ordinal) ? path
+            : path.StartsWith("\\\\", StringComparison.Ordinal) ? $"\\\\?\\UNC\\{path[2..]}" : $"\\\\?\\{path}";
+    }
     internal static unsafe SafeFileHandle OpenSecurityHandle(string path, bool writable)
     {
         const uint securityAccess = 0x160000, readAttributes = 0x80, writeOwner = 0x80000, shareAll = 7;
         const uint caseInsensitive = 0x40, synchronousOpenReparsePoint = 0x200020;
-        var dosPath = path.AsSpan();
-        if (dosPath.StartsWith(@"\\?\", StringComparison.Ordinal))
-            dosPath = dosPath[4..];
-        var nativePath = $@"\??\{dosPath}";
+        var dosPath = path.Replace('/', '\\').AsSpan();
+        var nativePath = dosPath.StartsWith(@"\\?\", StringComparison.Ordinal) ? $@"\??\{dosPath[4..]}"
+            : dosPath.StartsWith(@"\\", StringComparison.Ordinal) ? $@"\??\UNC\{dosPath[2..]}" : $@"\??\{dosPath}";
         fixed (char* text = nativePath)
         {
             var name = new UnicodeString { Length = checked((ushort)(nativePath.Length * 2)), MaximumLength = checked((ushort)(nativePath.Length * 2)), Buffer = (nint)text };

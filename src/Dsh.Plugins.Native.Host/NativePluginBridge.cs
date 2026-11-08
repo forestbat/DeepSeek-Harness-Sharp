@@ -20,10 +20,10 @@ public static class NativePluginBridge
                 ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the tools service");
             var logger = ctx.LoggerFor("native-plugin");
             plugin.Configure(SettingsJson.Write(config));
-            var capabilities = new Lazy<IPluginExecutionHost>(() =>
+            var capabilities = new Lazy<PluginCapabilityHost>(() =>
                 (ctx.Get<IPluginHostFactory>(IPluginHostFactory.ServiceName)
                     ?? throw new InvalidOperationException($"native plugin \"{plugin.Package}\" requires the plugin capability service"))
-                .Create(plugin.Package, ctx) as IPluginExecutionHost
+                .Create(plugin.Package, ctx) as PluginCapabilityHost
                 ?? throw new InvalidOperationException("native plugin capabilities require an execution-aware host"));
             var host = new Host(plugin, tools, logger, capabilities);
             try
@@ -50,7 +50,7 @@ public static class NativePluginBridge
                 ? text.GetString() ?? ""
                 : value.GetRawText();
 
-    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<IPluginExecutionHost> capabilities) : INativePluginHost, IDisposable
+    private sealed class Host(INativePlugin plugin, ToolRuntime tools, Logger logger, Lazy<PluginCapabilityHost> capabilities) : INativePluginHost, IDisposable
     {
         private readonly Dictionary<int, IDisposable> _registrations = [];
         private readonly Lock _sync = new();

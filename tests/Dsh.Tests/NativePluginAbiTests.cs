@@ -3,6 +3,7 @@ using Dsh.Boot;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Plugins.Native;
@@ -103,6 +104,7 @@ public sealed class NativePluginAbiTests
         var input = Path.Combine(fixture.Root, "native-input");
         await File.WriteAllTextAsync(input, "native 输入", TestContext.Current.CancellationToken);
         await fixture.StartAsync(expectFixtureActive: false);
+        using var answerer = ApprovalAnswerers.AutoApprove(fixture.App.Ctx);
         var config = Assert.IsType<ToolExecutionResult.Success>(await fixture.ExecuteTool("native_config", new { }, TestContext.Current.CancellationToken)).Value;
         var workerNamespace = config.GetProperty("pidNamespace").GetString();
         Assert.StartsWith("pid:[", workerNamespace);
@@ -170,8 +172,10 @@ public sealed class NativePluginAbiTests
         var ctx = new Context();
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         tools = new ToolRuntime(ctx);
+        var settings = new HarnessSettings { Safety = new SafetySettings { AutoApprove = true } };
+        _ = new SafetyPolicySource(ctx, () => settings);
         ctx.Provide(IPluginHostFactory.ServiceName,
-            new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(root), new HarnessSettings(), root)));
+            new PluginCapabilityFactory(ctx, new PluginExecutionEnvironment(new HarnessHome(root), settings, root)));
         return ctx;
     }
 

@@ -798,7 +798,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
                     break;
                 var result = slot.Value.NeedsPost
                     ? await tools.FinalizeScheduledExecution(slot.Value.Exec, slot.Value.Result)
-                    : tools.FinishScheduledExecution(slot.Value.Exec, slot.Value.Result);
+                    : await tools.FinishScheduledExecution(slot.Value.Exec, slot.Value.Result);
                 AppendToolResult(turn, step, group[committed], result, callSeqs[committed]!.Value);
                 foreach (var context in result.AdditionalContexts ?? [])
                     Inbox.Splice(InboxTargets.NextStep, Inbox.NextStep.Count, 0, [context]);

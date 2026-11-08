@@ -51,12 +51,11 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
 
 ### 设置变更审批
 
-模型通过 `write`、`edit`、`str_replace_editor`、`plugin_manager` 修改当前 `settings.yaml` 时，统一请求脱敏 diff 审批并记录结果。
-拒绝、取消或审批期间检测到人工改动时不发布旧提案；脱敏仅识别常见凭据字段和令牌格式，确认前仍须检查自定义秘密。
-人工命令和 GUI 保存不触发模型审批；缺少会话或审批服务时拒绝模型更新。
-`safety.whitelist` 使用既有工具/命令语法自动放行，如 `tool:write`、`bash:<command-pattern>`；`blacklist` 优先于白名单和 `autoApprove`，会话的 `never` 策略仍然拒绝。
-两张列表可在 GUI safety 页面编辑；匹配不是路径权限或 OS 隔离。
-设置审批独立于 `sandbox.enabled`，不接管宿主代码、shell、PTC、编辑器、Git 或远程进程的任意写入。
+模型通过文件工具或 `plugin_manager` 修改当前 `settings.yaml` 时，按安全规则审批并展示脱敏 diff；拒绝、取消或文件已被人工修改时，不写入旧提案。
+确认前请检查自定义秘密，自动脱敏不覆盖所有名称或格式。
+人工配置命令和 GUI 保存不触发模型审批。
+
+安全规则与配置示例见[配置模板](src/Dsh.Boot/Profiles/Templates/settings.yaml)，可在 GUI 安全页或直接编辑 `settings.yaml` 配置。
 
 ## 不同于原版 DSH 的功能
 

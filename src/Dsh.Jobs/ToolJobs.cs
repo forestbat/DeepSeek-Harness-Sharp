@@ -109,7 +109,7 @@ public static class ToolJobs
         }, new EventOptions { Prepend = true, Global = true });
         disposables.Add(new ActionDisposable(() => offPreExecute()));
 
-        IReadOnlyList<ContentBlock>? FinalizeTaskContent(ToolExecution exec, ToolExecutionResult result)
+        ValueTask<IReadOnlyList<ContentBlock>?> FinalizeTaskContent(ToolExecution exec, ToolExecutionResult result)
         {
             int? maxBytes = null;
             if (outputLimits.TryGetValue(exec, out var box))
@@ -118,7 +118,7 @@ public static class ToolJobs
                 outputLimits.Remove(exec);
             }
             maxBytes ??= VisibleOutputLimit(jobs, exec);
-            if (maxBytes is null) return null;
+            if (maxBytes is null) return default;
             if (exec.Name == "job_output" && !result.IsError && result is ToolExecutionResult.Success success)
             {
                 var value = success.Value;
@@ -128,9 +128,9 @@ public static class ToolJobs
                 var content = body.EndsWith('\n') ? body[..^1] : body;
                 var suffix = $"\n{StatusLine(job)}";
                 if (RawSingleText(result.Content) == content + suffix)
-                    return [new TextBlock(FitWithSuffix(content, suffix, maxBytes.Value, "\n[output truncated]"))];
+                    return ValueTask.FromResult<IReadOnlyList<ContentBlock>?>([new TextBlock(FitWithSuffix(content, suffix, maxBytes.Value, "\n[output truncated]"))]);
             }
-            return BoundSingleText(result.Content, maxBytes.Value);
+            return new(BoundSingleText(result.Content, maxBytes.Value));
         }
 
         disposables.Add(jobs.AttachController(PluginName));

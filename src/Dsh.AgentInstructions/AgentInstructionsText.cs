@@ -1,4 +1,6 @@
 using Dsh.Boot;
+using Dsh.Core;
+using Dsh.Runtime;
 
 namespace Dsh.AgentInstructions;
 
@@ -45,22 +47,37 @@ public static class AgentInstructionsText
     }
 
     /** 只返回新的 AGENTS 文件; 已加载路径由调用方维护, 避免与静态段重复。 */
-    public static string RenderNew(HarnessHome home, string? start, ISet<string> loaded)
+    public static async Task<string> RenderNewAsync(HarnessHome home, string? start, ISet<string> loaded,
+        ToolRunContext? run, CancellationToken signal = default)
     {
         var parts = new List<string>();
         foreach (var path in DiscoverFrom(home, start))
         {
-            if (!loaded.Add(path))
-                continue;
+            signal.ThrowIfCancellationRequested();
+            lock (loaded)
+                if (loaded.Contains(path)) continue;
+            string content;
             try
             {
-                var content = File.ReadAllText(path).Trim();
-                if (content.Length > 0)
-                    parts.Add($"## {path}\n\n{content}");
+                content = (run is null ? await File.ReadAllTextAsync(path, signal).ConfigureAwait(false)
+                    : await SafetyFileAccess.ReadTextAsync(path, run, signal).ConfigureAwait(false)).Trim();
             }
-            catch (IOException)
+            catch (UnauthorizedAccessException)
             {
+                signal.ThrowIfCancellationRequested();
+                parts.Add("Optional directory instructions were not loaded because access was denied.");
+                continue;
             }
+            catch (Exception error) when (error is IOException || PathAbsence.IsAbsent(error))
+            {
+                signal.ThrowIfCancellationRequested();
+                parts.Add("Optional directory instructions could not be loaded; no instructions from that file were added.");
+                continue;
+            }
+            lock (loaded)
+                if (!loaded.Add(path)) continue;
+            if (content.Length > 0)
+                parts.Add($"## {path}\n\n{content}");
         }
         return string.Join("\n\n", parts);
     }

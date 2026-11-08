@@ -30,8 +30,8 @@ public sealed record ApprovalRequest(
 public interface IApprovalService
 {
     Task<ApprovalOutcome> Request(ApprovalRequest request, CancellationToken signal);
+    bool IsDenied(IAgent agent);
 }
-
 public sealed record ToolView(
     IReadOnlyDictionary<string, ToolDefinition> Visible,
     IReadOnlySet<string> KnownNames,
@@ -55,24 +55,33 @@ public sealed class ToolRuntime : Service
     /** 一条工具注册:definition 携带的最终名字(重名消解后)与注册来源包名(null = Apply 之外注册,归属未知)。 */
     private sealed record ToolEntry(ToolDefinition Definition, string? Owner, Guid RegistrationId);
 
+    internal readonly record struct RegistrationSnapshot(ToolDefinition? Definition, string? Owner,
+        Guid Id, ToolExecutionModeKind Mode);
+
     private sealed class ToolLayer
     {
         public NamedEntries<ToolEntry> Tools { get; }
         public AnonymousEntries<ToolRestriction> Restrictions { get; } = new();
         public AnonymousEntries<Func<ToolExecution, string?>> Guards { get; } = new();
-        public Lock RegistrationGate { get; } = new();
 
         public ToolLayer(ScopeKey? scope)
         {
-            Tools = new NamedEntries<ToolEntry>(name => new InvalidOperationException(scope is null
-                ? $"tool \"{name}\" is already registered (for a per-agent variant, register through that agent's agent.ctx instead)"
-                : $"tool \"{name}\" is already registered in this scope"));
+            Tools = new NamedEntries<ToolEntry>(scope is null
+                ? static name => new InvalidOperationException($"tool \"{name}\" is already registered (for a per-agent variant, register through that agent's agent.ctx instead)")
+                : static name => new InvalidOperationException($"tool \"{name}\" is already registered in this scope"));
         }
 
-        public bool Admits(string name)
-            => Restrictions.Values.All(filter =>
-                (filter.Allow is null || filter.Allow.Contains(name))
-                && (filter.Deny is null || !filter.Deny.Contains(name)));
+        public static bool Admits(string name, IReadOnlyList<ToolRestriction> filters)
+        {
+            for (var index = 0; index < filters.Count; index++)
+            {
+                var filter = filters[index];
+                if ((filter.Allow is not null && !filter.Allow.Contains(name))
+                    || (filter.Deny is not null && filter.Deny.Contains(name)))
+                    return false;
+            }
+            return true;
+        }
     }
 
     private readonly ScopedLayers<ToolLayer> _layers;
@@ -80,7 +89,7 @@ public sealed class ToolRuntime : Service
     public ToolRuntime(Context ctx) : base(ctx, ServiceName)
     {
         _progressiveDisclosure = ctx.GetProp(ToolDisclosureSwitch.PropName) is true;
-        _layers = new ScopedLayers<ToolLayer>(scope => new ToolLayer(scope), () => ctx.Emit(new ToolChangeNotification()));
+        _layers = new ScopedLayers<ToolLayer>(static scope => new ToolLayer(scope), () => ctx.Emit(new ToolChangeNotification()));
         var systemPrompt = ctx.Get<SystemPrompt>(SystemPrompt.ServiceName, false)
             ?? throw new InvalidOperationException("tools requires the systemPrompt service");
         systemPrompt.Tools(WireSchemas);
@@ -114,13 +123,10 @@ public sealed class ToolRuntime : Service
         return _layers.Effect(Ctx, scope,
             layer =>
             {
-                lock (layer.RegistrationGate)
+                lock (layer.Tools.SyncRoot)
                 {
-                    var existing = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
-                    if (existing.Value is not null)
-                    {
-                        registeredName = ResolveNameConflict(registeredName, owner, existing.Value, layer);
-                    }
+                    if (layer.Tools.GetValueOrDefault(registeredName) is { } existing)
+                        registeredName = ResolveNameConflict(registeredName, owner, existing, layer);
                     var entry = registeredName == definition.Name
                         ? new ToolEntry(definition, owner, registrationId)
                         : new ToolEntry(new ToolDefinition
@@ -133,6 +139,8 @@ public sealed class ToolRuntime : Service
                             FinalizeContent = definition.FinalizeContent,
                             TimeoutMs = definition.TimeoutMs,
                             IsConcurrencySafe = definition.IsConcurrencySafe,
+                            MediatesFileAccess = definition.MediatesFileAccess,
+                            UsesScriptPermissions = definition.UsesScriptPermissions,
                             Disclosure = definition.Disclosure,
                             IsAvailable = definition.IsAvailable,
                             WriteTargets = definition.WriteTargets,
@@ -142,10 +150,10 @@ public sealed class ToolRuntime : Service
             },
             layer =>
             {
-                lock (layer.RegistrationGate)
+                lock (layer.Tools.SyncRoot)
                 {
-                    var current = layer.Tools.Entries.FirstOrDefault(entry => entry.Key == registeredName);
-                    if (current.Value?.RegistrationId == registrationId)
+                    if (layer.Tools.GetValueOrDefault(registeredName) is { } current
+                        && current.RegistrationId == registrationId)
                         layer.Tools.Remove(registeredName);
                 }
             });
@@ -159,9 +167,9 @@ public sealed class ToolRuntime : Service
     {
         var suffix = owner?.Split('/')[^1];
         if (suffix is null || existing.Owner == owner)
-            throw new InvalidOperationException($"tool \"{name}\" is already registered");
+            throw layer.Tools.Conflict(name);
         var renamed = $"{suffix}-{name}";
-        if (layer.Tools.Entries.Any(entry => entry.Key == renamed))
+        if (layer.Tools.GetValueOrDefault(renamed) is not null)
             throw new InvalidOperationException($"tool \"{name}\" is already registered, and the renamed form \"{renamed}\" is taken as well");
         Ctx.LoggerFor("tools").Warn(
             $"tool \"{name}\" from <{owner}> conflicts with the one from <{existing.Owner ?? "unknown"}>; it is now visible as \"{renamed}\" — both authors should pick distinct names");
@@ -220,40 +228,41 @@ public sealed class ToolRuntime : Service
     {
         var layers = _layers.ChainLayers(scope);
         var own = scope is null ? null : _layers.LayerFor(scope);
-        var inherited = new Dictionary<string, ToolDefinition>();
-        var globalEntries = _layers.Global.Tools.Entries;
-        foreach (var (name, entry) in globalEntries)
-            inherited[name] = entry.Definition;
+        var definitions = new Dictionary<string, ToolDefinition>();
+        foreach (var (name, entry) in _layers.Global.Tools.Entries)
+            definitions[name] = entry.Definition;
+        IEnumerable<KeyValuePair<string, ToolEntry>> ownEntries = [];
+        List<ToolRestriction>? restrictions = null;
         foreach (var layer in layers)
         {
+            var entries = layer.Tools.Entries;
             if (ReferenceEquals(layer, own))
-                continue;
-            foreach (var (name, entry) in layer.Tools.Entries)
-                inherited[name] = entry.Definition;
+                ownEntries = entries;
+            else
+                foreach (var (name, entry) in entries)
+                    definitions[name] = entry.Definition;
+            var filters = layer.Restrictions.Values;
+            if (filters.Count > 0)
+                (restrictions ??= []).AddRange(filters);
         }
-        var visible = new Dictionary<string, ToolDefinition>();
-        var knownNames = new HashSet<string>();
-        var restrictableNames = new HashSet<string>();
-        foreach (var (name, definition) in inherited)
+        var restrictableNames = new HashSet<string>(definitions.Keys);
+        var knownNames = new HashSet<string>(restrictableNames);
+        var visible = restrictions is null ? definitions : new Dictionary<string, ToolDefinition>();
+        if (restrictions is not null)
+            foreach (var (name, definition) in definitions)
+                if (ToolLayer.Admits(name, restrictions))
+                    visible[name] = definition;
+        // Restrictions mask inherited registrations, not tools registered in the current scope.
+        foreach (var (name, entry) in ownEntries)
         {
             knownNames.Add(name);
-            restrictableNames.Add(name);
-            if (layers.All(layer => layer.Admits(name)))
-                visible[name] = definition;
-        }
-        if (own is not null)
-        {
-            foreach (var (name, entry) in own.Tools.Entries)
-            {
-                knownNames.Add(name);
-                visible[name] = entry.Definition;
-            }
+            visible[name] = entry.Definition;
         }
         return new ToolView(visible, knownNames, restrictableNames);
     }
 
     public ToolDefinition? Get(string name, ScopeKey? scope = null)
-        => View(scope).Visible.TryGetValue(name, out var definition) ? definition : null;
+        => ResolveEntry(name, scope)?.Definition;
 
     public IReadOnlyList<ToolSchema> Schemas(ScopeKey? scope = null)
         => View(scope).Visible.Values
@@ -509,17 +518,20 @@ public sealed class ToolRuntime : Service
 
     public ToolExecutionModeKind ExecutionModeKind(ToolExecutionInput exec)
     {
-        var tool = Get(exec.Name, exec.Agent?.ScopeKey);
-        if (tool?.IsConcurrencySafe is null)
-            return ToolExecutionModeKind.Exclusive;
-        try
+        var snapshot = CaptureRegistration(ResolveEntry(exec.Name, exec.Agent?.ScopeKey), exec.Arguments);
+        exec.ScheduledRegistration = snapshot;
+        return snapshot.Mode;
+    }
+
+    private static RegistrationSnapshot CaptureRegistration(ToolEntry? entry, JsonElement arguments)
+    {
+        var mode = ToolExecutionModeKind.Exclusive;
+        if (entry?.Definition.IsConcurrencySafe is { } classify)
         {
-            return tool.IsConcurrencySafe(exec.Arguments) ? ToolExecutionModeKind.Parallel : ToolExecutionModeKind.Exclusive;
+            try { if (classify(arguments)) mode = ToolExecutionModeKind.Parallel; }
+            catch { }
         }
-        catch
-        {
-            return ToolExecutionModeKind.Exclusive;
-        }
+        return new(entry?.Definition, entry?.Owner, entry?.RegistrationId ?? Guid.Empty, mode);
     }
 
     public async Task<ToolExecutionResult> Execute(ToolExecutionInput input)
@@ -538,14 +550,14 @@ public sealed class ToolRuntime : Service
                     return dispatched switch
                     {
                         ScheduledToolDispatch.PostResult postResult => await FinalizeScheduledExecution(dispatch.Exec, postResult.Result),
-                        ScheduledToolDispatch.FinalResult finalResult => FinishScheduledExecution(dispatch.Exec, finalResult.Result),
+                        ScheduledToolDispatch.FinalResult finalResult => await FinishScheduledExecution(dispatch.Exec, finalResult.Result),
                         _ => throw new InvalidOperationException("unknown scheduled dispatch"),
                     };
                 }
             case ScheduledToolPreparation.PostResult postResult:
                 return await FinalizeScheduledExecution(postResult.Exec, postResult.Result);
             case ScheduledToolPreparation.FinalResult finalResult:
-                return FinishScheduledExecution(finalResult.Exec, finalResult.Result);
+                return await FinishScheduledExecution(finalResult.Exec, finalResult.Result);
             default:
                 throw new InvalidOperationException("unknown scheduled preparation");
         }
@@ -564,19 +576,58 @@ public sealed class ToolRuntime : Service
             Signal = input.Signal,
             HostContext = Ctx,
         };
-        var visible = Get(input.Name, input.Agent?.ScopeKey);
-        runContext.CapturedFinalizer = visible?.FinalizeContent;
+        var registration = input.ScheduledRegistration
+            ?? CaptureRegistration(ResolveEntry(input.Name, input.Agent?.ScopeKey), input.Arguments);
+        input.ScheduledRegistration = null;
+        BindRegistration(runContext, registration);
         return runContext;
     }
 
-    public async Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
+    private void BindRegistration(ToolRunContext exec, RegistrationSnapshot registration)
     {
-        var exec = CreateExecution(input);
+        exec.Registration = registration;
+        exec.UsesScriptPermissions = registration.Definition?.UsesScriptPermissions == true;
+    }
+
+    private ToolEntry? ResolveEntry(string name, ScopeKey? scope)
+    {
+        var layers = _layers.ChainLayers(scope);
+        var own = scope is null ? null : _layers.LayerFor(scope);
+        var inherited = _layers.Global.Tools.GetValueOrDefault(name);
+        foreach (var layer in layers)
+        {
+            if (ReferenceEquals(layer, own)) continue;
+            if (layer.Tools.GetValueOrDefault(name) is { } entry) inherited = entry;
+        }
+        var local = own?.Tools.GetValueOrDefault(name);
+        if (local is not null)
+            return local;
+        if (inherited is null)
+            return null;
+        foreach (var layer in layers)
+            if (!ToolLayer.Admits(name, layer.Restrictions.Values))
+                return null;
+        return inherited;
+    }
+
+    public Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
+        => PrepareExecution(CreateExecution(input));
+
+    private async Task<ScheduledToolPreparation> PrepareExecution(ToolRunContext exec)
+    {
         if (exec.Signal.IsCancellationRequested)
             return new ScheduledToolPreparation.FinalResult(exec, AbortedBeforeDispatchResult());
         try
         {
             var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
+            // Known denials precede every other approval hook, including root escalation.
+            if (GuardReason(exec) is { } blocked)
+                throw new UnauthorizedAccessException(blocked);
+            if (SafetyBoundary.Resolve(Ctx) is { } safety)
+            {
+                var definition = exec.Registration.Definition;
+                await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true).ConfigureAwait(false);
+            }
             var gate = WriteRootGate(exec, NormalizePreDecision(await Ctx.Events.Waterfall(
                 carrier, new ToolPreExecuteNotification(exec),
                 () => new ValueTask<object?>(new PreToolDecision.Allow()))));
@@ -607,16 +658,18 @@ public sealed class ToolRuntime : Service
         }
     }
 
+
     /** Writes outside the session's write permission root need approval, whatever the session's current directory is. */
     private PreToolDecision WriteRootGate(ToolRunContext exec, PreToolDecision gate)
     {
         if (gate is PreToolDecision.Deny || exec.Agent is not { } agent)
             return gate;
-        var tool = Get(exec.Name, agent.ScopeKey);
+        var tool = exec.Registration.Definition;
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
         // The actual settings writer requests its own diff decision instead of a second root-only decision.
-        if (Ctx.Get<ISettingsMutationGate>(ISettingsMutationGate.ServiceName, false) is { } settings)
-            targets = targets.Where(path => !settings.Owns(path)).ToArray();
+        if (Ctx.Get<Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>>(SettingsMutation.ServiceName, false) is not null
+            && Ctx.GetProp("harnessOptions") is Dsh.Boot.HarnessOptions options)
+            targets = targets.Where(path => !CanonicalFilePath.SameFile(path, options.Home.SettingsFile)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
         return new PreToolDecision.Ask(gate is PreToolDecision.Ask { Reason: { } earlier } ? $"{reason}; {earlier}" : reason);
@@ -648,7 +701,35 @@ public sealed class ToolRuntime : Service
             return AbortedBeforeDispatchResult();
         try
         {
-            var tool = Get(exec.Name, exec.Agent?.ScopeKey)
+            var current = ResolveEntry(exec.Name, exec.Agent?.ScopeKey);
+            if ((current?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
+            {
+                if (current is null)
+                    throw new ToolNotFoundException(exec.Name);
+                var replacement = CaptureRegistration(current, exec.Arguments);
+                if (exec.Registration.Mode == ToolExecutionModeKind.Parallel
+                    && replacement.Mode != ToolExecutionModeKind.Parallel)
+                    throw new InvalidOperationException("The replacement tool requires exclusive scheduling; start a new call.");
+                // A replacement gets its own admission and root/pre-execute decisions, not the
+                // retired registration's per-call stamps. Session grants remain authoritative.
+                exec.ClearSafetyApprovals();
+                BindRegistration(exec, replacement);
+                var prepared = await PrepareExecution(exec).ConfigureAwait(false);
+                DemandCurrentRegistration(exec);
+                switch (prepared)
+                {
+                    case ScheduledToolPreparation.PostResult post:
+                        return post.Result;
+                    case ScheduledToolPreparation.FinalResult final:
+                        return final.Result;
+                    case ScheduledToolPreparation.Dispatch:
+                        break;
+                    default:
+                        throw new InvalidOperationException("unknown replacement preparation");
+                }
+            }
+            DemandCurrentRegistration(exec);
+            var tool = exec.Registration.Definition
                 ?? throw new ToolNotFoundException(exec.Name);
             exec.BodyInvoked = true;
             var arguments = exec.Arguments.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
@@ -694,7 +775,7 @@ public sealed class ToolRuntime : Service
         try
         {
             var postResult = await PostExecute(exec, result);
-            return FinishScheduledExecution(
+            return await FinishScheduledExecution(
                 exec,
                 exec.Signal.IsCancellationRequested && !postResult.IsError
                     ? CancellationResult(exec, postResult)
@@ -702,26 +783,34 @@ public sealed class ToolRuntime : Service
         }
         catch (Exception error)
         {
-            return FinishScheduledExecution(exec, ErrorResult(error));
+            return await FinishScheduledExecution(exec, ErrorResult(error));
         }
     }
 
-    public ToolExecutionResult FinishScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
+    public async ValueTask<ToolExecutionResult> FinishScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
-        var finalResult = ApplyFinalContent(exec, result);
-        NotifyResult(exec, finalResult);
-        return finalResult;
+        if (exec.Registration.Definition?.FinalizeContent is { } finalize
+            && await finalize(exec, result).ConfigureAwait(false) is { } content)
+            result = result with { Content = content };
+        try
+        {
+            NotifyResult(exec, result);
+            return result;
+        }
+        finally { exec.Registration = default; }
     }
 
-    private ToolExecutionResult ApplyFinalContent(ToolRunContext exec, ToolExecutionResult result)
-        => exec.CapturedFinalizer?.Invoke(exec, result) is { } content
-            ? result with { Content = content }
-            : result;
 
     private void NotifyResult(ToolRunContext exec, ToolExecutionResult result)
     {
         var carrier = DshScope.ScopeTarget(Ctx, exec.Agent?.ScopeKey);
         Ctx.Events.Emit(carrier, new ToolResultNotification(exec, result));
+    }
+
+    private void DemandCurrentRegistration(ToolRunContext exec)
+    {
+        if ((ResolveEntry(exec.Name, exec.Agent?.ScopeKey)?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
+            throw new InvalidOperationException("The tool registration changed during authorization; no replacement body was executed.");
     }
 
     private async Task<ToolExecutionResult> PostExecute(ToolRunContext exec, ToolExecutionResult result)
@@ -752,7 +841,7 @@ public sealed class ToolRuntime : Service
                     {
                         if (result.IsError)
                             throw new JsonException("tools/post-execute cannot replace the value of a failed result");
-                        var tool = Get(exec.Name, exec.Agent?.ScopeKey)
+                        var tool = exec.Registration.Definition
                             ?? throw new ToolNotFoundException(exec.Name);
                         var replaced = CreateSuccessResult(exec, tool, value);
                         return replaced with { AdditionalContexts = additionalContexts };
@@ -833,30 +922,6 @@ public sealed class ToolRuntime : Service
     private ToolExecutionResult CancellationResult(ToolRunContext exec, ToolExecutionResult? prior = null)
         => exec.BodyInvoked ? AbortedResult(prior) : AbortedBeforeDispatchResult(prior);
 
-    private sealed class FusedSignal : IDisposable
-    {
-        private readonly CancellationTokenSource? _linked;
-
-        private FusedSignal(CancellationToken token, CancellationTokenSource? linked)
-        {
-            Token = token;
-            _linked = linked;
-        }
-
-        public CancellationToken Token { get; }
-
-        public static FusedSignal Fuse(CancellationToken caller, CancellationToken wrapper)
-        {
-            if (caller == wrapper || wrapper == default)
-                return new FusedSignal(caller, null);
-            if (caller == default)
-                return new FusedSignal(wrapper, null);
-            var linked = CancellationTokenSource.CreateLinkedTokenSource(caller, wrapper);
-            return new FusedSignal(linked.Token, linked);
-        }
-
-        public void Dispose() => _linked?.Dispose();
-    }
 
     internal static ToolExecutionResult ErrorResult(Exception error)
     {

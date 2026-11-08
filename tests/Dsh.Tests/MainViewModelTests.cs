@@ -8,6 +8,7 @@ using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Runtime;
 using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
@@ -489,13 +490,15 @@ public sealed class MainViewModelTests
         await using var environment = await GuiTestEnvironment.CreateAsync();
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
 
-        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"], ["tool:write"]);
+        viewModel.Settings.UpdateSafety(autoApprove: true,
+            new Dictionary<string, PermissionMatcher> { ["deny-delete"] = new() { Dialect = "posix", Args = new() { ["command"] = "rm -rf /*" } } },
+            new Dictionary<string, PermissionMatcher> { ["allow-write"] = new() { Tool = ["write"] } });
 
         var reloaded = viewModel.Settings.Load();
         var safety = Assert.IsType<SafetySettings>(reloaded.Safety);
         Assert.True(safety.AutoApprove);
-        Assert.Contains("bash: rm -rf /*", safety.Blacklist);
-        Assert.Equal(["tool:write"], safety.Whitelist);
+        Assert.Equal("rm -rf /*", safety.Blacklist["deny-delete"].Args["command"]);
+        Assert.Equal(["write"], safety.Whitelist["allow-write"].Tool);
         Assert.True(File.Exists(viewModel.Settings.SettingsPath));
     });
 
