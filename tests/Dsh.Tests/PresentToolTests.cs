@@ -95,7 +95,7 @@ public sealed class PresentToolTests
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);
         var session = environment.Agent.Session;
-        var root = await CreateFile(session, "report.txt");
+        var root = Path.Combine(session.Header.Cwd!, "report.txt");
         var directory = Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, "sub")).FullName;
         var nested = Path.Combine(directory, "report.txt");
         await System.IO.File.WriteAllTextAsync(root, "root-report-body", TestContext.Current.CancellationToken);
@@ -112,6 +112,8 @@ public sealed class PresentToolTests
             Assert.False(changed.IsError, TextOf(changed));
         }
         Assert.Equal(directory, session.WorkingDirectory);
+
+        // The original directory is denied, so both successful calls must resolve to the effective directory.
         Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
         {
             (settings.Safety ??= new Dsh.Boot.SafetySettings()).Blacklist["deny-original-report"] = new() { Path = root, Intent = "read" };
@@ -119,10 +121,12 @@ public sealed class PresentToolTests
         });
 
         var absolute = await Present(environment, File(nested, "absolute nested report"));
-        var relative = await Present(environment, File("report.txt", "relative nested report"));
-
         Assert.False(absolute.IsError, TextOf(absolute));
+        Assert.Equal(nested, Assert.IsType<ToolExecutionResult.Success>(absolute).Value.GetProperty("files")[0].GetProperty("path").GetString());
+
+        var relative = await Present(environment, File("report.txt", "relative nested report"));
         Assert.False(relative.IsError, TextOf(relative));
+        Assert.Equal(nested, Assert.IsType<ToolExecutionResult.Success>(relative).Value.GetProperty("files")[0].GetProperty("path").GetString());
         var delivered = Assert.Single(SessionDeliverables.Collect(session.SnapshotEvents()));
         Assert.Equal(nested, delivered.Path);
         Assert.Equal("nested-report-body", await System.IO.File.ReadAllTextAsync(delivered.Path, TestContext.Current.CancellationToken));
@@ -130,6 +134,7 @@ public sealed class PresentToolTests
             && audit.Tool == ToolName && audit.Intent == "read" && audit.Path == Dsh.Runtime.CanonicalFilePath.Canonicalize(nested)
             && audit.SessionId == session.Id.Value && !string.IsNullOrEmpty(audit.CallId));
 
+        // Reverse the policy: the absolute original path succeeds, but the same relative input must now be denied.
         Dsh.Boot.HarnessSettings.Update(environment.App.Home, settings =>
         {
             settings.Safety!.Blacklist.Clear();
@@ -138,9 +143,10 @@ public sealed class PresentToolTests
         });
         var originalAbsolute = await Present(environment, File(root, "absolute original report"));
         Assert.False(originalAbsolute.IsError, TextOf(originalAbsolute));
+        Assert.Equal(root, Assert.IsType<ToolExecutionResult.Success>(originalAbsolute).Value.GetProperty("files")[0].GetProperty("path").GetString());
         var beforeDenied = session.SnapshotEvents().Where(IsPresented).ToArray();
         var denied = await Present(environment, File("report.txt"));
-        Assert.True(denied.IsError);
+        Assert.IsType<ToolExecutionResult.Failure>(denied);
         Assert.Equal(beforeDenied, session.SnapshotEvents().Where(IsPresented).ToArray());
         SafetyAssert.Denied(session, null, "deny-effective-report", nested, "read", ToolName);
     }
@@ -169,26 +175,30 @@ public sealed class PresentToolTests
     {
         await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
         var session = environment.Agent.Session;
+        var target = Path.Combine(session.Header.Cwd!, path);
         if (directory)
-            Directory.CreateDirectory(Path.Combine(session.Header.Cwd!, path));
+            Directory.CreateDirectory(target);
         session.Append(new TurnStartPayload(1));
 
         var result = await Present(environment, File(path));
 
-        Assert.True(result.IsError);
+        Assert.IsType<ToolExecutionResult.Failure>(result);
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
+        Assert.Equal(directory, Directory.Exists(target));
+        Assert.False(System.IO.File.Exists(target));
     }
 
     [Fact]
     public async Task Present_OutsideOpenTurn_Fails()
     {
         await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
-        await CreateFile(environment.Agent.Session, "notes.md");
+        var path = await CreateFile(environment.Agent.Session, "notes.md");
 
         var result = await Present(environment, File("notes.md"));
 
-        Assert.True(result.IsError);
+        Assert.IsType<ToolExecutionResult.Failure>(result);
         Assert.DoesNotContain(environment.Agent.Session.SnapshotEvents(), IsPresented);
+        Assert.Equal("notes.md", await System.IO.File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -206,7 +216,7 @@ public sealed class PresentToolTests
 
         var result = await Present(environment, [.. files]);
 
-        Assert.True(result.IsError);
+        Assert.IsType<ToolExecutionResult.Failure>(result);
         Assert.DoesNotContain(session.SnapshotEvents(), IsPresented);
     }
 
