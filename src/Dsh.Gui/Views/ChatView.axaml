@@ -153,7 +153,8 @@
 
     <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Border.Subtle}" />
 
-    <ListBox Grid.Row="2" Name="MessageList" Classes="MessageList" AutoScrollToSelectedItem="False" IsVisible="{Binding !IsTraceTab}"
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" IsVisible="{Binding !IsTraceTab}">
+    <ListBox Grid.Column="0" Name="MessageList" Classes="MessageList" AutoScrollToSelectedItem="False"
              ItemsSource="{Binding Messages}">
       <ListBox.ItemsPanel>
         <ItemsPanelTemplate>
@@ -241,6 +242,29 @@
           </DataTemplate>
       </ListBox.ItemTemplate>
     </ListBox>
+
+    <views:TimelineRail Grid.Column="1" Name="Rail" Width="18" Margin="2,0,2,0"
+                        LineBrush="{DynamicResource Brush.Text.Primary}"
+                        TickBrush="{DynamicResource Brush.Text.Secondary}" />
+    </Grid>
+
+    <!-- 轨道悬停预览: 列出整篇消息并自动停在指针所在那条, 面板自己可滚动。 -->
+    <Border Grid.Row="2" Name="TimelinePreview" IsVisible="False" Width="360" MaxHeight="380"
+            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,22,0" Padding="6"
+            Background="{DynamicResource Brush.Bg.Card}" BorderBrush="{DynamicResource Brush.Border.Subtle}"
+            BorderThickness="1" CornerRadius="10">
+      <ListBox Name="TimelinePreviewList" Classes="MessageList" AutoScrollToSelectedItem="False"
+               Background="Transparent" ItemsSource="{Binding Messages}">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:MessageViewModel">
+            <StackPanel Spacing="2" Margin="2,3">
+              <TextBlock Text="{Binding Role}" Classes="Tertiary" IsVisible="{Binding HasRole}" />
+              <TextBlock Text="{Binding Preview}" Classes="Secondary" TextWrapping="Wrap" MaxLines="3" />
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
 
     <ListBox Grid.Row="2" Name="TraceList" Classes="MessageList" AutoScrollToSelectedItem="False" IsVisible="{Binding IsTraceTab}"
              ItemsSource="{Binding TraceView}">
