@@ -1100,19 +1100,24 @@ public sealed class ChatWindowPaneTests : IDisposable
     {
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
         var agent = chat.InputPane.Agent;
+        // 生产的顺序: 每个回合先 TurnStart 再用户消息, 回合结束记 TurnEnd。
+        var firstTurn = agent.Session.Append(new TurnStartPayload(1)).Seq;
         agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第一条")), new SurfaceOp.Append());
-        agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第二条")), new SurfaceOp.Append());
-        var targetSeq = agent.Session.SnapshotEvents().Last(entry => entry.Data is UserMessagePayload).Seq;
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        var secondTurn = agent.Session.Append(new TurnStartPayload(2)).Seq;
+        var targetSeq = agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第二条")), new SurfaceOp.Append()).Seq;
 
         chat.RunSlashCommand(chat.InputPane, $"/timestamp revert {targetSeq}");
-        for (var attempt = 0; attempt < 200 && agent.Session.Seq != targetSeq; attempt++)
+        for (var attempt = 0; attempt < 200 && agent.Session.Seq != secondTurn; attempt++)
         {
             chat.DrainUi();
             await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal("第二条", chat.InputPane.Input);
-        Assert.Equal(targetSeq, agent.Session.Seq);
+        // 停在"这条消息所属回合之前": 整个第二回合都被截掉, 第一回合原样保留。
+        Assert.Equal(secondTurn, agent.Session.Seq);
+        Assert.True(agent.Session.Seq > firstTurn);
         chat.Dispose();
     }
 

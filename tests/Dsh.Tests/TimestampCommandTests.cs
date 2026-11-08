@@ -55,8 +55,9 @@ public sealed class TimestampCommandTests
         Assert.Equal(["only question"], timeline);
     }
 
+    /** 回退停在"这条消息所属回合之前": 消息本身连同它那一回合都不留在会话里(原文回输入区)。 */
     [Fact]
-    public async Task Revert_TruncatesTheSessionBeforeTheChosenMessage()
+    public async Task Revert_TruncatesBeforeTheTurnThatOwnsTheChosenMessage()
     {
         using var fixture = new Fixture();
         fixture.AppendUser("keep me");
@@ -65,25 +66,36 @@ public sealed class TimestampCommandTests
 
         var result = Assert.IsType<CommandResult.Success>(await fixture.RunAsync($"/timestamp revert #{seq}"));
 
-        Assert.Contains($"reverted to before #{seq}", result.Text);
+        Assert.Contains("back in the input area", result.Text);
         var remaining = SessionTimeline.UserMessages(fixture.Agent.Session).Select(entry => entry.Text).ToList();
         Assert.Equal(["keep me"], remaining);
+        // 整个回合都要走(剩下唯一一个 TurnStart), 且日志不能以悬空的 TurnStart 收尾:
+        // 那正是界面卡在"正在运行"、停止按钮又没反应的原因。
+        var events = fixture.Agent.Session.SnapshotEvents();
+        Assert.Single(events, sessionEvent => sessionEvent.Data is TurnStartPayload);
+        Assert.IsNotType<TurnStartPayload>(events[^1].Data);
     }
 
+    /** 分叉同样停在回合之前: 被选中那条不进新会话, 新会话标题沿用父会话标题。 */
     [Fact]
-    public async Task Fork_CopiesTheChosenMessageIntoTheNewSession()
+    public async Task Fork_StopsBeforeTheChosenTurn_AndTitlesFromTheParent()
     {
         using var fixture = new Fixture();
+        fixture.Agent.Session.Rename("父会话标题");
         fixture.AppendUser("first");
         var seq = fixture.AppendUser("second");
 
         var result = Assert.IsType<CommandResult.Success>(await fixture.RunAsync($"/timestamp fork #{seq}"));
 
         Assert.Contains("forked ->", result.Text);
-        var forkedId = result.Text!["forked -> ".Length..].Split(':')[0].Trim();
-        using var reader = fixture.Persistence.Open(SessionId.Create(forkedId), SessionAccess.Read);
-        var texts = SessionTimeline.FromEvents(reader.Read()).Select(entry => entry.Text).ToList();
-        Assert.Equal(["first", "second"], texts);
+        var forkedId = SessionId.Create(result.Text!["forked -> ".Length..].Split(':')[0].Trim());
+        using var handle = fixture.Persistence.Open(forkedId, SessionAccess.Read);
+        var events = handle.Read();
+        Assert.Equal(["first"], SessionTimeline.FromEvents(events).Select(entry => entry.Text));
+        var header = fixture.Persistence.Stat(forkedId)!.Header;
+        Assert.Equal("fork of 父会话标题 @", header.Title![.."fork of 父会话标题 @".Length]);
+        // 种子带着父会话的旧时间, 但新会话的活动时间必须从创建时刻算起。
+        Assert.Equal(header.CreatedAt, events[^1].Time);
     }
 
     [Fact]
@@ -125,12 +137,16 @@ public sealed class TimestampCommandTests
         private readonly IDisposable _registration;
         private readonly EffectHandle _persistenceRegistration;
 
+        /** 与生产的顺序一致: 先 TurnStart 再 UserMessage(回退/分叉都按回合边界切)。 */
         public long AppendUser(string text)
         {
+            Agent.Session.Append(new TurnStartPayload(Agent.Session.SnapshotEvents().Count(IsTurnStart) + 1));
             var sessionEvent = Agent.Session.Append(
                 new UserMessagePayload(MessageFactory.CreateUserText(text)), new SurfaceOp.Append());
             return sessionEvent.Seq;
         }
+
+        private static bool IsTurnStart(SessionEvent sessionEvent) => sessionEvent.Data is TurnStartPayload;
 
         /** 插件来源的消息不算"我说过的话", 列时间线时必须被过滤掉。 */
         public void AppendPluginMessage(string text)

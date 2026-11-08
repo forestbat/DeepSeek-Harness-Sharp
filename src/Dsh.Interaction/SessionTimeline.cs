@@ -50,6 +50,23 @@ public static class SessionTimeline
         return text.ToString();
     }
 
+    /**
+     * 这条消息所属回合的 TurnStart 序号(找不到就是 0)。
+     * 回退与分叉都必须停在这里而不是消息本身: 事件顺序是 TurnStart → UserMessage, 砍在消息处会留下
+     * 一个没有 TurnEnd 的回合, 界面重放就永远停在"正在运行"。
+     */
+    public static long TurnStartOf(IReadOnlyList<SessionEvent> events, long seq)
+    {
+        for (var index = events.Count - 1; index >= 0; index--)
+        {
+            if (events[index].Seq > seq)
+                continue;
+            if (events[index].Data is TurnStartPayload)
+                return events[index].Seq;
+        }
+        return 0;
+    }
+
     /** 时间 ≤ 目标时刻的最近一条用户消息(消息按时间递增, 取最后一个满足的即可)。 */
     public static long? NearestSeq(IReadOnlyList<Entry> entries, long timestamp)
     {

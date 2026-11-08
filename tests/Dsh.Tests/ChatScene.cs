@@ -43,8 +43,9 @@ internal sealed class ChatScene : IAsyncDisposable
         window.Show();
         for (var index = 0; index < MessagePairs; index++)
         {
-            viewModel.Messages.Add(new MessageViewModel("用户", $"问题 {index}", MessageKind.User, false));
-            viewModel.Messages.Add(new MessageViewModel("结果", LongText(index), MessageKind.Result, false));
+            // Seq 是"真实时间线条目"的标记: 时间轨道/回退/分叉都按它定位。
+            viewModel.Messages.Add(new MessageViewModel("用户", $"问题 {index}", MessageKind.User, false) { Seq = index * 2 + 1 });
+            viewModel.Messages.Add(new MessageViewModel("结果", LongText(index), MessageKind.Result, false) { Seq = index * 2 + 2 });
         }
         var scene = new ChatScene(environment, viewModel, window, chat);
         scene.Render();

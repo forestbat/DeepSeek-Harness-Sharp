@@ -885,10 +885,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private Task ForkAtMessageAsync(MessageViewModel? message)
         => RunTimelineCommandAsync(message, "fork", reload: false);
 
+    /**
+     * 回退/分叉共用: 服务端把会话截断到"这条消息所属回合之前", 这里再把这条消息的原文放回输入区,
+     * 于是用户看到的是"编辑并重发", 而不是一条留在转录里、界面还以为在跑的用户消息。
+     */
     private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool reload)
     {
         if (message?.Seq is not { } seq)
             return;
+        var text = message.Text;
         var output = await _chat.RunAsync($"/timestamp {action} #{seq}");
         if (output.Length > 0)
             AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
@@ -896,9 +901,39 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             // 会话已在服务端被截断: 重新取一份快照, 否则界面还留着一堆已经不存在的事件。
             await _chat.ReloadAsync(forceReset: true);
+            FillComposer(text);
             return;
         }
+        // 分叉出的会话只写在磁盘上, host 的会话表里还没有它: 丢掉磁盘快照缓存才看得见,
+        // 看见之后直接打开它, 否则用户分叉完还得自己去侧栏找。
+        _catalog.InvalidateDiskCache();
         RefreshSessions();
+        if (ForkedSessionId(output) is not { } forked || FindSession(SessionId.Create(forked)) is not { } node)
+            return;
+        await OpenChatAsync(MachineSpec.LocalName, forked);
+        SelectedSession = node;
+        FillComposer(text);
+    }
+
+    /** 把文本放回输入框并把光标放到末尾: 回退/分叉之后用户接着改的就是这段话。 */
+    private void FillComposer(string text)
+    {
+        if (text.Length == 0)
+            return;
+        Composer.Input = text;
+        Composer.CaretIndex = text.Length;
+    }
+
+    /** 分叉命令的结果形如 "forked -> 会话 id: ..."; 取出新会话 id 用来打开它。 */
+    private static string? ForkedSessionId(string output)
+    {
+        const string marker = "forked -> ";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+        var rest = output[(start + marker.Length)..];
+        var end = rest.IndexOfAny([' ', '\r', '\n', ':']);
+        return end < 0 ? rest : rest[..end];
     }
 
     [RelayCommand]

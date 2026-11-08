@@ -671,6 +671,7 @@ plugins:
 #     read: true
 #     write: true
 #     network: true
+#     无规则匹配时的默认决策：false 请求审批，true 允许。
 #     autoApprove:
 #     blacklist:
 #       <id>:

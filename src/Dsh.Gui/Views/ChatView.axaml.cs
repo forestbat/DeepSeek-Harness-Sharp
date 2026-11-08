@@ -25,6 +25,12 @@ public sealed partial class ChatView : UserControl
     /** 一次还原里最多修几轮。 */
     private const int AnchorSettlePasses = 3;
 
+    /** 跳到某条消息时它离视口顶端的距离。 */
+    private const double TranscriptTopPadding = 8;
+
+    /** 已打开的预览在轨道/面板边界外再多留几像素: 指针横穿那条缝时不能把它抖没。 */
+    private const double TimelineKeepReach = 4;
+
     /** 折叠锚点最多生效几次布局变化: 只够它自己那一次重估, 之后的流式增长不许再动视口。 */
     private const int FoldAnchorPasses = 2;
 
@@ -44,6 +50,8 @@ public sealed partial class ChatView : UserControl
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _subagentFlyout;
+    private int _timelineHovered = -1;
+    private bool _previewScrolling;
 
     public ChatView()
     {
@@ -75,8 +83,9 @@ public sealed partial class ChatView : UserControl
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         LayoutUpdated += OnLayoutUpdatedGuard;
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
-        // 时间线入口: 右键消息就是"跳到这里 / 回退到这里 / 从这里分叉"。
+        // 时间线入口: 刻度点击在轨道上做(见 WireTimeline), 右键只留"回退/分叉"这类必须落到消息上的动作。
         MessageList.AddHandler(ContextRequestedEvent, OnMessageContextRequested, RoutingStrategies.Tunnel);
+        WireTimeline();
         MessageList.PropertyChanged += (_, change) =>
         {
             if (change.Property != ListBox.ScrollProperty)
@@ -95,6 +104,155 @@ public sealed partial class ChatView : UserControl
             if (change.Property == IsVisibleProperty && IsVisible)
                 FocusComposer();
         };
+    }
+
+    /** 轨道悬停出预览、点击跳转; 预览面板自己可滚动, 鼠标移到面板上时保持打开。 */
+    private void WireTimeline()
+    {
+        Rail.Transcript = MessageList;
+        Rail.HoverChanged += ShowTimelinePreview;
+        Rail.Activated += index =>
+        {
+            var marks = Rail.Marks;
+            if (index < 0 || index >= marks.Count)
+                return;
+            HideTimelinePreview();
+            _viewModel?.JumpToMessageCommand.Execute(marks[index].Message);
+        };
+        // 悬停/关闭都在 ChatView 上判定: 指针从刻度挪到预览面板要跨过轨道左边的空白,
+        // 只靠"离开控件就关"会把面板在用户手上抽走。
+        AddHandler(PointerMovedEvent, OnTimelinePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        TimelinePreviewList.AddHandler(PointerPressedEvent, OnTimelinePreviewPressed, RoutingStrategies.Tunnel);
+        // 拖预览自己的滚动条时指针可能被甩到面板外, 这段时间一律不关。
+        TimelinePreview.AddHandler(Thumb.DragStartedEvent, (_, _) => _previewScrolling = true,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        TimelinePreview.AddHandler(Thumb.DragCompletedEvent, (_, _) => _previewScrolling = false,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    /**
+     * 指针移动时统一决定预览去留。
+     *
+     * 两套判定必须分开, 混用会二选一地踩到两个坑:
+     * - **打开/切换**只认轨道列的真实边界 + 刻度容差: 外扩会把右侧滚动条一起吞掉, 想拖滚动条却点出了预览。
+     * - **保持**用轨道列与预览面板的并集(各外扩几个像素): 轨道与面板之间哪怕只有一两像素的缝,
+     *   指针横穿过去的那一帧既不在轨道也不在面板里, 面板就会在用户手上消失。
+     */
+    private void OnTimelinePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!Rail.IsEffectivelyVisible)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        if (_previewScrolling)
+            return;
+        var overRail = IsWithin(Rail, e, 0);
+        if (TimelinePreview.IsVisible
+            && (overRail || IsWithin(Rail, e, TimelineKeepReach) || IsWithin(TimelinePreview, e, TimelineKeepReach)))
+        {
+            if (overRail)
+                HoverTickAt(e.GetPosition(Rail).Y);
+            return;
+        }
+        if (!overRail)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        HoverTickAt(e.GetPosition(Rail).Y);
+    }
+
+    private void HoverTickAt(double y)
+    {
+        var index = Rail.MarkAt(y);
+        if (index < 0 || index == _timelineHovered)
+            return;
+        _timelineHovered = index;
+        Rail.SetHovered(index);
+        ShowTimelinePreview(index);
+    }
+
+    /** 指针是否落在某个控件的矩形里(向外扩 reach 像素)。 */
+    private static bool IsWithin(Visual target, PointerEventArgs e, double reach)
+        => new Rect(target.Bounds.Size).Inflate(reach).Contains(e.GetPosition(target));
+
+    private void ShowTimelinePreview(int index)
+    {
+        if (!Rail.IsEffectivelyVisible)
+            return;
+        var marks = Rail.Marks;
+        if (index < 0 || index >= marks.Count)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        TimelinePreview.IsVisible = true;
+        FillPreviewItems();
+        PlaceTimelinePreview(index);
+        CenterTimelinePreview(marks[index].Message);
+    }
+
+    /**
+     * 预览只列用户消息(时间线的候选), 不列工具/思考这类中间状态:
+     * 面板是刻度的放大镜, 列了别的就等于把轨道变成了另一份转录。
+     */
+    private void FillPreviewItems()
+    {
+        if (_viewModel is not { } viewModel)
+            return;
+        var userMessages = viewModel.Messages.Where(message => message.Kind == MessageKind.User).ToList();
+        if (TimelinePreviewList.ItemsSource is List<MessageViewModel> current && current.SequenceEqual(userMessages))
+            return;
+        TimelinePreviewList.ItemsSource = userMessages;
+    }
+
+    /** 预览停在指针所指那条的前后几条上: 先让它可见, 再把它的位置挪到面板中间。 */
+    private void CenterTimelinePreview(MessageViewModel message)
+    {
+        // 面板刚显示出来还没应用模板, 连 Scroll 都还是 null: 等这一次指针事件走完再定位。
+        Dispatcher.UIThread.Post(() =>
+        {
+            var index = TimelinePreviewList.Items.IndexOf(message);
+            if (index < 0)
+                return;
+            TimelinePreviewList.UpdateLayout();
+            if (TimelinePreviewList.Scroll is ScrollViewer scroll)
+                RevealIndex(TimelinePreviewList, scroll, index, double.NaN);
+        }, DispatcherPriority.Background);
+    }
+
+    /** 预览面板贴着指针所在的那条刻度: 让"从刻度往左移到面板"是一条水平路径,
+     * 面板也就不必固定居中而在上下两头留出够不着的缝。面板右缘与轨道左缘严格相接(不留缝)。 */
+    private void PlaceTimelinePreview(int index)
+    {
+        if (TimelinePreview.Parent is not Visual parent)
+            return;
+        var tickY = Rail.TranslatePoint(new Point(0, Rail.OffsetOf(index)), parent)?.Y;
+        if (tickY is not { } centerY)
+            return;
+        var height = TimelinePreview.Bounds.Height > 0 ? TimelinePreview.Bounds.Height : TimelinePreview.MaxHeight;
+        var available = parent.Bounds.Height;
+        var top = Math.Clamp(centerY - height / 2, 0, Math.Max(0, available - height));
+        var gap = Rail.Margin;
+        TimelinePreview.Margin = new Thickness(0, top, gap.Left + Rail.Bounds.Width + gap.Right, 0);
+    }
+
+    private void HideTimelinePreview()
+    {
+        _timelineHovered = -1;
+        Rail.SetHovered(-1);
+        TimelinePreview.IsVisible = false;
+    }
+
+    private void OnTimelinePreviewPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Source is not Visual source
+            || source.GetVisualAncestors().OfType<ListBoxItem>().FirstOrDefault()?.DataContext is not MessageViewModel message)
+            return;
+        HideTimelinePreview();
+        _viewModel?.JumpToMessageCommand.Execute(message);
+        e.Handled = true;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -286,7 +444,7 @@ public sealed partial class ChatView : UserControl
             _restoringAnchor = true;
             try
             {
-                ApproachIndex(scroll, blank);
+                ApproachIndex(MessageList, scroll, blank);
                 MessageList.ScrollIntoView(blank);
                 MessageList.UpdateLayout();
                 RememberAnchor(scroll);
@@ -383,7 +541,7 @@ public sealed partial class ChatView : UserControl
                 return;
             if (LastRealizedIndex() is var index && index >= 0)
             {
-                ApproachIndex(scroll, index);
+                ApproachIndex(MessageList, scroll, index);
                 MessageList.ScrollIntoView(index);
             }
         }, DispatcherPriority.Background);
@@ -434,7 +592,7 @@ public sealed partial class ChatView : UserControl
             // 面板重估通常把锚点挤出了实体化范围: 先按实测行高把偏移量挪过去, 再请列表实体化它。
             if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 })
             {
-                ApproachIndex(scroll, index);
+                ApproachIndex(MessageList, scroll, index);
                 MessageList.ScrollIntoView(index);
                 MessageList.UpdateLayout();
             }
@@ -459,17 +617,63 @@ public sealed partial class ChatView : UserControl
     }
 
     /**
+     * 把某一项放到列表视口里的指定高度(desiredTop 为 NaN 表示居中): 先 ScrollIntoView 让它实体化,
+     * 再按实际位置修正, 最多几轮。视口尺寸要等排过版才有效, 所以先 UpdateLayout 再判断。
+     */
+    private static void RevealIndex(ListBox list, ScrollViewer scroll, int index, double desiredTop)
+    {
+        if (index < 0)
+            return;
+        list.UpdateLayout();
+        list.ScrollIntoView(index);
+        list.UpdateLayout();
+        for (var pass = 0; pass <= AnchorSettlePasses; pass++)
+        {
+            if (scroll.Viewport.Height <= 0)
+                return;
+            if (list.ContainerFromIndex(index) is not { } container
+                || container.TranslatePoint(default, scroll) is not { } position)
+            {
+                // 目标还没实体化: 按视口里实测的行高先走过去(ScrollIntoView 对没实体化的项不生效)。
+                ApproachIndex(list, scroll, index);
+                continue;
+            }
+            var top = double.IsNaN(desiredTop) ? (scroll.Viewport.Height - container.Bounds.Height) / 2 : desiredTop;
+            var delta = position.Y - top;
+            if (Math.Abs(delta) < 1)
+                return;
+            var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            var target = Math.Clamp(scroll.Offset.Y + delta, 0, maximum);
+            if (Math.Abs(target - scroll.Offset.Y) < 1)
+                return;
+            scroll.Offset = new Vector(scroll.Offset.X, target);
+            list.UpdateLayout();
+        }
+    }
+
+    /**
      * 先把偏移量挪到目标附近, 免得 ScrollIntoView 按估算一段段走过去。
      * 同样取自 SubtitleEdit 的 TableViewExtras.PrePositionScroll: 用视口里实测的行高走位, 最多三轮。
      */
-    private void ApproachIndex(ScrollViewer scroll, int index)
+    private static void ApproachIndex(ListBox list, ScrollViewer scroll, int index)
     {
-        if (scroll.Viewport.Height <= 0 || index == 0)
+        if (scroll.Viewport.Height <= 0)
             return;
+        // 第 0 项没法"按实测行高靠近"(它上面没有参照物): 直接把偏移量归零, 否则永远实体化不出来,
+        // 表现为"点最上面那个刻度跳不到第一条消息"。
+        if (index == 0)
+        {
+            if (scroll.Offset.Y > 0)
+            {
+                scroll.Offset = new Vector(scroll.Offset.X, 0);
+                list.UpdateLayout();
+            }
+            return;
+        }
         for (var pass = 0; pass < ApproachPasses; pass++)
         {
-            var items = MessageList.GetVisualDescendants().OfType<ListBoxItem>()
-                .Select(item => (Index: MessageList.IndexFromContainer(item), Item: item))
+            var items = list.GetVisualDescendants().OfType<ListBoxItem>()
+                .Select(item => (Index: list.IndexFromContainer(item), Item: item))
                 .Where(entry => entry.Index >= 0 && entry.Item.Bounds.Height > 0)
                 .OrderBy(entry => entry.Index)
                 .ToList();
@@ -486,7 +690,7 @@ public sealed partial class ChatView : UserControl
             if (Math.Abs(target - scroll.Offset.Y) < 1)
                 return;
             scroll.Offset = new Vector(scroll.Offset.X, target);
-            MessageList.UpdateLayout();
+            list.UpdateLayout();
         }
     }
 
@@ -591,7 +795,6 @@ public sealed partial class ChatView : UserControl
             return;
         e.Handled = true;
         MenuFlyout menu = new();
-        menu.Items.Add(MenuItem("跳到此消息", () => viewModel.JumpToMessageCommand.Execute(message)));
         menu.Items.Add(MenuItem("回退到此消息", () =>
         {
             if (viewModel.RevertToMessageCommand.CanExecute(message))
@@ -633,14 +836,16 @@ public sealed partial class ChatView : UserControl
         block.Focus();
     }
 
+    /** 跳到某条消息: 落在视口顶部并且不再跟随(用户是特意过来看的)。 */
     private void ScrollToMessage(MessageViewModel message)
     {
-        if (_viewModel is null)
+        if (_viewModel is not { } viewModel || MessageList.Scroll is not ScrollViewer scroll)
             return;
-        if (!_viewModel.Messages.Contains(message))
+        var index = viewModel.Messages.IndexOf(message);
+        if (index < 0)
             return;
-        _sticky = true;
-        Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(message));
+        _sticky = false;
+        Dispatcher.UIThread.Post(() => RevealIndex(MessageList, scroll, index, TranscriptTopPadding));
     }
 
     private void QueueScrollToEnd()

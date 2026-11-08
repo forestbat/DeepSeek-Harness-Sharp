@@ -26,6 +26,9 @@ public sealed class HostChatProtocolTests
         Assert.Contains(commands, command => command.Name == "provider");
         Assert.True((await editor.SessionEditing.ExecuteSessionCommandAsync(created.Id, "/provider list", Ct)).Known);
         Assert.False((await editor.SessionEditing.ExecuteSessionCommandAsync(created.Id, "/does-not-exist", Ct)).Known);
+        // 插件命令也要经 host 生效: /timestamp 由 dsh-session-graph 注册, 客户端只发一行文本。
+        Assert.Contains(commands, command => command.Name == "timestamp");
+        Assert.True((await editor.SessionEditing.ExecuteSessionCommandAsync(created.Id, "/timestamp list", Ct)).Known);
         await editor.SessionEditing.RenameSessionAsync(created.Id, "shared title", Ct);
         await editor.SessionEditing.SetSessionApprovalPolicyAsync(created.Id, nameof(ApprovalPolicy.Never), Ct);
         var snapshot = await observer.GetSessionSnapshotAsync(created.Id, Ct);
