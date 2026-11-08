@@ -155,11 +155,23 @@ public sealed class MainViewModelTests
     public async Task TimelineActions_JumpRevertAndForkTakeTheMessageSeq() => await HeadlessGui.RunAsync(async () =>
     {
         // 回退会截断会话, 不能碰同类的共享组合: 用隔离环境, 否则会污染其它用例的事件流。
-        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        // 检查点在隔离环境里会去写 home 下的 git 仓库(被 ACL 拒), 会挡住回退; 这条用例只验证时间线语义, 关掉它。
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync($"""
+            {GuiTestEnvironment.HomeSettings}
+            plugins:
+              "@deepseek-ai/dsh-checkpoints":
+                enabled: false
+            """);
         var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("keep me")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(2));
         var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(2, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(3));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me too")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(3, new TurnEndReason.Completed()));
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
@@ -175,6 +187,9 @@ public sealed class MainViewModelTests
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1);
         Assert.Equal(["keep me"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
+        // 被回退的那条原文回输入区: 用户接下来就是改它再发, 而不是留在转录里当一条"卡住"的消息。
+        Assert.Equal("drop me", viewModel.Composer.Input);
+        Assert.False(viewModel.IsBusy, "截断之后没有回合在跑, 停止按钮不该继续显示");
     });
     /** 分叉要经 host 的 /timestamp 命令真的落盘, 并且分叉出的会话能直接打开(不是让用户自己去翻列表)。 */
     [Fact]
@@ -182,9 +197,15 @@ public sealed class MainViewModelTests
     {
         await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("first")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(2));
         var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("second")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(2, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(3));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("third")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(3, new TurnEndReason.Completed()));
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
@@ -194,7 +215,13 @@ public sealed class MainViewModelTests
 
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.SelectedSession is { } node && node.SessionId.Value != session.Id.Value);
-        Assert.Contains($"fork of {session.Id}", viewModel.SelectedSession!.Title, StringComparison.Ordinal);
+        // 标题沿用父会话的标题(不是 uuid), 后面带被分叉的位置。
+        var parentTitle = session.Header.Title;
+        Assert.NotNull(parentTitle);
+        Assert.StartsWith($"fork of {parentTitle} @", viewModel.SelectedSession!.Title, StringComparison.Ordinal);
+        // 新会话里只有被选中那条之前的内容, 它自己的原文回到新会话的输入区。
+        Assert.Equal(["first"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
+        Assert.Equal("second", viewModel.Composer.Input);
     });
 
     [Fact]

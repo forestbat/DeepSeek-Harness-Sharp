@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using Dsh.Gui.ViewModels;
 
 namespace Dsh.Gui.Views;
@@ -11,14 +12,22 @@ public sealed record TimelineMark(int Index, double Fraction, MessageViewModel M
 
 /**
  * 会话右侧的时间轨道: 一条竖线加每条用户消息一个刻度。
- * 刻度按消息在整篇里的序号定位, 所以"竖线上的高度"就是"滚到那里能看到的东西";
- * 悬停高亮并回传索引(预览面板据此滚动), 点击回传索引(跳到那条消息)。
+ *
+ * 刻度位置按**消息在内容里的真实高度**折算(已实体化的用实测位置, 未实体化的按平均行高顺推),
+ * 所以竖线上的高度与右侧滚动条的位置是同一套坐标 —— 刻度指哪, 滚到那里就是那条消息。
+ * 只有刻度本身是命中目标: 轨道空白既不预览也不跳转, 免得想去拖滚动条却"点到"远处的刻度。
  */
 public sealed class TimelineRail : Control
 {
     private const double EdgePadding = 12;
     private const double TickHalfWidth = 3;
     private const double HoveredTickHalfWidth = 6;
+
+    /** 刻度上下的命中容差: 超出这个距离就不算"点在这条刻度上"。 */
+    public const double TickReach = 7;
+
+    /** 还没排过版时的兜底行高(只用于首帧估算, 不参与稳定状态)。 */
+    private const double FallbackItemHeight = 40;
 
     public static readonly StyledProperty<ListBox?> TranscriptProperty =
         AvaloniaProperty.Register<TimelineRail, ListBox?>(nameof(Transcript));
@@ -30,12 +39,14 @@ public sealed class TimelineRail : Control
         AvaloniaProperty.Register<TimelineRail, IBrush?>(nameof(TickBrush), Brushes.White);
 
     private List<TimelineMark> _marks = [];
-    private int _sourceCount = -1;
-    private int _hovered;
+    private int _hovered = -1;
+    private MessageViewModel? _hoveredMessage;
+
+    /** 已实测到的行高(按消息序号), 滚过的区域越多越准。 */
+    private readonly Dictionary<int, double> _heights = [];
+    private int _heightsForCount = -1;
 
     static TimelineRail() => AffectsRender<TimelineRail>(LineBrushProperty, TickBrushProperty);
-
-    public TimelineRail() => _hovered = -1;
 
     public ListBox? Transcript
     {
@@ -55,7 +66,7 @@ public sealed class TimelineRail : Control
         set => SetValue(TickBrushProperty, value);
     }
 
-    /** 当前刻度: 消息源变化时重建。 */
+    /** 当前刻度; 每次取都按最新布局重算(内容长高/折叠/滚动都会改变刻度位置)。 */
     public IReadOnlyList<TimelineMark> Marks
     {
         get
@@ -69,25 +80,81 @@ public sealed class TimelineRail : Control
 
     public event Action<int>? Activated;
 
-    /** 消息源变了(新会话/回退截断)就重建刻度; 只在句柄里比个数, 不订阅集合事件。 */
+    /**
+     * 重建刻度: 用"内容坐标里的顶端"除以内容总高。
+     * 已实体化的项取实测位置, 其余按实测平均行高顺推 —— 与虚拟化面板自己的估算方式一致。
+     */
     public void Rebuild()
     {
-        if (_sourceCount == (Transcript?.ItemCount ?? -1))
-            return;
-        _sourceCount = Transcript?.ItemCount ?? -1;
-        var items = Transcript?.Items;
-        var total = _sourceCount;
+        var list = Transcript;
+        var items = list?.Items;
+        var total = list?.ItemCount ?? 0;
         _marks = [];
-        if (items is null || total <= 0)
+        if (list is null || items is null || total <= 0)
+        {
+            _hovered = -1;
             return;
+        }
+        var fractions = Positions(list, total);
         for (var index = 0; index < total; index++)
         {
-            if (items[index] is not MessageViewModel { Kind: MessageKind.User } message)
-                continue;
-            _marks.Add(new TimelineMark(index, total > 1 ? (double)index / (total - 1) : 0, message));
+            // 只认"真实时间线条目": 与 /timestamp 的候选同一套(用户自己发的消息, 带事件序号),
+            // 合成出来的界面行、上下文注入行都不会变成刻度。
+            if (items[index] is MessageViewModel { Kind: MessageKind.User, HasTimelineEntry: true } message)
+                _marks.Add(new TimelineMark(index, fractions[index], message));
         }
         if (_hovered >= _marks.Count)
             _hovered = -1;
+    }
+
+    /**
+     * 每一项在内容里的相对位置(0~1)。
+     *
+     * 累加"每项高度"而不是拿"实测顶端 + 平均行高"去拼: 虚拟化只给当前视口里的项实测位置,
+     * 拿它当锚点会让未实体化的项全挤在锚点前面(刻度成簇), 也就是"刻度对不上消息"。
+     * 这里把实测到的行高缓存下来(用户滚过的地方会越来越准), 没测过的用平均行高,
+     * 再从第一项累加到末项 —— 单调、无跳变, 与滚动位置同一套比例。
+     */
+    private double[] Positions(ListBox list, int total)
+    {
+        var fractions = new double[total];
+        if (list.Scroll is not ScrollViewer scroll || scroll.Extent.Height <= 0 || total == 0)
+        {
+            for (var index = 0; index < total; index++)
+                fractions[index] = total > 1 ? (double)index / (total - 1) : 0;
+            return fractions;
+        }
+
+        if (_heightsForCount != total)
+        {
+            _heights.Clear();
+            _heightsForCount = total;
+        }
+        foreach (var item in list.GetVisualDescendants().OfType<ListBoxItem>())
+        {
+            var index = list.IndexFromContainer(item);
+            if (index >= 0 && index < total && item.Bounds.Height > 0)
+                _heights[index] = item.Bounds.Height;
+        }
+
+        var average = _heights.Count > 0 ? _heights.Values.Average() : FallbackItemHeight;
+        var heights = new double[total];
+        var sum = 0.0;
+        for (var index = 0; index < total; index++)
+        {
+            heights[index] = _heights.TryGetValue(index, out var measured) ? measured : average;
+            sum += heights[index];
+        }
+        if (sum <= 0)
+            return fractions;
+
+        var top = 0.0;
+        for (var index = 0; index < total; index++)
+        {
+            fractions[index] = Math.Clamp(top / sum, 0, 1);
+            top += heights[index];
+        }
+        return fractions;
     }
 
     /** 第 index 条刻度在轨道上的纵坐标。 */
@@ -97,16 +164,16 @@ public sealed class TimelineRail : Control
         return index >= 0 && index < _marks.Count ? EdgePadding + _marks[index].Fraction * span : double.NaN;
     }
 
-    /** 指针位置落在哪条刻度上(容差按距离最近算, 不是命中哪个像素)。 */
+    /** 指针落在**哪条刻度上**: 超出 TickReach 的距离一律不算命中, 轨道的空白处什么都不做。 */
     public int MarkAt(double y)
     {
         Rebuild();
         var best = -1;
-        var bestDistance = double.MaxValue;
+        var bestDistance = TickReach;
         for (var index = 0; index < _marks.Count; index++)
         {
             var distance = Math.Abs(OffsetOf(index) - y);
-            if (distance >= bestDistance)
+            if (distance > bestDistance)
                 continue;
             bestDistance = distance;
             best = index;
@@ -116,7 +183,7 @@ public sealed class TimelineRail : Control
 
     public override void Render(DrawingContext context)
     {
-        // 透明底让整条轨道可命中: 刻度只有几个像素宽, 空白处也要能悬停。
+        // 透明底只为了让指针进入轨道列时能收到事件; 命中判定仍然只认刻度。
         context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
         Rebuild();
         var centerX = Bounds.Width / 2;
@@ -137,18 +204,6 @@ public sealed class TimelineRail : Control
         }
     }
 
-    protected override void OnPointerMoved(PointerEventArgs e)
-    {
-        base.OnPointerMoved(e);
-        SetHovered(MarkAt(e.GetPosition(this).Y));
-    }
-
-    protected override void OnPointerExited(PointerEventArgs e)
-    {
-        base.OnPointerExited(e);
-        SetHovered(-1);
-    }
-
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
@@ -157,11 +212,17 @@ public sealed class TimelineRail : Control
         e.Handled = true;
     }
 
-    private void SetHovered(int index)
+    /**
+     * 悬停高亮。传入 -1 表示指针离开了刻度(但可能还在轨道列里): 高亮撤掉, 预览由调用方决定留还是收。
+     * 同一条消息重复调用不触发事件, 免得指针在刻度附近抖动时预览反复重建。
+     */
+    public void SetHovered(int index)
     {
-        if (_hovered == index)
+        var message = index >= 0 && index < _marks.Count ? _marks[index].Message : null;
+        if (_hovered == index && ReferenceEquals(_hoveredMessage, message))
             return;
         _hovered = index;
+        _hoveredMessage = message;
         InvalidateVisual();
         HoverChanged?.Invoke(index);
     }

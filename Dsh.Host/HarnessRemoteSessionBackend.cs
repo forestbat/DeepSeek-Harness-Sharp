@@ -211,10 +211,11 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         return null;
     }
 
+    /** 最后事件时间; 播种会话(fork)的最后一条事件带着父会话的旧时间, 所以以创建时间为下界。 */
     private static long LastEventTime(Session session)
     {
         var events = session.SnapshotEvents();
-        return events.Count == 0 ? session.Header.CreatedAt : events[^1].Time;
+        return events.Count == 0 ? session.Header.CreatedAt : Math.Max(events[^1].Time, session.Header.CreatedAt);
     }
 
 

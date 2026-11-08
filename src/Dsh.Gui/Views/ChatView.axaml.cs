@@ -28,6 +28,9 @@ public sealed partial class ChatView : UserControl
     /** 跳到某条消息时它离视口顶端的距离。 */
     private const double TranscriptTopPadding = 8;
 
+    /** 已打开的预览在轨道/面板边界外再多留几像素: 指针横穿那条缝时不能把它抖没。 */
+    private const double TimelineKeepReach = 4;
+
     /** 折叠锚点最多生效几次布局变化: 只够它自己那一次重估, 之后的流式增长不许再动视口。 */
     private const int FoldAnchorPasses = 2;
 
@@ -47,6 +50,8 @@ public sealed partial class ChatView : UserControl
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _subagentFlyout;
+    private int _timelineHovered = -1;
+    private bool _previewScrolling;
 
     public ChatView()
     {
@@ -114,9 +119,63 @@ public sealed partial class ChatView : UserControl
             HideTimelinePreview();
             _viewModel?.JumpToMessageCommand.Execute(marks[index].Message);
         };
-        TimelinePreview.PointerExited += (_, _) => QueueHideTimelinePreview();
+        // 悬停/关闭都在 ChatView 上判定: 指针从刻度挪到预览面板要跨过轨道左边的空白,
+        // 只靠"离开控件就关"会把面板在用户手上抽走。
+        AddHandler(PointerMovedEvent, OnTimelinePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
         TimelinePreviewList.AddHandler(PointerPressedEvent, OnTimelinePreviewPressed, RoutingStrategies.Tunnel);
+        // 拖预览自己的滚动条时指针可能被甩到面板外, 这段时间一律不关。
+        TimelinePreview.AddHandler(Thumb.DragStartedEvent, (_, _) => _previewScrolling = true,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        TimelinePreview.AddHandler(Thumb.DragCompletedEvent, (_, _) => _previewScrolling = false,
+            RoutingStrategies.Bubble, handledEventsToo: true);
     }
+
+    /**
+     * 指针移动时统一决定预览去留。
+     *
+     * 两套判定必须分开, 混用会二选一地踩到两个坑:
+     * - **打开/切换**只认轨道列的真实边界 + 刻度容差: 外扩会把右侧滚动条一起吞掉, 想拖滚动条却点出了预览。
+     * - **保持**用轨道列与预览面板的并集(各外扩几个像素): 轨道与面板之间哪怕只有一两像素的缝,
+     *   指针横穿过去的那一帧既不在轨道也不在面板里, 面板就会在用户手上消失。
+     */
+    private void OnTimelinePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!Rail.IsEffectivelyVisible)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        if (_previewScrolling)
+            return;
+        var overRail = IsWithin(Rail, e, 0);
+        if (TimelinePreview.IsVisible
+            && (overRail || IsWithin(Rail, e, TimelineKeepReach) || IsWithin(TimelinePreview, e, TimelineKeepReach)))
+        {
+            if (overRail)
+                HoverTickAt(e.GetPosition(Rail).Y);
+            return;
+        }
+        if (!overRail)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        HoverTickAt(e.GetPosition(Rail).Y);
+    }
+
+    private void HoverTickAt(double y)
+    {
+        var index = Rail.MarkAt(y);
+        if (index < 0 || index == _timelineHovered)
+            return;
+        _timelineHovered = index;
+        Rail.SetHovered(index);
+        ShowTimelinePreview(index);
+    }
+
+    /** 指针是否落在某个控件的矩形里(向外扩 reach 像素)。 */
+    private static bool IsWithin(Visual target, PointerEventArgs e, double reach)
+        => new Rect(target.Bounds.Size).Inflate(reach).Contains(e.GetPosition(target));
 
     private void ShowTimelinePreview(int index)
     {
@@ -125,46 +184,66 @@ public sealed partial class ChatView : UserControl
         var marks = Rail.Marks;
         if (index < 0 || index >= marks.Count)
         {
-            QueueHideTimelinePreview();
+            HideTimelinePreview();
             return;
         }
         TimelinePreview.IsVisible = true;
+        FillPreviewItems();
+        PlaceTimelinePreview(index);
         CenterTimelinePreview(marks[index].Message);
     }
 
     /**
-     * 指针离开轨道后才判断关不关: 面板紧贴轨道, 从轨道移到面板上时指针已经在面板里, 这时不能关。
-     * 判断放进派发队列, 是为了等这一次指针移动的路由全部走完。
+     * 预览只列用户消息(时间线的候选), 不列工具/思考这类中间状态:
+     * 面板是刻度的放大镜, 列了别的就等于把轨道变成了另一份转录。
      */
-    private void QueueHideTimelinePreview()
+    private void FillPreviewItems()
     {
-        if (!TimelinePreview.IsVisible)
+        if (_viewModel is not { } viewModel)
             return;
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (TimelinePreview.IsPointerOver || (Rail.IsPointerOver && Rail.IsEffectivelyVisible))
-                return;
-            TimelinePreview.IsVisible = false;
-        }, DispatcherPriority.Background);
+        var userMessages = viewModel.Messages.Where(message => message.Kind == MessageKind.User).ToList();
+        if (TimelinePreviewList.ItemsSource is List<MessageViewModel> current && current.SequenceEqual(userMessages))
+            return;
+        TimelinePreviewList.ItemsSource = userMessages;
     }
-
-    private void HideTimelinePreview() => TimelinePreview.IsVisible = false;
 
     /** 预览停在指针所指那条的前后几条上: 先让它可见, 再把它的位置挪到面板中间。 */
     private void CenterTimelinePreview(MessageViewModel message)
     {
-        if (_viewModel is not { } viewModel)
-            return;
-        var index = viewModel.Messages.IndexOf(message);
         // 面板刚显示出来还没应用模板, 连 Scroll 都还是 null: 等这一次指针事件走完再定位。
         Dispatcher.UIThread.Post(() =>
         {
+            var index = TimelinePreviewList.Items.IndexOf(message);
+            if (index < 0)
+                return;
             TimelinePreviewList.UpdateLayout();
             if (TimelinePreviewList.Scroll is ScrollViewer scroll)
                 RevealIndex(TimelinePreviewList, scroll, index, double.NaN);
         }, DispatcherPriority.Background);
     }
 
+    /** 预览面板贴着指针所在的那条刻度: 让"从刻度往左移到面板"是一条水平路径,
+     * 面板也就不必固定居中而在上下两头留出够不着的缝。面板右缘与轨道左缘严格相接(不留缝)。 */
+    private void PlaceTimelinePreview(int index)
+    {
+        if (TimelinePreview.Parent is not Visual parent)
+            return;
+        var tickY = Rail.TranslatePoint(new Point(0, Rail.OffsetOf(index)), parent)?.Y;
+        if (tickY is not { } centerY)
+            return;
+        var height = TimelinePreview.Bounds.Height > 0 ? TimelinePreview.Bounds.Height : TimelinePreview.MaxHeight;
+        var available = parent.Bounds.Height;
+        var top = Math.Clamp(centerY - height / 2, 0, Math.Max(0, available - height));
+        var gap = Rail.Margin;
+        TimelinePreview.Margin = new Thickness(0, top, gap.Left + Rail.Bounds.Width + gap.Right, 0);
+    }
+
+    private void HideTimelinePreview()
+    {
+        _timelineHovered = -1;
+        Rail.SetHovered(-1);
+        TimelinePreview.IsVisible = false;
+    }
 
     private void OnTimelinePreviewPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -546,6 +625,8 @@ public sealed partial class ChatView : UserControl
         if (index < 0)
             return;
         list.UpdateLayout();
+        list.ScrollIntoView(index);
+        list.UpdateLayout();
         for (var pass = 0; pass <= AnchorSettlePasses; pass++)
         {
             if (scroll.Viewport.Height <= 0)
@@ -576,8 +657,19 @@ public sealed partial class ChatView : UserControl
      */
     private static void ApproachIndex(ListBox list, ScrollViewer scroll, int index)
     {
-        if (scroll.Viewport.Height <= 0 || index == 0)
+        if (scroll.Viewport.Height <= 0)
             return;
+        // 第 0 项没法"按实测行高靠近"(它上面没有参照物): 直接把偏移量归零, 否则永远实体化不出来,
+        // 表现为"点最上面那个刻度跳不到第一条消息"。
+        if (index == 0)
+        {
+            if (scroll.Offset.Y > 0)
+            {
+                scroll.Offset = new Vector(scroll.Offset.X, 0);
+                list.UpdateLayout();
+            }
+            return;
+        }
         for (var pass = 0; pass < ApproachPasses; pass++)
         {
             var items = list.GetVisualDescendants().OfType<ListBoxItem>()
