@@ -245,11 +245,11 @@ public sealed class ToolConflictTests
             Output = new(ToolSchemas.Parse("""{"type":"object","required":["value"],"properties":{"value":{"type":"string"}}}"""),
                 (args, value) => [new TextBlock(args.GetProperty("new_input").GetString() + "=" + value.GetProperty("value").GetString())]),
             Execute = (args, _) => Task.FromResult<object?>(new JsonObject { ["value"] = args.GetProperty("new_input").GetString() }),
-            FinalizeContent = (_, result) =>
+            FinalizeContent = async (_, result) =>
             {
                 if (result.IsError) return null;
                 finalizations++;
-                File.WriteAllText(finalized, Text(result));
+                await File.WriteAllTextAsync(finalized, Text(result), TestContext.Current.CancellationToken);
                 return result.Content;
             },
         });

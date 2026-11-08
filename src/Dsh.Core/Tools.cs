@@ -545,14 +545,14 @@ public sealed class ToolRuntime : Service
                     return dispatched switch
                     {
                         ScheduledToolDispatch.PostResult postResult => await FinalizeScheduledExecution(dispatch.Exec, postResult.Result),
-                        ScheduledToolDispatch.FinalResult finalResult => FinishScheduledExecution(dispatch.Exec, finalResult.Result),
+                        ScheduledToolDispatch.FinalResult finalResult => await FinishScheduledExecution(dispatch.Exec, finalResult.Result),
                         _ => throw new InvalidOperationException("unknown scheduled dispatch"),
                     };
                 }
             case ScheduledToolPreparation.PostResult postResult:
                 return await FinalizeScheduledExecution(postResult.Exec, postResult.Result);
             case ScheduledToolPreparation.FinalResult finalResult:
-                return FinishScheduledExecution(finalResult.Exec, finalResult.Result);
+                return await FinishScheduledExecution(finalResult.Exec, finalResult.Result);
             default:
                 throw new InvalidOperationException("unknown scheduled preparation");
         }
@@ -782,7 +782,7 @@ public sealed class ToolRuntime : Service
         try
         {
             var postResult = await PostExecute(exec, result);
-            return FinishScheduledExecution(
+            return await FinishScheduledExecution(
                 exec,
                 exec.Signal.IsCancellationRequested && !postResult.IsError
                     ? CancellationResult(exec, postResult)
@@ -790,25 +790,23 @@ public sealed class ToolRuntime : Service
         }
         catch (Exception error)
         {
-            return FinishScheduledExecution(exec, ErrorResult(error));
+            return await FinishScheduledExecution(exec, ErrorResult(error));
         }
     }
 
-    public ToolExecutionResult FinishScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
+    public async ValueTask<ToolExecutionResult> FinishScheduledExecution(ToolRunContext exec, ToolExecutionResult result)
     {
-        var finalResult = ApplyFinalContent(exec, result);
+        if (exec.Registration.Definition?.FinalizeContent is { } finalize
+            && await finalize(exec, result).ConfigureAwait(false) is { } content)
+            result = result with { Content = content };
         try
         {
-            NotifyResult(exec, finalResult);
-            return finalResult;
+            NotifyResult(exec, result);
+            return result;
         }
         finally { exec.Registration = default; }
     }
 
-    private ToolExecutionResult ApplyFinalContent(ToolRunContext exec, ToolExecutionResult result)
-        => exec.Registration.Definition?.FinalizeContent?.Invoke(exec, result) is { } content
-            ? result with { Content = content }
-            : result;
 
     private void NotifyResult(ToolRunContext exec, ToolExecutionResult result)
     {

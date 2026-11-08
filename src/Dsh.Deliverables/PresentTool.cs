@@ -51,7 +51,7 @@ public static class PresentTool
             Parameters = Parameters,
             Output = new ToolOutputDefinition(OutputSchema, static (_, value) => [new TextBlock(Rendered(value))]),
             Execute = (args, exec) => Execute(args, exec, projections, staged),
-            FinalizeContent = (exec, result) => Publish(exec, result, staged),
+            FinalizeContent = (exec, result) => PublishAsync(exec, result, staged),
         });
         return new Registration(section, registration);
     }
@@ -106,7 +106,7 @@ public static class PresentTool
         return new PresentedFile(target, string.IsNullOrEmpty(description) ? null : description);
     }
 
-    private static IReadOnlyList<ContentBlock>? Publish(ToolExecution execution, ToolExecutionResult result,
+    private static async ValueTask<IReadOnlyList<ContentBlock>?> PublishAsync(ToolExecution execution, ToolExecutionResult result,
         ConditionalWeakTable<ToolExecution, Staged> staged)
     {
         if (!staged.TryGetValue(execution, out var delivery)) return null;
@@ -116,8 +116,8 @@ public static class PresentTool
         for (var index = 0; index < delivery.Files.Count; index++)
         {
             var path = delivery.Files[index].Path;
-            SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx)
-                ?.AuthorizeFileAsync(delivery.Run, path, "read", execution.Signal, canApprove: false).GetAwaiter().GetResult();
+            if (SafetyBoundary.Resolve(delivery.Run.Agent?.Ctx) is { } safety)
+                await safety.AuthorizeFileAsync(delivery.Run, path, "read", execution.Signal, canApprove: false).ConfigureAwait(false);
             Dsh.Runtime.FilePathAccess.DemandOrdinaryFile(path, allowMissing: false);
         }
         execution.Signal.ThrowIfCancellationRequested();

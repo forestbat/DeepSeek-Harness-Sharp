@@ -22,7 +22,7 @@ public sealed class ToolDefinition
     public required JsonObject Parameters { get; init; }
     public required ToolOutputDefinition Output { get; init; }
     public required Func<JsonElement, ToolRunContext, Task<object?>> Execute { get; init; }
-    public Func<ToolExecution, ToolExecutionResult, IReadOnlyList<ContentBlock>?>? FinalizeContent { get; init; }
+    public Func<ToolExecution, ToolExecutionResult, ValueTask<IReadOnlyList<ContentBlock>?>>? FinalizeContent { get; init; }
     public long? TimeoutMs { get; init; }
     public Func<JsonElement, bool>? IsConcurrencySafe { get; init; }
     /** Trusted host file tools defer default notification to their actual mediated operations. */

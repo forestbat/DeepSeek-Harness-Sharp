@@ -53,7 +53,7 @@ internal sealed class ReplacementFixture : IDisposable
         => (await Tools.DispatchScheduledExecution(prepared.Exec)) switch
         {
             ScheduledToolDispatch.PostResult post => await Tools.FinalizeScheduledExecution(prepared.Exec, post.Result),
-            ScheduledToolDispatch.FinalResult final => Tools.FinishScheduledExecution(prepared.Exec, final.Result),
+            ScheduledToolDispatch.FinalResult final => await Tools.FinishScheduledExecution(prepared.Exec, final.Result),
             _ => throw new InvalidOperationException("Unexpected scheduled dispatch result."),
         };
 
