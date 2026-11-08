@@ -30,6 +30,13 @@ public sealed class ModelsDevReasoningSource : IModelReasoningSource
     public int? ContextWindowFor(string model)
         => ProviderKey() is { } key ? ModelsDevCatalog.Embedded.ContextWindowFor(key, model) : null;
 
+    /**
+     * 目录里有没有这个模型(它是否支持推理是另一回事)。
+     * 用来区分"目录明确说它不支持推理"与"目录根本不认识这个端点/模型": 后者才值得向端点自己探测。
+     */
+    public bool Knows(string model)
+        => ProviderKey() is { } key && ModelsDevCatalog.Embedded.ModelIdsFor(key, null).Contains(model, StringComparer.Ordinal);
+
     private string? ProviderKey()
     {
         if (!_resolved)

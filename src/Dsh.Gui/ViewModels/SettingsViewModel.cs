@@ -281,8 +281,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isWorking;
 
-    /** 模型切换后只需刷新推理强度候选; 完整 Reload 会读盘并重查 GPU/版本, 在点击链路里太重。 */
-    public void RefreshReasoningEfforts() => LoadReasoningEfforts();
+    /**
+     * 重算推理强度候选。provider/model 是当前会话用的模型: 传空才退回全局默认模型。
+     * 档位属于模型, 拿默认模型的档位去显示会在换模型后给出错的表, 选中就被 /reasoning 拒掉。
+     */
+    public void RefreshReasoningEfforts(string? provider = null, string? model = null)
+        => _ = LoadReasoningEffortsAsync(provider, model);
 
     public void Reload()
     {
@@ -471,8 +475,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsWorking = true;
         try
         {
-            var runtime = _ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false);
-            var models = runtime?.ListModels(provider) ?? [];
+            var models = Runtime()?.ListModels(provider) ?? [];
             Status = models.Count > 0
                 ? $"Provider {provider} 可用: {models.Count} 个模型（{string.Join(", ", models.Take(3))}…）"
                 : $"Provider {provider} 未返回模型，检查 baseUrl/apiKey 与适配器是否加载";
@@ -540,7 +543,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private async Task RefreshPluginsAsync()
     {
         LoadHarnessSettings(loadMetadata: false);
-        await LoadReasoningEffortsAsync();
+        await LoadReasoningEffortsAsync(null, null);
         await LoadPluginRowsAsync();
     }
 
@@ -921,19 +924,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void LoadHarnessSettings(bool loadMetadata = true)
     {
         var settings = HarnessSettings.Load(_home);
-        Models.Clear();
-        foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
-        {
-            foreach (var modelId in ProviderCatalog.EffectiveModels(providerName, providerEntry.Options?.BaseUrl, providerEntry.Models.Keys)
-                .OrderBy(id => id, StringComparer.Ordinal))
-            {
-                Models.Add($"{providerName}/{modelId}");
-            }
-        }
+        ReloadModels();
         Providers.Clear();
         foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
-            var effective = ProviderCatalog.EffectiveModels(providerName, providerEntry.Options?.BaseUrl, providerEntry.Models.Keys);
+            var effective = ProviderCatalog.EffectiveModels(Runtime(), providerName, providerEntry);
             Providers.Add(new ProviderRowViewModel(providerName, ProviderTypes.Canonical(providerEntry.Type), providerEntry.Options?.BaseUrl ?? "", effective.Count));
         }
         ProviderChoices = ProviderChoiceViewModel.Build(ProviderCatalog.LoadCached(_home));
@@ -953,21 +948,42 @@ public sealed partial class SettingsViewModel : ObservableObject
             CompactionThreshold = ratio * 100;
         if (loadMetadata)
         {
-            LoadReasoningEfforts();
+            RefreshReasoningEfforts();
             LoadPluginRows();
         }
     }
 
-    private void LoadReasoningEfforts() => _ = LoadReasoningEffortsAsync();
+    private LlmRuntime? Runtime() => _ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false);
 
-    private Task LoadReasoningEffortsAsync()
+    /** 重算模型清单: 打开模型浮层时也要来一次, 端点 /models 自报的模型是注册适配器之后才有的。 */
+    public void ReloadModels()
     {
-        var route = HarnessSettings.Load(_home).ResolveDefaultModel();
+        var settings = HarnessSettings.Load(_home);
+        var runtime = Runtime();
+        List<string> models = [];
+        foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            foreach (var modelId in ProviderCatalog.EffectiveModels(runtime, providerName, providerEntry).OrderBy(id => id, StringComparer.Ordinal))
+                models.Add($"{providerName}/{modelId}");
+        }
+        // 列表没变时不要 Clear/Add: ItemsControl 会重建全部按钮, 每次打开浮层都卡一下。
+        if (Models.SequenceEqual(models, StringComparer.Ordinal))
+            return;
+        Models.Clear();
+        foreach (var model in models)
+            Models.Add(model);
+    }
+
+    private Task LoadReasoningEffortsAsync(string? provider, string? model)
+    {
+        var route = provider is { Length: > 0 } currentProvider && model is { Length: > 0 } currentModel
+            ? (Provider: currentProvider, Model: currentModel)
+            : HarnessSettings.Load(_home).ResolveDefaultModel();
         if (route is null)
             return Task.CompletedTask;
         try
         {
-            var runtime = _ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false);
+            var runtime = Runtime();
             IReadOnlyList<string> efforts = runtime is null
                 ? []
                 : [.. runtime.ResolveModelInfo(route.Value.Provider, route.Value.Model).Reasoning?.Efforts.Select(effort => effort.Id.Value) ?? []];

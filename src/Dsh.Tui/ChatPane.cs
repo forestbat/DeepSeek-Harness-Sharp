@@ -1142,7 +1142,10 @@ public sealed class ChatPane : ITuiPane
                     "model" => Candidates([.. settings.Providers
                         .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                         .SelectMany(entry => ProviderCatalog
-                            .EffectiveModels(entry.Key, entry.Value.Options?.BaseUrl, entry.Value.Models.Keys)
+                            .EffectiveModels(
+                                _window.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false),
+                                entry.Key,
+                                entry.Value)
                             .OrderBy(model => model, StringComparer.Ordinal)
                             .Select(model => $"{entry.Key}/{model}"))]),
                     "remove" => Candidates([.. settings.Providers.Keys.OrderBy(name => name, StringComparer.Ordinal)]),

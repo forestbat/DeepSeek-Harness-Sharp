@@ -809,6 +809,48 @@ public sealed class MainViewModelTests
         Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.SessionSubtitle);
     });
 
+    /**
+     * 推理档位跟着当前会话的模型走, 不是全局默认模型: 否则换到另一个模型后浮层里还是旧模型的档位,
+     * 选中会被 /reasoning 拒掉(用户实测: 切到中转站模型后点 "max" 报 does not support reasoning effort)。
+     */
+    [Fact]
+    public async Task Reasoning_Efforts_Follow_The_Session_Model() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync("""
+            logging:
+              file: false
+            global_default_model: deepseek/deepseek-flash
+            providers:
+              deepseek:
+                type: openai-compatible
+                options:
+                  baseUrl: https://api.deepseek.com
+                  apiKey: sk-test
+                models:
+                  deepseek-flash: {}
+              relay:
+                type: openai-compatible
+                options:
+                  baseUrl: https://example.invalid/v1
+                  apiKey: sk-test
+                models:
+                  unknown-model: {}
+            """);
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+
+        viewModel.RefreshReasoningEfforts();
+        Assert.Contains("high", viewModel.Preferences.ReasoningEfforts);
+
+        environment.Agent.Session.Append(new RequestHeaderPayload(
+            new EpochHeader(new LlmCallConfig("relay", "unknown-model")),
+            RequestHeaderReasons.Change,
+            true));
+        await GuiTestEnvironment.WaitForAsync(viewModel.Composer, () => viewModel.Composer.ModelLabel == "relay/unknown-model");
+        viewModel.RefreshReasoningEfforts();
+
+        Assert.Empty(viewModel.Preferences.ReasoningEfforts);
+    });
+
     [Fact]
     public async Task SwitchReasoningCommand_Updates_Label_For_Flagged_Model() => await HeadlessGui.RunAsync(async () =>
     {

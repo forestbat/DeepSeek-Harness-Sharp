@@ -19,10 +19,23 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
     /** MEAI 在 TextReasoningContent 上保存 reasoning item id 的键名(与 Responses 客户端出站时读取的键一致)。 */
     private const string ReasoningItemIdKey = "reasoningItemId";
 
+    /** 探测端点是否接受 reasoning_effort 时用的档位与输出上限: 只要端点表态, 不需要真的生成内容。 */
+    private const string ProbeEffort = "low";
+    private const int ProbeMaxTokens = 16;
+
+    /** 端点只证明了"接受 reasoning_effort"时给的档位: openai 兼容族的通用取值(端点拒绝哪个就在缓存里改哪个)。 */
+    private static readonly IReadOnlyList<string> StandardEfforts = ["low", "medium", "high", "max"];
+    private static readonly TimeSpan ProbeRetryCooldown = TimeSpan.FromMinutes(5);
+
     private readonly string _providerId;
+    private readonly string _baseUrl;
     private readonly IReadOnlyList<ProviderModelSpec> _models;
     private readonly ModelsDevReasoningSource _modelsDev;
     private readonly IModelReasoningSource _metadata;
+    private readonly ModelMetadataReasoningSource? _discoveredModels;
+    private readonly ReasoningEffortsCache _effortsCache;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BackgroundRefreshGate> _probeGates =
+        new(StringComparer.Ordinal);
     private readonly OpenAIClient _openAi;
     private readonly bool _useResponses;
 
@@ -33,13 +46,16 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         IReadOnlyList<ProviderModelSpec>? models = null,
         HttpClient? httpClient = null,
         bool useResponses = false,
-        IModelReasoningSource? metadataSource = null)
+        IModelReasoningSource? metadataSource = null,
+        ReasoningEffortsCache? reasoningEfforts = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
 
         _providerId = providerId;
+        _baseUrl = baseUrl.TrimEnd('/');
+        _effortsCache = reasoningEfforts ?? new ReasoningEffortsCache(null);
         ProviderInfo = new LlmProviderInfo(providerId, "OpenAI-Compatible");
         _models = models ?? [];
         _modelsDev = new ModelsDevReasoningSource(baseUrl: baseUrl);
@@ -60,7 +76,8 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         {
             var source = new ModelMetadataReasoningSource(baseUrl, apiKey, transportClient);
             _metadata = source;
-            source.RefreshInBackground();
+            _discoveredModels = source;
+            source.RequestRefresh();
         }
     }
 
@@ -68,15 +85,34 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
 
     public override ResolvedRetryPolicy ProviderRetryPolicy { get; } = ResolvedRetryPolicy.Resolve(null, "openai-compatible");
 
+    /**
+     * 可列出的模型 = settings 声明/models.dev 目录(带显示名与模态) ∪ 端点 /models 自报的(只有 id)。
+     * 中转站的端点不在目录里, 少了后者它的模型就一个都选不到。
+     */
     public override IReadOnlyList<LlmModelInfo> ListModels()
-        => _models
-            .Select(model => new LlmModelInfo(_providerId, model.Id, model.Name ?? model.Id, null, _modelsDev.InputModalitiesFor(model.Id)))
-            .ToList();
+    {
+        // 端点清单是后台拉取的: 之前没成功就在这次重算里再试一次(有冷却), 选单因此能自己恢复。
+        _discoveredModels?.RequestRefresh();
+        return [.. _models
+            .Select(model => model.Id)
+            .Concat(_discoveredModels?.ModelIds ?? [])
+            .Distinct(StringComparer.Ordinal)
+            .Select(Describe)];
+    }
 
-    /** 推理强度解析顺序: 端点 /models 的实时元数据 → 内置 models.dev 快照(baseUrl 主机名命中 provider); 上下文窗口与输入模态取自 models.dev 快照。 */
+    private LlmModelInfo Describe(string id)
+    {
+        var declared = _models.FirstOrDefault(model => model.Id == id);
+        return new LlmModelInfo(_providerId, id, declared?.Name ?? id, null, _modelsDev.InputModalitiesFor(id));
+    }
+
+    /**
+     * 推理强度解析顺序: 端点 /models 的实时元数据 → 内置 models.dev 快照(baseUrl 主机名命中 provider) → 端点探测结果。
+     * 上下文窗口与输入模态取自 models.dev 快照。
+     */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
-        var reasoning = _metadata.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model);
+        var reasoning = _metadata.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model) ?? ReasoningForUnknownModel(model);
         return new LlmResolvedModelInfo(
             _providerId,
             model,
@@ -86,6 +122,82 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             _modelsDev.ContextWindowFor(model),
             null,
             reasoning);
+    }
+
+    /**
+     * 端点与目录都没声明推理强度时的退路: 用探测过的结论, 还没探测过就后台问一次。
+     * 目录明确收录了该模型(哪怕"不支持推理")时以目录为准, 不去打扰端点。
+     */
+    private LlmModelReasoningInfo? ReasoningForUnknownModel(string model)
+    {
+        if (_modelsDev.Knows(model))
+            return null;
+        if (_effortsCache.TryGet(EffortsKey(model), out var efforts))
+            return efforts.Count == 0 ? null : LlmModelReasoningInfo.FromIds(efforts);
+        StartReasoningProbe(model);
+        return null;
+    }
+
+    private string EffortsKey(string model) => ReasoningEffortsCache.Key("openai-compatible", _baseUrl, model);
+
+    /** 每个模型最多同时跑一次探测; 失败(端点抖动/网络不通)按冷却重试, 结论由缓存负责复用。 */
+    private void StartReasoningProbe(string model)
+    {
+        var gate = _probeGates.GetOrAdd(model, _ => new BackgroundRefreshGate(ProbeRetryCooldown));
+        if (!gate.TryBegin())
+            return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ProbeReasoningEffortAsync(model).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                gate.End();
+            }
+        });
+    }
+
+    /**
+     * 一次最小请求问端点认不认 reasoning_effort: 200 记下通用档位, 端点明确拒绝就记空清单,
+     * 其余失败(断网/限流)不留结论, 冷却后再试。答案落盘, 重启不再重复问。
+     */
+    private async Task ProbeReasoningEffortAsync(string model)
+    {
+        var options = new GenerateOptions
+        {
+            Provider = _providerId,
+            Model = model,
+            Messages = [MessageFactory.CreateUserText("ping")],
+            ReasoningEffort = ReasoningEffortId.Create(ProbeEffort),
+            MaxTokens = ProbeMaxTokens,
+        };
+        try
+        {
+            await foreach (var _ in Stream(options, CancellationToken.None).ConfigureAwait(false))
+            {
+            }
+            _effortsCache.Save(EffortsKey(model), StandardEfforts);
+        }
+        catch (LlmException error) when (RejectsReasoningEffort(error))
+        {
+            _effortsCache.Save(EffortsKey(model), []);
+        }
+    }
+
+    /** 端点/网关对带 reasoning_effort 的请求报错(400/422/500 的正文里通常带 "reasoning effort")。 */
+    private static bool RejectsReasoningEffort(LlmException error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            if (current.Message.Contains("reasoning", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     public override IAsyncEnumerable<StreamChunk> Stream(GenerateOptions options, CancellationToken cancellationToken)

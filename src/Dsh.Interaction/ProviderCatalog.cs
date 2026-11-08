@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dsh.Boot;
+using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 
@@ -102,6 +103,24 @@ public static class ProviderCatalog
         }
 
         return ids;
+    }
+
+    /**
+     * 模型选单用的模型清单: 已注册的适配器最全(声明 ∪ models.dev 目录 ∪ 端点 /models 自报的), 未注册时退回 settings ∪ 目录。
+     * 端点自报的模型不落盘(中转站的模型清单只有端点自己知道), 所以选单不能只读 settings.yaml。
+     */
+    public static IReadOnlyList<string> EffectiveModels(LlmRuntime? runtime, string providerName, ProviderSettings provider)
+    {
+        try
+        {
+            // 没注册(缺 key, 或缺服务该 type 的适配器)时 ListModels 会抛 NO_ADAPTER: 退回 settings 即可。
+            if (runtime?.ListModels(providerName) is { Count: > 0 } models)
+                return [.. models.Select(model => model.Id)];
+        }
+        catch (LlmException)
+        {
+        }
+        return EffectiveModels(providerName, provider.Options?.BaseUrl, provider.Models.Keys);
     }
 
     /** 内置映射(优先于 npm 方言): DeepSeek 有专有协议族。 */

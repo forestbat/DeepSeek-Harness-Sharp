@@ -1066,7 +1066,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await _chat.ExecuteAsync($"/model {model}");
             StatusText = result.Text ?? "";
             if (result.Success)
-                Preferences.RefreshReasoningEfforts();
+                RefreshReasoningEfforts();
             else
             {
                 Composer.ModelLabel = previousModel;
@@ -1207,6 +1207,23 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
      * 重放时节点头会逐条到达, 而 RefreshModelLabels 与每条助手消息都要读它, 回扫会把重放变成 O(n²)。
      */
     private LlmCallConfig? CurrentRequestHeader() => _requestHeader;
+
+    /**
+     * 推理档位属于当前会话用的模型: 拿全局默认模型的档位去显示, 换模型后点到的就是别的模型的档位,
+     * 会被 /reasoning 拒掉。头部还没落地时退回输入框上的模型标签。
+     */
+    public void RefreshReasoningEfforts()
+    {
+        var provider = CurrentRequestHeader()?.Provider;
+        var model = CurrentRequestHeader()?.Model;
+        var separator = Composer.ModelLabel.IndexOf('/');
+        if ((provider is null || model is null) && separator > 0)
+        {
+            provider = Composer.ModelLabel[..separator];
+            model = Composer.ModelLabel[(separator + 1)..];
+        }
+        Preferences.RefreshReasoningEfforts(provider, model);
+    }
 
     private LlmCallConfig? _requestHeader;
 
@@ -1527,6 +1544,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         SessionSubtitle = label;
         Composer.ReasoningLabel = config?.ReasoningEffort?.Value ?? "推理";
         RefreshFilteredModels();
+        // 打开会话就把档位候选算出来: 端点是后台探测的, 等用户点开浮层才启动的话第一次只能是空的。
+        RefreshReasoningEfforts();
     }
 
     /** 实时事件: 不是重放, 因此压缩状态要按真实生命周期切换。 */

@@ -21,7 +21,7 @@ providers:
       baseUrl: https://api.deepseek.com
       # API key 环境变量；也可直接写 apiKey
       apiKeyEnv: DEEPSEEK_API_KEY
-    # 目录已收录的模型不用列；这里只覆盖显示名/系统提示
+    # 可选模型 = 这里声明的 ∪ models.dev 目录已收录的 ∪ 端点 GET /models 自报的；目录和端点都已收录的不用列
     models: {}
   # 私有/中转 provider 示例:
   # "@deepseek-ai/dsh-relay":
@@ -29,6 +29,7 @@ providers:
   #   options:
   #     baseUrl: https://relay.example.com/v1
   #     apiKey: sk-...
+  #   # 模型清单由适配器向端点 GET /models 自动拉取；这里只在需要显示名或覆盖模型信息时声明
   #   models:
   #     my-model:
   #       name: My Model

@@ -136,8 +136,8 @@ public static class ProviderCommand
         var factories = ctx.Get<LlmAdapterFactoryRegistry>(LlmAdapterFactoryRegistry.ServiceName, false);
         return string.Join('\n', settings.Providers.Select(entry =>
         {
-            // 有效模型(声明 ∪ 目录): 目录已收录的不在 settings 里, 只看 Models.Count 会把它们漏掉。
-            var effective = ProviderCatalog.EffectiveModels(entry.Key, entry.Value.Options?.BaseUrl, entry.Value.Models.Keys);
+            // 有效模型(声明 ∪ 目录 ∪ 端点自报): 后两者都不在 settings 里, 只看 Models.Count 会把它们漏掉。
+            var effective = ProviderCatalog.EffectiveModels(llm, entry.Key, entry.Value);
             var models = effective.Count > 0 ? $" models=[{string.Join(',', effective)}]" : "";
             var type = ProviderTypes.Canonical(entry.Value.Type);
             var wire = ProviderTypes.Parse(entry.Value.Type).Wire;

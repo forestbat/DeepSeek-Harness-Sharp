@@ -28,10 +28,11 @@ public static class ModelCommand
                     var builder = new StringBuilder();
                     if (settings.GlobalDefaultModel is { } defaultModel)
                         builder.AppendLine($"default: {defaultModel}");
+                    var runtime = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false);
                     foreach (var (providerName, providerEntry) in settings.Providers.OrderBy(entry => entry.Key, StringComparer.Ordinal))
                     {
-                        // 目录已收录的模型不落盘, 列表要按"有效模型"(声明 ∪ 目录)算, 否则会漏掉整段。
-                        foreach (var modelId in ProviderCatalog.EffectiveModels(providerName, providerEntry.Options?.BaseUrl, providerEntry.Models.Keys)
+                        // 目录已收录与端点自报的模型都不落盘, 列表要按运行时的有效模型算, 否则会漏掉整段。
+                        foreach (var modelId in ProviderCatalog.EffectiveModels(runtime, providerName, providerEntry)
                             .OrderBy(id => id, StringComparer.Ordinal))
                         {
                             builder.AppendLine($"{providerName}/{modelId}");

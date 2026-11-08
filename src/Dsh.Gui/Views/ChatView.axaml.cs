@@ -869,6 +869,8 @@ public sealed partial class ChatView : UserControl
         if (sender is not Flyout flyout)
             return;
         _modelFlyout = flyout;
+        // 端点 /models 自报的模型是适配器后台拉取后才有的, 打开浮层时重算一次清单。
+        _viewModel?.Preferences.ReloadModels();
         if (_viewModel is not null)
             _viewModel.ModelSearchText = "";
         if (flyout.Content is Panel panel && panel.Children.OfType<TextBox>().FirstOrDefault() is { } search)
@@ -899,11 +901,11 @@ public sealed partial class ChatView : UserControl
         await execution;
     }
 
-    /** 打开浮层时按当前模型重算强度候选: 在线元数据是后台预热的, 打开时刻通常已就绪。 */
+    /** 打开浮层时按当前会话模型重算强度候选: 端点自报/探测是后台完成的, 打开时刻通常已就绪。 */
     private void OnReasoningFlyoutOpened(object? sender, EventArgs e)
     {
         _reasoningFlyout = sender as Flyout;
-        _viewModel?.Preferences.RefreshReasoningEfforts();
+        _viewModel?.RefreshReasoningEfforts();
     }
 
     private async void OnReasoningItemClick(object? sender, RoutedEventArgs e)

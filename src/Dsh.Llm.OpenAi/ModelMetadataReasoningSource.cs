@@ -3,13 +3,20 @@ using System.Text.Json;
 
 namespace Dsh.Llm.OpenAi;
 
-/** 从 openai 兼容端点的 /models 响应读取每个模型支持的推理强度: 优先 opencode.variants, 其次 supported_parameters 的 reasoning_effort。 */
+/**
+ * 从 openai 兼容端点的 /models 响应读取每个模型支持的推理强度: 优先 opencode.variants, 其次 supported_parameters 的 reasoning_effort。
+ * 同一份响应里还带着该端点提供的全部模型 id, 一并留作模型清单(中转站的模型只能从这里知道)。
+ */
 public sealed class ModelMetadataReasoningSource : IModelReasoningSource
 {
+    private static readonly TimeSpan RefreshCooldown = TimeSpan.FromSeconds(10);
+
     private readonly string _baseUrl;
     private readonly string _apiKey;
     private readonly HttpClient _http;
+    private readonly BackgroundRefreshGate _gate = new(RefreshCooldown);
     private readonly ConcurrentDictionary<string, LlmModelReasoningInfo> _byModel = new(StringComparer.Ordinal);
+    private volatile IReadOnlyList<string> _modelIds = [];
 
     public ModelMetadataReasoningSource(string baseUrl, string apiKey, HttpClient http)
     {
@@ -21,9 +28,15 @@ public sealed class ModelMetadataReasoningSource : IModelReasoningSource
     public LlmModelReasoningInfo? ReasoningFor(string model)
         => _byModel.TryGetValue(model, out var reasoning) ? reasoning : null;
 
-    /** 启动预热: 后台拉取, 失败静默(离线或端点不提供元数据时保持回退链)。 */
-    public void RefreshInBackground()
-        => _ = Task.Run(async () =>
+    /** 端点自报的模型清单: 拉取完成前与失败时为空。 */
+    public IReadOnlyList<string> ModelIds => _modelIds;
+
+    /** 清单还没拿到时补一次后台拉取(冷却窗口内合并): 端点抖动过之后不必重启进程就能恢复。 */
+    public void RequestRefresh()
+    {
+        if (_modelIds.Count > 0 || !_gate.TryBegin())
+            return;
+        _ = Task.Run(async () =>
         {
             try
             {
@@ -32,7 +45,12 @@ public sealed class ModelMetadataReasoningSource : IModelReasoningSource
             catch (Exception)
             {
             }
+            finally
+            {
+                _gate.End();
+            }
         });
+    }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -43,6 +61,7 @@ public sealed class ModelMetadataReasoningSource : IModelReasoningSource
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         foreach (var (model, reasoning) in Parse(json))
             _byModel[model] = reasoning;
+        _modelIds = EndpointModelList.ParseIds(json);
     }
 
     public static IReadOnlyDictionary<string, LlmModelReasoningInfo> Parse(string json)
