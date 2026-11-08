@@ -1,6 +1,4 @@
-﻿using Dsh.Core;
-
-namespace Dsh.Interaction;
+﻿namespace Dsh.Interaction;
 
 /** diff 卡片的展示窗口: 每处改动前后各留几行上下文, 相距较远的改动之间用省略行分隔。 */
 public static class DiffCardDisplay

@@ -5,7 +5,6 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Dsh.Core;
 using Dsh.Interaction;
 
 namespace Dsh.Gui.Views;

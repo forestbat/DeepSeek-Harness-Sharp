@@ -14,6 +14,9 @@ public sealed record StrReplaceEditorConfig
     public string? Description { get; init; }
 }
 
+// 命令语义移植自 packages/fs/tool-str-replace-editor/src/index.ts。
+// C# 侧读取经 SafetyFileAccess、写入经 SettingsMutation 统一授权与发布。
+// fs/write-intent、fs/edit-intent waterfall 与 fs/observed 事件没有本地消费者,不发。
 public static class StrReplaceEditorTool
 {
     public const string ToolName = "str_replace_editor";

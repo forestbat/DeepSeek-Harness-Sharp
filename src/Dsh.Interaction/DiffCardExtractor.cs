@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Dsh.Core;
+namespace Dsh.Interaction;
 
 /** 三层 diff 提取: ① resultMeta.card=="diff" 显式契约; ② unified/apply_patch 文本识别; ③ old/new 成对字段走行级 LCS。 */
 public static class DiffCardExtractor

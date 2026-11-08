@@ -334,7 +334,7 @@ public sealed class SettingsMutationTests
             Session.Append(new TurnStartPayload(1));
             if (withApproval)
                 _ = ApprovalService.Register(Context);
-            Context.SetOwn(HarnessHome.SettingsPathProperty, Home.SettingsFile);
+            Context.SetOwn("harnessOptions", new HarnessOptions(Home));
             _ = new SafetyPolicySource(Context, HarnessSettings.CreatePolicyReader(Home, HarnessSettings.Load(Home)));
             Gate = new SettingsMutationGate(Context, Home);
             _tools = [WriteTool.Register(Context), EditTool.Register(Context), StrReplaceEditorTool.Register(Context)];

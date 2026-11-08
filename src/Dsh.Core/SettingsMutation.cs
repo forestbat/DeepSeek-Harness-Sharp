@@ -6,12 +6,15 @@ using Dsh.Transport;
 
 namespace Dsh.Core;
 
+public readonly record struct SettingsMutationRequest(string Path, string Before, string After, ToolRunContext Context);
+
 public static class SettingsMutation
 {
+    public const string ServiceName = "settingsMutations";
     private const int ReadBufferBytes = 4096;
 
-    public static SettingsMutationGate RequireGate(ToolRunContext run)
-        => (run.Agent?.Ctx ?? run.HostContext)?.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)
+    public static Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task> RequireCommit(ToolRunContext run)
+        => (run.Agent?.Ctx ?? run.HostContext)?.Get<Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>>(ServiceName, false)
             ?? throw new InvalidOperationException("Settings mutations require the active approval service.");
 
     public static async Task<string> ReadTextAsync(string path, CancellationToken signal)
@@ -28,13 +31,12 @@ public static class SettingsMutation
         using var fused = FusedSignal.Fuse(run.Signal, signal ?? default);
         var token = fused.Token;
         var context = run.Agent?.Ctx ?? run.HostContext;
-        var gate = context?.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
-        var active = gate?.SettingsPath ?? context?.GetProp(HarnessHome.SettingsPathProperty) as string;
+        var active = (context?.GetProp("harnessOptions") as HarnessOptions)?.Home.SettingsFile;
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var isSettings = active is not null && comparer.Equals(CanonicalFilePath.Canonicalize(path), CanonicalFilePath.Canonicalize(active));
         if (isSettings)
         {
-            var settings = RequireGate(run);
+            var commit = RequireCommit(run);
             if (before is null)
             {
                 before = File.Exists(path)
@@ -42,7 +44,7 @@ public static class SettingsMutation
                     : "";
                 if (mode == FileMode.Append) after = $"{before}{after}";
             }
-            await settings.CommitAsync(new(path, before, after, run),
+            await commit(new(path, before, after, run),
                 (temporary, cancellation) => WriteFileAsync(temporary, after, FileMode.Create, cancellation), token).ConfigureAwait(false);
         }
         else

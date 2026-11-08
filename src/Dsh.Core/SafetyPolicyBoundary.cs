@@ -131,7 +131,9 @@ public sealed class SafetyBoundary : Service
         var (rules, input, decision) = DecideAndRecord(space, run, canonical, intent, lifecycleOwner);
         // Only active-settings proposal reads defer notification to the diff approval.
         if (settings is { Request: null } && intent == "read" && run is not null
-            && Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false)?.Owns(canonical) == true)
+            && Ctx.Get<Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>>(SettingsMutation.ServiceName, false) is not null
+            && Ctx.GetProp("harnessOptions") is HarnessOptions options
+            && Dsh.Runtime.CanonicalFilePath.SameFile(canonical, options.Home.SettingsFile))
         {
             _ = DemandSessionPolicy(run, input, decision, space);
             return;

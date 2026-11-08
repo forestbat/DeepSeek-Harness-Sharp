@@ -667,8 +667,9 @@ public sealed class ToolRuntime : Service
         var tool = exec.Registration.Definition;
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];
         // The actual settings writer requests its own diff decision instead of a second root-only decision.
-        if (Ctx.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false) is { } settings)
-            targets = targets.Where(path => !settings.Owns(path)).ToArray();
+        if (Ctx.Get<Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>>(SettingsMutation.ServiceName, false) is not null
+            && Ctx.GetProp("harnessOptions") is Dsh.Boot.HarnessOptions options)
+            targets = targets.Where(path => !CanonicalFilePath.SameFile(path, options.Home.SettingsFile)).ToArray();
         if (SessionWorkingDirectory.OutsideRootApprovalReason(agent.Session, targets) is not { } reason)
             return gate;
         return new PreToolDecision.Ask(gate is PreToolDecision.Ask { Reason: { } earlier } ? $"{reason}; {earlier}" : reason);

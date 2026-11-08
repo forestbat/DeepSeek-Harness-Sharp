@@ -1,4 +1,4 @@
-namespace Dsh.Core;
+namespace Dsh.Interaction;
 
 public enum DiffLineKind
 {

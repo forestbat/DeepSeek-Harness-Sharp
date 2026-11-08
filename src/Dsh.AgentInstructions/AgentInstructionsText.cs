@@ -46,7 +46,7 @@ public static class AgentInstructionsText
         return found;
     }
 
-    /** Return newly loaded optional instructions without re-reading the static prompt's files. */
+    /** 只返回新的 AGENTS 文件; 已加载路径由调用方维护, 避免与静态段重复。 */
     public static async Task<string> RenderNewAsync(HarnessHome home, string? start, ISet<string> loaded,
         ToolRunContext? run, CancellationToken signal = default)
     {

@@ -1,6 +1,6 @@
 using Dsh.GitInspect;
 using Dsh.Gui.ViewModels;
-using Dsh.Core;
+using Dsh.Interaction;
 using Dsh.RemoteHost;
 
 namespace Dsh.Tests;

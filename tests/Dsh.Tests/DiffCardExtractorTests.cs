@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Dsh.Core;
 using Dsh.Interaction;
 
 namespace Dsh.Tests;

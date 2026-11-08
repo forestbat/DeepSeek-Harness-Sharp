@@ -6,7 +6,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
-using Dsh.Core;
+using Dsh.Interaction;
 
 namespace Dsh.Tests;
 

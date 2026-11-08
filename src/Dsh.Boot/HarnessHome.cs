@@ -4,7 +4,6 @@ namespace Dsh.Boot;
 public sealed record HarnessHome(string Root)
 {
     public const string HomeEnv = "DSH_HOME";
-    public const string SettingsPathProperty = "activeSettingsPath";
 
     /** daemon 托管会话时注入的 harness 根; 与 DSH_HOME(daemon 的 run 根)区分, 见 Dsh.Pty.PtySessionProtocol.ChildHomeVariable。 */
     public const string ChildHomeEnv = "DSH_HARNESS_HOME";

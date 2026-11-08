@@ -100,10 +100,11 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
         var allowNetwork = Require(package, PluginPermission.Write);
         var path = ResolvePath(arguments, execution, allowNetwork);
         FilePathAccess.DemandOrdinaryFile(path, allowMissing: true);
-        var gate = context.Get<SettingsMutationGate>(SettingsMutationGate.ServiceName, false);
+        var gate = context.Get<Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>>(SettingsMutation.ServiceName, false);
+        var activeSettings = (context.GetProp("harnessOptions") as HarnessOptions)?.Home.SettingsFile ?? environment.SettingsPath;
         var data = DecodeBody(arguments, "data");
         var append = arguments.TryGetProperty("append", out var appending) && appending.GetBoolean();
-        if (gate?.Owns(path) == true || CanonicalFilePath.SameFile(path, environment.SettingsPath))
+        if (CanonicalFilePath.SameFile(path, activeSettings) || CanonicalFilePath.SameFile(path, environment.SettingsPath))
             await WriteSettingsAsync(package, path, data, append, execution, gate, cancellationToken).ConfigureAwait(false);
         else
         {
@@ -116,17 +117,17 @@ public sealed class PluginCapabilityFactory(Context context, PluginExecutionEnvi
     }
 
     private async Task WriteSettingsAsync(string package, string path, byte[] data, bool append, ToolRunContext? execution,
-        SettingsMutationGate? gate, CancellationToken cancellationToken)
+        Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>? gate, CancellationToken cancellationToken)
     {
         if (gate is null || execution is null)
             throw new RuntimeException("SETTINGS_APPROVAL_UNAVAILABLE", "Settings changes require an active tool call and the host settings approval service.");
-        var target = gate.SettingsPath;
+        var target = CanonicalFilePath.Canonicalize((context.GetProp("harnessOptions") as HarnessOptions)?.Home.SettingsFile ?? environment.SettingsPath);
         await Safety.AuthorizeFileAsync(SafetyBoundary.SafetyNamespace, execution, target, "read", cancellationToken, package,
             settings: new SettingsApproval()).ConfigureAwait(false);
         var before = File.Exists(target) ? await SettingsMutation.ReadTextAsync(target, cancellationToken).ConfigureAwait(false) : "";
         var text = Encoding.UTF8.GetString(data);
         var after = append ? $"{before}{text}" : text;
-        await gate.CommitAsync(new SettingsMutationRequest(path, before, after, execution), (temporary, signal) =>
+        await gate(new SettingsMutationRequest(path, before, after, execution), (temporary, signal) =>
         {
             Require(package, PluginPermission.Write);
             return WriteBytesAsync(temporary, Encoding.UTF8.GetBytes(after), append: false, signal);

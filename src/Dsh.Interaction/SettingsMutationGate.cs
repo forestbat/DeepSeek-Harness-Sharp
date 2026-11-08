@@ -3,17 +3,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
+using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Logging;
 
-namespace Dsh.Core;
-
-public readonly record struct SettingsMutationRequest(string Path, string Before, string After, ToolRunContext Context);
+namespace Dsh.Interaction;
 
 /** The single settings approval, publication and redacted audit service. */
 public sealed class SettingsMutationGate : IDisposable
 {
-    public const string ServiceName = "settingsMutations";
     private readonly Context context;
     private readonly HarnessHome home;
     private readonly EffectHandle registration;
@@ -22,7 +20,8 @@ public sealed class SettingsMutationGate : IDisposable
     {
         this.context = context;
         this.home = home;
-        registration = context.Provide(ServiceName, this);
+        registration = context.Provide(SettingsMutation.ServiceName,
+            (Func<SettingsMutationRequest, Func<string, CancellationToken, Task>, CancellationToken, Task>)CommitAsync);
     }
 
     public void Dispose() => registration.Dispose();

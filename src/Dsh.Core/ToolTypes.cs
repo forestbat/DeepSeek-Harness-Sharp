@@ -30,7 +30,7 @@ public sealed class ToolDefinition
     public bool UsesScriptPermissions { get; init; }
     public ToolDisclosure? Disclosure { get; init; }
 
-    /** Unavailable tools remain callable internally but are omitted from model-visible schemas. */
+    /** 平台能力判定: false 时工具仍可被内部调用, 但不出现在模型可见的 schema 里。 */
     public Func<bool>? IsAvailable { get; init; }
 
     /**
@@ -139,14 +139,15 @@ public sealed class ToolRunContext : ToolExecution
         Func<string, Dsh.Runtime.SettingsMutationProposal?> prepare,
         Func<string, Dsh.Runtime.SettingsMutationProposal, string, CancellationToken, Task> commit)
     {
-        var gate = SettingsMutation.RequireGate(this);
-        if (!gate.Owns(path))
+        var commitSettings = SettingsMutation.RequireCommit(this);
+        var active = ((Agent?.Ctx ?? HostContext)?.GetProp("harnessOptions") as Dsh.Boot.HarnessOptions)?.Home.SettingsFile;
+        if (active is null || !Dsh.Runtime.CanonicalFilePath.SameFile(path, active))
             throw new InvalidOperationException("The mutation does not target the active settings document.");
-        var canonical = gate.SettingsPath;
+        var canonical = Dsh.Runtime.CanonicalFilePath.Canonicalize(active);
         await SafetyFileAccess.AuthorizeAsync(canonical, "read", this, Signal, new SettingsApproval()).ConfigureAwait(false);
         if (prepare(canonical) is not { } proposal)
             return false;
-        await gate.CommitAsync(new(canonical, proposal.Before, proposal.After, this),
+        await commitSettings(new(canonical, proposal.Before, proposal.After, this),
             (temporary, signal) => commit(canonical, proposal, temporary, signal), Signal).ConfigureAwait(false);
         return true;
     }
