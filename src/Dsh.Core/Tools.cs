@@ -71,10 +71,17 @@ public sealed class ToolRuntime : Service
                 : static name => new InvalidOperationException($"tool \"{name}\" is already registered in this scope"));
         }
 
-        public bool Admits(string name)
-            => Restrictions.Values.All(filter =>
-                (filter.Allow is null || filter.Allow.Contains(name))
-                && (filter.Deny is null || !filter.Deny.Contains(name)));
+        public static bool Admits(string name, IReadOnlyList<ToolRestriction> filters)
+        {
+            for (var index = 0; index < filters.Count; index++)
+            {
+                var filter = filters[index];
+                if ((filter.Allow is not null && !filter.Allow.Contains(name))
+                    || (filter.Deny is not null && filter.Deny.Contains(name)))
+                    return false;
+            }
+            return true;
+        }
     }
 
     private readonly ScopedLayers<ToolLayer> _layers;
@@ -221,41 +228,41 @@ public sealed class ToolRuntime : Service
     {
         var layers = _layers.ChainLayers(scope);
         var own = scope is null ? null : _layers.LayerFor(scope);
-        List<string> inheritedNames = [];
-        var restrictableNames = new HashSet<string>();
-        foreach (var (name, _) in _layers.Global.Tools.Entries)
-        {
-            restrictableNames.Add(name);
-            inheritedNames.Add(name);
-        }
+        var definitions = new Dictionary<string, ToolDefinition>();
+        foreach (var (name, entry) in _layers.Global.Tools.Entries)
+            definitions[name] = entry.Definition;
+        IEnumerable<KeyValuePair<string, ToolEntry>> ownEntries = [];
+        List<ToolRestriction>? restrictions = null;
         foreach (var layer in layers)
         {
-            if (ReferenceEquals(layer, own)) continue;
-            foreach (var (name, _) in layer.Tools.Entries)
-                if (restrictableNames.Add(name)) inheritedNames.Add(name);
+            var entries = layer.Tools.Entries;
+            if (ReferenceEquals(layer, own))
+                ownEntries = entries;
+            else
+                foreach (var (name, entry) in entries)
+                    definitions[name] = entry.Definition;
+            var filters = layer.Restrictions.Values;
+            if (filters.Count > 0)
+                (restrictions ??= []).AddRange(filters);
         }
-        var visible = new Dictionary<string, ToolDefinition>();
+        var restrictableNames = new HashSet<string>(definitions.Keys);
         var knownNames = new HashSet<string>(restrictableNames);
-        foreach (var name in inheritedNames)
+        var visible = restrictions is null ? definitions : new Dictionary<string, ToolDefinition>();
+        if (restrictions is not null)
+            foreach (var (name, definition) in definitions)
+                if (ToolLayer.Admits(name, restrictions))
+                    visible[name] = definition;
+        // Restrictions mask inherited registrations, not tools registered in the current scope.
+        foreach (var (name, entry) in ownEntries)
         {
-            var (entry, inheritedVisible) = ResolveEntry(name, layers, own, includeInheritedVisibility: true);
-            if (inheritedVisible)
-                visible[name] = entry!.Definition;
-        }
-        if (own is not null)
-        {
-            foreach (var (name, _) in own.Tools.Entries)
-            {
-                knownNames.Add(name);
-                if (ResolveEntry(name, layers, own).Entry is { } entry)
-                    visible[name] = entry.Definition;
-            }
+            knownNames.Add(name);
+            visible[name] = entry.Definition;
         }
         return new ToolView(visible, knownNames, restrictableNames);
     }
 
     public ToolDefinition? Get(string name, ScopeKey? scope = null)
-        => ResolveEntry(name, scope).Entry?.Definition;
+        => ResolveEntry(name, scope)?.Definition;
 
     public IReadOnlyList<ToolSchema> Schemas(ScopeKey? scope = null)
         => View(scope).Visible.Values
@@ -511,7 +518,7 @@ public sealed class ToolRuntime : Service
 
     public ToolExecutionModeKind ExecutionModeKind(ToolExecutionInput exec)
     {
-        var snapshot = CaptureRegistration(ResolveEntry(exec.Name, exec.Agent?.ScopeKey).Entry, exec.Arguments);
+        var snapshot = CaptureRegistration(ResolveEntry(exec.Name, exec.Agent?.ScopeKey), exec.Arguments);
         exec.ScheduledRegistration = snapshot;
         return snapshot.Mode;
     }
@@ -570,7 +577,7 @@ public sealed class ToolRuntime : Service
             HostContext = Ctx,
         };
         var registration = input.ScheduledRegistration
-            ?? CaptureRegistration(ResolveEntry(input.Name, input.Agent?.ScopeKey).Entry, input.Arguments);
+            ?? CaptureRegistration(ResolveEntry(input.Name, input.Agent?.ScopeKey), input.Arguments);
         input.ScheduledRegistration = null;
         BindRegistration(runContext, registration);
         return runContext;
@@ -582,12 +589,10 @@ public sealed class ToolRuntime : Service
         exec.UsesScriptPermissions = registration.Definition?.UsesScriptPermissions == true;
     }
 
-    private (ToolEntry? Entry, bool InheritedVisible) ResolveEntry(string name, ScopeKey? scope)
-        => ResolveEntry(name, _layers.ChainLayers(scope), scope is null ? null : _layers.LayerFor(scope));
-
-    private (ToolEntry? Entry, bool InheritedVisible) ResolveEntry(string name, IReadOnlyList<ToolLayer> layers,
-        ToolLayer? own, bool includeInheritedVisibility = false)
+    private ToolEntry? ResolveEntry(string name, ScopeKey? scope)
     {
+        var layers = _layers.ChainLayers(scope);
+        var own = scope is null ? null : _layers.LayerFor(scope);
         var inherited = _layers.Global.Tools.GetValueOrDefault(name);
         foreach (var layer in layers)
         {
@@ -595,19 +600,14 @@ public sealed class ToolRuntime : Service
             if (layer.Tools.GetValueOrDefault(name) is { } entry) inherited = entry;
         }
         var local = own?.Tools.GetValueOrDefault(name);
-        if (local is not null && !includeInheritedVisibility)
-            return (local, false);
-        var inheritedVisible = inherited is not null;
-        if (inheritedVisible)
-        {
-            foreach (var layer in layers)
-            {
-                if (layer.Admits(name)) continue;
-                inheritedVisible = false;
-                break;
-            }
-        }
-        return (local ?? (inheritedVisible ? inherited : null), inheritedVisible);
+        if (local is not null)
+            return local;
+        if (inherited is null)
+            return null;
+        foreach (var layer in layers)
+            if (!ToolLayer.Admits(name, layer.Restrictions.Values))
+                return null;
+        return inherited;
     }
 
     public Task<ScheduledToolPreparation> PrepareScheduledExecution(ToolExecutionInput input)
@@ -700,7 +700,7 @@ public sealed class ToolRuntime : Service
             return AbortedBeforeDispatchResult();
         try
         {
-            var current = ResolveEntry(exec.Name, exec.Agent?.ScopeKey).Entry;
+            var current = ResolveEntry(exec.Name, exec.Agent?.ScopeKey);
             if ((current?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
             {
                 if (current is null)
@@ -808,7 +808,7 @@ public sealed class ToolRuntime : Service
 
     private void DemandCurrentRegistration(ToolRunContext exec)
     {
-        if ((ResolveEntry(exec.Name, exec.Agent?.ScopeKey).Entry?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
+        if ((ResolveEntry(exec.Name, exec.Agent?.ScopeKey)?.RegistrationId ?? Guid.Empty) != exec.Registration.Id)
             throw new InvalidOperationException("The tool registration changed during authorization; no replacement body was executed.");
     }
 
