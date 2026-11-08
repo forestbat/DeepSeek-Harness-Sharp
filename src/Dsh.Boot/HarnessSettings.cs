@@ -1,7 +1,9 @@
+using System.Globalization;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using System.Text.Encodings.Web;
 using Dsh.Runtime.Logging;
+using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using System.Security.Cryptography;
 using System.Text;
@@ -116,6 +118,9 @@ public sealed class HarnessSettings
             }
         }
     }
+    /** 上一次读取修复过文件时的说明(哪几段被丢弃、原文落在哪); 未修复为 null。不属于配置面, 不对外暴露。 */
+    [YamlIgnore]
+    internal string? Notice { get; private set; }
 
     public static HarnessSettings Load(HarnessHome home)
     {
@@ -135,15 +140,16 @@ public sealed class HarnessSettings
 
     private static HarnessSettings LoadSnapshot(string path, string canonicalPath)
     {
-        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
+        var text = ReadDocument(path, out var notice);
         var settings = Parse(text);
         settings.Plugins = PluginSettingsSection.ParseDocument(text);
         settings._savedDocument = text;
         settings._savedPath = canonicalPath;
+        settings.Notice = notice;
         return settings;
     }
 
-    private static HarnessSettings Parse(string text)
+    internal static HarnessSettings Parse(string text)
     {
         RuleMapYaml.ValidateDocument(text);
         var settings = new StaticDeserializerBuilder(new DshYamlStaticContext())
@@ -156,6 +162,108 @@ public sealed class HarnessSettings
         settings.Scripts?.Permissions?.Validate();
         return settings;
     }
+
+    /** 启动与写入共用的唯一判据: 类型化 settings 与 plugins 段都要吃得下这份文本。 */
+    public static void Validate(string text)
+    {
+        _ = Parse(text);
+        _ = PluginSettingsSection.ParseDocument(text);
+    }
+
+    public static bool TryValidate(string text, out string? message)
+    {
+        try
+        {
+            Validate(text);
+            message = null;
+            return true;
+        }
+        catch (YamlException error)
+        {
+            message = Describe(error);
+            return false;
+        }
+        catch (Exception error) when (error is RuntimeException or InvalidDataException)
+        {
+            message = error.Message;
+            return false;
+        }
+    }
+
+    public static string Describe(YamlException error)
+        => error.InnerException is { } inner
+            ? $"第 {error.Start.Line} 行 {error.Start.Column} 列: {error.Message} ({inner.Message})"
+            : $"第 {error.Start.Line} 行 {error.Start.Column} 列: {error.Message}";
+
+    /**
+     * settings.yaml 的唯一读入口: 能解析就用; 不能解析就丢掉坏的那条 entry 并写回, 原文隔离保存。
+     * 丢弃会放宽限制的段(plugins / sandbox)不修 —— 猜权限比不启动更糟。
+     */
+    private static string ReadDocument(string path, out string? notice)
+    {
+        notice = null;
+        var text = File.Exists(path) ? ReadSettingsTextShared(path) : LoadTemplate();
+        try
+        {
+            Validate(text);
+            return text;
+        }
+        catch (YamlException error)
+        {
+            var quarantined = File.Exists(path) ? Quarantine(path, text) : path;
+            var attempt = SettingsRepair.Repair(text, error);
+            if (attempt.Text is { } repaired)
+            {
+                WriteAtomic(path, repaired);
+                notice = attempt.Describe(quarantined);
+                return repaired;
+            }
+            throw new InvalidDataException(
+                $"settings.yaml {Describe(error)}; {attempt.Refusal}; 原文已保存为 {quarantined}; 修好这一段再启动。");
+        }
+    }
+
+    private static string Quarantine(string path, string text)
+    {
+        var stamp = DateTimeOffset.Now.ToString("yyyyMMdd'T'HHmmss", CultureInfo.InvariantCulture);
+        for (var attempt = 0; ; attempt++)
+        {
+            var candidate = $"{path}{SettingsRepair.QuarantineMarker}{stamp}{(attempt == 0 ? "" : $"-{attempt}")}";
+            try
+            {
+                SettingsFilePermissions.Write(candidate, text);
+                return candidate;
+            }
+            catch (IOException) when (attempt < 60)
+            {
+                // 同一秒内已有隔离文件: 换个后缀再试。
+            }
+        }
+    }
+
+    /** settings_set 的唯一写入口: 加锁读 → 改一条路径 → 校验 → 原子替换。 */
+    public static void SetEntry(HarnessHome home, IReadOnlyList<string> path, object? value)
+    {
+        Directory.CreateDirectory(home.Root);
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        var existing = ReadDocument(home.SettingsFile, out _);
+        var rendered = value is null ? null : SettingsDocument.FlowValue(value);
+        var updated = SettingsDocument.ReplacePath(existing, path, rendered);
+        if (!TryValidate(updated, out var problem))
+            throw new InvalidDataException($"settings_set 的结果无法解析({problem}); 文件未改动。");
+        WriteAtomic(home.SettingsFile, updated);
+    }
+
+    /** 守卫还原: 只接受已通过校验的文本, 与其它写者共用同一把跨进程锁。 */
+    public static void Restore(HarnessHome home, string text)
+    {
+        Validate(text);
+        Directory.CreateDirectory(home.Root);
+        using var transaction = new SettingsWriteLock(home.SettingsFile);
+        WriteAtomic(home.SettingsFile, text);
+    }
+
+    public static string Quarantine(HarnessHome home, string text) => Quarantine(home.SettingsFile, text);
 
     /** Human updates stay transactional; tool updates release the lock while awaiting a decision. */
     public static bool Update(HarnessHome home, Func<HarnessSettings, bool> update)
@@ -198,7 +306,7 @@ public sealed class HarnessSettings
         var text = serializer.Serialize(this);
         var previous = _savedPath == canonicalPath ? _savedDocument ?? existing : existing;
         var updated = SettingsDocument.MergeTopLevel(existing, serializer.Serialize(Parse(previous)), text);
-        _ = Parse(updated);
+        Validate(updated);
         return updated;
     }
 
@@ -261,7 +369,7 @@ public sealed class HarnessSettings
     {
         var canonical = CanonicalFilePath.Canonicalize(path);
         using var transaction = new SettingsWriteLock(canonical);
-        var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+        var before = File.Exists(canonical) ? ReadDocument(canonical, out _) : "";
         if (PrepareMutation(before, canonical, prepare) is not { } after)
             return false;
         Publish(canonical, before, after, backup);
@@ -273,7 +381,7 @@ public sealed class HarnessSettings
         => commit(path, canonical =>
         {
             using var transaction = new SettingsWriteLock(canonical);
-            var before = File.Exists(canonical) ? ReadSettingsTextShared(canonical) : "";
+            var before = File.Exists(canonical) ? ReadDocument(canonical, out _) : "";
             return PrepareMutation(before, canonical, prepare) is { } after
                 ? new SettingsMutationProposal(before, after)
                 : null;
@@ -293,7 +401,7 @@ public sealed class HarnessSettings
         {
             var after = prepare(before.Length == 0 ? LoadTemplate() : before, canonical);
             if (after is not null)
-                _ = Parse(after);
+                Validate(after);
             return after;
         }
         finally
@@ -319,7 +427,7 @@ public sealed class HarnessSettings
             var current = File.Exists(path) ? ReadSettingsTextShared(path) : "";
             if (current != before)
                 throw new InvalidOperationException("Settings changed while approval was pending; read the current settings and propose again.");
-            _ = Parse(after);
+            Validate(after);
             var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
             PublicationPath.Value = transaction.CanonicalPath;
             try

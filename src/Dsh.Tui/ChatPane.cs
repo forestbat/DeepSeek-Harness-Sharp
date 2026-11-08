@@ -123,7 +123,6 @@ public sealed class ChatPane : ITuiPane
             {
                 StickToBottom = false;
                 ScrollOffset = index;
-                _suppressStickOnce = true;
                 return true;
             }
         }
@@ -135,19 +134,7 @@ public sealed class ChatPane : ITuiPane
     /** 刚刚往下滚过: 下一帧知道 maxOffset 后决定是否恢复贴底(只有用户可以改判跟随)。 */
     private bool _resumeStickAtTail;
 
-    /** jump 后抑制一次“新内容贴底”, 让目标消息保持在顶上; 一次性, 之后恢复正常贴底。 */
-    private bool _suppressStickOnce;
-
-    private void RequestStickToBottom()
-    {
-        if (_suppressStickOnce)
-        {
-            _suppressStickOnce = false;
-            return;
-        }
-
-        StickToBottom = true;
-    }
+    private void RequestStickToBottom() => StickToBottom = true;
 
     public string? SelectedFoldKey { get; set; }
 
@@ -424,6 +411,8 @@ public sealed class ChatPane : ITuiPane
                 break;
             case ConsoleKey.PageDown:
                 ScrollOffset += 10;
+                // 与滚轮向下同一判定: 落到末尾就恢复跟随, 否则用 PageDown 到底后新输出会把视口留在旧位置。
+                _resumeStickAtTail = true;
                 break;
             default:
                 if (key.KeyChar >= ' ')

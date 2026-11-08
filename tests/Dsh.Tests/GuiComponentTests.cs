@@ -172,15 +172,53 @@ public sealed class GuiComponentTests
     }
 
     [Fact]
-    public void TokenStats_Reset_ClearsContextOccupancy()
+    public void TokenStats_Reset_ClearsEveryReading()
     {
         var stats = new TokenStatsViewModel();
         stats.ObserveRequestContext(64_000);
+        stats.ObserveTurn(4, 7);
+        stats.RequestStarted();
+        stats.FirstTokenArrived();
         stats.ObserveUsage(new TokenUsage(1_000, 10));
+        stats.RequestFinished();
+        Assert.NotEqual(TokenStatsViewModel.Empty, stats.Rounds);
+        Assert.NotEqual(TokenStatsViewModel.Empty, stats.Totals);
+        Assert.NotEqual(TokenStatsViewModel.Empty, stats.Cache);
 
         stats.Reset();
 
         Assert.Equal(TokenStatsViewModel.Empty, stats.ContextText);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.Rounds);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.Latency);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.FirstToken);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.TokensPerSecond);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.Cache);
+        Assert.Equal(TokenStatsViewModel.Empty, stats.Totals);
+    }
+
+    /** 换会话后的累计量只反映本会话: 重放该会话的用量事件两次, 结果必须与一次相同。 */
+    [Fact]
+    public void TokenStats_ResetThenReplay_DoesNotAccumulateAcrossSwitches()
+    {
+        var stats = new TokenStatsViewModel();
+        var events = new[]
+        {
+            new TokenUsage(2_000, 100),
+            new TokenUsage(3_000, 200),
+        };
+        void Replay()
+        {
+            stats.Reset();
+            foreach (var usage in events)
+                stats.ObserveUsage(usage);
+        }
+
+        Replay();
+        var once = stats.Totals;
+        Replay();
+
+        Assert.Equal(once, stats.Totals);
+        Assert.Equal("in 5.0k / out 300", stats.Totals);
     }
 
     [Fact]

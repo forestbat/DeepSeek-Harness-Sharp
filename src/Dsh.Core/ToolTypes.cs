@@ -215,7 +215,11 @@ public sealed class ToolOutputException : HarnessException
     public IReadOnlyList<string> Violations { get; }
 
     public ToolOutputException(string toolName, IReadOnlyList<string> violations)
-        : base($"tool \"{toolName}\" returned invalid output: {string.Join("; ", violations)}", ToolErrorCodes.InvalidToolOutput)
+        : base(
+            $"tool \"{toolName}\" returned invalid output: {string.Join("; ", violations)}"
+            + " — the tool body already ran, so its side effects may have taken place; do not retry the same call, "
+            + "this is a harness contract bug (tool output schema vs. actual value)",
+            ToolErrorCodes.InvalidToolOutput)
     {
         Violations = violations;
     }

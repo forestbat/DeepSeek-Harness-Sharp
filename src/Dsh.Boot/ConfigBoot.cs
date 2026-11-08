@@ -23,6 +23,8 @@ public static class ConfigBoot
         var logging = LoggingSetup.Create(settings.Logging?.ToOptions(), paths.LogsPath, allowConsole: !options.IsTui);
         var credentials = new EnvCredentials(home, options.Cwd);
         var ctx = new Context(logging);
+        if (settings.Notice is { } settingsNotice)
+            ctx.LoggerFor("settings").Warn("%s", settingsNotice);
         ctx.SetOwn("dshHomePath", home.Root);
         ctx.SetOwn(DshPaths.PropName, paths);
         ctx.SetOwn("credentials", credentials);

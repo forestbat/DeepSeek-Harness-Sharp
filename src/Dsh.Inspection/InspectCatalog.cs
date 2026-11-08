@@ -131,7 +131,7 @@ public static class InspectCatalog
     }
 
     /** schema 里的全部配置路径(顶层文档 + 各插件参数)。 */
-    private static List<(string Path, PluginSettingSpec Spec)> ConfigPaths()
+    internal static List<(string Path, PluginSettingSpec Spec)> ConfigPaths()
     {
         var paths = new List<(string, PluginSettingSpec)>();
         foreach (var provider in SettingsSchemaCatalog.All())

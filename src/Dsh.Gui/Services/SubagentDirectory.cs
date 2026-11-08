@@ -8,6 +8,7 @@ namespace Dsh.Gui.Services;
 public sealed class SubagentDirectory(HostChatSession chat)
 {
     private readonly Dictionary<SessionId, IReadOnlyList<SessionEvent>> _events = [];
+    private readonly Lock _eventsGate = new();
 
     public async Task<IReadOnlyList<RemoteSubagentInfo>> DescendantsAsync(SessionId root)
     {
@@ -39,13 +40,18 @@ public sealed class SubagentDirectory(HostChatSession chat)
     }
 
     public IReadOnlyList<SessionEvent>? FindEvents(SessionId id)
-        => _events.GetValueOrDefault(id);
+    {
+        lock (_eventsGate)
+            return _events.GetValueOrDefault(id);
+    }
 
+    /** 每次都重新取: 刷新要能看到子代理刚产出的事件, 缓存住就会停在第一次的快照上。 */
     public async Task<IReadOnlyList<SessionEvent>> LoadEventsAsync(SessionId id)
     {
         var snapshot = await (await chat.ClientAsync()).GetSessionSnapshotAsync(id.Value);
         var events = snapshot.Events.ToList();
-        _events[id] = events;
+        lock (_eventsGate)
+            _events[id] = events;
         return events;
     }
 }

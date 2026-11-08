@@ -25,6 +25,9 @@ public sealed partial class ChatView : UserControl
     /** 一次还原里最多修几轮。 */
     private const int AnchorSettlePasses = 3;
 
+    /** 折叠锚点最多生效几次布局变化: 只够它自己那一次重估, 之后的流式增长不许再动视口。 */
+    private const int FoldAnchorPasses = 2;
+
     /** 一格滚轮在内层滚动区域里滚动的像素数(与常见 3 行文本高度相当)。 */
     private const double NestedWheelStepPixels = 60;
 
@@ -72,6 +75,8 @@ public sealed partial class ChatView : UserControl
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         LayoutUpdated += OnLayoutUpdatedGuard;
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
+        // 时间线入口: 右键消息就是"跳到这里 / 回退到这里 / 从这里分叉"。
+        MessageList.AddHandler(ContextRequestedEvent, OnMessageContextRequested, RoutingStrategies.Tunnel);
         MessageList.PropertyChanged += (_, change) =>
         {
             if (change.Property != ListBox.ScrollProperty)
@@ -107,7 +112,6 @@ public sealed partial class ChatView : UserControl
 
     private void Detach()
     {
-        _foldPending = false;
         if (_composer is not null)
             _composer.PropertyChanged -= OnComposerPropertyChanged;
         _composer = null;
@@ -191,8 +195,13 @@ public sealed partial class ChatView : UserControl
     }
 
     /** 用户输入产生的位置变化才改判跟随意图; 程序/布局引起的位置变化不动它。 */
-    private void OnScrollInput(object? sender, RoutedEventArgs e) =>
+    private void OnScrollInput(object? sender, RoutedEventArgs e)
+    {
         _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
+        // 用户自己一动视口, 折叠锚点立刻作废: 它只负责"点开的那一下别让卡片乱跳"。
+        if (_scrollInput is not null && IsUserScrollInput(e))
+            _foldAnchorPasses = 0;
+    }
 
     /** 滚轮/键盘/拖动滚动条都属于用户自己在移动视口; 只读文本里的指针事件不算。 */
     private bool IsUserScrollInput(RoutedEventArgs e)
@@ -216,13 +225,11 @@ public sealed partial class ChatView : UserControl
     // Observe manual offset changes before ScrollChanged combines them with layout changes.
     private void OnScrollPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs change)
     {
-        if (_restoringAnchor || change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
+        if (change.Property != ScrollViewer.OffsetProperty || sender is not ScrollViewer scroll)
             return;
-        if (!_draggingThumb && (_scrollInput is not { } input || !IsUserScrollInput(input)))
+        if (_scrollInput is not { } input || !IsUserScrollInput(input))
             return;
-        _scrollGeneration++;
-        _foldPending = false;
-        _sticky = IsAtBottom(scroll);
+        _sticky = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
     }
 
     /**
@@ -232,42 +239,49 @@ public sealed partial class ChatView : UserControl
      * 因为内容一增长, 当前位置立刻就不算底部了。
      * 在这一条之上, 跟随还要同时满足: 意图仍为跟随、没有折叠对齐在飞、没在拖滚动条。
      *
-     * 意图在真实用户滚动时按落点重新判定; 程序性跳到中途只停止跟随。
-     * 内容高度变化和虚拟化锚点修正都不能重新开启跟随, 即使它们只发出 offset delta。
-     * 否则面板重估碰巧触底时会把刚滚开的读者重新拽回末尾。
+     * 意图只在"视口自己动了"时重新判定(用户滚动、程序性跳转、我们自己的贴底)。
+     * 内容高度变化(流式输出、虚拟化重估、折叠)一律不改判: 否则每一帧的 extent 抖动都会把跟随
+     * 自己打开又关掉, 表现为滚动条高频小幅乱跳、拖到底又弹回上面、点折叠没反应。
      */
     private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
     {
-        if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll) || _restoringAnchor)
+        if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
         if (!layoutChanged)
         {
-            // ScrollChanged 在布局结束后才发出, 无 extent delta 也可能只是面板的锚点修正。
-            // 程序性跳到中途可以停止跟随, 但只有真正的用户滚动才能重新开启跟随。
+            // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
+            // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
+            // 否则一次布局增长就会把人拽回底部。
             _scrollGeneration++;
-            _sticky &= IsAtBottom(scroll);
+            _sticky = IsAtBottom(scroll);
+        }
+        // 折叠锚点优先: 面板这次重估能把被点那条甩出几百像素, 而下面的常规判据要求偏移量几乎没变,
+        // 那种情况下它不会出手。只在"用户没在跟随"时生效, 贴底时一律交给贴底逻辑。
+        if (_foldAnchorPasses > 0 && !_sticky && !_draggingThumb && !_restoringAnchor && layoutChanged)
+        {
+            QueueFoldRestore(scroll);
         }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
-        if (!_foldPending && !_draggingThumb && !_sticky
+        else if (!_restoringAnchor && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
+            && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
             && scroll.Offset.Y > AnchorTolerance)
         {
             RestoreAnchor(scroll);
         }
         // 没有折叠在还原时: 布局变化顺手把视口推了几像素是面板重估 + 布局取整的噪声, 不是滚动, 原样退回。
         // 这两条必须互斥 —— 否则上一行的锚点修正会被这一行按旧 offset 撤销, 流式期间就一直漂。
-        else if (layoutChanged && !_foldPending && !_sticky && !_draggingThumb
+        else if (layoutChanged && !_sticky && !_draggingThumb
             && Math.Abs(e.OffsetDelta.Y) > 0 && Math.Abs(e.OffsetDelta.Y) < SubPixelDrift)
         {
             scroll.Offset = new Vector(scroll.Offset.X, _lastScroll.Offset);
         }
-        if (!_foldPending)
-            RememberAnchor(scroll);
+        RememberAnchor(scroll);
         // 面板重估偶尔会把实体化窗口整个丢到视口之外(实测: 视口里一条都没有, 已实体化项的 top 全是 -1100 之类),
         // 这时按锚点把它找回来。只在滚动事件里做一次, 不在布局回调里做, 不会递归。
-        if (!_foldPending && !HasVisibleItem(scroll) && LastRealizedIndex() is var blank && blank >= 0)
+        if (!_restoringAnchor && !HasVisibleItem(scroll) && LastRealizedIndex() is var blank && blank >= 0)
         {
             _restoringAnchor = true;
             try
@@ -287,7 +301,11 @@ public sealed partial class ChatView : UserControl
         var wasAtBottom = _lastScroll.IsAtBottom(StickyTolerance);
         if (layoutChanged && _sticky && wasAtBottom && !_draggingThumb && !_foldPending && !_restoringAnchor)
             StickToEnd(scroll);
+        if (layoutChanged)
+            _foldPending = false;
         _lastScroll = new ScrollSnapshot(scroll.Offset.Y, scroll.Viewport.Height, scroll.Extent.Height);
+        // 一个滚动周期结束: 下个周期没有新的输入事件就说明这次的位移来自布局, 不是用户。
+        _scrollInput = null;
     }
 
     /**
@@ -295,21 +313,11 @@ public sealed partial class ChatView : UserControl
      * 面板就把区间起点判为不可信, 改用"实体化项平均高度"重估整篇文档: 像素偏移不变, 但同一偏移下的
      * 内容换成了更早/更晚的一条, 表现为视口上下乱跳(上游 AvaloniaUI/Avalonia#17831)。
      *
-     * 处理办法照抄 SubtitleEdit 的 TableViewScrollAnchor
-     * (https://github.com/SubtitleEdit/subtitleedit/pull/13625, 后续 #14626 修 extent 缩短时的情形):
-     * 记住视口顶部那条消息及其在视口里的位置; 一旦发现"高度变了、位置没变", 就把它放回原处。
-     * 还原按数据项而不是像素做: 像素正是不可靠的那个量。
-     */
-    /**
-     * 折叠/展开会改变某条消息的高度。列表按 VirtualizingStackPanel 摆放时, 任何一条已实体化项高度变了,
-     * 面板就把区间起点判为不可信, 改用"实体化项平均高度"重估整篇文档: 像素偏移不变, 但同一偏移下的内容
-     * 换成了更早/更晚的一条, 表现为视口上下乱跳(上游 AvaloniaUI/Avalonia#17831)。
-     *
      * 还原办法照抄 SubtitleEdit 的 TableViewScrollAnchor 与 TableViewExtras.PrePositionScroll
      * (https://github.com/SubtitleEdit/subtitleedit/pull/13625, 后续 #14626 补上 extent 缩短的情形):
-     * 完全照 SubtitleEdit 的 TableViewScrollAnchor: **锚点永远是"视口顶部那条消息"**, 每次滚动之后重新记;
-     * 只要发现"高度变了、位置没变"(说明面板在视口下面重估, 不是滚动), 就把它放回原处。
-     * 像素正是不可靠的那个量, 所以还原按数据项做; 目标被回收时先用实测行高靠近(ApproachIndex)再 ScrollIntoView。
+     * **锚点永远是"视口顶部那条消息"**, 每次滚动之后重新记; 只要发现"高度变了、位置没变"
+     * (说明面板在视口下面重估, 不是滚动), 就把它放回原处。像素正是不可靠的那个量, 所以还原按数据项做;
+     * 目标被回收时先用实测行高靠近(ApproachIndex)再 ScrollIntoView。
      */
     private void RememberAnchor(ScrollViewer scroll)
     {
@@ -338,7 +346,6 @@ public sealed partial class ChatView : UserControl
         _anchorIndex = MessageList.IndexFromContainer(anchor);
         _anchorCount = MessageList.ItemCount;
         _anchorTop = top;
-        _anchorGeneration = _scrollGeneration;
     }
 
 
@@ -361,36 +368,6 @@ public sealed partial class ChatView : UserControl
     }
 
     /**
-     * 视口顶部那条消息(数据项 + 在视口里的位置)。平时由它兜住面板的重估, 折叠时换成用户点的那条。
-     */
-
-    /** 数据项优先于下标: 上面插了一条消息时, 视口里留住的仍是原来那条内容。 */
-    private int ResolveIndex(object? data, int index)
-    {
-        if (MessageList.ItemCount == 0)
-            return -1;
-        if (data is { } target)
-        {
-            for (var candidate = 0; candidate < MessageList.ItemCount; candidate++)
-            {
-                if (ReferenceEquals(MessageList.Items[candidate], target))
-                    return candidate;
-            }
-        }
-        return index >= 0 && index < MessageList.ItemCount ? index : -1;
-    }
-
-    /** 视口顶部那条消息(数据项 + 屏幕位置), 用来吸收重估带来的几像素噪声。 */
-
-    /** 只修几像素以内的抖动; 更大的位移是真正的滚动, 交给用户。
-     * 在布局回调里跑: 面板的重估发生在布局期间, 滚动事件早于它, 那时还看不到位移。 */
-
-    /**
-     * 面板重估之后, 按"实测屏幕位置"把被折叠的消息拉回去。
-     * 每次写偏移都会让面板再估一次, 所以量一次、修一次, 最多几轮; 目标被回收时先按实测行高靠近
-     * (ApproachIndex), 再请列表实体化它 —— 两步都取自 SubtitleEdit 的 Restore / PrePositionScroll。
-     */
-    /**
      * 视口空掉只在"布局把实体化窗口丢到视口外"时出现, 可能发生在没有任何滚动事件的那一轮布局里,
      * 所以挂一个只检测、只投递的布局回调: 检测到空视口就把修复投递出去(最多一次), 绝不在布局回调里写 offset。
      */
@@ -402,7 +379,7 @@ public sealed partial class ChatView : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             _blankRecoveryPosted = false;
-            if (_restoringAnchor || _foldPending || MessageList.Scroll is not ScrollViewer scroll || HasVisibleItem(scroll))
+            if (_restoringAnchor || MessageList.Scroll is not ScrollViewer scroll || HasVisibleItem(scroll))
                 return;
             if (LastRealizedIndex() is var index && index >= 0)
             {
@@ -439,10 +416,16 @@ public sealed partial class ChatView : UserControl
     }
 
     private void RestoreAnchor(ScrollViewer scroll)
+        => RestoreAnchor(scroll, ResolveAnchorIndex(), _anchorTop);
+
+    /**
+     * 按"某条消息 + 它当时的屏幕位置"还原视口。
+     * 折叠用被点那条做锚点: 面板重估会把它甩出几百像素, 按"视口顶部那条"还原对它无效。
+     * 位移多大都照样拉回: 面板重估一次能甩出一屏以上(实测追加内容后锚点位移 561px),
+     * 那不是用户滚动, 按它自己报的坐标重新记锚点等于把读者正在读的位置丢掉。
+     */
+    private void RestoreAnchor(ScrollViewer scroll, int index, double anchorTop)
     {
-        if (!_foldPending && _anchorGeneration != _scrollGeneration)
-            return;
-        var index = ResolveAnchorIndex();
         if (index < 0)
             return;
         _restoringAnchor = true;
@@ -460,15 +443,9 @@ public sealed partial class ChatView : UserControl
                 if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
                     || item.TranslatePoint(default, scroll) is not { } position)
                     break;
-                var delta = position.Y - _anchorTop;
+                var delta = position.Y - anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
-                // Restore large layout shifts only for the captured message identity.
-                if (!_foldPending && Math.Abs(delta) > scroll.Viewport.Height && !ReferenceEquals(item.DataContext, _anchorData))
-                {
-                    RememberAnchor(scroll);
-                    break;
-                }
                 var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
                 scroll.Offset = new Vector(scroll.Offset.X, Math.Clamp(scroll.Offset.Y + delta, 0, maximum));
                 MessageList.UpdateLayout();
@@ -531,13 +508,17 @@ public sealed partial class ChatView : UserControl
     /** 这一次布局变化来自折叠/展开: 不许顺手贴底, 否则用户刚点开的那条会被顶出视口。 */
     private bool _foldPending;
 
+    /** 折叠锚点: 被点那条(数据项 + 点击时的屏幕位置), 只在紧接着的两次布局里用来把它放回原处。 */
+    private object? _foldAnchorData;
+    private double _foldAnchorTop;
+    private int _foldAnchorPasses;
+
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
     private object? _anchorData;
     private int _anchorIndex = -1;
     private int _anchorCount = -1;
     private double _anchorTop;
-    private long _anchorGeneration;
 
     /** 正在还原锚点; 期间产生的滚动事件不再参与判断。 */
     private bool _restoringAnchor;
@@ -548,45 +529,97 @@ public sealed partial class ChatView : UserControl
     /** 每轮布局后检查视口是否空掉: 只检测、只投递, 绝不在布局回调里写 offset。 */
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
-    /** 点击前固定被操作消息的身份和位置, 不用布局后的顶部项覆盖它。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldAnchor(sender as Visual);
+    /**
+     * 折叠/展开会改变被点那条的高度, 而面板在已实体化项高度变化时会重估整篇坐标, 一次能甩出几百像素。
+     * 所以点击时记下被点那条及其屏幕位置, 接下来两次布局按它还原; 用户一滚(或重新贴底)就作废。
+     */
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
 
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source as Visual);
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
 
-    private void BeginFoldAnchor(Visual? source)
+    private void BeginFoldAnchor(object? source)
     {
-        if (MessageList.Scroll is not ScrollViewer scroll
-            || source?.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: { } data } item)
-            return;
-        var index = MessageList.IndexFromContainer(item);
-        if (index < 0 || !ReferenceEquals(MessageList.ContainerFromIndex(index), item)
-            || item.TranslatePoint(default, scroll) is not { } position)
-            return;
-        _sticky = false;
-        _scrollGeneration++;
-        _anchorData = data;
-        _anchorIndex = index;
-        _anchorCount = MessageList.ItemCount;
-        _anchorTop = position.Y;
-        if (_foldPending)
-            return;
         _foldPending = true;
-        // Loaded 在布局之后执行; 只还原这次点击, 沿用有界修正, 不在每帧重新追逐锚点。
+        _foldAnchorPasses = 0;
+        if (MessageList.Scroll is not ScrollViewer scroll
+            || MessageContainerOf(source)?.DataContext is not { } data)
+            return;
+        for (var index = 0; index < MessageList.ItemCount; index++)
+        {
+            if (!ReferenceEquals(MessageList.Items[index], data)
+                || MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
+                || item.TranslatePoint(default, scroll) is not { } position)
+                continue;
+            _foldAnchorData = data;
+            _foldAnchorTop = position.Y;
+            _foldAnchorPasses = FoldAnchorPasses;
+            return;
+        }
+    }
+
+    /**
+     * 折叠引起的重估要等这一轮布局结束才落定(滚动事件里读到的还是旧位置), 所以把还原投递到布局之后,
+     * 并且只投递有限次数: 之后的流式增长不许再动视口。
+     */
+    private void QueueFoldRestore(ScrollViewer scroll)
+    {
+        if (_foldAnchorPasses-- <= 0)
+            return;
         Dispatcher.UIThread.Post(() =>
         {
-            if (!_foldPending || MessageList.Scroll is not ScrollViewer live)
+            if (_sticky || _draggingThumb || _restoringAnchor || _foldAnchorData is not { } data)
                 return;
-            try
+            for (var index = 0; index < MessageList.ItemCount; index++)
             {
-                RestoreAnchor(live);
-            }
-            finally
-            {
-                _foldPending = false;
-                RememberAnchor(live);
-                _lastScroll = new ScrollSnapshot(live.Offset.Y, live.Viewport.Height, live.Extent.Height);
+                if (ReferenceEquals(MessageList.Items[index], data))
+                {
+                    RestoreAnchor(scroll, index, _foldAnchorTop);
+                    return;
+                }
             }
         }, DispatcherPriority.Loaded);
+    }
+
+    /**
+     * 右键一条消息: 只在它有事件序号时给出时间线动作(合成的界面行没有序号, 无从回退)。
+     * 菜单在代码里建:  Flyout 的内容不参与模板绑定, XAML 里无法把消息当参数递给命令。
+     */
+    private void OnMessageContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (_viewModel is not { } viewModel
+            || MessageContainerOf(e.Source)?.DataContext is not MessageViewModel { HasTimelineEntry: true } message)
+            return;
+        e.Handled = true;
+        MenuFlyout menu = new();
+        menu.Items.Add(MenuItem("跳到此消息", () => viewModel.JumpToMessageCommand.Execute(message)));
+        menu.Items.Add(MenuItem("回退到此消息", () =>
+        {
+            if (viewModel.RevertToMessageCommand.CanExecute(message))
+                _ = ExecuteViewCommandAsync(viewModel, viewModel.RevertToMessageCommand, message);
+        }));
+        menu.Items.Add(MenuItem("从此消息分叉", () =>
+        {
+            if (viewModel.ForkAtMessageCommand.CanExecute(message))
+                _ = ExecuteViewCommandAsync(viewModel, viewModel.ForkAtMessageCommand, message);
+        }));
+        menu.ShowAt(MessageContainerOf(e.Source)!, showAtPointer: true);
+    }
+
+    private static MenuItem MenuItem(string header, Action action)
+    {
+        MenuItem item = new() { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private ListBoxItem? MessageContainerOf(object? source)
+    {
+        for (var visual = source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is ListBoxItem item)
+                return item;
+        }
+        return null;
     }
 
     /** SelectableTextBlock 点击后不会自动获得焦点, 而 Ctrl+C 只有在其拥有焦点时才生效; 选中文字即意味着在阅读, 同时停止触底跟随。 */
@@ -606,7 +639,6 @@ public sealed partial class ChatView : UserControl
             return;
         if (!_viewModel.Messages.Contains(message))
             return;
-        _foldPending = false;
         _sticky = true;
         Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(message));
     }
@@ -713,6 +745,8 @@ public sealed partial class ChatView : UserControl
             await PasteAsync();
             return;
         }
+        if (HandlesTranscriptKey(e))
+            return;
         if (_viewModel.IsSuggestionOpen)
         {
             switch (e.Key)
@@ -741,6 +775,57 @@ public sealed partial class ChatView : UserControl
         e.Handled = true;
         if (_viewModel.SubmitCommand.CanExecute(null))
             await ExecuteViewCommandAsync(_viewModel, _viewModel.SubmitCommand, null);
+    }
+
+    /**
+     * 输入框在默认状态下有焦点, 而 TextBox 自己会吞掉 PageUp/PageDown/Home/End,
+     * 所以在隧道里先拦一道: 翻页键交给消息列表, Home/End 在输入框为空时跳到记录头尾。
+     * 输入框写得比 MaxHeight 高、自己需要滚动时, 这些键仍归 TextBox。
+     */
+    private bool HandlesTranscriptKey(KeyEventArgs e)
+    {
+        if (e.KeyModifiers is not (KeyModifiers.None or KeyModifiers.Control))
+            return false;
+        var scroll = MessageList.Scroll;
+        if (scroll is null)
+            return false;
+        var composerScrolls = InputBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } composer
+            && composer.Extent.Height - composer.Viewport.Height > AnchorTolerance;
+        var jumpToStart = e.Key == Key.Home && (e.KeyModifiers == KeyModifiers.Control || InputBox.Text is not { Length: > 0 });
+        var jumpToEnd = e.Key == Key.End && (e.KeyModifiers == KeyModifiers.Control || InputBox.Text is not { Length: > 0 });
+        switch (e.Key)
+        {
+            case Key.PageUp when !composerScrolls:
+                ScrollTranscriptBy(-scroll.Viewport.Height);
+                break;
+            case Key.PageDown when !composerScrolls:
+                ScrollTranscriptBy(scroll.Viewport.Height);
+                break;
+            case Key.Home or Key.End when jumpToStart || jumpToEnd:
+                ScrollTranscriptTo(jumpToEnd ? double.MaxValue : 0);
+                break;
+            default:
+                return false;
+        }
+        e.Handled = true;
+        return true;
+    }
+
+    private void ScrollTranscriptBy(double delta)
+        => ScrollTranscriptTo((MessageList.Scroll?.Offset.Y ?? 0) + delta);
+
+    /**
+     * 写偏移用具体像素(禁用 ScrollToEnd); 跟随意图只按**落点**判定, 由调用方指定的方向一律不作数。
+     * 否则(例如把 PageDown 当成"恢复跟随")用户停在半途时会被下一帧流式输出拽回底部。
+     */
+    private void ScrollTranscriptTo(double target)
+    {
+        if (MessageList.Scroll is not { } scroll)
+            return;
+        var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+        var offset = Math.Clamp(target, 0, maxOffset);
+        scroll.Offset = new Vector(scroll.Offset.X, offset);
+        _sticky = offset >= maxOffset - AnchorTolerance;
     }
 
     /** 剪贴板有图片 -> 转附件; 否则退回把剪贴板文本插到光标处(替代 TextBox 默认粘贴, 以便优先识别图片)。 */

@@ -180,6 +180,12 @@ public static class SubagentTool
         };
     }
 
+    /**
+     * 工具输出契约: 后台分支的 runId 是必需的, jobId 只在有 job 控制器时才有
+     * (BackgroundRunDispatch.JobId 可为 null), 所以不能把 jobId 写成 required。
+     * 改动这里必须同步改 StartBackgroundRun / SettleForegroundRun 的返回值,
+     * 回归用例见 SubagentTests.OutputContract_*。
+     */
     private static readonly JsonObject OutputSchema = new()
     {
         ["oneOf"] = new JsonArray
@@ -188,22 +194,12 @@ public static class SubagentTool
             {
                 ["type"] = "object",
                 ["additionalProperties"] = false,
-                ["required"] = new JsonArray("kind", "jobId"),
+                ["required"] = new JsonArray("kind", "runId"),
                 ["properties"] = new JsonObject
                 {
                     ["kind"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("background") },
+                    ["runId"] = new JsonObject { ["type"] = "string" },
                     ["jobId"] = new JsonObject { ["type"] = "string" },
-                },
-            },
-            new JsonObject
-            {
-                ["type"] = "object",
-                ["additionalProperties"] = false,
-                ["required"] = new JsonArray("kind", "subagentId"),
-                ["properties"] = new JsonObject
-                {
-                    ["kind"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("continuable") },
-                    ["subagentId"] = new JsonObject { ["type"] = "string" },
                 },
             },
             new JsonObject
@@ -449,9 +445,12 @@ public static class SubagentTool
     {
         var kind = value.GetProperty("kind").GetString();
         if (kind == "background")
-            return $"Subagent queued as background job {value.GetProperty("jobId").GetString()}";
-        if (kind == "continuable")
-            return $"Subagent running in the background as continuable subagent {value.GetProperty("subagentId").GetString()}";
+        {
+            var runId = value.GetProperty("runId").GetString();
+            return value.TryGetProperty("jobId", out var jobId) && jobId.GetString() is { Length: > 0 } id
+                ? $"Subagent queued as background job {id} (run {runId}); its result will be posted back to this session when it finishes"
+                : $"Subagent queued in the background (run {runId}); its result will be posted back to this session when it finishes";
+        }
         return OutputValueText(value.GetProperty("output"));
     }
 

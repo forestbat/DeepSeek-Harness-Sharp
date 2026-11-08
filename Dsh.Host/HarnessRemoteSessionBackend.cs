@@ -69,9 +69,9 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read)
             ?? throw new InvalidOperationException($"unknown session: {sessionId}");
         var events = handle.Read();
-        var restored = Session.FromRestore(id, events, handle.Header, handle.InheritedEventCount);
+        // 只为一个策略值重建整篇派生状态(surface 折叠等)不划算: 策略就藏在事件流里。
         return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, events.Count,
-            approvals?.EffectivePolicy(restored).ToString()));
+            approvals?.EffectivePolicy(events).ToString()));
     }
 
     public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
@@ -146,7 +146,12 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         }
         try
         {
-            var history = session?.SnapshotEvents(reset ? 0 : fromSeq) ?? ReadPersisted(id, reset ? 0 : fromSeq);
+            var history = session is not null
+                ? session.SnapshotEvents(reset ? 0 : fromSeq)
+                // 客户端通常已经拿到整段快照再来订阅: 起点追平条数时没必要为一片空白解析整份日志。
+                : !reset && stored?.EventCount is { } total && fromSeq >= total
+                    ? []
+                    : ReadPersisted(id, reset ? 0 : fromSeq);
             return Task.FromResult(new RemoteHostStream<RemoteSessionEvent>(
                 LiveEventsAsync(sessionId, history, buffer, fromSeq, reset, cancellationToken), Release));
         }

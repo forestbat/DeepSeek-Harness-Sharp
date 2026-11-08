@@ -399,6 +399,64 @@ public sealed class GuiViewsHeadlessTests
         }
         });
 
+    /** 输入框默认有焦点: PageUp/PageDown 必须翻记录, Home/End 在输入框为空时跳到头尾。 */
+    [Fact]
+    public async Task ChatView_PageKeysReachTheTranscriptFromTheComposer() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 24; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"History {index}\nSecond line\nThird line")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            Assert.True(maxOffset > 2 * scroll.Viewport.Height);
+
+            window.KeyPress(Key.PageUp, RawInputModifiers.None, PhysicalKey.PageUp, null);
+            Render();
+            Assert.True(scroll.Offset.Y < maxOffset - 1, "PageUp in the composer must scroll the transcript up");
+
+            window.KeyPress(Key.PageDown, RawInputModifiers.None, PhysicalKey.PageDown, null);
+            Render();
+            Assert.True(scroll.Offset.Y > 0);
+
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, scroll.Offset.Y, 3);
+
+            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
+            Render();
+            Assert.Equal(maxOffset, scroll.Offset.Y, 3);
+
+            var composer = chat.FindControl<TextBox>("InputBox")!;
+            composer.Text = "写着东西时 End 归光标";
+            composer.CaretIndex = 0;
+            Render();
+            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
+            Render();
+            Assert.Equal(maxOffset, scroll.Offset.Y, 3);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     private static void AssertInsideViewport(Control control, Control viewport)
     {
         var origin = control.TranslatePoint(default, viewport)!.Value;
