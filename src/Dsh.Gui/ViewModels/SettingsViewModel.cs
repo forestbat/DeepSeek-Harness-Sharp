@@ -495,11 +495,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             var rules = RuleMapYaml.Parse(BlacklistText);
             var allowed = RuleMapYaml.Parse(WhitelistText);
             _facade.UpdateSafety(AutoApprove, rules, allowed);
-            Status = $"Permission rules saved ({rules.Count} deny, {allowed.Count} allow).";
+            Status = $"安全策略已保存（{rules.Count} 条黑名单，{allowed.Count} 条白名单）";
         }
         catch (Exception error)
         {
-            Status = $"Permission rules were not saved: {error.Message}";
+            Status = $"安全策略未保存：{error.Message}";
         }
     }
 
