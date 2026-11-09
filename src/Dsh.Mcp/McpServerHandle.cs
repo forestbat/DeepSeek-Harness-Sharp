@@ -38,6 +38,14 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
 
     public int ToolCount => Volatile.Read(ref _live)?.Tools.Count ?? 0;
 
+    public IReadOnlyList<McpClientTool> Tools => Volatile.Read(ref _live)?.Tools.Values.ToList() ?? [];
+
+    public IReadOnlyList<McpPromptInfo> Prompts => Volatile.Read(ref _live)?.Prompts ?? [];
+
+    public string? NegotiatedProtocolVersion => Volatile.Read(ref _live)?.Client.NegotiatedProtocolVersion;
+
+    public bool IsModernProtocol => McpStaleSession.IsModern(NegotiatedProtocolVersion);
+
     public bool SupportsResources => Volatile.Read(ref _live)?.Client.ServerCapabilities.Resources is not null;
 
     public long ResourceListChanges => Interlocked.Read(ref _resourceListChanges);
@@ -89,8 +97,9 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
         try
         {
             var tools = await client.ListToolsAsync(cancellationToken: signal);
+            var prompts = await LoadPromptsAsync(client, signal);
             live = new Live(client, tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal), new CancellationTokenSource(),
-                transport as OwnedStdioClientTransport);
+                transport as OwnedStdioClientTransport, prompts);
             Volatile.Write(ref _live, live);
             _error = null;
             if (Interlocked.Increment(ref _version) > 1)
@@ -319,6 +328,25 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
             throw error;
     }
 
+    private static async Task<IReadOnlyList<McpPromptInfo>> LoadPromptsAsync(McpClient client, CancellationToken signal)
+    {
+        if (client.ServerCapabilities.Prompts is null)
+            return [];
+        try
+        {
+            var listed = await client.ListPromptsAsync(cancellationToken: signal);
+            return listed.Select(p => new McpPromptInfo(
+                p.Name,
+                p.Description,
+                p.ProtocolPrompt.Arguments?.Select(a => a.Name).ToList() ?? []
+            )).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     private static async Task CloseAsync(Live? live)
     {
         if (live is null)
@@ -344,7 +372,8 @@ internal sealed class McpServerHandle(McpServerConfig config, Func<IClientTransp
     }
 
     private sealed record Live(McpClient Client, IReadOnlyDictionary<string, McpClientTool> Tools,
-        CancellationTokenSource Listen, OwnedStdioClientTransport? OwnedTransport)
+        CancellationTokenSource Listen, OwnedStdioClientTransport? OwnedTransport,
+        IReadOnlyList<McpPromptInfo> Prompts)
     {
         public Task? ListenTask { get; set; }
         public volatile McpNotificationStreamEndedException? NotificationError;
