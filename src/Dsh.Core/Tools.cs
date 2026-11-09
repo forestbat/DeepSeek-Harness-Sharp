@@ -255,6 +255,9 @@ public sealed class ToolRuntime : Service
     public ToolDefinition? Get(string name, ScopeKey? scope = null)
         => View(scope).Visible.TryGetValue(name, out var definition) ? definition : null;
 
+    /** 这个作用域里注册的全部工具(含平台不可用的), 用于按整份目录做契约/诊断巡检。 */
+    public IReadOnlyCollection<ToolDefinition> All(ScopeKey? scope = null) => [.. View(scope).Visible.Values];
+
     public IReadOnlyList<ToolSchema> Schemas(ScopeKey? scope = null)
         => View(scope).Visible.Values
             // 平台能力不满足的工具(如 Windows 上的 bash)任何界面都不暴露, 内部调用仍可按名执行。
