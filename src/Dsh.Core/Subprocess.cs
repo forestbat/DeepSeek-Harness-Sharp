@@ -30,6 +30,7 @@ internal sealed class StreamCollector : IDisposable
     private string? _spillPath;
     private long _totalBytes;
     private bool _spillOverflowed;
+    private bool _finished;
 
     public StreamCollector(int maxBytes, int? spillMaxBytes)
     {
@@ -47,6 +48,8 @@ internal sealed class StreamCollector : IDisposable
         if (chunk.IsEmpty) return;
         lock (_gate)
         {
+            // 收尾之后仍可能有被放弃的 pump 推数据进来(孙进程占着管道时), 静默丢弃而不是抛异常。
+            if (_finished) return;
             _totalBytes += chunk.Length;
             _tail.Write(chunk);
             if (_tail.Length > _maxBytes)
@@ -95,7 +98,11 @@ internal sealed class StreamCollector : IDisposable
 
     public void Finish()
     {
-        lock (_gate) _spill?.Dispose();
+        lock (_gate)
+        {
+            _finished = true;
+            _spill?.Dispose();
+        }
     }
 
     public void Dispose()
@@ -126,6 +133,9 @@ internal sealed class StreamCollector : IDisposable
 
 public sealed class SubprocessHandle : IDisposable
 {
+    /** 根进程退出后留给管道排空的时间; 超时说明有孙进程握着写端。 */
+    private const int PipeDrainGraceMs = 1000;
+
     private readonly Process? _process;
     private readonly OwnedProcess? _ownedProcess;
     private readonly StreamWriter _stdin;
@@ -214,7 +224,7 @@ public sealed class SubprocessHandle : IDisposable
                 ? await _ownedProcess.WaitForExitAsync().ConfigureAwait(false)
                 : await WaitForOperatorExitAsync().ConfigureAwait(false);
             // WaitForExitAsync includes owned descendant teardown but leaves pipes open for draining.
-            await Task.WhenAll(drainStdout, drainStderr).ConfigureAwait(false);
+            await DrainAsync(drainStdout, drainStderr).ConfigureAwait(false);
             if (_terminateRequested != 0)
                 return new SubprocessOutcome(null, "SIGKILL");
             if (exitCode > 128 && !OperatingSystem.IsWindows())
@@ -228,6 +238,35 @@ public sealed class SubprocessHandle : IDisposable
             _stdout.Finish();
             _stderr.Finish();
         }
+    }
+
+    /**
+     * 根进程退出后用有界时间等管道 EOF。
+     * 孙进程(例如 adb server、start /b 起的后台进程)会继承 stdout/stderr 句柄: 即使根进程早已退出,
+     * 读端也永远等不到 EOF, 于是工具调用永不返回 —— 超时解不开, "停止"也解不开, 整个回合卡死。
+     * 宽限期一到就关读端并放弃等待: Windows 上关闭句柄并不能唤醒已经卡在同步 ReadFile 的读取线程,
+     * 所以这里绝不能 await 那几个 pump 任务, 否则又变成无限等待。
+     */
+    private async Task DrainAsync(Task stdout, Task stderr)
+    {
+        var drained = Task.WhenAll(stdout, stderr);
+        if (await Task.WhenAny(drained, Task.Delay(PipeDrainGraceMs)).ConfigureAwait(false) == drained)
+        {
+            await drained.ConfigureAwait(false);
+            return;
+        }
+        ClosePipes();
+        // 让这两个可能永不返回的 pump 任务的异常不冒泡到任何 await 点。
+        _ = drained.ContinueWith(static task => _ = task.Exception, TaskContinuationOptions.ExecuteSynchronously);
+    }
+
+    /** 关读端: 越权持有写端的孙进程会收到 broken pipe, 之后自行退出或写入失败。 */
+    private void ClosePipes()
+    {
+        try { _output.Dispose(); }
+        catch (Exception) { }
+        try { _error.Dispose(); }
+        catch (Exception) { }
     }
 
     private async Task<int> WaitForOperatorExitAsync()
@@ -248,6 +287,11 @@ public sealed class SubprocessHandle : IDisposable
             }
             catch (IOException)
             {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                // 宽限期结束时主线程主动关掉了读端。
                 return;
             }
             if (read == 0) return;
