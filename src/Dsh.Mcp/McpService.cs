@@ -64,7 +64,7 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
     public async Task ConnectAsync(IReadOnlyList<McpServerConfig> servers, CancellationToken signal = default)
     {
         foreach (var server in servers)
-            await ConnectOneAsync(server, () => CreateTransport(server), signal);
+            await ConnectOneAsync(server, () => CreateTransport(server, signal), signal);
     }
 
     internal async Task ConnectAsync(McpServerConfig server, IClientTransport transport, CancellationToken signal = default)
@@ -140,7 +140,7 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
     }
 
 
-    private IClientTransport CreateTransport(McpServerConfig server)
+    private IClientTransport CreateTransport(McpServerConfig server, CancellationToken signal)
     {
         if (server.Transport == "stdio")
         {
@@ -156,6 +156,7 @@ public sealed class McpService(Context ctx, int disclosureThreshold = ToolsSetti
                 });
             var subprocess = Ctx.Get<SubprocessService>(SubprocessService.ServiceName, false)
                 ?? throw new InvalidOperationException("Owned MCP stdio requires the subprocess service.");
+            SafetyBoundary.Resolve(Ctx)?.AuthorizeConfiguredLifecycle(SafetyBoundary.SafetyNamespace, server.Name, signal);
             return new OwnedStdioClientTransport(subprocess, server, workingDirectory ?? Environment.CurrentDirectory, home.SettingsFile);
         }
 

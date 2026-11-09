@@ -169,6 +169,7 @@ public sealed class SettingsFileGuardTests
         {
             public Task<ApprovalOutcome> Request(ApprovalRequest request, CancellationToken signal)
                 => Task.FromResult(ApprovalOutcome.AllowedOnce);
+            public bool IsDenied(IAgent agent) => false;
         }
     }
 }

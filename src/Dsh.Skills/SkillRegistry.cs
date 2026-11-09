@@ -154,7 +154,10 @@ public sealed class SkillRegistry : Service, ISkillCatalog
 
     public async Task<SkillCatalogSnapshot> Snapshot(SkillViewOptions? options = null)
     {
-        var collected = await Collect(options ?? new SkillViewOptions());
+        options ??= new SkillViewOptions();
+        using var fused = FusedSignal.Fuse(options.Run?.Signal ?? default, options.Signal);
+        if (options.Signal != fused.Token) options = options with { Signal = fused.Token };
+        var collected = await Collect(options);
         var skills = collected.Entries.Values
             .Select(entry => (SkillSummary)entry.Candidate)
             .OrderBy(summary => summary.Name, StringComparer.Ordinal)
@@ -167,10 +170,13 @@ public sealed class SkillRegistry : Service, ISkillCatalog
         if (!IsSkillName(name))
             return null;
         options ??= new SkillViewOptions();
+        using var fused = FusedSignal.Fuse(options.Run?.Signal ?? default, options.Signal);
+        if (options.Signal != fused.Token) options = options with { Signal = fused.Token };
         var collected = await Collect(options);
         options.Signal.ThrowIfCancellationRequested();
         if (!collected.Entries.TryGetValue(name, out var match))
             return null;
+        await SafetyBoundary.AuthorizeInvocationAsync(Ctx, options.Run, match.Provider is FileSystemSkillProvider, options.Signal).ConfigureAwait(false);
         var definition = await WaitWithAbort(match.Provider.Get(match.Candidate, options), options.Signal);
         if (definition is null)
             return null;
@@ -187,12 +193,13 @@ public sealed class SkillRegistry : Service, ISkillCatalog
     private async Task<CollectResult> Collect(SkillViewOptions options)
     {
         options.Signal.ThrowIfCancellationRequested();
+        var useCache = options.Run is null;
         var attempt = 1;
         while (true)
         {
             var revision = _revision;
-            var key = CollectCacheKey(options.Cwd, options.Scope, revision);
-            if (_collectCache.TryGetValue(key, out var cached))
+            var key = useCache ? CollectCacheKey(options.Cwd, options.Scope, revision) : string.Empty;
+            if (useCache && _collectCache.TryGetValue(key, out var cached))
                 return new CollectResult(cached, true);
 
             var result = await CollectFresh(options);
@@ -206,7 +213,7 @@ public sealed class SkillRegistry : Service, ISkillCatalog
                 }
                 return result with { Cacheable = false };
             }
-            if (result.Cacheable)
+            if (useCache && result.Cacheable)
             {
                 _collectCache[key] = result.Entries;
                 if (_collectCache.Count > _collectCacheMaxEntries)
@@ -270,13 +277,15 @@ public sealed class SkillRegistry : Service, ISkillCatalog
         {
             var localOrder = 0;
             SkillProviderObservation observation;
+            await SafetyBoundary.AuthorizeInvocationAsync(Ctx, options.Run, slot.Provider is FileSystemSkillProvider, options.Signal).ConfigureAwait(false);
             try
             {
                 observation = await WaitWithAbort(slot.Provider.List(options), options.Signal);
             }
             catch (Exception error)
             {
-                if (options.Signal.IsCancellationRequested)
+                if (options.Signal.IsCancellationRequested || options.Run is not null
+                    && error is UnauthorizedAccessException or OperationCanceledException or NotSupportedException)
                     throw;
                 cacheable = false;
                 Ctx.LoggerFor(ServiceName).Warn($"skill provider \"{slot.Provider.Name}\" skipped: {error.Message}");

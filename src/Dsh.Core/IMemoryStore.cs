@@ -6,9 +6,9 @@ public interface IMemoryStore
     /** 提示词里描述的来源(文件路径或库表 + key)。 */
     string Description { get; }
 
-    Task<string?> GetAsync(CancellationToken cancellationToken = default);
+    Task<string?> GetAsync(CancellationToken cancellationToken = default, ToolRunContext? run = null);
 
-    Task SetAsync(string text, CancellationToken cancellationToken = default);
+    Task SetAsync(string text, CancellationToken cancellationToken = default, ToolRunContext? run = null);
 }
 
 public static class MemoryServices

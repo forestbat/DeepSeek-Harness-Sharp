@@ -3,6 +3,7 @@
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.GitInspect\Dsh.GitInspect.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\Dsh.Notifications\Dsh.Notifications.csproj" />

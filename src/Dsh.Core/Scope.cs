@@ -61,6 +61,8 @@ public sealed class NamedEntries<T>
     private readonly Func<string, Exception> _conflict;
     private readonly Lock _sync = new();
 
+    internal Lock SyncRoot => _sync;
+
     public NamedEntries(Func<string, Exception> conflict)
     {
         _conflict = conflict;
@@ -75,6 +77,14 @@ public sealed class NamedEntries<T>
             _entries[name] = value;
         }
     }
+
+    internal T? GetValueOrDefault(string name)
+    {
+        lock (_sync)
+            return _entries.GetValueOrDefault(name);
+    }
+
+    internal Exception Conflict(string name) => _conflict(name);
 
     public bool Remove(string name)
     {

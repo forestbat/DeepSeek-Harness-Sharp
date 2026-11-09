@@ -81,6 +81,43 @@ public sealed class HarnessSettings
         return File.ReadAllText(templatePath);
     }
 
+    internal static HarnessSettings ParseSnapshot(string text, string canonicalPath)
+    {
+        var settings = Parse(text);
+        settings.Plugins = PluginSettingsSection.ParseDocument(text);
+        settings._savedDocument = text;
+        settings._savedPath = canonicalPath;
+        return settings;
+    }
+    /** Read current bytes every time; retain only one private parsed snapshot, never a public mutable Load DTO. */
+    public static Func<HarnessSettings> CreatePolicyReader(HarnessHome home, HarnessSettings? fallback = null)
+    {
+        var sync = new Lock();
+        string? previous = null;
+        string? previousPath = null;
+        HarnessSettings? cached = null;
+        return () =>
+        {
+            if (!File.Exists(home.SettingsFile)) return fallback ?? new HarnessSettings();
+            var canonical = Dsh.Runtime.CanonicalFilePath.Canonicalize(home.SettingsFile);
+            if (PublicationPath.Value == canonical)
+                return Read(canonical, ReadSettingsTextShared(canonical));
+            using var transaction = new SettingsWriteLock(canonical);
+            return Read(transaction.CanonicalPath, ReadSettingsTextShared(transaction.CanonicalPath));
+        };
+
+        HarnessSettings Read(string canonical, string text)
+        {
+            lock (sync)
+            {
+                if (cached is not null && previousPath == canonical && previous == text) return cached;
+                cached = ParseSnapshot(text, canonical);
+                previousPath = canonical;
+                previous = text;
+                return cached;
+            }
+        }
+    }
     /** 上一次读取修复过文件时的说明(哪几段被丢弃、原文落在哪); 未修复为 null。不属于配置面, 不对外暴露。 */
     [YamlIgnore]
     internal string? Notice { get; private set; }
@@ -114,12 +151,16 @@ public sealed class HarnessSettings
 
     internal static HarnessSettings Parse(string text)
     {
-        ScriptsSettings.ValidateDocument(text);
-        return new StaticDeserializerBuilder(new DshYamlStaticContext())
+        RuleMapYaml.ValidateDocument(text);
+        var settings = new StaticDeserializerBuilder(new DshYamlStaticContext())
+            .WithTypeConverter(new RuleToolsYamlConverter())
             .WithAttemptingUnquotedStringTypeDeserialization()
             .IgnoreUnmatchedProperties()
             .Build()
             .Deserialize<HarnessSettings>(text);
+        settings.Safety?.Validate();
+        settings.Scripts?.Permissions?.Validate();
+        return settings;
     }
 
     /** 启动与写入共用的唯一判据: 类型化 settings 与 plugins 段都要吃得下这份文本。 */
@@ -258,6 +299,7 @@ public sealed class HarnessSettings
     private string PrepareSnapshot(string existing, string canonicalPath)
     {
         var serializer = new StaticSerializerBuilder(new DshYamlStaticContext())
+            .WithTypeConverter(new RuleToolsYamlConverter())
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .WithQuotingNecessaryStrings()
             .Build();
@@ -279,13 +321,15 @@ public sealed class HarnessSettings
     public static void UpdatePlugins(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update)
         => MutateDocument(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), backup: true);
 
-    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
-        => UpdatePluginsAsync(home, [package], update, run);
+    public static Task UpdatePluginAsync(HarnessHome home, string package, Func<PluginSetting?, PluginSetting> update,
+        SettingsCommit? commit = null)
+        => UpdatePluginsAsync(home, [package], update, commit);
 
-    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run = null)
+    public static Task UpdatePluginsAsync(HarnessHome home, IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update,
+        SettingsCommit? commit = null)
     {
-        if (run is not null)
-            return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), run, backup: true);
+        if (commit is not null)
+            return MutateDocumentAsync(home.SettingsFile, (existing, _) => MergePluginUpdates(existing, packages, update), commit, backup: true);
         UpdatePlugins(home, packages, update);
         return Task.CompletedTask;
     }
@@ -332,8 +376,9 @@ public sealed class HarnessSettings
         return true;
     }
 
-    private static Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare, ISettingsMutationContext run, bool backup)
-        => run.CommitAsync(path, canonical =>
+    private static Task<bool> MutateDocumentAsync(string path, Func<string, string, string?> prepare,
+        SettingsCommit commit, bool backup)
+        => commit(path, canonical =>
         {
             using var transaction = new SettingsWriteLock(canonical);
             var before = File.Exists(canonical) ? ReadDocument(canonical, out _) : "";
@@ -555,17 +600,8 @@ public sealed class CompactionSettings
     public bool Prune { get; set; } = true;
 }
 
-public sealed class SafetySettings
-{
-    [YamlMember(Alias = "autoApprove")]
-    public bool AutoApprove { get; set; }
-
-    [YamlMember(Alias = "blacklist")]
-    public List<string> Blacklist { get; set; } = [];
-
-    [YamlMember(Alias = "whitelist")]
-    public List<string> Whitelist { get; set; } = [];
-}
+/** Rule IDs map to typed matchers, not legacy command strings. */
+public sealed class SafetySettings : PermissionRules;
 
 /** Plugin sandbox switch; per-plugin grants live under plugins."<package>".permissions. */
 public sealed class SandboxSettings

@@ -61,7 +61,8 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 return decision;
             var state = _loaded.GetValue(agent.Session, value => new LoadedState(
                 AgentInstructionsText.Discover(home, value.Header.Cwd)));
-            var text = AgentInstructionsText.RenderNew(home, Path.GetDirectoryName(target), state.Paths);
+            var text = await AgentInstructionsText.RenderNewAsync(home, Path.GetDirectoryName(target), state.Paths,
+                notification.Run, notification.Run.Signal).ConfigureAwait(false);
             if (text.Length == 0)
                 return decision;
             return new PostToolDecision.Accept(

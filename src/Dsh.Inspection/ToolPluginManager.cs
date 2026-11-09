@@ -106,10 +106,10 @@ public static class ToolPluginManager
         {
             "list" => ListResult(manager),
             "describe" => manager.Describe(RequireTarget(target)),
-            "enable" => await manager.EnableAsync(RequireTarget(target), run),
-            "disable" => await manager.DisableAsync(RequireTarget(target), run),
-            "add" => await manager.AddAsync(RequireTarget(target), run),
-            "remove" => await manager.RemoveAsync(RequireTarget(target), force, run),
+            "enable" => await manager.EnableAsync(RequireTarget(target), run.CommitAsync),
+            "disable" => await manager.DisableAsync(RequireTarget(target), run.CommitAsync),
+            "add" => await manager.AddAsync(RequireTarget(target), run.CommitAsync, run.Signal),
+            "remove" => await manager.RemoveAsync(RequireTarget(target), force, run.CommitAsync),
             _ => throw new InvalidOperationException($"unknown plugin_manager action \"{action}\""),
         };
         return new JsonObject

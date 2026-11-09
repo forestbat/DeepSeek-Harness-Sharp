@@ -128,7 +128,7 @@ public sealed partial class DshPluginCatalogGenerator
         var entries = new List<SchemaEntry>();
         if (depth > 4)
             return entries;
-        foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+        foreach (var property in WritableProperties(type))
         {
             if (property.IsStatic || property.SetMethod is null || property.IsIndexer)
                 continue;
@@ -145,9 +145,18 @@ public sealed partial class DshPluginCatalogGenerator
                 children.Count == 0 ? null : children)
             {
                 Description = DescriptionOf(property),
+                DynamicKeys = IsDictionary(property.Type),
             });
         }
         return entries;
+    }
+
+    private static IEnumerable<IPropertySymbol> WritableProperties(INamedTypeSymbol type)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (var current = type; current is not null; current = current.BaseType)
+            foreach (var property in current.GetMembers().OfType<IPropertySymbol>())
+                if (names.Add(property.Name)) yield return property;
     }
 
     /** 只使用声明处的 XML 注释。*/
@@ -262,7 +271,7 @@ public sealed partial class DshPluginCatalogGenerator
     }
 
     private static bool HasWritableProperties(INamedTypeSymbol type)
-        => type.GetMembers().OfType<IPropertySymbol>().Any(property =>
+        => WritableProperties(type).Any(property =>
             property.SetMethod is not null && property.DeclaredAccessibility == Accessibility.Public && !property.IsStatic);
 
     /** 嵌套子项: 映射取"值类型"的属性(字典本身只有 Comparer/Count 这类成员, 列出来是噪声)。 */
@@ -349,9 +358,9 @@ public sealed partial class DshPluginCatalogGenerator
     {
         var kind = $"global::Dsh.Plugins.PluginSettingKind.{entry.Kind}";
         if (entry.Children is null || entry.Children.Count == 0)
-            return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)})";
+            return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, DynamicKeys: {entry.DynamicKeys.ToString().ToLowerInvariant()})";
         var children = string.Join(", ", entry.Children.Select(SpecSource));
-        return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, [{children}])";
+        return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, [{children}], {entry.DynamicKeys.ToString().ToLowerInvariant()})";
     }
 
     private static string Literal(string? value)
@@ -371,6 +380,7 @@ internal sealed class SchemaEntry(string key, SchemaKind kind, string? defaultLi
 
     /** 声明处 /// 摘要, 或按名字/类型派生的最小提示。 */
     public string? Description { get; set; }
+    public bool DynamicKeys { get; set; }
 }
 
 internal enum SchemaKind

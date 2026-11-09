@@ -79,33 +79,39 @@ public sealed class HarnessPluginManager : IDisposable
         return _leaked.Contains(package) ? $"{line}, leaked" : line;
     }
 
-    public async Task<string> AddAsync(string packageOrPath, ISettingsMutationContext? run = null)
+    public async Task<string> AddAsync(string packageOrPath,
+        SettingsCommit? commit = null,
+        CancellationToken cancellationToken = default)
     {
-        await _mutation.WaitAsync(run?.Signal ?? CancellationToken.None);
-        try { return await AddCoreAsync(packageOrPath, run); }
+        await _mutation.WaitAsync(cancellationToken);
+        try { return await AddCoreAsync(packageOrPath, commit, cancellationToken); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> AddCoreAsync(string packageOrPath, ISettingsMutationContext? run)
+    private async Task<string> AddCoreAsync(string packageOrPath,
+        SettingsCommit? commit,
+        CancellationToken cancellationToken)
     {
         var spec = packageOrPath.Trim();
         if (spec.Length == 0)
             return "usage: /plugins add <package|path>";
         if (IsLibraryPath(spec) || File.Exists(spec))
-            return await AddFromPathAsync(spec, run);
+            return await AddFromPathAsync(spec, commit, cancellationToken);
         if (IsKnown(spec))
-            return await EnableCoreAsync(spec, run);
+            return await EnableCoreAsync(spec, commit);
         return $"plugin package not found: {spec}";
     }
 
-    public async Task<string> RemoveAsync(string package, bool force = false, ISettingsMutationContext? run = null)
+    public async Task<string> RemoveAsync(string package, bool force = false,
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
-        try { return await RemoveCoreAsync(package, force, run); }
+        try { return await RemoveCoreAsync(package, force, commit); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> RemoveCoreAsync(string package, bool force, ISettingsMutationContext? run)
+    private async Task<string> RemoveCoreAsync(string package, bool force,
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -113,7 +119,7 @@ public sealed class HarnessPluginManager : IDisposable
         if (!IsKnown(trimmed))
             return $"plugin {trimmed} is not active";
         var domain = CaptureDomain(trimmed);
-        await PersistAsync(trimmed, _ => new PluginSetting { Enabled = false }, run);
+        await PersistAsync(trimmed, _ => new PluginSetting { Enabled = false }, commit);
         var message = _sandbox is null
             ? await DetachAsync(trimmed, force)
             : await RebuildDomainAsync(trimmed, domain, force);
@@ -163,14 +169,16 @@ public sealed class HarnessPluginManager : IDisposable
         }
     }
 
-    public async Task<string> DisableAsync(string package, ISettingsMutationContext? run = null)
+    public async Task<string> DisableAsync(string package,
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
-        try { return await DisableCoreAsync(package, run); }
+        try { return await DisableCoreAsync(package, commit); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> DisableCoreAsync(string package, ISettingsMutationContext? run)
+    private async Task<string> DisableCoreAsync(string package,
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -178,7 +186,7 @@ public sealed class HarnessPluginManager : IDisposable
         if (!IsKnown(trimmed))
             return $"plugin package not found: {trimmed}";
         var domain = CaptureDomain(trimmed);
-        await PersistAsync(trimmed, existing => Toggled(existing, enabled: false), run);
+        await PersistAsync(trimmed, existing => Toggled(existing, enabled: false), commit);
         if (_sandbox is not null)
         {
             var result = await RebuildDomainAsync(trimmed, domain, force: false);
@@ -196,14 +204,16 @@ public sealed class HarnessPluginManager : IDisposable
         return $"plugin {trimmed} disabled (written to settings.yaml)";
     }
 
-    public async Task<string> EnableAsync(string package, ISettingsMutationContext? run = null)
+    public async Task<string> EnableAsync(string package,
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync();
-        try { return await EnableCoreAsync(package, run); }
+        try { return await EnableCoreAsync(package, commit); }
         finally { _mutation.Release(); }
     }
 
-    private async Task<string> EnableCoreAsync(string package, ISettingsMutationContext? run)
+    private async Task<string> EnableCoreAsync(string package,
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         if (trimmed.Length == 0)
@@ -212,7 +222,7 @@ public sealed class HarnessPluginManager : IDisposable
             return $"plugin package not found: {trimmed}";
         var domain = CaptureDomain(trimmed);
         var recover = _sandbox?.IsFaulted(trimmed) == true;
-        await PersistAsync(trimmed, existing => Toggled(existing, enabled: true), run);
+        await PersistAsync(trimmed, existing => Toggled(existing, enabled: true), commit);
         if (recover)
             return await RebuildDomainAsync(trimmed, domain, force: false);
         if (_composition.Root.Scheduler.Find(trimmed) is not null)
@@ -223,15 +233,17 @@ public sealed class HarnessPluginManager : IDisposable
     }
 
     public async Task<string> SetPermissionAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken = default, ISettingsMutationContext? run = null)
+        CancellationToken cancellationToken = default,
+        SettingsCommit? commit = null)
     {
         await _mutation.WaitAsync(cancellationToken);
-        try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken, run); }
+        try { return await SetPermissionCoreAsync(package, permission, allowed, cancellationToken, commit); }
         finally { _mutation.Release(); }
     }
 
     private async Task<string> SetPermissionCoreAsync(string package, PluginPermission permission, bool allowed,
-        CancellationToken cancellationToken, ISettingsMutationContext? run)
+        CancellationToken cancellationToken,
+        SettingsCommit? commit)
     {
         var trimmed = package.Trim();
         var key = PluginPermissions.KeyOf(permission);
@@ -243,7 +255,7 @@ public sealed class HarnessPluginManager : IDisposable
         await PersistAsync(trimmed, existing => (existing ?? new PluginSetting()) with
         {
             Permissions = (existing?.Permissions ?? PluginPermissions.AllAllowed).With(permission, allowed),
-        }, run);
+        }, commit);
         var result = $"plugin {trimmed} {key} permission {(allowed ? "allowed" : "denied")}";
         if (_sandbox is null)
             return $"{result} in its future isolation profile (sandbox is off; no OS access restrictions are enforced)";
@@ -257,9 +269,10 @@ public sealed class HarnessPluginManager : IDisposable
             || spec.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
             || spec.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<string> AddFromPathAsync(string spec, ISettingsMutationContext? run)
+    private async Task<string> AddFromPathAsync(string spec,
+        SettingsCommit? commit,
+        CancellationToken signal)
     {
-        var signal = run?.Signal ?? CancellationToken.None;
         signal.ThrowIfCancellationRequested();
         var path = Path.GetFullPath(spec);
         if (!File.Exists(path))
@@ -269,7 +282,7 @@ public sealed class HarnessPluginManager : IDisposable
             : InspectLegacyPackages(path);
         if (packages.Count == 0)
             return $"assembly has no DSH plugin: {path}";
-        await PersistAsync(packages, existing => Toggled(existing, enabled: true), run);
+        await PersistAsync(packages, existing => Toggled(existing, enabled: true), commit);
         signal.ThrowIfCancellationRequested();
         string installPath;
         try
@@ -542,15 +555,17 @@ public sealed class HarnessPluginManager : IDisposable
         _composition.Root.Logger.Error("%s", $"plugin {package} load context could not be collected: {report}");
     }
 
-    private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run)
+    private async Task PersistAsync(string package, Func<PluginSetting?, PluginSetting> update,
+        SettingsCommit? commit)
     {
-        await HarnessSettings.UpdatePluginAsync(_home, package, update, run);
+        await HarnessSettings.UpdatePluginAsync(_home, package, update, commit);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 
-    private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update, ISettingsMutationContext? run)
+    private async Task PersistAsync(IReadOnlyList<string> packages, Func<PluginSetting?, PluginSetting> update,
+        SettingsCommit? commit)
     {
-        await HarnessSettings.UpdatePluginsAsync(_home, packages, update, run);
+        await HarnessSettings.UpdatePluginsAsync(_home, packages, update, commit);
         _settings.Plugins = HarnessSettings.Load(_home).Plugins;
     }
 

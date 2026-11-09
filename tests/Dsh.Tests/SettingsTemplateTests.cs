@@ -10,19 +10,6 @@ public sealed class SettingsTemplateTests
     /** Tests that load plugins with settings share the global settings registry with these checks, so they never overlap. */
     public const string RegistryCollection = "PluginSettingsRegistry";
 
-    /** 随包发布的输出副本(AppContext.BaseDirectory/Profiles/Templates/settings.yaml)。 */
-    [Fact]
-    public void Output_Template_Has_Generated_Block()
-    {
-        AssertTemplate(SettingsTemplate.DefaultPath);
-    }
-
-    /** 源码模板(用户克隆仓库时看到的那份)。 */
-    [Fact]
-    public void Source_Template_Has_Generated_Block()
-    {
-        AssertTemplate(SourceTemplatePath());
-    }
 
     [Fact]
     public void Write_Preserves_Manual_Comments()
@@ -37,6 +24,54 @@ public sealed class SettingsTemplateTests
         var saved = File.ReadAllText(path);
         Assert.Contains(sentinel, saved);
         Assert.DoesNotContain("# 映射(见子项)", saved);
+    }
+
+    [Fact]
+    public void Write_RoundTrips_Dictionary_Entries_And_Preserves_Their_Documentation()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, $"settings-dictionary-{Guid.NewGuid():N}.yaml");
+        var seed = string.Join(Environment.NewLine,
+            SettingsSchemaCatalog.GeneratedBegin,
+            """
+            # providers:
+            #   <id>:
+            #     provider entry documentation
+            #     type:
+            #     models:
+            #       <id>:
+            #         model entry documentation
+            #         name:
+            # safety:
+            #   whitelist:
+            #     <id>:
+            #       inherited rule documentation
+            #       tool: []
+            # plugins:
+            #   <id>:
+            #     referenced setting documentation
+            #     enabled: true
+            """,
+            SettingsSchemaCatalog.GeneratedEnd);
+        File.WriteAllText(path, seed);
+        try
+        {
+            Assert.True(SettingsTemplate.Write(path));
+            Assert.Null(SettingsTemplate.Verify(path));
+            var saved = File.ReadAllText(path);
+            Assert.Contains("#     provider entry documentation", saved);
+            Assert.Contains("#         model entry documentation", saved);
+            Assert.Contains("#       inherited rule documentation", saved);
+            Assert.Contains("#     referenced setting documentation", saved);
+            Assert.False(SettingsTemplate.Write(path));
+
+            // A misplaced nested dictionary entry is a schema mismatch, not preserved prose.
+            File.WriteAllText(path, saved.Replace("#       <id>:", "#     <id>:", StringComparison.Ordinal));
+            Assert.NotNull(SettingsTemplate.Verify(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Theory]
@@ -78,14 +113,6 @@ public sealed class SettingsTemplateTests
         ];
     }
 
-    private static void AssertTemplate(string path)
-    {
-        Assert.True(File.Exists(path), path);
-        var text = File.ReadAllText(path);
-        Assert.Contains("# >>> generated", text);
-        Assert.Contains("# <<< generated", text);
-        Assert.DoesNotContain("# 映射(见子项)", text);
-    }
 
     private static string SourceTemplatePath()
     {

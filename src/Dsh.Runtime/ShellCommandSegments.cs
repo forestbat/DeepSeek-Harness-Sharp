@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Dsh.Interaction;
+namespace Dsh.Runtime;
 
 /** Shell family of a command line: decides the escape character and whether command names are case-sensitive. */
 public enum ShellDialect
