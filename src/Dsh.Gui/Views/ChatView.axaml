@@ -155,7 +155,7 @@
 
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto" IsVisible="{Binding !IsTraceTab}">
     <ListBox Grid.Column="0" Name="MessageList" Classes="MessageList" AutoScrollToSelectedItem="False"
-             ItemsSource="{Binding Messages}">
+             Focusable="True" ItemsSource="{Binding Messages}">
       <ListBox.ItemsPanel>
         <ItemsPanelTemplate>
           <VirtualizingStackPanel CacheLength="2" />
@@ -167,7 +167,11 @@
               <StackPanel Spacing="3">
                 <TextBlock Text="{Binding Role}" Classes="Tertiary" IsVisible="{Binding HasRole}" />
 
-                <SelectableTextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
+                <!--
+                  折叠按钮放在预览行**上面**: 展开时预览行会消失, 按钮若在它下面就会上移一行(实测 20px),
+                  用户点了按钮却发现它换了位置, 紧接着的第二次点击就会落到正文上(表现为"点了没反应")。
+                  放在上面后它上方的内容在展开/折叠前后完全一致, 按钮因此不动。
+                -->
                 <Button Classes="Ghost" Padding="2,0" HorizontalAlignment="Left"
                         IsVisible="{Binding IsFoldable}"
                         Click="OnFoldClick"
@@ -176,6 +180,7 @@
                   <TextBlock Text="{Binding FoldLabel}" Classes="Tertiary" />
                 </Button>
 
+                <SelectableTextBlock Text="{Binding Preview}" Classes="Secondary" IsVisible="{Binding ShowPreview}" />
                 <StackPanel Spacing="2" Margin="2,2,0,2" IsVisible="{Binding ShowSubagentStream}">
                   <ItemsControl ItemsSource="{Binding SubagentStream}">
                     <ItemsControl.ItemTemplate>
@@ -246,6 +251,17 @@
     <views:TimelineRail Grid.Column="1" Name="Rail" Width="18" Margin="0"
                         LineBrush="{DynamicResource Brush.Text.Primary}"
                         TickBrush="{DynamicResource Brush.Text.Secondary}" />
+
+    <!--
+      视口不在底部时(例如点开上面某条折叠、被特意留在原处之后)才出现: 它只在用户自己点的时候回到最新,
+      不做任何自动贴底 —— 自动贴底会把用户正在读的位置抢走。
+    -->
+    <Button Grid.Column="0" Name="JumpToLatest" Classes="Icon" Width="32" Height="32"
+            HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,14"
+            IsVisible="False" ZIndex="5" ToolTip.Tip="回到最新"
+            Click="OnJumpToLatestClick">
+      <TextBlock Text="↓" Classes="Tertiary" />
+    </Button>
     </Grid>
 
     <!-- 轨道悬停预览: 只列用户消息(时间线候选), 自动停在指针所在那条, 面板自己可滚动。 -->

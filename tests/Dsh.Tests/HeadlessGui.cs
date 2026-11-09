@@ -23,15 +23,16 @@ internal static class HeadlessGui
      * Dispatch 的 Task 在 headless dispatcher 线程上完成; 若把它的续体交给 xunit 直接在 dispatcher 线程上内联执行,
      * xunit 的测试收尾逻辑会占住该线程, 此后任何 Dispatch 都永不返回(整套测试挂死)。
      * 故经 RunContinuationsAsynchronously 的桥接 Task 把消费方续体甩回线程池; 超时抛诊断异常而非无限等待。
+     * timeout 只给"要跑整段真实会话矩阵"的用例使用: 默认 15s 会把这些用例判成超时而不是失败。
      */
-    public static async Task RunAsync(Func<Task> test)
+    public static async Task RunAsync(Func<Task> test, TimeSpan? timeout = null)
     {
         var dispatched = Session.Dispatch(async () =>
         {
             await test();
             return true;
         }, TestContext.Current.CancellationToken);
-        await BridgeToPool(dispatched).WaitAsync(Timeout, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        await BridgeToPool(dispatched).WaitAsync(timeout ?? Timeout, TestContext.Current.CancellationToken).ConfigureAwait(false);
     }
 
     /** 续体调度到线程池: 桥接 Task 完成于 dispatcher 线程, 但 RunContinuationsAsynchronously 保证等待方在线程池上继续。 */
