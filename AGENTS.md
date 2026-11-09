@@ -261,3 +261,4 @@
 56. /src路径下的模块是“作者提供给用户的预置插件包”，和“用户自己编制的IDshPlugin”只可能存在依赖关系，没有地位上的区别，开发时应遵循同一套标准。
 57. 若需要快速测试，需要用`trait`参数过滤掉渲染压测、GPU/桌面用例和LLM联网测试，例如： `Dsh.Tests.exe -trait- "Category=GpuStress" -trait- "Category=OnlyGpu" -trait- "Category=RenderBench" -trait- "Category=LlmSmoke"`，全量测试则不加`trait`参数。
 58. 除非用户显式要求，或者确有复用代码的必要，否则不要添加接口，这样会遗留很多没有二次开发需求的接口。
+59. 一个文件只许提交一次，**绝对禁止**拆分到不同的提交，这样会造成stash错误等问题。
