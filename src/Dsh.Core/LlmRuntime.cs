@@ -167,11 +167,9 @@ public sealed class LlmRuntime : Service
         var effective = watchdog is null ? options : options.WithCancellation(watchdog.Token);
         if (watchdog is not null && AgentLoopRequestMarker.IsMarked(options))
             AgentLoopRequestMarker.Mark(effective);
-        var result = await Ctx.Events.Waterfall(Ctx, new LlmStreamNotification(effective),
-            () => new ValueTask<object?>(AdapterStream(effective, prepared)));
-        if (result is not IAsyncEnumerable<StreamChunk> stream)
-            throw new LlmException(new LlmFailure("llm/stream waterfall returned no stream", "INVALID_STREAM"));
-        var guarded = watchdog is null ? stream : watchdog.Guard(stream);
+        var guarded = watchdog is null
+            ? AdapterStream(effective, prepared)
+            : watchdog.Guard(AdapterStream(effective, prepared));
         await foreach (var chunk in guarded)
             yield return chunk;
     }

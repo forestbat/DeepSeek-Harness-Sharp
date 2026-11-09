@@ -139,24 +139,16 @@ public interface IEditorCatalog
     IDisposable Register(EditorDescriptor descriptor);
     ValueTask<IReadOnlyList<EditorInstallation>> DetectAsync(bool refresh = false, CancellationToken cancellationToken = default);
 }
-public interface IEditorLauncher
+public interface IEditorService
 {
-    const string ServiceName = "editorLauncher";
+    const string ServiceName = "ide";
     ValueTask<EditorResult> LaunchAsync(EditorRequest request, CancellationToken cancellationToken = default);
-}
-public interface IEditorService : IEditorLauncher
-{
-    new const string ServiceName = "ide";
     IEditorCatalog Catalog { get; }
     EditorDecision? LastDecision { get; }
     EditorWorkspace InspectWorkspace(string root);
     EditorBinding? GetBinding(string root, string? sessionId = null);
     void Bind(EditorBinding binding);
     ValueTask<IReadOnlyList<EditorDiagnostic>> DoctorAsync(string workspaceRoot, CancellationToken cancellationToken = default);
-}
-public interface IEditorExecutor
-{
-    ValueTask<EditorExecutionResult> ExecuteAsync(EditorLaunchCommand command, CancellationToken cancellationToken = default);
 }
 public interface ITerminalHost
 {

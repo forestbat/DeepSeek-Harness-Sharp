@@ -19,13 +19,6 @@ public sealed record ResumeAgentOptions(
 
 public sealed record AgentHandle(IAgent Agent, IDisposable Dispose);
 
-public interface IAgentFactory
-{
-    Task<IAgent> CreateAgent(Context owner, CreateAgentOptions options, CancellationToken signal = default);
-
-    Task<IAgent> Resume(Context owner, ResumeAgentOptions options, CancellationToken signal = default);
-}
-
 public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 {
     public const string ServiceName = "agents";
@@ -34,7 +27,7 @@ public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 
     private readonly Dictionary<SessionId, IAgent> _agents = [];
     private readonly Dictionary<SessionId, IAgent> _owners = [];
-    private IAgentFactory? _factory;
+    private AgentLoop? _factory;
 
     public IAgent? CurrentInitiator() => InitiatorSlot.Value;
 
@@ -69,7 +62,7 @@ public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
         }
     }
 
-    public IDisposable SetFactory(IAgentFactory factory)
+    public IDisposable SetFactory(AgentLoop factory)
     {
         if (_factory is not null)
             throw new InvalidOperationException("an agent factory is already registered");
