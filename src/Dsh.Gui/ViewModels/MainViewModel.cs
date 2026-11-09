@@ -558,6 +558,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public ObservableCollection<AttachmentViewModel> Attachments { get; } = [];
 
+    /**
+     * 每个会话各自的未发送草稿(文本 + 附件 + 光标)。
+     * 切换会话时先保存当前会话的草稿、再复原目标会话的草稿; 否则上一条会话里写到一半的内容
+     * 会跟着用户进入下一条会话, 一不小心就发给了错误的会话。
+     */
+    private readonly Dictionary<string, ComposerDraft> _drafts = new(StringComparer.Ordinal);
+
+    private sealed record ComposerDraft(string Text, int Caret, IReadOnlyList<AttachmentViewModel> Attachments);
+
+    /** 当前输入区正在显示哪条会话的草稿; null 表示还没显示过任何会话。 */
+    private string? _shownSession;
+
     [ObservableProperty]
     private bool _hasAttachments;
 
@@ -1508,6 +1520,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void ShowSession()
     {
         UpdateCurrentWorkspace();
+        SwapComposerDraft(_shownSession, _chat.Id.Value);
+        _shownSession = _chat.Id.Value;
         _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         _renderedSeq = 0;
         _renderedAny = false;
@@ -1534,6 +1548,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
+    }
+
+    /**
+     * 换会话时换草稿: 先把上一条会话的输入区内容存起来, 再复原目标会话存过的内容
+     * (没存过就是空的)。附件跟着一起换, 否则上一条会话挂的图片会跟着被发到新会话去。
+     */
+    private void SwapComposerDraft(string? previous, string next)
+    {
+        if (previous is not null)
+            _drafts[previous] = new ComposerDraft(Composer.Input, Composer.CaretIndex, [.. Attachments]);
+        var draft = _drafts.GetValueOrDefault(next);
+        var text = draft?.Text ?? "";
+        Composer.Input = text;
+        Composer.CaretIndex = Math.Clamp(draft?.Caret ?? 0, 0, text.Length);
+        Attachments.Clear();
+        foreach (var attachment in draft?.Attachments ?? [])
+            Attachments.Add(attachment);
+        HasAttachments = Attachments.Count > 0;
+        CloseSuggestions();
     }
 
     private void RefreshModelLabels()
@@ -2074,8 +2107,30 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             "session" => [.. _catalog.Load().Select(node => node.SessionId.Value)],
             "skill" => _skillNames,
             "provider" => ProviderCandidates(argument),
+            "timestamp" => TimestampCandidates(argument),
             _ => [],
         };
+
+    /**
+     * `/timestamp` 的参数: 先选动作, 再选 `#seq`。
+     * 补全器会把参数末尾的空格裁掉, 所以"刚选完动作"(参数就是动作名)和"正在选序号"是同一形态,
+     * 这一步直接给序号: 它们以 `jump #` 开头, 补全器的前缀过滤仍能命中刚打完的动作名。
+     * 序号只从本会话的用户消息里出, 与命令本身的候选规则(`SessionTimeline`)一致,
+     * 免得补全里出现一个执行时会被拒的序号。
+     */
+    private IReadOnlyList<string> TimestampCandidates(string argument)
+    {
+        var space = argument.IndexOf(' ', StringComparison.Ordinal);
+        if (space < 0)
+            return argument is "jump" or "revert" or "fork"
+                ? SeqCandidates(argument)
+                : ["list", "jump", "revert", "fork"];
+        var action = argument[..space];
+        return action is "jump" or "revert" or "fork" ? SeqCandidates(action) : [];
+    }
+
+    private IReadOnlyList<string> SeqCandidates(string action)
+        => [.. SessionTimeline.FromEvents(_chat.Events).Select(entry => $"{action} #{entry.Seq}")];
 
     private IReadOnlyList<string> ProviderCandidates(string argument)
     {

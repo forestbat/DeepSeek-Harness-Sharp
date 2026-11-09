@@ -224,6 +224,63 @@ public sealed class MainViewModelTests
         Assert.Equal("second", viewModel.Composer.Input);
     });
 
+    /**
+     * 一条会话里写到一半的内容不许跟着用户进下一条会话, 否则很容易把草稿发给错的会话。
+     * 草稿本身不能丢: 切回去还要在。
+     */
+    [Fact]
+    public async Task SwitchingSessions_KeepsDraftInItsOwnSession() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var first = viewModel.SelectedSession!;
+        viewModel.Composer.Input = "只属于第一条会话的草稿";
+        viewModel.Composer.CaretIndex = 3;
+
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != first.SessionId);
+        Assert.Equal("", viewModel.Composer.Input);
+
+        var second = viewModel.SelectedSession!;
+        viewModel.Composer.Input = "第二条会话的草稿";
+        viewModel.SelectedSession = first;
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Composer.Input == "只属于第一条会话的草稿");
+        Assert.Equal(3, viewModel.Composer.CaretIndex);
+
+        viewModel.SelectedSession = second;
+        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.Composer.Input == "第二条会话的草稿");
+    });
+
+    /** 附件同样不许跟着切换会话跑: 图片是发给当前会话的, 换了会话就没了归属。 */
+    [Fact]
+    public async Task SwitchingSessions_KeepsAttachmentsInTheirOwnSession() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var first = viewModel.SelectedSession!;
+        viewModel.AttachImage("draft.png", OnePixelPng, 1, 1);
+        Assert.Single(viewModel.Attachments);
+        Assert.True(viewModel.HasAttachments);
+
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != first.SessionId);
+        Assert.Empty(viewModel.Attachments);
+        Assert.False(viewModel.HasAttachments);
+
+        viewModel.SelectedSession = first;
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession?.SessionId == first.SessionId && viewModel.Attachments.Count > 0);
+        Assert.Single(viewModel.Attachments);
+        Assert.True(viewModel.HasAttachments);
+    });
+
+    /** 1x1 透明 PNG: 附件存储只认字节, 不需要真的图片解码。 */
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+
     [Fact]
     public async Task Sessions_GroupedByWorkspace_AndMarkCurrentSessionSelected() => await HeadlessGui.RunAsync(async () =>
     {
@@ -646,6 +703,36 @@ public sealed class MainViewModelTests
 
         Assert.True(viewModel.IsSuggestionOpen);
         Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}");
+    });
+
+    /**
+     * `/timestamp` 的补全: 先给动作, 再给本会话用户消息的 `#seq`。
+     * 序号必须来自真实时间线, 否则补全里会出现执行时被拒绝的目标。
+     */
+    [Fact]
+    public async Task TimestampSuggestions_OfferActionsThenRealSeqs() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        var first = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("first prompt")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.Messages.Any(item => item.Seq == first.Seq));
+
+        viewModel.Composer.Input = "/timestamp ";
+
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp jump");
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp revert");
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp fork");
+
+        // 补全器会裁掉参数末尾空格, 所以"刚选完动作"就直接给序号候选。
+        viewModel.Composer.Input = "/timestamp jump ";
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label.StartsWith("/timestamp jump #", StringComparison.Ordinal)));
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"/timestamp jump #{first.Seq}");
+        // 不是用户消息的序号不该出现在候选里。
+        Assert.All(viewModel.Suggestions, suggestion => Assert.StartsWith("/timestamp jump #", suggestion.Label, StringComparison.Ordinal));
     });
 
     /** 引用补全只看光标处的未完成 @token: 引用之后继续打提示词, 菜单必须收起。 */

@@ -428,16 +428,26 @@ public sealed class GuiViewsHeadlessTests
 
             window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
             Render();
-            Assert.Equal(0, scroll.Offset.Y, 3);
-
-            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
-            Render();
-            Assert.Equal(maxOffset, scroll.Offset.Y, 3);
+            // 焦点在输入框(默认状态)时 Home/End 属于光标, 转录保持不动。
+            Assert.True(scroll.Offset.Y > 0, "焦点在输入框时 Home 不该跳转录");
 
             var composer = chat.FindControl<TextBox>("InputBox")!;
-            composer.Text = "写着东西时 End 归光标";
-            composer.CaretIndex = 0;
+            composer.Text = "写着东西时 Home/End 归光标";
+            composer.CaretIndex = composer.Text.Length;
             Render();
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, composer.CaretIndex);
+
+            // 焦点移到转录上时 Home/End 才跳会话头尾。
+            list.Focus();
+            Render();
+            Assert.True(list.IsFocused || list.IsKeyboardFocusWithin,
+                $"把焦点移到转录上失败: focused={list.IsFocused} within={list.IsKeyboardFocusWithin}");
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, scroll.Offset.Y, 3);
+
             window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
             Render();
             Assert.Equal(maxOffset, scroll.Offset.Y, 3);
