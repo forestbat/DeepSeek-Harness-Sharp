@@ -107,7 +107,9 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
             agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"第 {index} 行")));
         Draw(chat);
 
-        Assert.True(pane.TryScrollToMessage("第 0 行"));
+        // 等价于一次 jump: 滚到非底部并停止跟随。
+        pane.StickToBottom = false;
+        pane.ScrollOffset = 0;
         Draw(chat);
         Assert.False(pane.StickToBottom);
 
@@ -116,6 +118,36 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
         Draw(chat);
 
         Assert.True(pane.StickToBottom);
+    }
+
+    /**
+     * jump 按消息定位, 不按文本匹配: 同一句话在更早处出现过(例如被工具输出引用)时,
+     * 旧的按文本实现会跳到更早那处, 用户看到的就不是自己点的那条。
+     */
+    [Fact]
+    public async Task Jump_LandsOnTheRequestedMessage_NotAnEarlierIdenticalLine()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        var pane = chat.InputPane;
+        // 同一句话先作为普通输出出现在上面(旧实现按文本会跳到这里)。
+        pane.AppendRaw("请检查构建 —— 这是早先的一段工具输出\n");
+        for (var index = 0; index < 20; index++)
+            agent.Session.Append(new AssistantChunkPayload(1, index, new StreamChunk.TextDelta(0, $"填充 {index}")));
+        chat.DrainUi();
+        // 走真实发送路径: 用户消息气泡由输入回显渲染, 与 /timestamp jump 的目标一致。
+        pane.Input = "请检查构建";
+        pane.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false));
+        chat.DrainUi();
+        for (var index = 20; index < 60; index++)
+            agent.Session.Append(new AssistantChunkPayload(2, index, new StreamChunk.TextDelta(0, $"后续 {index}")));
+        Draw(chat);
+
+        Assert.True(pane.TryScrollToUserMessage(0));
+        var messageOffset = pane.ScrollOffset;
+        // 用户消息在上面那行输出之后, 所以定位必须比它更靠下。
+        Assert.True(messageOffset > 0, $"应当定位到用户消息所在行, 实际停在 {messageOffset}");
+        Assert.False(pane.StickToBottom);
     }
 
     private static void Draw(ChatWindow chat)

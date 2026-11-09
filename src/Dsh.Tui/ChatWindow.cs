@@ -1501,7 +1501,7 @@ public sealed partial class ChatWindow : IDisposable
         switch (action)
         {
             case "jump":
-                await JumpToMessage(pane, message, targetSeq);
+                await JumpToMessage(pane, message, targetSeq, messages.FindIndex(entry => entry.Seq == targetSeq));
                 return;
             case "revert":
                 await RevertToAsync(pane, targetSeq, message.Text);
@@ -1614,18 +1614,11 @@ public sealed partial class ChatWindow : IDisposable
     private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
         => [.. SessionTimeline.UserMessages(session).Select(entry => (entry.Seq, entry.Time, entry.Text))];
 
-    /** jump: 只滚到该消息(不改会话/文件); 用消息首行文本在视口缓存里定位。 */
-    private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq)
+    /** jump: 只滚到该消息(不改会话/文件); 按它在用户消息序列里的位置定位首行。 */
+    private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq, int index)
     {
-        var firstLine = FirstLine(target.Text);
-        if (firstLine.Length == 0)
-        {
-            pane.AppendRaw($"  jump: 消息 #{seq} 无文本\n");
-            return Task.CompletedTask;
-        }
-
         // 只定位: 目标消息滚到顶上; 不打印 "jumped to"(那会把视图重新贴回底部, 跳转看不到效果)。
-        if (!pane.TryScrollToMessage(firstLine))
+        if (!pane.TryScrollToUserMessage(index))
             pane.AppendRaw($"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
         return Task.CompletedTask;
     }
@@ -1660,17 +1653,6 @@ public sealed partial class ChatWindow : IDisposable
         pane.Cursor = pane.Input.Length;
         pane.StickToBottom = true;
         pane.AppendRaw($"  reverted: 会话已截断到 #{boundary} 之前, 消息已回填输入区\n");
-    }
-
-    private static string FirstLine(string text)
-    {
-        foreach (var line in text.Split('\n'))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length > 0)
-                return trimmed.Length <= 16 ? trimmed : trimmed[..16];
-        }
-        return "";
     }
 
     /**

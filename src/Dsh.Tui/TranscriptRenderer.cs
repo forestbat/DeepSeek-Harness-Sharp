@@ -19,6 +19,7 @@ public sealed class TranscriptRenderer
     private TranscriptTint _pendingTint;
     private readonly Dictionary<ToolCallId, (string Name, string Arguments, TranscriptFold Fold)> _pendingToolCalls = [];
     private readonly List<int> _lineStarts = [];
+    private readonly List<(int Start, UserMessage Message)> _userMessageStarts = [];
     private readonly StringBuilder _tail = new();
     private int _tailStart;
     private bool _reasoningOpen;
@@ -132,8 +133,28 @@ public sealed class TranscriptRenderer
             return;
         var imageNames = message.Content.OfType<ImageBlock>().Select(block => ImageName(block.Attachment)).ToList();
         var suffix = imageNames.Count == 0 ? "" : $" [图片: {string.Join(", ", imageNames)}]";
+        var start = CurrentLength;
         Append($"\n❯ {text}{suffix}\n");
+        _userMessageStarts.Add((start, message));
     }
+
+    /**
+     * 用户消息在全文里的起始偏移, 供 `/timestamp jump` 按消息(而不是按文本内容)定位:
+     * 按文本找首个命中会跳到更早引用过同一句话的地方, 首行被折行时也找不到。
+     */
+    public int? UserMessageStart(UserMessage message)
+    {
+        foreach (var (start, candidate) in _userMessageStarts)
+        {
+            if (ReferenceEquals(candidate, message))
+                return start;
+        }
+        return null;
+    }
+
+    /** 第 index 条用户消息的全文偏移(按渲染顺序); 越界返回 null。 */
+    public int? UserMessageStartAt(int index)
+        => index >= 0 && index < _userMessageStarts.Count ? _userMessageStarts[index].Start : null;
 
     /** 只显示文件名, 绝不渲染包含账户目录的完整路径。 */
     private static string ImageName(ImageAttachmentRef attachment)
