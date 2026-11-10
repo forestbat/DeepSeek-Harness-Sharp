@@ -107,12 +107,12 @@ internal sealed class SessionLogScanner
         CommittedBytes = endByte;
     }
 
+    /**
+     * 直接按字节解码: 普通事件不需要 DOM, 只有 chunk 打包行与带区间来源的记录才退回 JsonNode。
+     * 旧实现对每条记录都先 JsonNode.Parse 建树、再序列化回喂给反序列化, 等于每条记录多解析一遍。
+     */
     private static IReadOnlyList<SessionEvent> DecodeRecord(ReadOnlySpan<byte> line)
-    {
-        var node = JsonNode.Parse(Encoding.UTF8.GetString(line));
-        if (node is not JsonObject record) throw new FormatException("stored session records must be objects");
-        return ChunkRows.DecodeStorageRecord(record);
-    }
+        => ChunkRows.DecodeStorageRecord(line);
 }
 
 internal static class SessionLogScannerCompat

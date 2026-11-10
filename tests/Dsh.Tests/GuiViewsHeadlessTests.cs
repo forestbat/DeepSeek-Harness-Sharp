@@ -467,6 +467,98 @@ public sealed class GuiViewsHeadlessTests
         }
     });
 
+    /** PageUp 只翻一屏: 一次按键就冲到开头会让用户失去位置感。 */
+    [Fact]
+    public async Task ChatView_PageUpScrollsExactlyOneViewport() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 30; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"Row {index}\nMore\nLines")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var viewport = scroll.Viewport.Height;
+            var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            Assert.True(maxOffset > 3 * viewport, "准备的数据必须足够长");
+            // 从末尾往上翻: 三段距离约等于三个视口, 允许一行误差。
+            var before = scroll.Offset.Y;
+
+            window.KeyPress(Key.PageUp, RawInputModifiers.None, PhysicalKey.PageUp, null);
+            Render();
+
+            var moved = before - scroll.Offset.Y;
+            Assert.InRange(moved, viewport * 0.5, viewport * 1.5);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** 输入框有未发送内容时, Home/End 属于光标: 转录不许跳, 否则用户一按 Home 就丢失阅读位置。 */
+    [Fact]
+    public async Task ChatView_HomeEndWithDraftKeepTheCaretInTheComposer() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 24; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"History {index}\nMore")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var composer = chat.FindControl<TextBox>("InputBox")!;
+            composer.Focus();
+            Render();
+            composer.Text = "还没发出去的草稿";
+            composer.CaretIndex = composer.Text.Length;
+            Render();
+            var before = scroll.Offset.Y;
+
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, composer.CaretIndex);
+            Assert.Equal(before, scroll.Offset.Y, 1);
+
+            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
+            Render();
+            Assert.Equal(composer.Text.Length, composer.CaretIndex);
+            Assert.Equal(before, scroll.Offset.Y, 1);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     private static void AssertInsideViewport(Control control, Control viewport)
     {
         var origin = control.TranslatePoint(default, viewport)!.Value;

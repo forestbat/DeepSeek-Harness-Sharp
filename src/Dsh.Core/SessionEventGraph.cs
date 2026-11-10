@@ -48,27 +48,3 @@ public enum SessionLineageKind
  * ParentSeq 是父会话里的派生点: fork 为最后一条继承事件, 子代理为日志里能定位到的派生事件, 定位不到时为 null。
  */
 public readonly record struct SessionLineage(SessionId Session, SessionLineageKind Kind, SessionId Parent, long? ParentSeq);
-
-/**
- * 会话事件图的消费侧契约: 节点与边都从会话日志派生, 日志仍是唯一真相源。
- * 实现由 session-graph 插件注册, 查询工具、时间线等模块只面向本接口。
- */
-public interface ISessionEventGraph
-{
-    public const string ServiceName = "sessionEventGraph";
-
-    /** 按 seq 取节点; 会话不存在或 seq 越界时为 null。 */
-    SessionEventNode? Node(SessionId session, long seq);
-
-    /** 以该事件为起点的边。 */
-    IReadOnlyList<SessionEventEdge> EdgesFrom(SessionId session, long seq);
-
-    /** 以该事件为终点的边。 */
-    IReadOnlyList<SessionEventEdge> EdgesTo(SessionId session, long seq);
-
-    /** 会话的来源; 不是派生会话时为 null。 */
-    SessionLineage? Parent(SessionId session);
-
-    /** 直接由该会话派生的会话, 按创建时间排序。 */
-    IReadOnlyList<SessionLineage> Children(SessionId session);
-}

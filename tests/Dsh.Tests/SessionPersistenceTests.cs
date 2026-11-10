@@ -179,6 +179,31 @@ public class SessionPersistenceTests : IDisposable
         AssertEventsEqual([.. events, extra], reopened.Read().ToArray());
     }
 
+    /**
+     * 复用同一个解压器连续解多帧, 结果必须与逐帧各 new 一个完全一致。
+     * 这条守的是 W3 的捷径: 复用 Decompressor 只为省掉每帧的上下文重建, 不允许改变任何一个字节。
+     */
+    [Fact]
+    public void DecompressFrames_MatchesPerFrameDecompression()
+    {
+        var payloads = Enumerable.Range(0, 8)
+            .Select(index => Encoding.UTF8.GetBytes($"frame-{index}-中文-" + new string((char)('a' + index), 500)))
+            .ToArray();
+        var buffer = payloads.SelectMany(payload => ZstdFrames.CompressFrame(payload)).ToArray();
+        var (frames, tornStart) = ZstdFrames.Scan(buffer);
+
+        Assert.Equal(payloads.Length, frames.Count);
+        Assert.Null(tornStart);
+        var reused = ZstdFrames.DecompressFrames(frames, buffer);
+        var perFrame = ZstdFrames.Scan(buffer).Frames
+            .Select(frame => ZstdFrames.DecompressFrame(buffer.AsSpan(frame.Start, frame.End - frame.Start), frame.Start))
+            .SelectMany(bytes => bytes)
+            .ToArray();
+
+        Assert.Equal(perFrame, reused);
+        Assert.Equal(payloads.SelectMany(bytes => bytes).ToArray(), reused);
+    }
+
     /** 定时落盘会在读取期间从另一线程追加, 读取必须放行写入(Windows 上 File.ReadAllBytes 只共享读, 会和追加流冲突)。 */
     private static int FrameCount(string logPath)
     {

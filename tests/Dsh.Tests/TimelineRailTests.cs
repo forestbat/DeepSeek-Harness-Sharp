@@ -13,6 +13,7 @@ namespace Dsh.Tests;
  * 会话右侧的时间轨道: 每条用户消息一个刻度, 悬停出可滚动的预览, 点击跳到那条消息。
  * 这些用例跑真实的 ChatView, 不模拟业务逻辑。
  */
+[Collection(GuiSerialCollection.CollectionName)]
 public sealed class TimelineRailTests
 {
     /**

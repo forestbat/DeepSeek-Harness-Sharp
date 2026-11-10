@@ -16,7 +16,11 @@ public sealed record MemoryForgetResult(string Action, IReadOnlyList<string> Key
 
 public sealed record MemoryMatch(string Key, string Section, string Text);
 
-/** 项目记忆的记录级视图:在 IMemoryStore 的整段文本之上提供 remember/correct/forget、注入索引、会话摘要与审计。 */
+/**
+ * 项目记忆的记录级视图:在 IMemoryStore 的整段文本之上提供 remember/correct/forget、注入索引、会话摘要与审计。
+ * 本类的每个 await 都必须 ConfigureAwait(false): 注入索引会被同步的 prompt 提供者以 GetAwaiter().GetResult()
+ * 在 UI 线程上阻塞调用, 续体一旦回到那个被阻塞的 dispatcher, 提示词组装就永久卡死(表现为会话发不出消息)。
+ */
 public sealed class ProjectMemory
 {
     public const int DefaultIndexBudgetBytes = 8192;
@@ -67,7 +71,7 @@ public sealed class ProjectMemory
         else
         {
             Directory.CreateDirectory(_sidecarDir);
-            await File.WriteAllTextAsync(DisabledMarker, "", cancellationToken);
+            await File.WriteAllTextAsync(DisabledMarker, "", cancellationToken).ConfigureAwait(false);
         }
         _enabled = enabled;
     }
@@ -86,7 +90,7 @@ public sealed class ProjectMemory
     {
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException("memory forget requires a non-empty key");
-        var result = await ForgetAsync(new MemoryForgetRequest([key.Trim()], null, null, false), source, cancellationToken, run);
+        var result = await ForgetAsync(new MemoryForgetRequest([key.Trim()], null, null, false), source, cancellationToken, run).ConfigureAwait(false);
         return new MemoryOpResult("forget", key.Trim(), result.Sections.Count > 0 ? result.Sections[0] : "", true);
     }
 
@@ -100,18 +104,18 @@ public sealed class ProjectMemory
         if (query is not null && query.Length < MinQueryLength)
             throw new InvalidOperationException($"memory forget query must be at least {MinQueryLength} characters");
         var section = string.IsNullOrWhiteSpace(request.Section) ? null : request.Section.Trim();
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var doc = await LoadAsync(cancellationToken, run);
+            var doc = await LoadAsync(cancellationToken, run).ConfigureAwait(false);
             var removed = doc.RemoveWhere(section, record => Matches(record, keys, query));
             if (removed.Count == 0 && !request.DryRun)
                 throw new InvalidOperationException(DescribeMiss(keys, query, section));
             if (!request.DryRun && removed.Count > 0)
             {
-                await SaveAsync(doc, cancellationToken, run);
+                await SaveAsync(doc, cancellationToken, run).ConfigureAwait(false);
                 foreach (var (removedSection, record) in removed)
-                    await AuditAsync(new MemoryAuditEntry(Now(), "forget", record.Key, removedSection, null, source), cancellationToken, run);
+                    await AuditAsync(new MemoryAuditEntry(Now(), "forget", record.Key, removedSection, null, source), cancellationToken, run).ConfigureAwait(false);
             }
             return new MemoryForgetResult(
                 "forget",
@@ -133,10 +137,10 @@ public sealed class ProjectMemory
             throw new InvalidOperationException($"memory find query must be at least {MinQueryLength} characters");
         var trimmed = query.Trim();
         var sectionFilter = string.IsNullOrWhiteSpace(section) ? null : section.Trim();
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var doc = await LoadAsync(cancellationToken);
+            var doc = await LoadAsync(cancellationToken).ConfigureAwait(false);
             var matches = new List<MemoryMatch>();
             foreach (var current in doc.Sections)
             {
@@ -175,10 +179,10 @@ public sealed class ProjectMemory
     public async Task<string> BuildIndexAsync(int budgetBytes = DefaultIndexBudgetBytes, CancellationToken cancellationToken = default)
     {
         MemoryDocument doc;
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            doc = await LoadAsync(cancellationToken);
+            doc = await LoadAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -207,10 +211,10 @@ public sealed class ProjectMemory
     public async Task<string> ShowAsync(CancellationToken cancellationToken = default)
     {
         string? text;
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            text = await ReadStoreAsync(cancellationToken);
+            text = await ReadStoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -239,7 +243,7 @@ public sealed class ProjectMemory
         Directory.CreateDirectory(SessionsDir);
         var path = DigestPath(id);
         var temporary = $"{path}.tmp";
-        await File.WriteAllTextAsync(temporary, doc.Render(), cancellationToken);
+        await File.WriteAllTextAsync(temporary, doc.Render(), cancellationToken).ConfigureAwait(false);
         File.Move(temporary, path, overwrite: true);
     }
 
@@ -266,13 +270,13 @@ public sealed class ProjectMemory
         if (trimmedKey.Contains("::"))
             throw new InvalidOperationException("memory key must not contain \"::\"");
         var record = new MemoryRecord(trimmedKey, FirstLine(text), DateTimeOffset.UtcNow);
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var doc = await LoadAsync(cancellationToken, run);
+            var doc = await LoadAsync(cancellationToken, run).ConfigureAwait(false);
             var replaced = doc.Upsert(section, record);
-            await SaveAsync(doc, cancellationToken, run);
-            await AuditAsync(new MemoryAuditEntry(Now(), action, record.Key, section, record.Text, source), cancellationToken, run);
+            await SaveAsync(doc, cancellationToken, run).ConfigureAwait(false);
+            await AuditAsync(new MemoryAuditEntry(Now(), action, record.Key, section, record.Text, source), cancellationToken, run).ConfigureAwait(false);
             return new MemoryOpResult(action, record.Key, section, replaced);
         }
         finally

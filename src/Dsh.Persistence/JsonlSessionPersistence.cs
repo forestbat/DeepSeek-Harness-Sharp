@@ -372,8 +372,8 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         var headerPlaintext = DecompressFrame(buffer, frames[0]);
         AssertZstdHeaderFrame(headerPlaintext);
         var scanner = new SessionLogScanner(headerPlaintext);
-        for (var index = 1; index < frames.Count; index += 1)
-            scanner.Write(DecompressFrame(buffer, frames[index]));
+        // 复用同一个解压器把余下各帧一次解出: 逐帧 new Decompressor 在长会话上是上百次上下文重建。
+        scanner.Write(ZstdFrames.DecompressFrames(frames, buffer, skip: 1));
         var (inputBytes, committedBytes, eventCount) = scanner.Checkpoint();
         if (committedBytes != inputBytes)
             throw new FormatException("corrupt Zstandard session log: complete frame contains a torn JSONL record");
@@ -483,6 +483,10 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         stream.Flush(true);
     }
 
+    /**
+     * 读一份快照, 并确认读取期间文件没被追加。
+     * 正常情况下只读一次; 只有在读的当口写入方又追加了才重读一遍, 第二次仍不稳定就按已知长度截断返回。
+     */
     private (byte[] Buffer, string Revision) ReadStableFile(string path)
     {
         var info = new FileInfo(path);
@@ -499,12 +503,31 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
     }
 
+    /**
+     * 一次分配读完整个日志。
+     * 旧实现走 MemoryStream + CopyTo + ToArray: 内容先在 MemoryStream 的内部缓冲里存一份,
+     * ToArray 再复制一份, 34 MB 的日志因此峰值占两份内存。按已知长度直接分配目标数组后 ReadExactly,
+     * 边读边把实际读到的长度缩减, 就只需要一块缓冲。
+     */
     private static byte[] ReadLiveLog(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, LiveLogReadShare);
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return buffer.ToArray();
+        var length = stream.Length;
+        if (length == 0)
+            return [];
+        if (length > int.MaxValue)
+            throw new FormatException($"session log is larger than addressable memory: {length} bytes");
+        var buffer = new byte[length];
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            // 读取期间写入方可能追加, Length 是那时快照; 读不满就按实际读到的截断。
+            var chunk = stream.Read(buffer, read, buffer.Length - read);
+            if (chunk == 0)
+                break;
+            read += chunk;
+        }
+        return read == buffer.Length ? buffer : buffer[..read];
     }
 
     private static string FileRevision(FileInfo info)

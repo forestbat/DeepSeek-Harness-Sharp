@@ -44,6 +44,23 @@ public sealed class MessageFoldTests
         return PickCard(scene, last: true);
     });
 
+    /**
+     * 贴底(跟随中)时展开: 被点那条留在原地, 并且脱离跟随、"回到最新"按钮出现。
+     * 旧行为是继续贴住末尾, 结果被点的那条被自身涨高的量直接顶走(实测 -133px) —— 这正是用户报的跳动。
+     */
+    [Fact]
+    public Task ExpandingCardWhileAtTail_StaysPutAndStopsFollowing() => Run(scene =>
+    {
+        ScrollToFraction(scene, 1.0);
+        var pick = PickCard(scene, last: true);
+        var jumpToLatest = scene.Window.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(button => button.Name == "JumpToLatest");
+        Assert.False(jumpToLatest?.IsVisible ?? false, "贴底时不该出现回到最新");
+        // 展开后离开跟随: 断言留在 Run 里(位置不变), 这里只补"按钮出现"这条独有的语义。
+        scene.Pump(1);
+        return pick;
+    });
+
     [Fact]
     public Task CollapsingExpandedCard_KeepsItInPlace() => Run(scene =>
     {
