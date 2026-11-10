@@ -98,6 +98,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         try
         {
             var stored = RequireStoredLog(id);
+            var storedLength = new FileInfo(JsonlLayout.LogPath(_root, stored.Meta.Cwd, id, _compression)).Length;
             lock (_trackerGate)
                 return AdoptLocked(new JsonlSessionHandle(this, id, stored.Meta, SessionAccess.Write,
                     new StorageHandleState
@@ -108,6 +109,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
                         RecoveredTail = stored.RecoveredTail,
                         InheritedEventCount = stored.InheritedEventCount,
                         Primed = stored.Events,
+                        WrittenLength = storedLength,
                     }));
         }
         catch
@@ -290,22 +292,22 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return new StoredLog(parsed.Meta, parsed.Events, parsed.TornTruncateTo, parsed.RecoveredTail, parsed.InheritedEventCount, revision);
     }
 
-    internal void PersistBatch(SessionHeader header, IReadOnlyList<SessionEvent> events, bool isMaterialized, long inheritedEventCount)
+    internal void PersistBatch(SessionHeader header, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
         EnsureRootEncoding();
-        if (isMaterialized)
+        if (state.Materialized)
         {
-            AppendLines(header, events);
+            AppendLines(header, events, state);
             return;
         }
-        Materialize(header, inheritedEventCount, events);
+        state.WrittenLength = Materialize(header, state.InheritedEventCount, events);
         MarkMaterialized(header.Id);
     }
 
-    internal void PersistHeader(SessionHeader header, long inheritedEventCount)
+    internal void PersistHeader(SessionHeader header, StorageHandleState state)
     {
         EnsureRootEncoding();
-        Materialize(header, inheritedEventCount, []);
+        state.WrittenLength = Materialize(header, state.InheritedEventCount, []);
         MarkMaterialized(header.Id);
     }
 
@@ -318,15 +320,15 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /** 就地重写日志到前 eventCount 个事件(D3 revert): 头行 + 保留事件整体原子替换, 失败不改原文件。 */
-    internal void TruncateLog(SessionHeader header, long eventCount)
+    internal long? TruncateLog(SessionHeader header, long eventCount)
     {
         var path = FindLog(header.Id);
         if (path is null)
-            return;
+            return null;
         var stored = ReadStoredLog(path, header.Id);
         var keep = (int)Math.Clamp(eventCount, 0, stored.Events.Count);
         if (keep == stored.Events.Count)
-            return;
+            return null;
         var kept = stored.Events.GetRange(0, keep);
         var content = EncodeMaterialization(stored.Meta, stored.InheritedEventCount, kept);
         var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
@@ -336,6 +338,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             stream.Flush(true);
         }
         File.Move(temp, path, overwrite: true);
+        return content.Length;
     }
 
     internal void ReleaseHandle(JsonlSessionHandle handle, bool materialized)
@@ -402,7 +405,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             throw new FormatException("corrupt Zstandard session log: first frame is not exactly one header line");
     }
 
-    private void Materialize(SessionHeader meta, long inheritedEventCount, IReadOnlyList<SessionEvent> events)
+    private long Materialize(SessionHeader meta, long inheritedEventCount, IReadOnlyList<SessionEvent> events)
     {
         var dir = JsonlLayout.SessionDir(_root, meta.Cwd, meta.Id);
         var finalPath = JsonlLayout.LogPath(_root, meta.Cwd, meta.Id, _compression);
@@ -427,6 +430,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             if (File.Exists(finalPath)) throw new SessionAlreadyExistsException(meta.Id);
             throw;
         }
+        return content.Length;
     }
 
     private byte[] EncodeMaterialization(SessionHeader meta, long inheritedEventCount, IReadOnlyList<SessionEvent> events)
@@ -454,7 +458,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return _compression == JsonlCompression.Zstd ? ZstdFrames.CompressFrame(body) : body;
     }
 
-    private void AppendLines(SessionHeader meta, IReadOnlyList<SessionEvent> events)
+    private void AppendLines(SessionHeader meta, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
         var content = EncodeEventBatch(events);
         var path = JsonlLayout.LogPath(_root, meta.Cwd, meta.Id, _compression);
@@ -463,6 +467,11 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         {
             before = probe.Length;
         }
+        // 日志在本写入者两次落盘之间被别人推进过: 本写入者的序号已经落后于文件内容。
+        // 这时继续追加会把两套序号交织进同一个文件, 之后整份日志都读不回来。
+        if (state.WrittenLength is { } expected && before != expected)
+            throw new SessionPersistenceCorruptionException(
+                $"session \"{meta.Id}\": the log grew from {expected} to {before} bytes while this writer held it — another process appended to the same session; refusing to interleave events");
         try
         {
             using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
@@ -471,9 +480,11 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         catch
         {
+            state.WrittenLength = before;
             RollbackAppend(path, before);
             throw;
         }
+        state.WrittenLength = before + content.Length;
     }
 
     private static void RollbackAppend(string path, long size)

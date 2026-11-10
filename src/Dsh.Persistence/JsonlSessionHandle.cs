@@ -11,6 +11,9 @@ internal sealed class StorageHandleState
     public List<SessionEvent>? RecoveredTail { get; set; }
     public required long InheritedEventCount { get; init; }
     public List<SessionEvent>? Primed { get; set; }
+
+    /** 本写入者上一次离开日志时的字节长度; null 表示需要重新对齐(还没落盘或刚被外部重写过)。 */
+    public long? WrittenLength { get; set; }
 }
 
 internal sealed class JsonlSessionHandle(
@@ -104,6 +107,7 @@ internal sealed class JsonlSessionHandle(
             if (!_closed)
                 DrainLocked();
             action();
+            state.WrittenLength = null;
         }
     }
 
@@ -116,15 +120,16 @@ internal sealed class JsonlSessionHandle(
         {
             storage.TruncateTornTail(Header, truncateTo);
             state.TornTruncateTo = null;
+            state.WrittenLength = truncateTo;
         }
         if (state.RecoveredTail is { } recovered)
         {
             if (recovered.Count > 0)
-                storage.PersistBatch(Header, recovered, state.Materialized, state.InheritedEventCount);
+                storage.PersistBatch(Header, recovered, state);
             state.Materialized = true;
             state.RecoveredTail = null;
         }
-        storage.PersistBatch(Header, _buffered, state.Materialized, state.InheritedEventCount);
+        storage.PersistBatch(Header, _buffered, state);
         state.Materialized = true;
         _buffered.Clear();
     }
@@ -164,7 +169,7 @@ internal sealed class JsonlSessionHandle(
             if (state.Materialized && eventCount >= state.Cursor)
                 return;
             if (state.Materialized)
-                storage.TruncateLog(Header, eventCount);
+                state.WrittenLength = storage.TruncateLog(Header, eventCount) ?? state.WrittenLength;
             state.Cursor = eventCount;
             state.Materialized = state.Materialized || eventCount == 0;
             state.Primed = null;
@@ -182,7 +187,7 @@ internal sealed class JsonlSessionHandle(
             if (Access != SessionAccess.Write) throw new SessionReadOnlyException(Id, "flush");
             DrainLocked();
             if (state.Materialized) return;
-            storage.PersistHeader(Header, state.InheritedEventCount);
+            storage.PersistHeader(Header, state);
             state.Materialized = true;
         }
     }

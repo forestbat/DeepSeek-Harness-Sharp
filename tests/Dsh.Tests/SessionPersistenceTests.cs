@@ -587,4 +587,79 @@ public class SessionPersistenceTests : IDisposable
         Assert.Throws<SessionHandleClosedException>(() => handle.Read());
         Assert.Throws<SessionPersistenceNotFoundException>(() => persistence.Open(session.Header.Id, SessionAccess.Read));
     }
+
+    [Fact]
+    public void Open_DropsStaleReplayBlockWrittenByALaggingWriter()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var session = BuildSourceSession(TestCwd);
+        using (var writer = persistence.Create(session.Header))
+            writer.Append(session.SnapshotEvents());
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
+        var lines = File.ReadAllLines(logPath);
+        // 落后的写入者把自己那份历史又追加了一遍: 序号 0~2 落在已提交区间之内。
+        File.WriteAllLines(logPath, [.. lines, .. lines[1..4]]);
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+
+        AssertEventsEqual(session.SnapshotEvents(), reader.Read());
+    }
+
+    [Fact]
+    public void Open_DropsStaleReplayBlockInTheMiddleAndResumesAtCommittedSeq()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var session = BuildSourceSession(TestCwd);
+        using (var writer = persistence.Create(session.Header))
+            writer.Append(session.SnapshotEvents());
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
+        var lines = File.ReadAllLines(logPath);
+        File.WriteAllLines(logPath, [.. lines[..2], .. lines[1..3], .. lines[2..]]);
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+
+        AssertEventsEqual(session.SnapshotEvents(), reader.Read());
+    }
+
+    [Fact]
+    public void Open_MissingEventBeforeTurnEnd_StillReportsCorruption()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var session = BuildSourceSession(TestCwd);
+        using (var writer = persistence.Create(session.Header))
+            writer.Append(session.SnapshotEvents());
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
+        var lines = File.ReadAllLines(logPath);
+        File.WriteAllLines(logPath, [.. lines[..3], .. lines[4..]]);
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+
+        var error = Assert.Throws<SessionPersistenceCorruptionException>(() => reader.Read());
+        Assert.Contains("seq gap", error.Message);
+    }
+
+    [Fact]
+    public void WriteHandle_RefusesToAppendWhenAnotherWriterAdvancedTheLog()
+    {
+        var root = NewRoot();
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        using var first = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
+        var writer = first.Create(session.Header);
+        writer.Append(events.Take(2).ToArray());
+        writer.Flush();
+        using (var second = new JsonlSessionPersistence(root, compression: JsonlCompression.None))
+        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
+            rival.Append(events.Skip(2).Take(1).ToArray());
+
+        writer.Append(events.Skip(2).Take(1).ToArray());
+
+        var error = Assert.Throws<SessionPersistenceCorruptionException>(() => writer.Flush());
+        Assert.Contains("another process", error.Message);
+        // 缓冲区里那条事件已经没法安全落盘: 关闭时同样拒绝, 而不是把它硬塞进别人的日志。
+        Assert.Throws<SessionPersistenceCorruptionException>(() => writer.Close());
+    }
 }
