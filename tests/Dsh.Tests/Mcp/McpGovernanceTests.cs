@@ -276,6 +276,45 @@ public sealed class McpGovernanceTests
         Assert.False(safeResult.IsError);
     }
 
+    [Fact]
+    public async Task RouterPrompt_FollowsTemplate_And_DisclosesToolsTokenEstimate()
+    {
+        var (client, server) = CreateServerPair("database-ops", [
+            McpServerTool.Create(() => "1", new McpServerToolCreateOptions { Name = "query_sql", Description = "Execute SQL query on database" }),
+            McpServerTool.Create(() => "2", new McpServerToolCreateOptions { Name = "migrate_schema", Description = "Run database migrations" }),
+            McpServerTool.Create(() => "3", new McpServerToolCreateOptions { Name = "explain_plan", Description = "Explain query execution plan" }),
+            McpServerTool.Create(() => "4", new McpServerToolCreateOptions { Name = "vacuum_analyze", Description = "Vacuum analyze database tables" }),
+            McpServerTool.Create(() => "5", new McpServerToolCreateOptions { Name = "backup_db", Description = "Create database snapshot backup" }),
+        ]);
+        await using var s = server;
+        _ = server.RunAsync(TestContext.Current.CancellationToken);
+
+        var ctx = new Context();
+        _ = new SystemPrompt(ctx, new SystemPromptConfig());
+        ctx.SetOwn(ToolDisclosureSwitch.PropName, true);
+        var tools = new ToolRuntime(ctx);
+
+        await using var service = new McpService(ctx, disclosureThreshold: 5);
+        await service.ConnectAsync(new McpServerConfig("database-ops", "stdio"), client, TestContext.Current.CancellationToken);
+
+        var handle = service.Handles().First();
+        var routerPrompt = McpTipsGenerator.GenerateRouterPrompt(handle);
+
+        Assert.StartsWith("该工具为 database-ops 业务的路由工具，调取该工具，即可获取所有相关工具。示例工具为 ", routerPrompt);
+        Assert.Contains("共含有 5 个工具", routerPrompt);
+        foreach (var sample in handle.Tools.Take(3))
+            Assert.Contains($"[{sample.Name}]", routerPrompt);
+        Assert.Contains("tokens 上下文调用。", routerPrompt);
+        Assert.Contains("禁止使用 shell（bash/pwsh 等）代替路由工具或普通 MCP 工具，除非工具调用失败。", routerPrompt);
+
+        // Verify ToolDisclosure attached to grouped tool matches router prompt
+        var registered = tools.Get("mcp_database_ops_query_sql");
+        Assert.NotNull(registered);
+        Assert.NotNull(registered.Disclosure);
+        Assert.Equal("mcp:database-ops", registered.Disclosure.Group);
+        Assert.Equal(routerPrompt, registered.Disclosure.Summary);
+    }
+
     private static (IClientTransport Client, McpServer Server) CreateServerPair(
         string serverName,
         IEnumerable<McpServerTool> serverTools)

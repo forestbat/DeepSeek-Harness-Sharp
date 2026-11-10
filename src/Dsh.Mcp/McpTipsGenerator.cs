@@ -1,5 +1,6 @@
 using System.Text;
 using Dsh.Boot;
+using ModelContextProtocol.Client;
 
 namespace Dsh.Mcp;
 
@@ -36,6 +37,32 @@ internal static class McpTipsGenerator
         return sb.ToString();
     }
 
+    public static string GenerateRouterPrompt(McpServerHandle handle)
+    {
+        var server = handle.Config.Name;
+        var tools = handle.Tools;
+        var count = tools.Count;
+        var samples = tools.Take(3).Select(t => $"[{t.Name}]").ToList();
+        var sampleStr = samples.Count > 0 ? string.Join("", samples) : "无";
+        var estimatedTokens = EstimateTokens(tools);
+        var sb = new StringBuilder();
+        sb.AppendLine($"该工具为 {server} 业务的路由工具，调取该工具，即可获取所有相关工具。示例工具为 {sampleStr}，共含有 {count} 个工具，预计产生 {estimatedTokens} tokens 上下文调用。");
+        sb.AppendLine("禁止使用 shell（bash/pwsh 等）代替路由工具或普通 MCP 工具，除非工具调用失败。");
+        return sb.ToString().TrimEnd();
+    }
+
+    public static int EstimateTokens(IReadOnlyList<McpClientTool> tools)
+    {
+        var chars = 0;
+        foreach (var tool in tools)
+        {
+            chars += tool.Name.Length;
+            chars += tool.Description?.Length ?? 0;
+            chars += 60;
+        }
+        return Math.Max(40, chars / 4 + tools.Count * 20);
+    }
+
     private static void AppendToolFamilies(StringBuilder sb, IReadOnlyList<McpServerHandle> handles)
     {
         sb.AppendLine("## 1. 已装载工具族与分工概览");
@@ -51,6 +78,7 @@ internal static class McpTipsGenerator
                 ? string.Join(", ", handle.Tools.Select(t => t.Name))
                 : "无公开工具";
             sb.AppendLine($"- 服务 [{handle.Config.Name}] ({handle.Config.Transport}) 提供 {handle.Tools.Count} 个工具：{toolList}。");
+            sb.AppendLine($"  {GenerateRouterPrompt(handle)}");
         }
         sb.AppendLine();
     }

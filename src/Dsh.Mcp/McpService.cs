@@ -164,9 +164,10 @@ public sealed class McpService(
         var runtime = Ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         var activeTools = tools.Where(tool => !_store.IsToolDisabled(handle.Config.Name, tool.Name)).ToList();
         var grouped = Ctx.GetProp(ToolDisclosureSwitch.PropName) is true && activeTools.Count >= disclosureThreshold;
+        var routerSummary = McpTipsGenerator.GenerateRouterPrompt(handle);
         var group = grouped ? new ToolDisclosure(
             $"mcp:{handle.Config.Name}",
-            $"tools exposed by the MCP server \"{handle.Config.Name}\"") : null;
+            routerSummary) : null;
         return activeTools
             .Select(tool => runtime.Register(McpToolBridge.Wrap(handle, tool, group)))
             .ToList();
