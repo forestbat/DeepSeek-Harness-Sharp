@@ -14,8 +14,7 @@ public sealed class PhoneMcpTests
     {
         var protocol = new PhoneMcpProtocol(new FakePhone());
 
-        var reply = protocol.Handle(
-            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""");
+        var reply = protocol.HandleAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""").GetAwaiter().GetResult();
 
         var result = Result(reply);
         Assert.Equal("2025-06-18", result["protocolVersion"]!.GetValue<string>());
@@ -28,7 +27,7 @@ public sealed class PhoneMcpTests
     {
         var protocol = new PhoneMcpProtocol(new FakePhone());
 
-        var tools = Result(protocol.Handle("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}"""))["tools"]!.AsArray();
+        var tools = Result(protocol.HandleAsync("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""").GetAwaiter().GetResult())["tools"]!.AsArray();
 
         var names = tools.Select(tool => tool!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("launch_app", names);
@@ -68,7 +67,7 @@ public sealed class PhoneMcpTests
     [Fact]
     public void NotificationHasNoResponseBody() =>
         Assert.Null(new PhoneMcpProtocol(new FakePhone())
-            .Handle("""{"jsonrpc":"2.0","method":"notifications/initialized"}"""));
+            .HandleAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""").GetAwaiter().GetResult());
 
     [Fact]
     public async Task HttpEndpointAcceptsTheTokenInThePath()
@@ -126,7 +125,7 @@ public sealed class PhoneMcpTests
                 ["arguments"] = JsonNode.Parse(arguments),
             },
         };
-        return Result(protocol.Handle(request.ToJsonString()));
+        return Result(protocol.HandleAsync(request.ToJsonString()).GetAwaiter().GetResult());
     }
 
     private static JsonObject Result(string? reply)

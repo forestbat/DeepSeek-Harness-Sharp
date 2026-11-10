@@ -39,7 +39,7 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
         "这些工具操作的是手机本身: 列出已安装应用、按包名启动应用、用浏览器打开链接。";
 
     /** 返回 null 表示这是一条通知, 按 MCP 约定不需要响应体。 */
-    public string? Handle(string body)
+    public async Task<string?> HandleAsync(string body, CancellationToken cancellationToken = default)
     {
         JsonNode? node;
         try
@@ -63,7 +63,7 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
             "initialize" => Success(id, Initialize(parameters)),
             "ping" => Success(id, new JsonObject()),
             "tools/list" => Success(id, Tools()),
-            "tools/call" => ToolCall(id, parameters),
+            "tools/call" => await ToolCallAsync(id, parameters, cancellationToken).ConfigureAwait(false),
             _ => Failure(id, -32601, $"不支持的方法: {method}"),
         };
         return response.ToJsonString();
@@ -127,26 +127,44 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
             Tool("ui_key", "按系统键: back / home / recents / notifications。",
                 new JsonObject { ["action"] = StringProperty("back / home / recents / notifications") },
                 "action"),
+            Tool("ui_long_press", "长按: 给 index 长按节点, 或给 x/y 长按坐标。列表多选常靠长按唤出。",
+                new JsonObject
+                {
+                    ["index"] = new JsonObject { ["type"] = "integer", ["description"] = "ui_dump 里的编号" },
+                    ["x"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 x" },
+                    ["y"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 y" },
+                    ["duration_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "按住时长，默认 800" },
+                }),
+            Tool("ui_scroll", "按整屏滚动: direction 取 up / down / left / right, times 是屏数。",
+                new JsonObject
+                {
+                    ["direction"] = StringProperty("up / down / left / right"),
+                    ["times"] = new JsonObject { ["type"] = "integer", ["description"] = "滚动屏数，默认 1" },
+                },
+                "direction"),
+            Tool("ui_wait_for", "等界面上出现某段文字; 页面加载后立刻 dump 常常读不到内容。",
+                new JsonObject
+                {
+                    ["text"] = StringProperty("要等的文字；空串表示只等一小会儿让界面稳定"),
+                    ["timeout_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "最长等多久，默认 5000" },
+                },
+                "text"),
         },
     };
 
-    private JsonObject ToolCall(JsonNode id, JsonObject? parameters)
+    private async Task<JsonObject> ToolCallAsync(JsonNode id, JsonObject? parameters, CancellationToken cancellationToken)
     {
         var name = TextOf(parameters?["name"]);
         var arguments = parameters?["arguments"] as JsonObject ?? new JsonObject();
-        var result = name switch
+        PhoneActionResult result;
+        try
         {
-            "device_info" => PhoneActionResult.Done(device.Describe()),
-            "list_apps" => ListApps(arguments),
-            "launch_app" => device.LaunchApp(TextOf(arguments["package"]) ?? ""),
-            "open_url" => device.OpenUrl(TextOf(arguments["url"]) ?? ""),
-            "ui_dump" => UiDump(arguments),
-            "ui_tap" => UiTap(arguments),
-            "ui_swipe" => UiSwipe(arguments),
-            "ui_input" => UiInput(arguments),
-            "ui_key" => Ui().Global(TextOf(arguments["action"]) ?? "back"),
-            _ => PhoneActionResult.Fail($"没有这个工具: {name}"),
-        };
+            result = await DispatchAsync(name, arguments, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            result = PhoneActionResult.Fail($"{name} 执行失败: {error.Message}");
+        }
         return Success(id, new JsonObject
         {
             ["content"] = new JsonArray
@@ -163,6 +181,57 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
 
     private const int DefaultDumpLimit = 60;
     private const int DefaultSwipeMillis = 300;
+    private const int DefaultLongPressMillis = 800;
+    private const int DefaultWaitMillis = 5000;
+
+    private Task<PhoneActionResult> DispatchAsync(string? name, JsonObject arguments, CancellationToken cancellationToken)
+        => name switch
+        {
+            "device_info" => Task.FromResult(PhoneActionResult.Done(device.Describe())),
+            "list_apps" => Task.FromResult(ListApps(arguments)),
+            "launch_app" => Task.FromResult(device.LaunchApp(TextOf(arguments["package"]) ?? "")),
+            "open_url" => Task.FromResult(device.OpenUrl(TextOf(arguments["url"]) ?? "")),
+            "ui_dump" => Task.FromResult(UiDump(arguments)),
+            "ui_tap" => Task.FromResult(UiTap(arguments)),
+            "ui_swipe" => Task.FromResult(UiSwipe(arguments)),
+            "ui_input" => Task.FromResult(UiInput(arguments)),
+            "ui_key" => Task.FromResult(UiMissing() ? PhoneActionResult.Fail(NotRunning) : Ui().Global(TextOf(arguments["action"]) ?? "back")),
+            "ui_long_press" => Task.FromResult(UiLongPress(arguments)),
+            "ui_scroll" => Task.FromResult(UiMissing()
+                ? PhoneActionResult.Fail(NotRunning)
+                : Ui().Scroll(TextOf(arguments["direction"]) ?? "down", IntOf(arguments["times"]) ?? 1)),
+            "ui_wait_for" => UiWaitForAsync(arguments, cancellationToken),
+            _ => Task.FromResult(PhoneActionResult.Fail($"没有这个工具: {name}")),
+        };
+
+    private PhoneActionResult UiLongPress(JsonObject arguments)
+    {
+        if (UiMissing())
+            return PhoneActionResult.Fail(NotRunning);
+        var duration = IntOf(arguments["duration_ms"]) ?? DefaultLongPressMillis;
+        if (IntOf(arguments["index"]) is { } index)
+        {
+            var node = automation!.DumpUi(int.MaxValue).FirstOrDefault(item => item.Index == index);
+            return node is null
+                ? PhoneActionResult.Fail($"没有编号为 {index} 的节点; 先 ui_dump 一次")
+                : automation.LongPress((node.Left + node.Right) / 2, (node.Top + node.Bottom) / 2, duration);
+        }
+        if (IntOf(arguments["x"]) is { } x && IntOf(arguments["y"]) is { } y)
+            return automation!.LongPress(x, y, duration);
+        return PhoneActionResult.Fail("需要 index, 或者 x 与 y");
+    }
+
+    private async Task<PhoneActionResult> UiWaitForAsync(JsonObject arguments, CancellationToken cancellationToken)
+    {
+        if (UiMissing())
+            return PhoneActionResult.Fail(NotRunning);
+        return await automation!
+            .WaitForAsync(TextOf(arguments["text"]) ?? "", IntOf(arguments["timeout_ms"]) ?? DefaultWaitMillis, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static int? IntOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<int>(out var parsed) ? parsed : null;
 
     private IPhoneUiAutomation Ui()
         => automation ?? throw new InvalidOperationException("无障碍服务不可用");

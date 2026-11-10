@@ -14,8 +14,16 @@ public sealed class PhoneUiAutomation : IPhoneUiAutomation
     public IReadOnlyList<PhoneUiNode> DumpUi(int limit)
         => PhoneAccessibilityService.Current?.Dump(limit) ?? [];
 
+    public Task<PhoneCapture> CaptureAsync(CancellationToken cancellationToken)
+        => PhoneAccessibilityService.Current is { } service
+            ? service.CaptureAsync(cancellationToken)
+            : Task.FromResult(new PhoneCapture(false, NotRunning, null));
+
     public PhoneActionResult Tap(int x, int y)
         => Current()?.Tap(x, y) ?? PhoneActionResult.Fail(NotRunning);
+
+    public PhoneActionResult LongPress(int x, int y, int durationMs)
+        => Current()?.LongPress(x, y, durationMs) ?? PhoneActionResult.Fail(NotRunning);
 
     public PhoneActionResult Swipe(int fromX, int fromY, int toX, int toY, int durationMs)
         => Current()?.Swipe(fromX, fromY, toX, toY, durationMs) ?? PhoneActionResult.Fail(NotRunning);
@@ -28,6 +36,14 @@ public sealed class PhoneUiAutomation : IPhoneUiAutomation
 
     public PhoneActionResult Global(string action)
         => Current()?.Global(action) ?? PhoneActionResult.Fail(NotRunning);
+
+    public PhoneActionResult Scroll(string direction, int times)
+        => Current()?.Scroll(direction, times) ?? PhoneActionResult.Fail(NotRunning);
+
+    public Task<PhoneActionResult> WaitForAsync(string needle, int timeoutMs, CancellationToken cancellationToken)
+        => Current() is { } service
+            ? service.WaitForAsync(needle, timeoutMs, cancellationToken)
+            : Task.FromResult(PhoneActionResult.Fail(NotRunning));
 
     private static PhoneAccessibilityService? Current() => PhoneAccessibilityService.Current;
 }

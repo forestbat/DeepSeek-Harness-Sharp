@@ -24,7 +24,9 @@ public sealed class PhoneAgentToolsTests
         [
             PhoneAgentTools.DeviceInfoName, PhoneAgentTools.DumpUiName, PhoneAgentTools.InputName,
             PhoneAgentTools.KeyName, PhoneAgentTools.LauncherName, PhoneAgentTools.ListAppsName,
-            PhoneAgentTools.OpenUrlName, PhoneAgentTools.SwipeName, PhoneAgentTools.TapName,
+            PhoneAgentTools.LongPressName, PhoneAgentTools.OpenUrlName, PhoneAgentTools.ScrollName,
+            PhoneAgentTools.ScreenshotName, PhoneAgentTools.SwipeName, PhoneAgentTools.TapName,
+            PhoneAgentTools.WaitForName,
         ];
         Assert.Equal(expected.OrderBy(name => name, StringComparer.Ordinal), names);
     }
@@ -172,8 +174,8 @@ public sealed class PhoneAgentToolsTests
 
         public IReadOnlyList<PhoneUiNode> DumpUi(int limit) =>
         [
-            new PhoneUiNode(0, "7", null, "android.widget.Button", "com.android.calculator2:id/digit_7", true, false, false, 0, 0, 100, 100),
-            new PhoneUiNode(1, "", "加号", "android.widget.Button", null, true, false, false, 100, 0, 200, 100),
+            new PhoneUiNode(0, "7", null, "android.widget.Button", "com.android.calculator2:id/digit_7", true, false, false, false, false, 0, 0, 100, 100),
+            new PhoneUiNode(1, "", "加号", "android.widget.Button", null, true, false, false, false, false, 100, 0, 200, 100),
         ];
 
         public PhoneActionResult Tap(int x, int y)
@@ -182,10 +184,34 @@ public sealed class PhoneAgentToolsTests
             return PhoneActionResult.Done($"已点击 ({x},{y})");
         }
 
+        public PhoneActionResult LongPress(int x, int y, int durationMs)
+        {
+            Actions.Add($"longpress {x},{y} {durationMs}");
+            return PhoneActionResult.Done($"已长按 ({x},{y})");
+        }
+
         public PhoneActionResult Swipe(int fromX, int fromY, int toX, int toY, int durationMs)
         {
             Actions.Add($"swipe {fromX},{fromY}->{toX},{toY} {durationMs}");
             return PhoneActionResult.Done("已滑动");
+        }
+
+        public PhoneActionResult Scroll(string direction, int times)
+        {
+            Actions.Add($"scroll {direction} {times}");
+            return PhoneActionResult.Done($"已向 {direction} 滚动 {times} 屏");
+        }
+
+        public Task<PhoneActionResult> WaitForAsync(string needle, int timeoutMs, CancellationToken cancellationToken)
+        {
+            Actions.Add($"wait {needle} {timeoutMs}");
+            return Task.FromResult(PhoneActionResult.Done($"界面上出现了「{needle}」"));
+        }
+
+        public Task<PhoneCapture> CaptureAsync(CancellationToken cancellationToken)
+        {
+            Actions.Add("screenshot");
+            return Task.FromResult(new PhoneCapture(true, "截图 1080×2400", new PhoneScreenshot([1, 2, 3], 1080, 2400)));
         }
 
         public PhoneActionResult Click(int index)

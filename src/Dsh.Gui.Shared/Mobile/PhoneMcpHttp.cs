@@ -62,7 +62,7 @@ public sealed class PhoneMcpHttp(PhoneMcpProtocol protocol, string token)
             await WriteAsync(output, 413, "text/plain", "request too large", cancellationToken).ConfigureAwait(false);
             return;
         }
-        var reply = protocol.Handle(body);
+        var reply = await protocol.HandleAsync(body, cancellationToken).ConfigureAwait(false);
         if (reply is null)
         {
             await WriteAsync(output, 202, "application/json", "", cancellationToken).ConfigureAwait(false);

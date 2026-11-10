@@ -20,11 +20,17 @@ public static class PhoneAgentTools
     public const string SwipeName = "android_ui_swipe";
     public const string InputName = "android_ui_input";
     public const string KeyName = "android_ui_key";
+    public const string LongPressName = "android_ui_long_press";
+    public const string ScrollName = "android_ui_scroll";
+    public const string WaitForName = "android_ui_wait_for";
+    public const string ScreenshotName = "android_ui_screenshot";
 
     public static IDisposable Register(Context ctx, IPhoneDevice device, IPhoneUiAutomation automation)
     {
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)
             ?? throw new InvalidOperationException("tool runtime is not available");
+        // 截图要落成附件才能进模型: 没有附件存储时截图工具只回文字说明。
+        var appAttachments = ctx.Get<Dsh.Llm.IAttachmentStore>(Dsh.Core.FileAttachmentStore.ServiceName, false);
         return new Registrations(
         [
             tools.Register(MobileTool.Create(LauncherName,
@@ -143,10 +149,92 @@ public static class PhoneAgentTools
                     },
                 },
                 (args, _) => Answered(automation.Global(MobileTool.Text(args, "action") ?? "back")))),
+            tools.Register(MobileTool.Create(LongPressName,
+                "长按当前界面; 给 index 长按某个节点, 或给 x/y 长按坐标。列表项的多选/删除菜单常靠长按唤出。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["properties"] = new JsonObject
+                    {
+                        ["index"] = new JsonObject { ["type"] = "integer", ["description"] = "android_ui_dump 里的编号" },
+                        ["x"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 x 坐标" },
+                        ["y"] = new JsonObject { ["type"] = "integer", ["description"] = "屏幕 y 坐标" },
+                        ["duration_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "按住时长，默认 800" },
+                    },
+                },
+                (args, _) => Answered(LongPress(automation, args)))),
+            tools.Register(MobileTool.Create(ScrollName,
+                "按整屏滚动列表: direction 取 up / down / left / right, times 是屏数。比手写坐标滑动省事。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["required"] = new JsonArray("direction"),
+                    ["properties"] = new JsonObject
+                    {
+                        ["direction"] = new JsonObject { ["type"] = "string", ["description"] = "up / down / left / right" },
+                        ["times"] = new JsonObject { ["type"] = "integer", ["description"] = "滚动屏数，默认 1" },
+                    },
+                },
+                (args, _) => Answered(automation.Scroll(
+                    MobileTool.Text(args, "direction") ?? "down",
+                    MobileTool.Int(args, "times") ?? DefaultScrollTimes)))),
+            tools.Register(MobileTool.Create(WaitForName,
+                "等界面上出现某段文字, 点完之后页面要加载时用它代替瞎猜等待。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["required"] = new JsonArray("text"),
+                    ["properties"] = new JsonObject
+                    {
+                        ["text"] = new JsonObject { ["type"] = "string", ["description"] = "要等的文字；空串表示只等一小会儿让界面稳定" },
+                        ["timeout_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "最长等多久，默认 5000" },
+                    },
+                },
+                async (args, cancellationToken) => await AnsweredAsync(automation
+                    .WaitForAsync(MobileTool.Text(args, "text") ?? "", MobileTool.Int(args, "timeout_ms") ?? DefaultWaitMillis, cancellationToken))
+                    .ConfigureAwait(false))),
+            tools.Register(MobileTool.Create(ScreenshotName,
+                "截一张当前屏幕给模型看。自绘界面(购物车、地图、游戏这类)读不到节点, 只能靠截图定位坐标再点。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["properties"] = new JsonObject(),
+                },
+                async (_, cancellationToken) => await CapturedAsync(automation.CaptureAsync(cancellationToken)).ConfigureAwait(false),
+                appAttachments)),
         ]);
     }
 
+    private static async Task<MobileToolAnswer> CapturedAsync(Task<PhoneCapture> pending)
+    {
+        var capture = await pending.ConfigureAwait(false);
+        return new MobileToolAnswer(capture.Ok, capture.Text, capture.Image);
+    }
+
+    private static PhoneActionResult LongPress(IPhoneUiAutomation automation, System.Text.Json.JsonElement args)
+    {
+        var duration = MobileTool.Int(args, "duration_ms") ?? DefaultLongPressMillis;
+        if (MobileTool.Int(args, "index") is { } index)
+        {
+            var node = automation.DumpUi(int.MaxValue).FirstOrDefault(item => item.Index == index);
+            return node is null
+                ? PhoneActionResult.Fail($"没有编号为 {index} 的节点")
+                : automation.LongPress((node.Left + node.Right) / 2, (node.Top + node.Bottom) / 2, duration);
+        }
+        if (MobileTool.Int(args, "x") is { } x && MobileTool.Int(args, "y") is { } y)
+            return automation.LongPress(x, y, duration);
+        return PhoneActionResult.Fail("需要 index, 或者 x 与 y");
+    }
+
     private const int DefaultDumpLimit = 60;
+    private const int DefaultScrollTimes = 1;
+    private const int DefaultWaitMillis = 5000;
+    private const int DefaultLongPressMillis = 800;
+    private const int DefaultSwipeMillis = 300;
 
     /** 无障碍服务没开时如实说明, 让模型去要求用户开启, 而不是反复试错。 */
     private static PhoneActionResult DumpUi(IPhoneUiAutomation automation, System.Text.Json.JsonElement args)
@@ -198,16 +286,19 @@ public static class PhoneAgentTools
             || !args.TryGetProperty("to_x", out var toX) || !toX.TryGetInt32(out var x2)
             || !args.TryGetProperty("to_y", out var toY) || !toY.TryGetInt32(out var y2))
             return PhoneActionResult.Fail("需要 from_x / from_y / to_x / to_y");
-        var duration = args.TryGetProperty("duration_ms", out var durationElement) && durationElement.TryGetInt32(out var parsed)
-            ? parsed
-            : DefaultSwipeMillis;
+        var duration = MobileTool.Int(args, "duration_ms") ?? DefaultSwipeMillis;
         return automation.Swipe(x1, y1, x2, y2, duration);
     }
 
-    private const int DefaultSwipeMillis = 300;
 
     private static Task<MobileToolAnswer> Answered(PhoneActionResult result)
         => Task.FromResult(new MobileToolAnswer(result.Ok, result.Text));
+
+    private static async Task<MobileToolAnswer> AnsweredAsync(Task<PhoneActionResult> pending)
+    {
+        var result = await pending.ConfigureAwait(false);
+        return new MobileToolAnswer(result.Ok, result.Text);
+    }
 
     private static PhoneActionResult ListApps(IPhoneDevice device, string? filter)
     {
