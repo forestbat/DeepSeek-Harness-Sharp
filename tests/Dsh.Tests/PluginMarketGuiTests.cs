@@ -76,7 +76,7 @@ public sealed class PluginMarketGuiTests
             window.Close();
             Dispatcher.UIThread.RunJobs();
         }
-    });
+    }, TimeSpan.FromSeconds(30));
 
     [Fact]
     public async Task Market_RemoveButton_UnloadsPlugin_AndBrowseFillsPath() => await HeadlessGui.RunAsync(async () =>
@@ -110,7 +110,7 @@ public sealed class PluginMarketGuiTests
             window.Close();
             Dispatcher.UIThread.RunJobs();
         }
-    });
+    }, TimeSpan.FromSeconds(30));
 
     private static async Task<MainWindow> OpenMarketAsync(GuiTestEnvironment environment)
     {
