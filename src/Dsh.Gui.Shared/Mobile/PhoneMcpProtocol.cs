@@ -149,6 +149,8 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
                     ["timeout_ms"] = new JsonObject { ["type"] = "integer", ["description"] = "最长等多久，默认 5000" },
                 },
                 "text"),
+            Tool("ui_screenshot", "截一张当前屏幕并按图片返回。自绘界面(购物车、地图、游戏)读不到节点, 只能靠截图定位坐标再点。",
+                new JsonObject()),
         },
     };
 
@@ -157,26 +159,46 @@ public sealed class PhoneMcpProtocol(IPhoneDevice device, IPhoneUiAutomation? au
         var name = TextOf(parameters?["name"]);
         var arguments = parameters?["arguments"] as JsonObject ?? new JsonObject();
         PhoneActionResult result;
+        PhoneScreenshot? screenshot = null;
         try
         {
-            result = await DispatchAsync(name, arguments, cancellationToken).ConfigureAwait(false);
+            if (name == "ui_screenshot")
+                (result, screenshot) = await CaptureAsync(cancellationToken).ConfigureAwait(false);
+            else
+                result = await DispatchAsync(name, arguments, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             result = PhoneActionResult.Fail($"{name} 执行失败: {error.Message}");
         }
+        var content = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = result.Text,
+            },
+        };
+        if (screenshot is { } shot)
+            content.Add(new JsonObject
+            {
+                ["type"] = "image",
+                ["data"] = Convert.ToBase64String(shot.Png),
+                ["mimeType"] = "image/png",
+            });
         return Success(id, new JsonObject
         {
-            ["content"] = new JsonArray
-            {
-                new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] = result.Text,
-                },
-            },
+            ["content"] = content,
             ["isError"] = !result.Ok,
         });
+    }
+
+    private async Task<(PhoneActionResult Result, PhoneScreenshot? Shot)> CaptureAsync(CancellationToken cancellationToken)
+    {
+        if (UiMissing())
+            return (PhoneActionResult.Fail(NotRunning), null);
+        var capture = await automation!.CaptureAsync(cancellationToken).ConfigureAwait(false);
+        return (capture.Ok ? PhoneActionResult.Done(capture.Text) : PhoneActionResult.Fail(capture.Text), capture.Image);
     }
 
     private const int DefaultDumpLimit = 60;
