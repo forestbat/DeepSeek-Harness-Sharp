@@ -1,6 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Json.Nodes;
 using Dsh.Core;
 
 namespace Dsh.Persistence;
@@ -90,6 +88,11 @@ internal sealed class SessionLogScanner
                 throw new SessionPersistenceCorruptionException(_issue);
             return;
         }
+        if (IsStaleReplay(decoded))
+        {
+            CommittedBytes = endByte;
+            return;
+        }
         var rowStart = _events.Count;
         foreach (var sessionEvent in decoded)
         {
@@ -107,12 +110,19 @@ internal sealed class SessionLogScanner
         CommittedBytes = endByte;
     }
 
+    /**
+     * 落后的重放块: 另一个写入者带着落后于已提交区间的序号, 把同一段历史又追加了一遍。
+     * 整块都落在已提交区间内才认定为重放并整体丢弃; 与已提交区间交错仍是缺口, 交给上面的缺口判定。
+     */
+    private bool IsStaleReplay(IReadOnlyList<SessionEvent> decoded)
+        => decoded[0].Seq < _events.Count && decoded[^1].Seq < _events.Count;
+
+    /**
+     * 直接按字节解码: 普通事件不需要 DOM, 只有 chunk 打包行与带区间来源的记录才退回 JsonNode。
+     * 旧实现对每条记录都先 JsonNode.Parse 建树、再序列化回喂给反序列化, 等于每条记录多解析一遍。
+     */
     private static IReadOnlyList<SessionEvent> DecodeRecord(ReadOnlySpan<byte> line)
-    {
-        var node = JsonNode.Parse(Encoding.UTF8.GetString(line));
-        if (node is not JsonObject record) throw new FormatException("stored session records must be objects");
-        return ChunkRows.DecodeStorageRecord(record);
-    }
+        => ChunkRows.DecodeStorageRecord(line);
 }
 
 internal static class SessionLogScannerCompat

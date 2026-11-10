@@ -122,7 +122,7 @@ public class AgentModelSelectionTests
             await File.WriteAllTextAsync(home.SettingsFile,
                 configured ? "logging:\n  file: false\nglobal_default_model: host-provider/host-model\n" : GuiTestEnvironment.HomeSettings,
                 cancellationToken);
-            using var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: root, ReasoningEffort: configured ? "high" : null));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(home, Cwd: root, ReasoningEffort: configured ? "high" : null), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var reasoning = new LlmModelReasoningInfo(
                 [new(ReasoningEffortId.Create("low"), "Low"), new(ReasoningEffortId.Create("high"), "High")]);
             var defaultsAdapter = new RecordingAdapter("host-provider", reasoning);

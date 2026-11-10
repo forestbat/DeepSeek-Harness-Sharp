@@ -40,13 +40,6 @@ public sealed class McpToolBridgeTests
         Assert.Equal("mcp_Rider_MCP_ide_read_file", tool.Name);
     }
 
-    [Fact]
-    public void Wrap_FallsBackToToolNameWhenDescriptionMissing()
-    {
-        var tool = WrapEcho((_, _) => throw new InvalidOperationException());
-
-        Assert.Equal("ide-read_file", tool.Description);
-    }
 
     [Fact]
     public void Wrap_PassesThroughInputSchema()

@@ -558,6 +558,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public ObservableCollection<AttachmentViewModel> Attachments { get; } = [];
 
+    /**
+     * 每个会话各自的未发送草稿(文本 + 附件 + 光标)。
+     * 切换会话时先保存当前会话的草稿、再复原目标会话的草稿; 否则上一条会话里写到一半的内容
+     * 会跟着用户进入下一条会话, 一不小心就发给了错误的会话。
+     */
+    private readonly Dictionary<string, ComposerDraft> _drafts = new(StringComparer.Ordinal);
+
+    private sealed record ComposerDraft(string Text, int Caret, IReadOnlyList<AttachmentViewModel> Attachments);
+
+    /** 当前输入区正在显示哪条会话的草稿; null 表示还没显示过任何会话。 */
+    private string? _shownSession;
+
     [ObservableProperty]
     private bool _hasAttachments;
 
@@ -885,10 +897,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private Task ForkAtMessageAsync(MessageViewModel? message)
         => RunTimelineCommandAsync(message, "fork", reload: false);
 
+    /**
+     * 回退/分叉共用: 服务端把会话截断到"这条消息所属回合之前", 这里再把这条消息的原文放回输入区,
+     * 于是用户看到的是"编辑并重发", 而不是一条留在转录里、界面还以为在跑的用户消息。
+     */
     private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool reload)
     {
         if (message?.Seq is not { } seq)
             return;
+        var text = message.Text;
         var output = await _chat.RunAsync($"/timestamp {action} #{seq}");
         if (output.Length > 0)
             AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
@@ -896,9 +913,39 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             // 会话已在服务端被截断: 重新取一份快照, 否则界面还留着一堆已经不存在的事件。
             await _chat.ReloadAsync(forceReset: true);
+            FillComposer(text);
             return;
         }
+        // 分叉出的会话只写在磁盘上, host 的会话表里还没有它: 丢掉磁盘快照缓存才看得见,
+        // 看见之后直接打开它, 否则用户分叉完还得自己去侧栏找。
+        _catalog.InvalidateDiskCache();
         RefreshSessions();
+        if (ForkedSessionId(output) is not { } forked || FindSession(SessionId.Create(forked)) is not { } node)
+            return;
+        await OpenChatAsync(MachineSpec.LocalName, forked);
+        SelectedSession = node;
+        FillComposer(text);
+    }
+
+    /** 把文本放回输入框并把光标放到末尾: 回退/分叉之后用户接着改的就是这段话。 */
+    private void FillComposer(string text)
+    {
+        if (text.Length == 0)
+            return;
+        Composer.Input = text;
+        Composer.CaretIndex = text.Length;
+    }
+
+    /** 分叉命令的结果形如 "forked -> 会话 id: ..."; 取出新会话 id 用来打开它。 */
+    private static string? ForkedSessionId(string output)
+    {
+        const string marker = "forked -> ";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+        var rest = output[(start + marker.Length)..];
+        var end = rest.IndexOfAny([' ', '\r', '\n', ':']);
+        return end < 0 ? rest : rest[..end];
     }
 
     [RelayCommand]
@@ -1031,7 +1078,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await _chat.ExecuteAsync($"/model {model}");
             StatusText = result.Text ?? "";
             if (result.Success)
-                Preferences.RefreshReasoningEfforts();
+                RefreshReasoningEfforts();
             else
             {
                 Composer.ModelLabel = previousModel;
@@ -1172,6 +1219,23 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
      * 重放时节点头会逐条到达, 而 RefreshModelLabels 与每条助手消息都要读它, 回扫会把重放变成 O(n²)。
      */
     private LlmCallConfig? CurrentRequestHeader() => _requestHeader;
+
+    /**
+     * 推理档位属于当前会话用的模型: 拿全局默认模型的档位去显示, 换模型后点到的就是别的模型的档位,
+     * 会被 /reasoning 拒掉。头部还没落地时退回输入框上的模型标签。
+     */
+    public void RefreshReasoningEfforts()
+    {
+        var provider = CurrentRequestHeader()?.Provider;
+        var model = CurrentRequestHeader()?.Model;
+        var separator = Composer.ModelLabel.IndexOf('/');
+        if ((provider is null || model is null) && separator > 0)
+        {
+            provider = Composer.ModelLabel[..separator];
+            model = Composer.ModelLabel[(separator + 1)..];
+        }
+        Preferences.RefreshReasoningEfforts(provider, model);
+    }
 
     private LlmCallConfig? _requestHeader;
 
@@ -1456,6 +1520,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void ShowSession()
     {
         UpdateCurrentWorkspace();
+        SwapComposerDraft(_shownSession, _chat.Id.Value);
+        _shownSession = _chat.Id.Value;
         _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         _renderedSeq = 0;
         _renderedAny = false;
@@ -1484,6 +1550,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RefreshPendingDialogs();
     }
 
+    /**
+     * 换会话时换草稿: 先把上一条会话的输入区内容存起来, 再复原目标会话存过的内容
+     * (没存过就是空的)。附件跟着一起换, 否则上一条会话挂的图片会跟着被发到新会话去。
+     */
+    private void SwapComposerDraft(string? previous, string next)
+    {
+        if (previous is not null)
+            _drafts[previous] = new ComposerDraft(Composer.Input, Composer.CaretIndex, [.. Attachments]);
+        var draft = _drafts.GetValueOrDefault(next);
+        var text = draft?.Text ?? "";
+        Composer.Input = text;
+        Composer.CaretIndex = Math.Clamp(draft?.Caret ?? 0, 0, text.Length);
+        Attachments.Clear();
+        foreach (var attachment in draft?.Attachments ?? [])
+            Attachments.Add(attachment);
+        HasAttachments = Attachments.Count > 0;
+        CloseSuggestions();
+    }
+
     private void RefreshModelLabels()
     {
         var config = CurrentRequestHeader();
@@ -1492,6 +1577,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         SessionSubtitle = label;
         Composer.ReasoningLabel = config?.ReasoningEffort?.Value ?? "推理";
         RefreshFilteredModels();
+        // 打开会话就把档位候选算出来: 端点是后台探测的, 等用户点开浮层才启动的话第一次只能是空的。
+        RefreshReasoningEfforts();
     }
 
     /** 实时事件: 不是重放, 因此压缩状态要按真实生命周期切换。 */
@@ -1609,6 +1696,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 break;
             case ApprovalGrantedPayload granted:
                 AddTrace(sessionEvent.Seq, TraceKind.Approval, $"本会话不再询问 {granted.ToolName}");
+                break;
+            case ApprovalDecidedPayload decided:
+                AddTrace(sessionEvent.Seq, TraceKind.Approval, $"审批结果 {decided.Outcome}");
+                break;
+            case SettingsMutationAuditPayload mutation:
+                AddTrace(sessionEvent.Seq, TraceKind.Approval, $"settings {mutation.Outcome} · {mutation.ToolName}",
+                    $"{mutation.Path}\n{mutation.Diff}\nbeforeHash={mutation.BeforeHash}\nafterHash={mutation.AfterHash}");
+                if (!replay)
+                    SetStatus($"settings {mutation.Outcome}: {mutation.Path}");
                 break;
             case DeliverablesPresentedPayload presented:
                 Deliverables.Observe(sessionEvent);
@@ -2011,8 +2107,30 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             "session" => [.. _catalog.Load().Select(node => node.SessionId.Value)],
             "skill" => _skillNames,
             "provider" => ProviderCandidates(argument),
+            "timestamp" => TimestampCandidates(argument),
             _ => [],
         };
+
+    /**
+     * `/timestamp` 的参数: 先选动作, 再选 `#seq`。
+     * 补全器会把参数末尾的空格裁掉, 所以"刚选完动作"(参数就是动作名)和"正在选序号"是同一形态,
+     * 这一步直接给序号: 它们以 `jump #` 开头, 补全器的前缀过滤仍能命中刚打完的动作名。
+     * 序号只从本会话的用户消息里出, 与命令本身的候选规则(`SessionTimeline`)一致,
+     * 免得补全里出现一个执行时会被拒的序号。
+     */
+    private IReadOnlyList<string> TimestampCandidates(string argument)
+    {
+        var space = argument.IndexOf(' ', StringComparison.Ordinal);
+        if (space < 0)
+            return argument is "jump" or "revert" or "fork"
+                ? SeqCandidates(argument)
+                : ["list", "jump", "revert", "fork"];
+        var action = argument[..space];
+        return action is "jump" or "revert" or "fork" ? SeqCandidates(action) : [];
+    }
+
+    private IReadOnlyList<string> SeqCandidates(string action)
+        => [.. SessionTimeline.FromEvents(_chat.Events).Select(entry => $"{action} #{entry.Seq}")];
 
     private IReadOnlyList<string> ProviderCandidates(string argument)
     {

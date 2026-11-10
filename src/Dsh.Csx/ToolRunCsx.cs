@@ -35,11 +35,12 @@ public sealed class ToolRunCsx
         return tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            UsesScriptPermissions = true,
             Description = "Execute an existing C# .csx script with the installed dotnet-script frontend in a fresh process. "
                 + "Use C# script statements, declarations, #load and #r directives, not a run_code method body. "
                 + "Script arguments are available through Args, and #load paths retain their normal script-file semantics. "
                 + "Returns stdout, stderr and exit status; frontend failures are errors. "
-                + "This is not a runtime sandbox and does not provide run_code tool bindings.",
+                + "It does not provide run_code tool bindings." + SubprocessService.ScriptPermissionsNotice,
             Parameters = Parameters(),
             Output = new ToolOutputDefinition(OutputSchema(), (_, value) => [new TextBlock(Render(value))]),
             Execute = tool.ExecuteAsync,
@@ -137,7 +138,13 @@ public sealed class ToolRunCsx
         SubprocessHandle handle;
         try
         {
-            handle = _subprocess.Spawn(new SubprocessSpawnSpec { Argv = argv, Cwd = workdir, Signal = fused.Token });
+            handle = await _subprocess.SpawnScriptAsync(new SubprocessSpawnSpec
+            {
+                Argv = argv,
+                Cwd = workdir,
+                Signal = fused.Token,
+                AdditionalReadOnlyPaths = bootstrap is null ? [script] : [script, bootstrap.ScriptPath],
+            }, exec);
         }
         catch (Win32Exception error)
         {

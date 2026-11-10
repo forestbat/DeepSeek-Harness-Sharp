@@ -4,21 +4,17 @@ using Dsh.Core;
 
 namespace Dsh.Ide.Launch;
 
-public sealed class EditorExecutor : IEditorExecutor
+public sealed class EditorExecutor
 {
     private readonly ITerminalHost[] terminalHosts;
-    private readonly IEditorExecutor? clientExecutor;
-    public EditorExecutor(IEnumerable<ITerminalHost>? terminalHosts = null, IEditorExecutor? clientExecutor = null)
-    {
-        this.terminalHosts = (terminalHosts ?? []).Concat([new SystemTerminalHost(), new PrintTerminalHost()]).ToArray();
-        this.clientExecutor = clientExecutor;
-    }
+    public EditorExecutor(IEnumerable<ITerminalHost>? terminalHosts = null)
+        => this.terminalHosts = (terminalHosts ?? []).Concat([new SystemTerminalHost(), new PrintTerminalHost()]).ToArray();
     public async ValueTask<EditorExecutionResult> ExecuteAsync(EditorLaunchCommand command, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (command.Target == EditorExecutionTarget.Print) return await new PrintTerminalHost().LaunchAsync(command, cancellationToken);
         if (command.Target == EditorExecutionTarget.Client)
-            return clientExecutor is null ? new(false, EditorErrorCode.CLIENT_UNAVAILABLE, "No client editor execution channel is connected.") : await clientExecutor.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            return new(false, EditorErrorCode.CLIENT_UNAVAILABLE, "No client editor execution channel is connected.");
         if (command.Kind == EditorKind.Terminal || command.Kind == EditorKind.Hybrid && !HasDisplay())
         {
             var failures = new List<string>();

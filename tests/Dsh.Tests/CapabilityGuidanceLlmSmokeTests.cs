@@ -1,4 +1,5 @@
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -130,7 +131,7 @@ public sealed class CapabilityGuidanceLlmSmokeTests
                 var (provider, model) = settings.ResolveDefaultModel() ?? throw new InvalidOperationException("The real model smoke requires a configured default model.");
                 settings.Plugins[PtcPackage] = new PluginSetting { Parameters = new() { ["debug_batching"] = debugBatching } };
                 settings.SavePlugins(home);
-                app = await ConfigBoot.Compose(new HarnessOptions(home, root, Provider: provider, Model: model, IsTui: false));
+                app = await ConfigBoot.Compose(new HarnessOptions(home, root, Provider: provider, Model: model, IsTui: false), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
                 var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
                 var handle = await agents.Create(new CreateAgentOptions(SessionId.Create($"capability-{Guid.NewGuid():N}"), root,
                     new AgentOptions(provider, model)), TestContext.Current.CancellationToken);

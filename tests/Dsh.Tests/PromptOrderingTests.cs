@@ -19,6 +19,23 @@ public sealed class PromptOrderingTests
         return assembly.Sections.Select(section => section.Name).ToList();
     }
 
+    /**
+     * persona 段存在但默认文本为空: 内置 persona 已删除, persona 由 dsh-persona 插件(默认注册空串)接管。
+     * 这条守门用例防止将来有人"顺手"再塞一段内置文本回去 —— 那会改变每一次请求的提示词。
+     */
+    [Fact]
+    public async Task PersonaSection_ExistsButIsEmptyByDefault()
+    {
+        var ctx = new Context();
+        var prompt = new SystemPrompt(ctx, new SystemPromptConfig { IncludeHarnessIdentity = false });
+        using var registration = prompt.Section(PromptSection.Literal("probe", "x"));
+
+        var assembly = await prompt.Assemble(new AssembleContext());
+
+        var persona = Assert.Single(assembly.Sections, section => section.Name == "deployment:persona");
+        Assert.Equal("", persona.Text);
+    }
+
     [Fact]
     public async Task SpineSections_OrderBySpineRegardlessOfRegistrationOrder()
     {

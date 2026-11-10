@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
+using Dsh.Runtime;
 
 namespace Dsh.ScriptHost;
 
@@ -68,7 +69,7 @@ public sealed class PtcScriptHostClient
         var command = ResolveHostCommand();
         if (command is null)
             return new PtcRunOutcome(false, PtcFailureKinds.SandboxUnavailable, "the harness executable path is unavailable", null, null, "");
-        using var handle = _subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await _subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = [command.Value.FileName, .. command.Value.Arguments],
             Cwd = _cwd,

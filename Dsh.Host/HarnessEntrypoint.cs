@@ -8,10 +8,29 @@ namespace Dsh.Host;
 /** 入口组合根: 解析 CLI 参数并组合插件, 然后分发到 tui/gui/headless 分支。两个宿主 exe 的 Program 只做转发。 */
 public static class HarnessEntrypoint
 {
-    public static async Task<int> RunAsync(string[] args)
+    /** 配置坏了不是"未处理异常": 打一行能照着修的说明再退出, 而不是让用户读 YamlDotNet 的栈。 */
+    public static async Task<int> RunAsync(string[] args, string? defaultCommand = null)
+    {
+        try
+        {
+            global::Dsh.Plugins.Generated.DshPluginCatalog.RegisterAll();
+            if (global::Dsh.Plugins.Generated.DshPluginCatalog.TryRunWorkerAsync(args) is { } worker)
+                return await worker;
+            return await RunCoreAsync(args, defaultCommand);
+        }
+        catch (InvalidDataException error)
+        {
+            await Console.Error.WriteLineAsync($"dsharp: {error.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunCoreAsync(string[] args, string? defaultCommand)
     {
         if (args.Contains(PtcScriptHost.HostArgument))
             return await PtcScriptHost.RunAsync(args);
+        if (defaultCommand is not null && args is not ["host", ..] and not ["tui", ..])
+            args = [defaultCommand, .. args];
         // The web process alone owns ASP.NET. Forward before parsing so this assembly knows no web options or WebBridge types.
         if (args.FirstOrDefault() == "web")
             return await WebHostLauncher.RunAsync(args[1..]);
@@ -101,16 +120,16 @@ public static class HarnessEntrypoint
         if (dumpConfig)
         {
             var settings = HarnessSettings.Load(harnessHome);
-            var host = new PluginHost();
-            host.RegisterCompiledIn();
-            var discovery = host.Scan(Path.Combine(AppContext.BaseDirectory, "plugins"), nativeBridge: null);
+            var discovery = await ConfigBoot.InspectPluginsAsync(
+                new HarnessOptions(harnessHome, Directory.GetCurrentDirectory(), IsTui: false),
+                global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var lines = new List<string>
             {
                 $"dsh-home: {harnessHome.Root}",
                 $"provider: {settings.ResolveDefaultModel()?.Provider ?? "(not configured)"}",
                 $"model: {settings.ResolveDefaultModel()?.Model ?? "(not configured)"}",
             };
-            lines.AddRange(host.Catalog.Descriptors
+            lines.AddRange(discovery.Descriptors
                 .OrderBy(descriptor => descriptor.Package, StringComparer.Ordinal)
                 .Select(descriptor => $"plugin: {descriptor.Package} ({descriptor.Form}, "
                     + $"enabled={(settings.Plugins.TryGetValue(descriptor.Package, out var setting) ? setting.Enabled : true)})"));
@@ -179,7 +198,8 @@ public static class HarnessEntrypoint
                     return 1;
                 }
             case "headless":
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId);
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional.Skip(1)), resumeSessionId,
+                    global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             case "storage":
                 return await RunStorageCommandAsync(harnessHome, positional.Skip(1).ToList());
             case "config":
@@ -189,7 +209,8 @@ public static class HarnessEntrypoint
             case null:
                 return await RunEntrypointAsync(harnessHome, "tui", resumeSessionId, gpu, shell, gpuScreenshot, gpuCard, gpuCapturePlan);
             default:
-                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional));
+                return await BootCli.RunHeadlessAsync(harnessHome, string.Join(' ', positional), runtimeFactory:
+                    global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         }
     }
 
@@ -207,7 +228,8 @@ public static class HarnessEntrypoint
             return 0;
         }
 
-        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         await using var backend = await HarnessRemoteHostBackend.CreateAsync(app);
         var factory = app.Ctx.Get<Dsh.RemoteHost.RemoteHostServerFactory>(Dsh.RemoteHost.RemoteHostServerFactory.ServiceName, false)
             ?? throw new InvalidOperationException("remote-host-server 插件未加载，无法启动 host");
@@ -418,7 +440,7 @@ public static class HarnessEntrypoint
         string? gpuCapturePlan = null)
     {
         var options = new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: entrypoint == "tui");
-        using var app = await ConfigBoot.Compose(options);
+        using var app = await ConfigBoot.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         return await app.RunEntrypointAsync(entrypoint, new PluginEntrypointOptions(
             app.Home,
             Directory.GetCurrentDirectory(),
@@ -435,7 +457,8 @@ public static class HarnessEntrypoint
     private static int RunGuiOnMainThread(HarnessHome home, string? resumeSessionId)
     {
         var cwd = Directory.GetCurrentDirectory();
-        using var app = ConfigBoot.Compose(new HarnessOptions(home, cwd, IsTui: false)).GetAwaiter().GetResult();
+        using var app = ConfigBoot.Compose(new HarnessOptions(home, cwd, IsTui: false),
+            global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime).GetAwaiter().GetResult();
         return Dsh.Gui.GuiRunner.RunOnMainThread(app, cwd, resumeSessionId, StartLocalHostAsync);
     }
 

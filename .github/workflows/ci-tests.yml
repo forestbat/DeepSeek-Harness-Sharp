@@ -18,10 +18,16 @@ on:
         required: true
         type: string
       quick-cohort:
-        description: 'Quick test class cohort: all, fleet-iroh, or remainder'
+        description: 'Quick test class cohort: all, fleet-iroh, remainder-a-m, or remainder-rest'
         required: false
         type: string
         default: 'all'
+      dryioc-commit:
+        required: true
+        type: string
+      dryioc-sha256:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -49,8 +55,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-          cache: true
-          cache-dependency-path: '**/*.csproj'
+
+      - name: Cache NuGet packages without a post-job dotnet invocation
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: dotnet-cache-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
 
       - name: Download the native iroh-ssh built for this run
         if: inputs.suite == 'quick'
@@ -77,23 +87,27 @@ jobs:
           $directory = [System.IO.Path]::GetFullPath("artifacts/iroh-ssh/$rid")
           $directory >> $env:GITHUB_PATH
 
+      - name: Download the DryIoc feed prepared for this run
+        uses: actions/download-artifact@v4
+        with:
+          name: dryioc-feed
+          path: packages
+
       - name: Prepare local NuGet feed (packages/, DryIoc.dll)
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pwsh -NoProfile -File scripts/fetch-dryioc-feed.ps1 -UseGhArtifact
-          else
-            bash scripts/fetch-dryioc-feed.sh --use-gh-artifact
-          fi
+          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install real C# frontends for standalone tool tests
-        if: inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh'
+        if: (inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh') || (runner.os == 'Windows' && inputs.suite == 'regression-1')
         shell: pwsh
         run: |
           $tools = Join-Path $PWD '.artifacts/csharp-frontends'
-          dotnet tool install dotnet-script --version 2.0.1 --tool-path $tools --allow-roll-forward
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ('${{ inputs.suite }}' -eq 'quick') {
+            dotnet tool install dotnet-script --version 2.0.1 --tool-path $tools --allow-roll-forward
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           dotnet tool install csharprepl --version 0.9.2 --tool-path $tools --allow-roll-forward
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $tools >> $env:GITHUB_PATH
@@ -124,17 +138,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openssh-server openssh-sftp-server
+          if [[ "$(dpkg-query -W -f='${db:Status-Status}\n' openssh-server openssh-sftp-server 2>/dev/null)" != $'installed\ninstalled' ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends openssh-server openssh-sftp-server
+          else
+            echo "Real SSH server packages are already installed."
+          fi
           sudo mkdir -p /run/sshd
 
       - name: Build tests (Debug, plugin fixtures and fault probe)
+        id: build_tests
         run: >
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
       - name: Validate the explicitly installed native Iroh test fixture
-        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
+        if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +171,7 @@ jobs:
 
 
       - name: Check macOS non-admin headless SSH LAN receiver
-        if: inputs.suite == 'quick' && runner.os == 'macOS' && inputs.quick-cohort != 'remainder'
+        if: inputs.suite == 'quick' && runner.os == 'macOS' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: bash
         run: bash scripts/test-iroh-macos-lan.sh
       - name: Start a standalone PTY daemon from the current build
@@ -188,14 +207,6 @@ jobs:
           echo "::error::The standalone PTY daemon from the current build did not publish an endpoint"
           cat "$HOME_DIR/daemon.log"
           exit 1
-      - name: Check real Unix TUI raw input and exit restoration
-        if: inputs.suite == 'raw' && runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests -noColor \
-            -class Dsh.Tests.TuiRawModeEndToEndTests \
-            -trait- "Category=LlmSmoke"
 
       - name: Check real Unix TUI raw input and exit restoration (eight native rounds)
         if: inputs.suite == 'raw' && runner.os != 'Windows'
@@ -206,7 +217,7 @@ jobs:
             -class Dsh.Tests.TuiRawModeEndToEndTests \
             -trait- "Category=LlmSmoke" -failSkips
 
-      - name: Run quick tests (excluding GpuStress / OnlyGpu / LlmSmoke / RenderBench)
+      - name: Run quick tests (excluding GPU, model, and render categories)
         if: inputs.suite == 'quick'
         shell: bash
         run: |
@@ -231,18 +242,25 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ]; then
             ARGS+=(-class- Dsh.Tests.TuiRawModeEndToEndTests)
           fi
+          # Complementary class cohorts preserve coverage under the existing per-run watchdog.
+          if ${{ inputs.quick-cohort == 'fleet-iroh' }}; then
+            ARGS+=(-class 'Dsh.Tests.Fleet*' -class 'Dsh.Tests.Iroh*')
+          elif ${{ inputs.quick-cohort == 'remainder-a-m' || inputs.quick-cohort == 'remainder-rest' }}; then
+            ARGS+=(-class- 'Dsh.Tests.Fleet*' -class- 'Dsh.Tests.Iroh*')
+            CLASS_FILTER=-class
+            if ${{ inputs.quick-cohort == 'remainder-rest' }}; then
+              CLASS_FILTER=-class-
+            fi
+            for PREFIX in {A..M}; do
+              ARGS+=("$CLASS_FILTER" "Dsh.Tests.$PREFIX*")
+            done
+          fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             # MCP resource tests run in each of the three required regression suites.
-            ARGS+=(-parallel none
+            ARGS+=(-parallelMode none
               -reporter verbose
               -class- Dsh.Tests.Mcp.McpResourceToolsTests
               -method- Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay)
-            # Complementary class cohorts preserve coverage under the existing per-run watchdog.
-            if ${{ inputs.quick-cohort == 'fleet-iroh' }}; then
-              ARGS+=(-class 'Dsh.Tests.Fleet*' -class 'Dsh.Tests.Iroh*')
-            elif ${{ inputs.quick-cohort == 'remainder' }}; then
-              ARGS+=(-class- 'Dsh.Tests.Fleet*' -class- 'Dsh.Tests.Iroh*')
-            fi
             echo "Running: ${ARGS[*]}"
             # The background runner's CLI children need the default SIGINT disposition.
             set -m
@@ -264,7 +282,7 @@ jobs:
           "${ARGS[@]}"
 
       - name: Run root-cause regression (${{ inputs.suite }}, no retries)
-        if: startsWith(inputs.suite, 'regression-')
+        if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && startsWith(inputs.suite, 'regression-') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -293,6 +311,7 @@ jobs:
             -class Dsh.Tests.AcpClientTests
             -class Dsh.Tests.LspTests
             -class Dsh.Tests.SdkTests
+            -class Dsh.Tests.TempTreeTests
             -class Dsh.Tests.Mcp.McpResourceToolsTests
             -class Dsh.Tests.ProjectMemoryTests
             -class Dsh.Tests.SessionAutoRenameTests
@@ -304,12 +323,23 @@ jobs:
             -class Dsh.Tests.SettingsTemplateTests
             -class Dsh.Tests.ExportSessionLogTests)
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ARGS+=(-parallel none)
+            ARGS+=(-parallelMode none)
           fi
           "$EXE" "${ARGS[@]}"
 
+      - name: Run original owned MCP sandbox regression (Windows)
+        if: ${{ !cancelled() && steps.build_tests.outcome == 'success' && runner.os == 'Windows' && inputs.suite == 'regression-1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe"
+          "$EXE" -noColor -parallelMode none -reporter verbose \
+            -method Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings \
+            -trait- Category=GpuStress -trait- Category=OnlyGpu \
+            -trait- Category=RenderBench -trait- Category=LlmSmoke -failSkips
+
       - name: Check schedule time zones with invariant globalization
-        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
+        if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: pwsh
         run: |
           $runtime = Get-Content tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.runtimeconfig.json -Raw | ConvertFrom-Json -AsHashtable
@@ -320,7 +350,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check native containment (NativeGuardTests, ${{ inputs.native-cc }}, no skips)
-        if: inputs.suite == 'quick' && inputs.quick-cohort != 'remainder'
+        if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: bash
         run: |
           set -euo pipefail
@@ -331,7 +361,7 @@ jobs:
           "$EXE" -noColor -class Dsh.Tests.NativeGuardTests -failSkips
 
       - name: Rebuild native libraries with ${{ inputs.native-cc-alt }} and check native containment
-        if: inputs.suite == 'quick' && inputs.native-cc-alt != ''
+        if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh') && inputs.native-cc-alt != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -340,3 +370,23 @@ jobs:
           # Verify that the alternate driver rebuilt both the guard and the probe.
           grep -E '${{ inputs.native-cc-alt }} /nologo' native-alt.log
           tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe -noColor -class Dsh.Tests.NativeGuardTests -failSkips
+
+      - name: Verify the SDK still runs after macOS test consumers
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          process = subprocess.Popen(
+              ["dotnet", "nuget", "locals", "all", "--list", "--force-english-output"],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+          )
+          print(f"SDK_POST_TEST_PID={process.pid}", flush=True)
+          output, error = process.communicate()
+          code = process.returncode
+          print(f"SDK_POST_TEST_RETURN_CODE={code}; stdoutBytes={len(output)}; stderrBytes={len(error)}", flush=True)
+          sys.exit(code if code >= 0 else 128 - code)
+          PY

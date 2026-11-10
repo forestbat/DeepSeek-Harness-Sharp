@@ -36,14 +36,40 @@ public sealed class MessageFoldTests
         return PickCard(scene, last: false);
     });
 
+    /** 底边附近(还没到底)展开: 被点的卡片不能被面板重估顶走 —— 用户报的"多余跳转"就是这个位置。 */
+    [Fact]
+    public Task ExpandingCardNearBottom_KeepsItInPlace() => Run(scene =>
+    {
+        ScrollToFraction(scene, 0.85);
+        return PickCard(scene, last: true);
+    });
+
+    /**
+     * 贴底(跟随中)时展开: 被点那条留在原地, 并且脱离跟随、"回到最新"按钮出现。
+     * 旧行为是继续贴住末尾, 结果被点的那条被自身涨高的量直接顶走(实测 -133px) —— 这正是用户报的跳动。
+     */
+    [Fact]
+    public Task ExpandingCardWhileAtTail_StaysPutAndStopsFollowing() => Run(scene =>
+    {
+        ScrollToFraction(scene, 1.0);
+        var pick = PickCard(scene, last: true);
+        var jumpToLatest = scene.Window.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(button => button.Name == "JumpToLatest");
+        Assert.False(jumpToLatest?.IsVisible ?? false, "贴底时不该出现回到最新");
+        // 展开后离开跟随: 断言留在 Run 里(位置不变), 这里只补"按钮出现"这条独有的语义。
+        scene.Pump(1);
+        return pick;
+    });
+
     [Fact]
     public Task CollapsingExpandedCard_KeepsItInPlace() => Run(scene =>
     {
         ScrollToFraction(scene, 0.5);
         var card = PickCard(scene, last: false);
-        ((MessageViewModel)card.DataContext!).IsDiffExpanded = true;
+        var message = Assert.IsType<MessageViewModel>(card.DataContext);
+        message.IsDiffExpanded = true;
         scene.Pump(3);
-        return Reacquire(scene, card.DataContext as MessageViewModel);
+        return Reacquire(scene, message);
     });
 
     [Fact]
@@ -51,9 +77,10 @@ public sealed class MessageFoldTests
     {
         ScrollToFraction(scene, 0.5);
         var first = PickCard(scene, last: false);
+        var firstMessage = Assert.IsType<MessageViewModel>(first.DataContext);
         TapChevron(scene, first);
         scene.Pump(4);
-        Assert.True((first.DataContext as MessageViewModel)!.IsDiffExpanded,
+        Assert.True(firstMessage.IsDiffExpanded,
             "precondition: the first card must be expanded");
         ScrollToFraction(scene, 0.5);
         return PickCard(scene, last: false);

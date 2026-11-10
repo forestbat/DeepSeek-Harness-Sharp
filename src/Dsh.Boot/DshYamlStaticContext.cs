@@ -1,4 +1,5 @@
 using YamlDotNet.Serialization;
+using Dsh.Runtime;
 
 namespace Dsh.Boot;
 
@@ -24,6 +25,10 @@ namespace Dsh.Boot;
 [YamlSerializable(typeof(NetworkSettings))]
 [YamlSerializable(typeof(OutboundProxySettings))]
 [YamlSerializable(typeof(SandboxSettings))]
+[YamlSerializable(typeof(ScriptsSettings))]
+[YamlSerializable(typeof(ScriptPermissions))]
+[YamlSerializable(typeof(PermissionRules))]
+[YamlSerializable(typeof(PermissionMatcher))]
 [YamlSerializable(typeof(ToolsSettings))]
 public partial class DshYamlStaticContext : StaticContext
 {

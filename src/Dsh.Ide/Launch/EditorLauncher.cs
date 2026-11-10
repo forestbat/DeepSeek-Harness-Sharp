@@ -3,10 +3,10 @@ using Dsh.Ide.Selection;
 
 namespace Dsh.Ide.Launch;
 
-public sealed class EditorLauncher(IEditorCatalog catalog, EditorOptions? options = null, IEditorExecutor? executor = null, IReadOnlyList<string>? trustedSnapshotRoots = null, Func<bool>? canLaunch = null) : IEditorService
+public sealed class EditorLauncher(IEditorCatalog catalog, EditorOptions? options = null, EditorExecutor? executor = null, IReadOnlyList<string>? trustedSnapshotRoots = null, Func<bool>? canLaunch = null) : IEditorService
 {
     private readonly EditorOptions options = options ?? new();
-    private readonly IEditorExecutor executor = executor ?? new EditorExecutor();
+    private readonly EditorExecutor executor = executor ?? new EditorExecutor();
     private readonly EditorBindings bindings = new();
     private readonly string[] trustedSnapshotRoots = trustedSnapshotRoots?.Select(EditorPaths.PhysicalPath).ToArray() ?? [];
     private EditorDecision? lastDecision;

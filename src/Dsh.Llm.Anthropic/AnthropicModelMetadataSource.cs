@@ -3,15 +3,21 @@ using System.Text.Json;
 
 namespace Dsh.Llm.Anthropic;
 
-/** 从 Anthropic /v1/models 的 capabilities.effort 读取每个模型支持的推理强度(low/medium/high/max/xhigh)。 */
+/**
+ * 从 Anthropic /v1/models 的 capabilities.effort 读取每个模型支持的推理强度(low/medium/high/max/xhigh)。
+ * 同一份响应里还带着该端点提供的全部模型 id, 一并留作模型清单(中转站的模型只能从这里知道)。
+ */
 public sealed class AnthropicModelMetadataSource : IModelReasoningSource
 {
     private static readonly IReadOnlyList<string> EffortOrder = ["low", "medium", "high", "max", "xhigh"];
+    private static readonly TimeSpan RefreshCooldown = TimeSpan.FromSeconds(10);
 
     private readonly string _baseUrl;
     private readonly string? _apiKey;
     private readonly HttpClient _http;
+    private readonly BackgroundRefreshGate _gate = new(RefreshCooldown);
     private readonly ConcurrentDictionary<string, LlmModelReasoningInfo> _byModel = new(StringComparer.Ordinal);
+    private volatile IReadOnlyList<string> _modelIds = [];
 
     public AnthropicModelMetadataSource(string baseUrl, string? apiKey, HttpClient http)
     {
@@ -23,9 +29,15 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
     public LlmModelReasoningInfo? ReasoningFor(string model)
         => _byModel.TryGetValue(model, out var reasoning) ? reasoning : null;
 
-    /** 启动预热: 后台拉取, 失败静默(离线或无凭据时保持回退链)。 */
-    public void RefreshInBackground()
-        => _ = Task.Run(async () =>
+    /** 端点自报的模型清单: 拉取完成前与失败(含无 key)时为空。 */
+    public IReadOnlyList<string> ModelIds => _modelIds;
+
+    /** 清单还没拿到时补一次后台拉取(冷却窗口内合并): 端点抖动过之后不必重启进程就能恢复。 */
+    public void RequestRefresh()
+    {
+        if (_modelIds.Count > 0 || !_gate.TryBegin())
+            return;
+        _ = Task.Run(async () =>
         {
             try
             {
@@ -34,7 +46,12 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
             catch (Exception)
             {
             }
+            finally
+            {
+                _gate.End();
+            }
         });
+    }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -48,6 +65,7 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         foreach (var (model, reasoning) in Parse(json))
             _byModel[model] = reasoning;
+        _modelIds = EndpointModelList.ParseIds(json);
     }
 
     public static IReadOnlyDictionary<string, LlmModelReasoningInfo> Parse(string json)

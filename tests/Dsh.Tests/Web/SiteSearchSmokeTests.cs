@@ -1,5 +1,6 @@
 using Dsh.Runtime;
 using Dsh.Boot;
+using Dsh.Plugins;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime.Events;
@@ -85,7 +86,7 @@ public sealed class SiteSearchSmokeTests
             // Exercise the native web_search schema, not the optional TOON wrapper.
             settings.Plugins["@deepseek-ai/dsh-toon"] = new PluginSetting { Enabled = false };
             settings.SavePlugins(HarnessHome.Resolve(home));
-            using var app = await HarnessComposer.Compose(new HarnessOptions(HarnessHome.Resolve(home), Cwd: Directory.GetCurrentDirectory(), Provider: providerId, Model: modelId, ApiKey: apiKey));
+            using var app = await HarnessComposer.Compose(new HarnessOptions(HarnessHome.Resolve(home), Cwd: Directory.GetCurrentDirectory(), Provider: providerId, Model: modelId, ApiKey: apiKey), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var agents = app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
             var handle = await agents.Create(new CreateAgentOptions(SessionId.Create($"search-smoke-{Guid.NewGuid():N}"), Directory.GetCurrentDirectory(), new AgentOptions(providerId, modelId)), TestContext.Current.CancellationToken);
             var agent = (AgentLoopAgent)handle.Agent;

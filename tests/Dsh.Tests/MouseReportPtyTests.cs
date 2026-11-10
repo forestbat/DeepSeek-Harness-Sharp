@@ -95,11 +95,11 @@ public class MouseReportPtyTests
 
         Assert.True(after >= 0 && after <= before - 3, $"分隔线应从 {before} 左移至少 3 列, 实际 {after}");
 
-        // ⑤ attach 之后改终端尺寸也必须被上报: 常驻 TUI 只在尺寸变化时重排。
-        //    (旧实现只在 attach 那一刻上报一次, 之后调窗口没反应: 调大留白、调小被压。)
-        // 缩到夹具视口(100x30)以内: 否则会话比屏幕大, 后面就看不到输入行了。
+        // The default TUI proxy must forward its real client viewport, not an explicit daemon resize substituted by the test.
         harness.Session.Resize(rows: 24, columns: 80);
-        Assert.True(await WaitForSessionSizeAsync(harness, columns: 80, rows: 24), "会话没有跟随客户端尺寸变化");
+        Assert.True(await WaitForSessionSizeAsync(tui.Id, columns: 80, rows: 24), "会话没有跟随客户端尺寸变化");
+        await harness.WriteTextAsync("r");
+        await WaitForInputAsync(harness, ">测试r");
 
         // ⑥ /exit 之后代理必须结束, 并把终端还回去(离开备用屏 + 显示光标), 否则用户回不到宿主终端。
         //    先清掉第 ③b 步留在输入行里的"测试", 否则会变成把"测试/exit"当消息发出去。
@@ -153,15 +153,16 @@ public class MouseReportPtyTests
         return input;
     }
 
-    /** 轮询 daemon 里本夹具会话的尺寸, 直到等于期望值(尺寸上报是异步的)。 */
-    private static async Task<bool> WaitForSessionSizeAsync(PtyTuiHarness harness, int columns, int rows)
+    /** Wait for the resized resident session without replacing its active input attachment. */
+    private static async Task<bool> WaitForSessionSizeAsync(string sessionId, int columns, int rows)
     {
+        PtyDaemonSessionDto? session = null;
         for (var attempt = 0; attempt < 100; attempt++)
         {
             var sessions = await PtyDaemonClient.ListAsync(TestContext.Current.CancellationToken);
-            var session = sessions.FirstOrDefault(candidate =>
-                string.Equals(candidate.Home, harness.Home, StringComparison.OrdinalIgnoreCase));
-            if (session is not null && session.Columns == columns && session.Rows == rows)
+            session = sessions.FirstOrDefault(candidate =>
+                candidate.Id == sessionId);
+            if (session is { IsAttached: true } && session.Columns == columns && session.Rows == rows)
                 return true;
             await Task.Delay(100, TestContext.Current.CancellationToken);
         }

@@ -44,18 +44,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ?? throw new InvalidOperationException("harnessOptions is required for the interaction plugin");
         var catalog = ctx.GetProp("pluginCatalog") as PluginCatalog
             ?? throw new InvalidOperationException("pluginCatalog is required for the interaction plugin");
-        var settings = HarnessSettings.Load(options.Home);
         return new DisposableBundle(
+            new SettingsMutationGate(ctx, options.Home),
             ProviderRegistrar.Register(ctx, options),
             ModelCommand.Register(ctx, options.Home),
             ReasoningCommand.Register(ctx),
             ProviderCommand.Register(ctx, options.Home),
             ProxyCommand.Register(ctx, options.Home),
             MemoryCommand.Register(ctx),
-            PluginCommand.Register(ctx, catalog),
-            SafetyCommandGuard.Register(ctx, settings.Safety),
-            // safety.autoApprove=true 时全局自动放行需要审批的工具(黑名单仍在前置 Guard 拦截)。
-            settings.Safety?.AutoApprove == true ? ApprovalAnswerers.AutoApprove(ctx) : null);
+            PluginCommand.Register(ctx, catalog));
     }
 
     private static IReadOnlyDictionary<string, object?>? ConfigOf(object? config)

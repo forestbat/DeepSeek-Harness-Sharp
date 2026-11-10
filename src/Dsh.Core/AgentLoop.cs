@@ -20,7 +20,7 @@ public sealed record ConfiguredAgent(
     string? Cwd = null,
     AgentOptions? Options = null);
 
-public sealed class AgentLoop : Service, IAgentFactory
+public sealed class AgentLoop : Service
 {
     public const string ServiceName = "agentLoop";
 

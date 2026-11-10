@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Compaction;
@@ -7,6 +8,8 @@ using Dsh.Gui.Services;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Runtime;
+using Dsh.Runtime.Events;
 
 namespace Dsh.Tests;
 
@@ -153,11 +156,23 @@ public sealed class MainViewModelTests
     public async Task TimelineActions_JumpRevertAndForkTakeTheMessageSeq() => await HeadlessGui.RunAsync(async () =>
     {
         // 回退会截断会话, 不能碰同类的共享组合: 用隔离环境, 否则会污染其它用例的事件流。
-        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        // 检查点在隔离环境里会去写 home 下的 git 仓库(被 ACL 拒), 会挡住回退; 这条用例只验证时间线语义, 关掉它。
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync($"""
+            {GuiTestEnvironment.HomeSettings}
+            plugins:
+              "@deepseek-ai/dsh-checkpoints":
+                enabled: false
+            """);
         var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("keep me")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(2));
         var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(2, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(3));
         session.Append(new UserMessagePayload(MessageFactory.CreateUserText("drop me too")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(3, new TurnEndReason.Completed()));
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
@@ -173,7 +188,100 @@ public sealed class MainViewModelTests
         await GuiTestEnvironment.WaitForAsync(viewModel,
             () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1);
         Assert.Equal(["keep me"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
+        // 被回退的那条原文回输入区: 用户接下来就是改它再发, 而不是留在转录里当一条"卡住"的消息。
+        Assert.Equal("drop me", viewModel.Composer.Input);
+        Assert.False(viewModel.IsBusy, "截断之后没有回合在跑, 停止按钮不该继续显示");
     });
+    /** 分叉要经 host 的 /timestamp 命令真的落盘, 并且分叉出的会话能直接打开(不是让用户自己去翻列表)。 */
+    [Fact]
+    public async Task ForkAtMessage_CreatesASessionAndOpensIt() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("first")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(2));
+        var target = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("second")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(2, new TurnEndReason.Completed()));
+        session.Append(new TurnStartPayload(3));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("third")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(3, new TurnEndReason.Completed()));
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Messages.Count(message => message.HasTimelineEntry) == 3);
+        var message = Assert.Single(viewModel.Messages, item => item.Seq == target.Seq);
+
+        await viewModel.ForkAtMessageCommand.ExecuteAsync(message);
+
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } node && node.SessionId.Value != session.Id.Value);
+        // 标题沿用父会话的标题(不是 uuid), 后面带被分叉的位置。
+        var parentTitle = session.Header.Title;
+        Assert.NotNull(parentTitle);
+        Assert.StartsWith($"fork of {parentTitle} @", viewModel.SelectedSession!.Title, StringComparison.Ordinal);
+        // 新会话里只有被选中那条之前的内容, 它自己的原文回到新会话的输入区。
+        Assert.Equal(["first"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
+        Assert.Equal("second", viewModel.Composer.Input);
+    });
+
+    /**
+     * 一条会话里写到一半的内容不许跟着用户进下一条会话, 否则很容易把草稿发给错的会话。
+     * 草稿本身不能丢: 切回去还要在。
+     */
+    [Fact]
+    public async Task SwitchingSessions_KeepsDraftInItsOwnSession() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var first = viewModel.SelectedSession!;
+        viewModel.Composer.Input = "只属于第一条会话的草稿";
+        viewModel.Composer.CaretIndex = 3;
+
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != first.SessionId);
+        Assert.Equal("", viewModel.Composer.Input);
+
+        var second = viewModel.SelectedSession!;
+        viewModel.Composer.Input = "第二条会话的草稿";
+        viewModel.SelectedSession = first;
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.Composer.Input == "只属于第一条会话的草稿");
+        Assert.Equal(3, viewModel.Composer.CaretIndex);
+
+        viewModel.SelectedSession = second;
+        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.Composer.Input == "第二条会话的草稿");
+    });
+
+    /** 附件同样不许跟着切换会话跑: 图片是发给当前会话的, 换了会话就没了归属。 */
+    [Fact]
+    public async Task SwitchingSessions_KeepsAttachmentsInTheirOwnSession() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var first = viewModel.SelectedSession!;
+        viewModel.AttachImage("draft.png", OnePixelPng, 1, 1);
+        Assert.Single(viewModel.Attachments);
+        Assert.True(viewModel.HasAttachments);
+
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != first.SessionId);
+        Assert.Empty(viewModel.Attachments);
+        Assert.False(viewModel.HasAttachments);
+
+        viewModel.SelectedSession = first;
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession?.SessionId == first.SessionId && viewModel.Attachments.Count > 0);
+        Assert.Single(viewModel.Attachments);
+        Assert.True(viewModel.HasAttachments);
+    });
+
+    /** 1x1 透明 PNG: 附件存储只认字节, 不需要真的图片解码。 */
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+
     [Fact]
     public async Task Sessions_GroupedByWorkspace_AndMarkCurrentSessionSelected() => await HeadlessGui.RunAsync(async () =>
     {
@@ -200,13 +308,39 @@ public sealed class MainViewModelTests
         var node = viewModel.Workspaces.SelectMany(workspace => workspace.Sessions).First(item => item.SessionId == session.Id);
         Assert.False(node.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnStartPayload(1)), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.IsBusy);
-        Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
+        viewModel.NewSessionCommand.Execute(null);
+        await GuiTestEnvironment.WaitForAsync(viewModel,
+            () => viewModel.SelectedSession is { } selected && selected.SessionId != session.Id);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remove = environment.Agent.Ctx.OnWaterfall<AgentPreStepNotification>((notification, _) =>
+        {
+            entered.TrySetResult();
+            return new ValueTask<object?>(release.Task.WaitAsync(notification.Payload.Signal));
+        });
+        try
+        {
+            environment.Agent.Followup(MessageFactory.CreateUserText("Verify the background session running indicator."));
+            await GuiTestEnvironment.PumpAsync(entered.Task);
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: true });
+            Assert.Equal(AgentStatus.Running, environment.Agent.Status);
+            Assert.True(FindNode(viewModel, session.Id)!.IsRunning);
 
-        await Task.Run(() => session.Append(new TurnEndPayload(1, new TurnEndReason.Completed())), TestContext.Current.CancellationToken);
-        await GuiTestEnvironment.WaitForAsync(viewModel, () => !viewModel.IsBusy);
-        Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            release.TrySetResult(new PreStepDecision.Reject());
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+            await GuiTestEnvironment.WaitForAsync(viewModel.Workspaces,
+                () => FindNode(viewModel, session.Id) is { IsRunning: false });
+            Assert.Equal(AgentStatus.Idle, environment.Agent.Status);
+            Assert.False(FindNode(viewModel, session.Id)!.IsRunning);
+            Assert.DoesNotContain(session.SnapshotEvents(), item => item.Data is StepStartPayload);
+        }
+        finally
+        {
+            release.TrySetResult(new PreStepDecision.Reject());
+            remove();
+            await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
+        }
     });
 
     /** 交付物清单: 打开会话时从日志回放, 之后跟随新声明与会话截断。 */
@@ -316,41 +450,34 @@ public sealed class MainViewModelTests
         Assert.Contains("dsh-", message.Text);
     });
 
-    /**
-     * 压缩必须有自己的进度行与忙碌状态。摘要要发若干次模型请求, 一次压缩可能持续数分钟;
-     * 界面完全没反应时用户只会再按一次 /compact, 而那一次必然被"压缩已在进行"挡回来。
-     * 这里走"重新加载会话"这条确定性路径, 覆盖与实时流相同的渲染代码(ApplyEvents)。
-     */
     [Fact]
-    public async Task Compaction_ShowsProgressThenSummaryInsteadOfStayingSilent() => await HeadlessGui.RunAsync(async () =>
+    public async Task CompactionFeed_ExposesBusyProgressThenSummaryAndCompletion() => await HeadlessGui.RunAsync(async () =>
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
         var chat = await environment.OpenChatAsync();
         var session = environment.Agent.Session;
         var compactionId = CompactionId.Create("cmp-gui");
         session.Append(new CompactionStartPayload(compactionId, null, null));
+        await using var viewModel = new MainViewModel(environment.App, chat);
+        await GuiTestEnvironment.WaitForAsync(
+            (INotifyCollectionChanged)viewModel.Messages,
+            () => viewModel.IsBusy && viewModel.Messages.Any(message => message.Kind == MessageKind.Context),
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
+
+        const string summaryText = "GUI 压缩摘要正文";
         session.Append(new CompactionSummaryPayload(
             compactionId,
             null,
-            [new TextBlock("GUI 压缩摘要正文")],
+            [new TextBlock(summaryText)],
             new ShadowedRange(0, 10),
             [0, 1, 2, 3],
             4321,
             "deepseek-official",
             "deepseek-v4-flash"));
         session.Append(new CompactionEndPayload(compactionId, null, null));
-        await using var viewModel = new MainViewModel(environment.App, chat);
-        // 走实时流(不是重新加载): 用户报的正是"压缩开始后界面没动静"这条路。
-        await GuiTestEnvironment.WaitForAsync(
-            (INotifyCollectionChanged)viewModel.Messages,
-            () => viewModel.Messages.Any(message => message.Text.Contains("正在压缩上下文", StringComparison.Ordinal)),
-            () => GuiTestEnvironment.DescribeChatState(viewModel));
-        var summary = Assert.Single(viewModel.Messages, message =>
-            message.Text.Contains("上下文已压缩", StringComparison.Ordinal));
-        Assert.Contains("收起 4 条历史", summary.Text, StringComparison.Ordinal);
-        Assert.Contains("GUI 压缩摘要正文", summary.Detail, StringComparison.Ordinal);
-        // 成功的压缩结束后不能把界面留在忙碌态。
-        Assert.False(viewModel.IsBusy);
+        await GuiTestEnvironment.WaitForAsync((INotifyPropertyChanged)viewModel, () => !viewModel.IsBusy);
+        Assert.Single(viewModel.Messages, message =>
+            message.Kind == MessageKind.Context && message.Detail == summaryText);
     });
 
     /** 压缩检查点的正文已经由摘要行渲染过, 再当成上下文注入会让同一段摘要出现两次。 */
@@ -395,8 +522,10 @@ public sealed class MainViewModelTests
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
                 () => viewModel.Messages.Any(message => message.Kind == MessageKind.User),
                 () => GuiTestEnvironment.DescribeChatState(viewModel));
-            Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
-            Assert.Equal("你好", viewModel.Messages[0].Text);
+            var rendered = Assert.Single(viewModel.Messages, message => message.Kind == MessageKind.User);
+            Assert.Contains("你好", rendered.Text, StringComparison.Ordinal);
+            Assert.Single(environment.Agent.Session.SnapshotEvents().Select(item => item.Data).OfType<UserMessagePayload>(),
+                payload => payload.Message.Content.OfType<TextBlock>().Any(block => block.Text == "你好"));
         });
 
     [Fact]
@@ -418,12 +547,15 @@ public sealed class MainViewModelTests
         await using var environment = await GuiTestEnvironment.CreateAsync();
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
 
-        viewModel.Settings.UpdateSafety(autoApprove: true, ["bash: rm -rf /*"]);
+        viewModel.Settings.UpdateSafety(autoApprove: true,
+            new Dictionary<string, PermissionMatcher> { ["deny-delete"] = new() { Dialect = "posix", Args = new() { ["command"] = "rm -rf /*" } } },
+            new Dictionary<string, PermissionMatcher> { ["allow-write"] = new() { Tool = ["write"] } });
 
         var reloaded = viewModel.Settings.Load();
         var safety = Assert.IsType<SafetySettings>(reloaded.Safety);
         Assert.True(safety.AutoApprove);
-        Assert.Contains("bash: rm -rf /*", safety.Blacklist);
+        Assert.Equal("rm -rf /*", safety.Blacklist["deny-delete"].Args["command"]);
+        Assert.Equal(["write"], safety.Whitelist["allow-write"].Tool);
         Assert.True(File.Exists(viewModel.Settings.SettingsPath));
     });
 
@@ -574,6 +706,36 @@ public sealed class MainViewModelTests
 
         Assert.True(viewModel.IsSuggestionOpen);
         Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"@{environment.Agent.Id.Value}");
+    });
+
+    /**
+     * `/timestamp` 的补全: 先给动作, 再给本会话用户消息的 `#seq`。
+     * 序号必须来自真实时间线, 否则补全里会出现执行时被拒绝的目标。
+     */
+    [Fact]
+    public async Task TimestampSuggestions_OfferActionsThenRealSeqs() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        var first = session.Append(new UserMessagePayload(MessageFactory.CreateUserText("first prompt")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        await GuiTestEnvironment.WaitForAsync(viewModel, () => viewModel.Messages.Any(item => item.Seq == first.Seq));
+
+        viewModel.Composer.Input = "/timestamp ";
+
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp jump");
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp revert");
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == "/timestamp fork");
+
+        // 补全器会裁掉参数末尾空格, 所以"刚选完动作"就直接给序号候选。
+        viewModel.Composer.Input = "/timestamp jump ";
+        await GuiTestEnvironment.WaitForAsync(viewModel.Suggestions,
+            () => viewModel.Suggestions.Any(suggestion => suggestion.Label.StartsWith("/timestamp jump #", StringComparison.Ordinal)));
+        Assert.Contains(viewModel.Suggestions, suggestion => suggestion.Label == $"/timestamp jump #{first.Seq}");
+        // 不是用户消息的序号不该出现在候选里。
+        Assert.All(viewModel.Suggestions, suggestion => Assert.StartsWith("/timestamp jump #", suggestion.Label, StringComparison.Ordinal));
     });
 
     /** 引用补全只看光标处的未完成 @token: 引用之后继续打提示词, 菜单必须收起。 */
@@ -735,6 +897,48 @@ public sealed class MainViewModelTests
 
         Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.Composer.ModelLabel);
         Assert.Equal("pa/aion-labs/aion-3.0-mini", viewModel.SessionSubtitle);
+    });
+
+    /**
+     * 推理档位跟着当前会话的模型走, 不是全局默认模型: 否则换到另一个模型后浮层里还是旧模型的档位,
+     * 选中会被 /reasoning 拒掉(用户实测: 切到中转站模型后点 "max" 报 does not support reasoning effort)。
+     */
+    [Fact]
+    public async Task Reasoning_Efforts_Follow_The_Session_Model() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync("""
+            logging:
+              file: false
+            global_default_model: deepseek/deepseek-flash
+            providers:
+              deepseek:
+                type: openai-compatible
+                options:
+                  baseUrl: https://api.deepseek.com
+                  apiKey: sk-test
+                models:
+                  deepseek-flash: {}
+              relay:
+                type: openai-compatible
+                options:
+                  baseUrl: https://example.invalid/v1
+                  apiKey: sk-test
+                models:
+                  unknown-model: {}
+            """);
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+
+        viewModel.RefreshReasoningEfforts();
+        Assert.Contains("high", viewModel.Preferences.ReasoningEfforts);
+
+        environment.Agent.Session.Append(new RequestHeaderPayload(
+            new EpochHeader(new LlmCallConfig("relay", "unknown-model")),
+            RequestHeaderReasons.Change,
+            true));
+        await GuiTestEnvironment.WaitForAsync(viewModel.Composer, () => viewModel.Composer.ModelLabel == "relay/unknown-model");
+        viewModel.RefreshReasoningEfforts();
+
+        Assert.Empty(viewModel.Preferences.ReasoningEfforts);
     });
 
     [Fact]

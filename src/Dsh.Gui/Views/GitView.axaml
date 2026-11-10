@@ -3,7 +3,7 @@
              xmlns:vm="using:Dsh.Gui.ViewModels"
              xmlns:views="using:Dsh.Gui.Views"
              xmlns:git="using:Dsh.GitInspect"
-             xmlns:ia="using:Dsh.Interaction"
+             xmlns:interaction="using:Dsh.Interaction"
              x:Class="Dsh.Gui.Views.GitView"
              x:DataType="vm:GitViewModel"
              x:CompileBindings="True"
@@ -131,7 +131,7 @@
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="ia:DiffCard">
+            <DataTemplate x:DataType="interaction:DiffCard">
               <views:DiffView Card="{Binding}" />
             </DataTemplate>
           </ItemsControl.ItemTemplate>

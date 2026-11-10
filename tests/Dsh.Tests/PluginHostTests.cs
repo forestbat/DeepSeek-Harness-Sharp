@@ -46,9 +46,9 @@ public sealed class PluginHostTests
         {
             var home = Dsh.Boot.HarnessHome.Resolve(root);
             var settings = Dsh.Boot.HarnessSettings.Load(home);
-            settings.Plugins["@deepseek-ai/dsh-web-bridge"] = new Dsh.Boot.PluginSetting { Enabled = false };
+            settings.Plugins["@deepseek-ai/dsh-web-bridge"] = new Dsh.Plugins.PluginSetting { Enabled = false };
             settings.SavePlugins(home);
-            using var app = await Dsh.Boot.ConfigBoot.Compose(new Dsh.Boot.HarnessOptions(home, Cwd: root));
+            using var app = await Dsh.Boot.ConfigBoot.Compose(new Dsh.Boot.HarnessOptions(home, Cwd: root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             Assert.Null(app.Composition!.Find("@deepseek-ai/dsh-web-bridge"));
             Assert.Null(app.Ctx.Get(Dsh.WebBridge.WebBridgeRuntime.ServiceName, false));
             var failure = await Assert.ThrowsAsync<RuntimeException>(() => app.RunEntrypointAsync(
@@ -131,7 +131,7 @@ public sealed class PluginHostTests
     {
         var ct = TestContext.Current.CancellationToken;
         var root = TempTree.CreateSocketDirectory("wpl");
-        var app = await Dsh.Boot.ConfigBoot.Compose(new Dsh.Boot.HarnessOptions(new Dsh.Boot.HarnessHome(root), Cwd: root));
+        var app = await Dsh.Boot.ConfigBoot.Compose(new Dsh.Boot.HarnessOptions(new Dsh.Boot.HarnessHome(root), Cwd: root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var ctx = app.Ctx;
         var activation = Assert.IsType<PluginActivation>(app.Composition!.Find("@deepseek-ai/dsh-web-bridge"));
         Assert.Equal(ActivationState.Active, activation.State);

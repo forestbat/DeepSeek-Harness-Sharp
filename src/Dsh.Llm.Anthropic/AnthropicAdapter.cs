@@ -2,17 +2,30 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Dsh.Llm.Anthropic;
 
 public sealed class AnthropicAdapter : LlmAdapter
 {
+    /** 探测端点认不认 `output_config.effort` 时用的取值: 故意非法的串, 网关通常会在报错里列出合法取值。 */
+    private const string ProbeEffort = "__dsh_probe__";
+    private const int ProbeMaxTokens = 16;
+
+    /** 网关不校验(非法值也 200)时给的档位: Anthropic 族的通用取值。 */
+    private static readonly IReadOnlyList<string> StandardEfforts = ["low", "medium", "high", "max", "xhigh"];
+    private static readonly TimeSpan ProbeRetryCooldown = TimeSpan.FromMinutes(5);
+
     private readonly string _baseUrl;
     private readonly string? _apiKey;
     private readonly IReadOnlyList<string> _modelIds;
     private readonly HttpClient _http;
     private readonly IModelReasoningSource _metadataSource;
+    private readonly AnthropicModelMetadataSource? _discoveredModels;
     private readonly ModelsDevReasoningSource _modelsDev;
+    private readonly ReasoningEffortsCache _effortsCache;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BackgroundRefreshGate> _probeGates =
+        new(StringComparer.Ordinal);
 
     public AnthropicAdapter(
         string providerId,
@@ -20,7 +33,8 @@ public sealed class AnthropicAdapter : LlmAdapter
         string? apiKey = null,
         IReadOnlyList<string>? modelIds = null,
         HttpClient? httpClient = null,
-        IModelReasoningSource? metadataSource = null)
+        IModelReasoningSource? metadataSource = null,
+        ReasoningEffortsCache? reasoningEfforts = null)
     {
         ProviderInfo = new LlmProviderInfo(providerId, "Anthropic");
         _baseUrl = baseUrl.TrimEnd('/');
@@ -28,6 +42,7 @@ public sealed class AnthropicAdapter : LlmAdapter
         _modelIds = modelIds ?? [];
         _http = httpClient ?? new HttpClient();
         _modelsDev = new ModelsDevReasoningSource("anthropic");
+        _effortsCache = reasoningEfforts ?? new ReasoningEffortsCache(null);
         if (metadataSource is not null)
         {
             _metadataSource = metadataSource;
@@ -36,7 +51,8 @@ public sealed class AnthropicAdapter : LlmAdapter
         {
             var source = new AnthropicModelMetadataSource(_baseUrl, _apiKey, _http);
             _metadataSource = source;
-            source.RefreshInBackground();
+            _discoveredModels = source;
+            source.RequestRefresh();
         }
     }
 
@@ -44,17 +60,97 @@ public sealed class AnthropicAdapter : LlmAdapter
 
     public override ResolvedRetryPolicy ProviderRetryPolicy => ResolvedRetryPolicy.Resolve(null, ProviderTypes.AnthropicMessages);
 
+    /** 可列出的模型 = settings 声明/models.dev 目录 ∪ 端点 /v1/models 自报的(中转站只能从端点知道自己的模型)。 */
     public override IReadOnlyList<LlmModelInfo> ListModels()
-        => _modelIds
-            .Select(id => new LlmModelInfo(ProviderInfo.Id, id, id, null, _modelsDev.InputModalitiesFor(id)))
-            .ToList();
+    {
+        // 端点清单是后台拉取的: 之前没成功就在这次重算里再试一次(有冷却), 选单因此能自己恢复。
+        _discoveredModels?.RequestRefresh();
+        return [.. _modelIds
+            .Concat(_discoveredModels?.ModelIds ?? [])
+            .Distinct(StringComparer.Ordinal)
+            .Select(id => new LlmModelInfo(ProviderInfo.Id, id, id, null, _modelsDev.InputModalitiesFor(id)))];
+    }
 
-    /** 推理强度解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 models.dev 快照; 上下文窗口与输入模态取自 models.dev 快照。 */
+    /**
+     * 推理强度解析顺序: 端点 /v1/models 的 capabilities.effort 实时元数据 → 内置 models.dev 快照 → 端点探测结果。
+     * 上下文窗口与输入模态取自 models.dev 快照。
+     */
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
-        var reasoning = _metadataSource.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model);
+        var reasoning = _metadataSource.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model) ?? ReasoningForUnknownModel(model);
         return new LlmResolvedModelInfo(ProviderInfo.Id, model, model, null, _modelsDev.InputModalitiesFor(model),
             _modelsDev.ContextWindowFor(model), null, reasoning);
+    }
+
+    /**
+     * 端点与目录都没声明推理强度时的退路: 用探测过的结论, 还没探测过就后台问一次。
+     * 目录明确收录了该模型(哪怕"不支持推理")时以目录为准, 不去打扰端点。
+     */
+    private LlmModelReasoningInfo? ReasoningForUnknownModel(string model)
+    {
+        if (_modelsDev.Knows(model))
+            return null;
+        if (_effortsCache.TryGet(EffortsKey(model), out var efforts))
+            return efforts.Count == 0 ? null : LlmModelReasoningInfo.FromIds(efforts);
+        StartReasoningProbe(model);
+        return null;
+    }
+
+    private string EffortsKey(string model) => ReasoningEffortsCache.Key(ProviderTypes.AnthropicMessages, _baseUrl, model);
+
+    /** 每个模型最多同时跑一次探测; 失败(端点抖动/网络不通)按冷却重试, 结论由缓存负责复用。 */
+    private void StartReasoningProbe(string model)
+    {
+        var gate = _probeGates.GetOrAdd(model, _ => new BackgroundRefreshGate(ProbeRetryCooldown));
+        if (!gate.TryBegin())
+            return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ProbeReasoningEffortAsync(model, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                gate.End();
+            }
+        });
+    }
+
+    /**
+     * 一次最小请求问端点认不认 `output_config.effort`: 网关一般会在报错里列出合法取值;
+     * 什么都不校验(非法值也 200)时按族内通用取值给。答案落盘, 重启不再重复问。
+     * 探测直接看状态码与报错正文, 不走流式解析: 解析失败不该让"端点接受"这个结论丢失。
+     */
+    private async Task ProbeReasoningEffortAsync(string model, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["model"] = model,
+            ["max_tokens"] = ProbeMaxTokens,
+            ["messages"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = "ping" }),
+            ["output_config"] = new JsonObject { ["effort"] = ProbeEffort },
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/messages");
+        request.Headers.TryAddWithoutValidation("x-api-key", _apiKey);
+        request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+        request.Headers.TryAddWithoutValidation("user-agent", AppIdentity.Default.UserAgent);
+        request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode)
+        {
+            _effortsCache.Save(EffortsKey(model), StandardEfforts);
+            return;
+        }
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (body.Contains("effort", StringComparison.OrdinalIgnoreCase))
+        {
+            // 端点校验了这个参数: 报错里列了合法取值就用它, 没列就记空(别猜)。
+            _effortsCache.Save(EffortsKey(model), AnthropicEffortValues.ParseSupported(body));
+        }
     }
 
     public override async IAsyncEnumerable<StreamChunk> Stream(

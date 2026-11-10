@@ -7,13 +7,13 @@ using Dsh.Runtime.Events;
 namespace Dsh.SessionGraph;
 
 /**
- * ISessionEventGraph 的内存实现。
+ * 会话事件图: 节点与边都从会话日志派生, 日志仍是唯一真相源。
  * 活会话(在 SessionStore 里)以内存日志为准: 每次查询只吸收上次之后追加的事件, 截断时丢弃、下次查询按截断后的日志重建。
  * 其余会话从持久层日志构建, 按 Revision 缓存; 持久层重写日志(截断、改名)会换 Revision, 缓存随之失效。
  */
-public sealed class SessionEventGraphService : Service, ISessionEventGraph, IDisposable
+public sealed class SessionEventGraphService : Service, IDisposable
 {
-    public const string ServiceName = ISessionEventGraph.ServiceName;
+    public const string ServiceName = "sessionEventGraph";
 
     private readonly Lock _gate = new();
     private readonly ConditionalWeakTable<Session, SessionLogGraph> _live = new();

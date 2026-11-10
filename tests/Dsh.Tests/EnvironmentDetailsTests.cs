@@ -9,6 +9,7 @@ public sealed class EnvironmentDetailsTests
     public void AppendsShortFactsToEveryUserMessage()
     {
         var id = SessionId.Create($"session-environment-{Guid.NewGuid():N}");
+        var cwd = Path.GetFullPath("workspace");
         var session = Session.Create(
             id,
             header: new SessionHeader
@@ -16,7 +17,7 @@ public sealed class EnvironmentDetailsTests
                 Version = SessionHeader.SessionFormatVersion,
                 Id = id,
                 CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Cwd = @"C:\workspace",
+                Cwd = cwd,
                 IsSeeded = false,
             });
         var first = MessageFactory.CreateUserText("first");
@@ -30,8 +31,8 @@ public sealed class EnvironmentDetailsTests
 
         Assert.Contains(EnvironmentDetails.OpenTag, firstText);
         Assert.Contains("Message time:", firstText);
-        Assert.Contains(@"Working directory: C:\workspace", firstText);
-        Assert.Contains(@"Workspace root folder: C:\workspace", firstText);
+        Assert.Contains($"Working directory: {cwd}", firstText);
+        Assert.Contains($"Workspace root folder: {cwd}", firstText);
         Assert.Contains(EnvironmentDetails.CloseTag, firstText);
         Assert.Contains("Message time:", secondText);
 

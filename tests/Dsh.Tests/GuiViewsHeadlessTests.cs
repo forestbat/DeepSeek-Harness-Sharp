@@ -24,6 +24,17 @@ public sealed class GuiViewsHeadlessTests
     private const double WindowWidth = 1280;
     private const double WindowHeight = 800;
 
+    private readonly record struct ReadingParagraph(
+        int Index, string Text, Point Origin, ReadingLine[] Lines, Rect[] TextBounds);
+
+    private readonly record struct ReadingLine(
+        int FirstTextSourceIndex, int Length, int NewLineLength, double Start, double Width,
+        double WidthIncludingTrailingWhitespace, double Height, double Baseline);
+
+    // A timed-out dispatch can outlive its caller, so diagnostics use a process-lifetime writer.
+    private static readonly TextWriter Diagnostics = TextWriter.Synchronized(
+        new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+
     [Fact]
     public async Task FilesView_ShowsTheFileWithLineNumbersAndHighlighting_AndSavesWhatWasTyped() => await HeadlessGui.RunAsync(async () =>
     {
@@ -207,19 +218,27 @@ public sealed class GuiViewsHeadlessTests
             window.UpdateLayout();
             Render();
             Assert.True(readingOffset < previousOffset, "The actual keyboard scroll command must move away from the tail.");
-            Assert.Equal(readingOffset, scroll.Offset.Y, 3);
+            AssertOutsideViewport("unfollowed-tail");
+            var keyboardReading = CaptureReadingParagraphs();
+            await StreamAsync("\n\nkeyboard-unfollowed-tail", "keyboard-unfollowed-tail");
+            AssertReadingParagraphs(keyboardReading);
+            AssertOutsideViewport("keyboard-unfollowed-tail");
 
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
-            AssertVisible("unfollowed-tail");
+            AssertVisible("keyboard-unfollowed-tail");
             await StreamAsync("\n\n" + Paragraphs(52, 12) + "rearmed-tail", "rearmed-tail");
             AssertVisible("rearmed-tail");
 
+            previousOffset = scroll.Offset.Y;
             window.MouseWheel(wheelPoint, new Vector(0, 8));
             Render();
             readingOffset = scroll.Offset.Y;
+            Assert.True(readingOffset < previousOffset, "The actual wheel input must move away from the tail.");
+            var wheelReading = CaptureReadingParagraphs();
             await StreamAsync("\n\n" + Paragraphs(64, 12) + "wheel-unfollowed-tail", "wheel-unfollowed-tail");
-            Assert.Equal(readingOffset, scroll.Offset.Y, 3);
+            AssertReadingParagraphs(wheelReading);
+            AssertOutsideViewport("wheel-unfollowed-tail");
 
             window.MouseWheel(wheelPoint, new Vector(0, -1000));
             Render();
@@ -250,14 +269,112 @@ public sealed class GuiViewsHeadlessTests
                 return message;
             }
 
+            SelectableTextBlock[] AssistantParagraphs()
+            {
+                var markdown = Assert.Single(list.GetVisualDescendants().OfType<MarkdownView>(),
+                    view => ReferenceEquals(view.DataContext, assistant) && view.IsEffectivelyVisible);
+                return markdown.GetVisualDescendants().OfType<SelectableTextBlock>().ToArray();
+            }
+
+            ReadingParagraph[] CaptureReadingParagraphs()
+            {
+                var paragraphs = AssistantParagraphs();
+                var viewport = new Rect(scroll.Viewport);
+                var anchors = new List<ReadingParagraph>();
+                for (var index = 0; index < paragraphs.Length; index++)
+                {
+                    var paragraph = paragraphs[index];
+                    if (!paragraph.IsEffectivelyVisible || paragraph.Bounds.Width <= 0 || paragraph.Bounds.Height <= 0)
+                        continue;
+                    var snapshot = SnapshotParagraph(index, paragraph);
+                    if (snapshot.TextBounds.Length > 0 && snapshot.TextBounds.All(bounds => viewport.Contains(bounds)))
+                        anchors.Add(snapshot);
+                }
+                Assert.NotEmpty(anchors);
+                return anchors.ToArray();
+            }
+
+            void AssertReadingParagraphs(ReadingParagraph[] anchors)
+            {
+                // Compare rendered text geometry, not empty layout space stretched by a wider appended sibling.
+                var paragraphs = AssistantParagraphs();
+                var viewport = new Rect(scroll.Viewport);
+                foreach (var anchor in anchors)
+                {
+                    Assert.InRange(anchor.Index, 0, paragraphs.Length - 1);
+                    var paragraph = paragraphs[anchor.Index];
+                    Assert.True(paragraph.IsEffectivelyVisible);
+                    var current = SnapshotParagraph(anchor.Index, paragraph);
+                    Assert.Equal(anchor.Text, current.Text);
+                    Assert.Equal(anchor.Origin.X, current.Origin.X, 3);
+                    Assert.Equal(anchor.Origin.Y, current.Origin.Y, 3);
+                    Assert.Equal(anchor.Lines.Length, current.Lines.Length);
+                    for (var index = 0; index < anchor.Lines.Length; index++)
+                    {
+                        var before = anchor.Lines[index];
+                        var after = current.Lines[index];
+                        Assert.Equal(before.FirstTextSourceIndex, after.FirstTextSourceIndex);
+                        Assert.Equal(before.Length, after.Length);
+                        Assert.Equal(before.NewLineLength, after.NewLineLength);
+                        Assert.Equal(before.Start, after.Start, 3);
+                        Assert.Equal(before.Width, after.Width, 3);
+                        Assert.Equal(before.WidthIncludingTrailingWhitespace, after.WidthIncludingTrailingWhitespace, 3);
+                        Assert.Equal(before.Height, after.Height, 3);
+                        Assert.Equal(before.Baseline, after.Baseline, 3);
+                    }
+                    Assert.Equal(anchor.TextBounds.Length, current.TextBounds.Length);
+                    for (var index = 0; index < anchor.TextBounds.Length; index++)
+                    {
+                        var before = anchor.TextBounds[index];
+                        var after = current.TextBounds[index];
+                        Assert.True(viewport.Contains(after), "The same reading text must remain inside the viewport.");
+                        Assert.Equal(before.X, after.X, 3);
+                        Assert.Equal(before.Y, after.Y, 3);
+                        Assert.Equal(before.Width, after.Width, 3);
+                        Assert.Equal(before.Height, after.Height, 3);
+                    }
+                }
+            }
+
+            ReadingParagraph SnapshotParagraph(int index, SelectableTextBlock paragraph)
+            {
+                var text = ParagraphText(paragraph);
+                var layout = paragraph.TextLayout;
+                var origin = paragraph.TranslatePoint(new Point(paragraph.Padding.Left, paragraph.Padding.Top), scroll)!.Value;
+                var lines = layout.TextLines.Select(line => new ReadingLine(
+                    line.FirstTextSourceIndex, line.Length, line.NewLineLength, line.Start, line.Width,
+                    line.WidthIncludingTrailingWhitespace, line.Height, line.Baseline)).ToArray();
+                var bounds = layout.HitTestTextRange(0, text.Length)
+                    .Select(bound => new Rect(origin + new Vector(bound.X, bound.Y), bound.Size)).ToArray();
+                return new ReadingParagraph(index, text, origin, lines, bounds);
+            }
+
+            static string ParagraphText(SelectableTextBlock paragraph) =>
+                string.IsNullOrEmpty(paragraph.Text)
+                    ? string.Join("", paragraph.Inlines?.OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? [])
+                    : paragraph.Text;
+
             void AssertVisible(string marker)
             {
-                var block = Assert.Single(list.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(),
-                    block => block.Text == marker || string.Join("", block.Inlines?
-                        .OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? []) == marker);
+                var block = FindMarker(marker);
                 Assert.True(block.IsEffectivelyVisible);
                 AssertInsideViewport(block, scroll);
             }
+
+            void AssertOutsideViewport(string marker)
+            {
+                var block = FindMarker(marker);
+                Assert.True(block.IsEffectivelyVisible);
+                Assert.True(block.Bounds is { Width: > 0, Height: > 0 });
+                var origin = block.TranslatePoint(default, scroll)!.Value;
+                Assert.False(new Rect(scroll.Viewport).Intersects(new Rect(origin, block.Bounds.Size)),
+                    "Appending content must not bring the new tail into the reading viewport.");
+            }
+
+            Avalonia.Controls.TextBlock FindMarker(string marker) =>
+                Assert.Single(list.GetVisualDescendants().OfType<Avalonia.Controls.TextBlock>(),
+                    block => block.Text == marker || string.Join("", block.Inlines?
+                        .OfType<Avalonia.Controls.Documents.Run>().Select(run => run.Text) ?? []) == marker);
         }
         finally
         {
@@ -279,6 +396,166 @@ public sealed class GuiViewsHeadlessTests
             for (var index = start; index < start + count; index++)
                 text.AppendLine($"Streaming paragraph {index}.").AppendLine();
             return text.ToString();
+        }
+        });
+
+    /** 输入框默认有焦点: PageUp/PageDown 必须翻记录, Home/End 在输入框为空时跳到头尾。 */
+    [Fact]
+    public async Task ChatView_PageKeysReachTheTranscriptFromTheComposer() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 24; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"History {index}\nSecond line\nThird line")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            Assert.True(maxOffset > 2 * scroll.Viewport.Height);
+
+            window.KeyPress(Key.PageUp, RawInputModifiers.None, PhysicalKey.PageUp, null);
+            Render();
+            Assert.True(scroll.Offset.Y < maxOffset - 1, "PageUp in the composer must scroll the transcript up");
+
+            window.KeyPress(Key.PageDown, RawInputModifiers.None, PhysicalKey.PageDown, null);
+            Render();
+            Assert.True(scroll.Offset.Y > 0);
+
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            // 焦点在输入框(默认状态)时 Home/End 属于光标, 转录保持不动。
+            Assert.True(scroll.Offset.Y > 0, "焦点在输入框时 Home 不该跳转录");
+
+            var composer = chat.FindControl<TextBox>("InputBox")!;
+            composer.Text = "写着东西时 Home/End 归光标";
+            composer.CaretIndex = composer.Text.Length;
+            Render();
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, composer.CaretIndex);
+
+            // 焦点移到转录上时 Home/End 才跳会话头尾。
+            list.Focus();
+            Render();
+            Assert.True(list.IsFocused || list.IsKeyboardFocusWithin,
+                $"把焦点移到转录上失败: focused={list.IsFocused} within={list.IsKeyboardFocusWithin}");
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, scroll.Offset.Y, 3);
+
+            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
+            Render();
+            Assert.Equal(maxOffset, scroll.Offset.Y, 3);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** PageUp 只翻一屏: 一次按键就冲到开头会让用户失去位置感。 */
+    [Fact]
+    public async Task ChatView_PageUpScrollsExactlyOneViewport() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 30; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"Row {index}\nMore\nLines")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var viewport = scroll.Viewport.Height;
+            var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            Assert.True(maxOffset > 3 * viewport, "准备的数据必须足够长");
+            // 从末尾往上翻: 三段距离约等于三个视口, 允许一行误差。
+            var before = scroll.Offset.Y;
+
+            window.KeyPress(Key.PageUp, RawInputModifiers.None, PhysicalKey.PageUp, null);
+            Render();
+
+            var moved = before - scroll.Offset.Y;
+            Assert.InRange(moved, viewport * 0.5, viewport * 1.5);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /** 输入框有未发送内容时, Home/End 属于光标: 转录不许跳, 否则用户一按 Home 就丢失阅读位置。 */
+    [Fact]
+    public async Task ChatView_HomeEndWithDraftKeepTheCaretInTheComposer() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        for (var index = 0; index < 24; index++)
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"History {index}\nMore")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var chat = new ChatView { DataContext = viewModel };
+        var window = Show(chat);
+        try
+        {
+            Render();
+            var list = chat.FindControl<ListBox>("MessageList")!;
+            var scroll = Assert.IsType<ScrollViewer>(list.Scroll);
+            var composer = chat.FindControl<TextBox>("InputBox")!;
+            composer.Focus();
+            Render();
+            composer.Text = "还没发出去的草稿";
+            composer.CaretIndex = composer.Text.Length;
+            Render();
+            var before = scroll.Offset.Y;
+
+            window.KeyPress(Key.Home, RawInputModifiers.None, PhysicalKey.Home, null);
+            Render();
+            Assert.Equal(0, composer.CaretIndex);
+            Assert.Equal(before, scroll.Offset.Y, 1);
+
+            window.KeyPress(Key.End, RawInputModifiers.None, PhysicalKey.End, null);
+            Render();
+            Assert.Equal(composer.Text.Length, composer.CaretIndex);
+            Assert.Equal(before, scroll.Offset.Y, 1);
+        }
+        finally
+        {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Render()
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            window.CaptureRenderedFrame()?.Dispose();
+            Dispatcher.UIThread.RunJobs();
         }
     });
 

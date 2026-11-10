@@ -23,6 +23,7 @@ public static class EditTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = "Edit an existing UTF-8 text file by replacing literal text.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>
@@ -98,23 +99,12 @@ public static class EditTool
         exec.Signal.ThrowIfCancellationRequested();
         if (!File.Exists(target))
             throw new HarnessException($"file not found: \"{target}\"", "FS_NOT_FOUND");
-        var raw = await File.ReadAllTextAsync(target, new UTF8Encoding(false, false), exec.Signal);
+        var raw = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var lineEndings = DetectLineEndings(raw);
         var content = NormalizeLineEndings(raw);
         var (edited, _) = ApplyLiteralEdit(content, oldString, newString, replaceAll, target);
         var written = RestoreLineEndings(edited, lineEndings);
-        var tempPath = $"{target}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            await File.WriteAllTextAsync(tempPath, written, new UTF8Encoding(false, false), exec.Signal);
-            File.Move(tempPath, target, true);
-            exec.RecordFileChange(target);
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
+        await SettingsMutation.WriteTextAsync(target, raw, written, exec).ConfigureAwait(false);
         return new EditResultValue(target, content, edited);
     }
 

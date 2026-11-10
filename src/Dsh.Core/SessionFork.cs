@@ -21,9 +21,10 @@ public static class SessionFork
         string title,
         string? cwd = null)
     {
+        if (toSeqExclusive < 0)
+            throw new InvalidOperationException($"fork 失败: {source.Id} 的 fork 位置 {toSeqExclusive} 无效");
+        // 允许空种子: "从第一条用户消息之前 fork" 得到的就是一个只有握手事件的空会话。
         var seed = source.SnapshotEvents(0, Math.Min(toSeqExclusive, source.Seq));
-        if (seed.Count == 0)
-            throw new InvalidOperationException($"fork 失败: {source.Id} 在 seq {toSeqExclusive} 之前没有可继承的事件");
         var header = source.Header with
         {
             Id = SessionId.Create($"session-fork-{Guid.NewGuid():N}"),
@@ -34,11 +35,13 @@ public static class SessionFork
             ParentCallId = null,
             IsSeeded = true,
         };
+        // 种子标记带的是"fork 发生的时刻": 种子里的最后一条用户消息带的是父会话的旧时间,
+        // 拿它当新会话的活动时间会让 fork 在列表里沉到几天前。
         var marker = new SessionEvent
         {
             Type = SessionEventTypes.SessionEndSeed,
             Seq = seed.Count,
-            Time = seed[^1].Time,
+            Time = header.CreatedAt,
             Data = new SessionEndSeedPayload(),
         };
         using (var handle = persistence.Create(header, inheritedEventCount: seed.Count))
@@ -48,4 +51,8 @@ public static class SessionFork
         }
         return header.Id;
     }
+
+    /** fork 出的会话沿用父会话的标题(没有标题才退回 id): 用 id 命名的话侧栏里全是 uuid。 */
+    public static string ForkTitle(Session source, long seq)
+        => $"fork of {(string.IsNullOrWhiteSpace(source.Header.Title) ? source.Id.Value : source.Header.Title)} @{seq}";
 }

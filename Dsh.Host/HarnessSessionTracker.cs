@@ -43,7 +43,8 @@ internal sealed class HarnessSessionTracker : IDisposable
             header.Title,
             StatusOf(agent.Status),
             header.CreatedAt,
-            events.LastOrDefault(IsUserActivity)?.Time ?? header.CreatedAt,
+            // 种子(fork)里的最后一条用户消息带的是父会话的旧时间: 活动时间不能早于本会话的创建时间。
+            Math.Max(events.LastOrDefault(IsUserActivity)?.Time ?? header.CreatedAt, header.CreatedAt),
             0,
             null));
     }

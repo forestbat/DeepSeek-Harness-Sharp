@@ -25,6 +25,55 @@ public class PtyHostTests
     }
 
     [Fact(Timeout = 5000)]
+    public async Task ConstrainedScheduler_ReceivesComputedShellOutput()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromSeconds(5));
+        var scheduler = new ConcurrentExclusiveSchedulerPair(TaskScheduler.Default, maxConcurrencyLevel: 1);
+        var host = new PtyHost();
+        try
+        {
+            await Task.Factory.StartNew(() =>
+            {
+                var session = host.StartAsync(new PtyStartInfo
+                {
+                    FileName = TestShell.FileName,
+                    Arguments = TestShell.RunThenWait(TestShell.EchoAnswer("scheduler"), 5),
+                }, cancellationToken: cancellation.Token).GetAwaiter().GetResult();
+                if (OperatingSystem.IsWindows())
+                {
+                    var backend = typeof(PtySession).GetField("_conPty", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(session);
+                    Assert.NotNull(backend);
+                }
+
+                // Keep the caller's sole scheduler slot occupied while the independent pump serves real shell output.
+                var buffer = new byte[4096];
+                var received = new StringBuilder();
+                while (!received.ToString().Contains("scheduler-42", StringComparison.Ordinal))
+                {
+                    var read = session.ReadAsync(buffer, cancellation.Token).AsTask().GetAwaiter().GetResult();
+                    if (read == 0)
+                        break;
+                    received.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                }
+                Assert.Contains("scheduler-42", received.ToString());
+            }, cancellation.Token, TaskCreationOptions.None, scheduler.ExclusiveScheduler);
+        }
+        finally
+        {
+            scheduler.Complete();
+            try
+            {
+                host.Dispose();
+            }
+            finally
+            {
+                await scheduler.Completion;
+            }
+        }
+    }
+
+    [Fact(Timeout = 5000)]
     public async Task Host_Starts_Lists_Reads_And_Stops()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())

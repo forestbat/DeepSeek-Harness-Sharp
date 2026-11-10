@@ -89,7 +89,7 @@ internal static partial class SettingsDocument
         return FlowValue(before) == FlowValue(after) ? text : ReplacePath(text, path, FlowValue(after));
     }
 
-    private static string ReplacePath(string text, IReadOnlyList<string> path, string? value)
+    internal static string ReplacePath(string text, IReadOnlyList<string> path, string? value)
     {
         var parser = new Parser(new StringReader(text));
         parser.Consume<StreamStart>();
@@ -103,7 +103,9 @@ internal static partial class SettingsDocument
             var child = owner.Children.SingleOrDefault(pair => pair.Key.Start is Scalar scalar && scalar.Value == key);
             if (index < path.Count - 1)
             {
-                owner = child.Value ?? throw new InvalidDataException("Missing plugin settings parent.");
+                if (child.Value is null)
+                    return value is null ? text : InsertEntry(text, owner, FormatKey(key), NestedFlow(path, index + 1, value));
+                owner = child.Value;
                 continue;
             }
             if (child.Value is null)
@@ -117,7 +119,16 @@ internal static partial class SettingsDocument
         return text;
     }
 
-    private static string FlowValue(object? value) => value switch
+    /** 父级不存在时补出嵌套 flow 映射: logging.level → {level: debug}, 不碰文件其余部分。 */
+    private static string NestedFlow(IReadOnlyList<string> path, int index, string value)
+    {
+        var nested = value;
+        for (var position = path.Count - 1; position >= index; position--)
+            nested = $"{{{FormatKey(path[position])}: {nested}}}";
+        return nested;
+    }
+
+    internal static string FlowValue(object? value) => value switch
     {
         IDictionary<string, object?> map => $"{{{string.Join(", ", map.Select(pair => $"{FormatKey(pair.Key)}: {FlowValue(pair.Value)}"))}}}",
         string text => FormatString(text),
@@ -189,7 +200,26 @@ internal static partial class SettingsDocument
             else
                 return ReplaceRange(text, key.StartIndex, value.End, "").Remove(comma, 1);
         }
-        return ReplaceRange(text, key.StartIndex, value.End, "");
+        var (start, end) = WholeLines(text, key.StartIndex, value.End);
+        return ReplaceRange(text, start, end, "");
+    }
+
+    /** block mapping 的一条 entry 占整行: 连整行一起删, 不留只有缩进的白行。 */
+    private static (int Start, int End) WholeLines(string text, int start, int end)
+    {
+        var lineStart = start;
+        while (lineStart > 0 && text[lineStart - 1] is ' ' or '\t')
+            lineStart--;
+        if (lineStart > 0 && text[lineStart - 1] is not ('\n' or '\r'))
+            return (start, end);
+        var lineEnd = end;
+        while (lineEnd < text.Length && text[lineEnd] is ' ' or '\t')
+            lineEnd++;
+        if (lineEnd < text.Length && text[lineEnd] == '\r')
+            lineEnd++;
+        if (lineEnd < text.Length && text[lineEnd] == '\n')
+            lineEnd++;
+        return (lineStart, lineEnd);
     }
 
     private static int FlowSeparator(string text, int start, int end)
@@ -281,10 +311,10 @@ internal static partial class SettingsDocument
         return builder.ToString();
     }
 
-    /** A bare boolean when the entry only carries enabled; otherwise the {enabled, permissions, ...parameters} mapping. */
+    /** Render reserved authority fields separately from plugin-owned parameters. */
     private static void RenderPlugin(StringBuilder builder, string name, PluginSetting setting)
     {
-        if (setting.Parameters.Count == 0 && setting.Permissions is null)
+        if (setting.Parameters.Count == 0 && setting.Permissions is null && setting.Execution is null)
         {
             builder.Append('\n').Append(Indent).Append(Quote(name)).Append(": ").Append(Bool(setting.Enabled));
             return;
@@ -292,6 +322,9 @@ internal static partial class SettingsDocument
         const string entryIndent = Indent + Indent;
         builder.Append('\n').Append(Indent).Append(Quote(name)).Append(':');
         builder.Append('\n').Append(entryIndent).Append(PluginSetting.EnabledKey).Append(": ").Append(Bool(setting.Enabled));
+        if (setting.Execution is { } execution)
+            builder.Append('\n').Append(entryIndent).Append(PluginSetting.ExecutionKey).Append(": ")
+                .Append(execution == PluginExecution.Host ? "host" : "sandbox");
         if (setting.Permissions is { } permissions)
         {
             builder.Append('\n').Append(entryIndent).Append(PluginSetting.PermissionsKey).Append(':');

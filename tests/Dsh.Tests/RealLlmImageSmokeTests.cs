@@ -35,7 +35,7 @@ public sealed class RealLlmImageSmokeTests
                 Cwd: Directory.GetCurrentDirectory(),
                 Provider: providerId,
                 Model: modelId);
-            using var app = await HarnessComposer.Compose(options);
+            using var app = await HarnessComposer.Compose(options, global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
             var store = app.Ctx.Get<IAttachmentStore>(FileAttachmentStore.ServiceName)
                 ?? throw new InvalidOperationException("attachment store is not registered");
             var png = QuadrantPng(128);

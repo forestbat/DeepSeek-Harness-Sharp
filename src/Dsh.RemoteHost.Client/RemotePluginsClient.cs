@@ -14,6 +14,7 @@ public sealed class RemotePluginsClient : IWorkspacePlugins
 
     public Task<string> SetPluginPermissionAsync(string package, string permission, bool allowed, CancellationToken cancellationToken = default)
         => _host.SendAsync(PluginsProtocol.MethodPluginPermission, Serialize(new RemotePluginPermissionRequest(package, permission, allowed), PluginsProtocolJsonContext.Default.RemotePluginPermissionRequest), PluginsProtocolJsonContext.Default.String, cancellationToken);
+
 }
 
 

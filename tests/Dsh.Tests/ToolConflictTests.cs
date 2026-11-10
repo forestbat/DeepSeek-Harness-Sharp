@@ -1,3 +1,8 @@
+using Dsh.Runtime.Events;
+using System.Text.Json;
+using Dsh.Boot;
+using Dsh.Interaction;
+using Dsh.Tools;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
@@ -115,4 +120,288 @@ public sealed class ToolConflictTests
 
         Assert.Contains("\"slow_tool\"", error.Message);
     }
+
+    [Fact]
+    public async Task Replacement_RequiresCurrentAuthority_AndPreservesAnAuthoritativeSessionGrant()
+    {
+        using var fixture = new ReplacementFixture(new SafetySettings());
+        using var original = ReadTool.Register(fixture.Context);
+        var prepared = await fixture.Prepare("read", new { file_path = fixture.Target });
+        original.Dispose();
+        var calls = 0;
+        using var replacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "read", Description = "Replacement opaque file reader", Parameters = new JsonObject(),
+            IsConcurrencySafe = _ => true,
+            Output = new(new JsonObject(), (_, value) => [new TextBlock(value.GetString()!)]),
+            Execute = async (_, run) => { calls++; return await File.ReadAllTextAsync(fixture.Target, run.Signal); },
+        });
+        using var deny = ApprovalAnswerers.DenyAll(fixture.Context);
+        var result = await fixture.Complete(prepared);
+        Assert.True(result.IsError);
+        Assert.Equal(0, calls);
+        Assert.DoesNotContain("private-target-body", Text(result));
+        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+            && audit.Tool == "read" && audit.CallId == prepared.Exec.CallId.Value && audit.Outcome == "rejected");
+
+        // A tool whitelist does not approve the replacement's independent outside-root write.
+        fixture.Settings.Safety!.Whitelist["tool-only"] = new() { Tool = ["root_consumer"] };
+        var outside = Path.Combine(fixture.Root, "outside.txt");
+        await File.WriteAllTextAsync(outside, "outside-before", TestContext.Current.CancellationToken);
+        using var rootOriginal = fixture.Tools.Register(EchoTool("root_consumer", "prepared"));
+        var rootPrepared = await fixture.Prepare("root_consumer", new { });
+        rootOriginal.Dispose();
+        var rootCalls = 0;
+        using var rootReplacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "root_consumer", Description = "Replacement outside-root writer", Parameters = new JsonObject(),
+            MediatesFileAccess = true, WriteTargets = (_, _) => [outside],
+            Output = new(new JsonObject(), (_, _) => []),
+            Execute = async (_, run) =>
+            {
+                rootCalls++;
+                await SettingsMutation.WriteTextAsync(outside, "outside-before", "changed", run);
+                return null;
+            },
+        });
+        var rootResult = await fixture.Complete(rootPrepared);
+        Assert.True(rootResult.IsError);
+        Assert.Equal(0, rootCalls);
+        Assert.Equal("outside-before", await File.ReadAllTextAsync(outside, TestContext.Current.CancellationToken));
+
+        // A separate fresh tool call obtains an authoritative session grant.
+        deny.Dispose();
+        using var grantOriginal = fixture.Tools.Register(EchoTool("grant_consumer", "prepared"));
+        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>(
+            (_, _) => ValueTask.FromResult<object?>(ApprovalOutcome.AllowedForSession), new EventOptions { Global = true });
+        try
+        {
+            var first = await fixture.Tools.Execute(fixture.Input("grant_consumer", new { }));
+            Assert.False(first.IsError, Text(first));
+        }
+        finally { remove(); }
+        var grantPrepared = await fixture.Prepare("grant_consumer", new { });
+        grantOriginal.Dispose();
+        using var grantReplacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "grant_consumer", Description = "Granted replacement writer", Parameters = new JsonObject(),
+            Output = new(new JsonObject(), (_, _) => []),
+            Execute = async (_, run) => { await File.WriteAllTextAsync(fixture.Target, "session-granted-write", run.Signal); return null; },
+        });
+        using var denyNewPrompt = ApprovalAnswerers.DenyAll(fixture.Context);
+        var granted = await fixture.Complete(grantPrepared);
+        Assert.False(granted.IsError, Text(granted));
+        Assert.Equal("session-granted-write", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Replacement_UsesItsActualPermissionNamespaceBeforeEnteringTheBody(bool script)
+    {
+        using var fixture = new ReplacementFixture(new SafetySettings { AutoApprove = true });
+        fixture.Settings.Scripts = new() { Permissions = new() { AutoApprove = true } };
+        var rules = script ? (PermissionRules)fixture.Settings.Scripts.Permissions! : fixture.Settings.Safety!;
+        rules.Blacklist["deny-new-namespace"] = new() { Tool = ["namespace_consumer"] };
+        using var original = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "namespace_consumer", Description = "Prepared namespace", Parameters = new JsonObject(),
+            UsesScriptPermissions = !script, MediatesFileAccess = true,
+            Output = new(new JsonObject(), (_, _) => []), Execute = (_, _) => Task.FromResult<object?>(null),
+        });
+        var prepared = await fixture.Prepare("namespace_consumer", new { });
+        original.Dispose();
+        var calls = 0;
+        using var replacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "namespace_consumer", Description = "Replacement namespace", Parameters = new JsonObject(),
+            UsesScriptPermissions = script, MediatesFileAccess = true,
+            Output = new(new JsonObject(), (_, _) => []),
+            Execute = async (_, run) => { calls++; await File.WriteAllTextAsync(fixture.Target, "changed", run.Signal); return null; },
+        });
+        var result = await fixture.Complete(prepared);
+        Assert.True(result.IsError);
+        Assert.Equal(0, calls);
+        Assert.Equal("private-target-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
+        SafetyAssert.Denied(fixture.Session, prepared.Exec.CallId.Value, "deny-new-namespace", null, null, "namespace_consumer");
+    }
+
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replacement_UsesItsOwnBodySchemaRendererAndFinalizer_AfterPostHookRetirement(bool replaceAgain)
+    {
+        using var fixture = new ReplacementFixture(new SafetySettings { AutoApprove = true });
+        using var original = fixture.Tools.Register(EchoTool("result_consumer", "prepared"));
+        var prepared = await fixture.Prepare("result_consumer", new { old_input = "old", new_input = "approved-new-input" });
+        original.Dispose();
+        var finalized = Path.Combine(fixture.Workspace, "finalized.txt");
+        var finalizations = 0;
+        using var replacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "result_consumer", Description = "Replacement result producer",
+            Parameters = ToolSchemas.Parse("""{"type":"object","required":["new_input"],"properties":{"new_input":{"type":"string"}}}"""),
+            Output = new(ToolSchemas.Parse("""{"type":"object","required":["value"],"properties":{"value":{"type":"string"}}}"""),
+                (args, value) => [new TextBlock(args.GetProperty("new_input").GetString() + "=" + value.GetProperty("value").GetString())]),
+            Execute = (args, _) => Task.FromResult<object?>(new JsonObject { ["value"] = args.GetProperty("new_input").GetString() }),
+            FinalizeContent = async (_, result) =>
+            {
+                if (result.IsError) return null;
+                finalizations++;
+                await File.WriteAllTextAsync(finalized, Text(result), TestContext.Current.CancellationToken);
+                return result.Content;
+            },
+        });
+        IDisposable? third = null;
+        var remove = fixture.Context.OnWaterfall<ToolPostExecuteNotification>(async (_, next) =>
+        {
+            await next();
+            replacement.Dispose();
+            if (replaceAgain)
+                third = fixture.Tools.Register(new ToolDefinition
+                {
+                    Name = "result_consumer", Description = "Post-body foreign registration", Parameters = new JsonObject(),
+                    Output = new(ToolSchemas.Parse("""{"type":"object","properties":{"value":{"type":"integer"}}}"""),
+                        (_, _) => [new TextBlock("foreign-renderer")]),
+                    Execute = (_, _) => Task.FromResult<object?>(new JsonObject { ["value"] = 1 }),
+                });
+            return new PostToolDecision.Accept(Value: JsonSerializer.SerializeToElement(new { value = "posthook-value" }));
+        }, new EventOptions { Global = true });
+        try
+        {
+            var result = await fixture.Complete(prepared);
+            Assert.False(result.IsError, Text(result));
+            Assert.Equal("posthook-value", Assert.IsType<ToolExecutionResult.Success>(result).Value.GetProperty("value").GetString());
+            Assert.Equal("approved-new-input=posthook-value", Text(result));
+            Assert.Equal("approved-new-input=posthook-value", await File.ReadAllTextAsync(finalized, TestContext.Current.CancellationToken));
+            Assert.Equal(1, finalizations);
+        }
+        finally { remove(); third?.Dispose(); }
+    }
+
+    [Fact]
+    public async Task Dispatch_PreservesIdentityAndScheduling_WithoutBlockingUnregisteredStructuredOutput()
+    {
+        using var fixture = new ReplacementFixture(new SafetySettings());
+        using var original = ReadTool.Register(fixture.Context);
+        var prepared = await fixture.Prepare("read", new { file_path = fixture.Target });
+        original.Dispose();
+        var calls = 0;
+        ToolDefinition Opaque(string marker) => new()
+        {
+            Name = "read", Description = marker, Parameters = new JsonObject(), Output = new(new JsonObject(), (_, _) => []),
+            IsConcurrencySafe = _ => true,
+            Execute = async (_, run) => { calls++; await File.WriteAllTextAsync(fixture.Target, marker, run.Signal); return null; },
+        };
+        using var replacement = fixture.Tools.Register(Opaque("second"));
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = 0;
+        var remove = fixture.Context.OnWaterfall<ApprovalRequestNotification>((_, _) =>
+        {
+            if (Interlocked.Increment(ref requests) != 1) return ValueTask.FromResult<object?>(ApprovalOutcome.Rejected);
+            asked.TrySetResult();
+            return new(answer.Task);
+        }, new EventOptions { Global = true });
+        try
+        {
+            var pending = fixture.Complete(prepared);
+            var first = await Task.WhenAny(asked.Task, pending).WaitAsync(TestContext.Current.CancellationToken);
+            if (first == pending) Assert.Fail("Dispatch completed before requesting the replacement's authority: " + Text(await pending));
+            replacement.Dispose();
+            using var third = fixture.Tools.Register(Opaque("third"));
+            answer.TrySetResult(ApprovalOutcome.AllowedOnce);
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(result.IsError);
+            Assert.Equal(0, calls);
+            Assert.Equal(1, requests);
+            Assert.Equal("private-target-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
+        }
+        finally { answer.TrySetResult(ApprovalOutcome.Cancelled); remove(); }
+
+        // The approval handler and third registration are gone before preparing a separate retired call.
+        fixture.Settings.Safety!.AutoApprove = true;
+        var retiredCalls = 0;
+        using var retired = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "retired_consumer", Description = "Retired writer", Parameters = new JsonObject(),
+            Output = new(new JsonObject(), (_, _) => []), Execute = (_, _) => { retiredCalls++; return Task.FromResult<object?>(null); },
+        });
+        var retiredPrepared = await fixture.Prepare("retired_consumer", new { });
+        Assert.NotEqual(prepared.Exec.CallId, retiredPrepared.Exec.CallId);
+        retired.Dispose();
+        var retiredResult = await fixture.Complete(retiredPrepared);
+        Assert.True(retiredResult.IsError);
+        Assert.Equal(0, retiredCalls);
+
+        // A separately prepared parallel call rejects an exclusive replacement; a fresh call executes it.
+        using var modeOriginal = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "mode_consumer", Description = "Prepared parallel operation", Parameters = new JsonObject(),
+            IsConcurrencySafe = _ => true, Output = new(new JsonObject(), (_, _) => []),
+            Execute = (_, _) => Task.FromResult<object?>(null),
+        });
+        var modePrepared = await fixture.Prepare("mode_consumer", new { });
+        modeOriginal.Dispose();
+        var modeCalls = 0;
+        using var modeReplacement = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "mode_consumer", Description = "Replacement exclusive writer", Parameters = new JsonObject(),
+            IsConcurrencySafe = _ => false, Output = new(new JsonObject(), (_, _) => []),
+            Execute = async (_, run) => { modeCalls++; await File.WriteAllTextAsync(fixture.Target, "exclusive-body", run.Signal); return null; },
+        });
+        var incompatible = await fixture.Complete(modePrepared);
+        Assert.True(incompatible.IsError);
+        Assert.Equal(0, modeCalls);
+        Assert.Equal("private-target-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
+        var fresh = await fixture.Tools.Execute(fixture.Input("mode_consumer", new { }));
+        Assert.False(fresh.IsError, Text(fresh));
+        Assert.Equal(1, modeCalls);
+        Assert.Equal("exclusive-body", await File.ReadAllTextAsync(fixture.Target, TestContext.Current.CancellationToken));
+
+        // A real unregistered waterfall consumer still accepts its own fresh call.
+        using var attachment = Dsh.Subagent.StructuredOutputAttachment.Attach(fixture.Agent.Ctx, fixture.Agent,
+            ToolSchemas.Parse("""{"type":"object","required":["answer"],"properties":{"answer":{"type":"integer"}}}"""));
+        var structured = await fixture.Tools.Execute(fixture.Input(Dsh.Subagent.StructuredOutputAttachment.ToolName, new { answer = 42 }));
+        Assert.False(structured.IsError, Text(structured));
+        Assert.Equal(42, attachment.Captured!.Value.GetProperty("answer").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replacement_DoesNotInheritTheRetiredRegistrationsApprovalStamp(bool pathScoped)
+    {
+        using var fixture = new ReplacementFixture(new SafetySettings());
+        using var original = fixture.Tools.Register(new ToolDefinition
+        {
+            Name = "read", Description = "Approved retired reader", Parameters = new JsonObject(), MediatesFileAccess = pathScoped,
+            IsConcurrencySafe = _ => true,
+            Output = new(new JsonObject(), (_, _) => []),
+            Execute = (_, _) => Task.FromResult<object?>(null),
+        });
+        ScheduledToolPreparation.Dispatch prepared;
+        using (ApprovalAnswerers.AutoApprove(fixture.Context))
+        {
+            prepared = await fixture.Prepare("read", new { file_path = fixture.Target });
+            if (pathScoped)
+            {
+                await using var access = await SafetyFileAccess.OpenReadAsync(fixture.Target, prepared.Exec);
+                using var reader = new StreamReader(access);
+                Assert.Equal("private-target-body", await reader.ReadToEndAsync(prepared.Exec.Signal));
+            }
+        }
+        original.Dispose();
+        using var replacement = ReadTool.Register(fixture.Context);
+        using var deny = ApprovalAnswerers.DenyAll(fixture.Context);
+        var result = await fixture.Complete(prepared);
+        Assert.True(result.IsError);
+        Assert.DoesNotContain("private-target-body", Text(result));
+        Assert.Contains(fixture.Session.SnapshotEvents(), item => item.Data is SafetyDecisionAuditPayload audit
+            && audit.CallId == prepared.Exec.CallId.Value && audit.Outcome == "rejected");
+    }
+
+
+    private static string Text(ToolExecutionResult result) => string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text));
 }

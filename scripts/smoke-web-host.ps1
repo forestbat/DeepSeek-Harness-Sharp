@@ -29,17 +29,39 @@ $exe = Join-Path $webDirectory $(if ($IsWindows) { 'dsharp-web.exe' } else { 'ds
 # Keep Unix-domain socket paths short; every process and credential belongs to this smoke run.
 $homeDirectory = Join-Path (Split-Path $PSScriptRoot -Parent) ('.daemon-tests/w' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory $homeDirectory | Out-Null
+$settingsFile = Join-Path $homeDirectory 'settings.yaml'
+[IO.File]::WriteAllText($settingsFile, @'
+safety:
+  autoApprove: false
+  blacklist:
+    protected-write:
+      path: '**/protected/**'
+      intent: write
+    blocked-command:
+      dialect: posix
+      args:
+        command: 'rm -rf /*'
+  whitelist:
+    single-read:
+      tool: read
+      intent: read
+    multiple-read:
+      tool: [glob, grep]
+      path: 'src/**'
+      intent: read
+'@)
 $oldHome = $env:DSH_HOME
 $env:DSH_HOME = $homeDirectory
 $hostCommand = $null
 $webCommand = $null
 $ptyCommand = $null
+$configCommand = $null
 $client = $null
 $socket = $null
 $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(60))
 
-function Start-SmokeProcess([string]$Name, [string[]]$Arguments) {
-    $start = [Diagnostics.ProcessStartInfo]::new($exe)
+function Start-SmokeProcess([string]$Name, [string[]]$Arguments, [string]$Executable = $exe) {
+    $start = [Diagnostics.ProcessStartInfo]::new($Executable)
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
@@ -77,6 +99,12 @@ function Read-SmokeMessage {
 }
 
 try {
+    $tuiDirectory = (Resolve-Path $TuiPublishDir).Path
+    $tuiExe = Join-Path $tuiDirectory $(if ($IsWindows) { 'dsharp.exe' } else { 'dsharp' })
+    $configCommand = Start-SmokeProcess -Name 'config' -Arguments @('--dump-config') -Executable $tuiExe
+    $configCommand.Process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
+    if ($configCommand.Process.ExitCode -ne 0) { throw 'Published CLI could not consume ID-mapped safety rules with scalar and list tool selectors' }
+    Write-Host 'Published CLI consumed typed ID-mapped safety rules, including scalar and list tool selectors.'
     $ptyCommand = Start-SmokeProcess -Name 'pty' -Arguments @('tui', 'daemon')
     $ptyEndpoint = Join-Path $homeDirectory $(if ($IsWindows) { 'run/dsh.port' } else { 'run/dsh.sock' })
     while (-not (Test-Path $ptyEndpoint)) {
@@ -179,7 +207,7 @@ try {
 } finally {
     if ($socket) { $socket.Dispose() }
     if ($client) { $client.Dispose() }
-    foreach ($command in @($webCommand, $hostCommand, $ptyCommand)) {
+    foreach ($command in @($webCommand, $hostCommand, $ptyCommand, $configCommand)) {
         if (-not $command) { continue }
         try {
             if (-not $command.Process.HasExited) { $command.Process.Kill($true) }
@@ -190,7 +218,7 @@ try {
     }
     $deadline.Dispose()
     $env:DSH_HOME = $oldHome
-    foreach ($name in @('web.err', 'host.err', 'pty.err')) {
+    foreach ($name in @('web.err', 'host.err', 'pty.err', 'config.err')) {
         $log = Join-Path $homeDirectory $name
         if ((Test-Path $log) -and (Get-Item $log).Length -gt 0) { Get-Content $log | Write-Host }
     }

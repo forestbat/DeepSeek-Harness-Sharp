@@ -131,11 +131,13 @@ public static class DiffCardExtractor
             return null;
         if (!meta.TryGetProperty("card", out var card) || card.ValueKind != JsonValueKind.String || card.GetString() != "diff")
             return null;
-        if (!meta.TryGetProperty("diffs", out var diffs) || diffs.ValueKind != JsonValueKind.Array)
-            return null;
         var title = meta.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String
             ? titleElement.GetString() ?? "diff"
             : "diff";
+        if (meta.TryGetProperty("patch", out var patch) && patch.ValueKind == JsonValueKind.String)
+            return FromUnifiedDiff(title, patch.GetString() ?? "");
+        if (!meta.TryGetProperty("diffs", out var diffs) || diffs.ValueKind != JsonValueKind.Array)
+            return null;
         var lines = new List<DiffLine>();
         var multiFile = diffs.GetArrayLength() > 1;
         foreach (var diff in diffs.EnumerateArray())

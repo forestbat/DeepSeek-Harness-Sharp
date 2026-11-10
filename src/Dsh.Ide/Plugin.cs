@@ -55,7 +55,6 @@ public sealed class Plugin(string packageName) : IDshPlugin
         }
         ctx.Provide(IEditorCatalog.ServiceName, catalog);
         ctx.Provide(IEditorService.ServiceName, editors);
-        ctx.Provide(IEditorLauncher.ServiceName, editors);
         ctx.Effect(() => IdeCommand.Register(ctx, editors, reviews));
         ctx.Effect(() => IdeTool.Register(ctx, editors));
     }

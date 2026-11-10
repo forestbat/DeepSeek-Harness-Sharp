@@ -25,6 +25,15 @@ public sealed partial class ChatView : UserControl
     /** 一次还原里最多修几轮。 */
     private const int AnchorSettlePasses = 3;
 
+    /** 跳到某条消息时它离视口顶端的距离。 */
+    private const double TranscriptTopPadding = 8;
+
+    /** 已打开的预览在轨道/面板边界外再多留几像素: 指针横穿那条缝时不能把它抖没。 */
+    private const double TimelineKeepReach = 4;
+
+    /** 折叠锚点最多生效几次布局变化: 只够它自己那一次重估, 之后的流式增长不许再动视口。 */
+    private const int FoldAnchorPasses = 2;
+
     /** 一格滚轮在内层滚动区域里滚动的像素数(与常见 3 行文本高度相当)。 */
     private const double NestedWheelStepPixels = 60;
 
@@ -41,6 +50,8 @@ public sealed partial class ChatView : UserControl
     private Flyout? _modelFlyout;
     private Flyout? _reasoningFlyout;
     private Flyout? _subagentFlyout;
+    private int _timelineHovered = -1;
+    private bool _previewScrolling;
 
     public ChatView()
     {
@@ -72,8 +83,9 @@ public sealed partial class ChatView : UserControl
         AddHandler(InputElement.PointerPressedEvent, OnSelectablePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         LayoutUpdated += OnLayoutUpdatedGuard;
         MessageList.AddHandler(DiffView.CardToggleRequestedEvent, OnCardToggleRequested, RoutingStrategies.Bubble);
-        // 时间线入口: 右键消息就是"跳到这里 / 回退到这里 / 从这里分叉"。
+        // 时间线入口: 刻度点击在轨道上做(见 WireTimeline), 右键只留"回退/分叉"这类必须落到消息上的动作。
         MessageList.AddHandler(ContextRequestedEvent, OnMessageContextRequested, RoutingStrategies.Tunnel);
+        WireTimeline();
         MessageList.PropertyChanged += (_, change) =>
         {
             if (change.Property != ListBox.ScrollProperty)
@@ -92,6 +104,155 @@ public sealed partial class ChatView : UserControl
             if (change.Property == IsVisibleProperty && IsVisible)
                 FocusComposer();
         };
+    }
+
+    /** 轨道悬停出预览、点击跳转; 预览面板自己可滚动, 鼠标移到面板上时保持打开。 */
+    private void WireTimeline()
+    {
+        Rail.Transcript = MessageList;
+        Rail.HoverChanged += ShowTimelinePreview;
+        Rail.Activated += index =>
+        {
+            var marks = Rail.Marks;
+            if (index < 0 || index >= marks.Count)
+                return;
+            HideTimelinePreview();
+            _viewModel?.JumpToMessageCommand.Execute(marks[index].Message);
+        };
+        // 悬停/关闭都在 ChatView 上判定: 指针从刻度挪到预览面板要跨过轨道左边的空白,
+        // 只靠"离开控件就关"会把面板在用户手上抽走。
+        AddHandler(PointerMovedEvent, OnTimelinePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        TimelinePreviewList.AddHandler(PointerPressedEvent, OnTimelinePreviewPressed, RoutingStrategies.Tunnel);
+        // 拖预览自己的滚动条时指针可能被甩到面板外, 这段时间一律不关。
+        TimelinePreview.AddHandler(Thumb.DragStartedEvent, (_, _) => _previewScrolling = true,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        TimelinePreview.AddHandler(Thumb.DragCompletedEvent, (_, _) => _previewScrolling = false,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+    }
+
+    /**
+     * 指针移动时统一决定预览去留。
+     *
+     * 两套判定必须分开, 混用会二选一地踩到两个坑:
+     * - **打开/切换**只认轨道列的真实边界 + 刻度容差: 外扩会把右侧滚动条一起吞掉, 想拖滚动条却点出了预览。
+     * - **保持**用轨道列与预览面板的并集(各外扩几个像素): 轨道与面板之间哪怕只有一两像素的缝,
+     *   指针横穿过去的那一帧既不在轨道也不在面板里, 面板就会在用户手上消失。
+     */
+    private void OnTimelinePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!Rail.IsEffectivelyVisible)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        if (_previewScrolling)
+            return;
+        var overRail = IsWithin(Rail, e, 0);
+        if (TimelinePreview.IsVisible
+            && (overRail || IsWithin(Rail, e, TimelineKeepReach) || IsWithin(TimelinePreview, e, TimelineKeepReach)))
+        {
+            if (overRail)
+                HoverTickAt(e.GetPosition(Rail).Y);
+            return;
+        }
+        if (!overRail)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        HoverTickAt(e.GetPosition(Rail).Y);
+    }
+
+    private void HoverTickAt(double y)
+    {
+        var index = Rail.MarkAt(y);
+        if (index < 0 || index == _timelineHovered)
+            return;
+        _timelineHovered = index;
+        Rail.SetHovered(index);
+        ShowTimelinePreview(index);
+    }
+
+    /** 指针是否落在某个控件的矩形里(向外扩 reach 像素)。 */
+    private static bool IsWithin(Visual target, PointerEventArgs e, double reach)
+        => new Rect(target.Bounds.Size).Inflate(reach).Contains(e.GetPosition(target));
+
+    private void ShowTimelinePreview(int index)
+    {
+        if (!Rail.IsEffectivelyVisible)
+            return;
+        var marks = Rail.Marks;
+        if (index < 0 || index >= marks.Count)
+        {
+            HideTimelinePreview();
+            return;
+        }
+        TimelinePreview.IsVisible = true;
+        FillPreviewItems();
+        PlaceTimelinePreview(index);
+        CenterTimelinePreview(marks[index].Message);
+    }
+
+    /**
+     * 预览只列用户消息(时间线的候选), 不列工具/思考这类中间状态:
+     * 面板是刻度的放大镜, 列了别的就等于把轨道变成了另一份转录。
+     */
+    private void FillPreviewItems()
+    {
+        if (_viewModel is not { } viewModel)
+            return;
+        var userMessages = viewModel.Messages.Where(message => message.Kind == MessageKind.User).ToList();
+        if (TimelinePreviewList.ItemsSource is List<MessageViewModel> current && current.SequenceEqual(userMessages))
+            return;
+        TimelinePreviewList.ItemsSource = userMessages;
+    }
+
+    /** 预览停在指针所指那条的前后几条上: 先让它可见, 再把它的位置挪到面板中间。 */
+    private void CenterTimelinePreview(MessageViewModel message)
+    {
+        // 面板刚显示出来还没应用模板, 连 Scroll 都还是 null: 等这一次指针事件走完再定位。
+        Dispatcher.UIThread.Post(() =>
+        {
+            var index = TimelinePreviewList.Items.IndexOf(message);
+            if (index < 0)
+                return;
+            TimelinePreviewList.UpdateLayout();
+            if (TimelinePreviewList.Scroll is ScrollViewer scroll)
+                RevealIndex(TimelinePreviewList, scroll, index, double.NaN);
+        }, DispatcherPriority.Background);
+    }
+
+    /** 预览面板贴着指针所在的那条刻度: 让"从刻度往左移到面板"是一条水平路径,
+     * 面板也就不必固定居中而在上下两头留出够不着的缝。面板右缘与轨道左缘严格相接(不留缝)。 */
+    private void PlaceTimelinePreview(int index)
+    {
+        if (TimelinePreview.Parent is not Visual parent)
+            return;
+        var tickY = Rail.TranslatePoint(new Point(0, Rail.OffsetOf(index)), parent)?.Y;
+        if (tickY is not { } centerY)
+            return;
+        var height = TimelinePreview.Bounds.Height > 0 ? TimelinePreview.Bounds.Height : TimelinePreview.MaxHeight;
+        var available = parent.Bounds.Height;
+        var top = Math.Clamp(centerY - height / 2, 0, Math.Max(0, available - height));
+        var gap = Rail.Margin;
+        TimelinePreview.Margin = new Thickness(0, top, gap.Left + Rail.Bounds.Width + gap.Right, 0);
+    }
+
+    private void HideTimelinePreview()
+    {
+        _timelineHovered = -1;
+        Rail.SetHovered(-1);
+        TimelinePreview.IsVisible = false;
+    }
+
+    private void OnTimelinePreviewPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Source is not Visual source
+            || source.GetVisualAncestors().OfType<ListBoxItem>().FirstOrDefault()?.DataContext is not MessageViewModel message)
+            return;
+        HideTimelinePreview();
+        _viewModel?.JumpToMessageCommand.Execute(message);
+        e.Handled = true;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -192,8 +353,13 @@ public sealed partial class ChatView : UserControl
     }
 
     /** 用户输入产生的位置变化才改判跟随意图; 程序/布局引起的位置变化不动它。 */
-    private void OnScrollInput(object? sender, RoutedEventArgs e) =>
+    private void OnScrollInput(object? sender, RoutedEventArgs e)
+    {
         _scrollInput = e.Route == RoutingStrategies.Tunnel ? e : null;
+        // 用户自己一动视口, 折叠锚点立刻作废: 它只负责"点开的那一下别让卡片乱跳"。
+        if (_scrollInput is not null && IsUserScrollInput(e))
+            _foldAnchorPasses = 0;
+    }
 
     /** 滚轮/键盘/拖动滚动条都属于用户自己在移动视口; 只读文本里的指针事件不算。 */
     private bool IsUserScrollInput(RoutedEventArgs e)
@@ -240,28 +406,28 @@ public sealed partial class ChatView : UserControl
         if (e.Source is not ScrollViewer scroll || !ReferenceEquals(scroll, MessageList.Scroll))
             return;
         var layoutChanged = e.ExtentDelta != default || e.ViewportDelta != default;
-        if (!layoutChanged && !_foldSession)
+        if (!layoutChanged)
         {
             // 位置变了就作废排队中的贴底请求, 并按落点重判是否还贴底。
             // 程序性跳转(ScrollIntoView / 跳到某条消息)也走这里: 跳到中途就必须停止跟随,
             // 否则一次布局增长就会把人拽回底部。
-            // 折叠会话期间不重判: 面板自己挪的那点位移不能被追认成"用户滚到了底部"。
             _scrollGeneration++;
             _sticky = IsAtBottom(scroll);
         }
-        // 折叠会话: 只要高度变了就把被点那条拉回原位, 不再要求"偏移量几乎没变"——
-        // 面板重估经常直接把偏移推几十像素(实测 48px), 那条严格判据会把它当成真正的滚动而放过去。
-        if (_foldSession && !_restoringAnchor && !_draggingThumb && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance)
+        // 折叠锚点优先: 面板这次重估能把被点那条甩出几百像素, 而下面的常规判据要求偏移量几乎没变,
+        // 那种情况下它不会出手。
+        // 触发条件不能只看"内容高度变了": 展开一条很长的消息时, 面板会把它自己甩出实体化窗口,
+        // 这一趟可能只报 offset 变化而 extent 尚未更新(实测 offset 17481→14199 却 layoutChanged=false),
+        // 于是锚点一次都不出手。锚点等待期间只要视口动了就还原, 是否真需要由还原自己判断(位置够近就不动)。
+        if (_foldAnchorPasses > 0 && !_draggingThumb && !_restoringAnchor)
         {
-            RestoreAnchor(scroll);
-            if (--_foldSessionPasses <= 0)
-                _foldSession = false;
+            QueueFoldRestore(scroll);
         }
         // SubtitleEdit 的判据是"高度变了、位置没变"。这里把"位置"放宽到 SubPixelDrift: 我们自己的修正
         // 会让面板再估一次并再漂几像素, 用 0.5px 的严格判据会把这类后续漂移漏掉, 累积成可见位移。
         else if (!_restoringAnchor && !_draggingThumb && !_sticky
             && Math.Abs(e.ExtentDelta.Y) > AnchorTolerance
-            && Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift
+            && (Math.Abs(e.OffsetDelta.Y) <= SubPixelDrift || CoercedToEnd(scroll, e))
             && scroll.Offset.Y > AnchorTolerance)
         {
             RestoreAnchor(scroll);
@@ -281,7 +447,7 @@ public sealed partial class ChatView : UserControl
             _restoringAnchor = true;
             try
             {
-                ApproachIndex(scroll, blank);
+                ApproachIndex(MessageList, scroll, blank);
                 MessageList.ScrollIntoView(blank);
                 MessageList.UpdateLayout();
                 RememberAnchor(scroll);
@@ -299,6 +465,7 @@ public sealed partial class ChatView : UserControl
         if (layoutChanged)
             _foldPending = false;
         _lastScroll = new ScrollSnapshot(scroll.Offset.Y, scroll.Viewport.Height, scroll.Extent.Height);
+        UpdateJumpToLatest();
         // 一个滚动周期结束: 下个周期没有新的输入事件就说明这次的位移来自布局, 不是用户。
         _scrollInput = null;
     }
@@ -378,7 +545,7 @@ public sealed partial class ChatView : UserControl
                 return;
             if (LastRealizedIndex() is var index && index >= 0)
             {
-                ApproachIndex(scroll, index);
+                ApproachIndex(MessageList, scroll, index);
                 MessageList.ScrollIntoView(index);
             }
         }, DispatcherPriority.Background);
@@ -411,17 +578,28 @@ public sealed partial class ChatView : UserControl
     }
 
     private void RestoreAnchor(ScrollViewer scroll)
+        => RestoreAnchor(scroll, ResolveAnchorIndex(), _anchorTop);
+
+    /**
+     * 按"某条消息 + 它当时的屏幕位置"还原视口。
+     * 折叠用被点那条做锚点: 面板重估会把它甩出几百像素, 按"视口顶部那条"还原对它无效。
+     * 位移多大都照样拉回: 面板重估一次能甩出一屏以上(实测追加内容后锚点位移 561px),
+     * 那不是用户滚动, 按它自己报的坐标重新记锚点等于把读者正在读的位置丢掉。
+     */
+    private void RestoreAnchor(ScrollViewer scroll, int index, double anchorTop)
     {
-        var (index, anchorTop) = FoldOrViewportAnchor();
         if (index < 0)
             return;
         _restoringAnchor = true;
         try
         {
             // 面板重估通常把锚点挤出了实体化范围: 先按实测行高把偏移量挪过去, 再请列表实体化它。
-            if (MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 })
+            // ApproachIndex 一次只走半屏(它怕走过头), 而展开一条长消息能把锚点甩出几屏,
+            // 所以要反复"靠近 + ScrollIntoView"直到它真的被实体化 —— 只试一次的话,
+            // 被点那条会永久留在区间外(实测: 下标 218, 区间 [225..236]), 用户点开却看不见。
+            for (var attempt = 0; attempt < ApproachPasses && MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 }; attempt++)
             {
-                ApproachIndex(scroll, index);
+                ApproachIndex(MessageList, scroll, index);
                 MessageList.ScrollIntoView(index);
                 MessageList.UpdateLayout();
             }
@@ -433,12 +611,6 @@ public sealed partial class ChatView : UserControl
                 var delta = position.Y - anchorTop;
                 if (Math.Abs(delta) <= AnchorTolerance)
                     break;
-                // 偏出一屏说明这个锚点已经过期(内容长高/用户滚过): 重新记, 不要把视口拽过去。
-                if (Math.Abs(delta) > scroll.Viewport.Height)
-                {
-                    RememberAnchor(scroll);
-                    break;
-                }
                 var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
                 scroll.Offset = new Vector(scroll.Offset.X, Math.Clamp(scroll.Offset.Y + delta, 0, maximum));
                 MessageList.UpdateLayout();
@@ -452,17 +624,63 @@ public sealed partial class ChatView : UserControl
     }
 
     /**
+     * 把某一项放到列表视口里的指定高度(desiredTop 为 NaN 表示居中): 先 ScrollIntoView 让它实体化,
+     * 再按实际位置修正, 最多几轮。视口尺寸要等排过版才有效, 所以先 UpdateLayout 再判断。
+     */
+    private static void RevealIndex(ListBox list, ScrollViewer scroll, int index, double desiredTop)
+    {
+        if (index < 0)
+            return;
+        list.UpdateLayout();
+        list.ScrollIntoView(index);
+        list.UpdateLayout();
+        for (var pass = 0; pass <= AnchorSettlePasses; pass++)
+        {
+            if (scroll.Viewport.Height <= 0)
+                return;
+            if (list.ContainerFromIndex(index) is not { } container
+                || container.TranslatePoint(default, scroll) is not { } position)
+            {
+                // 目标还没实体化: 按视口里实测的行高先走过去(ScrollIntoView 对没实体化的项不生效)。
+                ApproachIndex(list, scroll, index);
+                continue;
+            }
+            var top = double.IsNaN(desiredTop) ? (scroll.Viewport.Height - container.Bounds.Height) / 2 : desiredTop;
+            var delta = position.Y - top;
+            if (Math.Abs(delta) < 1)
+                return;
+            var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            var target = Math.Clamp(scroll.Offset.Y + delta, 0, maximum);
+            if (Math.Abs(target - scroll.Offset.Y) < 1)
+                return;
+            scroll.Offset = new Vector(scroll.Offset.X, target);
+            list.UpdateLayout();
+        }
+    }
+
+    /**
      * 先把偏移量挪到目标附近, 免得 ScrollIntoView 按估算一段段走过去。
      * 同样取自 SubtitleEdit 的 TableViewExtras.PrePositionScroll: 用视口里实测的行高走位, 最多三轮。
      */
-    private void ApproachIndex(ScrollViewer scroll, int index)
+    private static void ApproachIndex(ListBox list, ScrollViewer scroll, int index)
     {
-        if (scroll.Viewport.Height <= 0 || index == 0)
+        if (scroll.Viewport.Height <= 0)
             return;
+        // 第 0 项没法"按实测行高靠近"(它上面没有参照物): 直接把偏移量归零, 否则永远实体化不出来,
+        // 表现为"点最上面那个刻度跳不到第一条消息"。
+        if (index == 0)
+        {
+            if (scroll.Offset.Y > 0)
+            {
+                scroll.Offset = new Vector(scroll.Offset.X, 0);
+                list.UpdateLayout();
+            }
+            return;
+        }
         for (var pass = 0; pass < ApproachPasses; pass++)
         {
-            var items = MessageList.GetVisualDescendants().OfType<ListBoxItem>()
-                .Select(item => (Index: MessageList.IndexFromContainer(item), Item: item))
+            var items = list.GetVisualDescendants().OfType<ListBoxItem>()
+                .Select(item => (Index: list.IndexFromContainer(item), Item: item))
                 .Where(entry => entry.Index >= 0 && entry.Item.Bounds.Height > 0)
                 .OrderBy(entry => entry.Index)
                 .ToList();
@@ -479,7 +697,7 @@ public sealed partial class ChatView : UserControl
             if (Math.Abs(target - scroll.Offset.Y) < 1)
                 return;
             scroll.Offset = new Vector(scroll.Offset.X, target);
-            MessageList.UpdateLayout();
+            list.UpdateLayout();
         }
     }
 
@@ -498,19 +716,44 @@ public sealed partial class ChatView : UserControl
     private static bool IsAtBottom(ScrollViewer scroll)
         => scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - StickyTolerance;
 
+    /**
+     * "回到最新"按钮只在视口不在底部时出现。
+     * 没有自动贴底兜底之后(点折叠会把视口留在原处), 用户需要一个自己回到最新的入口。
+     */
+    private void UpdateJumpToLatest()
+        => JumpToLatest.IsVisible = !_sticky && _viewModel?.Messages.Count is > 0;
+
+    private void OnJumpToLatestClick(object? sender, RoutedEventArgs e)
+    {
+        if (MessageList.Scroll is not ScrollViewer scroll)
+            return;
+        _sticky = true;
+        StickToEnd(scroll);
+        UpdateJumpToLatest();
+    }
+
+    /**
+     * 这次位移是不是"内容变矮把 offset 强行钳到新最大值"(SubtitleEdit #14626)。
+     *
+     * extent 缩短到 offset + viewport 以下时, ScrollViewer 会在同一趟里把 offset 直接压到新的最大值,
+     * 位移可以和用户滚动一样大(实测单次 10032px)。它跟着 extent 缩短一起来、又正好落在末端,
+     * 因此不是滚动, 而是面板重估的后果 —— 不认这一条, 锚点在"内容变矮"时一次都不会出手。
+     */
+    private static bool CoercedToEnd(ScrollViewer scroll, ScrollChangedEventArgs e)
+    {
+        if (e.ExtentDelta.Y >= -AnchorTolerance || e.OffsetDelta.Y >= -AnchorTolerance)
+            return false;
+        var maximum = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+        return Math.Abs(scroll.Offset.Y - maximum) <= AnchorTolerance;
+    }
+
     /** 这一次布局变化来自折叠/展开: 不许顺手贴底, 否则用户刚点开的那条会被顶出视口。 */
     private bool _foldPending;
 
-    /** 折叠会话: 被点那条还没被按实测位置放回原处。 */
-    private bool _foldSession;
-
-    /** 折叠会话还剩几轮可用来纠正(每轮布局一次, 面板最多几轮收敛)。 */
-    private int _foldSessionPasses;
-
-    /** 折叠会话的锚点: 被点那条(数据项 + 下标 + 当时的屏幕位置)。 */
+    /** 折叠锚点: 被点那条(数据项 + 点击时的屏幕位置), 只在紧接着的两次布局里用来把它放回原处。 */
     private object? _foldAnchorData;
-    private int _foldAnchorIndex = -1;
     private double _foldAnchorTop;
+    private int _foldAnchorPasses;
 
 
     /** 视口顶部那条消息(数据项 + 下标 + 当时的条目总数)和它在视口里的位置。 */
@@ -528,47 +771,91 @@ public sealed partial class ChatView : UserControl
     /** 每轮布局后检查视口是否空掉: 只检测、只投递, 绝不在布局回调里写 offset。 */
     private void OnLayoutUpdatedGuard(object? sender, EventArgs e) => ScheduleBlankRecovery();
 
-    /** 折叠与展开只是视图操作: 位置不需要补偿(上方内容不动), 但要挡掉这一次的触底跟随。 */
-    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
-
-    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldSession(e.Source);
-
     /**
-     * 折叠会改变被点那条的高度, 而 VirtualizingStackPanel 在已实体化项高度变化时会重估整篇文档的坐标,
-     * 连"是否到底"都可能被它改掉。所以从点击这一刻起开一段"折叠会话": 关掉跟随, 并把**被点的那条**
-     * 而不是视口顶部那条当作锚点, 接下来几轮布局都按实测位置把它拉回原处。
+     * 折叠/展开会改变被点那条的高度, 而面板在已实体化项高度变化时会重估整篇坐标, 一次能甩出几百像素。
+     * 所以点击时记下被点那条及其屏幕位置, 接下来几次布局按它还原; 用户一滚(或重新贴底)就作废。
+     *
+     * 贴底(跟随中)时同样按这条走: 用户点的是"这一条", 就该让它停在原地。
+     * 贴底态原来交给"贴住末尾", 结果是它被自身涨高的量直接顶走(实测 -133px), 这正是用户报的跳动。
+     * 代价是视口不再是贴底 —— 想回底部请点右下角的"回到最新"。
      */
-    private void BeginFoldSession(object? source)
+    private void OnFoldClick(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
+
+    private void OnCardToggleRequested(object? sender, RoutedEventArgs e) => BeginFoldAnchor(e.Source);
+
+    private void BeginFoldAnchor(object? source)
     {
         _foldPending = true;
-        _sticky = false;
-        _foldSessionPasses = AnchorSettlePasses;
-        _foldSession = false;
-        if (MessageList.Scroll is not ScrollViewer scroll || MessageContainerOf(source) is not { } item)
+        _foldAnchorPasses = 0;
+        if (MessageList.Scroll is not ScrollViewer scroll
+            || MessageContainerOf(source)?.DataContext is not { } data)
             return;
-        if (item.DataContext is not { } data || item.TranslatePoint(default, scroll) is not { } position)
+        for (var index = 0; index < MessageList.ItemCount; index++)
+        {
+            if (!ReferenceEquals(MessageList.Items[index], data)
+                || MessageList.ContainerFromIndex(index) is not { Bounds.Height: > 0 } item
+                || item.TranslatePoint(default, scroll) is not { } position)
+                continue;
+            _foldAnchorData = data;
+            _foldAnchorTop = position.Y;
+            _foldAnchorPasses = FoldAnchorPasses;
+            // 贴底态下也保住被点那条: 退出跟随, 否则下面"贴住末尾"的分支会立刻把它顶走。
+            _sticky = false;
+            UpdateJumpToLatest();
             return;
-        // 单独记一份: 还原过程中间的滚动事件会重记"视口顶部那条", 共用字段会被它覆盖掉。
-        _foldAnchorData = data;
-        _foldAnchorIndex = MessageList.IndexFromContainer(item);
-        _foldAnchorTop = position.Y;
-        _foldSession = true;
+        }
     }
 
-    /** 折叠会话期间锚点是被点的那条, 其余时候是视口顶部那条。 */
-    private (int Index, double Top) FoldOrViewportAnchor()
+    /**
+     * 折叠引起的重估要等这一轮布局结束才落定(滚动事件里读到的还是旧位置), 所以把还原投递到布局之后。
+     *
+     * 配额**只在真的修了位置时才消耗**: 一次折叠会连发好几个 ScrollChanged(实测: 先 extent+5867 而
+     * offset 不动, 再 extent−9866 且 offset 被钳到末端 −2633, 再 +1531/−649, 最后 −1531), 而真正需要
+     * 纠正的是中间那几次。若按"每来一个事件就扣一次"发放配额, 打开一个长消息就能把配额用光,
+     * 于是最该纠正的那一次反而没人管 —— 表现就是"点开自己却看不见了"。
+     */
+    private void QueueFoldRestore(ScrollViewer scroll)
     {
-        if (!_foldSession)
-            return (ResolveAnchorIndex(), _anchorTop);
-        if (_foldAnchorData is { } data)
+        if (_foldAnchorPasses <= 0)
+            return;
+        Dispatcher.UIThread.Post(() =>
         {
+            if (_sticky || _draggingThumb || _restoringAnchor || _foldAnchorData is not { } data)
+                return;
             for (var index = 0; index < MessageList.ItemCount; index++)
             {
-                if (ReferenceEquals(MessageList.Items[index], data))
-                    return (index, _foldAnchorTop);
+                if (!ReferenceEquals(MessageList.Items[index], data))
+                    continue;
+                // 位置已经对得上就不算一次配额消耗(这一趟只是面板在重估, 视口没被挪走)。
+                if (IsFoldAnchorInPlace(scroll, index))
+                    return;
+                _foldAnchorPasses--;
+                RestoreAnchor(scroll, index, _foldAnchorTop);
+                return;
             }
-        }
-        return (_foldAnchorIndex >= 0 && _foldAnchorIndex < MessageList.ItemCount ? _foldAnchorIndex : -1, _foldAnchorTop);
+        }, DispatcherPriority.Loaded);
+    }
+
+    /**
+     * 面板这次是否已经把被点那条挪离了点击时的位置。
+     * 判据是**容器取到没取到**而不是"取到的容器位置对不对": 面板把它甩出实体化窗口时,
+     * `ContainerFromIndex` 可能返回一个已经属于别处的旧容器, 它的位置恰好在原处,
+     * 于是"位置对得上"会被误判 —— 实测展开一条 4163 字符的思维链, 容器被回收、
+     * 该条根本不在视口里, 这里却报告"在位", 还原因此一次都不出手。
+     */
+    private bool IsFoldAnchorInPlace(ScrollViewer scroll, int index)
+        => MessageList.ContainerFromIndex(index) is { Bounds.Height: > 0 } item
+            && ReferenceEquals(MessageList.ContainerFromIndex(index), CurrentContainerOf(index))
+            && item.TranslatePoint(default, scroll) is { } position
+            && Math.Abs(position.Y - _foldAnchorTop) <= AnchorTolerance;
+
+    /** 列表当前真挂着的那个容器(视觉树里找, 不信任 ContainerFromIndex 的缓存)。 */
+    private ListBoxItem? CurrentContainerOf(int index)
+    {
+        foreach (var item in MessageList.GetVisualDescendants().OfType<ListBoxItem>())
+            if (MessageList.IndexFromContainer(item) == index)
+                return item;
+        return null;
     }
 
     /**
@@ -582,7 +869,6 @@ public sealed partial class ChatView : UserControl
             return;
         e.Handled = true;
         MenuFlyout menu = new();
-        menu.Items.Add(MenuItem("跳到此消息", () => viewModel.JumpToMessageCommand.Execute(message)));
         menu.Items.Add(MenuItem("回退到此消息", () =>
         {
             if (viewModel.RevertToMessageCommand.CanExecute(message))
@@ -624,14 +910,16 @@ public sealed partial class ChatView : UserControl
         block.Focus();
     }
 
+    /** 跳到某条消息: 落在视口顶部并且不再跟随(用户是特意过来看的)。 */
     private void ScrollToMessage(MessageViewModel message)
     {
-        if (_viewModel is null)
+        if (_viewModel is not { } viewModel || MessageList.Scroll is not ScrollViewer scroll)
             return;
-        if (!_viewModel.Messages.Contains(message))
+        var index = viewModel.Messages.IndexOf(message);
+        if (index < 0)
             return;
-        _sticky = true;
-        Dispatcher.UIThread.Post(() => MessageList.ScrollIntoView(message));
+        _sticky = false;
+        Dispatcher.UIThread.Post(() => RevealIndex(MessageList, scroll, index, TranscriptTopPadding));
     }
 
     private void QueueScrollToEnd()
@@ -655,6 +943,8 @@ public sealed partial class ChatView : UserControl
         if (sender is not Flyout flyout)
             return;
         _modelFlyout = flyout;
+        // 端点 /models 自报的模型是适配器后台拉取后才有的, 打开浮层时重算一次清单。
+        _viewModel?.Preferences.ReloadModels();
         if (_viewModel is not null)
             _viewModel.ModelSearchText = "";
         if (flyout.Content is Panel panel && panel.Children.OfType<TextBox>().FirstOrDefault() is { } search)
@@ -685,11 +975,11 @@ public sealed partial class ChatView : UserControl
         await execution;
     }
 
-    /** 打开浮层时按当前模型重算强度候选: 在线元数据是后台预热的, 打开时刻通常已就绪。 */
+    /** 打开浮层时按当前会话模型重算强度候选: 端点自报/探测是后台完成的, 打开时刻通常已就绪。 */
     private void OnReasoningFlyoutOpened(object? sender, EventArgs e)
     {
         _reasoningFlyout = sender as Flyout;
-        _viewModel?.Preferences.RefreshReasoningEfforts();
+        _viewModel?.RefreshReasoningEfforts();
     }
 
     private async void OnReasoningItemClick(object? sender, RoutedEventArgs e)
@@ -768,10 +1058,18 @@ public sealed partial class ChatView : UserControl
             await ExecuteViewCommandAsync(_viewModel, _viewModel.SubmitCommand, null);
     }
 
+    /** 视图级按键入口: 焦点不在输入框时(用户正在读转录)由这里接管 Home/End 与翻页键。 */
+    private void OnTranscriptKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Handled || _viewModel is null)
+            return;
+        HandlesTranscriptKey(e);
+    }
+
     /**
-     * 输入框在默认状态下有焦点, 而 TextBox 自己会吞掉 PageUp/PageDown/Home/End,
-     * 所以在隧道里先拦一道: 翻页键交给消息列表, Home/End 在输入框为空时跳到记录头尾。
-     * 输入框写得比 MaxHeight 高、自己需要滚动时, 这些键仍归 TextBox。
+     * 迁移键与转录导航的归属: 输入框有焦点(有闪烁光标)时 Home/End 属于光标, 归 TextBox;
+     * 焦点不在输入框时 Home/End 跳会话头尾。翻页键只看输入框是否自己需要滚动。
+     * 输入框写得比 MaxHeight 高、自带滚动条时, 翻页键仍归 TextBox。
      */
     private bool HandlesTranscriptKey(KeyEventArgs e)
     {
@@ -780,17 +1078,20 @@ public sealed partial class ChatView : UserControl
         var scroll = MessageList.Scroll;
         if (scroll is null)
             return false;
+        // 输入框内容超过 MaxHeight 时它自己要滚动, 翻页键归它。
         var composerScrolls = InputBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } composer
             && composer.Extent.Height - composer.Viewport.Height > AnchorTolerance;
-        var jumpToStart = e.Key == Key.Home && (e.KeyModifiers == KeyModifiers.Control || InputBox.Text is not { Length: > 0 });
-        var jumpToEnd = e.Key == Key.End && (e.KeyModifiers == KeyModifiers.Control || InputBox.Text is not { Length: > 0 });
+        // 只有焦点真的落在输入框里才算"正在编辑": 焦点在消息列表时 Home/End 属于转录导航。
+        var composerFocused = InputBox.IsFocused || InputBox.IsKeyboardFocusWithin;
+        var jumpToStart = e.Key == Key.Home && (e.KeyModifiers == KeyModifiers.Control || !composerFocused);
+        var jumpToEnd = e.Key == Key.End && (e.KeyModifiers == KeyModifiers.Control || !composerFocused);
         switch (e.Key)
         {
             case Key.PageUp when !composerScrolls:
-                ScrollTranscriptBy(-scroll.Viewport.Height, follow: false);
+                ScrollTranscriptBy(-scroll.Viewport.Height);
                 break;
             case Key.PageDown when !composerScrolls:
-                ScrollTranscriptBy(scroll.Viewport.Height, follow: true);
+                ScrollTranscriptBy(scroll.Viewport.Height);
                 break;
             case Key.Home or Key.End when jumpToStart || jumpToEnd:
                 ScrollTranscriptTo(jumpToEnd ? double.MaxValue : 0);
@@ -802,18 +1103,21 @@ public sealed partial class ChatView : UserControl
         return true;
     }
 
-    /** 写偏移用具体像素(禁用 ScrollToEnd): 到底时按"这次落点是否在末尾"重定跟随意图。 */
-    private void ScrollTranscriptBy(double delta, bool follow)
-        => ScrollTranscriptTo((MessageList.Scroll?.Offset.Y ?? 0) + delta, follow);
+    private void ScrollTranscriptBy(double delta)
+        => ScrollTranscriptTo((MessageList.Scroll?.Offset.Y ?? 0) + delta);
 
-    private void ScrollTranscriptTo(double target, bool? follow = null)
+    /**
+     * 写偏移用具体像素(禁用 ScrollToEnd); 跟随意图只按**落点**判定, 由调用方指定的方向一律不作数。
+     * 否则(例如把 PageDown 当成"恢复跟随")用户停在半途时会被下一帧流式输出拽回底部。
+     */
+    private void ScrollTranscriptTo(double target)
     {
         if (MessageList.Scroll is not { } scroll)
             return;
         var maxOffset = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
         var offset = Math.Clamp(target, 0, maxOffset);
         scroll.Offset = new Vector(scroll.Offset.X, offset);
-        _sticky = follow ?? offset >= maxOffset - AnchorTolerance;
+        _sticky = offset >= maxOffset - AnchorTolerance;
     }
 
     /** 剪贴板有图片 -> 转附件; 否则退回把剪贴板文本插到光标处(替代 TextBox 默认粘贴, 以便优先识别图片)。 */
@@ -869,12 +1173,16 @@ public sealed partial class ChatView : UserControl
             OnDataContextChanged(this, EventArgs.Empty);
         // TextBox 会先消费 Enter(AcceptsReturn), 必须在隧道阶段拦截。
         InputBox.AddHandler(InputElement.KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
+        // Home/End 与翻页键在两种焦点下都要有归属: 挂在视图上才收得到"焦点在转录里"的按键
+        // (挂 InputBox 只覆盖输入框有焦点的情况, 那时 Home/End 本来就该留给光标)。
+        AddHandler(InputElement.KeyDownEvent, OnTranscriptKeyDown, RoutingStrategies.Tunnel);
         FocusComposer();
     }
 
     protected override void OnUnloaded(RoutedEventArgs e)
     {
         InputBox.RemoveHandler(InputElement.KeyDownEvent, OnInputKeyDown);
+        RemoveHandler(InputElement.KeyDownEvent, OnTranscriptKeyDown);
         Detach();
         base.OnUnloaded(e);
     }

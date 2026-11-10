@@ -12,8 +12,10 @@
 #   ./scripts/fetch-dryioc-feed.sh --force                       # 不管戳记是否一致都重建
 #   ./scripts/fetch-dryioc-feed.sh --proxy http://<host>:<port>   # 访问 GitHub 走指定代理, 不传则直连
 #   ./scripts/fetch-dryioc-feed.sh --use-gh-artifact   # 本机有已登录的 gh CLI 时, 优先直接从 CI 产物下载
+#   ./scripts/fetch-dryioc-feed.sh --verify-only --expected-commit <sha> --expected-sha256 <hash> [--refresh-package-cache]
 #
 # 依赖: git 与 dotnet SDK。
+# Shared-feed verification requires PowerShell 7, but the default local fetch does not.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +35,10 @@ GH_ARTIFACT="packages"
 USE_GH_ARTIFACT=0
 PROXY=""
 FORCE=0
+VERIFY_ONLY=0
+EXPECTED_COMMIT=""
+EXPECTED_SHA256=""
+REFRESH_PACKAGE_CACHE=0
 
 usage() {
     cat <<'EOF'
@@ -42,6 +48,10 @@ usage() {
   --proxy <url>       访问 GitHub 走指定代理(如 http://<host>:<port>), 不传则直连
   --use-gh-artifact   若本机有已登录的 gh CLI, 优先从 CI 产物下载, 失败则回退到源码构建
   --force             不管 commit 戳记是否一致都重建
+  --verify-only       Verify the shared feed offline without fetching or building
+  --expected-commit   Exact source commit selected by the producer for this run
+  --expected-sha256   Exact package SHA256 produced for this run
+  --refresh-package-cache  Invalidate only this package version if its cached SHA256 differs
   -h, --help          显示本帮助
 EOF
 }
@@ -52,11 +62,31 @@ while [ "$#" -gt 0 ]; do
         --proxy=*) PROXY="${1#--proxy=}" ;;
         --use-gh-artifact) USE_GH_ARTIFACT=1 ;;
         --force) FORCE=1 ;;
+        --verify-only) VERIFY_ONLY=1 ;;
+        --expected-commit) shift; EXPECTED_COMMIT="${1:?--expected-commit requires a value}" ;;
+        --expected-sha256) shift; EXPECTED_SHA256="${1:?--expected-sha256 requires a value}" ;;
+        --refresh-package-cache) REFRESH_PACKAGE_CACHE=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "未知参数: $1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
+
+if [ "$VERIFY_ONLY" = "1" ]; then
+    if [ "$FORCE" = "1" ] || [ "$USE_GH_ARTIFACT" = "1" ] || [ -n "$PROXY" ]; then
+        echo "Verification cannot be combined with fetch options." >&2
+        exit 2
+    fi
+    VERIFY_ARGS=(-VerifyOnly -ExpectedCommit "$EXPECTED_COMMIT" -ExpectedSha256 "$EXPECTED_SHA256")
+    if [ "$REFRESH_PACKAGE_CACHE" = "1" ]; then
+        VERIFY_ARGS+=(-RefreshPackageCache)
+    fi
+    exec pwsh -NoProfile -File "$SCRIPT_DIR/fetch-dryioc-feed.ps1" "${VERIFY_ARGS[@]}"
+fi
+if [ -n "$EXPECTED_COMMIT" ] || [ -n "$EXPECTED_SHA256" ] || [ "$REFRESH_PACKAGE_CACHE" = "1" ]; then
+    echo "Expected commit, SHA256 and cache refresh require --verify-only." >&2
+    exit 2
+fi
 
 # 指定代理时对本脚本启动的子进程生效(git/gh/dotnet 都识别这些标准变量); 未指定则直连。
 if [ -n "$PROXY" ]; then

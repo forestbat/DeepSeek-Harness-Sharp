@@ -41,6 +41,13 @@
         <TextBlock Classes="Body" Text="{Binding Impact}" TextWrapping="Wrap"
                    Foreground="{DynamicResource Brush.Status.Warning}"
                    IsVisible="{Binding HasImpact}" />
+        <StackPanel Spacing="6" IsVisible="{Binding HasSettingsDiff}">
+          <TextBlock Text="Settings diff (credentials redacted)" Classes="Secondary" />
+          <ScrollViewer MaxHeight="320" Classes="Slim">
+            <SelectableTextBlock Text="{Binding SettingsDiff}" TextWrapping="Wrap"
+                                 FontFamily="{DynamicResource Font.Mono}" />
+          </ScrollViewer>
+        </StackPanel>
 
         <Expander Header="完整参数">
           <SelectableTextBlock Text="{Binding Arguments}" TextWrapping="Wrap"

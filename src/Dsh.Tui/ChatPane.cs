@@ -112,21 +112,31 @@ public sealed class ChatPane : ITuiPane
 
     public int ScrollOffset { get; set; }
 
-    /** 滚到包含指定文本的首行(供 /timestamp jump): 需先绘制过一次以建立视口缓存。 */
-    internal bool TryScrollToMessage(string needle)
+    /**
+     * 滚到第 index 条用户消息的首行(供 /timestamp jump)。
+     * 按"渲染时记下的源偏移"定位, 而不是按文本匹配: 文本匹配会命中更早引用过同一句话的工具输出/消息,
+     * 首行被折行折断时还会找不到。
+     */
+    internal bool TryScrollToUserMessage(int index)
     {
-        if (string.IsNullOrEmpty(needle) || _wrapCacheLines is not { Count: > 0 } lines)
+        if (_visualRows is not { Count: > 0 } rows || Renderer.UserMessageStartAt(index) is not { } offset)
             return false;
-        for (var index = 0; index < lines.Count; index++)
+        // 源偏移 -> 视觉行: 找最后一个 SourceStart <= offset 的视觉行。
+        var low = 0;
+        var high = rows.Count;
+        while (low < high)
         {
-            if (lines[index].Contains(needle, StringComparison.Ordinal))
-            {
-                StickToBottom = false;
-                ScrollOffset = index;
-                return true;
-            }
+            var middle = (low + high) / 2;
+            if (rows[middle].SourceStart <= offset)
+                low = middle + 1;
+            else
+                high = middle;
         }
-        return false;
+        if (low == 0)
+            return false;
+        StickToBottom = false;
+        ScrollOffset = rows[low - 1].FlatStart;
+        return true;
     }
 
     public bool StickToBottom { get; set; } = true;
@@ -1019,7 +1029,6 @@ public sealed class ChatPane : ITuiPane
             return;
         PendingApproval = null;
         CloseChoicePrompt();
-        AppendRaw($"  approval: {outcome}\n");
         pending.TrySetResult(outcome);
     }
 
@@ -1137,13 +1146,16 @@ public sealed class ChatPane : ITuiPane
                 "type" => Candidates([.. KnownProviderTypes()]),
                 "action" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => Candidates("jump", "revert", "fork"),
                 "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(),
-                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<IPluginManager>("pluginManager", false)?.PackageNames ?? []]),
+                PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames ?? []]),
                 _ => descriptor.Name switch
                 {
                     "model" => Candidates([.. settings.Providers
                         .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                         .SelectMany(entry => ProviderCatalog
-                            .EffectiveModels(entry.Key, entry.Value.Options?.BaseUrl, entry.Value.Models.Keys)
+                            .EffectiveModels(
+                                _window.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false),
+                                entry.Key,
+                                entry.Value)
                             .OrderBy(model => model, StringComparer.Ordinal)
                             .Select(model => $"{entry.Key}/{model}"))]),
                     "remove" => Candidates([.. settings.Providers.Keys.OrderBy(name => name, StringComparer.Ordinal)]),

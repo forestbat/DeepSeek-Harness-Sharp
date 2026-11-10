@@ -153,11 +153,13 @@ public sealed class ProviderRegistrar : IDisposable
                     + $"(set providers.{id}.options.apiKey or environment variable {apiKeyEnv}); requests using it will fail with NO_ADAPTER");
         }
         // 有效模型 = settings 声明 ∪ models.dev 目录(目录已收录的模型不必落盘, 但运行时要能列出/选中)。
+        // 目录之外的中转站由适配器自己向端点 GET /models 补齐, 这里不必为空清单告警。
         var specs = ProviderCatalog.EffectiveModels(id, baseUrl, provider.Models.Keys)
             .Select(modelId => provider.Models.TryGetValue(modelId, out var declared)
                 ? new ProviderModelSpec(modelId, declared.Name, declared.SystemPromptUpdate)
                 : new ProviderModelSpec(modelId))
             .ToList();
+
         var resolved = new ResolvedLlmProvider(
             id,
             wire,

@@ -7,7 +7,7 @@ using Dsh.Runtime;
 
 namespace Dsh.SessionGraph;
 
-/** @deepseek-ai/dsh-session-graph: 注册会话事件图服务(ISessionEventGraph), 供查询工具、时间线等经 ctx 取用。 */
+/** @deepseek-ai/dsh-session-graph: 会话事件图与 /timestamp 时间线命令。 */
 public sealed class Plugin(string packageName) : IDshPlugin
 {
     internal const string SessionGraph = "@deepseek-ai/dsh-session-graph";

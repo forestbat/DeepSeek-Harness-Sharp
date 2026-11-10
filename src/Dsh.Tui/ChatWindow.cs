@@ -1331,7 +1331,7 @@ public sealed partial class ChatWindow : IDisposable
     private IReadOnlyList<LocalCommand> LocalCommands => _localCommands ??=
     [
         new("new", "开始新会话(可带目录)", NewSession),
-        new("resume", "恢复历史会话", ResumeSession),
+        new("resume", "恢复历史会话", (pane, text) => ResumeSession(pane, text)),
         new("session", "列出/恢复/删除会话", ListSessions),
         new("detach", "脱离会话交给 daemon", DetachSession),
         new("gpu", "选择 GPU / 渲染后端", (pane, text) => { SelectGpu(pane, text); return Task.CompletedTask; },
@@ -1501,13 +1501,13 @@ public sealed partial class ChatWindow : IDisposable
         switch (action)
         {
             case "jump":
-                await JumpToMessage(pane, message, targetSeq);
+                await JumpToMessage(pane, message, targetSeq, messages.FindIndex(entry => entry.Seq == targetSeq));
                 return;
             case "revert":
                 await RevertToAsync(pane, targetSeq, message.Text);
                 return;
             case "fork":
-                await ForkAtAsync(pane, targetSeq);
+                await ForkAtAsync(pane, targetSeq, message.Text);
                 return;
             default:
                 pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide 项>\n");
@@ -1534,7 +1534,7 @@ public sealed partial class ChatWindow : IDisposable
         if (action == "fork")
         {
             if (nearest is { } seq)
-                await ForkAtAsync(pane, seq);
+                await ForkAtAsync(pane, seq, messages.First(entry => entry.Seq == seq).Text);
             else
                 pane.AppendRaw("  No user message exists before this history window.\n");
             return;
@@ -1614,18 +1614,11 @@ public sealed partial class ChatWindow : IDisposable
     private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
         => [.. SessionTimeline.UserMessages(session).Select(entry => (entry.Seq, entry.Time, entry.Text))];
 
-    /** jump: 只滚到该消息(不改会话/文件); 用消息首行文本在视口缓存里定位。 */
-    private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq)
+    /** jump: 只滚到该消息(不改会话/文件); 按它在用户消息序列里的位置定位首行。 */
+    private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq, int index)
     {
-        var firstLine = FirstLine(target.Text);
-        if (firstLine.Length == 0)
-        {
-            pane.AppendRaw($"  jump: 消息 #{seq} 无文本\n");
-            return Task.CompletedTask;
-        }
-
         // 只定位: 目标消息滚到顶上; 不打印 "jumped to"(那会把视图重新贴回底部, 跳转看不到效果)。
-        if (!pane.TryScrollToMessage(firstLine))
+        if (!pane.TryScrollToUserMessage(index))
             pane.AppendRaw($"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
         return Task.CompletedTask;
     }
@@ -1648,56 +1641,52 @@ public sealed partial class ChatWindow : IDisposable
             }
         }
 
-        if (!pane.Agent.Session.TryTruncateTo(seq))
+        // 停在"这条消息所属回合之前": 消息前面紧挨着 TurnStart, 截在消息处会留下没有 TurnEnd 的回合。
+        var boundary = SessionTimeline.TurnStartOf(pane.Agent.Session.SnapshotEvents(), seq);
+        if (!pane.Agent.Session.TryTruncateTo(boundary))
         {
-            pane.AppendRaw($"  revert 失败: seq {seq} 超出可截断范围\n");
+            pane.AppendRaw($"  revert 失败: #{seq} 超出可截断范围\n");
             return;
         }
 
         pane.Input = targetText;
         pane.Cursor = pane.Input.Length;
         pane.StickToBottom = true;
-        pane.AppendRaw($"  reverted: 会话已截断到 #{seq} 之前, 消息已回填输入区\n");
-    }
-
-    private static string FirstLine(string text)
-    {
-        foreach (var line in text.Split('\n'))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length > 0)
-                return trimmed.Length <= 16 ? trimmed : trimmed[..16];
-        }
-        return "";
+        pane.AppendRaw($"  reverted: 会话已截断到 #{boundary} 之前, 消息已回填输入区\n");
     }
 
     /**
      * 派生新会话(不动当前会话), 带上 [0, seq] —— **含被选中的那条消息**。
      * 不带它的话"从第一条用户消息 fork"会得到一个只有握手的空会话(用户看到的就是空转录)。
      */
-    private Task ForkAtAsync(ChatPane pane, long seq)
+    /**
+     * 派生新会话, 带上"这条消息所属回合之前"的前缀 —— 被选中那条**不进**新会话:
+     * 它的原文回填到新会话的输入区, 用户改完再发, 才是分叉这个动作的用途。
+     */
+    private async Task ForkAtAsync(ChatPane pane, long seq, string targetText)
     {
         var session = pane.Agent.Session;
         var persistence = _ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false);
         if (persistence is null)
         {
             pane.AppendRaw("  fork 不可用: 会话持久化未启用\n");
-            return Task.CompletedTask;
+            return;
         }
 
         SessionId forked;
         try
         {
-            forked = SessionFork.Fork(persistence, session, seq + 1, $"fork of {session.Id} @{seq}", pane.CurrentCwd());
+            var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
+            forked = SessionFork.Fork(persistence, session, boundary, SessionFork.ForkTitle(session, seq), pane.CurrentCwd());
         }
         catch (InvalidOperationException error)
         {
             pane.AppendRaw($"  {error.Message}\n");
-            return Task.CompletedTask;
+            return;
         }
 
-        pane.AppendRaw($"  forked -> {forked} (用 /resume {forked} 打开)\n");
-        return Task.CompletedTask;
+        await ResumeSession(pane, $"/resume {forked}", targetText,
+            notice: $"  forked -> {forked}, 消息已回填输入区\n");
     }
 
     private static string Preview(string text) => SessionTimeline.Preview(text);
@@ -1724,7 +1713,11 @@ public sealed partial class ChatWindow : IDisposable
         });
     }
 
-    private async Task ResumeSession(ChatPane pane, string text)
+    /**
+     * prefill 是切过去之后要回填到输入区的文本(分叉时带回被选中那条消息);
+     * notice 是切换之后才打印的提示 —— 切换会清空旧转录, 提前打印就看不见了。
+     */
+    private async Task ResumeSession(ChatPane pane, string text, string? prefill = null, string? notice = null)
     {
         var agents = _ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
         var raw = text["/resume".Length..].Trim();
@@ -1771,7 +1764,12 @@ public sealed partial class ChatWindow : IDisposable
             if (!IsPaneAlive(pane))
                 return;
             pane.SwitchAgent(target);
-            pane.AppendRaw($"  resumed: {target.Id}\n");
+            pane.AppendRaw(notice ?? $"  resumed: {target.Id}\n");
+            if (prefill is { Length: > 0 })
+            {
+                pane.Input = prefill;
+                pane.Cursor = pane.Input.Length;
+            }
         });
     }
 

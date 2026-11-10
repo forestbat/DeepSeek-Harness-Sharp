@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Dsh.Plugins.Generated;
 
 namespace Dsh.Plugins;
@@ -54,21 +53,17 @@ public sealed class NativePluginQuarantine
     }
 }
 
-/** 原生插件的加载上下文:与托管侧的 PluginLoadContext 对称——每原生插件一个,
- *  持有 NativeLibrary 句柄、导出符号表(绑定)与该插件的在飞调用线程清单,配套 Deactivate + Free 卸载路径。
- *  与 ALC 的内存隔离不同,它只提供「故障遏制」:标记 Faulted → 快速卸载 → 同类二次故障禁装;
- *  不保证任意内存破坏后进程仍一致。 */
+/** Owns logical native-plugin activation, calls, and fault state.
+ * Native image memory is reclaimed with its owning process, not by logical disposal. */
 public sealed class NativePluginLoadContext : IDisposable
 {
-    private readonly nint _library;
     private readonly DshPluginApiBinding _binding;
     private readonly Lock _sync = new();
     private readonly HashSet<int> _inFlight = [];
     private NativePluginState _state = NativePluginState.Loaded;
 
-    internal NativePluginLoadContext(nint library, DshPluginApiBinding binding, string sourcePath, string package, string settingsSchemaJson = "")
+    internal NativePluginLoadContext(DshPluginApiBinding binding, string sourcePath, string package, string settingsSchemaJson = "")
     {
-        _library = library;
         _binding = binding;
         SourcePath = sourcePath;
         Package = package;
@@ -156,6 +151,5 @@ public sealed class NativePluginLoadContext : IDisposable
                 return;
             _state = NativePluginState.Unloaded;
         }
-        NativeLibrary.Free(_library);
     }
 }

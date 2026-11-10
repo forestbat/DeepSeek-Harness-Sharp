@@ -157,7 +157,8 @@ public sealed class PtySession : IDisposable, ITerminalConnection
     }
 
 
-    private void PumpAsync() => Task.Factory.StartNew(PumpLoop, TaskCreationOptions.LongRunning);
+    private void PumpAsync() => Task.Factory.StartNew(
+        PumpLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     /**
      * 泵用**专用线程 + 同步读**: Unix 后端是无缓冲同步 FileStream, 用 ReadAsync 会在阻塞期间占住它的

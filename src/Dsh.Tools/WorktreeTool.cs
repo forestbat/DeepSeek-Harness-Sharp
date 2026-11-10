@@ -2,6 +2,8 @@ using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Transport;
+using System.Text;
 
 namespace Dsh.Tools;
 
@@ -90,7 +92,7 @@ public static class WorktreeTool
             throw new ArgumentException("create_worktree: name and from must not start with '-'");
         await Git(subprocess, repository, ["check-ref-format", "--branch", name], exec.Signal);
         var baseCommit = await Git(subprocess, repository, ["rev-parse", "--verify", $"{from}^{{commit}}"], exec.Signal);
-        var checkout = await AllocateCheckout(repository, name, exec.Signal);
+        var checkout = await AllocateCheckout(repository, name, exec);
         await Git(subprocess, repository, ["worktree", "add", "-b", name, checkout, baseCommit], exec.Signal);
         return new CreatedWorktreeValue(SessionWorkingDirectory.Change(session, checkout), name, baseCommit, repository);
     }
@@ -115,7 +117,7 @@ public static class WorktreeTool
     private static string PoolOf(string repository) => Path.Combine(repository, ".agents", "worktrees");
 
     /** Reserves an unused checkout path; the pool ignores its own content only when this call creates it. */
-    private static async Task<string> AllocateCheckout(string repository, string name, CancellationToken signal)
+    private static async Task<string> AllocateCheckout(string repository, string name, ToolRunContext exec)
     {
         var pool = PoolOf(repository);
         var checkout = Path.GetFullPath(Path.Combine(pool, name));
@@ -123,14 +125,18 @@ public static class WorktreeTool
             throw new InvalidOperationException($"create_worktree: checkout path already exists: {checkout}");
         if (Directory.Exists(pool))
             return checkout;
+        var ignore = Path.Combine(pool, ".gitignore");
+        await SafetyFileAccess.AuthorizeAsync(ignore, "write", exec, exec.Signal).ConfigureAwait(false);
         Directory.CreateDirectory(pool);
-        await File.WriteAllTextAsync(Path.Combine(pool, ".gitignore"), PoolIgnoreContent, signal);
+        await using var file = new FileStream(ignore, FileMode.CreateNew, FileAccess.Write, FileShare.Read | FileShare.Delete,
+            4096, FileOptions.Asynchronous);
+        await file.WriteAsync(Encoding.UTF8.GetBytes(PoolIgnoreContent), exec.Signal).ConfigureAwait(false);
         return checkout;
     }
 
     private static async Task<string> Git(SubprocessService subprocess, string repository, IReadOnlyList<string> arguments, CancellationToken signal)
     {
-        using var handle = subprocess.Spawn(new SubprocessSpawnSpec
+        using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
             Argv = ["git", .. arguments],
             Cwd = repository,

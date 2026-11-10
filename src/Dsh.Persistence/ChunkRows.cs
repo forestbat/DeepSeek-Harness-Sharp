@@ -50,9 +50,7 @@ internal static class ChunkRows
         ExpandProvenance(record);
         var type = ReadTypeTag(record);
         if (IsChunkRowTag(type)) return ExpandRow(record, type!);
-        if (type is not null && !SessionEventCodec.IsRegistered(type) && !IsIgnorable(record))
-            throw new SessionFormatUnsupportedException(
-                $"session log contains event type \"{type}\" unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness");
+        ValidateTypeTag(type, IsIgnorable(record));
         if (type == SessionEventTypes.RequestHeader
             && record["data"] is JsonObject data
             && data["reason"] is JsonValue reasonValue
@@ -64,6 +62,128 @@ internal static class ChunkRows
         }
         return [DshJson.Deserialize<SessionEvent>(record)
             ?? throw new FormatException("stored session record deserialized to null")];
+    }
+
+    /**
+     * 直接从 UTF-8 字节解码一条存储记录。
+     *
+     * 绝大多数记录是普通事件, 既不是 chunk 打包行, 也不需要展开 sourceEventSeqs 的区间编码,
+     * 所以它们不需要 DOM: 走 JsonNode.Parse 只为把整棵 JSON 物化一遍、再序列化回去喂给反序列化,
+     * 相当于每条记录多解析一次。只有确实需要改写结构的记录才退回 DOM 路径。
+     */
+    public static IReadOnlyList<SessionEvent> DecodeStorageRecord(ReadOnlySpan<byte> line)
+    {
+        if (NeedsDom(line))
+            return DecodeStorageRecord(ParseRecord(line));
+        ValidateTypeTag(line);
+        var sessionEvent = JsonSerializer.Deserialize(line, DshJson.Info<SessionEvent>())
+            ?? throw new FormatException("stored session record deserialized to null");
+        return [sessionEvent];
+    }
+
+    /** 是否需要 Dom: chunk 打包行(要按行展开)与带区间编码来源(要展开 sourceEventSeqs)。 */
+    private static bool NeedsDom(ReadOnlySpan<byte> line)
+        => line.IndexOf("\"text-chunks\""u8) >= 0
+            || line.IndexOf("\"reasoning-chunks\""u8) >= 0
+            || line.IndexOf("\"tool-call-chunks\""u8) >= 0
+            || line.IndexOf("\"sourceEventSeqs\""u8) >= 0;
+
+    /** 未转义的 UTF-8 字节与常量比较: type 标签都是纯 ASCII, 不需要解码成字符串。 */
+    private static bool IsType(ReadOnlySpan<byte> value, string expected)
+        => value.SequenceEqual(Encoding.UTF8.GetBytes(expected));
+
+    private static JsonObject ParseRecord(ReadOnlySpan<byte> line)
+        => JsonNode.Parse(Encoding.UTF8.GetString(line)) as JsonObject
+            ?? throw new FormatException("stored session records must be objects");
+
+    /**
+     * 快速路径上的类型标签校验: 未知类型与退役格式必须拒绝, 这条约束不能因为跳过 DOM 而失效。
+     * 只顺序扫到 type/ignorable 与 request/header 的 data.reason 就停, 不建树。
+     */
+    private static void ValidateTypeTag(ReadOnlySpan<byte> line)
+    {
+        ReadOnlySpan<byte> type = default;
+        bool ignorable = false;
+        bool fallback = false;
+        var reader = new Utf8JsonReader(line);
+        try
+        {
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                throw new FormatException("stored session records must be objects");
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals("type"u8))
+                {
+                    reader.Read();
+                    type = reader.TokenType == JsonTokenType.String ? reader.ValueSpan : default;
+                }
+                else if (reader.ValueTextEquals("ignorable"u8))
+                {
+                    reader.Read();
+                    ignorable = reader.TokenType == JsonTokenType.True;
+                }
+                else if (reader.ValueTextEquals("data"u8))
+                {
+                    // 只有 request/header 的 data.reason 需要看, 用 Skip 跳过大块正文。
+                    reader.Read();
+                    if (reader.TokenType == JsonTokenType.StartObject)
+                    {
+                        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+                        {
+                            if (reader.ValueTextEquals("reason"u8))
+                            {
+                                reader.Read();
+                                fallback = reader.TokenType == JsonTokenType.String && reader.ValueTextEquals("fallback"u8);
+                            }
+                            else
+                            {
+                                reader.Read();
+                                reader.Skip();
+                            }
+                        }
+                    }
+                    else
+                    {
+                        reader.Skip();
+                    }
+                    continue;
+                }
+                else
+                {
+                    reader.Read();
+                    reader.Skip();
+                    continue;
+                }
+                // 已知且非 request/header 的类型直接通过, 不必再扫剩余字段;
+                // 未知类型必须继续找 ignorable(标记了忽略的未知事件要放行), request/header 还要看 data.reason。
+                if (!type.IsEmpty)
+                {
+                    var known = SessionEventCodec.IsRegistered(Encoding.UTF8.GetString(type));
+                    if (known && !IsType(type, SessionEventTypes.RequestHeader))
+                        break;
+                    if (!known && ignorable)
+                        break;
+                }
+            }
+        }
+        catch (JsonException error)
+        {
+            throw new FormatException("corrupt session log: stored record is not valid JSON", error);
+        }
+        if (type.IsEmpty)
+            return;
+        var name = Encoding.UTF8.GetString(type);
+        ValidateTypeTag(name, ignorable);
+        if (name == SessionEventTypes.RequestHeader && fallback)
+            throw new SessionFormatUnsupportedException(
+                "session log contains a request/header event with the unsupported legacy reason \"fallback\"; refusing to interpret the log — it was written by a retired pre-release harness");
+    }
+
+    private static void ValidateTypeTag(string? type, bool ignorable)
+    {
+        if (type is not null && !SessionEventCodec.IsRegistered(type) && !ignorable)
+            throw new SessionFormatUnsupportedException(
+                $"session log contains event type \"{type}\" unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness");
     }
 
     private static string? ReadTypeTag(JsonObject record)

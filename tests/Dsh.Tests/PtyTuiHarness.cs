@@ -22,6 +22,7 @@ internal sealed class PtyTuiHarness : IDisposable
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _cancellation = new();
     private readonly Task _pump;
+    private int _outputPumpStarted;
 
     private PtyTuiHarness(PtyHost host, PtySession session, string home)
     {
@@ -34,6 +35,10 @@ internal sealed class PtyTuiHarness : IDisposable
     public PtySession Session { get; }
 
     public string Home { get; }
+
+    public bool OutputPumpStarted => Volatile.Read(ref _outputPumpStarted) != 0;
+
+    public TaskStatus OutputPumpStatus => _pump.Status;
 
     /** 测试构建必须提供真实 TUI; 环境缺配置/不支持 AF_UNIX 时 Assert.Skip。 */
     public static async Task<PtyTuiHarness> StartAsync(params string[] extraArguments)
@@ -144,6 +149,19 @@ internal sealed class PtyTuiHarness : IDisposable
         }
     }
 
+    public async Task<char[,]> WaitForScreenAsync(Func<char[,], bool> isReady, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var screen = ReadScreen();
+            var remaining = deadline - DateTime.UtcNow;
+            if (isReady(screen) || remaining <= TimeSpan.Zero)
+                return screen;
+            await _signal.WaitAsync(remaining, TestContext.Current.CancellationToken);
+        }
+    }
+
     public async Task WriteTextAsync(string text)
         => await Session.WriteAsync(Encoding.UTF8.GetBytes(text), TestContext.Current.CancellationToken);
 
@@ -245,6 +263,7 @@ internal sealed class PtyTuiHarness : IDisposable
 
     private async Task PumpAsync()
     {
+        Volatile.Write(ref _outputPumpStarted, 1);
         var buffer = new byte[4096];
         while (!_cancellation.IsCancellationRequested)
         {

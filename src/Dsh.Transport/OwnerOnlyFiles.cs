@@ -33,6 +33,7 @@ public static class OwnerOnlyFiles
     public static FileStream Create(string path)
         => OperatingSystem.IsWindows() ? CreateWindows(path) : CreateUnix(path);
 
+
     /** Writes a new owner-only file, replacing whatever was at the path. */
     public static void Write(string path, string contents)
         => Write(path, Encoding.UTF8.GetBytes(contents));
@@ -87,4 +88,5 @@ public static class OwnerOnlyFiles
         security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.FullControl, AccessControlType.Allow));
         return new FileInfo(path).Create(FileMode.CreateNew, FileSystemRights.FullControl, FileShare.None, WriteBufferSize, FileOptions.None, security);
     }
+
 }

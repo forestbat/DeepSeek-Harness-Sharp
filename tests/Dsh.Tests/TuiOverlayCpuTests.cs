@@ -10,17 +10,24 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public class TuiOverlayCpuTests
 {
+    private const int InitialLayoutTimeoutSeconds = 15;
+
     [Fact]
     public async Task Slash_Menu_Does_Not_Mix_Right_Panel_Into_Main()
     {
         using var harness = await PtyTuiHarness.StartAsync();
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        await harness.WaitForAsync("快捷键", TimeSpan.FromSeconds(5));
-        await harness.WaitForAsync("上下文", TimeSpan.FromSeconds(10));
+        var initial = await harness.WaitForScreenAsync(static screen =>
+        {
+            if (DividerColumn(screen) <= 0)
+                return false;
+            var text = Columns(screen, 0, screen.GetLength(0)).Replace(" ", string.Empty);
+            return text.Contains("快捷键", StringComparison.Ordinal) && text.Contains("上下文", StringComparison.Ordinal);
+        }, TimeSpan.FromSeconds(InitialLayoutTimeoutSeconds));
 
-        var divider = DividerColumn(harness.ReadScreen());
-        Assert.True(divider > 0, "初始布局里找不到右侧栏分隔线");
+        var divider = DividerColumn(initial);
+        Assert.True(divider > 0, $"Initial right-panel divider was not rendered in the actual {initial.GetLength(0)}x{initial.GetLength(1)} viewport.");
 
         // 先打 / 打开浮层, 再输入中文(宽字符): 覆盖宽字符是历史上"行右移/串栏"的触发点。
         await harness.WriteTextAsync("/");

@@ -14,8 +14,8 @@ public sealed record StrReplaceEditorConfig
     public string? Description { get; init; }
 }
 
-// 逐字移植 packages/fs/tool-str-replace-editor/src/index.ts。
-// 与 TS 的差异:C# 侧没有 sandbox fs 服务,直接做本地文件 I/O;
+// 命令语义移植自 packages/fs/tool-str-replace-editor/src/index.ts。
+// C# 侧读取经 SafetyFileAccess、写入经 SettingsMutation 统一授权与发布。
 // fs/write-intent、fs/edit-intent waterfall 与 fs/observed 事件没有本地消费者,不发。
 public static class StrReplaceEditorTool
 {
@@ -49,6 +49,7 @@ public static class StrReplaceEditorTool
         return tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = description,
             Parameters = ToolSchemas.Parse("""
                 {
@@ -97,7 +98,7 @@ public static class StrReplaceEditorTool
         });
     }
 
-    private static Task<object?> Execute(JsonElement args, ToolRunContext exec, StrReplaceEditorConfig config)
+    private static async Task<object?> Execute(JsonElement args, ToolRunContext exec, StrReplaceEditorConfig config)
     {
         var command = args.TryGetProperty("command", out var commandElement) && commandElement.ValueKind == JsonValueKind.String
             ? commandElement.GetString()
@@ -107,14 +108,14 @@ public static class StrReplaceEditorTool
             : "";
         object result = command switch
         {
-            "view" => ViewPath(path, args, config.MaxOutputChars, exec),
-            "create" => CreateFile(path, OptionalString(args, "file_text"), exec),
-            "str_replace" => ReplaceInFile(path, OptionalString(args, "old_str"), NewStrOf(args), exec),
-            "insert" => InsertInFile(path, OptionalInt(args, "insert_line"), OptionalString(args, "new_str"), exec),
+            "view" => await ViewPath(path, args, config.MaxOutputChars, exec).ConfigureAwait(false),
+            "create" => await CreateFile(path, OptionalString(args, "file_text"), exec).ConfigureAwait(false),
+            "str_replace" => await ReplaceInFile(path, OptionalString(args, "old_str"), NewStrOf(args), exec).ConfigureAwait(false),
+            "insert" => await InsertInFile(path, OptionalInt(args, "insert_line"), OptionalString(args, "new_str"), exec).ConfigureAwait(false),
             // TS 由入参 schema 拦截未知 command;C# 侧运行时校验入参 schema 未接,这里等价拒绝。
             _ => throw new ArgumentException($"invalid command: expected one of `view`, `create`, `str_replace`, `insert`, got {(command is null ? "missing" : $"`{command}`")}"),
         };
-        return Task.FromResult<object?>(result);
+        return result;
     }
 
     private static bool IsView(JsonElement args)
@@ -188,18 +189,18 @@ public static class StrReplaceEditorTool
     private static string MaybeTruncate(string content, int maxOutputChars)
         => content.Length <= maxOutputChars ? content : string.Concat(content.AsSpan(0, maxOutputChars), TruncatedMessage);
 
-    private static string ViewPath(string path, JsonElement args, int maxOutputChars, ToolRunContext exec)
+    private static async Task<string> ViewPath(string path, JsonElement args, int maxOutputChars, ToolRunContext exec)
     {
         var target = ResolveTarget(path);
         if (StatExisting(target, "view"))
         {
             if (args.TryGetProperty("view_range", out var rangeElement) && rangeElement.ValueKind != JsonValueKind.Null)
                 throw new ArgumentException("The `view_range` parameter is not allowed when `path` points to a directory.");
-            return ListDirectory(target, maxOutputChars);
+            return await ListDirectory(target, maxOutputChars, exec).ConfigureAwait(false);
         }
         var viewRange = ParseViewRange(args);
         exec.Signal.ThrowIfCancellationRequested();
-        var content = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var content = await SafetyFileAccess.ReadTextAsync(target, exec).ConfigureAwait(false);
         return FormatFileView(target, content, maxOutputChars, viewRange);
     }
 
@@ -227,10 +228,10 @@ public static class StrReplaceEditorTool
         return MaybeTruncate($"{prompt}:\n{numbered}\n", maxOutputChars);
     }
 
-    private static string ListDirectory(string target, int maxOutputChars)
+    private static async Task<string> ListDirectory(string target, int maxOutputChars, ToolRunContext exec)
     {
         var rows = new List<string> { $"d\t{target}" };
-        Visit(target, 1, rows);
+        await Visit(target, 1, rows, exec).ConfigureAwait(false);
         rows.Sort((left, right) => string.CompareOrdinal(RowKey(left), RowKey(right)));
         var listing = MaybeTruncate(string.Join('\n', rows) + '\n', maxOutputChars);
         return $"Here're the files and directories up to 2 levels deep in {target}, excluding hidden items, node_modules, and Python cache directories:\n{listing}\n";
@@ -238,35 +239,30 @@ public static class StrReplaceEditorTool
         static string RowKey(string row) => row[(row.IndexOf('\t') + 1)..];
     }
 
-    private static void Visit(string directory, int depth, List<string> rows)
+    private static async Task Visit(string directory, int depth, List<string> rows, ToolRunContext exec)
     {
-        foreach (var entry in Directory.GetFileSystemEntries(directory))
+        foreach (var entry in await SafetyFileAccess.ReadDirectoryAsync(directory, exec).ConfigureAwait(false))
         {
-            var name = Path.GetFileName(entry);
+            var name = Path.GetFileName(entry.Path);
             if (name.StartsWith('.') || name is "node_modules" or "__pycache__") continue;
-            var isDirectory = Directory.Exists(entry);
-            rows.Add($"{(isDirectory ? "d" : "f")}\t{entry}");
-            if (isDirectory && depth < 2)
-                Visit(entry, depth + 1, rows);
+            rows.Add($"{(entry.IsDirectory ? "d" : "f")}\t{entry.Path}");
+            if (entry.IsDirectory && depth < 2)
+                await Visit(entry.Path, depth + 1, rows, exec).ConfigureAwait(false);
         }
     }
 
-    private static string CreateFile(string path, string? fileText, ToolRunContext exec)
+    private static async Task<string> CreateFile(string path, string? fileText, ToolRunContext exec)
     {
         var content = RequiredForCommand(fileText, "file_text", "create");
         var target = ResolveTarget(path);
         exec.Signal.ThrowIfCancellationRequested();
         if (File.Exists(target) || Directory.Exists(target))
             throw new ArgumentException($"File already exists at: {target}. Cannot overwrite files using command `create`.");
-        var directory = Path.GetDirectoryName(target);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-        File.WriteAllText(target, content, new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        await SettingsMutation.WriteTextAsync(target, "", content, exec, FileMode.CreateNew).ConfigureAwait(false);
         return $"New file created successfully at: {target}";
     }
 
-    private static string ReplaceInFile(string path, string? oldStr, (bool IsNull, string? Value) newStr, ToolRunContext exec)
+    private static async Task<string> ReplaceInFile(string path, string? oldStr, (bool IsNull, string? Value) newStr, ToolRunContext exec)
     {
         if (newStr.IsNull)
             throw new ArgumentException("Parameter `new_str` must be omitted or contain a string for command: str_replace");
@@ -277,7 +273,7 @@ public static class StrReplaceEditorTool
         var newValue = newStr.Value ?? "";
         StatExisting(target, "str_replace");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var offsets = MatchOffsets(before, oldValue);
         if (offsets.Count == 0)
             throw new HarnessException($"No replacement was performed, old_str `{oldValue}` did not appear verbatim in {target}.", "FS_EDIT_NOT_FOUND");
@@ -287,12 +283,12 @@ public static class StrReplaceEditorTool
             throw new HarnessException($"No replacement was performed. Multiple occurrences of old_str `{oldValue}` in lines [{string.Join(", ", lines)}]. Please ensure it is unique", "FS_AMBIGUOUS_EDIT");
         }
         var offset = offsets[0];
-        File.WriteAllText(target, string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length)), new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        var after = string.Concat(before.AsSpan(0, offset), newValue, before.AsSpan(offset + oldValue.Length));
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 
-    private static string InsertInFile(string path, int? insertLine, string? newStr, ToolRunContext exec)
+    private static async Task<string> InsertInFile(string path, int? insertLine, string? newStr, ToolRunContext exec)
     {
         if (insertLine is null)
             throw new ArgumentException("Parameter `insert_line` is required for command: insert");
@@ -300,13 +296,12 @@ public static class StrReplaceEditorTool
         var target = ResolveTarget(path);
         StatExisting(target, "insert");
         exec.Signal.ThrowIfCancellationRequested();
-        var before = File.ReadAllText(target, new UTF8Encoding(false, false));
+        var before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
         var lines = before.Split('\n');
         if (insertLine.Value < 0 || insertLine.Value > lines.Length)
             throw new ArgumentException($"Invalid `insert_line` parameter: {insertLine.Value}. It should be within the range of lines of the file: [0, {lines.Length}]");
         var after = string.Join('\n', lines.Take(insertLine.Value).Concat(value.Split('\n')).Concat(lines.Skip(insertLine.Value)));
-        File.WriteAllText(target, after, new UTF8Encoding(false, false));
-        exec.RecordFileChange(target);
+        await SettingsMutation.WriteTextAsync(target, before, after, exec, FileMode.Open).ConfigureAwait(false);
         return $"The file {target} has been edited successfully.";
     }
 

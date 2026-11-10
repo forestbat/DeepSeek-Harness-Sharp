@@ -23,6 +23,7 @@ public static class WriteTool
         var registration = tools.Register(new ToolDefinition
         {
             Name = ToolName,
+            MediatesFileAccess = true,
             Description = "Create or fully replace a UTF-8 text file.",
             Parameters = ToolSchemas.ObjectSchema(
                 new Dictionary<string, System.Text.Json.Nodes.JsonObject>
@@ -93,24 +94,10 @@ public static class WriteTool
         var operation = "create";
         if (File.Exists(target))
         {
-            before = await File.ReadAllTextAsync(target, new UTF8Encoding(false, false), exec.Signal);
+            before = await SafetyFileAccess.ReadTextAsync(target, exec, settings: new SettingsApproval()).ConfigureAwait(false);
             operation = "update";
         }
-        var directory = Path.GetDirectoryName(target);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-        var tempPath = $"{target}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            await File.WriteAllTextAsync(tempPath, content, new UTF8Encoding(false, false), exec.Signal);
-            File.Move(tempPath, target, true);
-            exec.RecordFileChange(target);
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
+        await SettingsMutation.WriteTextAsync(target, before ?? "", content, exec).ConfigureAwait(false);
         return new WriteResultValue(target, operation, before, content);
     }
 }

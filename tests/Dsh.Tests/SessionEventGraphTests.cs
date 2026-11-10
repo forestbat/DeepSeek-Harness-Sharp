@@ -16,7 +16,7 @@ namespace Dsh.Tests;
 
 /**
  * 事件图组件测试: 会话日志一律由真实写入路径产生(agent 循环 + 工具/审批/命令/压缩/子代理/工作流/fork),
- * 再从 ISessionEventGraph 读出节点与边; LLM 由脚本化适配器按顺序应答。
+ * 再从 SessionEventGraphService 读出节点与边; LLM 由脚本化适配器按顺序应答。
  */
 public sealed class SessionEventGraphTests : IDisposable
 {
@@ -117,7 +117,7 @@ public sealed class SessionEventGraphTests : IDisposable
         public ToolResultPruner Pruner { get; }
         public JsonlSessionPersistence Persistence { get; }
         public CountingPersistence PersistenceReads { get; }
-        public ISessionEventGraph Graph { get; }
+        public SessionEventGraphService Graph { get; }
 
         /** probe 工具回显参数里的 text, 且每次执行前都要审批(自动批准), 让日志里出现审批配对。 */
         private void RegisterProbeTool()
@@ -210,11 +210,11 @@ public sealed class SessionEventGraphTests : IDisposable
     private static long ResultSeq(Session session, string callId)
         => session.SnapshotEvents().First(e => e.Data is ToolResultPayload payload && payload.Message.ToolSource.CallId.Value == callId).Seq;
 
-    private static IReadOnlyList<SessionEventEdge> Edges(ISessionEventGraph graph, SessionId session, long seq, SessionEventEdgeKind kind)
+    private static IReadOnlyList<SessionEventEdge> Edges(SessionEventGraphService graph, SessionId session, long seq, SessionEventEdgeKind kind)
         => [.. graph.EdgesFrom(session, seq).Where(edge => edge.Kind == kind)];
 
     /** 两张图在 [0, count) 上的节点(surface)与出边逐条一致。 */
-    private static void AssertSameGraph(ISessionEventGraph graph, SessionId expected, SessionId actual, long count)
+    private static void AssertSameGraph(SessionEventGraphService graph, SessionId expected, SessionId actual, long count)
     {
         for (var seq = 0L; seq < count; seq++)
         {

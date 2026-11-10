@@ -72,10 +72,17 @@ public sealed class FleetLocalForwardEgressTests
             var accepted = incumbent.AcceptTcpClientAsync(deadline.Token);
             await witness.ConnectAsync(IPAddress.Loopback, port, deadline.Token);
             using var server = await accepted;
-            await server.GetStream().WriteAsync("incumbent-owned"u8.ToArray(), deadline.Token);
+            var serverStream = server.GetStream();
+            var witnessStream = witness.GetStream();
+            await serverStream.WriteAsync("incumbent-owned"u8.ToArray(), deadline.Token);
             var bytes = new byte["incumbent-owned".Length];
-            await witness.GetStream().ReadExactlyAsync(bytes, deadline.Token);
+            await witnessStream.ReadExactlyAsync(bytes, deadline.Token);
             Assert.Equal("incumbent-owned"u8.ToArray(), bytes);
+            // The witness owns the active close; the incumbent must not leave TIME_WAIT on the fixed listening port.
+            witness.Client.Shutdown(SocketShutdown.Send);
+            Assert.Equal(0, await serverStream.ReadAsync(bytes.AsMemory(0, 1), deadline.Token));
+            server.Client.Shutdown(SocketShutdown.Send);
+            Assert.Equal(0, await witnessStream.ReadAsync(bytes.AsMemory(0, 1), deadline.Token));
         }
         incumbent.Stop();
         AssertPortCanRebind(port);
@@ -109,6 +116,47 @@ public sealed class FleetLocalForwardEgressTests
         await freshExited;
         Assert.False(File.Exists(freshAskPass));
         AssertPortCanRebind(freshPort);
+    }
+
+    [Theory]
+    [InlineData("localForward")]
+    [InlineData("proxyCommand")]
+    public async Task DeniedJumpForwarding_RetiresOnlyTheOwnedSshAndKeepsTheJumpAvailable(string mode)
+    {
+        FleetSshEndToEndTests.RequireEnvironment();
+        await using var ssh = await TestSshServer.StartAsync(TestContext.Current.CancellationToken, allowTcpForwarding: false);
+        await using var forwarding = new TestForwardProxy();
+        var root = TempTree.CreateSocketDirectory("f81e");
+        try
+        {
+            var direct = ssh.Machine("healthy-jump", root);
+            var observed = BorrowedOutboundProxyTests.ObserveSsh(direct, root);
+            // The real jump authenticates, then sshd rejects its direct-tcpip request without relying on target TCP behavior.
+            await using var tunnel = new SshOutboundTunnel(observed with
+            {
+                OutboundTunnel = new(mode, $"http://127.0.0.1:{forwarding.Port}"),
+            });
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            deadline.CancelAfter(SignalTimeout);
+            await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                await using var unexpected = await tunnel.ConnectAsync(new DnsEndPoint("127.0.0.1", forwarding.Port), deadline.Token);
+            });
+            Assert.Empty(forwarding.Requests);
+            if (mode == "localForward")
+                AssertPortCanRebind(Assert.IsType<int>(tunnel.LocalPort));
+            else
+                Assert.Null(tunnel.LocalPort);
+            await tunnel.DisposeAsync();
+            await tunnel.DisposeAsync();
+            await AssertOwnedSshRetiredAsync(root, mode, forwarding.Port);
+            Assert.Equal("jump-still-alive", await new SshTransport(direct).RunAsync("printf 'jump-still-alive'", deadline.Token));
+            Assert.False(deadline.IsCancellationRequested, "The denied jump forwarding and cleanup must complete before the original watchdog.");
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
     }
 
     [Theory]
@@ -626,8 +674,31 @@ public sealed class FleetLocalForwardEgressTests
     {
         using var rebound = new TcpListener(IPAddress.Loopback, port);
         rebound.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        rebound.Start();
+        try
+        {
+            rebound.Start();
+        }
+        catch (SocketException exception) when (exception.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            throw new IOException($"The released local-forward port cannot be rebound ({DescribePortState(port)}).", exception);
+        }
         Assert.Equal(new IPEndPoint(IPAddress.Loopback, port), rebound.LocalEndpoint);
+    }
+
+    private static string DescribePortState(int port)
+    {
+        try
+        {
+            var properties = IPGlobalProperties.GetIPGlobalProperties();
+            var listeners = properties.GetActiveTcpListeners().Count(endpoint => endpoint.Port == port);
+            var connections = properties.GetActiveTcpConnections().Where(connection => connection.LocalEndPoint.Port == port)
+                .Select(static connection => connection.State).ToArray();
+            return $"listeners={listeners}, connections=[{string.Join(",", connections)}], osVersion={Environment.OSVersion.Version}";
+        }
+        catch (NetworkInformationException exception)
+        {
+            return $"networkStateUnavailable={exception.ErrorCode}, osVersion={Environment.OSVersion.Version}";
+        }
     }
 
     internal static async Task AssertOwnedSshRetiredAsync(string root, string mode, params int[] proxyPorts)

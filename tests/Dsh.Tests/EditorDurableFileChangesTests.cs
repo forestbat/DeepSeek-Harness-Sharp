@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Ide.Surfaces;
@@ -24,51 +25,37 @@ public sealed class EditorDurableFileChangesTests
     {
         using var fixture = new MutationFixture();
         var path = Path.Combine(fixture.Root, "changed.txt");
-        var arguments = new JsonObject();
-        var tool = StrReplaceEditorTool.ToolName;
-        if (operation is "write" or "edit")
+        const string before = "before-long-文档";
+        const string after = "after-✓";
+        if (operation != "create")
         {
-            tool = operation;
-            arguments["file_path"] = path;
-            if (operation == "write")
-                arguments["content"] = "after";
-            else
-            {
-                File.WriteAllText(path, "before");
-                arguments["old_string"] = "before";
-                arguments["new_string"] = "after";
-            }
+            File.WriteAllText(path, before);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
         }
-        else
-        {
-            arguments["command"] = operation;
-            arguments["path"] = path;
-            if (operation == "create")
-                arguments["file_text"] = "after";
-            else
-            {
-                File.WriteAllText(path, "before");
-                arguments["new_str"] = "after";
-                if (operation == "insert")
-                    arguments["insert_line"] = 0;
-                else
-                    arguments["old_str"] = "before";
-            }
-        }
+        await using var previous = operation == "create" ? null
+            : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        var (tool, arguments) = Replacement(operation, path, before, after);
         fixture.Session.Append(new TurnStartPayload(1));
+
         Assert.False((await fixture.Execute(tool, arguments)).IsError);
         fixture.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
 
+        var expected = operation == "insert" ? "after-✓\nbefore-long-文档" : after;
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), File.ReadAllBytes(path));
+        if (previous is not null)
+        {
+            using var reader = new StreamReader(previous, leaveOpen: true);
+            Assert.Equal(before, await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
+        }
         var change = Assert.Single(fixture.Session.SnapshotEvents(), item => item.Data is FileChangedPayload);
         Assert.Equal(path, Assert.IsType<FileChangedPayload>(change.Data).Path);
-        Assert.True(change.Ignorable);
-        Assert.False(change.IsSurfaceEligible);
         Assert.Empty(fixture.Session.DeriveMessages());
-        Assert.Contains("after", File.ReadAllText(path));
-        using var serialized = JsonDocument.Parse(DshJson.Serialize(change));
-        Assert.Equal(["path", "type"], serialized.RootElement.GetProperty("data").EnumerateObject().Select(property => property.Name).Order().ToArray());
         Assert.Equal([path], EditorChangeSet.PreviousTurnFiles(fixture.Session));
         Assert.Equal([path], EditorChangeSet.PreviousTurnFiles(await fixture.Restore()));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite
+                | (operation is "str_replace" or "insert" ? UnixFileMode.GroupRead : 0), File.GetUnixFileMode(path));
     }
 
     [Fact]
@@ -91,6 +78,70 @@ public sealed class EditorDurableFileChangesTests
         Assert.Empty(EditorChangeSet.PreviousTurnFiles(fixture.Session));
         Assert.Empty(EditorChangeSet.PreviousTurnFiles(await fixture.Restore()));
     }
+
+    [Theory]
+    [InlineData("write")]
+    [InlineData("edit")]
+    [InlineData("str_replace")]
+    [InlineData("insert")]
+    public async Task MutationTools_FailedPublicationPreservesOriginalAndDoesNotRecordChanges(string operation)
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip("Windows delete-sharing denial is required for this publication failure.");
+        using var fixture = new MutationFixture();
+        var directory = Directory.CreateDirectory(Path.Combine(fixture.Root, "files")).FullName;
+        var path = Path.Combine(directory, "unchanged.txt");
+        const string before = "before-long-文档";
+        File.WriteAllText(path, before);
+        using var previous = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        fixture.Session.Append(new TurnStartPayload(1));
+        var (tool, arguments) = Replacement(operation, path, before, "after-✓");
+
+        var result = await fixture.Execute(tool, arguments);
+        fixture.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+
+        Assert.True(result.IsError);
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.Equal([path], Directory.GetFiles(directory));
+        Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is FileChangedPayload);
+        Assert.Empty(EditorChangeSet.PreviousTurnFiles(await fixture.Restore()));
+    }
+
+    [Theory]
+    [InlineData(FileMode.Open, false)]
+    [InlineData(FileMode.CreateNew, true)]
+    public async Task OrdinaryMutationModes_RejectMissingOpenAndExistingCreateNew(FileMode mode, bool exists)
+    {
+        using var fixture = new MutationFixture();
+        var path = Path.Combine(fixture.Root, "mode.txt");
+        if (exists)
+            File.WriteAllText(path, "before");
+        var call = ToolCallId.Create("ordinary-mode-test");
+        var run = new ToolRunContext
+        {
+            CallId = call, RootCallIdValue = call, Name = "write",
+            Arguments = JsonSerializer.SerializeToElement(new { }),
+            Agent = fixture.Agent, Signal = TestContext.Current.CancellationToken,
+        };
+
+        await Assert.ThrowsAnyAsync<IOException>(() => SettingsMutation.WriteTextAsync(path, "before", "after", run, mode));
+
+        Assert.Equal(exists, File.Exists(path));
+        if (exists)
+            Assert.Equal("before", File.ReadAllText(path));
+        Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is FileChangedPayload);
+    }
+
+    private static (string Tool, JsonObject Arguments) Replacement(string operation, string path, string before, string after)
+        => operation switch
+        {
+            "write" => ("write", new JsonObject { ["file_path"] = path, ["content"] = after }),
+            "edit" => ("edit", new JsonObject { ["file_path"] = path, ["old_string"] = before, ["new_string"] = after }),
+            "create" => (StrReplaceEditorTool.ToolName, new JsonObject { ["command"] = operation, ["path"] = path, ["file_text"] = after }),
+            "str_replace" => (StrReplaceEditorTool.ToolName, new JsonObject { ["command"] = operation, ["path"] = path, ["old_str"] = before, ["new_str"] = after }),
+            "insert" => (StrReplaceEditorTool.ToolName, new JsonObject { ["command"] = operation, ["path"] = path, ["insert_line"] = 0, ["new_str"] = after }),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
 
     [Theory]
     [InlineData(false)]

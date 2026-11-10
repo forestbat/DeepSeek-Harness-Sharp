@@ -1,4 +1,5 @@
 using Dsh.Runtime;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -166,6 +167,187 @@ public class SkillTests
     }
 
     [Fact]
+    public async Task CatalogTool_RealFileReadObservesCurrentDenyWithoutLeakingContent_WhileManualLoadingStillWorks()
+    {
+        var root = TempTree.CreateDirectory("skill-policy");
+        try
+        {
+            var directory = Directory.CreateDirectory(Path.Combine(root, "private-skill")).FullName;
+            var path = Path.Combine(directory, "SKILL.md");
+            await File.WriteAllTextAsync(path, "---\nname: private-skill\ndescription: File read policy consumer\n---\nprivate-skill-body-marker\n",
+                TestContext.Current.CancellationToken);
+            var policy = new SafetySettings { Whitelist = new() { ["skill-invocation"] = new() { Tool = [SkillCatalog.ToolName] } } };
+            await using var fixture = new DiscoveryFixture(root, [root], () => new HarnessSettings { Safety = policy });
+            var allowed = await fixture.Execute(TestContext.Current.CancellationToken, "private-skill");
+            Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("private-skill-body-marker", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+            policy.Blacklist["deny-skill-file"] = new() { Path = path, Intent = "read" };
+            var denied = await fixture.Execute(TestContext.Current.CancellationToken, "private-skill");
+            Assert.True(denied.IsError);
+            Assert.DoesNotContain("private-skill-body-marker", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
+            SafetyAssert.Denied(fixture.Session, fixture.LastCallId.Value, "deny-skill-file", path, "read", SkillCatalog.ToolName);
+            var manual = await fixture.Registry.Get("private-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
+            Assert.NotNull(manual);
+            Assert.Contains("private-skill-body-marker", manual.Content);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CatalogTool_NativeSkillLinks_AllowContentThenDenyItsRealTarget(bool directoryLink)
+    {
+        var root = TempTree.CreateDirectory("skill-link-policy");
+        try
+        {
+            var skills = Directory.CreateDirectory(Path.Combine(root, "skills")).FullName;
+            var storage = Directory.CreateDirectory(Path.Combine(root, "storage")).FullName;
+            var target = directoryLink
+                ? Path.Combine(Directory.CreateDirectory(Path.Combine(storage, "linked-skill")).FullName, "SKILL.md")
+                : Path.Combine(storage, "linked-skill.md");
+            await File.WriteAllTextAsync(target,
+                "---\nname: linked-skill\ndescription: Native link consumer\n---\nlinked-private-body\n",
+                TestContext.Current.CancellationToken);
+            try
+            {
+                if (directoryLink)
+                    Directory.CreateSymbolicLink(Path.Combine(skills, "linked-skill"), Path.GetDirectoryName(target)!);
+                else
+                    File.CreateSymbolicLink(Path.Combine(skills, "linked-skill.md"), target);
+            }
+            catch (Exception error) when (OperatingSystem.IsWindows()
+                && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+            {
+                Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+            }
+
+            var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
+            await using var fixture = new DiscoveryFixture(root, [skills], () => new HarnessSettings { Safety = policy });
+            var manual = await fixture.Registry.Get("linked-skill", new SkillViewOptions { Cwd = root, Signal = TestContext.Current.CancellationToken });
+            Assert.NotNull(manual);
+            Assert.Contains("linked-private-body", manual.Content);
+            var allowed = await fixture.Execute(TestContext.Current.CancellationToken, "linked-skill");
+            Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("linked-private-body", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+
+            policy.Blacklist["deny-linked-target"] = new() { Path = target, Intent = "read" };
+            var denied = await fixture.Execute(TestContext.Current.CancellationToken, "linked-skill");
+            Assert.True(denied.IsError);
+            Assert.DoesNotContain("linked-private-body", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
+            SafetyAssert.Denied(fixture.Session, fixture.LastCallId.Value, "deny-linked-target", target, "read", SkillCatalog.ToolName);
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("dangling.md")]
+    [InlineData("dangling.bin")]
+    public async Task CatalogTool_DanglingEntry_DoesNotHideAnExistingHealthySkill(string danglingName)
+    {
+        var root = TempTree.CreateDirectory("skill-dangling-entry");
+        try
+        {
+            var healthy = Directory.CreateDirectory(Path.Combine(root, "healthy-skill")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(healthy, "SKILL.md"),
+                "---\nname: healthy-skill\ndescription: Healthy sibling consumer\n---\nhealthy-sibling-body\n",
+                TestContext.Current.CancellationToken);
+            var policy = new SafetySettings { Whitelist = new() { ["skill-call"] = new() { Tool = [SkillCatalog.ToolName] } } };
+            await using var fixture = new DiscoveryFixture(root, [root], () => new HarnessSettings { Safety = policy });
+            var before = await fixture.Execute(TestContext.Current.CancellationToken, "healthy-skill");
+            Assert.False(before.IsError, string.Concat(before.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("healthy-sibling-body", string.Concat(before.Content.OfType<TextBlock>().Select(block => block.Text)));
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(root, danglingName), Path.Combine(root, "missing-target.md"));
+            }
+            catch (Exception error) when (OperatingSystem.IsWindows()
+                && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+            {
+                Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+            }
+            var after = await fixture.Execute(TestContext.Current.CancellationToken, "healthy-skill");
+            Assert.False(after.IsError, string.Concat(after.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Contains("healthy-sibling-body", string.Concat(after.Content.OfType<TextBlock>().Select(block => block.Text)));
+        }
+        finally { TempTree.Delete(root); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CatalogTool_ColdAndInvalidatedDiscovery_DoesNotTouchUnselectedBackendsBeforeApproval(bool invalidated)
+    {
+        await using var fixture = new DiscoveryFixture();
+        if (invalidated)
+        {
+            await fixture.Registry.List(new SkillViewOptions { Cwd = fixture.Root, Signal = TestContext.Current.CancellationToken });
+            fixture.ProviderControl.Invalidate();
+        }
+        fixture.ResetObservations();
+        using (ApprovalAnswerers.DenyAll(fixture.Context))
+        {
+            var denied = await fixture.Execute(TestContext.Current.CancellationToken);
+            Assert.True(denied.IsError);
+            Assert.Equal((0, 0), (fixture.FileSystem.Reads, fixture.Provider.Reads));
+            Assert.Equal(0, fixture.FileSystem.Operations);
+            Assert.DoesNotContain("private-discovery-body", string.Concat(denied.Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Single(fixture.Session.SnapshotEvents().Select(item => item.Data).OfType<SafetyDecisionAuditPayload>(),
+                audit => audit.Tool == SkillCatalog.ToolName && audit.CallId == fixture.LastCallId.Value && audit.Outcome == "rejected");
+        }
+
+        fixture.ResetObservations();
+        using (ApprovalAnswerers.AutoApprove(fixture.Context))
+        {
+            foreach (var name in new[] { "private-file-skill", "unselected-provider-skill" })
+            {
+                var allowed = await fixture.Execute(TestContext.Current.CancellationToken, name);
+                Assert.False(allowed.IsError, string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+                Assert.Contains("private-discovery-body", string.Concat(allowed.Content.OfType<TextBlock>().Select(block => block.Text)));
+            }
+            Assert.True(fixture.FileSystem.Reads > 0);
+            Assert.True(fixture.Provider.Reads > 0);
+        }
+    }
+
+    [Fact]
+    public async Task CatalogTool_CancelledDiscovery_CancelsTheRealCustomFilesystemReader()
+    {
+        await using var fixture = new DiscoveryFixture(allowTool: true);
+        fixture.FileSystem.BlockReads = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        try
+        {
+            var pending = fixture.Execute(cancellation.Token, "private-file-skill");
+            var first = await Task.WhenAny(fixture.FileSystem.ReadEntered.Task, pending).WaitAsync(TestContext.Current.CancellationToken);
+            if (first == pending)
+                Assert.Fail("Discovery finished before entering its controlled reader: "
+                    + string.Concat((await pending).Content.OfType<TextBlock>().Select(block => block.Text)));
+            Assert.Same(fixture.FileSystem.ReadEntered.Task, first);
+            cancellation.Cancel();
+            fixture.FileSystem.ResumeRead.TrySetResult(true);
+            var result = await pending.WaitAsync(TestContext.Current.CancellationToken);
+            await fixture.FileSystem.ReadFinished.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(result.IsError);
+            Assert.True(fixture.FileSystem.ReadWasCancelled);
+            Assert.Equal(0, fixture.FileSystem.Reads);
+            Assert.DoesNotContain("private-discovery-body", string.Concat(result.Content.OfType<TextBlock>().Select(block => block.Text)));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            fixture.FileSystem.ResumeRead.TrySetResult(true);
+        }
+    }
+
+    [Fact]
     public async Task Catalog_Is_Injected_As_User_Prefix_Reminder()
     {
         var ctx = new Context();
@@ -200,4 +382,5 @@ public class SkillTests
         Assert.Contains("<available_skills>", Assert.IsType<TextBlock>(message.Content[0]).Text);
         Assert.Contains("demo-skill", Assert.IsType<TextBlock>(message.Content[0]).Text);
     }
+
 }

@@ -1,3 +1,4 @@
+using Dsh.Boot;
 using Dsh.Runtime;
 using Dsh.Plugins;
 using System.Runtime.CompilerServices;
@@ -12,13 +13,13 @@ public static class PluginCommand
         return commands.Register(new CommandDefinition
         {
             Name = "plugins",
-            Description = "List, add, remove, disable, or enable DSH plugin modules and set their write permission",
+            Description = "List, add, remove, disable, or enable DSH plugin modules and set their read, write, or network permissions",
             Input = new CommandInputDescriptor($"list | add <pkg|path> | {PackageOps}"),
             Subcommands = MenuSubcommands,
             Handler = invocation =>
             {
                 var tokens = invocation.RawInput.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var manager = ctx.Get<IPluginManager>("pluginManager", false);
+                var manager = ctx.Get<HarnessPluginManager>("pluginManager", false);
                 if (tokens.Length == 0 || tokens[0] == "list")
                 {
                     var names = (manager?.PackageNames ?? catalog.PackageNames)
@@ -59,9 +60,12 @@ public static class PluginCommand
                         return RunAsync(manager.DisableAsync(tokens[1]));
                     case "enable" when tokens.Length > 1:
                         return RunAsync(manager.EnableAsync(tokens[1]));
+                    case BanRead or EnableRead when tokens.Length > 1:
+                        return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Read, allowed: tokens[0] == EnableRead));
                     case BanWrite or EnableWrite when tokens.Length > 1:
-                        return Task.FromResult<CommandResult>(new CommandResult.Success(
-                            manager.SetPermission(tokens[1], PluginPermission.Write, allowed: tokens[0] == EnableWrite)));
+                        return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Write, allowed: tokens[0] == EnableWrite));
+                    case BanNetwork or EnableNetwork when tokens.Length > 1:
+                        return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Network, allowed: tokens[0] == EnableNetwork));
                     default:
                         return Task.FromResult<CommandResult>(
                             new CommandResult.Error($"usage: /plugins list | doctor | add <pkg|path> | {PackageOps}"));
@@ -70,9 +74,13 @@ public static class PluginCommand
         });
     }
 
+    private const string BanRead = "ban_read";
+    private const string EnableRead = "enable_read";
     private const string BanWrite = "ban_write";
     private const string EnableWrite = "enable_write";
-    private const string PackageOps = $"remove <pkg> [--force] | disable <pkg> | enable <pkg> | {BanWrite} <pkg> | {EnableWrite} <pkg>";
+    private const string BanNetwork = "ban_network";
+    private const string EnableNetwork = "enable_network";
+    private const string PackageOps = $"remove <pkg> [--force] | disable <pkg> | enable <pkg> | {BanRead} <pkg> | {EnableRead} <pkg> | {BanWrite} <pkg> | {EnableWrite} <pkg> | {BanNetwork} <pkg> | {EnableNetwork} <pkg>";
 
     private static string Ops => RuntimeFeature.IsDynamicCodeSupported
         ? $"ops: list | doctor | add <pkg|path> | {PackageOps}"
@@ -93,8 +101,12 @@ public static class PluginCommand
                 new CommandDescriptor("remove", "Uninstall a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("disable", "Disable a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("enable", "Enable a plugin", ArgumentSchemas: [package]),
-                new CommandDescriptor(BanWrite, "Deny a plugin write access (permissions.write: false)", ArgumentSchemas: [package]),
-                new CommandDescriptor(EnableWrite, "Allow a plugin write access (permissions.write: true)", ArgumentSchemas: [package]),
+                new CommandDescriptor(BanRead, "Deny reads through the sandbox broker", ArgumentSchemas: [package]),
+                new CommandDescriptor(EnableRead, "Allow reads through the sandbox broker", ArgumentSchemas: [package]),
+                new CommandDescriptor(BanWrite, "Deny writes through the sandbox broker", ArgumentSchemas: [package]),
+                new CommandDescriptor(EnableWrite, "Allow writes through the sandbox broker", ArgumentSchemas: [package]),
+                new CommandDescriptor(BanNetwork, "Deny network access through the sandbox broker", ArgumentSchemas: [package]),
+                new CommandDescriptor(EnableNetwork, "Allow network access through the sandbox broker", ArgumentSchemas: [package]),
             ];
         }
     }

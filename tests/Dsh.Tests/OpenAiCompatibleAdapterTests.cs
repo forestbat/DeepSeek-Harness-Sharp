@@ -83,6 +83,47 @@ public class OpenAiCompatibleAdapterTests
         Assert.False(parsed.ContainsKey("kilo/empty-variants"));
     }
 
+    /** 推理强度的出站值按字面被端点校验: "max" 必须发成 xhigh, 发成 "max"/"extrahigh" 等于该档位不可用。 */
+    [Fact]
+    public async Task Reasoning_Effort_Max_Is_Sent_As_Xhigh()
+    {
+        var chat = await CaptureReasoningBodyAsync("max", useResponses: false);
+        var responses = await CaptureReasoningBodyAsync("max", useResponses: true);
+
+        Assert.Contains("\"reasoning_effort\":\"xhigh\"", chat);
+        Assert.Contains("\"effort\":\"xhigh\"", responses);
+    }
+
+    private static async Task<string> CaptureReasoningBodyAsync(string effort, bool useResponses)
+    {
+        var handler = new CapturingHandler();
+        var adapter = new OpenAiCompatibleAdapter(
+            "relay",
+            "https://example.invalid/v1",
+            "sk-test",
+            httpClient: new HttpClient(handler),
+            useResponses: useResponses,
+            metadataSource: new NoReasoningSource());
+        var options = new GenerateOptions
+        {
+            Provider = "relay",
+            Model = "vision-model",
+            Messages = [MessageFactory.CreateUserText("hi")],
+            ReasoningEffort = ReasoningEffortId.Create(effort),
+        };
+        try
+        {
+            await foreach (var _ in adapter.Stream(options, CancellationToken.None))
+            {
+            }
+        }
+        catch (LlmException)
+        {
+            // 脚本化的响应只有 chat 流; 这里只关心出站请求体。
+        }
+        return handler.Body ?? "";
+    }
+
     [Fact]
     public void ResolveModel_Reports_ModelsDev_Input_Modalities()
     {

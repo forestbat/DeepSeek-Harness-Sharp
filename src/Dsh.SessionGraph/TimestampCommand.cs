@@ -52,10 +52,14 @@ public static class TimestampCommand
         };
     }
 
-    /** 回退 = 文件按检查点恢复到 <= seq, 再把会话截断到该消息之前(文件恢复失败就不截断)。 */
+    /**
+     * 回退 = 文件按检查点恢复到不晚于该消息的检查点, 再把会话截断到"这条消息所属回合开始之前"(文件恢复失败就不截断)。
+     * 停在回合之前而不是消息之前: 消息之前紧挨着它的 TurnStart, 截在消息处会留下没有 TurnEnd 的回合。
+     */
     private static async Task<CommandResult> RevertAsync(Context ctx, CommandInvocation invocation, long seq)
     {
         var session = invocation.Agent.Session;
+        var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
         var cwd = session.Header.Cwd;
         if (ctx.Get<ICheckpointRestore>(ICheckpointRestore.ServiceName, false) is { } restore
             && cwd is { Length: > 0 })
@@ -69,12 +73,15 @@ public static class TimestampCommand
                 return new CommandResult.Error($"files were not restored ({error.Message}); the session was left untouched");
             }
         }
-        return session.TryTruncateTo(seq)
-            ? new CommandResult.Success($"reverted to before #{seq}")
+        return session.TryTruncateTo(boundary)
+            ? new CommandResult.Success($"reverted to before #{boundary}; #{seq} is back in the input area")
             : new CommandResult.Error($"#{seq} cannot be truncated: only this session's own events can be dropped");
     }
 
-    /** 分叉 = 复制 [0, seq] 落成新会话; 被选中那条本身保留, 与 TUI 的 `/timestamp fork` 一致。 */
+    /**
+     * 分叉 = 复制"这条消息所属回合之前"的前缀落成新会话; 被选中那条不进新会话(它的原文回填输入区)。
+     * 与 TUI 的同名动作共用同一套语义。
+     */
     private static CommandResult Fork(Context ctx, CommandInvocation invocation, long seq)
     {
         var persistence = ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)
@@ -82,8 +89,9 @@ public static class TimestampCommand
         var session = invocation.Agent.Session;
         try
         {
-            var forked = SessionFork.Fork(persistence, session, seq + 1, $"fork of {session.Id} @{seq}", session.Header.Cwd);
-            return new CommandResult.Success($"forked -> {forked}: use /resume {forked} to open it");
+            var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
+            var forked = SessionFork.Fork(persistence, session, boundary, SessionFork.ForkTitle(session, seq), session.Header.Cwd);
+            return new CommandResult.Success($"forked -> {forked}: #{seq} is back in the input area");
         }
         catch (InvalidOperationException error)
         {

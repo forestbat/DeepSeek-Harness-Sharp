@@ -69,6 +69,7 @@ public record SkillLookupOptions
 {
     public string? Cwd { get; init; }
     public CancellationToken Signal { get; init; }
+    public Core.ToolRunContext? Run { get; init; }
 }
 
 public sealed record SkillViewOptions : SkillLookupOptions

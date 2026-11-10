@@ -15,6 +15,8 @@ public sealed class HarnessSdkServer
     private readonly List<Func<bool>> _disposers = [];
     private readonly Dictionary<string, SessionRecord> _sessions = [];
     private readonly Dictionary<string, Task<SessionRecord>> _sessionCreations = [];
+    private readonly Lock _shutdownGate = new();
+    private Task<Dictionary<string, object?>>? _shutdownTask;
     private bool _initialized;
     private bool _shuttingDown;
     private string _cwd = "";
@@ -81,7 +83,38 @@ public sealed class HarnessSdkServer
 
     public async Task<Dictionary<string, object?>> ShutdownAsync()
     {
-        _shuttingDown = true;
+        TaskCompletionSource<Dictionary<string, object?>>? completion = null;
+        Task<Dictionary<string, object?>> shutdown;
+        lock (_shutdownGate)
+        {
+            if (_shutdownTask is null)
+            {
+                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _shutdownTask = completion.Task;
+                _shuttingDown = true;
+            }
+            shutdown = _shutdownTask;
+        }
+        if (completion is not null)
+        {
+            try
+            {
+                completion.SetResult(await ShutdownCoreAsync());
+            }
+            catch (OperationCanceledException error)
+            {
+                completion.SetCanceled(error.CancellationToken);
+            }
+            catch (Exception error)
+            {
+                completion.SetException(error);
+            }
+        }
+        return await shutdown;
+    }
+
+    private async Task<Dictionary<string, object?>> ShutdownCoreAsync()
+    {
         foreach (var pending in _sessionCreations.Values.ToList())
         {
             try
@@ -101,6 +134,12 @@ public sealed class HarnessSdkServer
         foreach (var record in _sessions.Values)
         {
             record.Agent.Cancel(new AgentCancelCause.Disposed());
+        }
+        foreach (var record in _sessions.Values)
+        {
+            // Prompt only queues work; cancellation does not finish the driver's final session-log writes.
+            // Join that work before flushing and releasing the session's persistence handle.
+            await record.Agent.WhenIdle();
             if (sessions is not null)
                 await sessions.Flush(record.Agent.Session);
             record.Handle.Dispose.Dispose();

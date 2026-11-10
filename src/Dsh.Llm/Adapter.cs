@@ -106,7 +106,18 @@ public static class SystemPromptUpdateModes
     public const string InHistory = "in-history";
 }
 
-public sealed record LlmModelReasoningInfo(IReadOnlyList<LlmReasoningEffortInfo> Efforts, ReasoningEffortId? DefaultEffort = null);
+public sealed record LlmModelReasoningInfo(IReadOnlyList<LlmReasoningEffortInfo> Efforts, ReasoningEffortId? DefaultEffort = null)
+{
+    /** 由档位 id 清单构造: 显示名取首字母大写, 默认档位按 medium → high → 第一个。 */
+    public static LlmModelReasoningInfo FromIds(IReadOnlyList<string> ids)
+    {
+        List<LlmReasoningEffortInfo> efforts = [.. ids.Select(id => new LlmReasoningEffortInfo(ReasoningEffortId.Create(id), $"{char.ToUpperInvariant(id[0])}{id[1..]}"))];
+        var defaultEffort = efforts.FirstOrDefault(effort => effort.Id == ReasoningEffortId.Create("medium"))?.Id
+            ?? efforts.FirstOrDefault(effort => effort.Id == ReasoningEffortId.Create("high"))?.Id
+            ?? efforts[0].Id;
+        return new LlmModelReasoningInfo(efforts, defaultEffort);
+    }
+}
 
 public sealed record LlmReasoningEffortInfo(ReasoningEffortId Id, string Name, string? Description = null);
 

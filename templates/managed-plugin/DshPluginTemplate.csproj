@@ -16,8 +16,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 插件只面向抽象与运行时编程: Abstractions 是契约面, Core 提供服务/工具/提示词的注册点。 -->
-    <!-- 这两个程序集随宿主镜像分发, 打包时不会也不应拷进插件目录(见下面的 PackPluginLayout)。 -->
+    <!-- The template uses the original plugin contract and Core composition services. -->
+    <!-- Host-shared contract assemblies are excluded from the plugin payload below. -->
     <ProjectReference Include="..\..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
   </ItemGroup>

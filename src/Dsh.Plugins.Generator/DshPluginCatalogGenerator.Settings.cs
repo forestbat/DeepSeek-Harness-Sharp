@@ -13,8 +13,8 @@ namespace Dsh.Plugins.Generator;
  * 配置面生成: 插件的参数面来自两类声明——
  *  - `IDshPlugin.ConfigType => typeof(X)`: 与宿主绑定同一个类型(声明即启用未知键告警);
  *  - 标了 [DshPluginSettings] 的类型: 只声明文档面, 不改变运行期解析(适合自己解析参数的插件, 可多类型合并)。
- * 生成器读这些类型的**语法**(属性名/类型/初始化器默认值/嵌套记录)产出 ISettingsSchemaProvider,
- * 并在模块初始化器里注册。只读语法不反射: 默认值以字面量落进生成代码, 裁剪/AOT 下与 JIT 行为一致。
+ * Generates schema literals from property symbols, source initializers and explicit cross-assembly default metadata.
+ * Generated providers register without runtime reflection and preserve the same literals in trimmed and AOT applications.
  * 顶层 settings 文档由标了 [DshSettingsDocument] 的类型(如 HarnessSettings)产出, IsPlugin=false。
  */
 public sealed partial class DshPluginCatalogGenerator
@@ -25,6 +25,7 @@ public sealed partial class DshPluginCatalogGenerator
     private const string SchemaHintName = "DshPluginSettingsSchema.g.cs";
     private const string SettingsAttributeMetadataName = "Dsh.Plugins.DshPluginSettingsAttribute";
     private const string DocumentAttributeMetadataName = "Dsh.Plugins.DshSettingsDocumentAttribute";
+    private const string DefaultValueAttributeMetadataName = "System.ComponentModel.DefaultValueAttribute";
 
     private static void EmitSettingsSchema(SourceProductionContext context, Compilation compilation)
     {
@@ -127,7 +128,7 @@ public sealed partial class DshPluginCatalogGenerator
         var entries = new List<SchemaEntry>();
         if (depth > 4)
             return entries;
-        foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+        foreach (var property in WritableProperties(type))
         {
             if (property.IsStatic || property.SetMethod is null || property.IsIndexer)
                 continue;
@@ -144,9 +145,18 @@ public sealed partial class DshPluginCatalogGenerator
                 children.Count == 0 ? null : children)
             {
                 Description = DescriptionOf(property),
+                DynamicKeys = IsDictionary(property.Type),
             });
         }
         return entries;
+    }
+
+    private static IEnumerable<IPropertySymbol> WritableProperties(INamedTypeSymbol type)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (var current = type; current is not null; current = current.BaseType)
+            foreach (var property in current.GetMembers().OfType<IPropertySymbol>())
+                if (names.Add(property.Name)) yield return property;
     }
 
     /** 只使用声明处的 XML 注释。*/
@@ -261,7 +271,7 @@ public sealed partial class DshPluginCatalogGenerator
     }
 
     private static bool HasWritableProperties(INamedTypeSymbol type)
-        => type.GetMembers().OfType<IPropertySymbol>().Any(property =>
+        => WritableProperties(type).Any(property =>
             property.SetMethod is not null && property.DeclaredAccessibility == Accessibility.Public && !property.IsStatic);
 
     /** 嵌套子项: 映射取"值类型"的属性(字典本身只有 Comparer/Count 这类成员, 列出来是噪声)。 */
@@ -303,9 +313,13 @@ public sealed partial class DshPluginCatalogGenerator
             && named.AllInterfaces.Any(candidate => candidate.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
             && named.SpecialType != SpecialType.System_String;
 
-    /** 默认值: 取属性的初始化器文本(`= true` / `= 30` / `= []`); 主构造参数默认值与无初始化器都留空。 */
+    /** Explicit default metadata survives assembly boundaries; source initializers supply other local defaults. */
     private static string? DefaultLiteralOf(IPropertySymbol property)
     {
+        var declared = property.GetAttributes().FirstOrDefault(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == DefaultValueAttributeMetadataName);
+        if (declared is { ConstructorArguments.Length: 1 })
+            return declared.ConstructorArguments[0].ToCSharpString();
         if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not PropertyDeclarationSyntax syntax)
             return null;
         return syntax.Initializer?.Value.ToString();
@@ -344,9 +358,9 @@ public sealed partial class DshPluginCatalogGenerator
     {
         var kind = $"global::Dsh.Plugins.PluginSettingKind.{entry.Kind}";
         if (entry.Children is null || entry.Children.Count == 0)
-            return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)})";
+            return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, DynamicKeys: {entry.DynamicKeys.ToString().ToLowerInvariant()})";
         var children = string.Join(", ", entry.Children.Select(SpecSource));
-        return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, [{children}])";
+        return $"new({Literal(entry.Key)}, {kind}, {Literal(entry.DefaultLiteral)}, {Literal(entry.Description)}, [{children}], {entry.DynamicKeys.ToString().ToLowerInvariant()})";
     }
 
     private static string Literal(string? value)
@@ -366,6 +380,7 @@ internal sealed class SchemaEntry(string key, SchemaKind kind, string? defaultLi
 
     /** 声明处 /// 摘要, 或按名字/类型派生的最小提示。 */
     public string? Description { get; set; }
+    public bool DynamicKeys { get; set; }
 }
 
 internal enum SchemaKind

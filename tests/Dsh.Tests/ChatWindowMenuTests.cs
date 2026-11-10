@@ -1122,19 +1122,25 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Equal(["tui", "--session", "session-1"], handoff[^3..]);
     }
 
-    /** fork 出来的会话带上"[0, 被选中那条消息]": resume 后必须能看到 fork 点之前的内容(用户报的缺陷)。 */
+    /**
+     * fork 出来的会话只带"被选中那条之前"的内容, 并直接切过去: 被分叉那条的原文回到输入区,
+     * 用户改完再发 —— 这才是从某条消息分叉的用途。
+     */
     [Fact]
-    public async Task Forked_Session_Shows_Previous_Content_After_Resume()
+    public async Task Forked_Session_ShowsContentBeforeTheMessage_AndPrefillsTheInput()
     {
         var persistence = new JsonlSessionPersistence(Path.Combine(_homeDir, "fork-sessions"));
         using var chat = await CreateChat(
             configure: (ctx, _) => ctx.Provide(ISessionPersistence.ServiceName, persistence),
             persistenceFor: _ => persistence);
 
-        Type(chat, "source message before fork");
+        Type(chat, "kept message");
         Press(chat, ConsoleKey.Enter);
         await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
-        var sourceSeq = long.Parse(chat.TimestampCandidates()[0].Value.TrimStart('#'), CultureInfo.InvariantCulture);
+        Type(chat, "message to repost");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => chat.TimestampCandidates().Count > 1);
+        var sourceSeq = long.Parse(chat.TimestampCandidates()[^1].Value.TrimStart('#'), CultureInfo.InvariantCulture);
 
         // 直接走命令分发(菜单的多参数面板需要多次 Tab/Enter, 与本用例无关)。
         chat.RunSlashCommand(chat.InputPane, $"/timestamp fork {sourceSeq}");
@@ -1152,10 +1158,13 @@ public class ChatWindowMenuTests : IDisposable
         Assert.Equal(SessionEventTypes.SessionEndSeed, forkedEvents[^1].Type);
         forkReader.Close();
 
-        chat.RunSlashCommand(chat.InputPane, $"/resume {forkId}");
-        await SettleAsync(chat, () => WideFrame(chat).Contains("resumed:", StringComparison.Ordinal));
-
-        Assert.Contains("source message before fork", WideFrame(chat), StringComparison.Ordinal);
+        // 已经切到新会话: 转录里只有那条消息之前的内容, 被分叉那条回到了输入区。
+        Assert.Equal(SessionId.Create(forkId!), chat.InputPane.Agent.Id);
+        var frame = WideFrame(chat);
+        Assert.Contains("kept message", frame, StringComparison.Ordinal);
+        // 转录里没有它, 只有输入区那一行还带着: 出现两次就说明消息仍留在转录里。
+        Assert.Equal(1, frame.Split("message to repost").Length - 1);
+        Assert.Equal("message to repost", chat.InputPane.Input);
 
         // 打开(resume)不许往 fork 里补合成事件: 种子的部分不参与中断收尾。
         var resumedReader = persistence.Open(SessionId.Create(forkId!), SessionAccess.Read);
@@ -1215,7 +1224,7 @@ public class ChatWindowMenuTests : IDisposable
         if (index < 0)
             return null;
         var rest = frame[(index + marker.Length)..];
-        var end = rest.IndexOfAny([' ', '\n', '\r', '|', '(', ')', '[']);
+        var end = rest.IndexOfAny([' ', ',', '\n', '\r', '|', '(', ')', '[']);
         return end < 0 ? rest : rest[..end];
     }
 
