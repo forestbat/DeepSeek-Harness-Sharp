@@ -42,7 +42,7 @@ public static class RuleMapYaml
         }
         catch (ArgumentException error)
         {
-            throw new Dsh.Runtime.RuntimeException("INVALID_SCRIPT_SETTING", error.Message);
+            throw new RuntimeException("INVALID_SCRIPT_SETTING", error.Message);
         }
     }
 
@@ -57,10 +57,16 @@ public static class RuleMapYaml
     private static YamlNode? Get(YamlMappingNode map, string key)
         => map.Children.TryGetValue(new YamlScalarNode(key), out var node) ? node : null;
 
+    /**
+     * 规则校验失败必须抛 RuntimeException: settings 守卫(SettingsFileGuard)靠 TryValidate 接住它来回滚坏写入,
+     * 裸 ArgumentException 会直接穿透守卫和启动路径, 变成没有上下文的崩溃。
+     */
+    private static RuntimeException Invalid(string message) => new("INVALID_PERMISSION_RULES", message);
+
     private static void ValidatePolicy(YamlNode? node, bool structural)
     {
         if (node is null || node is YamlScalarNode { Value: null or "" or "null" or "~" }) return;
-        if (node is not YamlMappingNode map) throw new ArgumentException("Permission policies must be YAML mappings.");
+        if (node is not YamlMappingNode map) throw Invalid("Permission policies must be YAML mappings.");
         foreach (var (keyNode, value) in map.Children)
         {
             var key = (keyNode as YamlScalarNode)?.Value;
@@ -68,10 +74,10 @@ public static class RuleMapYaml
             else
             {
                 if (key != "autoApprove" && !(structural && key is ("read" or "write" or "network")))
-                    throw new ArgumentException("Unknown permission policy field.");
+                    throw Invalid("Unknown permission policy field.");
                 if (value is not YamlScalarNode scalar || scalar.Style != YamlDotNet.Core.ScalarStyle.Plain
                     || !bool.TryParse(scalar.Value, out _))
-                    throw new ArgumentException("Structural grants and autoApprove must be YAML booleans.");
+                    throw Invalid("Structural grants and autoApprove must be YAML booleans.");
             }
         }
     }
@@ -79,30 +85,30 @@ public static class RuleMapYaml
     private static void ValidateMap(YamlNode node)
     {
         if (node is not YamlMappingNode map)
-            throw new ArgumentException("Rules must be an ID-to-matcher YAML map; legacy lists are not supported.");
+            throw Invalid("Rules must be an ID-to-matcher YAML map; legacy lists are not supported.");
         foreach (var (id, rule) in map.Children)
         {
             if (id is not YamlScalarNode || rule is not YamlMappingNode matcher)
-                throw new ArgumentException("Each rule requires a nonempty ID and a matcher mapping.");
+                throw Invalid("Each rule requires a nonempty ID and a matcher mapping.");
             foreach (var (keyNode, value) in matcher.Children)
             {
                 var key = (keyNode as YamlScalarNode)?.Value;
                 if (key is not ("tool" or "dialect" or "path" or "intent" or "args"))
-                    throw new ArgumentException("Unknown matcher field; use tool, dialect, path, intent or args.");
+                    throw Invalid("Unknown matcher field; use tool, dialect, path, intent or args.");
                 if (key == "args")
                 {
-                    if (value is not YamlMappingNode args) throw new ArgumentException("args must be a string-pattern mapping.");
+                    if (value is not YamlMappingNode args) throw Invalid("args must be a string-pattern mapping.");
                     foreach (var (argument, pattern) in args.Children)
                         if (argument is not YamlScalarNode || pattern is not YamlScalarNode)
-                            throw new ArgumentException("args must contain string patterns; paths use the unified path field.");
+                            throw Invalid("args must contain string patterns; paths use the unified path field.");
                 }
                 else if (key == "tool")
                 {
                     if (value is not YamlScalarNode && value is not YamlSequenceNode)
-                        throw new ArgumentException("tool must be a scalar name or a sequence of names.");
+                        throw Invalid("tool must be a scalar name or a sequence of names.");
                 }
                 else if (value is not YamlScalarNode)
-                    throw new ArgumentException("Matcher dimensions other than tool and args must be scalar strings.");
+                    throw Invalid("Matcher dimensions other than tool and args must be scalar strings.");
             }
         }
     }

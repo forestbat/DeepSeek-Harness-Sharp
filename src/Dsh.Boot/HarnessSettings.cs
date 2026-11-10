@@ -221,6 +221,13 @@ public sealed class HarnessSettings
             throw new InvalidDataException(
                 $"settings.yaml {Describe(error)}; {attempt.Refusal}; 原文已保存为 {quarantined}; 修好这一段再启动。");
         }
+        catch (RuntimeException error)
+        {
+            // 结构合法但语义不合法(如权限规则格式), 改 YAML 结构修不了: 隔离原文并给出可执行的提示, 不要裸崩。
+            var quarantined = File.Exists(path) ? Quarantine(path, text) : path;
+            throw new InvalidDataException(
+                $"settings.yaml {error.Message}; 原文已保存为 {quarantined}; 修好这一段再启动。", error);
+        }
     }
 
     private static string Quarantine(string path, string text)

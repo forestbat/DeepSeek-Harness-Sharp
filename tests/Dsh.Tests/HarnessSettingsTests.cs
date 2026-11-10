@@ -265,4 +265,42 @@ public sealed class HarnessSettingsTests
             Directory.Delete(home, true);
         }
     }
+
+    /**
+     * settings 守卫(SettingsFileGuard)靠 TryValidate 判"这次写入能不能吃下", 吃不下就回滚。
+     * 规则段校验曾抛裸 ArgumentException 穿过这里, 守卫因此自己崩掉而不是回滚。
+     */
+    [Fact]
+    public void TryValidateReportsLegacyRuleListsInsteadOfThrowing()
+    {
+        Assert.False(HarnessSettings.TryValidate("""
+            safety:
+              blacklist:
+                - tool:read
+            """, out var problem));
+        Assert.False(string.IsNullOrWhiteSpace(problem));
+    }
+
+    /** 启动路径遇到语义非法的规则段必须给出可执行的提示(隔离原文 + 修好再启动), 而不是裸异常栈。 */
+    [Fact]
+    public void LoadTurnsLegacyRuleListsIntoAnActionableError()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "dsh-settings-legacy", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(home);
+        File.WriteAllText(Path.Combine(home, "settings.yaml"), """
+            safety:
+              whitelist:
+                - tool:read
+            """);
+        try
+        {
+            var error = Assert.Throws<InvalidDataException>(() => HarnessSettings.Load(new HarnessHome(home)));
+            Assert.Contains("修好这一段再启动", error.Message);
+            Assert.Contains("legacy lists are not supported", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(home, true);
+        }
+    }
 }
