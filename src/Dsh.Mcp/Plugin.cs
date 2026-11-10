@@ -31,7 +31,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
             ?? throw new InvalidOperationException("dshHomePath is required for the mcp plugin");
         var home = new HarnessHome(homePath);
         var settings = LoadSettings(ctx, home);
-        var service = new McpService(ctx, settings.Tools?.DisclosureThreshold ?? ToolsSettings.DefaultDisclosureThreshold);
+        var service = new McpService(ctx, settings.Tools?.DisclosureThreshold ?? ToolsSettings.DefaultDisclosureThreshold, home: home);
         var command = McpCommand.Register(ctx, service, home);
         var servers = McpServerConfig.FromSettings(settings);
         if (servers.Count > 0)

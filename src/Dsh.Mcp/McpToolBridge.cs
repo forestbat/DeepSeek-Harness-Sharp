@@ -49,20 +49,22 @@ public static class McpToolBridge
             invoke: () => Resolve(handle, toolName).Tool.CallAsync(arguments, null, null, signal),
             usedVersion: () => handle.Version,
             reconnect: version => handle.ReconnectIfVersionAsync(version, signal),
-            signal: signal);
+            signal: signal,
+            protocolVersion: handle.NegotiatedProtocolVersion);
 
     internal static async ValueTask<T> CallWithReconnectAsync<T>(
         Func<ValueTask<T>> invoke,
         Func<long> usedVersion,
         Func<long, Task> reconnect,
-        CancellationToken signal)
+        CancellationToken signal,
+        string? protocolVersion = null)
     {
         var version = usedVersion();
         try
         {
             return await invoke();
         }
-        catch (Exception error) when (McpStaleSession.IsStale(error, signal))
+        catch (Exception error) when (McpStaleSession.IsStale(error, signal, protocolVersion))
         {
             await reconnect(version);
             return await invoke();

@@ -94,12 +94,12 @@ public sealed class ReasoningEffortProbeTests
     {
         var endpoint = new StubEndpoint(_ => Text(HttpStatusCode.OK, ChatSse, "text/event-stream"));
         var adapter = new OpenAiCompatibleAdapter(
-            "relay",
-            "https://example.invalid/v1",
+            "openrouter",
+            "https://openrouter.ai/api/v1",
             "sk-test",
             httpClient: new HttpClient(endpoint));
 
-        Assert.Null(adapter.ResolveModel("deepseek-v4-flash").Reasoning);
+        Assert.Null(adapter.ResolveModel("deepseek/deepseek-chat").Reasoning);
         Assert.Equal(0, endpoint.Posts);
     }
 

@@ -38,6 +38,8 @@ internal sealed class RealSessionProbe
     public static RealSessionProbe Locate(string? sessionId = null)
     {
         var root = Environment.GetEnvironmentVariable("DSH_REPRO_SESSION_ROOT") ?? DefaultSessionsRoot;
+        if (!Directory.Exists(root))
+            Assert.Skip($"未找到真实会话目录: {root}");
         var requested = sessionId ?? Environment.GetEnvironmentVariable("DSH_REPRO_SESSION_ID");
         IReadOnlyList<string> ids = requested is { Length: > 0 } ? [requested] : DefaultSessionIds;
         foreach (var candidate in ids)
@@ -47,6 +49,7 @@ internal sealed class RealSessionProbe
                 if (File.Exists(Path.Combine(directory, "session.jsonl.zstd")))
                     return new RealSessionProbe(project, directory);
             }
+        Assert.Skip($"没有找到真实会话日志: root={root} ids=[{string.Join(", ", ids)}]");
         throw new InvalidOperationException($"没有找到真实会话日志: root={root} ids=[{string.Join(", ", ids)}]");
     }
 
