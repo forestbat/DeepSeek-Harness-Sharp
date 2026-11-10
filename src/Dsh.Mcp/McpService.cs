@@ -112,9 +112,14 @@ public sealed class McpService(
         var handles = Handles();
         var conflicts = McpSemanticAnalyzer.Analyze(handles);
         var resolutions = await _store.SyncAsync(conflicts, signal);
-        var tipsContent = await McpTipsGenerator.GenerateAndSaveAsync(_home, handles, resolutions, signal);
-        var tipsPath = _home is not null ? Path.Combine(_home.Root, McpTipsGenerator.DefaultFileName) : McpTipsGenerator.DefaultFileName;
-        var report = new McpGovernanceReport(conflicts, resolutions, tipsPath, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var tipsResult = await McpTipsGenerator.GenerateAndSaveAsync(Ctx, _home, handles, resolutions, signal);
+        var tipsPath = tipsResult.TipsPath ?? (_home is not null ? Path.Combine(_home.Root, McpTipsGenerator.DefaultFileName) : McpTipsGenerator.DefaultFileName);
+        var report = new McpGovernanceReport(
+            conflicts,
+            resolutions,
+            tipsPath,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            tipsResult.SkillPaths);
         lock (_gate)
             _governanceReport = report;
         return report;

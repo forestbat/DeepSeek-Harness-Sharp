@@ -1,5 +1,7 @@
 using System.Text;
 using Dsh.Boot;
+using Dsh.Interaction;
+using Dsh.Runtime;
 using ModelContextProtocol.Client;
 
 namespace Dsh.Mcp;
@@ -8,19 +10,39 @@ internal static class McpTipsGenerator
 {
     public const string DefaultFileName = "DSH_TOOLS_TIPS.md";
 
-    public static async Task<string> GenerateAndSaveAsync(
+    public static async Task<McpTipsResult> GenerateAndSaveAsync(
+        Context ctx,
         HarnessHome? home,
         IReadOnlyList<McpServerHandle> handles,
         IReadOnlyList<McpConflictResolution> resolutions,
         CancellationToken signal = default)
     {
+        var isSkillEnabled = ctx.Get<object>(ISkillCatalog.ServiceName, false) is not null;
+        if (isSkillEnabled && home is not null)
+        {
+            var skillsRoot = home.SubPath("skills");
+            var skillPaths = new List<string>();
+            foreach (var handle in handles)
+            {
+                var skillDirName = $"mcp-{NormalizeSkillName(handle.Config.Name)}";
+                var serverSkillDir = Path.Combine(skillsRoot, skillDirName);
+                Directory.CreateDirectory(serverSkillDir);
+                var skillPath = Path.Combine(serverSkillDir, "SKILL.md");
+                var skillContent = GenerateServerSkillContent(handle, resolutions);
+                await File.WriteAllTextAsync(skillPath, skillContent, Encoding.UTF8, signal);
+                skillPaths.Add(skillPath);
+            }
+            return new McpTipsResult(null, skillPaths, string.Join("\n---\n", skillPaths));
+        }
+
         var content = Generate(handles, resolutions);
+        string? tipsPath = null;
         if (home is not null)
         {
-            var path = Path.Combine(home.Root, DefaultFileName);
-            await File.WriteAllTextAsync(path, content, Encoding.UTF8, signal);
+            tipsPath = Path.Combine(home.Root, DefaultFileName);
+            await File.WriteAllTextAsync(tipsPath, content, Encoding.UTF8, signal);
         }
-        return content;
+        return new McpTipsResult(tipsPath, [], content);
     }
 
     public static string Generate(
@@ -61,6 +83,83 @@ internal static class McpTipsGenerator
             chars += 60;
         }
         return Math.Max(40, chars / 4 + tools.Count * 20);
+    }
+
+    public static string NormalizeSkillName(string raw)
+    {
+        var sb = new StringBuilder();
+        var prevHyphen = false;
+        foreach (var c in raw.ToLowerInvariant())
+        {
+            if (char.IsAsciiLetterOrDigit(c))
+            {
+                sb.Append(c);
+                prevHyphen = false;
+            }
+            else if (!prevHyphen && sb.Length > 0)
+            {
+                sb.Append('-');
+                prevHyphen = true;
+            }
+        }
+        var res = sb.ToString().Trim('-');
+        return string.IsNullOrEmpty(res) ? "server" : res;
+    }
+
+    public static string GenerateServerSkillContent(
+        McpServerHandle handle,
+        IReadOnlyList<McpConflictResolution> resolutions)
+    {
+        var server = handle.Config.Name;
+        var skillName = $"mcp-{NormalizeSkillName(server)}";
+        var sb = new StringBuilder();
+        sb.AppendLine("---");
+        sb.AppendLine($"name: {skillName}");
+        sb.AppendLine($"description: MCP server {server} routing and tool guidance.");
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine($"# MCP 服务 [{server}] 工具调和指引");
+        sb.AppendLine();
+        sb.AppendLine("## 1. 路由工具与调用指引");
+        sb.AppendLine(GenerateRouterPrompt(handle));
+        sb.AppendLine();
+        sb.AppendLine("## 2. 工具清单与说明");
+        if (handle.Tools.Count == 0)
+        {
+            sb.AppendLine("该服务当前无公开可用工具。");
+        }
+        else
+        {
+            foreach (var tool in handle.Tools)
+            {
+                var desc = !string.IsNullOrWhiteSpace(tool.Description) ? tool.Description : "无说明";
+                sb.AppendLine($"- [{tool.Name}]：{desc}。");
+            }
+        }
+        sb.AppendLine();
+        if (handle.Prompts.Count > 0)
+        {
+            sb.AppendLine("## 3. Server 自带提示词");
+            foreach (var prompt in handle.Prompts)
+            {
+                var desc = !string.IsNullOrWhiteSpace(prompt.Description) ? prompt.Description : "无额外说明";
+                sb.AppendLine($"- [{prompt.Name}]：{desc}。");
+            }
+            sb.AppendLine();
+        }
+        var serverResolutions = resolutions
+            .Where(r => r.ServerNames.Contains(server, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        if (serverResolutions.Count > 0)
+        {
+            sb.AppendLine("## 4. 冲突消歧与已生效消解决策");
+            foreach (var res in serverResolutions)
+            {
+                sb.AppendLine($"- 决策 [{res.Id}]：针对 [{res.Target}] 执行 [{res.Action}]（状态：{res.Status}）。");
+            }
+            sb.AppendLine();
+        }
+        return sb.ToString();
     }
 
     private static void AppendToolFamilies(StringBuilder sb, IReadOnlyList<McpServerHandle> handles)

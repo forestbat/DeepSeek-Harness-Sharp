@@ -50,8 +50,14 @@ public sealed record McpConflictResolution(
     long CreatedAt,
     long? DecidedAt = null);
 
+public sealed record McpTipsResult(
+    string? TipsPath,
+    IReadOnlyList<string> SkillPaths,
+    string Content);
+
 public sealed record McpGovernanceReport(
     IReadOnlyList<McpConflict> Conflicts,
     IReadOnlyList<McpConflictResolution> Resolutions,
     string TipsPath,
-    long GeneratedAt);
+    long GeneratedAt,
+    IReadOnlyList<string>? SkillPaths = null);

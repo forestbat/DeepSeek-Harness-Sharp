@@ -315,6 +315,75 @@ public sealed class McpGovernanceTests
         Assert.Equal(routerPrompt, registered.Disclosure.Summary);
     }
 
+    [Fact]
+    public async Task PerServerSkill_GeneratedWhenSkillCatalogEnabled_OtherwiseFallsBackToTipsFile()
+    {
+        using var home = new TemporaryHome();
+        var harnessHome = new HarnessHome(home.Path);
+
+        // Case 1: Skills catalog enabled -> generates per-server SKILL.md under <home>/skills/mcp-{server}/SKILL.md
+        var ctxWithSkill = new Context();
+        ctxWithSkill.SetOwn("dshHomePath", home.Path);
+        _ = new TestSkillService(ctxWithSkill);
+        _ = new SystemPrompt(ctxWithSkill, new SystemPromptConfig());
+        _ = new ToolRuntime(ctxWithSkill);
+
+        var (client1, server1) = CreateServerPair("db-server", [
+            McpServerTool.Create(() => "1", new McpServerToolCreateOptions { Name = "db_query", Description = "Query database" }),
+        ]);
+        await using var s1 = server1;
+        _ = server1.RunAsync(TestContext.Current.CancellationToken);
+
+        await using (var service = new McpService(ctxWithSkill, home: harnessHome))
+        {
+            await service.ConnectAsync(new McpServerConfig("db-server", "stdio"), client1, TestContext.Current.CancellationToken);
+
+            var report = service.GovernanceReport;
+            Assert.NotNull(report);
+            Assert.NotNull(report.SkillPaths);
+            var skillPath = Assert.Single(report.SkillPaths);
+            Assert.True(File.Exists(skillPath));
+            Assert.Contains(Path.Combine("skills", "mcp-db-server", "SKILL.md"), skillPath);
+
+            var skillContent = await File.ReadAllTextAsync(skillPath, TestContext.Current.CancellationToken);
+            Assert.StartsWith("---", skillContent);
+            Assert.Contains("name: mcp-db-server", skillContent);
+            Assert.Contains("该工具为 db-server 业务的路由工具", skillContent);
+            Assert.Contains("[db_query]：Query database。", skillContent);
+
+            // In skill mode, DSH_TOOLS_TIPS.md should NOT be created
+            var defaultTips = Path.Combine(harnessHome.Root, McpTipsGenerator.DefaultFileName);
+            Assert.False(File.Exists(defaultTips));
+        }
+
+        // Case 2: Skills catalog not enabled -> falls back to single DSH_TOOLS_TIPS.md
+        using var homeFallback = new TemporaryHome();
+        var fallbackHarnessHome = new HarnessHome(homeFallback.Path);
+        var ctxFallback = new Context();
+        ctxFallback.SetOwn("dshHomePath", homeFallback.Path);
+        _ = new SystemPrompt(ctxFallback, new SystemPromptConfig());
+        _ = new ToolRuntime(ctxFallback);
+
+        var (client2, server2) = CreateServerPair("db-fallback", [
+            McpServerTool.Create(() => "1", new McpServerToolCreateOptions { Name = "db_query", Description = "Query database" }),
+        ]);
+        await using var s2 = server2;
+        _ = server2.RunAsync(TestContext.Current.CancellationToken);
+
+        await using (var service = new McpService(ctxFallback, home: fallbackHarnessHome))
+        {
+            await service.ConnectAsync(new McpServerConfig("db-fallback", "stdio"), client2, TestContext.Current.CancellationToken);
+
+            var report = service.GovernanceReport;
+            Assert.NotNull(report);
+            Assert.Empty(report.SkillPaths!);
+            Assert.True(File.Exists(report.TipsPath));
+            var tipsContent = await File.ReadAllTextAsync(report.TipsPath, TestContext.Current.CancellationToken);
+            Assert.Contains("DSH MCP 工具调和指引 (DSH_TOOLS_TIPS.md)", tipsContent);
+            Assert.Contains("该工具为 db-fallback 业务的路由工具", tipsContent);
+        }
+    }
+
     private static (IClientTransport Client, McpServer Server) CreateServerPair(
         string serverName,
         IEnumerable<McpServerTool> serverTools)
@@ -341,6 +410,8 @@ public sealed class McpGovernanceTests
 
         public void Dispose() => TempTree.Delete(Path);
     }
+
+    private sealed class TestSkillService(Context ctx) : Service(ctx, ISkillCatalog.ServiceName);
 
     private sealed class TestAgent(Context ctx) : IAgent
     {

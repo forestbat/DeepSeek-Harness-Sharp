@@ -1,3 +1,4 @@
+using System.Text;
 using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Interaction;
@@ -64,7 +65,15 @@ public static class McpCommand
     {
         var report = service.GovernanceReport;
         if (report is null)
-            return new CommandResult.Success("尚未生成 DSH_TOOLS_TIPS.md。");
+            return new CommandResult.Success("尚未生成提示词。");
+        if (report.SkillPaths is { Count: > 0 } skillPaths)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"[MCP 技能模式：已为 {skillPaths.Count} 个 Server 生成独立 SKILL.md]");
+            foreach (var sp in skillPaths)
+                sb.AppendLine($"- {sp}");
+            return new CommandResult.Success(sb.ToString().TrimEnd());
+        }
         var content = File.Exists(report.TipsPath)
             ? await File.ReadAllTextAsync(report.TipsPath)
             : "提示词文件尚未落盘。";
@@ -83,7 +92,10 @@ public static class McpCommand
             var pending = report.Resolutions.Count(r => r.Status == McpResolutionStatus.Pending);
             var approved = report.Resolutions.Count(r => r.Status == McpResolutionStatus.Approved);
             lines.Add($"MCP 治理概况: 检测到 {report.Conflicts.Count} 项冲突/建议 (待审批: {pending}, 已批准生效: {approved})");
-            lines.Add($"调和提示词: {report.TipsPath}");
+            if (report.SkillPaths is { Count: > 0 } skills)
+                lines.Add($"Server Skills: 已生成 {skills.Count} 个技能 ({string.Join(", ", skills.Select(Path.GetFileName))})");
+            else
+                lines.Add($"调和提示词: {report.TipsPath}");
         }
         return string.Join('\n', lines);
     }
