@@ -11,6 +11,7 @@ using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.RemoteHost;
+using Dsh.Account;
 
 namespace Dsh.Gui.ViewModels;
 

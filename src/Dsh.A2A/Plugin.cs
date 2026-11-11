@@ -1,7 +1,8 @@
-﻿using Dsh.Runtime;
+using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin("@deepseek-ai/dsh-a2a")]
 

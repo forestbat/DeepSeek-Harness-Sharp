@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Dsh.Core;
+using Dsh.Sdk;
 
 namespace Dsh.Subagent;
 

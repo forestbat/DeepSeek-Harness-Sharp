@@ -2,6 +2,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Llm.DeepSeek;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

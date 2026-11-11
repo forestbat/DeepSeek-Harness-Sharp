@@ -8,6 +8,7 @@ using Dsh.Pty;
 using Dsh.Runtime;
 using Dsh.Toon;
 using Dsh.Tui;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

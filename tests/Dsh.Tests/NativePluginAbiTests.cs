@@ -10,6 +10,7 @@ using Dsh.Plugins.Native;
 using Dsh.Plugins.Native.Host;
 using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

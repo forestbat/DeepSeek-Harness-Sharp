@@ -5,6 +5,8 @@
     纯能力库, 不含插件入口; ptc 插件(run_code)与 workflow 插件共用, 宿主入口按 PtcScriptHost.HostArgument 派发到 PtcScriptHost。
   -->
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Subprocess\Dsh.Subprocess.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
   </ItemGroup>
 

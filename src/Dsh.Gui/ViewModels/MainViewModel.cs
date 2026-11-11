@@ -15,6 +15,10 @@ using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.SessionQuery;
+using Dsh.Ide;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Gui.ViewModels;
 

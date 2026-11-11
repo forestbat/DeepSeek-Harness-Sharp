@@ -9,6 +9,8 @@ using Dsh.Tui;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using static Dsh.Tests.IdeHistoryTestContext;
+using Dsh.Ide;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Workspace;
 using Dsh.Ide.Bridge;
+using Dsh.Ide;
 
 namespace Dsh.Gui.Services;
 

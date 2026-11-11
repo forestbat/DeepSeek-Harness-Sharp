@@ -2,6 +2,7 @@ using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Persistence;
 

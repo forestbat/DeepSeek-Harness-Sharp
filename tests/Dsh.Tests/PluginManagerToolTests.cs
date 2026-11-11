@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -8,6 +8,7 @@ using Dsh.Runtime.Composition;
 using Dsh.Runtime.Events;
 using Dsh.Boot;
 using static Dsh.Inspection.Plugin;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

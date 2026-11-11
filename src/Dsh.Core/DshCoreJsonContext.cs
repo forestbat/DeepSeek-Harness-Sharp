@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Dsh.Llm;
 
 namespace Dsh.Core;
 
@@ -49,7 +50,6 @@ namespace Dsh.Core;
 [JsonSerializable(typeof(AgentCancelCause.Disposed))]
 [JsonSerializable(typeof(AgentCancelCause.Legacy))]
 [JsonSerializable(typeof(SessionHeader))]
-[JsonSerializable(typeof(MemoryAuditEntry))]
 [JsonSerializable(typeof(IReadOnlyList<long>))]
 [JsonSerializable(typeof(JsonElement))]
 internal sealed partial class DshCoreJsonContext : JsonSerializerContext

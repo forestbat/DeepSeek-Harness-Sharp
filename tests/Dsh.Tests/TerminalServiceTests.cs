@@ -1,6 +1,7 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.PtyTerminal;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

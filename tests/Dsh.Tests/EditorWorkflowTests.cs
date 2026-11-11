@@ -6,6 +6,8 @@ using Dsh.Ide.Triggers;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Ide;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

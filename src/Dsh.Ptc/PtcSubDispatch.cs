@@ -1,8 +1,9 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.ScriptHost;
+using Dsh.Agent;
 
 namespace Dsh.Ptc;
 

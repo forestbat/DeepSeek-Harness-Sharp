@@ -13,6 +13,7 @@ using Dsh.Llm;
 using Dsh.Notifications;
 using Dsh.Pty;
 using Dsh.RemoteHost;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

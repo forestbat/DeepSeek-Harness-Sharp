@@ -6,6 +6,7 @@ using Dsh.Persistence;
 using Dsh.Runtime;
 using Dsh.SessionQuery;
 using Microsoft.Data.Sqlite;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

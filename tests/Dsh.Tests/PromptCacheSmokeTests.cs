@@ -4,6 +4,7 @@ using Dsh.Llm;
 using Dsh.Llm.Anthropic;
 using Dsh.Llm.OpenAi;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

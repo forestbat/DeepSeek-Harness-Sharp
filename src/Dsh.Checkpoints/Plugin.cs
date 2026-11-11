@@ -3,6 +3,7 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Ide;
 
 [assembly: DshPlugin(Dsh.Checkpoints.Plugin.Checkpoints)]
 

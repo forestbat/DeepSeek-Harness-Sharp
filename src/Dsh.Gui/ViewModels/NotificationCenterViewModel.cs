@@ -6,6 +6,7 @@ using Dsh.Gui.Services;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Gui.ViewModels;
 

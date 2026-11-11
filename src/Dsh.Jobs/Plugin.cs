@@ -1,6 +1,9 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Jobs;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Jobs.Plugin.JobsLocal)]
 [assembly: DshPlugin(Dsh.Jobs.Plugin.ToolJobs)]

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dsh.Notifications;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

@@ -15,6 +15,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Tui;
 using TextBlock = Avalonia.Controls.TextBlock;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

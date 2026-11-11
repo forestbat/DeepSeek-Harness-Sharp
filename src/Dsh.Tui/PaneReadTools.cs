@@ -4,6 +4,8 @@ using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Pty;
+using Dsh.Toon;
+using Dsh.Agent;
 
 namespace Dsh.Tui;
 

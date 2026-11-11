@@ -1,8 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Tools\Dsh.Tools.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />

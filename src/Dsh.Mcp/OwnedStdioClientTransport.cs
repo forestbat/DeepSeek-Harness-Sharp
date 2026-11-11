@@ -3,6 +3,7 @@ using Dsh.Runtime;
 using Dsh.Sandbox;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Dsh.Subprocess;
 
 namespace Dsh.Mcp;
 

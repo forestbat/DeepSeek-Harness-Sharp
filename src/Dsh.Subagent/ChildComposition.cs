@@ -1,9 +1,11 @@
-﻿using System.Text.Json.Nodes;
+using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Subagent;
 

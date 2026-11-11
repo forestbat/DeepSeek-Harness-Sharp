@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- remote host 线路契约: 这些 DTO 内嵌会话内核类型(SessionEvent/SessionHeader), 所以位于 Dsh.Core 之上, 不能下沉到 Dsh.Transport。 -->
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.GitInspect\Dsh.GitInspect.csproj" />
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\Dsh.Notifications\Dsh.Notifications.csproj" />
+    <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

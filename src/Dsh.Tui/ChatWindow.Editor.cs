@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Pty;
 using Dsh.Runtime;
+using Dsh.Ide;
 
 namespace Dsh.Tui;
 

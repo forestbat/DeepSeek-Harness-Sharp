@@ -2,7 +2,9 @@
 
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Contracts\Dsh.RemoteHost.Contracts.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
   </ItemGroup>
   <PropertyGroup>

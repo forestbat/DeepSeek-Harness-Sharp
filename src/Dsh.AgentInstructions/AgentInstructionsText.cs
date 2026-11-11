@@ -1,6 +1,8 @@
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.AgentInstructions;
 

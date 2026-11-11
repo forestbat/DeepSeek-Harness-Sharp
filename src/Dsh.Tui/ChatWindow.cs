@@ -8,6 +8,10 @@ using Dsh.GitInspect;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Tui.Services;
+using Dsh.Checkpoints;
+using Dsh.Ide;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Tui;
 
@@ -99,7 +103,7 @@ public sealed partial class ChatWindow : IDisposable
         _nextPaneId = 1;
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
 
-        _unsubscribe = ctx.On<SessionEventNotification>(notification =>
+        _unsubscribe = ctx.On<Dsh.Core.SessionEventNotification>(notification =>
         {
             var target = FindPaneBySession(notification.Session);
             if (target is null)

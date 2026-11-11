@@ -4,6 +4,8 @@ using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tools;
 

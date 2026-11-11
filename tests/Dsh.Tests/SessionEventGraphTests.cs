@@ -11,6 +11,8 @@ using Dsh.Runtime.Events;
 using Dsh.SessionGraph;
 using Dsh.Subagent;
 using Dsh.Workflow;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

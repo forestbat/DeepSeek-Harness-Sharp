@@ -7,6 +7,7 @@ using Dsh.Mcp;
 using Dsh.Runtime;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Dsh.Agent;
 
 namespace Dsh.Tests.Mcp;
 

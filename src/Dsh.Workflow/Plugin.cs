@@ -1,6 +1,9 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Sdk;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Workflow.Plugin.WorkflowWorkerThread)]
 [assembly: DshPlugin(Dsh.Workflow.Plugin.ToolWorkflow)]

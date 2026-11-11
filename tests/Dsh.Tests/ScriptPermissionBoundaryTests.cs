@@ -8,6 +8,8 @@ using Dsh.Csx;
 using Dsh.Llm;
 using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

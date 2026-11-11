@@ -5,6 +5,7 @@ using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

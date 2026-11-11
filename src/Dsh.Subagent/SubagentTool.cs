@@ -6,6 +6,8 @@ using Dsh.Runtime.Events;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Subagent;
 

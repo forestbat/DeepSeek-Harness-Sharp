@@ -5,6 +5,8 @@ using Dsh.CSharpRepl;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

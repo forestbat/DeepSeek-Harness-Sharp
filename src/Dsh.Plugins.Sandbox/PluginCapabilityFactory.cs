@@ -7,6 +7,8 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Plugins.Sandbox;
 

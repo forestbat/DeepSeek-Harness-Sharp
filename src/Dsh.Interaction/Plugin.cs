@@ -3,6 +3,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Interaction.Plugin.Interaction)]
 [assembly: DshPlugin(Dsh.Interaction.Plugin.Persona)]

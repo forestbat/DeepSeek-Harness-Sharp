@@ -4,6 +4,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Tools;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

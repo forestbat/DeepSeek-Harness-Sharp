@@ -5,6 +5,8 @@ using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Csx;
 

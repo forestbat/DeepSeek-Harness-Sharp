@@ -9,6 +9,7 @@ using Dsh.Llm;
 using Dsh.Pty;
 using Dsh.RemoteHost;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

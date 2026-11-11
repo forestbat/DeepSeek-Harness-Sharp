@@ -1,3 +1,5 @@
+using Dsh.Agent;
+
 namespace Dsh.Skills;
 
 public static class SkillSources
@@ -69,7 +71,7 @@ public record SkillLookupOptions
 {
     public string? Cwd { get; init; }
     public CancellationToken Signal { get; init; }
-    public Core.ToolRunContext? Run { get; init; }
+    public ToolRunContext? Run { get; init; }
 }
 
 public sealed record SkillViewOptions : SkillLookupOptions

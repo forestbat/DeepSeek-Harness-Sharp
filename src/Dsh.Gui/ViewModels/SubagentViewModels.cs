@@ -9,6 +9,7 @@ using Dsh.RemoteHost;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Sdk;
 
 namespace Dsh.Gui.ViewModels;
 

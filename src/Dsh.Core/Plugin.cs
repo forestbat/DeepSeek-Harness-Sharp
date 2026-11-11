@@ -22,48 +22,15 @@ public sealed class Plugin(string packageName) : IDshPlugin
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
+    /** 会话内核只装配存储与 LLM 运行时; agent 循环与工具运行时由 @deepseek-ai/dsh-agent 装配。 */
     private static IDisposable RegisterCore(Context ctx, object? config)
     {
         _ = new SessionStore(ctx);
         _ = new FileAttachmentStore(ctx);
-        _ = new SessionProjectionRegistry(ctx);
-        _ = new SystemPrompt(ctx, SystemPromptConfigFrom(config));
-        _ = new ToolRuntime(ctx);
         _ = new LlmRuntime(ctx, LlmStreamLimitsFrom(config));
         _ = new LlmAdapterFactoryRegistry(ctx);
-        _ = new AgentRegistry(ctx);
-        // 持久化插件声明依赖 core 的服务, 因此它总是晚于 core 加载; 这里必须按需解析而不是取值快照。
-        _ = new AgentLoop(ctx, AgentLoopConfigFrom(config), _ => PersistenceOf(ctx));
         return new NoopDisposable();
     }
-
-    private static ISessionPersistence PersistenceOf(Context ctx)
-        => ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName, false)
-            ?? throw new InvalidOperationException("no session persistence backend configured for resume");
-
-    private static SystemPromptConfig SystemPromptConfigFrom(object? config)
-    {
-        var dict = config as IReadOnlyDictionary<string, object?>;
-        return new SystemPromptConfig
-        {
-            IncludeHarnessIdentity = BoolOf(dict, "includeHarnessIdentity") ?? new SystemPromptConfig().IncludeHarnessIdentity,
-            IncludeRuntimeContext = BoolOf(dict, "includeRuntimeContext") ?? new SystemPromptConfig().IncludeRuntimeContext,
-            IncludeEnvironment = BoolOf(dict, "includeEnvironment") ?? true,
-            Persona = dict?.GetValueOrDefault("persona") as string ?? "",
-        };
-    }
-
-    private static AgentLoopConfig AgentLoopConfigFrom(object? config)
-    {
-        var dict = config as IReadOnlyDictionary<string, object?>;
-        return new AgentLoopConfig
-        {
-            MaxParallelToolCalls = IntOf(dict, "maxParallelToolCalls") ?? AgentLoopConfig.DefaultMaxParallelToolCalls,
-        };
-    }
-
-    private static bool? BoolOf(IReadOnlyDictionary<string, object?>? dict, string key)
-        => dict?.GetValueOrDefault(key) as bool?;
 
     /** 流式看门狗阈值: 默认对齐 qwen-code (idle 4 分钟 / lifetime 15 分钟); 非正值关闭该守卫。 */
     private static LlmStreamLimits LlmStreamLimitsFrom(object? config)

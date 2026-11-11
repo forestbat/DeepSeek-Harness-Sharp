@@ -3,6 +3,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
+using Dsh.Sdk;
 
 namespace Dsh.Host;
 

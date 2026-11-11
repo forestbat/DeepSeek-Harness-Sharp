@@ -9,6 +9,8 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.Processing;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tools;
 

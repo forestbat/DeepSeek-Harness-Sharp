@@ -1,5 +1,6 @@
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

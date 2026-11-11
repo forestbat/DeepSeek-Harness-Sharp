@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Dsh.Notifications;
+using Dsh.Agent;
 
 namespace Dsh.RemoteHost;
 

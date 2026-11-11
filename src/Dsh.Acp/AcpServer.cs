@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Sdk;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Acp;
 

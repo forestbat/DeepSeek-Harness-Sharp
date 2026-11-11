@@ -3,6 +3,8 @@ using Dsh.Gui.ViewModels;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Subagent;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

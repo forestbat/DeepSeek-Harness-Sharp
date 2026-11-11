@@ -3,6 +3,7 @@ using Dsh.Core;
 using Dsh.Jobs;
 using Dsh.Llm;
 using Dsh.PtyTerminal;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

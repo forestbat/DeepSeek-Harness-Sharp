@@ -8,6 +8,7 @@ using Dsh.Llm;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 using Dsh.Transport;
+using Dsh.SessionQuery;
 
 namespace Dsh.Tests;
 

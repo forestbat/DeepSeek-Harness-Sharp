@@ -1,5 +1,6 @@
 using Dsh.Core;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
 
 namespace Dsh.Interaction;
 

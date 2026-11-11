@@ -6,6 +6,7 @@ using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
 
 namespace Dsh.Host;
 

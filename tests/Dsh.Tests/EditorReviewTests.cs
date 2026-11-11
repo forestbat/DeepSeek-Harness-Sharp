@@ -3,6 +3,7 @@ using Dsh.Core;
 using Dsh.Ide.Surfaces;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Ide;
 
 namespace Dsh.Tests;
 

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Dsh.Core;
 using Dsh.Ide.Bridge;
+using Dsh.Ide;
 
 namespace Dsh.Gui.Services;
 

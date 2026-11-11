@@ -2,6 +2,7 @@ using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Goal;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

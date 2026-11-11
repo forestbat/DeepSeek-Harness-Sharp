@@ -2,6 +2,7 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Deliverables.Plugin.ToolPresent)]
 

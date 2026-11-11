@@ -11,6 +11,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using Dsh.Agent;
 
 namespace Dsh.Tests.Mcp;
 

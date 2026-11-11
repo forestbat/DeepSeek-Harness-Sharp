@@ -1,6 +1,8 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Memory;
+using Dsh.Agent;
 
 namespace Dsh.Interaction;
 

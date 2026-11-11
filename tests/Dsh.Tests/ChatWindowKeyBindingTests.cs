@@ -6,6 +6,7 @@ using Dsh.Runtime;
 using Dsh.Tui;
 using Dsh.Tui.Services;
 using System.Text;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 [assembly: DshPlugin("@example/dsh-plugin-template")]
 

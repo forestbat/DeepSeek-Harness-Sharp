@@ -5,6 +5,7 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Schedule;
 using Microsoft.Extensions.Time.Testing;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

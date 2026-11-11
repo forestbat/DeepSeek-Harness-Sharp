@@ -3,6 +3,7 @@ using Dsh.Fleet;
 using Dsh.Gui.ViewModels;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

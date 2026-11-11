@@ -6,6 +6,7 @@ using Dsh.Llm;
 using Dsh.Runtime.Events;
 using Dsh.Web;
 using System.Text.Json;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

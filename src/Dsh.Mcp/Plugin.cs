@@ -3,6 +3,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Mcp.Plugin.Mcp)]
 

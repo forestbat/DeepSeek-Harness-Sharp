@@ -14,6 +14,8 @@ using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tests;
 

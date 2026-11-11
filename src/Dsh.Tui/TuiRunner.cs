@@ -3,6 +3,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Tui.Services;
+using Dsh.Agent;
 
 namespace Dsh.Tui;
 

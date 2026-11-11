@@ -3,6 +3,7 @@ using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.Transport;
 using static Dsh.RemoteHost.RemoteHostRpc;
+using Dsh.Ide;
 
 namespace Dsh.RemoteHost;
 

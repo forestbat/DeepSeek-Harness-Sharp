@@ -14,7 +14,8 @@
     <Project Path="src/Dsh.AgentAdapters/Dsh.AgentAdapters.csproj" />
     <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
     <Project Path="src/Dsh.Board/Dsh.Board.csproj" />
-    <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
+        <Project Path="src/Dsh.Agent/Dsh.Agent.csproj" />
+<Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
     <Project Path="src/Dsh.Checkpoints/Dsh.Checkpoints.csproj" />
     <Project Path="src/Dsh.Compaction/Dsh.Compaction.csproj" />
     <Project Path="src/Dsh.Core/Dsh.Core.csproj" />
@@ -52,9 +53,11 @@
     <Project Path="src/Dsh.PtyTerminal/Dsh.PtyTerminal.csproj" />
     <Project Path="src/Dsh.Ptc/Dsh.Ptc.csproj" />
     <Project Path="src/Dsh.RemoteHost.Client/Dsh.RemoteHost.Client.csproj" />
+    <Project Path="src/Dsh.RemoteHost.Contracts/Dsh.RemoteHost.Contracts.csproj" />
     <Project Path="src/Dsh.RemoteHost.Server/Dsh.RemoteHost.Server.csproj" />
-    <Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
-    <Project Path="src/Dsh.Sandbox/Dsh.Sandbox.csproj" />
+        <Project Path="src/Dsh.Subprocess/Dsh.Subprocess.csproj" />
+<Project Path="src/Dsh.Runtime/Dsh.Runtime.csproj" />
+<Project Path="src/Dsh.Sandbox/Dsh.Sandbox.csproj" />
     <Project Path="src/Dsh.Schedule/Dsh.Schedule.csproj" />
     <Project Path="src/Dsh.ScriptHost/Dsh.ScriptHost.csproj" />
     <Project Path="src/Dsh.Sdk/Dsh.Sdk.csproj" />

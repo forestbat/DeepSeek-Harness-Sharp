@@ -1,4 +1,5 @@
 using Dsh.Core;
+using Dsh.Sdk;
 
 namespace Dsh.Tui;
 

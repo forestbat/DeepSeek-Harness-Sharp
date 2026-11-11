@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
 
 namespace Dsh.Ide.Triggers;
 

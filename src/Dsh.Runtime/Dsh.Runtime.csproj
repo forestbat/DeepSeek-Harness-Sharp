@@ -15,6 +15,20 @@
     <PackageReference Include="DryIoc.dll" Version="6.0.0" ExcludeAssets="build" />
   </ItemGroup>
 
+  <ItemGroup>
+
+    <InternalsVisibleTo Include="Dsh.Agent" />
+
+  </ItemGroup>
+
+
+  <ItemGroup>
+
+
+  </ItemGroup>
+
+
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

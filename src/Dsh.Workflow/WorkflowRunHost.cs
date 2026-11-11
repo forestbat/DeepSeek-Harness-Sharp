@@ -1,5 +1,6 @@
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Sdk;
 
 namespace Dsh.Workflow;
 

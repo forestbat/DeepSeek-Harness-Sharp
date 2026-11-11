@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 
@@ -41,7 +42,7 @@ public sealed class RemoteHostNotifyTests
         Assert.Equal((1, 1), (addedChange.Page.Total, addedChange.Page.UnreadCount));
         Assert.Equal(1, bobAddedChange.Page.UnreadCount);
         Assert.True(await alice.RespondApprovalAsync(request.RequestId, false, cancellationToken: Ct));
-        Assert.Equal(Dsh.Core.ApprovalOutcome.Rejected, await decision.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+        Assert.Equal(ApprovalOutcome.Rejected, await decision.WaitAsync(TimeSpan.FromSeconds(5), Ct));
 
         Assert.True(alice.Supports(NotificationsProtocol.Capability));
         Assert.Equal(added, seenByBob);

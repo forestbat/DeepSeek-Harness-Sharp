@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using Dsh.Core;
 using Dsh.Workspace;
 using Dsh.Gui.ViewModels;
+using Dsh.Ide;
 
 namespace Dsh.Gui.Services;
 

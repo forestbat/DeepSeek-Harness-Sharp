@@ -4,6 +4,8 @@ using Dsh.Ide.Bridge;
 using Dsh.Plugins;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
+using Dsh.Transport;
+using Dsh.Ide;
 
 namespace Dsh.Host;
 

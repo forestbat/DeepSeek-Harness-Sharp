@@ -22,6 +22,11 @@
     <InternalsVisibleTo Include="Dsh.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+
+  </ItemGroup>
+
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

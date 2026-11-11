@@ -1,7 +1,10 @@
-﻿using Dsh.Boot;
+using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 using ModelContextProtocol.Client;
+using Dsh.Subprocess;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Mcp;
 

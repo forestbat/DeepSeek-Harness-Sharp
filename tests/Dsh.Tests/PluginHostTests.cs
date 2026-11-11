@@ -5,6 +5,8 @@ using Dsh.Ide.Bridge;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Plugins;
+using Dsh.Ide;
+using Dsh.Agent;
 
 [assembly: DshPlugin("test/local")]
 

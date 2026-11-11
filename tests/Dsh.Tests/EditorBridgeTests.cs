@@ -7,6 +7,7 @@ using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.RemoteHost;
 using Dsh.Transport;
+using Dsh.Ide;
 
 namespace Dsh.Tests;
 

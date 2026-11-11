@@ -3,6 +3,8 @@
   <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Checkpoints\Dsh.Checkpoints.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />

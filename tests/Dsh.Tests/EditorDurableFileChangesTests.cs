@@ -9,6 +9,9 @@ using Dsh.Persistence;
 using Dsh.Ptc;
 using Dsh.Runtime;
 using Dsh.Tools;
+using Dsh.Subprocess;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tests;
 

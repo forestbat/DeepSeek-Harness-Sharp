@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Ide.Bridge;
 using Dsh.RemoteHost;
+using Dsh.Ide;
 
 namespace Dsh.Host;
 

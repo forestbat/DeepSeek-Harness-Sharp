@@ -7,6 +7,7 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Tools;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

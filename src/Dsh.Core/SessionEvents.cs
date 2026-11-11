@@ -131,8 +131,6 @@ public sealed record EpochHeader(
     LlmCallConfigAdapterDefaults? AdapterDefaults = null,
     IReadOnlyList<ToolSchema>? Tools = null);
 
-public sealed record LlmCallConfigAdapterDefaults(bool ReasoningEffort = false, bool MaxTokens = false);
-
 public static class RequestHeaderReasons
 {
     public const string Initial = "initial";
@@ -191,4 +189,14 @@ public static class SessionEventTypes
 public static class SessionEventSources
 {
     public const string AcpPlan = "acp-plan";
+}
+
+public sealed record InboxSplicePayload(
+    string Target,
+    long Start,
+    long? RemovedCount,
+    IReadOnlyList<UserMessage> Inserted,
+    string? Outcome = null) : SessionEventPayload
+{
+    public override string Type => SessionEventTypes.AgentInboxSpliced;
 }

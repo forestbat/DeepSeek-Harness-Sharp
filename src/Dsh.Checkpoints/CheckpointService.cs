@@ -4,6 +4,8 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Persistence;
+using Dsh.Ide;
 
 namespace Dsh.Checkpoints;
 

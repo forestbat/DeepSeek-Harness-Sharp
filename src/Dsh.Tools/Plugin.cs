@@ -1,6 +1,8 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Tools.Plugin.ToolBash)]
 [assembly: DshPlugin(Dsh.Tools.Plugin.Subprocess)]
