@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using Dsh.Core;
 
 namespace Dsh.Account;
@@ -11,6 +11,11 @@ public static class AccountOrigins
     public const string AuthorizedPath = "/dsh/authorized";
 
     public const string CallbackPath = "/oauth/callback";
+
+    /** 平台个人页: 用量明细与充值只在官网页面上有, 客户端只做跳转。 */
+    public const string UsagePath = "/usage";
+
+    public const string TopUpPath = "/top_up";
 
     private static readonly string[] LoopbackHosts = ["localhost", "127.0.0.1", "[::1]"];
 

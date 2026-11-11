@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Text.Json;
 using Dsh.Account;
 using Dsh.Boot;
@@ -50,7 +50,7 @@ public sealed class AccountServiceTests
                     return AccountHttpHandler.Json(AccountHttpHandler.Envelope("{}"));
             }
         });
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home, handler, url =>
+        using var service = new AccountService(new Context(), Config(), home.Home, handler, url =>
         {
             opened.Add(url);
             if (callbackTask is null && callbackUrl is not null)
@@ -85,7 +85,7 @@ public sealed class AccountServiceTests
                 $$"""{"authorize_url":"{{Origin}}/dsh/authorize","authorize_id":"auth-9","expires_in":300}""")),
             _ => AccountHttpHandler.Json(AccountHttpHandler.Envelope("{}")),
         });
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home, handler, _ => true);
+        using var service = new AccountService(new Context(), Config(), home.Home, handler, _ => true);
 
         var task = service.SignInAsync(TestContext.Current.CancellationToken);
         await WaitForAsync(() => service.Snapshot.Phase == AccountPhase.WaitingBrowser);
@@ -112,7 +112,7 @@ public sealed class AccountServiceTests
                 ? AccountHttpHandler.Json("{}", HttpStatusCode.InternalServerError)
                 : AccountHttpHandler.Json(AccountHttpHandler.Envelope("{}"));
         });
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home, handler, _ => true);
+        using var service = new AccountService(new Context(), Config(), home.Home, handler, _ => true);
 
         await service.SignOutAsync();
 
@@ -131,7 +131,7 @@ public sealed class AccountServiceTests
         store.WriteGrant(new AccountGrant(1, "grant-token", Origin));
         var expired = false;
         var handler = new AccountHttpHandler(_ => AccountHttpHandler.Json("""{"code":40003}"""));
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home, handler, _ => true);
+        using var service = new AccountService(new Context(), Config(), home.Home, handler, _ => true);
         service.SessionExpired += () => expired = true;
 
         var profile = await service.GetProfileAsync(TestContext.Current.CancellationToken);
@@ -142,29 +142,34 @@ public sealed class AccountServiceTests
         Assert.Equal(AccountPhase.SignedOut, service.Snapshot.Phase);
     }
 
+    /** 「用量」「充值」只有平台官网页面上有, 客户端只负责把这两个地址交给系统浏览器。 */
     [Fact]
-    public async Task SignIn_WhenDisabled_ThrowsDisabled()
+    public void OpenPlatformPage_OpensTheOfficialUsageAndTopUpPages()
     {
         using var home = new AccountTempHome();
-        using var service = new AccountService(new Context(), Config(enabled: false), home.Home,
-            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+        var opened = new List<string>();
+        using var service = new AccountService(new Context(), Config(), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), url =>
+            {
+                opened.Add(url);
+                return true;
+            });
 
-        var error = await Assert.ThrowsAsync<AccountException>(() => service.SignInAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(AccountFailure.Disabled, error.Failure);
+        Assert.True(service.OpenPlatformPage(AccountPlatformPage.Usage));
+        Assert.True(service.OpenPlatformPage(AccountPlatformPage.TopUp));
+
+        Assert.Equal([$"{Origin}/usage", $"{Origin}/top_up"], opened);
     }
 
+    /** 浏览器起不来时如实返回 false, 由 UI 提示用户手动访问。 */
     [Fact]
-    public void SetEnabled_PersistsToPluginParameters()
+    public void OpenPlatformPage_ReportsFailureWhenTheBrowserCannotStart()
     {
         using var home = new AccountTempHome();
-        using var service = new AccountService(new Context(), Config(enabled: false), home.Home,
-            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
+        using var service = new AccountService(new Context(), Config(), home.Home,
+            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => false);
 
-        service.SetEnabled(true);
-
-        Assert.True(service.Enabled);
-        var parameters = HarnessSettings.Load(home.Home).Plugins["@deepseek-ai/dsh-account"].Parameters;
-        Assert.Equal(true, parameters["accountEnabled"]);
+        Assert.False(service.OpenPlatformPage(AccountPlatformPage.Usage));
     }
 
     [Fact]
@@ -173,7 +178,7 @@ public sealed class AccountServiceTests
         using var home = new AccountTempHome();
         new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", Origin));
         var ctx = new Context();
-        using var service = new AccountService(ctx, Config(enabled: true), home.Home,
+        using var service = new AccountService(ctx, Config(), home.Home,
             new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
 
         Assert.True(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
@@ -189,21 +194,9 @@ public sealed class AccountServiceTests
     public void InferenceToken_RequiresSignedInGrant()
     {
         using var home = new AccountTempHome();
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home,
+        using var service = new AccountService(new Context(), Config(), home.Home,
             new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
 
-        Assert.Null(service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
-    }
-
-    [Fact]
-    public void InferenceToken_IsNotReleasedWhenDisabled()
-    {
-        using var home = new AccountTempHome();
-        new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", Origin));
-        using var service = new AccountService(new Context(), Config(enabled: false), home.Home,
-            new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
-
-        Assert.False(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
         Assert.Null(service.TryGetToken(new Uri(AccountConfig.DefaultInferenceOrigin)));
     }
 
@@ -212,7 +205,7 @@ public sealed class AccountServiceTests
     {
         using var home = new AccountTempHome();
         new AccountStore(home.Home).WriteGrant(new AccountGrant(1, "grant-token", "https://other.test"));
-        using var service = new AccountService(new Context(), Config(enabled: true), home.Home,
+        using var service = new AccountService(new Context(), Config(), home.Home,
             new AccountHttpHandler(_ => AccountHttpHandler.Json("{}")), _ => true);
 
         Assert.True(service.Covers(new Uri(AccountConfig.DefaultInferenceOrigin)));
@@ -227,10 +220,9 @@ public sealed class AccountServiceTests
         Assert.True(condition(), "condition not reached in time");
     }
 
-    private static AccountConfig Config(bool enabled) => new()
+    private static AccountConfig Config() => new()
     {
         PlatformOrigin = Origin,
-        Enabled = enabled,
         AttemptTimeoutMs = 10_000,
         RequestTimeoutMs = 5_000,
         LogoutRetryDelayMs = 1,

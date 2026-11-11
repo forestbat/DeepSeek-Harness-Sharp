@@ -118,7 +118,6 @@ public sealed class DeepSeekAccountRouteTests
         => $"""
             plugins:
               "@deepseek-ai/dsh-account":
-                accountEnabled: true
                 platformOrigin: {endpoint.BaseUrl}
                 inferenceOrigin: {endpoint.BaseUrl}
                 allowLoopbackHttp: true
@@ -139,7 +138,6 @@ public sealed class DeepSeekAccountRouteTests
         using var home = new TestHome($"""
             plugins:
               "@deepseek-ai/dsh-account":
-                accountEnabled: true
                 platformOrigin: {endpoint.BaseUrl}
                 inferenceOrigin: {endpoint.BaseUrl}
                 allowLoopbackHttp: true
@@ -185,7 +183,6 @@ public sealed class DeepSeekAccountRouteTests
         using var home = new TestHome($"""
             plugins:
               "@deepseek-ai/dsh-account":
-                accountEnabled: true
                 platformOrigin: {endpoint.BaseUrl}
                 inferenceOrigin: {endpoint.BaseUrl}
                 allowLoopbackHttp: true

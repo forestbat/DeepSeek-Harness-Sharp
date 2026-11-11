@@ -30,7 +30,6 @@ public sealed class RealAccountRouteSmokeTests
             File.WriteAllText(Path.Combine(home, "settings.yaml"), $"""
                 plugins:
                   "@deepseek-ai/dsh-account":
-                    accountEnabled: true
                 """);
             var target = HarnessHome.Resolve(home);
             new AccountStore(target).WriteGrant(new AccountGrant(1, grant.Token, AccountConfig.DefaultPlatformOrigin));

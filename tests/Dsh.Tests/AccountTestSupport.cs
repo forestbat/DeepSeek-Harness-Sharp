@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Text;
 using Dsh.Account;
 using Dsh.Boot;
@@ -69,9 +69,12 @@ internal sealed class FakeAccountService : IAccountService
 
     public event Action? SessionExpired;
 
-    public bool Enabled { get; set; } = true;
+    public AccountSnapshot Snapshot { get; set; } = new(AccountPhase.SignedOut, null, null, null, null);
 
-    public AccountSnapshot Snapshot { get; set; } = new(AccountPhase.SignedOut, true, null, null, null, null);
+    /** 记录 VM 请求打开的官方页面, 断言跳转目标而不真的拉起浏览器。 */
+    public List<AccountPlatformPage> OpenedPages { get; } = [];
+
+    public bool OpenBrowser { get; set; } = true;
 
     public Func<CancellationToken, Task<AccountProfile?>> SignInHandler { get; set; } = _ => Task.FromResult<AccountProfile?>(null);
 
@@ -86,10 +89,10 @@ internal sealed class FakeAccountService : IAccountService
         return Task.CompletedTask;
     }
 
-    public void SetEnabled(bool enabled)
+    public bool OpenPlatformPage(AccountPlatformPage page)
     {
-        Enabled = enabled;
-        Changed?.Invoke();
+        OpenedPages.Add(page);
+        return OpenBrowser;
     }
 
     public Task<AccountProfile?> SignInAsync(CancellationToken cancellationToken)

@@ -1,4 +1,4 @@
-﻿using Dsh.Account;
+using Dsh.Account;
 using Dsh.Gui.ViewModels;
 using Dsh.Core;
 
@@ -18,16 +18,54 @@ public sealed class AccountPanelViewModelTests
     }
 
     [Fact]
-    public void ToggleEnabled_FlowsToService_AndUnlocksSignIn()
+    public void SignedOut_AllowsSignIn_WithoutAnyEnableSwitch()
     {
-        var service = new FakeAccountService { Enabled = false };
+        var service = new FakeAccountService();
         var panel = new AccountPanelViewModel(service);
-        Assert.False(panel.CanSignIn);
 
-        panel.IsEnabled = true;
-
-        Assert.True(service.Enabled);
         Assert.True(panel.CanSignIn);
+        Assert.True(panel.CanOfferSignIn);
+        Assert.True(panel.IsSignedOut);
+    }
+
+    [Fact]
+    public async Task SignedIn_HidesTheTitleBarSignInHint()
+    {
+        var service = new FakeAccountService
+        {
+            SignInHandler = _ => Task.FromResult<AccountProfile?>(new AccountProfile("u-1", "小明", null, "13812345678")),
+        };
+        var panel = new AccountPanelViewModel(service);
+
+        await panel.SignInCommand.ExecuteAsync(null);
+
+        Assert.True(panel.IsSignedIn);
+        Assert.False(panel.CanOfferSignIn);
+    }
+
+    /** 「更多账号信息」「查询用量」「充值」都跳官方页面: 客户端不自造用量与充值界面。 */
+    [Fact]
+    public void OfficialPageCommands_OpenUsageAndTopUp()
+    {
+        var service = new FakeAccountService();
+        var panel = new AccountPanelViewModel(service);
+
+        panel.OpenUsageCommand.Execute(null);
+        panel.OpenTopUpCommand.Execute(null);
+
+        Assert.Equal([AccountPlatformPage.Usage, AccountPlatformPage.TopUp], service.OpenedPages);
+        Assert.Equal("", panel.Status);
+    }
+
+    [Fact]
+    public void BrowserFailure_ShowsAStatusInsteadOfSilence()
+    {
+        var service = new FakeAccountService { OpenBrowser = false };
+        var panel = new AccountPanelViewModel(service);
+
+        panel.OpenUsageCommand.Execute(null);
+
+        Assert.Contains("platform.deepseek.com", panel.Status);
     }
 
     [Fact]
@@ -46,7 +84,28 @@ public sealed class AccountPanelViewModelTests
         Assert.Equal("小明", panel.DisplayName);
         Assert.Equal("138****5678", panel.MaskedContact);
         Assert.Equal("小", panel.Initial);
-        Assert.Contains("12.34", panel.BalanceText);
+        Assert.Equal("¥12.34", panel.BalanceText);
+        Assert.True(panel.HasBalance);
+        Assert.False(panel.HasBonus);
+    }
+
+    /** 赠金单独一行: 与充值余额不是同一笔钱, 不能混在一个数字里。 */
+    [Fact]
+    public async Task SignIn_WithBonusWallet_ShowsBonusSeparately()
+    {
+        var service = new FakeAccountService
+        {
+            SignInHandler = _ => Task.FromResult<AccountProfile?>(new AccountProfile("u-1", "小明", null, "13812345678")),
+            BalanceHandler = _ => Task.FromResult<AccountBalance?>(
+                new AccountBalance([new AccountWallet("CNY", "0.42")], [new AccountWallet("CNY", "5.00")])),
+        };
+        var panel = new AccountPanelViewModel(service);
+
+        await panel.SignInCommand.ExecuteAsync(null);
+
+        Assert.Equal("¥0.42", panel.BalanceText);
+        Assert.Equal("赠金 ¥5.00", panel.BonusText);
+        Assert.True(panel.HasBonus);
     }
 
     [Fact]

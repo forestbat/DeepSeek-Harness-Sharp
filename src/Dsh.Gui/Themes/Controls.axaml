@@ -300,4 +300,22 @@
     <Setter Property="Background" Value="{DynamicResource Brush.Status.Error}" />
   </Style>
 
+  <!-- 标题栏里带文字的按钮(如"登录到 DeepSeek"): 与最小化/关闭同高, 宽度随内容。 -->
+  <Style Selector="Button.TitleAction">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Margin" Value="0,0,6,0" />
+    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource CornerRadius.Control}" />
+    <Setter Property="Background" Value="{DynamicResource Brush.Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Brush.Text.OnAccent}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="FontSize" Value="{DynamicResource FontSize.List}" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.TitleAction:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Brush.Accent.Hover}" />
+    <Setter Property="TextBlock.Foreground" Value="{DynamicResource Brush.Text.OnAccent}" />
+  </Style>
+
 </Styles>

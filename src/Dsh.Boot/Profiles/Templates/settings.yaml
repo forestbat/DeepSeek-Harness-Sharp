@@ -714,8 +714,6 @@ plugins:
 #   inferenceOrigin:
 #   允许回环 HTTP
 #   allowLoopbackHttp:
-#   是否启用
-#   enabled:
 #   请求超时(毫秒)
 #   requestTimeoutMs:
 #   单次尝试超时(毫秒)

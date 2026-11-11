@@ -38,9 +38,16 @@ public sealed partial class AccountPanelViewModel : ObservableObject
 
     public bool IsFailed => Stage == AccountPhase.Failed;
 
-    public bool CanSignIn => IsAvailable && IsEnabled && !IsBusy;
+    public bool CanSignIn => IsAvailable && !IsBusy;
 
     public bool CanCancel => IsAvailable && IsWaiting;
+
+    /** 标题栏的「登录到 DeepSeek」: 已登录或正在登录时不再占位置。 */
+    public bool CanOfferSignIn => IsAvailable && !IsSignedIn && !IsWaiting && !IsBusy;
+
+    public bool HasBalance => BalanceText.Length > 0;
+
+    public bool HasBonus => BonusText.Length > 0;
 
     public string Initial => DisplayName.Length > 0 ? DisplayName[..1].ToUpperInvariant() : "?";
 
@@ -51,16 +58,13 @@ public sealed partial class AccountPanelViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsCancelled))]
     [NotifyPropertyChangedFor(nameof(IsFailed))]
     [NotifyPropertyChangedFor(nameof(CanCancel))]
+    [NotifyPropertyChangedFor(nameof(CanOfferSignIn))]
     private AccountPhase _stage = AccountPhase.SignedOut;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSignIn))]
     [NotifyPropertyChangedFor(nameof(CanCancel))]
-    private bool _isEnabled;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanSignIn))]
-    [NotifyPropertyChangedFor(nameof(CanCancel))]
+    [NotifyPropertyChangedFor(nameof(CanOfferSignIn))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -77,15 +81,18 @@ public sealed partial class AccountPanelViewModel : ObservableObject
     private string? _avatarUrl;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasBalance))]
     private string _balanceText = "";
 
-    partial void OnIsEnabledChanged(bool value) => _service?.SetEnabled(value);
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasBonus))]
+    private string _bonusText = "";
 
     /** 切到账号分区或窗口重开时调用: 有授权则拉取资料与余额, 无则保持未登录。 */
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         SyncFromService();
-        if (_service is null || !_service.Enabled)
+        if (_service is null)
             return;
         try
         {
@@ -94,12 +101,13 @@ public sealed partial class AccountPanelViewModel : ObservableObject
             {
                 if (Stage != AccountPhase.Failed)
                     Stage = AccountPhase.SignedOut;
+                ResetProfile();
                 return;
             }
             ApplyProfile(profile);
-            BalanceText = FormatBalance(await _service.GetBalanceAsync(cancellationToken));
+            ApplyBalance(await _service.GetBalanceAsync(cancellationToken));
             Stage = AccountPhase.SignedIn;
-            Status = "已登录";
+            Status = "";
         }
         catch (OperationCanceledException)
         {
@@ -126,19 +134,14 @@ public sealed partial class AccountPanelViewModel : ObservableObject
             profile ??= await _service.GetProfileAsync(_signIn.Token);
             if (profile is not null)
                 ApplyProfile(profile);
-            BalanceText = FormatBalance(await _service.GetBalanceAsync(_signIn.Token));
+            ApplyBalance(await _service.GetBalanceAsync(_signIn.Token));
             Stage = AccountPhase.SignedIn;
-            Status = "已登录";
+            Status = "";
         }
         catch (OperationCanceledException)
         {
             Stage = AccountPhase.Cancelled;
             Status = "已取消登录";
-        }
-        catch (AccountException error) when (error.Failure == AccountFailure.Disabled)
-        {
-            Stage = AccountPhase.SignedOut;
-            Status = "请先打开账号功能总开关";
         }
         catch (AccountException error)
         {
@@ -182,11 +185,24 @@ public sealed partial class AccountPanelViewModel : ObservableObject
         }
     }
 
+    /** 用量明细只有平台官网有: 「更多账号信息」与「查询用量」都跳到同一个官方页面。 */
+    [RelayCommand]
+    private void OpenUsage() => OpenPlatformPage(AccountPlatformPage.Usage);
+
+    [RelayCommand]
+    private void OpenTopUp() => OpenPlatformPage(AccountPlatformPage.TopUp);
+
+    private void OpenPlatformPage(AccountPlatformPage page)
+    {
+        if (_service is null)
+            return;
+        Status = _service.OpenPlatformPage(page) ? "" : "无法打开浏览器，请手动访问 platform.deepseek.com";
+    }
+
     private void SyncFromService()
     {
         if (_service is null)
             return;
-        IsEnabled = _service.Enabled;
         Stage = _service.Snapshot.Phase == AccountPhase.SignedIn && _service.Snapshot.Profile is null
             ? AccountPhase.SignedOut
             : _service.Snapshot.Phase;
@@ -205,20 +221,33 @@ public sealed partial class AccountPanelViewModel : ObservableObject
         MaskedContact = "";
         AvatarUrl = null;
         BalanceText = "";
+        BonusText = "";
     }
 
-    private static string FormatBalance(AccountBalance? balance)
+    private void ApplyBalance(AccountBalance? balance)
     {
         if (balance is null)
-            return "";
-        var parts = balance.NormalWallets.Select(wallet => $"{wallet.Currency} {wallet.Balance}").ToList();
-        parts.AddRange(balance.BonusWallets.Select(wallet => $"赠金 {wallet.Currency} {wallet.Balance}"));
-        return parts.Count == 0 ? "余额不可用" : string.Join(" · ", parts);
+        {
+            BalanceText = "";
+            BonusText = "";
+            return;
+        }
+        BalanceText = Amounts(balance.NormalWallets);
+        BonusText = balance.BonusWallets.Count == 0 ? "" : $"赠金 {Amounts(balance.BonusWallets)}";
     }
+
+    private static string Amounts(IReadOnlyList<AccountWallet> wallets)
+        => wallets.Count == 0 ? "" : string.Join(" · ", wallets.Select(wallet => $"{Symbol(wallet.Currency)}{wallet.Balance}"));
+
+    private static string Symbol(string currency) => currency switch
+    {
+        "CNY" => "¥",
+        "USD" => "$",
+        _ => $"{currency} ",
+    };
 
     private static string FailureText(AccountFailure failure) => failure switch
     {
-        AccountFailure.Disabled => "账号功能未开启",
         AccountFailure.Network => "网络不可用或平台未响应",
         AccountFailure.Protocol => "平台响应不符合预期（接口可能已变更）",
         AccountFailure.Storage => "本地凭据读写失败",

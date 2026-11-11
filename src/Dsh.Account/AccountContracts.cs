@@ -17,11 +17,17 @@ public enum AccountPhase
 /** 账号失败分类: 不含任何响应正文或 URL, 可安全进 UI 与日志。 */
 public enum AccountFailure
 {
-    Disabled,
     Network,
     Protocol,
     Storage,
     Expired,
+}
+
+/** 平台个人页上的官方页面: 用量明细与充值都只有平台官网提供, 客户端只负责跳转。 */
+public enum AccountPlatformPage
+{
+    Usage,
+    TopUp,
 }
 
 /** 账号协议错误: 消息只暴露稳定分类, 绝不携带 token/正文/授权 URL。 */
@@ -44,7 +50,6 @@ public sealed record AccountBalance(IReadOnlyList<AccountWallet> NormalWallets, 
 /** 账号状态快照: GUI 消费的唯一状态形态。 */
 public sealed record AccountSnapshot(
     AccountPhase Phase,
-    bool Enabled,
     AccountProfile? Profile,
     AccountBalance? Balance,
     string? AuthorizeUrl,
@@ -59,11 +64,7 @@ public interface IAccountService
 
     event Action? SessionExpired;
 
-    bool Enabled { get; }
-
     AccountSnapshot Snapshot { get; }
-
-    void SetEnabled(bool enabled);
 
     Task<AccountProfile?> SignInAsync(CancellationToken cancellationToken);
 
@@ -74,4 +75,7 @@ public interface IAccountService
     Task<AccountProfile?> GetProfileAsync(CancellationToken cancellationToken);
 
     Task<AccountBalance?> GetBalanceAsync(CancellationToken cancellationToken);
+
+    /** 在系统浏览器打开平台个人页; 用作"用量/充值"这类官方页面跳转的入口。 */
+    bool OpenPlatformPage(AccountPlatformPage page);
 }
