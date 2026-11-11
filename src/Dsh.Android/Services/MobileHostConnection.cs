@@ -113,6 +113,12 @@ public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
         await lease.Client.SendMessageAsync(sessionId, text, [], cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task InterruptAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        var lease = await WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await lease.Client.InterruptAsync(sessionId, cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _lifetime.CancelAsync().ConfigureAwait(false);

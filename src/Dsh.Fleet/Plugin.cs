@@ -1,5 +1,5 @@
 using Dsh.Boot;
-using Dsh.Core;
+using Dsh.Agent;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Transport;
@@ -11,7 +11,11 @@ namespace Dsh.Fleet;
 /** Provides the plugin-lifetime owner; unloading disposes its clients while host sessions remain independent. */
 public sealed class Plugin : IDshPlugin
 {
-    public string[] Inject => [WorkspaceService.ServiceName];
+    /**
+ * 插件按服务名声明依赖: 这里要 ToolRuntime, 因为 FleetSessionTools 在 Apply 里就把它注册到工具运行时。
+ * 只声明 WorkspaceService 会让激活顺序靠运气 —— 工具运行时还没就位时 Apply 会失败, 整个 fleet 后端随之缺席。
+ */
+public string[] Inject => [WorkspaceService.ServiceName, ToolRuntime.ServiceName];
 
     public IDisposable Apply(Context ctx, object? config)
     {

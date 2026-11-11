@@ -140,27 +140,73 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost
     public Task<RemoteSessionSummary> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
         => SendAsync(HostProtocol.MethodSessionResume, Serialize(new RemoteSessionRef(sessionId), HostProtocolJsonContext.Default.RemoteSessionRef), HostProtocolJsonContext.Default.RemoteSessionSummary, cancellationToken);
 
-    /** 整段历史按字节预算分页取完再拼成一个快照, 调用方看到的历史与单次响应时一致。 */
-    public async Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken = default)
+    /**
+     * 整段历史按字节预算分页取完再拼成一个快照, 调用方看到的历史与单次响应时一致。
+     */
+    public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken = default)
+        => GetSessionSnapshotAsync(sessionId, tailCount: 0, cancellationToken);
+
+    /**
+     * tailCount > 0 时只要末尾这么多条。
+     * 先发一个越界请求只为了拿到总条数(旧版服务端也照样回 TotalEventCount, 只是 Events 为空),
+     * 再从 total - tailCount 起取, 于是无论对面是不是新版, 手机都只下载尾部这一截。
+     */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, int tailCount, CancellationToken cancellationToken = default)
     {
-        var snapshot = await FetchSnapshotPageAsync(sessionId, 0, cancellationToken).ConfigureAwait(false);
-        var events = new List<SessionEvent>(snapshot.Events);
-        while (events.Count < snapshot.TotalEventCount)
+        var from = 0L;
+        if (tailCount > 0)
         {
-            var next = await FetchSnapshotPageAsync(sessionId, events.Count, cancellationToken).ConfigureAwait(false);
-            // 分页期间历史被截断时整段也就到此为止。
-            if (next.Events.Count == 0)
-                break;
-            events.AddRange(next.Events);
-            snapshot = next;
+            var total = await TotalEventCountAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            if (total > tailCount)
+                from = total - tailCount;
         }
-        // 拼好的快照就是整段历史: 条数按实到的事件重算, 免得把中途的旧总数带出去。
-        return snapshot with { Events = events, TotalEventCount = events.Count };
+        return await GetSessionSnapshotFromAsync(sessionId, from, cancellationToken).ConfigureAwait(false);
+    }
+
+    /**
+     * 尾部 tailCount 条, 且单页最多 maxBytes 字节。
+     * 手机端要的是一屏, 拿满 12 MB 一页再裁掉既慢又会让窗口内容超出预期。
+     */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, int tailCount, int maxBytes, CancellationToken cancellationToken = default)
+    {
+        var from = 0L;
+        if (tailCount > 0)
+        {
+            var total = await TotalEventCountAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            if (total > tailCount)
+                from = total - tailCount;
+        }
+        return await GetSessionSnapshotFromAsync(sessionId, from, maxBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    /**
+     * 从 fromEvent 起取一段(受单页字节预算约束, 需要更多时调用方自己续取)。
+     * 手机按消息序号定位时用这个: 想看的消息在哪儿就从哪儿开始, 不必把前面的历史也拖下来。
+     */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotFromAsync(string sessionId, long fromEvent, CancellationToken cancellationToken = default)
+        => await FetchSnapshotPageAsync(sessionId, fromEvent, cancellationToken).ConfigureAwait(false);
+
+    /**
+     * 从 fromEvent 起最多取 maxBytes 字节。
+     * 服务端默认一页是 12 MB, 一页就能装下几千条事件; 手机只要一屏,
+     * 拿满一页再在本地裁掉, 等于白下载白渲染 —— 这也是"上滑取更早"要等很久却看不出变化的原因。
+     */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotFromAsync(string sessionId, long fromEvent, int maxBytes, CancellationToken cancellationToken = default)
+        => await FetchSnapshotPageAsync(sessionId, fromEvent, maxBytes, cancellationToken).ConfigureAwait(false);
+
+    /** 整段历史有多少条; 用一个越界请求问, 服务端只回总数不回事件。 */
+    public async Task<long> TotalEventCountAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var probe = await FetchSnapshotPageAsync(sessionId, long.MaxValue, cancellationToken).ConfigureAwait(false);
+        return probe.TotalEventCount;
     }
 
     private Task<RemoteSessionSnapshot> FetchSnapshotPageAsync(string sessionId, long fromEvent, CancellationToken cancellationToken)
+        => FetchSnapshotPageAsync(sessionId, fromEvent, HostProtocol.SnapshotPageBytes, cancellationToken);
+
+    private Task<RemoteSessionSnapshot> FetchSnapshotPageAsync(string sessionId, long fromEvent, int maxBytes, CancellationToken cancellationToken)
         => SendAsync(HostProtocol.MethodSessionSnapshot,
-            Serialize(new RemoteSessionSnapshotRequest(sessionId, fromEvent), HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest),
+            Serialize(new RemoteSessionSnapshotRequest(sessionId, fromEvent, maxBytes), HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest),
             HostProtocolJsonContext.Default.RemoteSessionSnapshot,
             cancellationToken);
 

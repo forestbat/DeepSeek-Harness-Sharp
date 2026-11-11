@@ -82,6 +82,11 @@ public sealed class PluginHostTests
         Assert.True(host.Catalog.TryCreateDefinition("@deepseek-ai/dsh-fleet", out var definition));
         var ctx = new Context();
         ctx.SetOwn("dshHomePath", server.Root);
+        // fleet 在 Apply 里把自己的会话工具注册到 ToolRuntime, 所以这两个依赖得先就位。
+        Assert.True(host.Catalog.TryCreateDefinition("@deepseek-ai/dsh-core", out var coreDefinition));
+        Assert.True(host.Catalog.TryCreateDefinition("@deepseek-ai/dsh-agent", out var agentDefinition));
+        await ctx.Plugin(coreDefinition!).WaitAsync();
+        await ctx.Plugin(agentDefinition!).WaitAsync();
         var workspaceActivation = ctx.Plugin(workspaceDefinition!);
         await workspaceActivation.WaitAsync();
         var activation = ctx.Plugin(definition!);

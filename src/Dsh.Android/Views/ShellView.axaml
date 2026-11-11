@@ -22,13 +22,21 @@
       <Setter Property="FontSize" Value="15" />
       <Setter Property="MinHeight" Value="44" />
     </Style>
+    <!--
+      按钮的纵向留白只由 MinHeight + 内容居中决定: Fluent 主题的 ButtonPadding 本身是
+      上下不对称的(上 5 下 6), 逐按钮再写 Padding="12,4" 会把这个偏差叠上去, 所以这里
+      统一横向 padding, 纵向交给居中的内容行盒。
+    -->
     <Style Selector="Button">
       <Setter Property="MinHeight" Value="44" />
       <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Padding" Value="14,0" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="Button.small">
       <Setter Property="MinHeight" Value="34" />
-      <Setter Property="Padding" Value="12,4" />
+      <Setter Property="Padding" Value="12,0" />
       <Setter Property="FontSize" Value="13" />
     </Style>
     <Style Selector="Border.message">
@@ -69,14 +77,12 @@
         <Button Grid.Column="0"
                 Content="←"
                 FontSize="18"
-                Padding="12,4"
                 Margin="0,0,10,0"
                 Command="{Binding BackCommand}"
                 IsVisible="{Binding ShowChat}" />
         <Button Grid.Column="0"
                 Content="←"
                 FontSize="18"
-                Padding="12,4"
                 Margin="0,0,10,0"
                 Command="{Binding CancelMachineCommand}"
                 IsVisible="{Binding ShowConnect}" />
@@ -90,12 +96,10 @@
         <Button Grid.Column="2"
                 Content="＋"
                 FontSize="18"
-                Padding="12,4"
                 Command="{Binding AddMachineCommand}"
                 IsVisible="{Binding ShowMachines}" />
         <Button Grid.Column="2"
                 Content="机器"
-                Padding="12,4"
                 Command="{Binding OpenMachinesCommand}"
                 IsVisible="{Binding ShowSessions}" />
       </Grid>
@@ -124,6 +128,11 @@
                   </Grid>
                   <TextBlock Classes="error" Text="{Binding Detail}" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                   <StackPanel Orientation="Horizontal" Spacing="8">
+                    <!-- 本机不是一条链路, 点进去是本机 agent 与手机工具的设置页。 -->
+                    <Button Classes="small"
+                            Content="设置"
+                            IsVisible="{Binding IsLocal}"
+                            Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).OpenLocalMachineCommand}" />
                     <Button Classes="small"
                             Content="连接"
                             IsVisible="{Binding CanConnect}"
@@ -158,36 +167,107 @@
         <TextBlock Margin="16,10,16,0" Classes="hint"
                    Text="还没有机器。点右上角 ＋ 填写一台桌面机的地址，保存后会立即连接。"
                    IsVisible="{Binding HasNoMachines}" />
+      </StackPanel>
+    </ScrollViewer>
 
-        <Border Classes="card" Background="#141A22" Margin="12,18,12,5">
+    <!-- 机器 → 本机: 本机 agent 与手机工具都属于这台手机自己 -->
+    <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowLocalMachine}">
+      <StackPanel Margin="0,4,0,20">
+        <Grid ColumnDefinitions="Auto,*" Margin="16,10,16,2">
+          <Button Grid.Column="0" Classes="small" Content="←" Margin="0,0,10,0" Command="{Binding OpenMachinesCommand}" />
+          <TextBlock Grid.Column="1" Text="本机" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+        </Grid>
+        <TextBlock Margin="16,0,16,4" Classes="hint"
+                   Text="这台手机自己就是一个宿主：会话与工具都在手机上执行，不需要连电脑。" />
+        <TextBlock Margin="16,0,16,4" Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
+
+        <Border Classes="card" Background="#141A22">
           <StackPanel Spacing="8">
-            <TextBlock Text="本机 agent" FontSize="15" FontWeight="SemiBold" />
+            <TextBlock Text="DeepSeek 账号" FontSize="15" FontWeight="SemiBold" />
             <TextBlock Classes="hint"
-                       Text="在手机上直接跑一个宿主：会话与工具都在本机执行，不需要连电脑。" />
-            <TextBox PlaceholderText="供应商，例如 deepseek" Text="{Binding LocalProvider}" />
-            <TextBox PlaceholderText="模型，例如 deepseek-chat" Text="{Binding LocalModel}" />
-            <TextBox PlaceholderText="接口地址，留空则用供应商默认地址" Text="{Binding LocalBaseUrl}" />
-            <TextBox PlaceholderText="API 密钥" Text="{Binding LocalApiKey}" PasswordChar="●" />
+                       Text="登录后本机 agent 直接用账号跑推理，模型配置里可以不填 API 密钥。" />
+            <TextBlock Text="{Binding AccountStatus}" FontSize="13" />
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="启动" Command="{Binding StartLocalCommand}" />
+              <Button Classes="small" Content="登录" Command="{Binding SignInCommand}" />
+              <Button Classes="small" Content="退出登录" Command="{Binding SignOutCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card" Background="#141A22" Margin="12,12,12,5">
+          <StackPanel Spacing="8">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0" Spacing="2">
+                <TextBlock Text="本机 agent" FontSize="15" FontWeight="SemiBold" />
+                <TextBlock Classes="hint" Text="{Binding LocalProfilesHint}" />
+              </StackPanel>
+              <TextBlock Grid.Column="1" Text="{Binding LocalRunningLabel}" FontSize="12" Foreground="#8B929C"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding LocalProfiles}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:LocalModelRowViewModel">
+                  <Border Background="#1B1E24" CornerRadius="10" Padding="10,8" Margin="0,0,0,6">
+                    <StackPanel Spacing="4">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Spacing="2">
+                          <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding Route}" Classes="hint" />
+                          <TextBlock Text="{Binding KeyHint}" Classes="hint" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="当前" FontSize="12" Foreground="#8AB4F8"
+                                   VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Button Classes="small" Content="使用"
+                                Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).UseLocalProfileCommand}"
+                                CommandParameter="{Binding}" />
+                        <Button Classes="small" Content="编辑"
+                                Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).EditLocalProfileCommand}"
+                                CommandParameter="{Binding}" />
+                        <Button Classes="small" Content="删除"
+                                Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).RemoveLocalProfileCommand}"
+                                CommandParameter="{Binding}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBox PlaceholderText="配置名，例如 官方 或 中转" Text="{Binding LocalProfileName}" />
+            <TextBox PlaceholderText="供应商，例如 deepseek-official" Text="{Binding LocalProvider}" />
+            <TextBox PlaceholderText="模型，例如 deepseek-v4-flash" Text="{Binding LocalModel}" />
+            <TextBox PlaceholderText="接口地址，留空则用供应商默认地址" Text="{Binding LocalBaseUrl}" />
+            <TextBox PlaceholderText="API 密钥（已登录 DeepSeek 账号时可留空）" Text="{Binding LocalApiKey}" PasswordChar="●" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="保存这条" Command="{Binding SaveLocalProfileCommand}" />
+              <Button Content="清空表单" Command="{Binding EditLocalProfileCommand}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="启动本机 agent" Command="{Binding StartLocalCommand}" />
               <Button Content="停止" Command="{Binding StopLocalCommand}" IsVisible="{Binding LocalRunning}" />
             </StackPanel>
           </StackPanel>
         </Border>
 
-        <Border Classes="card" Background="#141A22" Margin="12,18,12,5">
+        <Border Classes="card" Background="#141A22" Margin="12,12,12,5">
           <StackPanel Spacing="8">
             <Grid ColumnDefinitions="*,Auto">
               <StackPanel Grid.Column="0" Spacing="2">
                 <TextBlock Text="手机工具（MCP）" FontSize="15" FontWeight="SemiBold" />
-                <TextBlock Classes="hint" Text="把手机本身的能力（列应用、启动应用、打开链接）暴露给电脑上的 agent。" />
+                <TextBlock Classes="hint" Text="把手机本身的能力（列应用、启动应用、打开链接、截图、点按）暴露给电脑上的 agent。" />
               </StackPanel>
               <Button Grid.Column="1" Classes="small"
                       Content="{Binding PhoneToolsToggleLabel}"
                       Command="{Binding TogglePhoneToolsCommand}" />
             </Grid>
-            <TextBlock Classes="hint" Text="在电脑的 settings.yaml 里加：" IsVisible="{Binding PhoneToolsEnabled}" />
+            <TextBlock Classes="hint" Text="在电脑的 settings.yaml 里加（任一可达地址即可）：" IsVisible="{Binding PhoneToolsEnabled}" />
             <TextBox Text="{Binding PhoneToolsUrl}" IsReadOnly="True" FontSize="12" TextWrapping="Wrap" MaxHeight="90"
+                     IsVisible="{Binding PhoneToolsEnabled}" />
+            <TextBlock Classes="hint" Text="本机所有可达地址：" IsVisible="{Binding PhoneToolsEnabled}" />
+            <TextBox Text="{Binding PhoneToolsEndpoints}" IsReadOnly="True" FontSize="11" TextWrapping="Wrap" MaxHeight="120"
                      IsVisible="{Binding PhoneToolsEnabled}" />
             <Button Content="复制地址" Classes="small" HorizontalAlignment="Stretch" Click="OnCopyPhoneToolsUrl"
                     IsVisible="{Binding PhoneToolsEnabled}" />
@@ -261,7 +341,7 @@
                Margin="6,4,6,0">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:SessionRowViewModel">
-            <Grid ColumnDefinitions="*,Auto" Margin="6,6">
+            <Grid ColumnDefinitions="*,Auto,Auto" Margin="6,6">
               <StackPanel Grid.Column="0" Spacing="2">
                 <TextBlock Text="{Binding Title}" FontSize="15" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="{Binding Subtitle}" Classes="hint" TextTrimming="CharacterEllipsis" />
@@ -272,6 +352,11 @@
                            IsVisible="{Binding HasPending}" />
                 <TextBlock Text="{Binding Activity}" FontSize="11" Foreground="#5F6672" HorizontalAlignment="Right" />
               </StackPanel>
+              <!-- 不用先打开会话就能叫停: 等一轮跑完往往是等不起的。 -->
+              <Button Grid.Column="2" Classes="small" Content="停止" Margin="10,0,0,0"
+                      VerticalAlignment="Center"
+                      Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).StopSessionRowCommand}"
+                      CommandParameter="{Binding}" />
             </Grid>
           </DataTemplate>
         </ListBox.ItemTemplate>
@@ -284,14 +369,79 @@
     </Grid>
 
     <!-- 会话内容 -->
-    <Grid Grid.Row="1" IsVisible="{Binding ShowChat}" RowDefinitions="Auto,*,Auto,Auto,Auto">
-      <StackPanel Grid.Row="0" Margin="16,10,16,4" Spacing="2">
-        <TextBlock Text="{Binding ChatTitle}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-        <TextBlock Text="{Binding ChatSubtitle}" Classes="hint" />
-      </StackPanel>
+    <Grid Grid.Row="1" IsVisible="{Binding ShowChat}" RowDefinitions="Auto,Auto,*,Auto,Auto,Auto">
+      <Grid Grid.Row="0" Margin="16,10,16,4" ColumnDefinitions="*,Auto,Auto">
+        <StackPanel Grid.Column="0" Spacing="2">
+          <TextBlock Text="{Binding ChatTitle}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="{Binding ChatSubtitle}" Classes="hint" />
+        </StackPanel>
+        <Button Grid.Column="1" Classes="small" Content="时间线" Margin="0,0,6,0"
+                VerticalAlignment="Center"
+                Command="{Binding OpenTimelineCommand}" />
+        <Button Grid.Column="2" Classes="small" Content="停止" VerticalAlignment="Center"
+                IsVisible="{Binding CanStop}"
+                Command="{Binding StopSessionCommand}" />
+      </Grid>
 
-      <ScrollViewer Grid.Row="1" x:Name="MessageScroll">
-        <ItemsControl ItemsSource="{Binding Messages}" Margin="4,0">
+      <!-- 时间线面板: 复用服务端的 /timestamp, 每条可跳转/回退/分叉。 -->
+      <Border Grid.Row="1" Background="#1A2432" CornerRadius="12" Padding="12,8" Margin="12,4"
+              IsVisible="{Binding HasTimeline}">
+        <StackPanel Spacing="6">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" Text="时间线" FontSize="14" FontWeight="SemiBold" Foreground="#8AB4F8" />
+            <TextBlock Grid.Column="1" Classes="hint" Text="{Binding TimelineHint}" VerticalAlignment="Center" />
+          </Grid>
+          <ScrollViewer MaxHeight="300">
+            <ItemsControl ItemsSource="{Binding Timeline}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:TimelineEntryViewModel">
+                  <StackPanel Spacing="4" Margin="0,0,0,8">
+                    <TextBlock Text="{Binding Label}" FontSize="13" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Button Classes="small" Content="跳到"
+                              Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).JumpToTimelineEntryCommand}"
+                              CommandParameter="{Binding}" />
+                      <Button Classes="small" Content="回退到这条"
+                              Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).RevertToTimelineEntryCommand}"
+                              CommandParameter="{Binding}" />
+                      <Button Classes="small" Content="从此分叉"
+                              Command="{Binding $parent[UserControl].((vm:MobileShellViewModel)DataContext).ForkAtTimelineEntryCommand}"
+                              CommandParameter="{Binding}" />
+                    </StackPanel>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </StackPanel>
+      </Border>
+
+      <!--
+        消息列表必须虚拟化: 长会话动辄上千条, 把每条都做成控件会在一次 measure/arrange 里把 UI 线程钉死。
+        上滑到顶自动续取更早的消息, 因此这里不再放按钮。
+        这里用 ItemsControl 而不是 ListBox: ListBox 没有"不选中"的模式(只有 Single/Multiple/Toggle),
+        而选中会在手指抬起时抢走拖动 —— 表现为滑动滞涩, 并且常常连带把某条消息选上。
+        ScrollViewer 写在 ItemsControl 自己的模板里: 放在外面会给内容无限高度, 虚拟化失效,
+        而且 ScrollChanged 从 ScrollViewer 冒泡时根本不会经过外层容器, 自动续取也就永远触发不了。
+      -->
+      <Grid Grid.Row="2" RowDefinitions="*">
+        <ItemsControl x:Name="MessageScroll"
+                      ItemsSource="{Binding Messages}"
+                      Margin="4,0">
+          <ItemsControl.Template>
+            <ControlTemplate TargetType="ItemsControl">
+              <ScrollViewer x:Name="PART_Scroller"
+                            VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
+                <ItemsPresenter Name="PART_ItemsPresenter" />
+              </ScrollViewer>
+            </ControlTemplate>
+          </ItemsControl.Template>
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="gui:MessageViewModel">
               <Border Classes="message"
@@ -299,16 +449,34 @@
                       Classes.tool="{Binding IsTool}"
                       Classes.result="{Binding IsContext}">
                 <StackPanel Spacing="3">
-                  <TextBlock Classes="role" Text="{Binding Role}" />
-                  <TextBlock Text="{Binding Text}" FontSize="14" TextWrapping="Wrap" />
+                  <Grid ColumnDefinitions="Auto,Auto,Auto">
+                    <TextBlock Grid.Column="0" Classes="role" Text="{Binding Role}" />
+                    <TextBlock Grid.Column="1" Classes="role" Margin="8,0,0,0"
+                               Text="{Binding Timestamp}"
+                               IsVisible="{Binding HasTimestamp}" />
+                    <!-- 折叠时只显示一行摘要, 双击展开全文; 窄屏上一条长回复否则能占掉好几屏。 -->
+                    <TextBlock Grid.Column="2" Classes="role" Margin="8,0,0,0"
+                               Text="{Binding FoldLabel}"
+                               IsVisible="{Binding IsFoldable}" />
+                  </Grid>
+                  <TextBlock Text="{Binding Text}"
+                             FontSize="14"
+                             TextWrapping="Wrap"
+                             IsVisible="{Binding !ShowPreview}" />
+                  <TextBlock Text="{Binding Preview}"
+                             FontSize="14"
+                             TextWrapping="Wrap"
+                             Foreground="#9AA3AF"
+                             IsVisible="{Binding ShowPreview}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
-      </ScrollViewer>
+      </Grid>
 
-      <StackPanel Grid.Row="2" Margin="12,4" Spacing="6">
+      <StackPanel Grid.Row="3" Margin="12,4" Spacing="6">
+        <TextBlock Classes="hint" Text="{Binding Notice}" IsVisible="{Binding HasNotice}" />
         <TextBlock Classes="error" Text="{Binding Error}" IsVisible="{Binding HasError}" />
         <Border Background="#2C2317" CornerRadius="12" Padding="12,10" IsVisible="{Binding HasApproval}">
           <StackPanel Spacing="8">
@@ -354,16 +522,16 @@
         </Border>
       </StackPanel>
 
-      <Border Grid.Row="3" Background="#1B1E24" CornerRadius="10" Padding="12,8" Margin="12,2"
+      <Border Grid.Row="4" Background="#1B1E24" CornerRadius="10" Padding="12,8" Margin="12,2"
               IsVisible="{Binding HasAttachment}">
         <Grid ColumnDefinitions="*,Auto">
           <TextBlock Grid.Column="0" Text="{Binding AttachmentSummary}" Classes="hint" VerticalAlignment="Center" />
-          <Button Grid.Column="1" Content="移除" Padding="10,2" MinHeight="32" Click="OnClearAttachment" />
+          <Button Grid.Column="1" Content="移除" Classes="small" MinHeight="32" Click="OnClearAttachment" />
         </Grid>
       </Border>
 
-      <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto" Margin="12,6,12,16">
-        <Button Grid.Column="0" Content="＋" FontSize="18" Padding="14,4" Margin="0,0,8,0"
+      <Grid Grid.Row="5" ColumnDefinitions="Auto,*,Auto" Margin="12,6,12,16">
+        <Button Grid.Column="0" Content="＋" FontSize="18" Margin="0,0,6,0"
                 VerticalAlignment="Bottom" Click="OnPickAttachment" />
         <TextBox Grid.Column="1"
                  Text="{Binding Input}"

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Gui.Shared.Mobile;
 using Dsh.Llm;

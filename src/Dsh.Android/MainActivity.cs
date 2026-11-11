@@ -57,6 +57,17 @@ public class MainActivity : AvaloniaMainActivity
         HandleShare(intent);
     }
 
+    /**
+     * 系统返回热键: 先让界面按页面层级退一级, 退无可退才交回系统退出 App。
+     * 不拦截的话在任何页面按返回都会直接关掉程序。
+     */
+    public override void OnBackPressed()
+    {
+        if (BackNavigation.TryGoBack())
+            return;
+        base.OnBackPressed();
+    }
+
     protected override void OnResume()
     {
         base.OnResume();

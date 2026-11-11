@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Runtime;
 

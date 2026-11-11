@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Gui.Shared.Mobile;
 using Dsh.Llm;
@@ -103,6 +104,34 @@ public sealed class MachineSessionToolsTests
         Assert.Contains(MachineSessionTools.SessionsTool, answer.Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task StopsTheSessionPickedByTitleFragment()
+    {
+        var link = new FakeLink("桌面机", Session("aaaaaaaa-1", "修表格"), Session("bbbbbbbb-2", "写文档"));
+        var (ctx, tools) = Harness(link);
+
+        var answer = await Execute(ctx, tools, MachineSessionTools.StopTool,
+            """{"machine":"桌面机","session":"修表格"}""");
+
+        Assert.True(answer.Ok);
+        Assert.Equal("已叫停 桌面机/修表格（aaaaaaaa-1）", answer.Text);
+        Assert.Equal(["aaaaaaaa-1"], link.Interrupted);
+        Assert.Empty(link.Sent);
+    }
+
+    [Fact]
+    public async Task StopWithoutSessionTellsTheModelToLookFirst()
+    {
+        var link = new FakeLink("桌面机", Session("s-1", "修表格"));
+        var (ctx, tools) = Harness(link);
+
+        var answer = await Execute(ctx, tools, MachineSessionTools.StopTool, """{"machine":"桌面机"}""");
+
+        Assert.False(answer.Ok);
+        Assert.Contains(MachineSessionTools.SessionsTool, answer.Text, StringComparison.Ordinal);
+        Assert.Empty(link.Interrupted);
+    }
+
     private static (Context Ctx, ToolRuntime Tools) Harness(params FakeLink[] links)
     {
         var ctx = new Context();
@@ -148,6 +177,7 @@ public sealed class MachineSessionToolsTests
         public IReadOnlyList<RemoteSessionSummary> Sessions => _sessions;
         public List<string> Created { get; } = [];
         public List<(string Session, string Text)> Sent { get; } = [];
+        public List<string> Interrupted { get; } = [];
 
         public Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken cancellationToken)
         {
@@ -160,6 +190,12 @@ public sealed class MachineSessionToolsTests
         public Task SendMessageAsync(string sessionId, string text, CancellationToken cancellationToken)
         {
             Sent.Add((sessionId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task InterruptAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            Interrupted.Add(sessionId);
             return Task.CompletedTask;
         }
     }
