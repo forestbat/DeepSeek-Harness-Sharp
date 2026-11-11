@@ -1234,48 +1234,40 @@ public class ChatWindowMenuTests : IDisposable
     [Fact]
     public async Task TimestampCandidates_IncludeIdeHistory_OnlyWhenTimelineEnabled()
     {
-        using (var chat = await CreateChat(configure: (ctx, _) =>
-            ctx.Provide(IIdeHistoryService.ServiceName, new StubIdeHistoryService(timelineEnabled: false))))
+        var workspace = Path.Combine(_homeDir, "ide-workspace");
+        Directory.CreateDirectory(Path.Combine(workspace, ".vscode"));
+        var target = Path.Combine(workspace, "app.cs");
+        var history = Path.Combine(_homeDir, ".config", "Code", "User", "History", "entry");
+        Directory.CreateDirectory(history);
+        File.WriteAllText(Path.Combine(history, "old.txt"), "same body");
+        File.WriteAllText(Path.Combine(history, "entries.json"), $$"""
+            { "version": 1, "resource": "{{new Uri(target).AbsoluteUri}}",
+              "entries": [{ "id": "old.txt", "timestamp": 1780000001000 }] }
+            """);
+
+        using (var chat = await CreateChat(cwd: workspace, configure: (ctx, _) => RegisterIdeHistory(ctx, timeline: false)))
         {
             Type(chat, "message for timeline");
             Press(chat, ConsoleKey.Enter);
             await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
-            Assert.DoesNotContain(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide|", StringComparison.Ordinal));
+            Assert.DoesNotContain(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
         }
 
-        using (var chat = await CreateChat(configure: (ctx, _) =>
-            ctx.Provide(IIdeHistoryService.ServiceName, new StubIdeHistoryService(timelineEnabled: true))))
+        using (var chat = await CreateChat(cwd: workspace, configure: (ctx, _) => RegisterIdeHistory(ctx, timeline: true)))
         {
             Type(chat, "message for timeline");
             Press(chat, ConsoleKey.Enter);
             await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
-            var ide = Assert.Single(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide|", StringComparison.Ordinal));
+            var ide = Assert.Single(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
             Assert.Contains("app.cs", ide.Label, StringComparison.Ordinal);
-            Assert.NotNull(ChatWindow.ParseIdeTarget(ide.Value));
         }
     }
 
-    private sealed class StubIdeHistoryService(bool timelineEnabled) : IIdeHistoryService
+    /** 真实 IDE 历史服务: VSCode 本地历史从本用例 home 下的合成 store 读出; 工作区门控需要编辑器目录服务。 */
+    private void RegisterIdeHistory(Context ctx, bool timeline)
     {
-        public bool TimelineEnabled { get; } = timelineEnabled;
-
-        public IdeWorkspaceKind WorkspaceKind(string? workspaceRoot) => IdeWorkspaceKind.VsCode;
-
-        public IReadOnlyList<IdeHistoryEntry> Query(string? workspaceRoot, long? from, long? to, string? path = null)
-            =>
-            [
-                new IdeHistoryEntry
-                {
-                    Provider = "vscode",
-                    Path = Path.Combine(workspaceRoot ?? Environment.CurrentDirectory, "app.cs"),
-                    Timestamp = 1780000001000,
-                    Kind = "User",
-                    EntryFile = "v1.txt",
-                },
-            ];
-
-        public IdeHistoryContent? Read(IdeHistoryEntry entry)
-            => new() { Bytes = "x"u8.ToArray(), Origin = "stub" };
+        _ = IdeHistoryTestContext.CreateHistoryContext(ctx);
+        _ = new IdeHistoryService(ctx, IdeHistoryRegistry.CreateDefault(_homeDir), IdeHistoryOptions.From(null) with { Timeline = timeline });
     }
 
     /** §20: 时间线里 IDE 项的值编码(`ide|<provider>|<epoch-ms>|<path>`)可无损解析回条目; 消息项(#seq)不受影响。 */

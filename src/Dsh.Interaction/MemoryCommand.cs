@@ -126,6 +126,6 @@ public static class MemoryCommand
     }
 
     private static ProjectMemory? ResolveMemory(Context ctx, string? cwd)
-        => ctx.Get<IProjectMemoryProvider>(MemoryServices.Provider, false)?.For(cwd)
+        => ctx.Get<MemoryWorkspace>(MemoryServices.Provider, false)?.For(cwd)
            ?? ctx.Get<ProjectMemory>(MemoryServices.ProjectMemory, false);
 }

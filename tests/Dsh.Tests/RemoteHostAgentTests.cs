@@ -552,7 +552,7 @@ public sealed class RemoteHostAgentTests : IDisposable
 
     private static void AssertSearchable(HarnessHostFixture host, string sessionId, string text, IReadOnlyList<SessionEvent> events, string? eventType = null)
     {
-        var query = host.Environment.App.Ctx.Get<ISessionQueryService>(ISessionQueryService.ServiceName)!;
+        var query = host.Environment.App.Ctx.Get<SessionQueryService>(SessionQueryService.ServiceName)!;
         Assert.Contains(query.Search(text), hit => hit.SessionId == sessionId
             && (eventType is null || hit.Type == eventType)
             && events.Any(item => item.Seq == hit.Seq && item.Type == hit.Type));

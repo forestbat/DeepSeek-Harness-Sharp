@@ -11,7 +11,7 @@ namespace Dsh.Tui;
 
 /**
  * 分屏协作的只读工具: pane_list/pane_read/session_read, 让 agent 看到本 TUI 进程内其他窗格与会话的内容。
- * 注入/写入不做(已有 send_message); 输出格式 format: text(默认)/json/toon, toon 经 Dsh.Core 的 IToonCodec 契约取(未装 toon 插件时报错)。
+ * 注入/写入不做(已有 send_message); 输出格式 format: text(默认)/json/toon, toon 经 toon 插件的 ToonCodecService 取(未装该插件时报错)。
  */
 internal static class PaneReadTools
 {
@@ -257,7 +257,7 @@ internal static class PaneReadTools
         _ => "shell",
     };
 
-    /** 按 format 渲染输出值: text 给纯文本行, json 给结构化原文, toon 经 IToonCodec 契约编码(插件缺失在请求时就报错)。 */
+    /** 按 format 渲染输出值: text 给纯文本行, json 给结构化原文, toon 经 ToonCodecService 编码(插件缺失在请求时就报错)。 */
     private static IReadOnlyList<ContentBlock> Render(Context ctx, JsonElement args, JsonElement value)
     {
         var format = args.TryGetProperty("format", out var raw) && raw.ValueKind == JsonValueKind.String
@@ -268,7 +268,7 @@ internal static class PaneReadTools
             case "json":
                 return [new TextBlock(value.GetRawText())];
             case "toon":
-                var codec = ctx.Get<IToonCodec>(IToonCodec.ServiceName, false)
+                var codec = ctx.Get<ToonCodecService>(ToonCodecService.ServiceName, false)
                     ?? throw new InvalidOperationException("format \"toon\" requires the @deepseek-ai/dsh-toon plugin (it provides the toon-codec service)");
                 return [new TextBlock(codec.Encode(JsonNode.Parse(value.GetRawText())))];
             default:

@@ -232,7 +232,10 @@ public sealed class ScriptPermissionBoundaryTests
     {
         using var fixture = new Fixture(false, true, true, true, TestContext.Current.CancellationToken);
         File.WriteAllText(fixture.Home.SettingsFile, document);
-        Assert.Throws<RuntimeException>(() => HarnessSettings.Load(fixture.Home));
+        // 语义非法的段落改 YAML 结构修不了: 启动路径隔离原文后抛 InvalidDataException, 内层保留原始 RuntimeException。
+        var error = Assert.Throws<InvalidDataException>(() => HarnessSettings.Load(fixture.Home));
+        Assert.Contains("修好这一段再启动", error.Message);
+        Assert.IsType<RuntimeException>(error.InnerException);
     }
 
 

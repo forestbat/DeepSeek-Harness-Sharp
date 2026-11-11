@@ -1,9 +1,9 @@
-﻿using Dsh.Core;
+using Dsh.Core;
 
 namespace Dsh.Memory;
 
 /** 按会话工作区解析项目记忆:一次进程内可同时服务多个项目,项目根相同则复用同一 ProjectMemory。 */
-public sealed class MemoryWorkspace(MemoryPluginConfig config) : IProjectMemoryProvider, IDisposable
+public sealed class MemoryWorkspace(MemoryPluginConfig config) : IDisposable
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, ProjectMemory> _byRoot = new(StringComparer.OrdinalIgnoreCase);

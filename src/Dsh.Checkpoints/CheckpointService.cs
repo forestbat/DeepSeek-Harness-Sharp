@@ -36,9 +36,12 @@ public sealed record CheckpointPolicy
     }
 }
 
-public sealed class CheckpointService : Service, ICheckpointRestore, IEditorCheckpointReview, IDisposable
+public sealed class CheckpointService : Service, IEditorCheckpointReview, IDisposable
 {
     public const string ServiceName = "checkpoints";
+
+    /** 只取 revert 文件侧的消费方(TUI 的 revert、/timestamp)按这个名字解析本服务。 */
+    public const string RestoreServiceName = "checkpointRestore";
 
     private sealed record ProjectRepo(ShadowGit Git, CheckpointLog Log);
 

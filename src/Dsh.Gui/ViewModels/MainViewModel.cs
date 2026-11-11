@@ -378,7 +378,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             await Task.Delay(ContentSearchDebounceMs, signal);
-            var service = _ctx.Get<ISessionQueryService>(ISessionQueryService.ServiceName, false);
+            var service = _ctx.Get<SessionQueryService>(SessionQueryService.ServiceName, false);
             if (service is null)
                 return;
             foreach (var hit in service.Search(query, ContentSearchLimit))

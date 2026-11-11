@@ -23,7 +23,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         var paths = DshPaths.FromContext(ctx) ?? DshPaths.Default(HarnessHome.Resolve().Root);
         var service = new CheckpointService(ctx, CheckpointPolicy.Resolve(config), paths.CheckpointsPath);
-        ctx.Provide(ICheckpointRestore.ServiceName, service);
+        ctx.Provide(CheckpointService.RestoreServiceName, service);
         ctx.Provide(IEditorCheckpointReview.ServiceName, service);
         return new DisposableBundle(service, CheckpointCommand.Register(ctx, service));
     }

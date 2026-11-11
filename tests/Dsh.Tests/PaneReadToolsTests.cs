@@ -199,7 +199,7 @@ public sealed class PaneReadToolsTests : IDisposable
         _ = new SystemPrompt(ctx, new SystemPromptConfig());
         var tools = new ToolRuntime(ctx);
         if (registerToonCodec)
-            ctx.Provide(IToonCodec.ServiceName, new ToonCodecAdapter());
+            _ = new ToonCodecService(ctx);
         var first = await CreateAgent(agents);
         var second = await CreateAgent(agents);
         var chat = new ChatWindow(ctx, first, HarnessHome.Resolve(_homeDir));
@@ -250,12 +250,6 @@ public sealed class PaneReadToolsTests : IDisposable
     {
         Assert.False(result.IsError, result is ToolExecutionResult.Failure failure ? failure.Error.Message : null);
         return string.Join('\n', result.Content.OfType<TextBlock>().Select(block => block.Text));
-    }
-
-    /** 组装侧适配: 契约接口接到真实 ToonCodec 上(与 Dsh.Toon 插件 Apply 时的注册同形)。 */
-    private sealed class ToonCodecAdapter : IToonCodec
-    {
-        public string Encode(JsonNode? value) => ToonCodec.Encode(value);
     }
 
     /** 假的 daemon pty 访问: 按给定窗格快照发布一个远端 pty, 并记录控制消息路由。 */
