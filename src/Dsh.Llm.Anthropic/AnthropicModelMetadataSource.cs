@@ -14,15 +14,18 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
 
     private readonly string _baseUrl;
     private readonly string? _apiKey;
+    private readonly Func<CancellationToken, Task<LlmCredential>>? _resolveCredential;
     private readonly HttpClient _http;
     private readonly BackgroundRefreshGate _gate = new(RefreshCooldown);
     private readonly ConcurrentDictionary<string, LlmModelReasoningInfo> _byModel = new(StringComparer.Ordinal);
     private volatile IReadOnlyList<string> _modelIds = [];
 
-    public AnthropicModelMetadataSource(string baseUrl, string? apiKey, HttpClient http)
+    public AnthropicModelMetadataSource(string baseUrl, string? apiKey, HttpClient http,
+        Func<CancellationToken, Task<LlmCredential>>? resolveCredential = null)
     {
         _baseUrl = baseUrl.TrimEnd('/');
         _apiKey = apiKey;
+        _resolveCredential = resolveCredential;
         _http = http;
     }
 
@@ -55,10 +58,14 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
+        var credential = await ResolveCredentialAsync(cancellationToken).ConfigureAwait(false);
+        if (credential is null)
             return;
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}/v1/models?limit=1000");
-        request.Headers.TryAddWithoutValidation("x-api-key", _apiKey);
+        if (credential.Scheme == LlmCredentialScheme.DshAuthToken)
+            request.Headers.TryAddWithoutValidation(LlmCredential.DshAuthTokenHeader, credential.Token);
+        else
+            request.Headers.TryAddWithoutValidation("x-api-key", credential.Token);
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -66,6 +73,14 @@ public sealed class AnthropicModelMetadataSource : IModelReasoningSource
         foreach (var (model, reasoning) in Parse(json))
             _byModel[model] = reasoning;
         _modelIds = EndpointModelList.ParseIds(json);
+    }
+
+    /** 没配 key 也没登录时没有凭据可用: 清单退化为空, 不去打扰端点。 */
+    private async Task<LlmCredential?> ResolveCredentialAsync(CancellationToken cancellationToken)
+    {
+        if (_resolveCredential is { } resolve)
+            return await resolve(cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(_apiKey) ? null : new LlmCredential(_apiKey, LlmCredentialScheme.Bearer);
     }
 
     public static IReadOnlyDictionary<string, LlmModelReasoningInfo> Parse(string json)

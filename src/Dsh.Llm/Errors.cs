@@ -31,6 +31,10 @@ public static class LlmFailureCodes
     public const string EmptyResponse = "EMPTY_RESPONSE";
     public const string InvalidCredential = "INVALID_CREDENTIAL";
     public const string MissingCredential = "MISSING_CREDENTIAL";
+    /** 账号登录态被推理端点拒绝: 需要重新登录, 与 API Key 无效区分开。 */
+    public const string AccountTokenInvalid = "ACCOUNT_TOKEN_INVALID";
+    /** 目标端点只接受账号令牌, 而当前没有登录。 */
+    public const string AccountSignInRequired = "ACCOUNT_SIGN_IN_REQUIRED";
     public const string NoAdapter = "NO_ADAPTER";
     public const string RateLimit = "RATE_LIMIT";
     public const string Server = "SERVER";

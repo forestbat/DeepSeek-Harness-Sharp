@@ -20,6 +20,7 @@ public sealed class ProviderRegistrar : IDisposable
     private readonly HarnessSettings _settings;
     private readonly LlmAdapterFactoryRegistry _factories;
     private readonly List<IDisposable> _handles = [];
+    private readonly AccountRouteFallback? _accountFallback;
     private readonly Func<bool> _unsubscribeFactoryUpdates;
     private readonly Func<bool> _unsubscribeReady;
     private bool _ready;
@@ -28,12 +29,14 @@ public sealed class ProviderRegistrar : IDisposable
         Context ctx,
         HarnessOptions options,
         HarnessSettings settings,
-        LlmAdapterFactoryRegistry factories)
+        LlmAdapterFactoryRegistry factories,
+        AccountRouteFallback? accountFallback)
     {
         _ctx = ctx;
         _options = options;
         _settings = settings;
         _factories = factories;
+        _accountFallback = accountFallback;
         _unsubscribeFactoryUpdates = ctx.On<LlmAdapterFactoriesUpdatedNotification>(_ => Sync());
         _unsubscribeReady = ctx.On<CompositionReadyNotification>(_ =>
         {
@@ -49,7 +52,8 @@ public sealed class ProviderRegistrar : IDisposable
         var credentials = ctx.GetProp("credentials") as ICredentials;
         if (llm is null || factories is null || credentials is null)
             return null;
-        var registrar = new ProviderRegistrar(ctx, options, HarnessSettings.Load(options.Home), factories);
+        var registrar = new ProviderRegistrar(ctx, options, HarnessSettings.Load(options.Home), factories,
+            AccountRouteFallback.Register(ctx, options.Provider));
         registrar.Sync();
         return registrar;
     }
@@ -94,6 +98,9 @@ public sealed class ProviderRegistrar : IDisposable
                     $"adapter plugin \"{source}\" serves [{string.Join(", ", idle)}] but no matching provider is configured; it stays idle");
             }
         }
+
+        // 一个 provider 都没注册成功(零配置或只登录了账号)时, 用账号令牌兜底开一条 DeepSeek 路由。
+        _accountFallback?.Sync(anyProviderRegistered: served.Count > 0);
     }
 
     /** 单个 provider 条目的注册结果:句柄、命中的 wire 与来源插件,或失败原因。 */
@@ -153,8 +160,11 @@ public sealed class ProviderRegistrar : IDisposable
                     + $"(set providers.{id}.options.apiKey or environment variable {apiKeyEnv}); requests using it will fail with NO_ADAPTER");
         }
         // 有效模型 = settings 声明 ∪ models.dev 目录(目录已收录的模型不必落盘, 但运行时要能列出/选中)。
-        // 目录之外的中转站由适配器自己向端点 GET /models 补齐, 这里不必为空清单告警。
-        var specs = ProviderCatalog.EffectiveModels(id, baseUrl, provider.Models.Keys)
+        // 自描述端点(deepseek)例外: 它的模型清单只能来自端点 /models, 目录里的条目可能已经过期。
+        var effective = definition?.SelfDescribing is true
+            ? provider.Models.Keys.ToList()
+            : ProviderCatalog.EffectiveModels(id, baseUrl, provider.Models.Keys);
+        var specs = effective
             .Select(modelId => provider.Models.TryGetValue(modelId, out var declared)
                 ? new ProviderModelSpec(modelId, declared.Name, declared.SystemPromptUpdate)
                 : new ProviderModelSpec(modelId))
@@ -210,6 +220,7 @@ public sealed class ProviderRegistrar : IDisposable
     {
         _unsubscribeFactoryUpdates();
         _unsubscribeReady();
+        _accountFallback?.Dispose();
         foreach (var handle in _handles)
             handle.Dispose();
         _handles.Clear();

@@ -18,6 +18,7 @@ public sealed class AnthropicAdapter : LlmAdapter
 
     private readonly string _baseUrl;
     private readonly string? _apiKey;
+    private readonly Func<CancellationToken, Task<LlmCredential>>? _resolveCredential;
     private readonly IReadOnlyList<string> _modelIds;
     private readonly HttpClient _http;
     private readonly IModelReasoningSource _metadataSource;
@@ -34,11 +35,13 @@ public sealed class AnthropicAdapter : LlmAdapter
         IReadOnlyList<string>? modelIds = null,
         HttpClient? httpClient = null,
         IModelReasoningSource? metadataSource = null,
-        ReasoningEffortsCache? reasoningEfforts = null)
+        ReasoningEffortsCache? reasoningEfforts = null,
+        Func<CancellationToken, Task<LlmCredential>>? resolveCredential = null)
     {
         ProviderInfo = new LlmProviderInfo(providerId, "Anthropic");
         _baseUrl = baseUrl.TrimEnd('/');
         _apiKey = apiKey;
+        _resolveCredential = resolveCredential;
         _modelIds = modelIds ?? [];
         _http = httpClient ?? new HttpClient();
         _modelsDev = new ModelsDevReasoningSource("anthropic");
@@ -49,7 +52,7 @@ public sealed class AnthropicAdapter : LlmAdapter
         }
         else
         {
-            var source = new AnthropicModelMetadataSource(_baseUrl, _apiKey, _http);
+            var source = new AnthropicModelMetadataSource(_baseUrl, _apiKey, _http, resolveCredential);
             _metadataSource = source;
             _discoveredModels = source;
             source.RequestRefresh();
@@ -134,8 +137,9 @@ public sealed class AnthropicAdapter : LlmAdapter
             ["messages"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = "ping" }),
             ["output_config"] = new JsonObject { ["effort"] = ProbeEffort },
         };
+        var credential = await ResolveCredentialAsync(cancellationToken).ConfigureAwait(false);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/messages");
-        request.Headers.TryAddWithoutValidation("x-api-key", _apiKey);
+        ApplyCredential(request, credential);
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         request.Headers.TryAddWithoutValidation("user-agent", AppIdentity.Default.UserAgent);
         request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
@@ -157,14 +161,10 @@ public sealed class AnthropicAdapter : LlmAdapter
         GenerateOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
-            throw new LlmException(new LlmFailure(
-                "Anthropic API key is missing",
-                LlmFailureCodes.MissingCredential));
-
+        var credential = await ResolveCredentialAsync(cancellationToken).ConfigureAwait(false);
         var payload = AnthropicWire.SerializeRequest(options);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/v1/messages");
-        request.Headers.TryAddWithoutValidation("x-api-key", _apiKey);
+        ApplyCredential(request, credential);
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Headers.TryAddWithoutValidation("user-agent", AppIdentity.Default.UserAgent);
@@ -192,7 +192,7 @@ public sealed class AnthropicAdapter : LlmAdapter
             {
                 var rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
                 throw new LlmException(
-                    BuildHttpFailure(response, rawResponse),
+                    BuildHttpFailure(response, rawResponse, credential),
                     new Exception(rawResponse.Length > 0 ? rawResponse : $"Anthropic HTTP {(int)response.StatusCode}"));
             }
 
@@ -202,7 +202,28 @@ public sealed class AnthropicAdapter : LlmAdapter
         }
     }
 
-    private LlmFailure BuildHttpFailure(HttpResponseMessage response, string rawResponse)
+    /** Anthropic 的 API Key 走 x-api-key, 账号登录令牌走 x-dsh-auth-token: 两种凭据的请求头不同。 */
+    private static void ApplyCredential(HttpRequestMessage request, LlmCredential credential)
+    {
+        if (credential.Scheme == LlmCredentialScheme.DshAuthToken)
+            request.Headers.TryAddWithoutValidation(LlmCredential.DshAuthTokenHeader, credential.Token);
+        else
+            request.Headers.TryAddWithoutValidation("x-api-key", credential.Token);
+    }
+
+    /** 凭据来源: 有注入的解析器就用它(账号令牌走 x-dsh-auth-token), 否则用构造时的 API Key。 */
+    private async Task<LlmCredential> ResolveCredentialAsync(CancellationToken cancellationToken)
+    {
+        if (_resolveCredential is { } resolve)
+            return await resolve(cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(_apiKey))
+            throw new LlmException(new LlmFailure(
+                "Anthropic API key is missing",
+                LlmFailureCodes.MissingCredential));
+        return new LlmCredential(_apiKey, LlmCredentialScheme.Bearer);
+    }
+
+    private LlmFailure BuildHttpFailure(HttpResponseMessage response, string rawResponse, LlmCredential credential)
     {
         var status = (int)response.StatusCode;
         var message = $"Anthropic API error (HTTP {status})";
@@ -236,16 +257,18 @@ public sealed class AnthropicAdapter : LlmAdapter
 
         return new LlmFailure(
             message,
-            ErrorCode(status, type, code, message),
+            ErrorCode(status, type, code, message, credential),
             status,
             delay,
             requestId);
     }
 
-    private static string ErrorCode(int status, string? type, string? code, string message)
+    private static string ErrorCode(int status, string? type, string? code, string message, LlmCredential credential)
     {
         if (status is 401 or 403)
-            return LlmFailureCodes.InvalidCredential;
+            return credential.Scheme == LlmCredentialScheme.DshAuthToken
+                ? LlmFailureCodes.AccountTokenInvalid
+                : LlmFailureCodes.InvalidCredential;
 
         var detail = string.Join(' ', new[] { type, code, message }.Where(field => !string.IsNullOrEmpty(field)));
 

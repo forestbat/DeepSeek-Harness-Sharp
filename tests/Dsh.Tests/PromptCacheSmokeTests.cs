@@ -112,13 +112,14 @@ public sealed class PromptCacheSmokeTests
             new Dsh.Llm.DeepSeek.RequestDefaults(),
             Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultMaxTokens,
             Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultContextWindowValue,
-            [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(Model, SystemPromptUpdate: SystemPromptUpdateModes.InHistory)],
+            [new ProviderModelSpec(Model, SystemPromptUpdate: SystemPromptUpdateModes.InHistory)],
+            new Dsh.Llm.DeepSeek.DeepSeekModelListing([new Dsh.Llm.DeepSeek.DeepSeekListedModel(Model)]),
             Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "test"));
         return new Dsh.Llm.DeepSeek.DeepSeekAdapter(Provider, new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
         {
             Options = () => connection,
-            ResolveApiKey = (_, _) => Task.FromResult(credentials.ApiKey),
+            ResolveCredential = (_, _) => Task.FromResult(new LlmCredential(credentials.ApiKey, LlmCredentialScheme.Bearer)),
             ResolveUserId = () => "test-user",
         });
     }

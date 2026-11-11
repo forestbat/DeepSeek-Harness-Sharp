@@ -1,4 +1,4 @@
-﻿using Dsh.Boot;
+using Dsh.Boot;
 using Dsh.Plugins;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -68,6 +68,16 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
     public string Origin { get; }
 
     public string InferenceOrigin { get; }
+
+    /** 账号功能的开关与推理 origin 决定它会不会供令牌; 未启用时为 null。 */
+    Uri? IInferenceCredentials.InferenceOrigin
+    {
+        get
+        {
+            lock (_gate)
+                return _enabled ? new Uri(InferenceOrigin) : null;
+        }
+    }
 
     public bool Enabled
     {
@@ -226,6 +236,9 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
             : null;
     }
 
+    /** 推理端点拒绝了该令牌: 只在它仍是当前登录时清除, 迟到的拒绝不能清掉后来重新登录的凭据。 */
+    public void RejectToken(string token) => ExpireCredential(token, notify: false);
+
     private bool IsInferenceOrigin(Uri destination)
         => string.Equals(
             destination.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped),
@@ -364,7 +377,8 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
         }
     }
 
-    private void ExpireCredential(string token)
+    /** notify=false 用于推理端点的拒绝: 那次失败已经由请求本身报告, 不再额外抛一次会话失效事件。 */
+    private void ExpireCredential(string token, bool notify = true)
     {
         var grant = _store.ReadGrant(Origin);
         if (grant is null || !string.Equals(grant.Token, token, StringComparison.Ordinal))
@@ -378,7 +392,8 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
             _failureCode = nameof(AccountFailure.Expired);
         }
         RaiseChanged();
-        SessionExpired?.Invoke();
+        if (notify)
+            SessionExpired?.Invoke();
     }
 
     private void SetSignedOut()

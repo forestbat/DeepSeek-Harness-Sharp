@@ -5,22 +5,14 @@ using System.Text.Json.Serialization;
 
 namespace Dsh.Llm.DeepSeek;
 
-public sealed record DeepSeekCatalogModel(
-    string Id,
-    string? Name = null,
-    string? Description = null,
-    int? ContextWindow = null,
-    int? MaxTokens = null,
-    IReadOnlyList<string>? InputModalities = null,
-    string? SystemPromptUpdate = null);
-
 public sealed record DeepSeekConnectionOptions(
     string BaseUrl,
     string ApiKeyEnv,
     RequestDefaults Defaults,
     int MaxTokens,
     int DefaultContextWindow,
-    IReadOnlyList<DeepSeekCatalogModel> Models,
+    IReadOnlyList<ProviderModelSpec> DeclaredModels,
+    DeepSeekModelListing Listing,
     long StreamIdleTimeoutMs,
     ResolvedRetryPolicy RetryPolicy)
 {
@@ -32,8 +24,10 @@ public sealed record DeepSeekConnectionOptions(
 public sealed class DeepSeekAdapterOptions
 {
     public required Func<DeepSeekConnectionOptions> Options { get; init; }
-    public required Func<DeepSeekConnectionOptions, CancellationToken, Task<string>> ResolveApiKey { get; init; }
+    public required Func<DeepSeekConnectionOptions, CancellationToken, Task<LlmCredential>> ResolveCredential { get; init; }
     public required Func<string> ResolveUserId { get; init; }
+    /** 账号令牌被端点拒绝时清登录态; 没有账号来源时为 null。 */
+    public Action<LlmCredential>? RejectCredential { get; init; }
     public Func<IDictionary<string, JsonElement>, CancellationToken, Task>? PrepareExtensions { get; init; }
     public HttpClient? HttpClient { get; init; }
 }
@@ -77,27 +71,45 @@ public sealed class DeepSeekAdapter : LlmAdapter
 
     public override ResolvedRetryPolicy ProviderRetryPolicy => _config.Options().RetryPolicy;
 
+    /**
+     * 可列出的模型 = settings 声明的 ∪ 端点 /models 自报的。
+     * 端点清单是这个凭据当前真正能用的模型(可能按账号灰度), 不能写死在本地。
+     */
     public override IReadOnlyList<LlmModelInfo> ListModels()
-        => _config.Options().Models
-            .Select(model => new LlmModelInfo(
-                ProviderInfo.Id,
-                model.Id,
-                model.Name ?? model.Id,
-                model.Description,
-                InputModalitiesOf(model.Id, model.InputModalities)))
-            .ToList();
+    {
+        var connection = _config.Options();
+        // 清单是后台拉的: 之前没成功就在这次重算里再试一次(有冷却), 选单因此能自己恢复。
+        connection.Listing.RequestRefresh();
+        var discovered = connection.Listing.Entries;
+        var ids = connection.DeclaredModels.Select(model => model.Id)
+            .Concat(discovered.Select(model => model.Id))
+            .Distinct(StringComparer.Ordinal);
+        return [.. ids.Select(id => new LlmModelInfo(
+            ProviderInfo.Id,
+            id,
+            NameOf(connection, id),
+            null,
+            InputModalitiesOf(connection, id)))];
+    }
+
+    private static string NameOf(DeepSeekConnectionOptions connection, string model)
+        => connection.DeclaredModels.FirstOrDefault(entry => entry.Id == model)?.Name
+            ?? connection.Listing.Find(model)?.Name
+            ?? model;
 
     /**
-     * 输入模态的取值顺序: 配置里显式声明 > models.dev 快照 > 纯文本。
-     * 快照是能力事实源, 漏了它就会把本来支持图片的模型当成纯文本, 用户贴的图会被静默替换成一段说明文字。
+     * 输入模态的取值顺序: 端点 /models > models.dev 快照 > 纯文本。
+     * 端点最懂自己的凭据能看到什么; 漏掉图片能力会把用户贴的图静默换成一段说明文字。
      */
-    private IReadOnlyList<string> InputModalitiesOf(string model, IReadOnlyList<string>? declared)
-        => declared ?? _modelsDev.InputModalitiesFor(model) ?? ["text"];
+    private IReadOnlyList<string> InputModalitiesOf(DeepSeekConnectionOptions connection, string model)
+        => connection.Listing.Find(model)?.InputModalities
+            ?? _modelsDev.InputModalitiesFor(model)
+            ?? ["text"];
 
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
         var connection = _config.Options();
-        var configured = connection.Models.FirstOrDefault(entry => entry.Id == model);
+        var configured = connection.DeclaredModels.FirstOrDefault(entry => entry.Id == model);
         if (configured?.SystemPromptUpdate is { } systemPromptUpdate
             && systemPromptUpdate != SystemPromptUpdateModes.InHistory)
         {
@@ -105,9 +117,35 @@ public sealed class DeepSeekAdapter : LlmAdapter
                 $"catalog model \"{model}\" systemPromptUpdate must be \"{SystemPromptUpdateModes.InHistory}\" when present",
                 "INVALID_MODEL_INFO"));
         }
-        var contextWindow = configured?.ContextWindow ?? connection.DefaultContextWindow;
-        var reasoning = _modelsDev.ReasoningFor(model);
-        reasoning ??= connection.Defaults.Thinking == "disabled"
+        var listed = connection.Listing.Find(model);
+        return new LlmResolvedModelInfo(
+            ProviderInfo.Id,
+            model,
+            NameOf(connection, model),
+            null,
+            InputModalitiesOf(connection, model),
+            listed?.ContextWindow ?? connection.DefaultContextWindow,
+            listed?.MaxOutputTokens ?? connection.MaxTokens,
+            ReasoningOf(listed) ?? _modelsDev.ReasoningFor(model) ?? DefaultReasoning(connection),
+            // DeepSeek 接受对话中途的 system 消息, 变化后的系统提示叠到尾部即可保住前缀缓存;
+            // 没显式声明时按 in-history 走, 否则每次变化都会原地改写前缀。
+            configured?.SystemPromptUpdate ?? SystemPromptUpdateModes.InHistory);
+    }
+
+    /** 端点声明的档位(含"off"表示可关思考)优先; 端点没说就问 models.dev, 再没有就按部署默认。 */
+    private static LlmModelReasoningInfo? ReasoningOf(DeepSeekListedModel? listed)
+    {
+        if (listed?.Efforts is not { Count: > 0 } efforts)
+            return null;
+        var info = LlmModelReasoningInfo.FromIds(efforts);
+        return listed.DefaultEffort is { Length: > 0 } declared
+            && efforts.Contains(declared, StringComparer.Ordinal)
+                ? info with { DefaultEffort = ReasoningEffortId.Create(declared) }
+                : info;
+    }
+
+    private static LlmModelReasoningInfo DefaultReasoning(DeepSeekConnectionOptions connection)
+        => connection.Defaults.Thinking == "disabled"
             ? new LlmModelReasoningInfo(OffOnlyReasoningEfforts, OffEffort)
             : new LlmModelReasoningInfo(ReasoningEfforts, connection.Defaults.ReasoningEffort switch
             {
@@ -116,19 +154,6 @@ public sealed class DeepSeekAdapter : LlmAdapter
                 "max" => MaxEffort,
                 _ => HighEffort,
             });
-        return new LlmResolvedModelInfo(
-            ProviderInfo.Id,
-            model,
-            configured?.Name ?? model,
-            configured?.Description,
-            InputModalitiesOf(model, configured?.InputModalities),
-            contextWindow,
-            configured?.MaxTokens ?? connection.MaxTokens,
-            reasoning,
-            // DeepSeek 接受对话中途的 system 消息, 变化后的系统提示叠到尾部即可保住前缀缓存;
-            // 没显式声明时按 in-history 走, 否则每次变化都会原地改写前缀。
-            configured?.SystemPromptUpdate ?? SystemPromptUpdateModes.InHistory);
-    }
 
     public override PreparedAdapterCall PrepareCall(string model, CancellationToken cancellationToken)
     {
@@ -145,22 +170,20 @@ public sealed class DeepSeekAdapter : LlmAdapter
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (options.Messages.Any(message => ToolResultImages.Any(message.Content))
-            && !InputModalitiesOf(
-                options.Model,
-                connection.Models.FirstOrDefault(entry => entry.Id == options.Model)?.InputModalities).Contains("image"))
+            && !InputModalitiesOf(connection, options.Model).Contains("image"))
         {
             throw new LlmException(new LlmFailure(
                 $"DeepSeek model \"{options.Model}\" does not accept image input.",
                 "UNSUPPORTED_CONTENT"));
         }
 
-        var apiKey = await _config.ResolveApiKey(connection, cancellationToken);
+        var credential = await _config.ResolveCredential(connection, cancellationToken);
         using var watchdog = new IdleWatchdog(cancellationToken, connection.StreamIdleTimeoutMs);
 
         IAsyncEnumerator<StreamChunk> iterator;
         try
         {
-            iterator = Request(options, watchdog.Token, connection, apiKey, watchdog.Pulse).GetAsyncEnumerator(watchdog.Token);
+            iterator = Request(options, watchdog.Token, connection, credential, watchdog.Pulse).GetAsyncEnumerator(watchdog.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -225,7 +248,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
         GenerateOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken,
         DeepSeekConnectionOptions connection,
-        string apiKey,
+        LlmCredential credential,
         Action onActivity)
     {
         var body = WireSerialize.SerializeRequest(options, connection.Defaults);
@@ -241,7 +264,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
         var payload = JsonSerializer.Serialize(body, DeepSeekJson.Options);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{connection.BaseUrl}/chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        credential.Apply(request);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Headers.TryAddWithoutValidation("user-agent", AppIdentity.Default.UserAgent);
         request.Headers.TryAddWithoutValidation("x-deepseek-harness-user-id", _config.ResolveUserId());
@@ -270,33 +293,7 @@ public sealed class DeepSeekAdapter : LlmAdapter
             if (!response.IsSuccessStatusCode)
             {
                 var rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
-                WireErrorBody? providerError = null;
-                var message = $"DeepSeek API error (HTTP {(int)response.StatusCode})";
-                try
-                {
-                    providerError = JsonSerializer.Deserialize<WireError>(rawResponse, DeepSeekJson.Options)?.Error;
-                    if (providerError?.Message is { } providerMessage)
-                        message = providerMessage;
-                }
-                catch (JsonException)
-                {
-                    // The HTTP status remains authoritative when a gateway returns malformed JSON.
-                }
-                var delay = RetryAfterHeader.ParseMs(
-                    response.Headers.TryGetValues("retry-after", out var values) ? values.FirstOrDefault() : null,
-                    DateTimeOffset.UtcNow);
-                var requestId = response.Headers.TryGetValues("x-request-id", out var ids) && ids.FirstOrDefault() is { Length: > 0 } id
-                    ? ProviderRequestId.Create(id)
-                    : response.Headers.TryGetValues("x-deepseek-request-id", out var dsIds) && dsIds.FirstOrDefault() is { Length: > 0 } dsId
-                        ? ProviderRequestId.Create(dsId)
-                        : (ProviderRequestId?)null;
-                throw new LlmException(
-                    new LlmFailure(
-                        message,
-                        HttpErrorCode((int)response.StatusCode, providerError),
-                        (int)response.StatusCode,
-                        delay,
-                        requestId),
+                throw new LlmException(await BuildHttpFailureAsync(response, rawResponse, credential), 
                     new Exception(rawResponse.Length > 0 ? rawResponse : $"DeepSeek HTTP {(int)response.StatusCode}"));
             }
 
@@ -304,6 +301,41 @@ public sealed class DeepSeekAdapter : LlmAdapter
             await foreach (var chunk in WireTranslate.Translate(SseParser.Parse(stream, _ => onActivity(), cancellationToken), cancellationToken))
                 yield return chunk;
         }
+    }
+
+    /** 401 与 403 区分凭据类型: 账号令牌被拒是"要重新登录", 不能混成 API Key 无效。 */
+    private async Task<LlmFailure> BuildHttpFailureAsync(HttpResponseMessage response, string rawResponse, LlmCredential credential)
+    {
+        WireErrorBody? providerError = null;
+        var message = $"DeepSeek API error (HTTP {(int)response.StatusCode})";
+        try
+        {
+            providerError = JsonSerializer.Deserialize<WireError>(rawResponse, DeepSeekJson.Options)?.Error;
+            if (providerError?.Message is { } providerMessage)
+                message = providerMessage;
+        }
+        catch (JsonException)
+        {
+            // The HTTP status remains authoritative when a gateway returns malformed JSON.
+        }
+        var status = (int)response.StatusCode;
+        if (status is 401 or 403 && credential.Scheme == LlmCredentialScheme.DshAuthToken)
+        {
+            _config.RejectCredential?.Invoke(credential);
+            return new LlmFailure(
+                $"{message}（DeepSeek 账号登录态已失效，请重新登录）",
+                LlmFailureCodes.AccountTokenInvalid,
+                status);
+        }
+        var delay = RetryAfterHeader.ParseMs(
+            response.Headers.TryGetValues("retry-after", out var values) ? values.FirstOrDefault() : null,
+            DateTimeOffset.UtcNow);
+        var requestId = response.Headers.TryGetValues("x-request-id", out var ids) && ids.FirstOrDefault() is { Length: > 0 } id
+            ? ProviderRequestId.Create(id)
+            : response.Headers.TryGetValues("x-deepseek-request-id", out var dsIds) && dsIds.FirstOrDefault() is { Length: > 0 } dsId
+                ? ProviderRequestId.Create(dsId)
+                : (ProviderRequestId?)null;
+        return new LlmFailure(message, HttpErrorCode(status, providerError), status, delay, requestId);
     }
 
     public static string HttpErrorCode(int status, WireErrorBody? error)

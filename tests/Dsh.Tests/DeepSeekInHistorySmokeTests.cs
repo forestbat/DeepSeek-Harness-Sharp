@@ -20,20 +20,21 @@ public sealed class DeepSeekInHistorySmokeTests
         var apiKey = provider.Options?.ApiKey;
         if (string.IsNullOrEmpty(apiKey))
             return null;
-        var model = provider.Models.Keys.FirstOrDefault() ?? "deepseek-v4-flash";
+        var model = provider.Models.Keys.FirstOrDefault() ?? "deepseek-flash";
         var connection = new DeepSeekConnectionOptions(
             provider.Options?.BaseUrl ?? "https://api.deepseek.com",
             "DEEPSEEK_API_KEY",
             new RequestDefaults(),
             DeepSeekConnectionOptions.DefaultMaxTokens,
             DeepSeekConnectionOptions.DefaultContextWindowValue,
-            [new DeepSeekCatalogModel(model, SystemPromptUpdate: SystemPromptUpdateModes.InHistory)],
+            [new ProviderModelSpec(model, SystemPromptUpdate: SystemPromptUpdateModes.InHistory)],
+            new DeepSeekModelListing([new DeepSeekListedModel(model)]),
             DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "test"));
         return (new DeepSeekAdapter("deepseek-official", new DeepSeekAdapterOptions
         {
             Options = () => connection,
-            ResolveApiKey = (_, _) => Task.FromResult(apiKey),
+            ResolveCredential = (_, _) => Task.FromResult(new LlmCredential(apiKey, LlmCredentialScheme.Bearer)),
             ResolveUserId = () => "test-user",
         }), model);
     }
