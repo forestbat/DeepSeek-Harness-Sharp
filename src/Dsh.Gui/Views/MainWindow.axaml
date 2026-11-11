@@ -21,11 +21,17 @@
       <Image Grid.Column="0" Source="avares://Dsh.Gui/Assets/icon.png" Width="18" Height="18"
              Margin="10,0,8,0" VerticalAlignment="Center" />
       <TextBlock Grid.Column="1" Text="DeepSeek Harness" Classes="Tertiary" VerticalAlignment="Center" />
-      <Button Grid.Column="2" Name="TitleAccountSignIn" Classes="TitleAction"
-              Content="登录到 DeepSeek"
-              IsVisible="{Binding Preferences.Account.CanOfferSignIn}"
-              Command="{Binding Preferences.Account.SignInCommand}"
-              ToolTip.Tip="在浏览器完成 DeepSeek 账号登录，之后可直接用账号额度对话" />
+      <!--
+        标题栏按钮必须标 DecorationsElement: 扩展客户区下这一条整体是 HTCAPTION(窗口拖拽区),
+        普通按钮收不到点击; 标了这个角色 Win32 才把它当客户区输入转发给按钮。
+      -->
+      <Button Grid.Column="2" Name="TitleAccount" Classes="TitleAction"
+              Classes.signedIn="{Binding Preferences.Account.IsSignedIn}"
+              Content="{Binding Preferences.Account.TitleText}"
+              IsVisible="{Binding Preferences.Account.IsAvailable}"
+              Command="{Binding Preferences.Account.TitleCommand}"
+              ToolTip.Tip="{Binding Preferences.Account.TitleTip}"
+              chrome:WindowDecorationProperties.ElementRole="DecorationsElement" />
       <Button Grid.Column="3" Name="TitleMinimize" Classes="TitleButton" Click="OnMinimizeClick" ToolTip.Tip="最小化"
               chrome:WindowDecorationProperties.ElementRole="MinimizeButton">
         <Path Classes="Icon" Width="14" Height="14" Data="{StaticResource Icon.Minimize}" />

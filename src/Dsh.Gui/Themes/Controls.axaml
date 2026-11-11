@@ -300,9 +300,9 @@
     <Setter Property="Background" Value="{DynamicResource Brush.Status.Error}" />
   </Style>
 
-  <!-- 标题栏里带文字的按钮(如"登录到 DeepSeek"): 与最小化/关闭同高, 宽度随内容。 -->
+  <!-- 标题栏里带文字的按钮(如账号按钮): 与最小化/关闭同高, 宽度随内容, 文字垂直居中。 -->
   <Style Selector="Button.TitleAction">
-    <Setter Property="Height" Value="32" />
+    <Setter Property="Height" Value="24" />
     <Setter Property="Margin" Value="0,0,6,0" />
     <Setter Property="Padding" Value="10,0" />
     <Setter Property="CornerRadius" Value="{DynamicResource CornerRadius.Control}" />
@@ -311,11 +311,25 @@
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="FontSize" Value="{DynamicResource FontSize.List}" />
     <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
   </Style>
 
   <Style Selector="Button.TitleAction:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource Brush.Accent.Hover}" />
     <Setter Property="TextBlock.Foreground" Value="{DynamicResource Brush.Text.OnAccent}" />
+  </Style>
+
+  <!-- 已登录时按钮退成次要样式: 它此时是"打开账号页", 不再是要人去点的登录入口。 -->
+  <Style Selector="Button.TitleAction.signedIn">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource Brush.Text.Secondary}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border.Subtle}" />
+  </Style>
+
+  <Style Selector="Button.TitleAction.signedIn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Brush.Bg.Hover}" />
+    <Setter Property="TextBlock.Foreground" Value="{DynamicResource Brush.Text.Primary}" />
   </Style>
 
 </Styles>

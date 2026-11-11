@@ -1,6 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Dsh.Core;
 using Dsh.Account;
 
 namespace Dsh.Gui.ViewModels;
@@ -42,8 +41,17 @@ public sealed partial class AccountPanelViewModel : ObservableObject
 
     public bool CanCancel => IsAvailable && IsWaiting;
 
-    /** 标题栏的「登录到 DeepSeek」: 已登录或正在登录时不再占位置。 */
-    public bool CanOfferSignIn => IsAvailable && !IsSignedIn && !IsWaiting && !IsBusy;
+    /** 标题栏的账号按钮: 未登录时提示登录, 登录中提示进度, 已登录显示账号名。 */
+    public string TitleText => Stage switch
+    {
+        AccountPhase.SignedIn => DisplayName.Length > 0 ? DisplayName : "我的账号",
+        AccountPhase.Initializing or AccountPhase.WaitingBrowser or AccountPhase.Exchanging => "登录中…",
+        _ => "登录到 DeepSeek",
+    };
+
+    public string TitleTip => Stage == AccountPhase.SignedIn
+        ? "在浏览器打开 DeepSeek 用量与充值页面"
+        : "在浏览器完成 DeepSeek 账号登录，之后可直接用账号额度对话";
 
     public bool HasBalance => BalanceText.Length > 0;
 
@@ -58,13 +66,13 @@ public sealed partial class AccountPanelViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsCancelled))]
     [NotifyPropertyChangedFor(nameof(IsFailed))]
     [NotifyPropertyChangedFor(nameof(CanCancel))]
-    [NotifyPropertyChangedFor(nameof(CanOfferSignIn))]
+    [NotifyPropertyChangedFor(nameof(TitleText))]
+    [NotifyPropertyChangedFor(nameof(TitleTip))]
     private AccountPhase _stage = AccountPhase.SignedOut;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanSignIn))]
     [NotifyPropertyChangedFor(nameof(CanCancel))]
-    [NotifyPropertyChangedFor(nameof(CanOfferSignIn))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -72,6 +80,7 @@ public sealed partial class AccountPanelViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Initial))]
+    [NotifyPropertyChangedFor(nameof(TitleText))]
     private string _displayName = "";
 
     [ObservableProperty]
@@ -191,6 +200,23 @@ public sealed partial class AccountPanelViewModel : ObservableObject
 
     [RelayCommand]
     private void OpenTopUp() => OpenPlatformPage(AccountPlatformPage.TopUp);
+
+    /**
+     * 标题栏账号按钮: 未登录直接拉起浏览器登录, 不进设置页中转; 已登录则打开平台个人页。
+     * 按钮始终存在, 不随登录态消失。
+     */
+    [RelayCommand]
+    private async Task TitleAsync()
+    {
+        if (IsWaiting)
+            return;
+        if (Stage == AccountPhase.SignedIn)
+        {
+            OpenPlatformPage(AccountPlatformPage.Usage);
+            return;
+        }
+        await SignInAsync();
+    }
 
     private void OpenPlatformPage(AccountPlatformPage page)
     {

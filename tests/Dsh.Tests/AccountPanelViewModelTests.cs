@@ -1,6 +1,5 @@
 using Dsh.Account;
 using Dsh.Gui.ViewModels;
-using Dsh.Core;
 
 namespace Dsh.Tests;
 
@@ -24,12 +23,13 @@ public sealed class AccountPanelViewModelTests
         var panel = new AccountPanelViewModel(service);
 
         Assert.True(panel.CanSignIn);
-        Assert.True(panel.CanOfferSignIn);
         Assert.True(panel.IsSignedOut);
+        Assert.Equal("登录到 DeepSeek", panel.TitleText);
     }
 
+    /** 标题栏按钮始终在, 已登录时换成账号名: 它不会因为登录成功而消失。 */
     [Fact]
-    public async Task SignedIn_HidesTheTitleBarSignInHint()
+    public async Task TitleButton_StaysAfterSignIn_AndShowsTheAccountName()
     {
         var service = new FakeAccountService
         {
@@ -37,10 +37,49 @@ public sealed class AccountPanelViewModelTests
         };
         var panel = new AccountPanelViewModel(service);
 
-        await panel.SignInCommand.ExecuteAsync(null);
+        await panel.TitleCommand.ExecuteAsync(null);
 
         Assert.True(panel.IsSignedIn);
-        Assert.False(panel.CanOfferSignIn);
+        Assert.Equal("小明", panel.TitleText);
+    }
+
+    /** 未登录点标题栏按钮 = 直接登录, 不需要先去设置页。 */
+    [Fact]
+    public async Task TitleButton_SignedOut_StartsTheBrowserSignIn()
+    {
+        var signedIn = new TaskCompletionSource();
+        var service = new FakeAccountService
+        {
+            SignInHandler = _ =>
+            {
+                signedIn.TrySetResult();
+                return Task.FromResult<AccountProfile?>(new AccountProfile("u-1", "小明", null, "13812345678"));
+            },
+        };
+        var panel = new AccountPanelViewModel(service);
+
+        await panel.TitleCommand.ExecuteAsync(null);
+
+        Assert.True(signedIn.Task.IsCompleted);
+        Assert.True(panel.IsSignedIn);
+    }
+
+    /** 已登录点标题栏按钮 = 打开平台个人页(用量/余额), 不退登录, 也不进设置页。 */
+    [Fact]
+    public async Task TitleButton_SignedIn_OpensThePlatformPage()
+    {
+        var service = new FakeAccountService
+        {
+            SignInHandler = _ => Task.FromResult<AccountProfile?>(new AccountProfile("u-1", "小明", null, "13812345678")),
+        };
+        var panel = new AccountPanelViewModel(service);
+        await panel.SignInCommand.ExecuteAsync(null);
+        Assert.True(panel.IsSignedIn);
+
+        await panel.TitleCommand.ExecuteAsync(null);
+
+        Assert.Equal([AccountPlatformPage.Usage], service.OpenedPages);
+        Assert.True(panel.IsSignedIn);
     }
 
     /** 「更多账号信息」「查询用量」「充值」都跳官方页面: 客户端不自造用量与充值界面。 */
