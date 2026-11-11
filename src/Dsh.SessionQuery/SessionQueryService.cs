@@ -5,9 +5,9 @@ using Dsh.Runtime.Events;
 namespace Dsh.SessionQuery;
 
 /** 会话全文检索:活会话按事件数、历史会话按持久层 Revision 增量刷新内存索引。 */
-public sealed class SessionQueryService : Service, ISessionQueryService, IDisposable
+public sealed class SessionQueryService : Service, IDisposable
 {
-    public const string ServiceName = ISessionQueryService.ServiceName;
+    public const string ServiceName = "sessionQuery";
 
     private readonly SessionQueryIndex _index;
     private readonly Dictionary<string, string> _versions = new(StringComparer.Ordinal);

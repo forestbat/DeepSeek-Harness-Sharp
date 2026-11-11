@@ -6,6 +6,7 @@ using Dsh.PtyTerminal;
 using Dsh.Tui;
 using Dsh.Tui.GL;
 using OpenTK.Graphics.OpenGL;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

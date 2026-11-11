@@ -2,6 +2,7 @@
 using Dsh.Workspace;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
+using Dsh.Agent;
 
 namespace Dsh.Gui.ViewModels;
 

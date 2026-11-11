@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Boot;
@@ -8,6 +8,8 @@ using Dsh.Plugins;
 using Dsh.Ptc;
 using Dsh.Runtime;
 using Dsh.ScriptHost;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

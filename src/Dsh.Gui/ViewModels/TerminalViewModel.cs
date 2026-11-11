@@ -6,6 +6,7 @@ using Dsh.Workspace;
 using Dsh.Core;
 using Dsh.Pty;
 using Dsh.RemoteHost;
+using Dsh.Ide;
 
 namespace Dsh.Gui.ViewModels;
 

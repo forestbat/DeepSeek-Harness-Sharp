@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Schedule.Plugin.Schedule)]
 [assembly: DshPlugin(Dsh.Schedule.Plugin.ToolSchedule)]

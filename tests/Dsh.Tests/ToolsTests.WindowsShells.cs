@@ -2,6 +2,7 @@ using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Tools;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

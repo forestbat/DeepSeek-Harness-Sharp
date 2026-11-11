@@ -7,6 +7,8 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Transport;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Deliverables;
 

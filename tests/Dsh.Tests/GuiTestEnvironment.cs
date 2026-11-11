@@ -12,6 +12,7 @@ using Dsh.Interaction;
 using Dsh.Host;
 using Dsh.RemoteHost;
 using Dsh.Persistence;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

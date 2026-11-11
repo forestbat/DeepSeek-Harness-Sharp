@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Sandbox;
+using Dsh.Safety;
 
 namespace Dsh.Plugins.Sandbox;
 

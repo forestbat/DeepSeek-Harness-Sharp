@@ -9,6 +9,7 @@ using Dsh.Ide.Launch;
 using Dsh.Ide.Surfaces;
 using Dsh.Ide.Triggers;
 using Dsh.Ide.Bridge;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Ide.Plugin.Ide)]
 

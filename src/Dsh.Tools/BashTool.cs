@@ -2,6 +2,8 @@ using System.Text.Json;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tools;
 

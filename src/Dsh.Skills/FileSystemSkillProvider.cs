@@ -1,5 +1,7 @@
 using Dsh.Runtime;
 using Dsh.Core;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Skills;
 

@@ -20,6 +20,7 @@ using GetTaskRequest = global::A2A.GetTaskRequest;
 using SendMessageRequest = global::A2A.SendMessageRequest;
 using SendMessageConfiguration = global::A2A.SendMessageConfiguration;
 using TaskState = global::A2A.TaskState;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

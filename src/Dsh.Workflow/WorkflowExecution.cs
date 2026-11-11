@@ -3,6 +3,8 @@ using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.ScriptHost;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Workflow;
 

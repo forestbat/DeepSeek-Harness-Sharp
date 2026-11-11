@@ -4,6 +4,8 @@ using Dsh.Core;
 using Dsh.Jobs;
 using Dsh.Llm;
 using Dsh.Tools;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

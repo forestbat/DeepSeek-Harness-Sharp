@@ -3,6 +3,8 @@ using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Jobs;
+using Dsh.Agent;
 
 namespace Dsh.PtyTerminal;
 

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
@@ -6,6 +6,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ContentBlock = Dsh.Llm.ContentBlock;
+using Dsh.Agent;
 
 namespace Dsh.Mcp;
 

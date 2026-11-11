@@ -6,6 +6,8 @@ using Dsh.Core;
 using Dsh.Transport;
 using Dsh.Llm;
 using Microsoft.Extensions.FileSystemGlobbing;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tools;
 

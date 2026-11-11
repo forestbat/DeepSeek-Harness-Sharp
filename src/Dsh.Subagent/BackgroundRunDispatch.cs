@@ -1,6 +1,9 @@
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Jobs;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Subagent;
 

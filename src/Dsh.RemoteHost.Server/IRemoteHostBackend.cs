@@ -1,3 +1,5 @@
+using Dsh.Ide;
+
 namespace Dsh.RemoteHost;
 
 /** A host composes its required session/decision/registry services and explicitly supplies optional domains. */
@@ -81,7 +83,7 @@ public interface IRemoteNetworkReloadBackend
 
 public interface IRemoteEditorBackend
 {
-    Dsh.Core.IEditorService Service { get; }
+    IEditorService Service { get; }
     Dsh.Ide.Bridge.EditorClientDispatcher? Clients { get; }
     HostPathPolicy? Paths => null;
 }

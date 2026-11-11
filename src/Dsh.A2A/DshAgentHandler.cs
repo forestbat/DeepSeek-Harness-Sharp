@@ -8,6 +8,7 @@ using Dsh.Llm;
 using A2AMessage = A2A.Message;
 using A2ARole = A2A.Role;
 using A2APart = A2A.Part;
+using Dsh.Agent;
 
 namespace Dsh.A2A;
 

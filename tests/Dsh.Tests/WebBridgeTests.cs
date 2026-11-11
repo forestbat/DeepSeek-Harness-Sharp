@@ -7,6 +7,7 @@ using Dsh.Interaction;
 using Dsh.RemoteHost;
 using Dsh.Transport;
 using Dsh.WebBridge;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 
@@ -477,7 +478,7 @@ public sealed class WebBridgeTests
 
         var answer = $$"""{"RequestId":"{{approvalId}}","Allow":true}""";
         Assert.True((await WebSocketRpc.RequestAsync(second, 2, HostProtocol.MethodApprovalRespond, answer)).GetBoolean());
-        Assert.Equal(Dsh.Core.ApprovalOutcome.AllowedOnce, await approval.WaitAsync(ct));
+        Assert.Equal(ApprovalOutcome.AllowedOnce, await approval.WaitAsync(ct));
         Assert.False((await WebSocketRpc.RequestAsync(second, 3, HostProtocol.MethodApprovalRespond, answer)).GetBoolean());
         Assert.Empty((await WebSocketRpc.RequestAsync(second, 4, HostProtocol.MethodPendingList, null)).GetProperty("Approvals").EnumerateArray());
         Assert.Contains((await WebSocketRpc.RequestAsync(second, 5, HostProtocol.MethodSessionsList, null)).EnumerateArray(),

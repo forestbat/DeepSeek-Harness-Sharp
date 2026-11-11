@@ -10,6 +10,7 @@ using Dsh.Gui.ViewModels;
 using Dsh.Gui.Views;
 using Dsh.Ide.Bridge;
 using Dsh.RemoteHost;
+using Dsh.Ide;
 
 namespace Dsh.Tests;
 

@@ -8,7 +8,7 @@ public sealed record MongoMemorySettings(string ConnectionString, string Databas
 public sealed class MongoMemoryStore : IDisposable
 {
     private readonly Lazy<MongoClient> _client;
-    private readonly Lazy<IMongoCollection<MemoryDocument>> _collection;
+    private readonly Lazy<IMongoCollection<MongoMemoryDocument>> _collection;
 
     /**
      * 驱动与它的集群监视线程(心跳)推迟到首次读写才起: 构造本身不再拉起 MongoDB 驱动。
@@ -16,8 +16,8 @@ public sealed class MongoMemoryStore : IDisposable
     public MongoMemoryStore(MongoMemorySettings settings)
     {
         _client = new Lazy<MongoClient>(() => new MongoClient(settings.ConnectionString));
-        _collection = new Lazy<IMongoCollection<MemoryDocument>>(
-            () => _client.Value.GetDatabase(settings.Database).GetCollection<MemoryDocument>(settings.Collection));
+        _collection = new Lazy<IMongoCollection<MongoMemoryDocument>>(
+            () => _client.Value.GetDatabase(settings.Database).GetCollection<MongoMemoryDocument>(settings.Collection));
     }
 
     public async Task<string?> GetAsync(string key, CancellationToken cancellationToken = default)
@@ -28,7 +28,7 @@ public sealed class MongoMemoryStore : IDisposable
 
     public async Task SetAsync(string key, string text, CancellationToken cancellationToken = default)
     {
-        var document = new MemoryDocument
+        var document = new MongoMemoryDocument
         {
             Id = key,
             Text = text,
@@ -48,7 +48,7 @@ public sealed class MongoMemoryStore : IDisposable
     }
 }
 
-public sealed class MemoryDocument
+public sealed class MongoMemoryDocument
 {
     [BsonId]
     public string Id { get; set; } = "";

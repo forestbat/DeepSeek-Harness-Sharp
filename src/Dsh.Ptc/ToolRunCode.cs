@@ -1,10 +1,12 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.ScriptHost;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Ptc;
 

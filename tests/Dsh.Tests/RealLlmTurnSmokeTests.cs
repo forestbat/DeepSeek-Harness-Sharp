@@ -4,6 +4,7 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Schedule;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

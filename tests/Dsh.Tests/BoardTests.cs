@@ -1,10 +1,11 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Board;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

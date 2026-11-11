@@ -5,6 +5,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.AgentInstructions.Plugin.AgentInstructions)]
 

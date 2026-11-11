@@ -3,6 +3,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

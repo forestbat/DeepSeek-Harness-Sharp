@@ -1,3 +1,4 @@
+
 namespace Dsh.Notifications;
 
 /** What needs attention; only reflects process and interaction state, never whether a task is finished. */

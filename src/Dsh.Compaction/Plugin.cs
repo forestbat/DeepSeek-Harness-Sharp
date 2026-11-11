@@ -2,7 +2,9 @@ using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
+using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Compaction.Plugin.TokenMeter)]
 [assembly: DshPlugin(Dsh.Compaction.Plugin.CompactionToolResultPruner)]

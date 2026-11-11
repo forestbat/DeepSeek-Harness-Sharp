@@ -1,6 +1,8 @@
 using System.Text;
 using Dsh.Runtime;
 using Dsh.Core;
+using Dsh.Tools;
+using Dsh.Subprocess;
 
 namespace Dsh.Jobs;
 

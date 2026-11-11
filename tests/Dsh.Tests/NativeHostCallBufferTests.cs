@@ -6,6 +6,7 @@ using Dsh.Plugins;
 using Dsh.Plugins.Native;
 using Dsh.Plugins.Sandbox;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

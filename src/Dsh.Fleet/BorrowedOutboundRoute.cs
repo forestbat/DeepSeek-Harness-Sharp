@@ -1,6 +1,7 @@
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
+using Dsh.Transport;
 
 namespace Dsh.Fleet;
 

@@ -7,6 +7,7 @@ using Dsh.Runtime;
 using Dsh.Fleet;
 using System.Diagnostics;
 using System.IO.Pipes;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

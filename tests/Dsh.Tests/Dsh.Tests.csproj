@@ -40,6 +40,8 @@
       声明的 [DshPlugin] 一并聚合进编译目录, 直接引用会让夹具的 test/local 与测试自带的 TestPlugin 撞包。
       因此产物文件用下面的 None 显式复制。
     -->
+    <ProjectReference Include="..\src\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Contracts\Dsh.RemoteHost.Contracts.csproj" />
     <ProjectReference Include="..\Dsh.ManagedPluginSample\Dsh.ManagedPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <ProjectReference Include="..\Dsh.SandboxPluginSample\Dsh.SandboxPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <ProjectReference Include="..\..\templates\managed-plugin\DshPluginTemplate.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
@@ -92,6 +94,7 @@
     <ProjectReference Include="..\..\src\Dsh.Jobs\Dsh.Jobs.csproj" />
     <ProjectReference Include="..\..\src\Dsh.PtyTerminal\Dsh.PtyTerminal.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Checkpoints\Dsh.Checkpoints.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Checkpoints.Contracts\Dsh.Checkpoints.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Ide\Dsh.Ide.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Tui\Dsh.Tui.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Tui.GL\Dsh.Tui.GL.csproj" />

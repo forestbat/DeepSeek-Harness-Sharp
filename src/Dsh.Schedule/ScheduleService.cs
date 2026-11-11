@@ -2,6 +2,7 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
 
 namespace Dsh.Schedule;
 

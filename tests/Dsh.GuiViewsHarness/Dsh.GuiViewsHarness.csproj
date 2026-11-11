@@ -14,6 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Gui\Dsh.Gui.csproj" />
     <ProjectReference Include="..\..\src\Dsh.Fleet\Dsh.Fleet.csproj" />
   </ItemGroup>

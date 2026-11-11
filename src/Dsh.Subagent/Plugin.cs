@@ -2,6 +2,7 @@ using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Subagent.Plugin.Subagent)]
 [assembly: DshPlugin(Dsh.Subagent.Plugin.SubagentSpawnInProcess)]

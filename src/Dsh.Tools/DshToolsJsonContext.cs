@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dsh.Core;
+using Dsh.Subprocess;
 
 namespace Dsh.Tools;
 

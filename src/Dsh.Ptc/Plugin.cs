@@ -1,6 +1,8 @@
-﻿using Dsh.Core;
+using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 [assembly: DshPlugin("@deepseek-ai/dsh-ptc")]
 

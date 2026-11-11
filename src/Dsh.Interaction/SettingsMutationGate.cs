@@ -6,6 +6,8 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Runtime.Logging;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Interaction;
 

@@ -7,6 +7,7 @@ using Dsh.Interaction;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Host;
 

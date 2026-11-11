@@ -1,6 +1,7 @@
 using System.Globalization;
 using Dsh.Core;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Ide;
 

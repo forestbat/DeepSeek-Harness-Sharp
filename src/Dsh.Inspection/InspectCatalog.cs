@@ -6,6 +6,7 @@ using Dsh.Llm;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
+using Dsh.Agent;
 
 namespace Dsh.Inspection;
 

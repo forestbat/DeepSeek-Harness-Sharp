@@ -48,9 +48,14 @@ public sealed record IdeHistoryOptions
         => (int)Math.Clamp(value switch { int number => number, long number => number, double number when double.IsFinite(number) => number, _ => fallback }, minimum, maximum);
 }
 
+/**
+ * 供 TUI/GUI 复用的 IDE 历史服务(§5): 与 checkpoints 无依赖, 关掉检查点也照常可用。
+ * 查询按工作区门控(§3): 只有工作区带对应 IDE 标记时才查该 provider; 无标记返回空(不做全局扫描)。
+ */
 public sealed class IdeHistoryService(Context ctx, IdeHistoryRegistry registry, IdeHistoryOptions options)
-    : Service(ctx, IIdeHistoryService.ServiceName), IIdeHistoryService, IIdeHistoryTimeline, IIdeHistoryRestore
+    : Service(ctx, IdeHistoryService.ServiceName)
 {
+    public const string ServiceName = "ideHistory";
     private const int CandidateMultiplier = 4;
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     private static readonly IEqualityComparer<(string Path, string Digest)> TimelineIdentityComparer =

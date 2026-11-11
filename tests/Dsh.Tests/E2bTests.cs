@@ -7,6 +7,7 @@ using Dsh.E2b;
 using Dsh.Llm;
 using Dsh.Runtime;
 using E2bPlugin = Dsh.E2b.Plugin;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

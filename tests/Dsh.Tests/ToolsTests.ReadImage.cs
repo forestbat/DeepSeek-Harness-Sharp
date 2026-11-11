@@ -5,6 +5,7 @@ using Dsh.Tools;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Gif;
 using SixLabors.ImageSharp.PixelFormats;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

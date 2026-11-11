@@ -1,6 +1,8 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Memory;
+using Dsh.Agent;
 
 namespace Dsh.Interaction;
 
@@ -124,6 +126,6 @@ public static class MemoryCommand
     }
 
     private static ProjectMemory? ResolveMemory(Context ctx, string? cwd)
-        => ctx.Get<IProjectMemoryProvider>(MemoryServices.Provider, false)?.For(cwd)
+        => ctx.Get<MemoryWorkspace>(MemoryServices.Provider, false)?.For(cwd)
            ?? ctx.Get<ProjectMemory>(MemoryServices.ProjectMemory, false);
 }

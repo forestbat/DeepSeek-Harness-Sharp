@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.E2b.Plugin.E2b)]
 [assembly: DshPlugin(Dsh.E2b.Plugin.ToolE2b)]

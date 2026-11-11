@@ -1,6 +1,8 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.ScriptHost;
+using Dsh.Sdk;
+using Dsh.Subprocess;
 
 namespace Dsh.Workflow;
 

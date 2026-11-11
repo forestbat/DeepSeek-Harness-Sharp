@@ -2,6 +2,7 @@ using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Telemetry.Plugin.Package)]
 

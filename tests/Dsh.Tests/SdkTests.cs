@@ -8,6 +8,7 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

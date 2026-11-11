@@ -8,6 +8,8 @@ using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Composition;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tests;
 

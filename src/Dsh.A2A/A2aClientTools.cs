@@ -5,6 +5,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.A2A;
 

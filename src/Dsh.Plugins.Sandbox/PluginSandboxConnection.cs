@@ -7,6 +7,7 @@ using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Sandbox;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Plugins.Sandbox;
 

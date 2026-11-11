@@ -13,7 +13,7 @@ public sealed class MongoMemoryStoreTests
         const string collection = "memory_test";
         var key = $"dsh-test-{Guid.NewGuid():N}";
         var client = new MongoClient(connectionString);
-        var mongoCollection = client.GetDatabase(database).GetCollection<MemoryDocument>(collection);
+        var mongoCollection = client.GetDatabase(database).GetCollection<MongoMemoryDocument>(collection);
         using var store = new MongoMemoryStore(new MongoMemorySettings(connectionString, database, collection));
         try
         {

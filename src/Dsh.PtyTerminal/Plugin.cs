@@ -1,6 +1,7 @@
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Plugins;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.PtyTerminal.Plugin.Terminal)]
 [assembly: DshPlugin(Dsh.PtyTerminal.Plugin.ToolTerminal)]

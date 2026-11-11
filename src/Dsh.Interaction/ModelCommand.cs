@@ -3,6 +3,7 @@ using Dsh.Runtime;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Llm;
+using Dsh.Agent;
 
 namespace Dsh.Interaction;
 

@@ -5,6 +5,7 @@ using Dsh.Core;
 using Dsh.Host;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

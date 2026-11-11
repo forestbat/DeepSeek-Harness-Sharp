@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Core;
+using Dsh.Agent;
 
 namespace Dsh.Goal;
 

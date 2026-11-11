@@ -2,6 +2,7 @@ using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Sandbox;
+using Dsh.Subprocess;
 
 namespace Dsh.Plugins.Sandbox;
 

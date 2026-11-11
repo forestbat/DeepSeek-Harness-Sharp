@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj" />
     <ProjectReference Include="..\Dsh.Plugins.Native\Dsh.Plugins.Native.csproj" />

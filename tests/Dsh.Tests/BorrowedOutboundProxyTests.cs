@@ -11,6 +11,7 @@ using Dsh.Fleet;
 using Dsh.Runtime;
 using Dsh.Interaction;
 using Dsh.Transport;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

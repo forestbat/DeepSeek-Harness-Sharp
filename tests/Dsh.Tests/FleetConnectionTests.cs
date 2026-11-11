@@ -2,6 +2,7 @@ using Dsh.Core;
 using Dsh.Fleet;
 using Dsh.Interaction;
 using Dsh.RemoteHost;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

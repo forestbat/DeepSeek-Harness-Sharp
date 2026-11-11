@@ -9,6 +9,7 @@ using Dsh.Tui.Services;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

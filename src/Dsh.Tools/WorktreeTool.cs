@@ -4,6 +4,9 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Transport;
 using System.Text;
+using Dsh.Subprocess;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Tools;
 

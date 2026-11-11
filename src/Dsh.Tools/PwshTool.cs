@@ -1,5 +1,6 @@
 using Dsh.Runtime;
 using Dsh.Core;
+using Dsh.Subprocess;
 
 namespace Dsh.Tools;
 

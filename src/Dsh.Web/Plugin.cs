@@ -1,6 +1,7 @@
 using Dsh.Core;
 using Dsh.Plugins;
 using Dsh.Runtime;
+using Dsh.Agent;
 
 [assembly: DshPlugin(Dsh.Web.Plugin.Web)]
 [assembly: DshPlugin(Dsh.Web.Plugin.WebFetchHttp)]

@@ -3,6 +3,7 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Runtime;
+using Dsh.Checkpoints;
 
 namespace Dsh.SessionGraph;
 
@@ -61,7 +62,7 @@ public static class TimestampCommand
         var session = invocation.Agent.Session;
         var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
         var cwd = session.Header.Cwd;
-        if (ctx.Get<ICheckpointRestore>(ICheckpointRestore.ServiceName, false) is { } restore
+        if (ctx.Get<CheckpointService>(CheckpointService.ServiceName, false) is { } restore
             && cwd is { Length: > 0 })
         {
             try

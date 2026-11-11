@@ -5,6 +5,8 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Subagent;
 using Dsh.Tui;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Tests;
 

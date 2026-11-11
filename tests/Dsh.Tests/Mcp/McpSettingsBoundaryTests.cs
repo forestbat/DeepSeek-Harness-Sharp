@@ -11,6 +11,8 @@ using Dsh.Llm;
 using Dsh.Mcp;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
+using Dsh.Subprocess;
+using Dsh.Agent;
 
 namespace Dsh.Tests.Mcp;
 

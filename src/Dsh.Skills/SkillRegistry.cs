@@ -4,6 +4,8 @@ using System.Text.RegularExpressions;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Interaction;
+using Dsh.Agent;
+using Dsh.Safety;
 
 namespace Dsh.Skills;
 

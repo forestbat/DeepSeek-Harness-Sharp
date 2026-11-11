@@ -8,6 +8,10 @@ using Dsh.GitInspect;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Tui.Services;
+using Dsh.Checkpoints;
+using Dsh.Ide;
+using Dsh.Sdk;
+using Dsh.Agent;
 
 namespace Dsh.Tui;
 
@@ -99,7 +103,7 @@ public sealed partial class ChatWindow : IDisposable
         _nextPaneId = 1;
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
 
-        _unsubscribe = ctx.On<SessionEventNotification>(notification =>
+        _unsubscribe = ctx.On<Dsh.Core.SessionEventNotification>(notification =>
         {
             var target = FindPaneBySession(notification.Session);
             if (target is null)
@@ -1395,15 +1399,15 @@ public sealed partial class ChatWindow : IDisposable
             candidates.Add((time, new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time))));
         }
 
-        var service = _ctx.Get<IIdeHistoryService>(IIdeHistoryService.ServiceName, false);
+        var service = _ctx.Get<IdeHistoryService>(IdeHistoryService.ServiceName, false);
         // 默认不并进时间线(插件参数 timeline=false): IDE 自动保存很密, 会淹掉用户消息。
         if (service is null || !service.TimelineEnabled)
             return [.. candidates.Select(item => item.Candidate)];
         var workspace = InputPane.CurrentCwd();
         _ideTimelineSession = InputPane.Agent.Session.Id;
-        if (workspace is not null && service is IIdeHistoryTimeline timeline)
+        if (workspace is not null)
         {
-            foreach (var moment in timeline.QueryTimeline(workspace))
+            foreach (var moment in service.QueryTimeline(workspace))
             {
                 var token = $"ide-group|{moment.Timestamp.ToString(CultureInfo.InvariantCulture)}";
                 _ideTimelineMoments[token] = moment;
@@ -1480,7 +1484,7 @@ public sealed partial class ChatWindow : IDisposable
         }
         if (ParseIdeTarget(target) is { } ide)
         {
-            var service = _ctx.Get<IIdeHistoryService>(IIdeHistoryService.ServiceName, false);
+            var service = _ctx.Get<IdeHistoryService>(IdeHistoryService.ServiceName, false);
             var entry = service?.Query(pane.CurrentCwd(), ide.Timestamp, ide.Timestamp, ide.Path)
                 .FirstOrDefault(candidate => candidate.Provider == ide.Provider && candidate.Timestamp == ide.Timestamp);
             if (entry is null)
@@ -1544,7 +1548,7 @@ public sealed partial class ChatWindow : IDisposable
             pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide revision>\n");
             return;
         }
-        if (_ctx.Get<IIdeHistoryRestore>(IIdeHistoryService.ServiceName, false) is not { } restore
+        if (_ctx.Get<IdeHistoryService>(IdeHistoryService.ServiceName, false) is not { } restore
             || pane.CurrentCwd() is not { } workspace)
         {
             pane.AppendRaw("  Safe history restore is unavailable.\n");
@@ -1626,7 +1630,7 @@ public sealed partial class ChatWindow : IDisposable
     /** 会话截断到该消息之前并把消息回填输入区; 文件侧先按检查点恢复到 <= seq。 */
     private async Task RevertToAsync(ChatPane pane, long seq, string targetText, bool restoreFiles = true)
     {
-        var restore = _ctx.Get<ICheckpointRestore>(ICheckpointRestore.ServiceName, false);
+        var restore = _ctx.Get<CheckpointService>(CheckpointService.ServiceName, false);
         if (restoreFiles && restore is not null && pane.CurrentCwd() is { Length: > 0 } cwd)
         {
             try

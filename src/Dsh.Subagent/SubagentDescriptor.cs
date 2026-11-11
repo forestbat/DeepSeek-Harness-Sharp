@@ -1,6 +1,7 @@
-﻿using Dsh.Plugins;
+using Dsh.Plugins;
 using System.Runtime.CompilerServices;
 using Dsh.Core;
+using Dsh.Sdk;
 
 namespace Dsh.Subagent;
 

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 子进程派生与输出收集: 跨平台的 System.Diagnostics.Process 封装, 与 Dsh.Pty 的 ConPTY/原生注入变换原因不同。
+       工程名不叫 Dsh.Process: 那会让本命名空间内的 Process 解析到命名空间而不是 System.Diagnostics.Process。 -->
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
