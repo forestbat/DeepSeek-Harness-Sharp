@@ -8,10 +8,7 @@ namespace Dsh.Gui.ViewModels;
 public sealed partial class AccountPanelViewModel : ObservableObject
 {
     private const string DisclaimerText =
-        "非官方功能：本功能通过 DeepSeek 网页端接口/登录态工作，未经 DeepSeek 官方授权，接口可能在无通知的情况下失效。\n"
-        + "登录态仅保存在本机（加密），不会上传、不会写入日志。请勿在共享电脑上使用。\n"
-        + "使用第三方客户端登录可能导致账号被限流、禁言或封禁，风险自负。\n"
-        + "如需官方支持，请使用 DeepSeek 开放平台 API Key（platform.deepseek.com）。";
+        "本功能借助 DeepSeek 网页端接口/登录态工作，非官方功能。登录态仅保存在本机（加密），不会上传、不会写入日志。请勿在共享电脑上使用。\n";
 
     private readonly IAccountService? _service;
 
