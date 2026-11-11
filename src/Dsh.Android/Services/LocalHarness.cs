@@ -49,6 +49,10 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
 
     public bool Running => State == MobileConnectionState.Connected;
 
+    /** 本机 harness 的账号服务; 未启动或插件没组合出来时为 null。 */
+    public Dsh.Account.IAccountService? Account
+        => _app?.Ctx.Get<Dsh.Account.IAccountService>(Dsh.Account.IAccountService.ServiceName, false);
+
     public void Start() => _ = StartAsync();
 
     public Task<HostLease> WaitConnectedAsync(CancellationToken cancellationToken)
@@ -74,14 +78,17 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
             await EnsureSettingsTemplateAsync(home);
             ConfigureFleet(home);
             ConfigureA2a(home);
+            ConfigureAccount();
             var settings = store.Load();
+            ConfigureProfiles(home, settings);
+            var active = settings.Active;
             _app = await ConfigBoot.Compose(new HarnessOptions(
                 home,
                 files,
-                settings.Provider,
-                settings.Model,
-                settings.BaseUrl is { Length: > 0 } ? settings.BaseUrl : null,
-                ApiKey: settings.ApiKey,
+                active?.Provider,
+                active?.Model,
+                active?.BaseUrl is { Length: > 0 } activeBaseUrl ? activeBaseUrl : null,
+                ApiKey: active?.ApiKey,
                 IsTui: false));
             _tools = PhoneAgentTools.Register(_app.Ctx, new AndroidPhoneDevice(), new PhoneUiAutomation());
             _machineTools = MachineSessionTools.Register(_app.Ctx, links);
@@ -153,6 +160,58 @@ public sealed class LocalHarness(MachineStore machines, LocalAgentStore store, F
         settings.A2a = a2a;
         settings.Save(home);
     }
+
+    /**
+     * 把 App 里配好的每条模型 profile 都写进 harness 的 providers 段, 并把当前一条设为默认模型。
+     * 只传激活的那条会让 /model 在会话里看不到其余模型; 全部落盘之后切模型就是运行时的动作, 不需要重启本机 agent。
+     */
+    private static void ConfigureProfiles(HarnessHome home, LocalAgentSettings profiles)
+    {
+        if (profiles.Profiles.Count == 0)
+            return;
+        var settings = HarnessSettings.Load(home);
+        foreach (var profile in profiles.Profiles)
+        {
+            var entry = settings.Providers.TryGetValue(profile.Provider, out var existing)
+                ? existing
+                : new ProviderSettings();
+            var options = entry.Options ?? new ProviderOptions();
+            if (profile.BaseUrl.Length > 0)
+                options.BaseUrl = profile.BaseUrl;
+            if (profile.ApiKey.Length > 0)
+                options.ApiKey = profile.ApiKey;
+            entry.Options = options;
+            settings.Providers[profile.Provider] = entry;
+        }
+        if (profiles.Active is { IsComplete: true } active)
+            settings.GlobalDefaultModel = active.Route;
+        settings.Save(home);
+    }
+
+    /**
+     * 账号登录走浏览器 PKCE: 手机上"打开浏览器"是 Intent 而不是起进程, 所以把打开方式换掉。
+     * 回调仍是本机回环端口, 手机浏览器访问自己的 127.0.0.1 没有障碍。
+     */
+    private static void ConfigureAccount()
+        => Dsh.Account.BrowserLauncher.Override = url =>
+        {
+            try
+            {
+                var context = global::Android.App.Application.Context;
+                if (context is null)
+                    return false;
+                var intent = new global::Android.Content.Intent(
+                    global::Android.Content.Intent.ActionView,
+                    global::Android.Net.Uri.Parse(url));
+                intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+                context.StartActivity(intent);
+                return true;
+            }
+            catch (Exception error) when (error is global::Android.Content.ActivityNotFoundException or InvalidOperationException)
+            {
+                return false;
+            }
+        };
 
     private IReadOnlyList<HostProfile> RemoteMachines()
         => [.. machines.Load().Where(profile => profile.Transport == HostTransportKind.Ssh && profile.Host.Length > 0)];

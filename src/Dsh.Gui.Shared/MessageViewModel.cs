@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Avalonia.Layout;
 using Avalonia.Threading;
@@ -43,7 +44,8 @@ public sealed partial class MessageViewModel : ObservableObject
         Kind = kind;
         IsStreaming = streaming;
         // 工具/结果默认折叠, 只显示工具名; 其余可折叠消息在短文本时直接展开。
-        IsExpanded = Kind is not (MessageKind.Tool or MessageKind.Result) && (!IsFoldable || (!streaming && Flatten(text).Length <= PreviewChars));
+        IsExpanded = Kind is not (MessageKind.Tool or MessageKind.Result)
+            && (!IsFoldable || (!streaming && BuildPreview(text).Length <= PreviewChars));
         _buffer.Append(text);
         Text = text;
     }
@@ -53,8 +55,23 @@ public sealed partial class MessageViewModel : ObservableObject
     /** 这条记录对应的事件序号; 时间线跳转/回退/分叉都按它定位(合成出来的界面行没有序号)。 */
     public long? Seq { get; init; }
 
+    /** 产生这条记录的事件时间(epoch 毫秒); 合成行没有事件时间。 */
+    public long? Time { get; init; }
+
     /** 时间线动作只对真实事件(有序号)开放。 */
     public bool HasTimelineEntry => Seq is not null;
+
+    /** 气泡上的时刻: 今天的只显示时分, 更早的带上月日; 没有事件时间时为空。 */
+    public string Timestamp => Time is { } time
+        ? FormatTimestamp(DateTimeOffset.FromUnixTimeMilliseconds(time).ToLocalTime())
+        : "";
+
+    public bool HasTimestamp => Time is not null;
+
+    private static string FormatTimestamp(DateTimeOffset time)
+        => time.Date == DateTimeOffset.Now.Date
+            ? time.ToString("HH:mm", CultureInfo.InvariantCulture)
+            : time.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
 
     public MessageKind Kind { get; }
 
@@ -181,7 +198,14 @@ public sealed partial class MessageViewModel : ObservableObject
     public HorizontalAlignment Align => IsUser ? HorizontalAlignment.Right : HorizontalAlignment.Left;
 
     /** 思考/工具/结果/上下文/系统消息可折叠; 摊平后不超过 PreviewChars 的短消息默认展开, 流式消息构造时内容未定, 默认折叠。 */
-    public bool IsFoldable => Kind is MessageKind.Reasoning or MessageKind.Tool or MessageKind.Result or MessageKind.Context or MessageKind.System;
+    public bool IsFoldable => Kind is MessageKind.Reasoning or MessageKind.Tool or MessageKind.Result or MessageKind.Context or MessageKind.System
+        || (CompactByDefault && Kind is MessageKind.User or MessageKind.Assistant);
+
+    /**
+     * 手机端把用户消息与助手正文也纳入折叠: 窄屏上一条长回复能占掉好几屏, 展开交给双击。
+     * 桌面端宽度足够, 保持全展开, 所以这是一个显式开关而不是默认行为。
+     */
+    public static bool CompactByDefault { get; set; }
 
     public string FoldLabel => IsExpanded ? "▾ 折叠" : "▸ 展开";
 
@@ -195,12 +219,30 @@ public sealed partial class MessageViewModel : ObservableObject
                 return $"{diff.Title} (+{diff.Added} -{diff.Removed})";
             if (Kind == MessageKind.Tool)
                 return ToolName.Length > 0 ? $"{ToolName}" : "工具";
-            var flat = Flatten(Text);
-            return flat.Length <= PreviewChars ? flat : flat[..PreviewChars] + "…";
+            return _previewFor == Text ? _preview : _preview = BuildPreview(Text);
         }
     }
 
-    private static string Flatten(string text) => text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+    private string? _preview;
+    private string? _previewFor;
+
+    /**
+     * 只取开头一小段, 不整理全文。
+     * 一条长回复有几万字, 每次流式刷新都把全文替换一遍再截断, 会把回放拖成秒级。
+     */
+    private static string BuildPreview(string text)
+    {
+        var flat = new StringBuilder(PreviewChars + 1);
+        foreach (var character in text)
+        {
+            if (flat.Length > PreviewChars)
+                break;
+            if (character is not ('\r' or '\n'))
+                flat.Append(character);
+        }
+        var compact = flat.ToString().Trim();
+        return compact.Length <= PreviewChars ? compact : compact[..PreviewChars] + "…";
+    }
 
     public bool ShowActions => Kind == MessageKind.Assistant && !IsStreaming;
 

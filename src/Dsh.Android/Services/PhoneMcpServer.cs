@@ -23,8 +23,12 @@ public sealed class PhoneMcpServer(int port, string token) : IAsyncDisposable
 
     public string? Error { get; private set; }
 
-    /** 电脑端 settings.yaml 里要填的地址。 */
-    public string Endpoint => $"http://{LocalAddress()}:{Port}{PhoneMcpHttp.EndpointPath}/{Token}";
+    /** 电脑端 settings.yaml 里要填的地址: 主地址给一份, 其余地址也一并给出, 让对面挑它够得着的那条。 */
+    public string Endpoint => $"http://{LocalAddresses()[0]}:{Port}{PhoneMcpHttp.EndpointPath}/{Token}";
+
+    /** 本机所有可用的 IPv4 地址(局域网、热点、VPN、tailscale 都算); 排序只求稳定, 不判断哪种更"该用"。 */
+    public IReadOnlyList<string> Endpoints => [.. LocalAddresses()
+        .Select(address => $"http://{address}:{Port}{PhoneMcpHttp.EndpointPath}/{Token}")];
 
     public void Start()
     {
@@ -105,30 +109,30 @@ public sealed class PhoneMcpServer(int port, string token) : IAsyncDisposable
         }
     }
 
-    private static string LocalAddress()
+    /**
+     * 本机所有可用 IPv4 地址。
+     * 手机不判断哪个地址"更稳": 换网、开热点、接 VPN 都会改变可达性, 由电脑侧按自己所在网络挑,
+     * 这里只管把自己有的地址如实报出来。回环不报 —— 对外部调用方没有意义。
+     */
+    private static IReadOnlyList<string> LocalAddresses()
     {
         try
         {
-            return NetworkInterface.GetAllNetworkInterfaces()
+            var addresses = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(network => network.OperationalStatus == OperationalStatus.Up
                     && network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
                 .SelectMany(network => network.GetIPProperties().UnicastAddresses)
                 .Select(address => address.Address)
                 .Where(address => address.AddressFamily == AddressFamily.InterNetwork)
-                // 同一台手机可能同时有局域网与 tailscale(100.64/10) 地址: 优先给局域网, 电脑通常就在同一个网段。
-                .OrderBy(address => IsCarrierGradeNat(address) ? 1 : 0)
-                .FirstOrDefault()?.ToString()
-                ?? "127.0.0.1";
+                .Select(address => address.ToString())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(address => address, StringComparer.Ordinal)
+                .ToList();
+            return addresses.Count > 0 ? addresses : ["127.0.0.1"];
         }
         catch (NetworkInformationException)
         {
-            return "127.0.0.1";
+            return ["127.0.0.1"];
         }
-    }
-
-    private static bool IsCarrierGradeNat(IPAddress address)
-    {
-        var bytes = address.GetAddressBytes();
-        return bytes[0] == 100 && bytes[1] is >= 64 and <= 127;
     }
 }

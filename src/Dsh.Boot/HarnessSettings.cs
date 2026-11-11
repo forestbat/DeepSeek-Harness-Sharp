@@ -774,6 +774,10 @@ public sealed class McpServerSettings
     [YamlMember(Alias = "url")]
     public string? Url { get; set; }
 
+    /** 候选端点: 地址会随网络变化的 server(例如手机)写多条, 连接时挑第一条可达的。 */
+    [YamlMember(Alias = "urls")]
+    public List<string>? Urls { get; set; }
+
     [YamlMember(Alias = "enabled")]
     public bool Enabled { get; set; } = true;
 }

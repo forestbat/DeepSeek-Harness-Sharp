@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
@@ -14,6 +15,7 @@ public static class MachineSessionTools
 {
     public const string SessionsTool = "desktop_sessions";
     public const string SendTool = "desktop_send_message";
+    public const string StopTool = "desktop_stop_session";
 
     private const int MaxListedSessions = 40;
 
@@ -51,6 +53,20 @@ public static class MachineSessionTools
                     },
                 },
                 (args, cancellationToken) => SendAsync(machines, MobileTool.Text(args, "machine"), MobileTool.Text(args, "session"), MobileTool.Text(args, "text") ?? "", MobileTool.Text(args, "cwd"), cancellationToken))),
+            tools.Register(MobileTool.Create(StopTool,
+                "叫停某台机器上某个会话正在跑的这一轮; 会话本身保留, 之后还能继续发消息。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["additionalProperties"] = false,
+                    ["required"] = new JsonArray("machine", "session"),
+                    ["properties"] = new JsonObject
+                    {
+                        ["machine"] = new JsonObject { ["type"] = "string", ["description"] = "机器名" },
+                        ["session"] = new JsonObject { ["type"] = "string", ["description"] = "会话编号（desktop_sessions 列表里的 1、2、3）、标题片段或 id 前缀" },
+                    },
+                },
+                (args, cancellationToken) => StopAsync(machines, MobileTool.Text(args, "machine"), MobileTool.Text(args, "session"), cancellationToken))),
         ]);
     }
 
@@ -93,6 +109,18 @@ public static class MachineSessionTools
             : (await target.CreateSessionAsync(cwd is { Length: > 0 } ? cwd : "", cancellationToken).ConfigureAwait(false)).SessionId;
         await target.SendMessageAsync(session, text, cancellationToken).ConfigureAwait(false);
         return MobileToolAnswer.Success($"已发送到 {target.Name}/{SessionLabel(target, session)}");
+    }
+
+    private static async Task<MobileToolAnswer> StopAsync(Func<IReadOnlyList<IAgentMachineLink>> machines, string? machine, string? selector, CancellationToken cancellationToken)
+    {
+        if (machine is not { Length: > 0 })
+            return MobileToolAnswer.Failure("需要 machine 参数");
+        if (selector is not { Length: > 0 })
+            return MobileToolAnswer.Failure("需要 session 参数; 先用 desktop_sessions 看列表里的编号");
+        var target = Find(machines, machine);
+        var session = ResolveSession(target, selector);
+        await target.InterruptAsync(session, cancellationToken).ConfigureAwait(false);
+        return MobileToolAnswer.Success($"已叫停 {target.Name}/{SessionLabel(target, session)}");
     }
 
     private static IReadOnlyList<RemoteSessionSummary> Ordered(IAgentMachineLink link)

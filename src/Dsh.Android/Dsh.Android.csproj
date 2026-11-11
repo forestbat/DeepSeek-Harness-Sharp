@@ -51,6 +51,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Dsh.Account\Dsh.Account.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />

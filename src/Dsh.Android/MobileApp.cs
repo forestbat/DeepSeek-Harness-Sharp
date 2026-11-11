@@ -5,6 +5,7 @@ using Dsh.Android.Services;
 using Dsh.Android.ViewModels;
 using Dsh.Android.Views;
 using Dsh.Core;
+using Dsh.Gui.ViewModels;
 using Dsh.Llm;
 
 namespace Dsh.Android;
@@ -17,6 +18,8 @@ public sealed class MobileApp : Avalonia.Application
     {
         // 手机端不组合插件宿主, Dsh.Core 的序列化上下文不会由插件目录注册; 会话事件解析要用同一份源生成上下文。
         DshJson.RegisterResolver(DshCoreJsonContext.Default);
+        // 窄屏上一条长回复能占掉好几屏, 所以消息正文默认折叠, 双击展开。
+        MessageViewModel.CompactByDefault = true;
         AvaloniaXamlLoader.Load(this);
     }
 

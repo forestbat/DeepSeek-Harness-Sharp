@@ -9,6 +9,43 @@ namespace Dsh.Tests;
 [Collection(SerialProcessCollection.Name)]
 public sealed class HostSessionSnapshotTests
 {
+    /**
+     * 手机只取尾部: 历史再长, 下载到的事件数也不超过请求的窗口。
+     * 以前调用方一律拿整段, 几千条事件在手机上直接撑爆进程 —— 这条守住"只取尾部"的契约。
+     */
+    [Fact]
+    public async Task SnapshotTail_DownloadsOnlyTheWindowEvenWhenHistoryIsMuchLonger()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hst", Ct);
+        var reader = await host.ConnectAsync("tail-reader", Ct);
+        var session = host.Environment.Agent.Session;
+        var expected = FillOversizedHistory(session);
+        const int window = 120;
+
+        var snapshot = await reader.GetSessionSnapshotAsync(session.Id.Value, window, Ct);
+
+        Assert.Equal(window, snapshot.Events.Count);
+        Assert.Equal(expected, snapshot.Events[^1].Seq + 1);
+        // 尾部之外的事件一条都不该出现在内存里。
+        Assert.Equal(expected - window, snapshot.Events[0].Seq);
+    }
+
+    /** 历史比窗口还短时, 尾部窗口就是整段, 不能凭空补空条目。 */
+    [Fact]
+    public async Task SnapshotTail_ReturnsEverythingWhenHistoryIsShorterThanTheWindow()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hss", Ct);
+        var reader = await host.ConnectAsync("short-runner", Ct);
+        var session = host.Environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("只有一条")), new SurfaceOp.Append());
+
+        var snapshot = await reader.GetSessionSnapshotAsync(session.Id.Value, tailCount: 500, Ct);
+
+        Assert.Equal(snapshot.Events.Count, (int)session.Seq);
+        Assert.Equal(0, snapshot.Events[0].Seq);
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /** 一段远超单页预算的历史。 */
@@ -119,11 +156,65 @@ public sealed class HostSessionSnapshotTests
         }
     }
 
+    /**
+     * 从快照末尾之后订阅, 只该收到之后的新事件, 不能把整段历史再回放一遍。
+     * 手机以前从 0 订阅, 17MB 的会话就是几十万条事件挤在同一条流里 —— 界面卡死与"一直下滑到不了底"都来自这里。
+     */
+    [Fact]
+    public async Task SubscribeAfterTailSnapshot_ReplaysNewEventsOnly()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hsr", Ct);
+        var reader = await host.ConnectAsync("tail-subscriber", Ct);
+        var session = host.Environment.Agent.Session;
+        FillOversizedHistory(session);
+
+        var snapshot = await reader.GetSessionSnapshotAsync(session.Id.Value, tailCount: 100, Ct);
+        var fromSeq = snapshot.Events[^1].Seq + 1;
+
+        // 只发一条新事件, 订阅就必须只回放这一条。
+        session.Append(new TurnStartPayload(2));
+        var expectedSeq = session.Seq - 1;
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        await using var stream = reader.SubscribeAsync(session.Id.Value, fromSeq, stop.Token).GetAsyncEnumerator(stop.Token);
+        Assert.True(await stream.MoveNextAsync());
+        Assert.Equal(expectedSeq, stream.Current.Event?.Seq);
+        Assert.Equal(fromSeq, snapshot.Events[^1].Seq + 1);
+    }
+
     private static async Task<RemoteSessionSnapshot> SnapshotPageAsync(RemoteHostClient client, string sessionId, long fromEvent, int pageBytes)
     {
         var request = new RemoteSessionSnapshotRequest(sessionId, fromEvent, pageBytes);
         var parameters = JsonSerializer.SerializeToElement(request, HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest);
         var result = await client.RequestAsync(HostProtocol.MethodSessionSnapshot, parameters, Ct);
         return JsonSerializer.Deserialize(result, HostProtocolJsonContext.Default.RemoteSessionSnapshot)!;
+    }
+
+    /**
+     * 上滑取更早的消息要在一屏之内返回, 否则用户每次滑到头都要等。
+     * 这里把一次增量取数的耗时和"取 100 条到底花了多长时间"钉住, 便于定位是服务端重建历史慢还是网络慢。
+     */
+    [Fact]
+    public async Task SnapshotChunk_FetchingAnOlderChunkStaysFastOnALongHistory()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hsf", Ct);
+        var reader = await host.ConnectAsync("chunk-reader", Ct);
+        var session = host.Environment.Agent.Session;
+        FillOversizedHistory(session);
+        var total = (int)session.Seq;
+
+        // 连取三次同一位置: 服务端若每次都重建整段历史, 三次都会一样慢, 与"页大小"无关。
+        var costs = new List<long>();
+        for (var round = 0; round < 3; round += 1)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var page = await reader.GetSessionSnapshotFromAsync(session.Id.Value, total / 2, 512 * 1024, Ct);
+            clock.Stop();
+            costs.Add(clock.ElapsedMilliseconds);
+            Assert.NotEmpty(page.Events);
+        }
+        TestContext.Current.SendDiagnosticMessage($"single page fetch (512KB) x3: {string.Join(", ", costs)}ms total={total}");
+
+        Assert.True(costs.Max() < 500, $"单次取一页耗时 {string.Join(", ", costs)}ms, 超过一屏内返回的预算");
     }
 }

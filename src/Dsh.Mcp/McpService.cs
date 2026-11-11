@@ -1,5 +1,4 @@
 using Dsh.Boot;
-using Dsh.Core;
 using Dsh.Runtime;
 using ModelContextProtocol.Client;
 using Dsh.Subprocess;
@@ -13,8 +12,18 @@ public sealed record McpServerConfig(
     string Transport,
     string? Command = null,
     IReadOnlyList<string>? Arguments = null,
-    string? Url = null)
+    string? Url = null,
+    IReadOnlyList<string>? Urls = null)
 {
+    /**
+     * 要尝试的端点顺序: Urls 在前, Url 兜底, 去重后保持原顺序。
+     * 手机这类端点随网络变化的 server 在配置里写多条地址, 连接时挑第一条可达的, 换网后不必改配置。
+     */
+    public IReadOnlyList<string> Endpoints => [.. (Urls ?? [])
+        .Concat(Url is { Length: > 0 } single ? [single] : Array.Empty<string>())
+        .Where(url => url.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)];
+
     public static List<McpServerConfig> FromSettings(HarnessSettings settings)
         => settings.McpServers
             .Where(entry => entry.Value.Enabled)
@@ -26,7 +35,7 @@ public sealed record McpServerConfig(
         var commandParts = settings.Command ?? [];
         var command = commandParts.Count > 0 ? commandParts[0] : null;
         var arguments = commandParts.Skip(1).Concat(settings.Args ?? []).ToList();
-        return new McpServerConfig(name, settings.Transport ?? "stdio", command, arguments, settings.Url);
+        return new McpServerConfig(name, settings.Transport ?? "stdio", command, arguments, settings.Url, settings.Urls);
     }
 }
 
@@ -248,14 +257,46 @@ public sealed class McpService(
 
         if (server.Transport is "streamable-http" or "sse")
         {
-            if (string.IsNullOrWhiteSpace(server.Url))
-                throw new ArgumentException($"mcp server \"{server.Name}\" requires a url for {server.Transport} transport");
+            // 多条候选地址时挑第一条能握手的: 手机换网后旧地址会失效, 配置里同时留着新旧两条就能自愈。
+            var endpoint = SelectEndpointAsync(server, signal).GetAwaiter().GetResult();
             return new HttpClientTransport(
-                new HttpClientTransportOptions { Name = server.Name, Endpoint = new Uri(server.Url) },
+                new HttpClientTransportOptions { Name = server.Name, Endpoint = endpoint },
                 new HttpClient(OutboundProxy.FromContext(Ctx).CreateHandler()), ownsHttpClient: true);
         }
 
         throw new ArgumentException($"mcp server \"{server.Name}\" has unsupported transport \"{server.Transport}\"");
+    }
+
+    /**
+     * 候选地址里挑第一条连得上的。
+     * 只做 TCP 可达性探测而不发 MCP 请求: 真正的握手交给 HttpClientTransport,
+     * 这里只负责把明显不通的地址排掉, 免得每次重连都卡在一个已经失效的 IP 上。
+     */
+    private static async Task<Uri> SelectEndpointAsync(McpServerConfig server, CancellationToken signal)
+    {
+        var endpoints = server.Endpoints;
+        if (endpoints.Count == 0)
+            throw new ArgumentException($"mcp server \"{server.Name}\" requires a url for {server.Transport} transport");
+        if (endpoints.Count == 1)
+            return new Uri(endpoints[0]);
+        foreach (var candidate in endpoints)
+        {
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+                continue;
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(signal);
+                timeout.CancelAfter(TimeSpan.FromSeconds(2));
+                await client.ConnectAsync(uri.Host, uri.Port == -1 ? 80 : uri.Port, timeout.Token).ConfigureAwait(false);
+                return uri;
+            }
+            catch (Exception error) when (error is System.Net.Sockets.SocketException or OperationCanceledException)
+            {
+            }
+        }
+        // 全都不通时退回第一条: 让连接失败报在原来的位置上, 而不是报一个"没有地址"的怪错。
+        return new Uri(endpoints[0]);
     }
 
     private sealed record Connection(
