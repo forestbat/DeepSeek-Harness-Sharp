@@ -156,7 +156,7 @@ public sealed class DeepSeekAccountRouteTests
         Assert.All(chats, chat => Assert.Equal("account-token", chat.Header(LlmCredential.DshAuthTokenHeader)));
     }
 
-    /** 用户配了自己的 provider: 兜底不介入, 会话仍用用户的路由。 */
+    /** 用户配了自己的 provider: 兜底不介入, 也不往 settings.yaml 里写 deepseek-account。 */
     [Fact]
     public async Task ConfiguredProvider_KeepsTheFallbackOut()
     {
@@ -173,6 +173,44 @@ public sealed class DeepSeekAccountRouteTests
         var chats = endpoint.Requests.Where(request => request.Path.EndsWith("/chat/completions", StringComparison.Ordinal)).ToList();
         Assert.NotEmpty(chats);
         Assert.All(chats, chat => Assert.Equal("Bearer sk-test", chat.Header("Authorization")));
+        var settings = HarnessSettings.Load(home.Home);
+        Assert.DoesNotContain("deepseek-account", settings.Providers.Keys);
+    }
+
+    /** 兜底路由写回 settings.yaml: 下次启动直接按配置注册, 不必再为"用哪个模型"问一次端点。 */
+    [Fact]
+    public async Task ZeroConfig_PersistsTheRouteForTheNextStart()
+    {
+        await using var endpoint = await AccountEndpoint.StartAsync();
+        using var home = new TestHome($"""
+            plugins:
+              "@deepseek-ai/dsh-account":
+                accountEnabled: true
+                platformOrigin: {endpoint.BaseUrl}
+                inferenceOrigin: {endpoint.BaseUrl}
+                allowLoopbackHttp: true
+            """, signedIn: true);
+        using (var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime))
+        {
+            await using var fixture = await AgentFixture.StartAsync(app.Ctx);
+            Assert.Equal("deepseek-flash", await fixture.RunTurnAsync(TestContext.Current.CancellationToken));
+        }
+
+        var settings = HarnessSettings.Load(home.Home);
+        var persisted = Assert.Single(settings.Providers, entry => entry.Key == "deepseek-account").Value;
+        Assert.Equal(ProviderTypes.DeepSeek, persisted.Type);
+        Assert.Equal(endpoint.BaseUrl, persisted.Options!.BaseUrl);
+        Assert.Equal(["deepseek-flash", "deepseek-v4-pro"], persisted.Models.Keys.OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal("deepseek-account/deepseek-flash", settings.GlobalDefaultModel);
+        Assert.Null(persisted.Options.ApiKey);
+
+        // 第二次启动: 端点清单不再被问, 配置直接生效。
+        endpoint.Requests.Clear();
+        using var restarted = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
+        var llm = restarted.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
+        Assert.Contains(llm.ListProviders(), provider => provider.Id == "deepseek-account");
+        Assert.Equal(["deepseek-flash", "deepseek-v4-pro"], llm.ListModels("deepseek-account").Select(model => model.Id).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.DoesNotContain(endpoint.Requests, request => request.Path.EndsWith("/models", StringComparison.Ordinal));
     }
 
     private static async Task<(string Text, LlmFailure? Failure)> StreamAsync(LlmRuntime llm, string model)

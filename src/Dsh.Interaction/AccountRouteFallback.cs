@@ -1,4 +1,5 @@
 using Dsh.Agent;
+using Dsh.Boot;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
@@ -23,6 +24,7 @@ public sealed class AccountRouteFallback : IDisposable
     private readonly Context _ctx;
     private readonly LlmRuntime _llm;
     private readonly LlmAdapterFactoryRegistry _factories;
+    private readonly HarnessHome _home;
     private readonly string? _explicitProvider;
     private readonly Func<bool> _unsubscribeRequest;
     private IDisposable? _handle;
@@ -32,22 +34,24 @@ public sealed class AccountRouteFallback : IDisposable
         Context ctx,
         LlmRuntime llm,
         LlmAdapterFactoryRegistry factories,
+        HarnessHome home,
         string? explicitProvider)
     {
         _ctx = ctx;
         _llm = llm;
         _factories = factories;
+        _home = home;
         _explicitProvider = explicitProvider;
         _unsubscribeRequest = ctx.OnWaterfall<AgentRequestNotification>(SupplyDefaultRouteAsync, new EventOptions { Global = true });
     }
 
-    public static AccountRouteFallback? Register(Context ctx, string? explicitProvider)
+    public static AccountRouteFallback? Register(Context ctx, HarnessHome home, string? explicitProvider)
     {
         var llm = ctx.Get<LlmRuntime>(LlmRuntime.ServiceName, false);
         var factories = ctx.Get<LlmAdapterFactoryRegistry>(LlmAdapterFactoryRegistry.ServiceName, false);
         if (llm is null || factories is null)
             return null;
-        return new AccountRouteFallback(ctx, llm, factories, explicitProvider);
+        return new AccountRouteFallback(ctx, llm, factories, home, explicitProvider);
     }
 
     /** 用户自己配了 provider, 或有 CLI 指定的 provider: 一律不兜底。 */
@@ -103,9 +107,43 @@ public sealed class AccountRouteFallback : IDisposable
             ApiStyle: null);
         _handle = _llm.RegisterAdapter([ProviderId], factory!.Create(provider));
         _defaultModel = ids[0];
+        Persist(origin, ids);
         _ctx.LoggerFor("llm").Info("%s",
             $"no provider with a usable credential is configured; requests default to the DeepSeek account as \"{ProviderId}\"");
         return _defaultModel;
+    }
+
+    /**
+     * 把兜底路由写进 settings.yaml: 下次启动直接按配置注册, 不必再为"用哪个模型"问一次端点。
+     * 只在这条记录不存在或模型清单变了时写, 不动用户自己的 provider 与已有的其它设置。
+     */
+    private void Persist(Uri origin, IReadOnlyList<string> ids)
+    {
+        try
+        {
+            var settings = HarnessSettings.Load(_home);
+            var existing = settings.Providers.GetValueOrDefault(ProviderId);
+            var models = existing?.Models ?? [];
+            var sameModels = models.Count == ids.Count && ids.All(id => models.ContainsKey(id));
+            if (existing is not null && sameModels)
+                return;
+            var merged = new Dictionary<string, ProviderModelSettings>(StringComparer.Ordinal);
+            foreach (var id in ids)
+                merged[id] = models.GetValueOrDefault(id) ?? new ProviderModelSettings();
+            settings.Providers[ProviderId] = new ProviderSettings
+            {
+                Type = ProviderTypes.DeepSeek,
+                Options = new ProviderOptions { BaseUrl = origin.GetLeftPart(UriPartial.Authority) },
+                Models = merged,
+            };
+            settings.GlobalDefaultModel ??= $"{ProviderId}/{ids[0]}";
+            settings.Save(_home);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // 写不进去只影响下次启动要重新问一次端点, 不改变本次会话已经生效的路由。
+            _ctx.LoggerFor("llm").Warn("%s", $"failed to persist the DeepSeek account route: {error.Message}");
+        }
     }
 
     /** 端点清单只在这里问一次: 账号当前能用哪些模型, 由服务端说了算。 */

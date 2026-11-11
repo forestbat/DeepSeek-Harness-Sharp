@@ -53,7 +53,7 @@ public sealed class ProviderRegistrar : IDisposable
         if (llm is null || factories is null || credentials is null)
             return null;
         var registrar = new ProviderRegistrar(ctx, options, HarnessSettings.Load(options.Home), factories,
-            AccountRouteFallback.Register(ctx, options.Provider));
+            AccountRouteFallback.Register(ctx, options.Home, options.Provider));
         registrar.Sync();
         return registrar;
     }
