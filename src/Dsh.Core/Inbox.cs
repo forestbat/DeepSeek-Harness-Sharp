@@ -15,22 +15,57 @@ public sealed class InboxNotifications
     public Action<UserMessage, int>? Claimed { get; init; }
 }
 
-public sealed class Inbox
+public sealed class Inbox : IDisposable
 {
     private readonly Session _session;
     private readonly InboxNotifications _notifications;
     private readonly List<UserMessage> _nextTurn = [];
     private readonly List<UserMessage> _nextStep = [];
+    private readonly Action<Session, long> _onTruncated;
 
     public Inbox(Session session, InboxNotifications notifications)
     {
         _session = session;
         _notifications = notifications;
-        foreach (var sessionEvent in session.OwnEvents())
+        Rebuild();
+        _onTruncated = (_, _) => RebuildAfterTruncation();
+        session.Truncated += _onTruncated;
+    }
+
+    public void Dispose() => _session.Truncated -= _onTruncated;
+
+    private void Rebuild()
+    {
+        _nextTurn.Clear();
+        _nextStep.Clear();
+        foreach (var sessionEvent in _session.OwnEvents())
         {
-            if (sessionEvent.Data is not InboxSplicePayload splice)
-                continue;
-            Apply(splice);
+            if (sessionEvent.Data is InboxSplicePayload splice)
+                Apply(splice);
+        }
+    }
+
+    /**
+     * 撤回把日志改短时要重放, 否则内存与日志分叉; 但**单靠重放不够**:
+     * 发一条消息的日志顺序是「入队 → TurnStart → 取走 → 用户消息」, 撤回截到 TurnStart 之前,
+     * 于是保住了「入队」却丢掉了「取走」—— 按日志重放会把已经发出去的那条重新当成待发。
+     * 判据是截断前的待发集合: 重建后才出现、截断前不在待发里的消息, 只可能来自被撤回的回合。
+     * 找到之后要把清理写回日志, 否则下次从磁盘恢复(新 Inbox 没有截断前快照)又会复活。
+     */
+    private void RebuildAfterTruncation()
+    {
+        var pendingBefore = _nextTurn.Concat(_nextStep).Select(message => message.Id).ToHashSet();
+        Rebuild();
+        PurgeStale(InboxTargets.NextTurn, _nextTurn, pendingBefore);
+        PurgeStale(InboxTargets.NextStep, _nextStep, pendingBefore);
+    }
+
+    private void PurgeStale(string target, List<UserMessage> inbox, HashSet<MessageId> pendingBefore)
+    {
+        for (var index = inbox.Count - 1; index >= 0; index--)
+        {
+            if (!pendingBefore.Contains(inbox[index].Id))
+                Splice(target, index, 1, []);
         }
     }
 
