@@ -1,9 +1,9 @@
 using Dsh.Boot;
+using Dsh.Checkpoints.Contracts;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Plugins;
 using Dsh.Runtime;
-using Dsh.Ide;
 
 [assembly: DshPlugin(Dsh.Checkpoints.Plugin.Checkpoints)]
 
@@ -23,8 +23,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         var paths = DshPaths.FromContext(ctx) ?? DshPaths.Default(HarnessHome.Resolve().Root);
         var service = new CheckpointService(ctx, CheckpointPolicy.Resolve(config), paths.CheckpointsPath);
-        ctx.Provide(CheckpointService.RestoreServiceName, service);
-        ctx.Provide(IEditorCheckpointReview.ServiceName, service);
+        ctx.Provide(CheckpointReviewServices.Snapshot, (CheckpointSnapshotLookup)service.FindSnapshot);
         return new DisposableBundle(service, CheckpointCommand.Register(ctx, service));
     }
 

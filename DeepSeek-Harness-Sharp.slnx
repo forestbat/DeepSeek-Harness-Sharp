@@ -17,6 +17,7 @@
         <Project Path="src/Dsh.Agent/Dsh.Agent.csproj" />
 <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
     <Project Path="src/Dsh.Checkpoints/Dsh.Checkpoints.csproj" />
+    <Project Path="src/Dsh.Checkpoints.Contracts/Dsh.Checkpoints.Contracts.csproj" />
     <Project Path="src/Dsh.Compaction/Dsh.Compaction.csproj" />
     <Project Path="src/Dsh.Core/Dsh.Core.csproj" />
     <Project Path="src/Dsh.CSharpRepl/Dsh.CSharpRepl.csproj" />

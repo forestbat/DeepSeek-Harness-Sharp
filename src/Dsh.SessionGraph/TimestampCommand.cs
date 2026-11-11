@@ -62,7 +62,7 @@ public static class TimestampCommand
         var session = invocation.Agent.Session;
         var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
         var cwd = session.Header.Cwd;
-        if (ctx.Get<CheckpointService>(CheckpointService.RestoreServiceName, false) is { } restore
+        if (ctx.Get<CheckpointService>(CheckpointService.ServiceName, false) is { } restore
             && cwd is { Length: > 0 })
         {
             try

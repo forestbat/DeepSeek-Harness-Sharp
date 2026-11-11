@@ -1,4 +1,5 @@
 using Dsh.Checkpoints;
+using Dsh.Checkpoints.Contracts;
 using Dsh.Core;
 using Dsh.Ide.Surfaces;
 using Dsh.Llm;
@@ -18,7 +19,7 @@ public sealed class EditorReviewTests
         var ctx = new Context();
         var sessions = new SessionStore(ctx);
         using var checkpoints = new CheckpointService(ctx, CheckpointPolicy.Resolve(null), Path.Combine(repo.Sandbox, "checkpoints"));
-        ctx.Provide(IEditorCheckpointReview.ServiceName, checkpoints);
+        ctx.Provide(CheckpointReviewServices.Snapshot, (CheckpointSnapshotLookup)checkpoints.FindSnapshot);
         var own = CreateSession(sessions, repo.Root);
         AppendResult(own);
         await WaitForPointAsync(checkpoints, repo.Root, own.Id.Value);

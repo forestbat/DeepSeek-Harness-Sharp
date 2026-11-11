@@ -1,3 +1,4 @@
+using Dsh.Checkpoints.Contracts;
 using Dsh.Core;
 using Dsh.GitInspect;
 using Dsh.Runtime;
@@ -19,9 +20,9 @@ public sealed class EditorReviewService(Context ctx, string snapshotRoot)
 
     public Task<IReadOnlyList<EditorReviewFile>> PrepareCheckpointAsync(Session session, string workspace, long beforeSeq, CancellationToken cancellationToken)
     {
-        var checkpoints = ctx.Get<IEditorCheckpointReview>(IEditorCheckpointReview.ServiceName, false)
+        var lookup = ctx.Get<CheckpointSnapshotLookup>(CheckpointReviewServices.Snapshot, false)
             ?? throw new InvalidOperationException("The checkpoints plugin is not available.");
-        var snapshot = checkpoints.FindSnapshot(session.Header.Cwd ?? workspace, session.Id.Value, beforeSeq)
+        var snapshot = lookup(session.Header.Cwd ?? workspace, session.Id.Value, beforeSeq)
             ?? throw new InvalidOperationException("No checkpoint exists before the selected turn.");
         return PrepareAsync(workspace, snapshot.WorkspaceRoot, snapshot.Revision, snapshot.GitDirectory, cancellationToken);
     }

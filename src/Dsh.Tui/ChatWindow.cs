@@ -1630,7 +1630,7 @@ public sealed partial class ChatWindow : IDisposable
     /** 会话截断到该消息之前并把消息回填输入区; 文件侧先按检查点恢复到 <= seq。 */
     private async Task RevertToAsync(ChatPane pane, long seq, string targetText, bool restoreFiles = true)
     {
-        var restore = _ctx.Get<CheckpointService>(CheckpointService.RestoreServiceName, false);
+        var restore = _ctx.Get<CheckpointService>(CheckpointService.ServiceName, false);
         if (restoreFiles && restore is not null && pane.CurrentCwd() is { Length: > 0 } cwd)
         {
             try

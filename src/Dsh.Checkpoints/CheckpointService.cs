@@ -1,11 +1,11 @@
 using System.Threading.Channels;
 using Dsh.Boot;
+using Dsh.Checkpoints.Contracts;
 using Dsh.Core;
 using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Persistence;
-using Dsh.Ide;
 
 namespace Dsh.Checkpoints;
 
@@ -36,12 +36,9 @@ public sealed record CheckpointPolicy
     }
 }
 
-public sealed class CheckpointService : Service, IEditorCheckpointReview, IDisposable
+public sealed class CheckpointService : Service, IDisposable
 {
     public const string ServiceName = "checkpoints";
-
-    /** 只取 revert 文件侧的消费方(TUI 的 revert、/timestamp)按这个名字解析本服务。 */
-    public const string RestoreServiceName = "checkpointRestore";
 
     private sealed record ProjectRepo(ShadowGit Git, CheckpointLog Log);
 
@@ -75,7 +72,7 @@ public sealed class CheckpointService : Service, IEditorCheckpointReview, IDispo
     public IReadOnlyList<CheckpointPoint> PointsFor(string cwd)
         => RepoForOrNull(cwd)?.Log.Points ?? [];
 
-    public EditorCheckpointSnapshot? FindSnapshot(string workspaceRoot, string sessionId, long beforeSeq)
+    public CheckpointSnapshot? FindSnapshot(string workspaceRoot, string sessionId, long beforeSeq)
     {
         var repo = RepoForOrNull(workspaceRoot);
         var point = repo?.Log.Points.LastOrDefault(point => point.Session == sessionId && point.Seq <= beforeSeq);

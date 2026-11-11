@@ -11,7 +11,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
-    <ProjectReference Include="..\Dsh.Ide\Dsh.Ide.csproj" />
+    <ProjectReference Include="..\Dsh.Checkpoints.Contracts\Dsh.Checkpoints.Contracts.csproj" />
+
     <ProjectReference Include="..\Dsh.Persistence\Dsh.Persistence.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
     <ProjectReference Include="..\Dsh.Interaction\Dsh.Interaction.csproj" />
