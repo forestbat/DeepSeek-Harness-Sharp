@@ -136,8 +136,10 @@ public sealed class ReasoningEffortProbeTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (request.Method == HttpMethod.Post)
+            {
+                LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
                 Interlocked.Increment(ref _posts);
-            LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            }
             return respond(request);
         }
     }
