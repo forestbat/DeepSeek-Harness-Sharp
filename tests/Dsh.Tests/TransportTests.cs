@@ -255,6 +255,28 @@ public sealed class JsonRpcPeerTests
         await Assert.ThrowsAnyAsync<Exception>(async () => await pending);
     }
 
+    [Theory(Timeout = 15000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SendsAfterRemoteEof_FailWithoutWaitingForAResponse(bool notification)
+    {
+        var signal = TestContext.Current.CancellationToken;
+        await using var fixture = await DuplexFixture.CreateAsync(signal);
+        var closed = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Client.Closed += failure => closed.TrySetResult(failure);
+
+        fixture.HalfCloseServer();
+        Assert.Null(await closed.Task.WaitAsync(TimeSpan.FromSeconds(5), signal));
+
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            if (notification)
+                await fixture.Client.NotifyAsync("after-eof", cancellationToken: signal).WaitAsync(TimeSpan.FromSeconds(5), signal);
+            else
+                await fixture.Client.RequestAsync("after-eof", cancellationToken: signal).WaitAsync(TimeSpan.FromSeconds(5), signal);
+        });
+    }
+
     [Fact]
     public async Task ClosingPeer_DoesNotWaitForAHandlerIgnoringCancellation()
     {
@@ -365,6 +387,8 @@ public sealed class JsonRpcPeerTests
         public JsonRpcPeer Client { get; }
 
         public JsonRpcPeer Server { get; }
+
+        public void HalfCloseServer() => _server.Client.Shutdown(SocketShutdown.Send);
 
         public static async Task<DuplexFixture> CreateAsync(CancellationToken cancellationToken, bool startServer = true, int? maxFrameBytes = null)
         {
