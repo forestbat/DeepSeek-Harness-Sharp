@@ -16,6 +16,13 @@
     <!-- 侧载安装(文件管理器点开 APK)不会走 fast deployment, 程序集必须打进 APK 才能独立启动。 -->
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+    <!--
+      Android SDK 只在 Debug 配置下把 UseInterpreter 设成 true(见 Microsoft.Android.Sdk.DefaultProperties.targets),
+      而桌面 Debug 一直是 JIT —— 平台默认值不同, 不是硬件差异。
+      历史加载的热路径(JSON 解析 + zstd 解压)在解释执行下: 1.6MB 事件页要 1.7 秒, 桌面同一份数据 26 毫秒。
+      这里关掉解释器, 让 Debug 构建也走 JIT, 调试时的耗时才代表真实体验。
+    -->
+    <UseInterpreter>false</UseInterpreter>
   </PropertyGroup>
 
   <PropertyGroup>

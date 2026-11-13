@@ -28,6 +28,23 @@ public static class SessionEventCodec
 
     private static readonly ConcurrentDictionary<string, Registration> Registrations = new(StringComparer.Ordinal);
 
+    /** ref struct 不能作为泛型实参, 所以这里用专门的委托类型而不是 Action<...>。 */
+    private delegate void PayloadReader(ref Utf8JsonReader reader, JsonSerializerOptions options, PayloadSlot slot);
+
+    /**
+     * 类型 -> 直接从 reader 读 payload 的分支。
+     * data 的结构由 type 决定, 所以只能先读到 type; 而"读完 type 再把 data 建成 JsonElement 再去反序列化"
+     * 等于把同一段数据解析两遍 —— 这条表让常见类型只解析一遍。
+     * 注册表之外的(含插件自定义与旧版本未知类型)仍走 JsonElement 路径。
+     */
+    private static readonly ConcurrentDictionary<string, PayloadReader> Readers = new(StringComparer.Ordinal);
+
+    /** 直接读取的结果容器: 用可变槽位把 payload 带出 ref struct 调用。 */
+    public sealed class PayloadSlot
+    {
+        public SessionEventPayload? Value { get; set; }
+    }
+
     static SessionEventCodec()
     {
         Register<TurnStartPayload>(SessionEventTypes.TurnStart);
@@ -56,12 +73,19 @@ public static class SessionEventCodec
             (payload, writer, options) => DshJson.Serialize(writer, payload.Message));
     }
 
+    /** 常见 payload 既能从 reader 直接读, 也保留 JsonElement 路径给未知/插件类型。 */
     public static void Register<T>(string type, bool ignorable = false) where T : SessionEventPayload
-        => Register<T>(type,
+    {
+        Register<T>(type,
             (element, options) => DshJson.Deserialize<T>(element)
                 ?? throw new JsonException($"invalid \"{type}\" payload"),
             static (payload, writer, options) => DshJson.Serialize(writer, payload),
             ignorable);
+        // payload 类型由 DshJson 的全局解析器提供; 传入的 options 只覆盖会话外壳那几个类型。
+        Readers[type] = static (ref Utf8JsonReader reader, JsonSerializerOptions options, PayloadSlot slot) =>
+            slot.Value = JsonSerializer.Deserialize(ref reader, DshJson.Info<T>())
+                ?? throw new JsonException("invalid session payload");
+    }
 
     /**
      * ignorable: 该类型的事件写盘时带 `ignorable:true`, 不认识该类型的版本读到时跳过它而不是拒开整份日志。
@@ -81,13 +105,27 @@ public static class SessionEventCodec
             ignorable);
     }
 
-    public static bool IsRegistered(string type) => Registrations.ContainsKey(type);
+    public static bool IsRegistered(string type) => Registrations.ContainsKey(type);    public static bool IsIgnorable(string type) => Registrations.TryGetValue(type, out var registration) && registration.Ignorable;
 
-    public static bool IsIgnorable(string type) => Registrations.TryGetValue(type, out var registration) && registration.Ignorable;
+    /**
+     * 直接从 reader 读 data。返回 false 表示这个类型没有直读分支(插件自定义类型等), 调用方需退回 JsonElement 路径。
+     * reader 必须正停在 data 的值起始处。
+     */
+    public static bool TryReadDirectly(string type, ref Utf8JsonReader reader, JsonSerializerOptions options, out SessionEventPayload payload)
+    {
+        if (Readers.TryGetValue(type, out var read))
+        {
+            var slot = new PayloadSlot();
+            read(ref reader, options, slot);
+            payload = slot.Value ?? throw new JsonException($"invalid \"{type}\" payload");
+            return true;
+        }
+        payload = null!;
+        return false;
+    }
 
     public static SessionEventPayload ReadPayload(string type, JsonElement data, bool ignorable, JsonSerializerOptions options)
-    {
-        if (Registrations.TryGetValue(type, out var registration))
+    {        if (Registrations.TryGetValue(type, out var registration))
             return registration.Reader(data, options);
         if (ignorable)
             return new UnknownSessionEventPayload(type, data.Clone());
@@ -109,28 +147,90 @@ public static class SessionEventCodec
 
 public sealed class SessionEventJsonConverter : JsonConverter<SessionEvent>
 {
-    private static readonly HashSet<string> EnvelopeKeys = ["type", "seq", "time", "data", "surfaceOp", "sourceEventSeqs", "ignorable"];
-
     public override SessionEvent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        using var doc = JsonDocument.ParseValue(ref reader);
-        var root = doc.RootElement;
-        foreach (var property in root.EnumerateObject())
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("session event must be an object");
+        string? type = null;
+        long seq = -1;
+        long time = 0;
+        var ignorable = false;
+        JsonElement data = default;
+        var hasData = false;
+        SessionEventPayload? payload = null;
+        var hasPayload = false;
+        SurfaceOp? surfaceOp = null;
+        IReadOnlyList<long>? sourceEventSeqs = null;
+        while (reader.Read())
         {
-            if (!EnvelopeKeys.Contains(property.Name))
+            if (reader.TokenType == JsonTokenType.EndObject)
+                break;
+            if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("session event has an invalid event envelope");
+            if (reader.ValueTextEquals("type"))
+            {
+                reader.Read();
+                type = reader.GetString();
+                continue;
+            }
+            if (reader.ValueTextEquals("seq"))
+            {
+                reader.Read();
+                seq = reader.GetInt64();
+                continue;
+            }
+            if (reader.ValueTextEquals("time"))
+            {
+                reader.Read();
+                time = reader.GetInt64();
+                continue;
+            }
+            if (reader.ValueTextEquals("ignorable"))
+            {
+                reader.Read();
+                ignorable = reader.GetBoolean();
+                continue;
+            }
+            if (reader.ValueTextEquals("surfaceOp"))
+            {
+                reader.Read();
+                surfaceOp = DshJson.Deserialize<SurfaceOp>(JsonElement.ParseValue(ref reader));
+                continue;
+            }
+            if (reader.ValueTextEquals("sourceEventSeqs"))
+            {
+                reader.Read();
+                sourceEventSeqs = DshJson.Deserialize<IReadOnlyList<long>>(JsonElement.ParseValue(ref reader));
+                continue;
+            }
+            if (reader.ValueTextEquals("data"))
+            {
+                reader.Read();
+                // type 已在前就直读, 免掉"建 JsonElement 再反序列化"的第二遍解析;
+                // data 排在 type 之前(旧日志或手写 JSON 都可能这样)时无法分派, 只能先留住。
+                if (type is not null && SessionEventCodec.TryReadDirectly(type, ref reader, options, out var direct))
+                {
+                    payload = direct;
+                    hasPayload = true;
+                }
+                else
+                {
+                    data = JsonElement.ParseValue(ref reader);
+                    hasData = true;
+                }
+                continue;
+            }
+            throw new JsonException("session event has an invalid event envelope");
         }
-        var type = root.GetProperty("type").GetString() ?? throw new JsonException("session event missing type");
+        if (type is null)
+            throw new JsonException("session event missing type");
         if (type == "request/header-delta")
             throw new JsonException("session event uses unsupported legacy request/header-delta format");
-        var seq = root.GetProperty("seq").GetInt64();
-        var time = root.GetProperty("time").GetInt64();
-        if (seq < 0)
+        if (seq < 0 || (!hasPayload && !hasData))
             throw new JsonException("session event has an invalid event envelope");
-        var ignorable = root.TryGetProperty("ignorable", out var ignorableElement) && ignorableElement.GetBoolean();
-        var data = SessionEventCodec.ReadPayload(type, root.GetProperty("data"), ignorable, options);
+        payload ??= SessionEventCodec.ReadPayload(type, data, ignorable, options);
         if (type == SessionEventTypes.RequestHeader
-            && data is RequestHeaderPayload { Reason: "fallback" })
+            && payload is RequestHeaderPayload { Reason: "fallback" })
         {
             throw new JsonException("session event uses unsupported legacy request/header reason \"fallback\"");
         }
@@ -139,14 +239,10 @@ public sealed class SessionEventJsonConverter : JsonConverter<SessionEvent>
             Type = type,
             Seq = seq,
             Time = time,
-            Data = data,
+            Data = payload,
             Ignorable = ignorable,
-            SurfaceOp = root.TryGetProperty("surfaceOp", out var surfaceOp)
-                ? DshJson.Deserialize<SurfaceOp>(surfaceOp)
-                : null,
-            SourceEventSeqs = root.TryGetProperty("sourceEventSeqs", out var seqs)
-                ? DshJson.Deserialize<IReadOnlyList<long>>(seqs)
-                : null,
+            SurfaceOp = surfaceOp,
+            SourceEventSeqs = sourceEventSeqs,
         };
     }
 

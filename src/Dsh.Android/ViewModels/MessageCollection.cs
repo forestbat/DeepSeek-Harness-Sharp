@@ -14,7 +14,7 @@ public sealed class MessageCollection : ObservableCollection<MessageViewModel>
 {
     private int _depth;
 
-    /** 压住通知执行一批改动, 结束后补发一次 Reset。 */
+    /** 压住通知执行一批改动, 结束后按需补发一次 Reset。 */
     public void Batch(Action changes)
     {
         _depth += 1;
@@ -29,19 +29,52 @@ public sealed class MessageCollection : ObservableCollection<MessageViewModel>
         NotifyReset();
     }
 
-    /** 队首插入一批, 只通知一次。 */
-    public void Prefix(IReadOnlyList<MessageViewModel> items) => Batch(() =>
+    /**
+     * 队首插入一批。
+     * 用一次 Insert 通知而不是 Reset: Reset 会让虚拟化面板把整屏当成新数据重排,
+     * 窗口里已有几十条、内容高几千像素时, 那一次重排要一秒。
+     */
+    public void Prefix(IReadOnlyList<MessageViewModel> items)
     {
-        for (var offset = 0; offset < items.Count; offset += 1)
-            InsertItem(offset, items[offset]);
-    });
+        if (items.Count == 0)
+            return;
+        _depth += 1;
+        try
+        {
+            for (var offset = 0; offset < items.Count; offset += 1)
+                InsertItem(offset, items[offset]);
+        }
+        finally
+        {
+            _depth -= 1;
+        }
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+            NotifyCollectionChangedAction.Add, items.ToList(), 0));
+    }
 
     /** 队尾追加一批, 只通知一次。 */
-    public void Suffix(IReadOnlyList<MessageViewModel> items) => Batch(() =>
+    public void Suffix(IReadOnlyList<MessageViewModel> items)
     {
-        foreach (var item in items)
-            InsertItem(Count, item);
-    });
+        if (items.Count == 0)
+            return;
+        var start = Count;
+        _depth += 1;
+        try
+        {
+            foreach (var item in items)
+                InsertItem(Count, item);
+        }
+        finally
+        {
+            _depth -= 1;
+        }
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+            NotifyCollectionChangedAction.Add, items.ToList(), start));
+    }
 
     private void NotifyReset()
     {

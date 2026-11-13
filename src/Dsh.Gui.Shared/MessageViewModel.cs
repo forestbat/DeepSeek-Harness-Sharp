@@ -219,7 +219,13 @@ public sealed partial class MessageViewModel : ObservableObject
                 return $"{diff.Title} (+{diff.Added} -{diff.Removed})";
             if (Kind == MessageKind.Tool)
                 return ToolName.Length > 0 ? $"{ToolName}" : "工具";
-            return _previewFor == Text ? _preview : _preview = BuildPreview(Text);
+            // 折叠摘要只需开头一小段, 但流式刷新很频繁: 文本没变就不重算。
+            if (!string.Equals(_previewFor, Text, StringComparison.Ordinal))
+            {
+                _preview = BuildPreview(Text);
+                _previewFor = Text;
+            }
+            return _preview;
         }
     }
 

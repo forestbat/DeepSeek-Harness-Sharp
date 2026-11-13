@@ -115,17 +115,26 @@ public sealed partial class ShellView : UserControl
         if (count <= 0 || Scroller is not { } scroll)
             return;
         var before = _extentBeforeOlder;
+        var queued = DateTime.UtcNow;
+        // 此刻集合刚改完、布局还没跑: 读 Extent 会把它同步跑掉, 于是能把布局本身的耗时从"排队等待"里剥出来。
+        _ = scroll.Extent.Height;
+        var syncLayout = (DateTime.UtcNow - queued).TotalMilliseconds;
         Dispatcher.UIThread.Post(() =>
         {
             if (Scroller is not { } current)
                 return;
+            // 排队到真正执行之间的等待, 与"读 Extent 让布局落地"是两笔不同的开销, 分开记才看得出该修哪边。
+            var entered = DateTime.UtcNow;
             Hold();
+            var measured = current.Extent.Height;
+            var afterMeasure = DateTime.UtcNow;
             // 插入的这几条要先落一次布局才有真实高度, 差值就是它们撑出来的部分。
             // 插入前的 extent 还不可信(首屏尚未量出)时不做补偿, 否则会把滚动位置设成一个凭空算出的值。
-            var delta = current.Extent.Height - before;
+            var delta = measured - before;
             if (before > 0 && delta > 0)
                 current.Offset = new Vector(0, current.Offset.Y + delta);
-            MobileLog.Info($"older-loaded: count={count} extent={before}->{current.Extent.Height} delta={delta} offset={current.Offset.Y}");
+            var done = DateTime.UtcNow;
+            MobileLog.Info($"older-loaded: count={count} syncLayout={syncLayout:F0}ms wait={(entered - queued - TimeSpan.FromMilliseconds(syncLayout)).TotalMilliseconds:F0}ms measure={(afterMeasure - entered).TotalMilliseconds:F0}ms scroll={(done - afterMeasure).TotalMilliseconds:F0}ms extent={before}->{measured} offset={current.Offset.Y}");
         }, DispatcherPriority.Loaded);
     }
 

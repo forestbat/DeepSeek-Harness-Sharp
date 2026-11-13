@@ -19,8 +19,12 @@ public sealed record RemoteSubscriptionRef(string SubscriptionId);
 public readonly record struct RemoteEventFrame(string SubscriptionId, RemoteSessionEvent Event);
 
 
-/** 会话历史分页请求: 从 FromEvent 起返回装得进 MaxBytes 的一段; 响应里的 TotalEventCount 让客户端接着取下一页。 */
-public sealed record RemoteSessionSnapshotRequest(string SessionId, long FromEvent = 0, int MaxBytes = HostProtocol.SnapshotPageBytes);
+/**
+ * 会话历史分页请求: 从 FromEvent 起返回装得进 MaxBytes 的一段; 响应里的 TotalEventCount 让客户端接着取下一页。
+ * MaxEvents 是可选条数上限(0 表示只按字节切): 手机只要一屏十几条,
+ * 只靠字节预算的话一页能装上千条, 传回来的绝大部分立刻被丢掉。
+ */
+public sealed record RemoteSessionSnapshotRequest(string SessionId, long FromEvent = 0, int MaxBytes = HostProtocol.SnapshotPageBytes, int MaxEvents = 0);
 
 /** 会话历史的一页; TotalEventCount 是整段历史的条数, 客户端据此取完剩余各页。 */
 public sealed record RemoteSessionSnapshot(

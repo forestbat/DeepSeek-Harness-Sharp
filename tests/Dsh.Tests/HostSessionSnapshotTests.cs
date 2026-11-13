@@ -217,4 +217,63 @@ public sealed class HostSessionSnapshotTests
 
         Assert.True(costs.Max() < 500, $"单次取一页耗时 {string.Join(", ", costs)}ms, 超过一屏内返回的预算");
     }
+
+    /**
+     * 手机按条数要历史: 只要 maxEvents 条, 不要"装满字节预算"的那一大截。
+     * 只按字节切时一页能装上千条事件, 传回来立刻被丢掉, 手机每次上滑都在白等这段时间。
+     */
+    [Fact]
+    public async Task SnapshotPage_HonorsAnEventCountLimitInsteadOfFillingTheByteBudget()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hsc", Ct);
+        var reader = await host.ConnectAsync("count-reader", Ct);
+        var session = host.Environment.Agent.Session;
+        FillOversizedHistory(session);
+        var total = (int)session.Seq;
+
+        var page = await reader.GetSessionSnapshotRangeAsync(session.Id.Value, total / 2, maxEvents: 100, Ct);
+
+        Assert.Equal(100, page.Events.Count);
+        // 总数仍是整段历史, 客户端据此判断后面还有没有。
+        Assert.Equal(total, page.TotalEventCount);
+    }
+
+    /**
+     * 手机一次取三千条(约一屏多的历史)时的服务端成本与真实字节数。
+     * 只有把"服务端算多久"和"线上传多久"分开, 才知道慢该往哪边修;
+     * 这里用接近真实会话的事件尺寸(几百字节), 而不是压测用的十六 KB 大块。
+     */
+    [Fact]
+    public async Task SnapshotChunk_MeasuresWhatAThreeThousandEventPageCosts()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("hsm", Ct);
+        var reader = await host.ConnectAsync("measure-reader", Ct);
+        var session = host.Environment.Agent.Session;
+        FillRealisticHistory(session, eventCount: 6000);
+        var total = (int)session.Seq;
+
+        var costs = new List<string>();
+        var bytes = 0;
+        for (var round = 0; round < 3; round += 1)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var page = await reader.GetSessionSnapshotRangeAsync(session.Id.Value, total / 2, maxEvents: 3000, Ct);
+            costs.Add($"{clock.ElapsedMilliseconds}ms");
+            bytes = page.Events.Sum(item =>
+                JsonSerializer.SerializeToUtf8Bytes(item, HostProtocolJsonContext.Default.SessionEvent).Length);
+            Assert.Equal(3000, page.Events.Count);
+        }
+        TestContext.Current.SendDiagnosticMessage(
+            $"3000 events: {string.Join(", ", costs)} wire={bytes / 1024}KB");
+    }
+
+    /** 尺寸接近真实会话的事件流: 每条几百字节。 */
+    private static void FillRealisticHistory(Session session, int eventCount)
+    {
+        var text = new string('x', 400);
+        session.Append(new TurnStartPayload(1));
+        session.Append(new StepStartPayload(1, 1));
+        for (var index = 0; index < eventCount; index += 1)
+            session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, text)));
+    }
 }

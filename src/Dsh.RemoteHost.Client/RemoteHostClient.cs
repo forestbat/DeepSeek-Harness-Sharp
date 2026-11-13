@@ -194,6 +194,16 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost
     public async Task<RemoteSessionSnapshot> GetSessionSnapshotFromAsync(string sessionId, long fromEvent, int maxBytes, CancellationToken cancellationToken = default)
         => await FetchSnapshotPageAsync(sessionId, fromEvent, maxBytes, cancellationToken).ConfigureAwait(false);
 
+    /**
+     * 从 fromEvent 起最多取 maxEvents 条(同时受单页字节预算约束)。
+     * 按条数要, 而不是按字节: 手机只要一屏, 字节预算会塞进上千条, 传回来立刻被丢掉。
+     */
+    public async Task<RemoteSessionSnapshot> GetSessionSnapshotRangeAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken = default)
+        => await SendAsync(HostProtocol.MethodSessionSnapshot,
+            Serialize(new RemoteSessionSnapshotRequest(sessionId, fromEvent, HostProtocol.SnapshotPageBytes, maxEvents), HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest),
+            HostProtocolJsonContext.Default.RemoteSessionSnapshot,
+            cancellationToken).ConfigureAwait(false);
+
     /** 整段历史有多少条; 用一个越界请求问, 服务端只回总数不回事件。 */
     public async Task<long> TotalEventCountAsync(string sessionId, CancellationToken cancellationToken = default)
     {
@@ -320,9 +330,19 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost
 
     internal async Task<T> SendAsync<T>(string method, JsonElement? parameters, JsonTypeInfo<T> info, CancellationToken cancellationToken)
     {
+        // 一帧要解析两次: 读循环先把它读成 JsonElement(整段复制一份), 这里再从那份复制反序列化成对象。
+        // 大响应上这是双倍的 CPU 与分配, 分开计时才看得出它占多少。
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var value = await RequestAsync(method, parameters, cancellationToken).ConfigureAwait(false);
-        return JsonSerializer.Deserialize(value, info) ?? throw new IOException($"host returned an invalid result for {method}");
+        var received = clock.ElapsedMilliseconds;
+        var result = JsonSerializer.Deserialize(value, info) ?? throw new IOException($"host returned an invalid result for {method}");
+        if (HandshakeTrace is { } trace)
+            trace($"{method}: frame={received}ms parse={clock.ElapsedMilliseconds - received}ms total={clock.ElapsedMilliseconds}ms");
+        return result;
     }
+
+    /** 逐次请求的分段耗时; 只用于诊断, 平时为 null。 */
+    public static Action<string>? HandshakeTrace { get; set; }
 
     public async ValueTask DisposeAsync()
     {

@@ -7,6 +7,7 @@ using Dsh.Android.Views;
 using Dsh.Core;
 using Dsh.Gui.ViewModels;
 using Dsh.Llm;
+using Dsh.RemoteHost;
 
 namespace Dsh.Android;
 
@@ -20,6 +21,8 @@ public sealed class MobileApp : Avalonia.Application
         DshJson.RegisterResolver(DshCoreJsonContext.Default);
         // 窄屏上一条长回复能占掉好几屏, 所以消息正文默认折叠, 双击展开。
         MessageViewModel.CompactByDefault = true;
+        // 一帧要解析两次(读循环读成 JsonElement, 客户端再反序列化); 分开计时才知道瓶颈在帧到达还是解析。
+        RemoteHostClient.HandshakeTrace = MobileLog.Info;
         AvaloniaXamlLoader.Load(this);
     }
 
