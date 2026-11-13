@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace Dsh.Checkpoints;
 
@@ -44,6 +45,7 @@ public sealed class ShadowGit
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
+            StandardOutputEncoding = Encoding.UTF8,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -83,7 +85,7 @@ public sealed class ShadowGit
             }
             await Task.WhenAll(outputTask, errorTask);
         }
-        return new GitResult(process.ExitCode, (await outputTask).Trim(), (await errorTask).Trim());
+        return new GitResult(process.ExitCode, (await outputTask).TrimEnd('\r', '\n'), (await errorTask).Trim());
     }
 
     public async Task InitAsync(CancellationToken signal = default)
@@ -130,18 +132,18 @@ public sealed class ShadowGit
 
     public async Task<IReadOnlyList<string>> ListTrackedFilesAsync(string commit, CancellationToken signal = default)
     {
-        var result = await RunAsync(["ls-tree", "-r", "--name-only", commit], signal);
+        var result = await RunAsync(["ls-tree", "-r", "--name-only", "-z", commit], signal);
         if (!result.Ok)
             throw new InvalidOperationException($"git ls-tree failed: {result.Error}");
-        return SplitLines(result.Output);
+        return SplitPaths(result.Output);
     }
 
     public async Task<IReadOnlyList<string>> ListIndexFilesAsync(CancellationToken signal = default)
     {
-        var result = await RunAsync(["ls-files"], signal);
+        var result = await RunAsync(["ls-files", "-z"], signal);
         if (!result.Ok)
             throw new InvalidOperationException($"git ls-files failed: {result.Error}");
-        return SplitLines(result.Output);
+        return SplitPaths(result.Output);
     }
 
     public async Task RestoreAsync(string commit, CancellationToken signal = default)
@@ -199,6 +201,6 @@ public sealed class ShadowGit
         }, signal);
     }
 
-    private static IReadOnlyList<string> SplitLines(string text)
-        => text.Length == 0 ? [] : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    private static IReadOnlyList<string> SplitPaths(string text)
+        => text.Split('\0', StringSplitOptions.RemoveEmptyEntries);
 }
