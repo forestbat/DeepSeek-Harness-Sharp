@@ -212,8 +212,12 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     /** 快照分批落地的每批事件数; 批与批之间让出 UI 线程。 */
     private const int SnapshotBatchEvents = 200;
 
-    /** Messages 的窗口上限: 超出后从头部丢弃, 内存与控件数都不会无限增长。 */
-    private const int MessageWindow = 400;
+    /**
+     * Messages 的窗口上限。
+     * 消息是纯数据对象, 几百条的内存开销远小于一次往返: 窗口太小会让滑回来的内容又要重新取,
+     * 而用户上滑时下方那些正是他随时会滑回去的。
+     */
+    private const int MessageWindow = 1200;
 
     /** 取窗口时让锚点落在窗口中部: 上下都留出可滚动的内容。 */
     private const int WindowCenterOffset = 100;
@@ -222,19 +226,33 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private const int WindowEvents = 300;
 
     /** 每次上滑/下滑取多少条事件: 一个取数单位, 不代表最终能出几条消息。 */
-    private const int OlderChunkEvents = 100;
+    private const int OlderChunkEvents = 600;
 
-    /** 一次上滑至少要接出这么多条消息, 否则继续往前取: 尾部工具调用密集时一百个事件也未必出一条。 */
-    private const int OlderChunkMessages = 6;
+    /**
+     * 一次上滑至少接出这么多条消息。
+     * 连续上滑时每接一次都要往前走一屏: 目标定得太小, 就变成"滑一下就等一次网络"。
+     */
+    private const int OlderChunkMessages = 12;
 
     /** 往回找更早消息时最多取几次: 一截落在同一条长消息内部时还要继续往前。 */
-    private const int OlderChunkPages = 12;
+    private const int OlderChunkPages = 8;
 
-    /** 一次上滑最多花这么久取数: 超过就先把手上的接上, 剩下的等用户继续滑。 */
-    private const int OlderLoadBudgetMilliseconds = 800;
+    /**
+     * 一次上滑最多花这么久取数。
+     * 常规情况都走缓存(百毫秒级); 只有跨越一段超长工具输出时才需要联网重试几次,
+     * 预算太紧会让那一次直接放弃, 表现就是"滑到某处卡住不动"。
+     */
+    private const int OlderLoadBudgetMilliseconds = 2000;
 
-    /** 单次快照请求的字节上限: 一页装不满就继续要下一页, 所以它只影响往返次数。 */
-    private const int SnapshotPageBytes = 512 * 1024;
+    /** 缓存低于这个条数就再取一截: 上滑是连续的, 见底才取会让某一次滑动手感明显变慢。 */
+    private const int PrefetchLowWater = 1200;
+
+    /**
+     * 后台预取一次取多少条。
+     * 每次请求有约一百毫秒的固定开销(隧道往返 + 服务端定位), 取一百条时它占了三分之一;
+     * 一次取一大截能把它摊薄到可以忽略, 而实测这条链路一千五百条约一秒半, 用户滑完一屏远不止这么慢。
+     */
+    private const int PrefetchBatchEvents = 3000;
 
     private readonly MachineStore _store;
     private readonly PhoneToolStore _phoneToolStore;
@@ -1570,8 +1588,11 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             if (snapshot is null)
                 return;
             await ApplySnapshotAsync(link, row.Id, snapshot.Events, lifetime.Token);
-            // 真机手势注入被系统挡住, 只能开屏后自己跑一次, 把"上滑慢在哪一段"写进 logcat。
-            _ = Dispatcher.UIThread.InvokeAsync(async () => await DiagnoseOlderLoadAsync());
+            // 进来之后先在后台把更早的一截备好, 用户第一次上滑时数据已经在内存里。
+            var ready = await link.WaitConnectedAsync(lifetime.Token);
+            StartOlderFeed();
+            // 连续上滑自检: 卡顿只在连续上滑时复现, 这串数字是当前唯一能拿到的证据。
+            _ = Dispatcher.UIThread.InvokeAsync(DiagnoseScrollRunAsync);
             var fromSeq = snapshot.Events.Count > 0 ? snapshot.Events[^1].Seq + 1 : 0;
             await foreach (var item in link.SubscribeAsync(row.Id, fromSeq, lifetime.Token))
             {
@@ -1598,17 +1619,33 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         try
         {
             var lease = await link.WaitConnectedAsync(cancellationToken);
-            // 只要尾部: 几千条事件全下载下来再反序列化, 在真机上直接把进程撑爆, 而手机一屏也就十几条。
-            var total = await lease.Client.TotalEventCountAsync(sessionId, cancellationToken);
-            _totalEvents = total;
-            var events = await FetchEventsAsync(lease.Client, sessionId, Math.Max(0, total - tailCount), tailCount, cancellationToken);
-            return new RemoteSessionSnapshot(default!, events, total, null);
+            // 屏幕上只铺最后一截: 更早的交给后台预取, 不必在这一步等一整套历史下完。
+            var events = await FetchTailAsync(lease.Client, sessionId, tailCount, cancellationToken);
+            _totalEvents = events.Count > 0 ? events[^1].Seq + 1 : 0;
+            return new RemoteSessionSnapshot(default!, events, _totalEvents, null);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             Dispatcher.UIThread.Post(() => Error = $"无法读取会话快照: {error.Message}");
             return null;
         }
+    }
+
+    /**
+     * 取末尾 count 条事件。
+     * 先问总数再定位: 总数用越界请求拿, 服务端只回一个数字, 不必传事件。
+     */
+    private static async Task<IReadOnlyList<SessionEvent>> FetchTailAsync(
+        RemoteHostClient client,
+        string sessionId,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var total = await client.TotalEventCountAsync(sessionId, cancellationToken);
+        if (total == 0)
+            return [];
+        var from = Math.Max(0, total - count);
+        return await FetchEventsAsync(client, sessionId, from, (int)Math.Min(count, total - from), cancellationToken);
     }
 
     private async Task ReloadSnapshotAsync(IMachineLink link, string sessionId, CancellationToken cancellationToken)
@@ -1799,6 +1836,9 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             // 这一截是为了停在锚点上, 渲染完不要被拉到末尾。
             await ApplySnapshotAsync(link, _openSessionId, events, cancellationToken, scrollToEnd: false);
             ScrollToSeqRequested?.Invoke(anchorSeq);
+            // 跳过来之后用户多半会往下翻: 把两侧都备好, 两个方向都不必再等往返。
+            _ = PrefetchNewerCoreAsync(lease.Client, CancellationToken.None);
+            StartOlderFeed();
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -1812,7 +1852,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
 
     /**
      * 从 from 起取够 count 条事件。
-     * 一页装不下就继续往后要, 直到条数够或者到了历史末尾。
+     * 按条数要, 不按字节: 服务端按字节切时一页能塞进上千条, 传回来只用前一百条, 其余白下载白反序列化。
+     * 一页不够就继续往后要, 直到条数够或者到了历史末尾。
      */
     private static async Task<IReadOnlyList<SessionEvent>> FetchEventsAsync(
         RemoteHostClient client,
@@ -1824,15 +1865,13 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         var events = new List<SessionEvent>();
         var cursor = from;
         var pages = 0;
-        var slowestPage = 0L;
+        var network = 0L;
         var clock = Stopwatch.StartNew();
         while (events.Count < count)
         {
             var before = clock.ElapsedMilliseconds;
-            var page = await client.GetSessionSnapshotFromAsync(sessionId, cursor, SnapshotPageBytes, cancellationToken);
-            var pageCost = clock.ElapsedMilliseconds - before;
-            if (pageCost > slowestPage)
-                slowestPage = pageCost;
+            var page = await client.GetSessionSnapshotRangeAsync(sessionId, cursor, count - events.Count, cancellationToken);
+            network += clock.ElapsedMilliseconds - before;
             pages += 1;
             if (page.Events.Count == 0)
                 break;
@@ -1842,8 +1881,8 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
             if (cursor >= page.TotalEventCount)
                 break;
         }
-        MobileLog.Info($"fetch-events: pages={pages} got={events.Count} want={count} elapsed={clock.ElapsedMilliseconds}ms slowestPage={slowestPage}ms");
-        return events.Count > count ? events[..count] : events;
+        MobileLog.Info($"fetch-events: pages={pages} got={events.Count} want={count} net={network}ms total={clock.ElapsedMilliseconds}ms");
+        return events;
     }
 
     /** 已取到的窗口前面还有历史, 且当前没在取。 */
@@ -1873,58 +1912,30 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private void MarkRendered(long lastSeq) => _renderedThroughSeq = Math.Max(_renderedThroughSeq, lastSeq + 1);
 
     /**
-     * 视图滚到顶部时调用: 往前接一截。
-     * 只看这一截, 不重取整窗: 重取会把几百条消息全部销毁再重建, 那正是"上滑要等很久"的来源。
+     * 打开会话时预取的事件窗口。
+     * 上滑是最高频的操作, 每次都等一次往返会让整屏都顿; 缓存里还有就直接用, 用完再去取。
      */
-    public Task LoadOlderAsync() => CanLoadOlder
-        ? PrependOlderAsync(_lifetime.Token)
-        : Task.CompletedTask;
-
-    /** 视图滚到底部时调用: 往后接一截; 起点是已渲染事件之后, 不是最后一条消息的序号。 */
-    public Task<bool> LoadNewerAsync() => CanLoadNewer
-        ? AppendNewerAsync(_renderedThroughSeq, _lifetime.Token)
-        : Task.FromResult(false);
+    private readonly List<SessionEvent> _cached = [];
 
     /**
-     * 在窗口最左边之前接一段。
-     * 起点是窗口第一个事件的序号, 不是首条消息的序号: 一条消息可能横跨几百个事件,
-     * 从消息起点往回退一截往往整段仍在它内部, 取回来过滤后什么都不剩, 用户看到的就是"滑了没反应"。
-     * 一截不够就继续往前退, 直到真的拿到新消息或到了历史开头。
+     * 视图滚到顶部时调用: 把缓存里已经备好的那一截接到上方。
+     * 这里不联网: 滑动必须在本地完成, 等网络就意味着滑到哪里都要看运气;
+     * 数据由后台一路取到缓存里, 取到之后会自动补上来。
      */
-    private async Task PrependOlderAsync(CancellationToken cancellationToken)
+    public async Task LoadOlderAsync()
     {
-        if (_openSessionId.Length == 0 || Find(_openMachine) is not { } link || IsLoadingOlder)
+        if (!CanLoadOlder || _openSessionId.Length == 0)
             return;
         IsLoadingOlder = true;
-        var clock = Stopwatch.StartNew();
         try
         {
-            var lease = await link.WaitConnectedAsync(cancellationToken);
-            var cursor = _windowFirstSeq;
-            var pages = 0;
             var added = 0;
-            // 尾部常是一长串工具调用, 一百个事件可能只出一条消息; 退到"够看"为止, 否则用户滑一次什么也看不到。
-            // 但没取够也要在预算内收手: 攒够一屏却让用户等好几秒, 比少接几条更糟。
-            while (cursor > 0
-                && pages < OlderChunkPages
-                && added < OlderChunkMessages
-                && clock.ElapsedMilliseconds < OlderLoadBudgetMilliseconds)
-            {
-                var from = Math.Max(0, cursor - OlderChunkEvents);
-                var events = await FetchEventsAsync(lease.Client, _openSessionId, from, (int)(cursor - from), cancellationToken);
-                pages += 1;
-                // 只保留真正在这之前的: 服务端按下标给, 可能多给几条。
-                var older = events.Where(item => item.Seq < cursor).ToList();
-                cursor = from;
-                if (older.Count == 0)
-                    continue;
-                added += await RenderIntoAsync(older, atStart: true, cancellationToken);
-            }
-            MobileLog.Info($"prepend: pages={pages} added={added} total={clock.ElapsedMilliseconds}ms window={Messages.Count} cursor={cursor}");
-        }
-        catch (Exception error) when (error is not OperationCanceledException)
-        {
-            Error = $"载入更早的消息失败: {error.Message}";
+            while (_windowFirstSeq > 0 && added < OlderChunkMessages && TakeCachedOlder() is { Count: > 0 } cached)
+                added += await RenderIntoAsync(cached, atStart: true, cancellationToken: _lifetime.Token);
+            if (added > 0)
+                return;
+            // 缓存空了: 立刻把后台取数叫醒, 但这一步不等它 —— 用户下一次滑动才有数据可看。
+            StartOlderFeed();
         }
         finally
         {
@@ -1932,7 +1943,124 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    /** 在队尾接上 newestSeq 之后的一段; 已有消息保持不动。 */
+    /** 视图滚到底部时调用: 往后接一截; 起点是已渲染事件之后, 不是最后一条消息的序号。 */
+    public Task<bool> LoadNewerAsync() => CanLoadNewer
+        ? AppendNewerAsync(_renderedThroughSeq, _lifetime.Token)
+        : Task.FromResult(false);
+
+    /**
+     * 后台持续往缓存里取更早的历史。
+     * 滑动只在本地消费缓存, 因此滑多远都同样快; 取数追不上时用户滑到头会停住,
+     * 等后台补上之后自动出现在上方 —— 这是唯一能让"滑动耗时与网络无关"的结构。
+     */
+    private void StartOlderFeed()
+    {
+        if (_olderFeed is { IsCompleted: false })
+            return;
+        _olderFeed = FeedOlderAsync(_olderFeedLifetime.Token);
+    }
+
+    private async Task FeedOlderAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && CanLoadOlder)
+            {
+                // 缓存已经很深就先歇会儿, 别把连接占满; 门槛按"还能滑几屏"算, 不按条数拍。
+                if (_cached.Count >= PrefetchDepthEvents)
+                {
+                    await Task.Delay(FeedIdleMilliseconds, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                await FetchOlderChunkAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error) when (error is not OperationCanceledException or ObjectDisposedException)
+        {
+            // 后台取数失败不打扰用户: 下次滑动会把后台再叫醒。
+            _olderFeed = null;
+        }
+    }
+
+    /** 取一截更早的事件放进缓存; 顺序按序号, 滑动时从尾部消费。 */
+    private async Task FetchOlderChunkAsync(CancellationToken cancellationToken)
+    {
+        if (Find(_openMachine) is not { } link)
+            return;
+        var lease = await link.WaitConnectedAsync(cancellationToken).ConfigureAwait(false);
+        long cursor;
+        lock (_cached)
+        {
+            cursor = _cached.Count > 0 ? _cached[0].Seq : _windowFirstSeq;
+        }
+        if (cursor <= 0)
+            return;
+        var from = Math.Max(0, cursor - PrefetchBatchEvents);
+        if (from >= cursor)
+            return;
+        var clock = Stopwatch.StartNew();
+        var events = await FetchEventsAsync(lease.Client, _openSessionId, from, (int)(cursor - from), cancellationToken).ConfigureAwait(false);
+        if (events.Count == 0)
+            return;
+        lock (_cached)
+        {
+            _cached.InsertRange(0, events.Where(item => item.Seq < cursor && item.Seq < _windowFirstSeq));
+        }
+        var cost = clock.ElapsedMilliseconds;
+        MobileLog.Info($"feed: from={from} want={(int)(cursor - from)} got={events.Count} cost={cost}ms rate={(events.Count * 1000.0 / Math.Max(1, cost)):F0}/s cached={_cached.Count} first={_windowFirstSeq}");
+    }
+
+    /** 后台取数任务; 同一时间只跑一个。 */
+    private Task? _olderFeed;
+
+    private readonly CancellationTokenSource _olderFeedLifetime = new();
+
+    /** 缓存够深时后台歇多久再看一眼。 */
+    private const int FeedIdleMilliseconds = 200;
+
+    /**
+     * 后台把缓存填到这么深就暂停。
+     * 这条链路实测只有几百 KB/s(瓶颈在 SSH 端口转发), 一屏内容就要传大半秒;
+     * 所以缓存必须远远领先用户: 深度按"还能连滑十几屏"来定, 而不是刚够下一次滑动。
+     */
+    private const int PrefetchDepthEvents = 9000;
+
+    /** 从缓存里切出窗口最左边之前的一截; 缓存里没有更早的就返回空。 */
+    private IReadOnlyList<SessionEvent> TakeCachedOlder()
+    {
+        lock (_cached)
+        {
+            // 比窗口更早的部分已经渲染过了, 留着只会让"缓存还有"变成假象。
+            _cached.RemoveAll(item => item.Seq >= _windowFirstSeq);
+            if (_cached.Count == 0)
+                return [];
+            // 只交出一截(靠近窗口的那一端), 剩下的留在缓存里给下次上滑用。
+            var take = _cached.Count <= OlderChunkEvents ? [.. _cached] : _cached.GetRange(_cached.Count - OlderChunkEvents, OlderChunkEvents);
+            _cached.RemoveRange(_cached.Count - take.Count, take.Count);
+            return take;
+        }
+    }
+
+    /**
+     * 从缓存里切出窗口之后的一截, 供下滑接回。
+     * 跳转到某条历史消息之后, 用户接下来大多是往下翻; 这条路径以前完全没有缓存,
+     * 每滑一次都要等一次往返。
+     */
+    private IReadOnlyList<SessionEvent> TakeCachedNewer()
+    {
+        lock (_cached)
+        {
+            _cached.RemoveAll(item => item.Seq < _renderedThroughSeq);
+            if (_cached.Count == 0)
+                return [];
+            // 靠窗口的这一端先交出去。
+            var take = _cached.Count <= OlderChunkEvents ? [.. _cached] : _cached.GetRange(0, OlderChunkEvents);
+            _cached.RemoveRange(0, take.Count);
+            return take;
+        }
+    }
+
+    /** 在队尾接上更晚的一段; 已有消息保持不动。 */
     private async Task<bool> AppendNewerAsync(long newestSeq, CancellationToken cancellationToken)
     {
         if (_openSessionId.Length == 0 || Find(_openMachine) is not { } link || IsLoadingOlder)
@@ -1941,10 +2069,28 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         try
         {
             var lease = await link.WaitConnectedAsync(cancellationToken);
+            var added = 0;
+            // 缓存里备好的先接上: 跳转之后往下翻是最常见的后续动作, 这一段不该再等网络。
+            while (added < OlderChunkMessages && TakeCachedNewer() is { Count: > 0 } cached)
+                added += await RenderIntoAsync(cached, atStart: false, cancellationToken);
+            if (added > 0)
+            {
+                MobileLog.Info($"append cached: added={added} left={_cached.Count}");
+                _ = PrefetchNewerCoreAsync(lease.Client, CancellationToken.None);
+                return true;
+            }
+            StartOlderFeed();
+            if (TakeCachedNewer() is { Count: > 0 } fetched)
+            {
+                await RenderIntoAsync(fetched, atStart: false, cancellationToken);
+                _ = PrefetchNewerCoreAsync(lease.Client, CancellationToken.None);
+                return true;
+            }
             var events = await FetchEventsAsync(lease.Client, _openSessionId, newestSeq, OlderChunkEvents, cancellationToken);
             if (events.Count == 0)
                 return false;
             await RenderIntoAsync(events, atStart: false, cancellationToken);
+            _ = PrefetchNewerCoreAsync(lease.Client, CancellationToken.None);
             return true;
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -1955,6 +2101,33 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
         finally
         {
             IsLoadingOlder = false;
+        }
+    }
+
+
+    private async Task PrefetchNewerCoreAsync(RemoteHostClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            long from;
+            lock (_cached)
+            {
+                if (_cached.Count >= PrefetchLowWater)
+                    return;
+                from = _cached.Count > 0 ? _cached[^1].Seq + 1 : _renderedThroughSeq;
+            }
+            var events = await FetchEventsAsync(client, _openSessionId, from, PrefetchBatchEvents, cancellationToken);
+            if (events.Count == 0)
+                return;
+            lock (_cached)
+            {
+                foreach (var item in events.Where(item => item.Seq >= _renderedThroughSeq))
+                    _cached.Add(item);
+            }
+            MobileLog.Info($"prefetch newer: from={from} got={_cached.Count} through={_renderedThroughSeq}");
+        }
+        catch (Exception error) when (error is not OperationCanceledException or ObjectDisposedException)
+        {
         }
     }
     /** 这一截实际能取多少条: 不能越过历史开头, 也不超过一次增量的大小。 */
@@ -1969,20 +2142,24 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     private async Task<int> RenderIntoAsync(IReadOnlyList<SessionEvent> events, bool atStart, CancellationToken cancellationToken)
     {
         var added = 0;
+        var queued = Stopwatch.StartNew();
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (cancellationToken.IsCancellationRequested || events.Count == 0)
                 return;
+            var wait = queued.ElapsedMilliseconds;
             if (atStart)
             {
                 // 往前粘: 这一截自成一段, 用独立 transcript 渲染才不会打乱末尾的流式状态。
                 var older = RenderEvents(events);
+                var rendered = queued.ElapsedMilliseconds;
                 Messages.Prefix(older);
+                var prefixed = queued.ElapsedMilliseconds;
                 TrimWindowFromEnd();
-                // 窗口左边界跟着前移。
                 _windowFirstSeq = events[0].Seq;
                 added = older.Count;
                 OlderLoaded?.Invoke(older.Count);
+                MobileLog.Info($"render-into: wait={wait}ms render={rendered - wait}ms prefix={prefixed - rendered}ms trim={queued.ElapsedMilliseconds - prefixed}ms count={older.Count}");
                 return;
             }
             var appended = new List<MessageViewModel>();
@@ -2045,28 +2222,42 @@ public sealed partial class MobileShellViewModel : ObservableObject, IAsyncDispo
     public event Action<int>? OlderLoaded;
 
     /**
-     * 自证入口: 诊断"上滑加载慢在哪一段"。
-     * 真机手势注入被系统挡住, 只能由界面在开屏后主动跑一次并写 logcat, 否则这个数字无从取得。
+     * 连续滑动压测: 先一路上滑到底, 再一路下滑回来, 中途不停顿。
+     * 真机手势注入被系统挡住, 这串数字是唯一能拿到的证据;
+     * 不停顿是为了量性能上限——用户真的在翻找时就是这个节奏, 停下来再滑反而把卡顿藏住了。
      */
-    public async Task DiagnoseOlderLoadAsync()
+    public async Task DiagnoseScrollRunAsync()
     {
-        if (_openSessionId.Length == 0 || Messages.Count == 0)
-            return;
-        MobileLog.Info($"diagnose start: total={_totalEvents} messages={Messages.Count} firstSeq={_windowFirstSeq} through={_renderedThroughSeq}");
-        if (Find(_openMachine) is { } link && await link.WaitConnectedAsync(_lifetime.Token) is { } lease)
+        await Task.Delay(TimeSpan.FromSeconds(4), _lifetime.Token);
+        await RunScrollPassAsync("up", 100, LoadOlderAsync, () => CanLoadOlder);
+        await RunScrollPassAsync("down", 100, async () => await LoadNewerAsync(), () => CanLoadNewer);
+    }
+
+    private async Task RunScrollPassAsync(string direction, int steps, Func<Task> step, Func<bool> canContinue)
+    {
+        var worst = 0L;
+        var stalls = 0;
+        var fast = 0;
+        var done = 0;
+        var total = 0L;
+        for (var index = 1; index <= steps; index += 1)
         {
-            for (var probe = 0; probe < 3; probe += 1)
-            {
-                var ping = Stopwatch.StartNew();
-                await lease.Client.PingAsync(_lifetime.Token);
-                MobileLog.Info($"diagnose ping={ping.ElapsedMilliseconds}ms");
-            }
-        }
-        for (var round = 1; round <= 8 && CanLoadOlder; round += 1)
-        {
+            while (IsLoadingOlder)
+                await Task.Delay(20, _lifetime.Token);
+            if (!canContinue())
+                break;
             var clock = Stopwatch.StartNew();
-            await LoadOlderAsync();
-            MobileLog.Info($"diagnose round={round} total={clock.ElapsedMilliseconds}ms messages={Messages.Count} firstSeq={_windowFirstSeq} canOlder={CanLoadOlder}");
+            await step();
+            var cost = clock.ElapsedMilliseconds;
+            done = index;
+            total += cost;
+            worst = Math.Max(worst, cost);
+            if (cost >= 1000)
+                stalls += 1;
+            if (cost < 300)
+                fast += 1;
+            MobileLog.Info($"scroll-{direction}: step={index} cost={cost}ms worst={worst}ms stalls={stalls} fast={fast} messages={Messages.Count} first={_windowFirstSeq} through={_renderedThroughSeq} cached={_cached.Count}");
         }
+        MobileLog.Info($"scroll-{direction} done: steps={done} avg={(done == 0 ? 0 : total / done)}ms worst={worst}ms stalls={stalls} fast={fast} messages={Messages.Count} first={_windowFirstSeq} through={_renderedThroughSeq}");
     }
 }
