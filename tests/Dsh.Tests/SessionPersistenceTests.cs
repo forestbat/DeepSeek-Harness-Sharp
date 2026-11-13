@@ -662,4 +662,106 @@ public class SessionPersistenceTests : IDisposable
         // 缓冲区里那条事件已经没法安全落盘: 关闭时同样拒绝, 而不是把它硬塞进别人的日志。
         Assert.Throws<SessionPersistenceCorruptionException>(() => writer.Close());
     }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_PreservesProtectionAgainstAnotherWriter(JsonlCompression compression)
+    {
+        var root = TempTree.CreateDirectory("session-rename-writers");
+        _roots.Add(root);
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        var batch = new JsonlWriteBatch(JsonlWriteBatch.DefaultMaxEvents, TimeSpan.FromHours(1));
+        using var first = new JsonlSessionPersistence(root, compression: compression, writeBatch: batch);
+        var writer = first.Create(session.Header);
+        writer.Append(events.Take(2).ToArray());
+        first.Rename(session.Header.Id, "A longer renamed session title");
+        using (var second = new JsonlSessionPersistence(root, compression: compression))
+        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
+            rival.Append(events.Skip(2).Take(1).ToArray());
+
+        writer.Append(events.Skip(2).Take(1).ToArray());
+        var flushError = Record.Exception(writer.Flush);
+        var closeError = Record.Exception(writer.Close);
+
+        Assert.IsType<SessionPersistenceCorruptionException>(flushError);
+        Assert.IsType<SessionPersistenceCorruptionException>(closeError);
+        using var reader = first.Open(session.Header.Id, SessionAccess.Read);
+        AssertEventsEqual(events.Take(3).ToArray(), reader.Read());
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_AllowsTheCurrentWriterToContinue(JsonlCompression compression)
+    {
+        var root = TempTree.CreateDirectory("session-rename-append");
+        _roots.Add(root);
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        using (var writer = persistence.Create(session.Header))
+        {
+            writer.Append(events.Take(2).ToArray());
+            persistence.Rename(session.Header.Id, "A longer renamed session title");
+            writer.Append(events.Skip(2).ToArray());
+        }
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        Assert.Equal("A longer renamed session title", reader.Header.Title);
+        AssertEventsEqual(events, reader.Read());
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_RejectsAnAlreadyAdvancedLog(JsonlCompression compression)
+    {
+        var root = TempTree.CreateDirectory("session-rename-stale-writer");
+        _roots.Add(root);
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        using var first = new JsonlSessionPersistence(root, compression: compression);
+        using var writer = first.Create(session.Header);
+        writer.Append(events.Take(2).ToArray());
+        using (var second = new JsonlSessionPersistence(root, compression: compression))
+        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
+            rival.Append(events.Skip(2).Take(1).ToArray());
+
+        Assert.Throws<SessionPersistenceCorruptionException>(() =>
+            first.Rename(session.Header.Id, "A longer renamed session title"));
+
+        using var reader = first.Open(session.Header.Id, SessionAccess.Read);
+        Assert.Null(reader.Header.Title);
+        AssertEventsEqual(events.Take(3).ToArray(), reader.Read());
+    }
+
+    [Theory]
+    [InlineData(JsonlCompression.None)]
+    [InlineData(JsonlCompression.Zstd)]
+    public void Rename_PreservesTornTailRecoveryBeforeAppend(JsonlCompression compression)
+    {
+        var root = TempTree.CreateDirectory("session-rename-torn-tail");
+        _roots.Add(root);
+        using var persistence = new JsonlSessionPersistence(root, compression: compression);
+        var session = BuildSourceSession(TestCwd);
+        using (var writer = persistence.Create(session.Header))
+            writer.Append(session.SnapshotEvents());
+        var next = session.Append(new TurnStartPayload(2));
+        var record = Encoding.UTF8.GetBytes($"{JsonSerializer.Serialize(next, DshJson.Options)}\n");
+        var tail = compression == JsonlCompression.Zstd ? ZstdFrames.CompressFrame(record) : record;
+        using (var stream = new FileStream(LogPathOf(root, session.Header, compression), FileMode.Append))
+            stream.Write(tail.AsSpan(0, tail.Length / 2));
+
+        using (var writer = persistence.Open(session.Header.Id, SessionAccess.Write))
+        {
+            persistence.Rename(session.Header.Id, "A much longer title after recovering an interrupted session write");
+            writer.Append([next]);
+        }
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        Assert.Equal("A much longer title after recovering an interrupted session write", reader.Header.Title);
+        AssertEventsEqual(session.SnapshotEvents(), reader.Read());
+    }
 }
