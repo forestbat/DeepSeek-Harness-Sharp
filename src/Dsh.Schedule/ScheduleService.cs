@@ -42,6 +42,8 @@ public sealed class ScheduleService : Service, IDisposable
             ctx.On<AgentDisposedNotification>(notification => Disarm(notification.Agent.Session), global),
             ctx.On<SessionTruncateNotification>(notification => Rearm(notification.Session), global),
         ];
+        foreach (var agent in ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)?.List() ?? [])
+            Arm(agent);
     }
 
     public DateTimeOffset Now => _time.GetUtcNow();
@@ -137,7 +139,8 @@ public sealed class ScheduleService : Service, IDisposable
     {
         lock (_gate)
         {
-            if (_armed.ContainsKey(agent.Session))
+            if (_armed.ContainsKey(agent.Session)
+                || !ReferenceEquals(Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)?.Get(agent.Id), agent))
                 return;
             var session = agent.Session;
             var timer = _time.CreateTimer(_ => Fire(session), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
