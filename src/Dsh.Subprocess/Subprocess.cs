@@ -471,6 +471,7 @@ public sealed class SubprocessService : Service, IDisposable
         };
         foreach (var argument in spec.Argv.Skip(1))
             startInfo.ArgumentList.Add(argument);
+        startInfo.Environment.Clear();
         foreach (var (key, value) in ScrubbedParentEnv())
             startInfo.Environment[key] = value;
         if (spec.Env is not null)
