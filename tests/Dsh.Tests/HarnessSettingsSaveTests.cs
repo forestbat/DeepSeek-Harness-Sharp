@@ -67,6 +67,7 @@ public sealed class HarnessSettingsSaveTests
 
             settings.Save(home);
 
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(home.Root).Select(Path.GetFileName));
             var text = ReadSettings(home);
             Assert.Equal(text.ReplaceLineEndings(newline), text);
             Assert.Contains("# 用户注释: 保留", text);
@@ -209,6 +210,7 @@ public sealed class HarnessSettingsSaveTests
             settings.SavePlugins(home);
 
             var text = ReadSettings(home);
+            Assert.Equal(["settings.yaml", "settings.yaml.bak"], Directory.GetFiles(home.Root).Select(Path.GetFileName).Order(StringComparer.Ordinal));
             Assert.Contains("timeline: true # value comment", text);
             Assert.Contains("future_option: keep # unknown option comment", text);
             Assert.Contains("future_history: [a, b] # future nested comment", text);
