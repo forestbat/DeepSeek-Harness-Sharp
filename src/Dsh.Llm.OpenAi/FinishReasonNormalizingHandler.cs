@@ -61,7 +61,14 @@ public sealed class FinishReasonNormalizingHandler : DelegatingHandler
                 .Replace("\"finish_reason\":\"\"", "\"finish_reason\":null", StringComparison.Ordinal)
                 .Replace("\"finish_reason\": \"\"", "\"finish_reason\": null", StringComparison.Ordinal)
                 .Replace("\"type\":\"\"", "\"type\":\"function\"", StringComparison.Ordinal)
-                .Replace("\"type\": \"\"", "\"type\": \"function\"", StringComparison.Ordinal);
+                .Replace("\"type\": \"\"", "\"type\": \"function\"", StringComparison.Ordinal)
+                // Responses 流上 logprobs 在 output_text.delta/.done 是必填数组
+                // （TypeSpec 无 |null）。个别中转/上游会透传 null，openai-dotnet 2.x 的
+                // 流事件反序列化对它直接 EnumerateArray()，把整条流炸掉
+                // （"requires an element of type 'Array', but the target element has
+                // type 'Null'"）。归一为空数组，对两种事件与 content part 均合法。
+                .Replace("\"logprobs\":null", "\"logprobs\":[]", StringComparison.Ordinal)
+                .Replace("\"logprobs\": null", "\"logprobs\": []", StringComparison.Ordinal);
             var bytes = Encoding.UTF8.GetBytes(normalized + "\n");
             _pending.Write(bytes, 0, bytes.Length);
         }

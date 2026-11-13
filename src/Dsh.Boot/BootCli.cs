@@ -26,7 +26,7 @@ public static class BootCli
         if (string.IsNullOrWhiteSpace(resumeSessionId))
         {
             var createOptions = Activator.CreateInstance(
-                RequireType("Dsh.Core.CreateAgentOptions", "Dsh.Core"),
+                RequireType("Dsh.Agent.CreateAgentOptions", "Dsh.Agent"),
                 [null, Directory.GetCurrentDirectory(), agentOptions, null, null, null, null])!;
             handle = (await AwaitAsync(InvokeMethod(agents, "Create", createOptions)))!;
         }
@@ -34,7 +34,7 @@ public static class BootCli
         {
             var sessionId = Activator.CreateInstance(RequireType("Dsh.Llm.SessionId", "Dsh.Llm"), resumeSessionId)!;
             var resumeOptions = Activator.CreateInstance(
-                RequireType("Dsh.Core.ResumeAgentOptions", "Dsh.Core"),
+                RequireType("Dsh.Agent.ResumeAgentOptions", "Dsh.Agent"),
                 [sessionId, agentOptions, null])!;
             handle = (await AwaitAsync(InvokeMethod(agents, "Resume", resumeOptions)))!;
         }

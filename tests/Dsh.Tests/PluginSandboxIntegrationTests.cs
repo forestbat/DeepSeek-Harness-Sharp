@@ -675,7 +675,7 @@ public sealed class PluginSandboxIntegrationTests
         private readonly bool _sandbox;
         private static readonly HashSet<string> EnabledImagePackages =
         [
-            "@deepseek-ai/dsh-core", "@deepseek-ai/dsh-interaction", "@deepseek-ai/dsh-plugin-manager",
+            "@deepseek-ai/dsh-core", "@deepseek-ai/dsh-agent", "@deepseek-ai/dsh-interaction", "@deepseek-ai/dsh-plugin-manager",
         ];
         private HarnessApp? _app;
         private AgentLoopAgent? _agent;

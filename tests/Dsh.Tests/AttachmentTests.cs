@@ -269,13 +269,18 @@ public sealed class AttachmentTests : IDisposable
             new RequestDefaults(),
             DeepSeekConnectionOptions.DefaultMaxTokens,
             DeepSeekConnectionOptions.DefaultContextWindowValue,
-            [new DeepSeekCatalogModel(VisionModel, InputModalities: ["text", "image"]), new DeepSeekCatalogModel(TextOnlyModel)],
+            [new ProviderModelSpec(VisionModel), new ProviderModelSpec(TextOnlyModel)],
+            new DeepSeekModelListing(
+            [
+                new DeepSeekListedModel(VisionModel, InputModalities: ["text", "image"]),
+                new DeepSeekListedModel(TextOnlyModel),
+            ]),
             DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "test"));
         return new DeepSeekAdapter("deepseek-official", new DeepSeekAdapterOptions
         {
             Options = () => connection,
-            ResolveApiKey = (_, _) => Task.FromResult("sk-test"),
+            ResolveCredential = (_, _) => Task.FromResult(new LlmCredential("sk-test", LlmCredentialScheme.Bearer)),
             ResolveUserId = () => "test-user",
             HttpClient = new HttpClient(handler),
         });

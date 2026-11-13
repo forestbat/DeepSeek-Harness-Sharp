@@ -17,8 +17,6 @@ public sealed record AccountConfig
 
     public bool AllowLoopbackHttp { get; init; }
 
-    public bool Enabled { get; init; }
-
     public int RequestTimeoutMs { get; init; } = DefaultRequestTimeoutMs;
 
     public int AttemptTimeoutMs { get; init; } = DefaultAttemptTimeoutMs;
@@ -39,7 +37,6 @@ public sealed record AccountConfig
             PlatformOrigin = Text(values, "platformOrigin") ?? DefaultPlatformOrigin,
             InferenceOrigin = Text(values, "inferenceOrigin") ?? DefaultInferenceOrigin,
             AllowLoopbackHttp = Flag(values, "allowLoopbackHttp") ?? false,
-            Enabled = Flag(values, "accountEnabled") ?? false,
             RequestTimeoutMs = Clamp(Int(values, "requestTimeoutMs") ?? DefaultRequestTimeoutMs, 1, 120_000),
             AttemptTimeoutMs = Clamp(Int(values, "attemptTimeoutMs") ?? DefaultAttemptTimeoutMs, 1, 3_600_000),
             LogoutMaxRetries = Clamp(Int(values, "logoutMaxRetries") ?? DefaultLogoutMaxRetries, 0, 5),

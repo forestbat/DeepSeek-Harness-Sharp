@@ -110,17 +110,19 @@ public class AgentLoopIntegrationTests
                 new Dsh.Llm.DeepSeek.RequestDefaults(),
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultMaxTokens,
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultContextWindowValue,
-                [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(
-                    "test-model",
-                    InputModalities: inputModalities,
-                    SystemPromptUpdate: SystemPromptUpdateModes.InHistory),
-                    new Dsh.Llm.DeepSeek.DeepSeekCatalogModel(TextOnlyModel)],
+                [new ProviderModelSpec("test-model", SystemPromptUpdate: SystemPromptUpdateModes.InHistory),
+                    new ProviderModelSpec(TextOnlyModel)],
+                new Dsh.Llm.DeepSeek.DeepSeekModelListing(
+                [
+                    new Dsh.Llm.DeepSeek.DeepSeekListedModel("test-model", InputModalities: inputModalities),
+                    new Dsh.Llm.DeepSeek.DeepSeekListedModel(TextOnlyModel),
+                ]),
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
                 retryPolicy ?? ResolvedRetryPolicy.Resolve(null, "test"));
             var adapter = new Dsh.Llm.DeepSeek.DeepSeekAdapter("test-provider", new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
             {
                 Options = () => connection,
-                ResolveApiKey = (_, _) => Task.FromResult("sk-test"),
+                ResolveCredential = (_, _) => Task.FromResult(new LlmCredential("sk-test", LlmCredentialScheme.Bearer)),
                 ResolveUserId = () => "test-user",
             });
             llm.RegisterAdapter(["test-provider"], adapter);

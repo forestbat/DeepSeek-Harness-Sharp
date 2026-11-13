@@ -12,7 +12,7 @@ internal sealed class StorageHandleState
     public required long InheritedEventCount { get; init; }
     public List<SessionEvent>? Primed { get; set; }
 
-    /** 本写入者上一次离开日志时的字节长度; null 表示需要重新对齐(还没落盘或刚被外部重写过)。 */
+    /** Bytes written by this handle; null until the log is materialized. */
     public long? WrittenLength { get; set; }
 }
 
@@ -99,15 +99,17 @@ internal sealed class JsonlSessionHandle(
         }
     }
 
-    /** 先把缓冲写盘再在句柄锁内执行 action, 供需要独占日志文件的操作(重写头部)使用。 */
-    internal void WhileDrained(Action action)
+    /** Drains buffered events and records the length returned by an exclusive rewrite. */
+    internal void WhileDrained(Func<long?, long> action)
     {
         lock (_gate)
         {
             if (!_closed)
                 DrainLocked();
-            action();
-            state.WrittenLength = null;
+            var rewrittenLength = action(state.WrittenLength);
+            if (state.TornTruncateTo is { } truncateTo && state.WrittenLength is { } previousLength)
+                state.TornTruncateTo = truncateTo + rewrittenLength - previousLength;
+            state.WrittenLength = rewrittenLength;
         }
     }
 

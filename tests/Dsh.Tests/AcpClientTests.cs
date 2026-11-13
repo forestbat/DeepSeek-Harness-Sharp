@@ -348,13 +348,14 @@ public sealed class AcpClientTests
                 new Dsh.Llm.DeepSeek.RequestDefaults(),
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultMaxTokens,
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultContextWindowValue,
-                [new Dsh.Llm.DeepSeek.DeepSeekCatalogModel("test-model")],
+                [new ProviderModelSpec("test-model")],
+                new Dsh.Llm.DeepSeek.DeepSeekModelListing([new Dsh.Llm.DeepSeek.DeepSeekListedModel("test-model")]),
                 Dsh.Llm.DeepSeek.DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
                 ResolvedRetryPolicy.Resolve(null, "test"));
             var adapter = new Dsh.Llm.DeepSeek.DeepSeekAdapter("test-provider", new Dsh.Llm.DeepSeek.DeepSeekAdapterOptions
             {
                 Options = () => connection,
-                ResolveApiKey = (_, _) => Task.FromResult("sk-test"),
+                ResolveCredential = (_, _) => Task.FromResult(new LlmCredential("sk-test", LlmCredentialScheme.Bearer)),
                 ResolveUserId = () => "test-user",
             });
             llm.RegisterAdapter(["test-provider"], adapter);
