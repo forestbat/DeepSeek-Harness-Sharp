@@ -175,6 +175,45 @@ public sealed class CheckpointTests
         }
     }
 
+    [Theory]
+    [InlineData("added.txt")]
+    [InlineData("\u6587\u4ef6.txt")]
+    [InlineData(" added.txt")]
+    [InlineData("added.txt ")]
+    [InlineData("tab\tname.txt")]
+    [InlineData("line\nname.txt")]
+    [InlineData("quote\"name.txt")]
+    [InlineData("literal\\name.txt")]
+    public async Task Service_RestoreRemovesAddedFilesWithLiteralNames(string name)
+    {
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || OperatingSystem.IsWindows() && name.EndsWith(' '))
+            Assert.Skip("The filename is not supported on this platform.");
+        var project = TempTree.CreateDirectory("project");
+        var home = TempTree.CreateDirectory("home");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(project, "keep.txt"), "baseline", TestContext.Current.CancellationToken);
+            var ctx = new Context();
+            var sessions = new SessionStore(ctx);
+            using var service = new CheckpointService(ctx, CheckpointPolicy.Resolve(null), Path.Combine(home, "checkpoints"));
+            var header = Header(project);
+            var session = sessions.Create(id: header.Id, header: header);
+            AppendToolResult(session);
+            await WaitUntilAsync(() => service.PointsFor(project).Count == 1, "baseline checkpoint");
+            await File.WriteAllTextAsync(Path.Combine(project, name), "added after checkpoint", TestContext.Current.CancellationToken);
+
+            await service.RestoreFilesAsync(project, 0, TestContext.Current.CancellationToken);
+
+            Assert.False(File.Exists(Path.Combine(project, name)));
+            Assert.Equal("baseline", await File.ReadAllTextAsync(Path.Combine(project, "keep.txt"), TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            TempTree.Delete(project);
+            TempTree.Delete(home);
+        }
+    }
+
     [Fact]
     public async Task Service_RespectsGitignoreAndPrunesOldPoints()
     {
