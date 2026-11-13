@@ -1,4 +1,5 @@
 using Dsh.Core;
+using Dsh.Runtime;
 
 namespace Dsh.Memory;
 
@@ -6,7 +7,7 @@ namespace Dsh.Memory;
 public sealed class MemoryWorkspace(MemoryPluginConfig config) : IDisposable
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, ProjectMemory> _byRoot = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly Dictionary<string, ProjectMemory> _byRoot = new(StringComparer.Ordinal);
     private readonly List<IDisposable> _stores = [];
 
     public ProjectMemory For(string? cwd)
@@ -16,6 +17,12 @@ public sealed class MemoryWorkspace(MemoryPluginConfig config) : IDisposable
         {
             if (_byRoot.TryGetValue(root, out var existing))
                 return existing;
+            foreach (var (cachedRoot, cachedMemory) in _byRoot)
+            {
+                if (string.Equals(root, cachedRoot, StringComparison.OrdinalIgnoreCase)
+                    && FilePathAccess.SameDirectory(root, cachedRoot))
+                    return cachedMemory;
+            }
             var store = MemoryStoreFactory.Create(config, root);
             if (store is IDisposable disposable)
                 _stores.Add(disposable);
