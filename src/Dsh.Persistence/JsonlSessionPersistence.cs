@@ -174,7 +174,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             if (writer is null)
                 RewriteHeader(path, renamed, snapshot.InheritedEventCount);
             else
-                writer.WhileDrained(() => RewriteHeader(path, renamed, snapshot.InheritedEventCount));
+                writer.WhileDrained(expectedLength => RewriteHeader(path, renamed, snapshot.InheritedEventCount, expectedLength));
         }
         List<JsonlSessionHandle> handles;
         lock (_trackerGate)
@@ -226,14 +226,17 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         if (errors.Count > 0) throw new AggregateException($"{BackendName} dispose failed", errors);
     }
 
-    private void RewriteHeader(string path, SessionHeader header, long inheritedEventCount)
+    private long RewriteHeader(string path, SessionHeader header, long inheritedEventCount, long? expectedLength = null)
     {
+        var original = ReadLiveLog(path);
+        if (expectedLength is { } expected && original.LongLength != expected)
+            throw new SessionPersistenceCorruptionException(
+                $"session \"{header.Id}\": the log changed from {expected} to {original.LongLength} bytes while this writer held it; refusing to rewrite a stale session");
         var headerLine = Encoding.UTF8.GetBytes(
             SessionLogHeader.WriteHeaderLine(header, header.IsSeeded ? inheritedEventCount : null) + "\n");
         byte[] replacement;
         if (_compression == JsonlCompression.None)
         {
-            var original = ReadLiveLog(path);
             var newline = Array.IndexOf(original, (byte)'\n');
             if (newline < 0)
                 throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header line: {path}");
@@ -241,7 +244,6 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         else
         {
-            var original = ReadLiveLog(path);
             var (frames, _) = ZstdFrames.Scan(original);
             if (frames.Count == 0)
                 throw new SessionPersistenceCorruptionException($"session \"{header.Id}\": log has no header frame: {path}");
@@ -250,6 +252,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
         File.WriteAllBytes(temp, replacement);
         File.Move(temp, path, overwrite: true);
+        return replacement.LongLength;
     }
 
     internal string? ResolveLog(SessionId id)
