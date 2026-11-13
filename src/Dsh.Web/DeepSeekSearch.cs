@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Dsh.Llm;
 using Dsh.Runtime;
 
 namespace Dsh.Web;
@@ -8,9 +9,10 @@ namespace Dsh.Web;
 public sealed class DeepSeekSearchProviderOptions
 {
     public string? ApiKey { get; init; }
-    public Func<Task<string?>>? ResolveApiKey { get; init; }
+    /** 没写字面 apiKey 时的凭据来源: 账号令牌走 x-dsh-auth-token, API Key 走 Bearer。 */
+    public Func<Task<LlmCredential?>>? ResolveCredential { get; init; }
     public string BaseUrl { get; init; } = "https://api.deepseek.com/anthropic/v1";
-    public string Model { get; init; } = "deepseek-v4-flash";
+    public string Model { get; init; } = "deepseek-flash";
     public string ApiVersion { get; init; } = "2023-06-01";
     public int MaxTokens { get; init; } = 4096;
     public int MaxUses { get; init; } = 5;
@@ -23,7 +25,7 @@ public sealed class DeepSeekSearchConfig
 {
     public string? ApiKey { get; init; }
     public string BaseUrl { get; init; } = "https://api.deepseek.com/anthropic/v1";
-    public string Model { get; init; } = "deepseek-v4-flash";
+    public string Model { get; init; } = "deepseek-flash";
     public string ApiVersion { get; init; } = "2023-06-01";
     public int MaxTokens { get; init; } = 4096;
     public int MaxUses { get; init; } = 5;
@@ -33,7 +35,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
 {
     public const string ProviderId = "deepseek-official";
     public const string DefaultBaseUrl = "https://api.deepseek.com/anthropic/v1";
-    public const string DefaultModel = "deepseek-v4-flash";
+    public const string DefaultModel = "deepseek-flash";
     public const string DefaultApiVersion = "2023-06-01";
     public const int DefaultMaxTokens = 4096;
     public const int DefaultMaxUses = 5;
@@ -53,7 +55,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
     public bool Available()
     {
         var options = _resolveOptions();
-        return ((options.ApiKey?.Length ?? 0) > 0 || options.ResolveApiKey is not null)
+        return ((options.ApiKey?.Length ?? 0) > 0 || options.ResolveCredential is not null)
             && Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _)
             && options.MaxTokens > 0
             && options.MaxUses > 0;
@@ -62,7 +64,7 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
     public async Task<WebSearchResult> Search(WebSearchRequest request, CancellationToken signal = default)
     {
         var options = _resolveOptions();
-        var apiKey = await ResolveApiKeyAsync(options, signal).ConfigureAwait(false);
+        var credential = await ResolveCredentialAsync(options, signal).ConfigureAwait(false);
         ThrowIfAborted(signal);
         var endpoint = $"{options.BaseUrl.TrimEnd('/')}/messages";
         var body = new Dictionary<string, object?>
@@ -89,8 +91,8 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         ThrowIfAborted(signal);
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        httpRequest.Headers.TryAddWithoutValidation("x-api-key", apiKey);
-        httpRequest.Headers.TryAddWithoutValidation("authorization", $"Bearer {apiKey}");
+        var (credentialHeader, credentialValue) = credential.Header();
+        httpRequest.Headers.TryAddWithoutValidation(credentialHeader, credentialValue);
         httpRequest.Headers.TryAddWithoutValidation("anthropic-version", options.ApiVersion);
         httpRequest.Headers.TryAddWithoutValidation("user-agent", UserAgent);
         httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -254,16 +256,16 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         return null;
     }
 
-    private async Task<string> ResolveApiKeyAsync(DeepSeekSearchProviderOptions options, CancellationToken signal)
+    private async Task<LlmCredential> ResolveCredentialAsync(DeepSeekSearchProviderOptions options, CancellationToken signal)
     {
         ThrowIfAborted(signal);
         if (options.ApiKey is { Length: > 0 })
-            return options.ApiKey;
-        string? resolved = null;
+            return new LlmCredential(options.ApiKey, LlmCredentialScheme.Bearer);
+        LlmCredential? resolved = null;
         try
         {
-            if (options.ResolveApiKey is not null)
-                resolved = await Abortable(options.ResolveApiKey(), signal).ConfigureAwait(false);
+            if (options.ResolveCredential is not null)
+                resolved = await Abortable(options.ResolveCredential(), signal).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -273,12 +275,12 @@ public sealed class DeepSeekSearchProvider : IWebSearchProvider
         {
             throw new WebError($"DeepSeek search credential resolution failed: {error.Message}", WebErrorCodes.ProviderError, error);
         }
-        if (resolved is { Length: > 0 })
+        if (resolved is not null && resolved.Token.Length > 0)
             return resolved;
         var reference = "DEEPSEEK_API_KEY";
         throw new WebError(
-            $"DeepSeek search has no API key for \"{reference}\"; store it through the credentials service"
-            + " (the web Models page writes it), export it in the launching environment, or set a literal"
+            $"DeepSeek search has no credential: sign in with the DeepSeek account, store an API key for \"{reference}\""
+            + " through the credentials service, export it in the launching environment, or set a literal"
             + " \"apiKey\" in the web-search-deepseek config",
             WebErrorCodes.CredentialMissing);
     }
@@ -343,6 +345,8 @@ public static class WebSearchDeepseek
         var options = new DeepSeekSearchProviderOptions
         {
             ApiKey = string.IsNullOrEmpty(resolved.ApiKey) ? null : resolved.ApiKey,
+            // 没写字面 apiKey 时用账号登录的令牌: 与模型走同一份凭据, 用户登录一次搜索也能用。
+            ResolveCredential = () => Task.FromResult(AccountCredential(ctx)),
             BaseUrl = resolved.BaseUrl,
             Model = resolved.Model,
             ApiVersion = resolved.ApiVersion,
@@ -352,6 +356,10 @@ public static class WebSearchDeepseek
         var http = SiteSearchHttp.CreateClient(ctx);
         return new WebDisposable(web.RegisterSearchProvider(new DeepSeekSearchProvider(() => options, http)), http);
     }
+
+    /** 账号令牌只在推理 origin 上放行; 未登录或端点不匹配时返回 null, 由搜索报告缺凭据。 */
+    private static LlmCredential? AccountCredential(Context ctx)
+        => InferenceCredentials.Resolve(ctx, DeepSeekSearchProvider.DefaultBaseUrl).Credential;
 
     private static DeepSeekSearchConfig FromDictionary(IReadOnlyDictionary<string, object?> dict)
     {

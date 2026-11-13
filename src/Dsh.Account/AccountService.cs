@@ -1,4 +1,4 @@
-﻿using Dsh.Boot;
+using Dsh.Boot;
 using Dsh.Plugins;
 using Dsh.Llm;
 using Dsh.Runtime;
@@ -14,14 +14,11 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
 {
     public const string ServiceName = IAccountService.ServiceName;
 
-    public const string PluginPackage = "@deepseek-ai/dsh-account";
-
     private const string LogName = "deepseek-account";
 
     private const string LoginSource = "desktop";
 
     private readonly AccountConfig _config;
-    private readonly HarnessHome _home;
     private readonly AccountStore _store;
     private readonly PlatformClient _client;
     private readonly Logger _logger;
@@ -37,7 +34,6 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
     private AccountBalance? _balance;
     private AccountPhase _phase = AccountPhase.SignedOut;
     private string? _failureCode;
-    private bool _enabled;
     private bool _closed;
 
     public AccountService(
@@ -49,8 +45,6 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
         ISecretProtector? protector = null) : base(ctx, ServiceName)
     {
         _config = config;
-        _home = home;
-        _enabled = config.Enabled;
         _logger = ctx.LoggerFor(LogName);
         _openBrowser = openBrowser ?? BrowserLauncher.Open;
         Origin = ResolveOrigin(config);
@@ -69,40 +63,20 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
 
     public string InferenceOrigin { get; }
 
-    public bool Enabled
-    {
-        get
-        {
-            lock (_gate)
-                return _enabled;
-        }
-    }
+    /** 推理 origin 决定账号令牌能覆盖哪个 API base url; 是否真的给出令牌由登录态决定。 */
+    Uri? IInferenceCredentials.InferenceOrigin => new(InferenceOrigin);
 
     public AccountSnapshot Snapshot
     {
         get
         {
             lock (_gate)
-                return new AccountSnapshot(_phase, _enabled, _profile, _balance, _authorizeUrl, _failureCode);
+                return new AccountSnapshot(_phase, _profile, _balance, _authorizeUrl, _failureCode);
         }
-    }
-
-    public void SetEnabled(bool enabled)
-    {
-        lock (_gate)
-        {
-            if (_enabled == enabled)
-                return;
-            _enabled = enabled;
-        }
-        PersistEnabled(enabled);
-        RaiseChanged();
     }
 
     public async Task<AccountProfile?> SignInAsync(CancellationToken cancellationToken)
     {
-        if (!Enabled)
-            throw new AccountException(AccountFailure.Disabled);
         if (_closed)
             throw new AccountException(AccountFailure.Protocol);
         await CancelAsync();
@@ -211,9 +185,15 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
         }
     }
 
-    /** 注册阶段: 该目标是否由账号提供令牌(只看开关与 origin, 不读取令牌)。 */
-    public bool Covers(Uri destination)
-        => Enabled && IsInferenceOrigin(destination);
+    /** 在系统浏览器打开平台个人页(用量/充值): 这两项功能只有官网提供, 客户端不做本地复刻。 */
+    public bool OpenPlatformPage(AccountPlatformPage page)
+    {
+        var path = page == AccountPlatformPage.TopUp ? AccountOrigins.TopUpPath : AccountOrigins.UsagePath;
+        return OpenBrowser($"{Origin}{path}");
+    }
+
+    /** 注册阶段: 该目标是否由账号提供令牌(只比 origin, 不读取令牌)。 */
+    public bool Covers(Uri destination) => IsInferenceOrigin(destination);
 
     /** 请求阶段: origin 匹配且存在同签发者的授权时给出令牌。 */
     public string? TryGetToken(Uri destination)
@@ -225,6 +205,9 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
             ? grant.Token
             : null;
     }
+
+    /** 推理端点拒绝了该令牌: 只在它仍是当前登录时清除, 迟到的拒绝不能清掉后来重新登录的凭据。 */
+    public void RejectToken(string token) => ExpireCredential(token, notify: false);
 
     private bool IsInferenceOrigin(Uri destination)
         => string.Equals(
@@ -364,7 +347,8 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
         }
     }
 
-    private void ExpireCredential(string token)
+    /** notify=false 用于推理端点的拒绝: 那次失败已经由请求本身报告, 不再额外抛一次会话失效事件。 */
+    private void ExpireCredential(string token, bool notify = true)
     {
         var grant = _store.ReadGrant(Origin);
         if (grant is null || !string.Equals(grant.Token, token, StringComparison.Ordinal))
@@ -378,7 +362,8 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
             _failureCode = nameof(AccountFailure.Expired);
         }
         RaiseChanged();
-        SessionExpired?.Invoke();
+        if (notify)
+            SessionExpired?.Invoke();
     }
 
     private void SetSignedOut()
@@ -405,28 +390,13 @@ public sealed class AccountService : Service, IAccountService, IInferenceCredent
         RaiseChanged();
     }
 
-    private void PersistEnabled(bool enabled)
-    {
-        try
-        {
-            var settings = HarnessSettings.Load(_home);
-            var existing = settings.Plugins.GetValueOrDefault(PluginPackage);
-            var merged = new Dictionary<string, object?>(existing?.Parameters ?? [], StringComparer.Ordinal) { ["accountEnabled"] = enabled };
-            settings.Plugins[PluginPackage] = (existing ?? new PluginSetting()) with { Parameters = merged };
-            settings.SavePlugins(_home);
-        }
-        catch (Exception error)
-        {
-            _logger.Warn("%s", $"account enabled persist failed: {error.GetType().Name}");
-        }
-    }
-
-    private void OpenBrowser(string url)
+    private bool OpenBrowser(string url)
     {
         if (_openBrowser(url))
-            return;
+            return true;
         var path = Uri.TryCreate(url, UriKind.Absolute, out var parsed) ? parsed.AbsolutePath : "unknown";
         Log($"browser open failed path={path}");
+        return false;
     }
 
     private static string AppendLoginSource(string url)

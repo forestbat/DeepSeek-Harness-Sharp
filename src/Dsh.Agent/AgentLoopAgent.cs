@@ -84,7 +84,11 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
     internal static readonly object AgentContextKey = new();
 
     /** 退订本 agent 挂在共享事件表上的投影;会话本身的释放由持有者(AgentLoop / 子代理 run)决定。 */
-    public void Dispose() => _runtimeContext.Dispose();
+    public void Dispose()
+    {
+        Inbox.Dispose();
+        _runtimeContext.Dispose();
+    }
 
     public SessionId Id { get; }
     public AgentOptions Options { get; }

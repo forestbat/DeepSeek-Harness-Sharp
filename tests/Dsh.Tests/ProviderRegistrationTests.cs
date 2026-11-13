@@ -84,8 +84,9 @@ public sealed class ProviderRegistrationTests
         Assert.DoesNotContain(app.Ctx.Root.Logger.Buffer, message => message.Text.Contains("no adapter plugin serves type"));
     }
 
+    /** deepseek 的模型清单只来自端点 /models: 静态目录已删除, 因此没网络时一个模型都不该冒出来。 */
     [Fact]
-    public async Task Compose_ExplicitDeepSeekTypeUsesDeepSeekCatalog()
+    public async Task Compose_DeepSeekTypeTakesModelsFromTheEndpointOnly()
     {
         using var home = new TestHome("""
             providers:
@@ -93,12 +94,13 @@ public sealed class ProviderRegistrationTests
                 type: deepseek
                 options:
                   apiKey: sk-test
+                  baseUrl: https://example.invalid
             """);
         using var app = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
 
         var llm = app.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Equal("ds", Assert.Single(llm.ListProviders()).Id);
-        Assert.Contains(llm.ListModels("ds"), model => model.Id == "deepseek-v4-flash");
+        Assert.Empty(llm.ListModels("ds"));
     }
 
     [Fact]

@@ -127,46 +127,74 @@
           <StackPanel Spacing="12" IsVisible="{Binding Preferences.IsAccountSection}">
             <TextBlock Text="账号" Classes="Title" />
 
+            <TextBlock Text="当前功能不可用（账号插件未加载）" Classes="Tertiary" TextWrapping="Wrap"
+                       IsVisible="{Binding !Preferences.Account.IsAvailable}" />
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14"
+                    IsVisible="{Binding Preferences.Account.IsSignedIn}">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border Width="44" Height="44" CornerRadius="22" Background="{DynamicResource Brush.Bg.Chat}">
+                  <TextBlock Text="{Binding Preferences.Account.Initial}" Classes="Secondary"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="2" Margin="12,0,0,0" VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Preferences.Account.DisplayName}" Classes="Secondary" />
+                  <TextBlock Text="{Binding Preferences.Account.MaskedContact}" Classes="Tertiary" />
+                </StackPanel>
+                <Button Grid.Column="2" Name="AccountMore" Classes="Ghost" VerticalAlignment="Center"
+                        Content="更多账号信息 ↗" ToolTip.Tip="在浏览器打开 platform.deepseek.com/usage"
+                        Command="{Binding Preferences.Account.OpenUsageCommand}" />
+              </Grid>
+            </Border>
+
+            <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14"
+                    IsVisible="{Binding Preferences.Account.IsSignedIn}">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="充值余额" Classes="Secondary" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Name="AccountBalance" Text="{Binding Preferences.Account.BalanceText}"
+                             FontSize="{DynamicResource FontSize.Brand}" FontWeight="SemiBold" VerticalAlignment="Center"
+                             IsVisible="{Binding Preferences.Account.HasBalance}" />
+                </Grid>
+                <TextBlock Text="{Binding Preferences.Account.BonusText}" Classes="Tertiary" TextWrapping="Wrap"
+                           IsVisible="{Binding Preferences.Account.HasBonus}" />
+                <Border Height="1" Background="{DynamicResource Brush.Border.Subtle}" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <Button Classes="Ghost" HorizontalAlignment="Left" Content="更多"
+                          Command="{Binding Preferences.Account.OpenUsageCommand}" />
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Name="AccountUsage" Classes="Ghost" Content="查询用量"
+                            Command="{Binding Preferences.Account.OpenUsageCommand}" />
+                    <Button Name="AccountTopUp" Classes="Primary" Content="充值"
+                            Command="{Binding Preferences.Account.OpenTopUpCommand}" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+            </Border>
+
             <Border Background="{DynamicResource Brush.Bg.Card}" CornerRadius="{DynamicResource CornerRadius.Card}" Padding="14">
               <StackPanel Spacing="10">
-                <TextBlock Text="当前功能不可用（账号插件未加载）" Classes="Tertiary" TextWrapping="Wrap"
-                           IsVisible="{Binding !Preferences.Account.IsAvailable}" />
-                <CheckBox Content="启用 DeepSeek 账号登录（默认关闭）"
-                          IsChecked="{Binding Preferences.Account.IsEnabled, Mode=TwoWay}"
-                          IsEnabled="{Binding Preferences.Account.IsAvailable}" />
-                <TextBlock Text="{Binding Preferences.Account.Disclaimer}" Classes="Tertiary" TextWrapping="Wrap" />
-
                 <StackPanel Spacing="8" IsVisible="{Binding Preferences.Account.IsSignedOut}">
                   <TextBlock Text="未登录：点击登录后会在系统浏览器打开 DeepSeek 授权页。" Classes="Secondary" TextWrapping="Wrap" />
-                  <Button Classes="Primary" HorizontalAlignment="Left" Content="登录"
+                  <Button Name="AccountSignIn" Classes="Primary" HorizontalAlignment="Left" Content="登录到 DeepSeek"
                           IsEnabled="{Binding Preferences.Account.CanSignIn}"
                           Command="{Binding Preferences.Account.SignInCommand}" />
                 </StackPanel>
 
                 <StackPanel Spacing="8" IsVisible="{Binding Preferences.Account.IsWaiting}">
                   <TextBlock Text="等待浏览器完成…请在打开的页面完成登录。" Classes="Secondary" TextWrapping="Wrap" />
-                  <Button Classes="Ghost" HorizontalAlignment="Left" Content="取消登录"
+                  <Button Name="AccountCancel" Classes="Ghost" HorizontalAlignment="Left" Content="取消登录"
                           IsEnabled="{Binding Preferences.Account.CanCancel}"
                           Command="{Binding Preferences.Account.CancelCommand}" />
                 </StackPanel>
 
                 <StackPanel Spacing="8" IsVisible="{Binding Preferences.Account.IsSignedIn}">
-                  <StackPanel Orientation="Horizontal" Spacing="10">
-                    <Border Width="40" Height="40" CornerRadius="20" Background="{DynamicResource Brush.Bg.Chat}">
-                      <TextBlock Text="{Binding Preferences.Account.Initial}" Classes="Secondary"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                    <StackPanel Spacing="2" VerticalAlignment="Center">
-                      <TextBlock Text="{Binding Preferences.Account.DisplayName}" Classes="Secondary" />
-                      <TextBlock Text="{Binding Preferences.Account.MaskedContact}" Classes="Tertiary" />
-                    </StackPanel>
-                  </StackPanel>
-                  <TextBlock Text="{Binding Preferences.Account.BalanceText}" Classes="Mono" TextWrapping="Wrap" />
-                  <Button Classes="Ghost" HorizontalAlignment="Left" Content="退出登录"
+                  <Button Name="AccountSignOut" Classes="Ghost" HorizontalAlignment="Left" Content="退出登录"
                           IsEnabled="{Binding !Preferences.Account.IsBusy}"
                           Command="{Binding Preferences.Account.SignOutCommand}" />
                 </StackPanel>
 
+                <TextBlock Text="{Binding Preferences.Account.Disclaimer}" Classes="Tertiary" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding Preferences.Account.Status}" Classes="Tertiary" TextWrapping="Wrap" />
               </StackPanel>
             </Border>

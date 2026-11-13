@@ -5,7 +5,7 @@ using Dsh.Runtime;
 
 namespace Dsh.Llm.DeepSeek;
 
-/** DeepSeek wire 适配器插件:登记 deepseek 工厂;默认 baseUrl/密钥环境变量与模型目录都归本插件。 */
+/** DeepSeek wire 适配器插件:登记 deepseek 工厂;默认 baseUrl 与密钥环境变量归本插件, 模型清单由端点自己下发。 */
 public sealed class Plugin : IDshPlugin
 {
     internal const string Package = "@deepseek-ai/dsh-llm-deepseek";
@@ -23,76 +23,57 @@ public sealed class Plugin : IDshPlugin
 
 internal sealed class DeepSeekAdapterFactory(string homeRoot, Context ctx) : ILlmAdapterFactory
 {
-    private static readonly IReadOnlyList<DeepSeekCatalogModel> Catalog =
-    [
-        new("deepseek-v4-flash", "DeepSeek-V4-Flash",
-            "Fast, efficient, and economical; suited to focused, routine, or parallel tasks.",
-            DeepSeekConnectionOptions.DefaultContextWindowValue),
-        new("deepseek-v4-pro", "DeepSeek-V4-Pro",
-            "Stronger agentic coding, knowledge, and reasoning; suited to complex or quality-critical tasks at higher cost.",
-            DeepSeekConnectionOptions.DefaultContextWindowValue),
-        new("deepseek-v4-flash-vision-exp", "DeepSeek-V4-Flash-Vision-Exp",
-            null,
-            DeepSeekConnectionOptions.DefaultContextWindowValue,
-            null,
-            ["text", "image"]),
-    ];
-
     public IReadOnlyList<LlmWireDefinition> Wires { get; } =
     [
         new("deepseek",
             DefaultBaseUrl: "https://api.deepseek.com",
-            DefaultApiKeyEnv: "DEEPSEEK_API_KEY"),
+            DefaultApiKeyEnv: "DEEPSEEK_API_KEY",
+            SelfDescribing: true),
     ];
 
     public LlmAdapter Create(ResolvedLlmProvider provider)
     {
+        var baseUrl = Endpoint.NormalizeBaseUrl(provider.BaseUrl);
+        var http = new HttpClient(OutboundProxy.FromContext(ctx).CreateHandler());
+        var credential = CredentialResolver(provider, baseUrl);
         var connection = new DeepSeekConnectionOptions(
-            Endpoint.NormalizeBaseUrl(provider.BaseUrl),
+            baseUrl,
             provider.ApiKeyEnv,
             new RequestDefaults(),
             DeepSeekConnectionOptions.DefaultMaxTokens,
             DeepSeekConnectionOptions.DefaultContextWindowValue,
-            MergeCatalog(provider.Models),
+            provider.Models,
+            new DeepSeekModelListing(baseUrl, credential, http),
             DeepSeekConnectionOptions.DefaultStreamIdleTimeoutMs,
             ResolvedRetryPolicy.Resolve(null, "llm-deepseek"));
         return new DeepSeekAdapter(provider.ProviderId, new DeepSeekAdapterOptions
         {
             Options = () => connection,
-            ResolveApiKey = (activeConnection, cancellationToken) =>
-            {
-                if (provider.ApiKey is not null && ApiKey.Normalize(provider.ApiKey, out var key, out _))
-                    return Task.FromResult(key);
-                var (accountToken, accountCovered) = InferenceCredentials.Resolve(ctx, activeConnection.BaseUrl);
-                if (accountToken is { Length: > 0 })
-                    return Task.FromResult(accountToken);
-                var reason = accountCovered
-                    ? $"provider \"{provider.ProviderId}\" has no API key and the DeepSeek account is not signed in"
-                    : $"provider \"{provider.ProviderId}\" credential \"{provider.ApiKeyEnv}\" is unusable";
-                throw new LlmException(new LlmFailure(reason, LlmFailureCodes.InvalidCredential));
-            },
+            ResolveCredential = (_, cancellationToken) => credential(cancellationToken),
+            RejectCredential = rejected => InferenceCredentials.Reject(ctx, rejected),
             ResolveUserId = () => AnonymousUserId.Resolve(homeRoot),
-            HttpClient = new HttpClient(OutboundProxy.FromContext(ctx).CreateHandler()),
+            HttpClient = http,
         });
     }
 
-    private static IReadOnlyList<DeepSeekCatalogModel> MergeCatalog(IReadOnlyList<ProviderModelSpec> models)
-    {
-        if (models.Count == 0)
-            return Catalog;
-        var merged = Catalog.ToDictionary(entry => entry.Id, StringComparer.Ordinal);
-        foreach (var model in models)
+    /**
+     * 凭据解析: settings 里的 API Key 优先, 否则用账号登录换来的令牌。
+     * 两者走不同的请求头, 由端点自己区分; 都没有时按"缺凭据"报错, 并区分"没登录"与"key 不可用"。
+     */
+    private Func<CancellationToken, Task<LlmCredential>> CredentialResolver(ResolvedLlmProvider provider, string baseUrl)
+        => cancellationToken =>
         {
-            merged.TryGetValue(model.Id, out var existing);
-            merged[model.Id] = new DeepSeekCatalogModel(
-                model.Id,
-                model.Name ?? existing?.Name,
-                existing?.Description,
-                existing?.ContextWindow,
-                existing?.MaxTokens,
-                existing?.InputModalities,
-                model.SystemPromptUpdate ?? existing?.SystemPromptUpdate);
-        }
-        return [.. merged.Values];
-    }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (provider.ApiKey is not null && ApiKey.Normalize(provider.ApiKey, out var key, out _))
+                return Task.FromResult(new LlmCredential(key, LlmCredentialScheme.Bearer));
+            var (accountCredential, covered) = InferenceCredentials.Resolve(ctx, baseUrl);
+            if (accountCredential is not null)
+                return Task.FromResult(accountCredential);
+            var reason = covered
+                ? $"provider \"{provider.ProviderId}\" has no API key and the DeepSeek account is not signed in"
+                : $"provider \"{provider.ProviderId}\" credential \"{provider.ApiKeyEnv}\" is unusable";
+            throw new LlmException(new LlmFailure(
+                reason,
+                covered ? LlmFailureCodes.AccountSignInRequired : LlmFailureCodes.InvalidCredential));
+        };
 }
