@@ -6,7 +6,7 @@ namespace Dsh.Memory;
 public sealed class MemoryWorkspace(MemoryPluginConfig config) : IDisposable
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, ProjectMemory> _byRoot = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ProjectMemory> _byRoot = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private readonly List<IDisposable> _stores = [];
 
     public ProjectMemory For(string? cwd)
