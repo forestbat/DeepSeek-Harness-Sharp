@@ -343,6 +343,7 @@ public static class GrepTool
         if (File.Exists(root))
         {
             files = [root];
+            root = Path.GetDirectoryName(root)!;
         }
         else if (Directory.Exists(root))
         {
