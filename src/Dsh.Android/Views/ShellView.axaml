@@ -54,6 +54,10 @@
     <Style Selector="Border.message.result">
       <Setter Property="Background" Value="#1D2620" />
     </Style>
+    <!-- 折叠摘要用淡色, 展开后的全文用正文色。 -->
+    <Style Selector="TextBlock.preview">
+      <Setter Property="Foreground" Value="#9AA3AF" />
+    </Style>
     <Style Selector="Border.card">
       <Setter Property="Background" Value="#1B1E24" />
       <Setter Property="CornerRadius" Value="12" />
@@ -387,9 +391,10 @@
       <Border Grid.Row="1" Background="#1A2432" CornerRadius="12" Padding="12,8" Margin="12,4"
               IsVisible="{Binding HasTimeline}">
         <StackPanel Spacing="6">
-          <Grid ColumnDefinitions="*,Auto">
+          <Grid ColumnDefinitions="*,Auto,Auto">
             <TextBlock Grid.Column="0" Text="时间线" FontSize="14" FontWeight="SemiBold" Foreground="#8AB4F8" />
-            <TextBlock Grid.Column="1" Classes="hint" Text="{Binding TimelineHint}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Classes="hint" Text="{Binding TimelineHint}" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <Button Grid.Column="2" Classes="small" Content="收起" Command="{Binding CloseTimelineCommand}" />
           </Grid>
           <ScrollViewer MaxHeight="300">
             <ItemsControl ItemsSource="{Binding Timeline}">
@@ -433,7 +438,9 @@
               <ScrollViewer x:Name="PART_Scroller"
                             VerticalScrollBarVisibility="Auto"
                             HorizontalScrollBarVisibility="Disabled">
-                <ItemsPresenter Name="PART_ItemsPresenter" />
+                <!-- 面板必须由这里显式传给 ItemsPresenter: 自定义模板不写这条绑定, 列表就退回默认的 StackPanel, 虚拟化整个失效。 -->
+                <ItemsPresenter Name="PART_ItemsPresenter"
+                                ItemsPanel="{TemplateBinding ItemsPanel}" />
               </ScrollViewer>
             </ControlTemplate>
           </ItemsControl.Template>
@@ -449,30 +456,23 @@
                       Classes.tool="{Binding IsTool}"
                       Classes.result="{Binding IsContext}">
                 <StackPanel Spacing="3">
-                  <Grid ColumnDefinitions="Auto,Auto,Auto">
-                    <TextBlock Grid.Column="0" Classes="role" Text="{Binding Role}" />
-                    <TextBlock Grid.Column="1" Classes="role" Margin="8,0,0,0"
-                               Text="{Binding Timestamp}"
-                               IsVisible="{Binding HasTimestamp}" />
-                    <!-- 折叠时只显示一行摘要, 双击展开全文; 窄屏上一条长回复否则能占掉好几屏。 -->
-                    <TextBlock Grid.Column="2" Classes="role" Margin="8,0,0,0"
-                               Text="{Binding FoldLabel}"
-                               IsVisible="{Binding IsFoldable}" />
-                  </Grid>
-                  <TextBlock Text="{Binding Text}"
+                  <TextBlock Classes="role" Text="{Binding HeaderLine}" />
+                  <TextBlock Text="{Binding BodyText}"
                              FontSize="14"
                              TextWrapping="Wrap"
-                             IsVisible="{Binding !ShowPreview}" />
-                  <TextBlock Text="{Binding Preview}"
-                             FontSize="14"
-                             TextWrapping="Wrap"
-                             Foreground="#9AA3AF"
-                             IsVisible="{Binding ShowPreview}" />
+                             Classes.preview="{Binding ShowPreview}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <!-- 等数据时的细进度条: 贴顶部不遮内容, 也不吃触摸, 滑动手感不受影响。 -->
+        <ProgressBar IsIndeterminate="True"
+                     Height="3"
+                     VerticalAlignment="Top"
+                     HorizontalAlignment="Stretch"
+                     IsHitTestVisible="False"
+                     IsVisible="{Binding IsWaitingForData}" />
       </Grid>
 
       <StackPanel Grid.Row="3" Margin="12,4" Spacing="6">
