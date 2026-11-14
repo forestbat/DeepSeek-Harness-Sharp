@@ -376,10 +376,10 @@ public sealed class HarnessSettings
     {
         var canonical = CanonicalFilePath.Canonicalize(path);
         using var transaction = new SettingsWriteLock(canonical);
-        var before = File.Exists(canonical) ? ReadDocument(canonical, out _) : "";
+        var before = File.Exists(path) ? ReadDocument(path, out _) : "";
         if (PrepareMutation(before, canonical, prepare) is not { } after)
             return false;
-        Publish(canonical, before, after, backup);
+        Publish(path, before, after, backup);
         return true;
     }
 
@@ -388,14 +388,14 @@ public sealed class HarnessSettings
         => commit(path, canonical =>
         {
             using var transaction = new SettingsWriteLock(canonical);
-            var before = File.Exists(canonical) ? ReadDocument(canonical, out _) : "";
+            var before = File.Exists(path) ? ReadDocument(path, out _) : "";
             return PrepareMutation(before, canonical, prepare) is { } after
                 ? new SettingsMutationProposal(before, after)
                 : null;
-        }, (canonical, proposal, temporary, signal) =>
+        }, (_, proposal, temporary, signal) =>
         {
             if (backup && proposal.Before != proposal.After && proposal.Before.Length > 0)
-                WriteAtomic($"{canonical}.bak", proposal.Before);
+                WriteAtomic($"{path}.bak", proposal.Before);
             return File.WriteAllTextAsync(temporary, proposal.After, signal);
         });
 

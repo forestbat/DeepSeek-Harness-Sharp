@@ -115,6 +115,8 @@ public sealed class JsonRpcPeer : IAsyncDisposable
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_cts.IsCancellationRequested)
+                throw new IOException("The JSON-RPC connection is closed.");
             // A frame cancelled halfway leaves the peer reading the next frames as its body (a cancelled 1 MiB upload chunk hung the connection), so a started frame is always written whole.
             await FrameCodec.WriteFrameAsync(_stream, payload, CancellationToken.None).ConfigureAwait(false);
         }
