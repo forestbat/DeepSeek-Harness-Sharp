@@ -135,6 +135,32 @@ public sealed class HarnessSettingsSaveTests
         }
     }
 
+    /** 旧版本把文件写成了大写 SETTINGS.YAML: 新版本用小写名落盘只能接管它, 不能把内容丢掉。 */
+    [Fact]
+    public void Save_TakesOverTheUppercaseFileLeftByOlderBuilds()
+    {
+        var home = CreateHome("\n");
+        try
+        {
+            var uppercase = Path.Combine(home.Root, "SETTINGS.YAML");
+            File.Move(home.SettingsFile, uppercase);
+
+            var settings = HarnessSettings.Load(home);
+            settings.Safety!.AutoApprove = true;
+            settings.Save(home);
+
+            var text = ReadSettings(home);
+            Assert.Contains("# 用户注释: 保留", text);
+            Assert.Contains("custom_key: keep-me", text);
+            Assert.Contains("autoApprove: true", text);
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(home.Root).Select(Path.GetFileName));
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
     [Fact]
     public void Load_MissingSettings_DoesNotWriteTemplate()
     {
