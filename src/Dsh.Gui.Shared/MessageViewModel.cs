@@ -154,6 +154,7 @@ public sealed partial class MessageViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowToolArguments));
         OnPropertyChanged(nameof(ShowToolResult));
         OnPropertyChanged(nameof(Preview));
+        OnPropertyChanged(nameof(BodyText));
     }
 
     public void SetToolResult(string text, bool isError)
@@ -208,6 +209,28 @@ public sealed partial class MessageViewModel : ObservableObject
     public static bool CompactByDefault { get; set; }
 
     public string FoldLabel => IsExpanded ? "▾ 折叠" : "▸ 展开";
+
+    /**
+     * 头部一行: 角色、时刻、折叠标记用" · "串起来。
+     * 手机列表每条消息的控件数直接决定上滑插入的耗时(实测每个 TextBlock 约 0.4ms), 合成一行省掉一个 Grid 和两个 TextBlock。
+     */
+    public string HeaderLine
+    {
+        get
+        {
+            var parts = new List<string>(3);
+            if (HasRole && Role.Length > 0)
+                parts.Add(Role);
+            if (HasTimestamp)
+                parts.Add(Timestamp);
+            if (IsFoldable)
+                parts.Add(FoldLabel);
+            return string.Join(" · ", parts);
+        }
+    }
+
+    /** 折叠时显示摘要, 展开时显示全文; 两者互斥, 所以合成一个属性只占用一个 TextBlock。 */
+    public string BodyText => ShowPreview ? Preview : Text;
 
     public bool HasDetail => Detail.Length > 0;
 
@@ -283,8 +306,11 @@ public sealed partial class MessageViewModel : ObservableObject
             return;
         Text = text;
         OnPropertyChanged(nameof(Preview));
+        OnPropertyChanged(nameof(BodyText));
         Updated?.Invoke(this);
     }
+
+    partial void OnTextChanged(string value) => OnPropertyChanged(nameof(BodyText));
 
     partial void OnDetailChanged(string value)
     {
@@ -295,6 +321,8 @@ public sealed partial class MessageViewModel : ObservableObject
     partial void OnIsExpandedChanged(bool value)
     {
         OnPropertyChanged(nameof(FoldLabel));
+        OnPropertyChanged(nameof(HeaderLine));
+        OnPropertyChanged(nameof(BodyText));
         OnPropertyChanged(nameof(ShowBody));
         OnPropertyChanged(nameof(ShowMarkdown));
         OnPropertyChanged(nameof(ShowPlainBody));
