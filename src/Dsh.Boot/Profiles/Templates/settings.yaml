@@ -534,6 +534,8 @@ plugins:
 #     args: []
 #     HTTP 端点(transport: streamable-http 或 sse 时使用)
 #     url:
+#     候选端点: 地址会随网络变化的 server(例如手机)写多条, 连接时挑第一条可达的
+#     urls: []
 #     是否启用
 #     enabled: true
 # 工具集行为
