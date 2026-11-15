@@ -181,7 +181,7 @@ public static class BashTool
             Stdout = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Stderr = new SubprocessCollect(config.MaxOutputBytes, config.MaxSpillBytes),
             Signal = fused.Token,
-        });
+        }, exec);
         var outcome = await handle.Done;
         var stdoutRead = handle.StdoutReader.ReadFrom(0);
         var stderrRead = handle.StderrReader.ReadFrom(0);

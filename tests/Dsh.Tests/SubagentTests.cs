@@ -331,6 +331,31 @@ public class SubagentTests
     }
 
     [Fact]
+    public async Task SpawnDelegation_InheritsFullAccessApprovalPolicy()
+    {
+        using var fixture = new SubagentFixture(
+        [
+            _ => ToolCallAnswer("call-sub-1", "subagent", """{"description":"auto policy task","prompt":"check inherited policy"}"""),
+            _ => TextAnswer("done"),
+            _ => TextAnswer("ok"),
+        ]);
+        var parent = await fixture.CreateParent("session-parent-auto-policy");
+        fixture.Approval.SetPolicy(parent, ApprovalPolicy.Auto);
+
+        parent.Followup(MessageFactory.CreateUserText("start"));
+        await parent.WhenIdle();
+
+        var child = fixture.ChildOf(parent.Id);
+        Assert.NotNull(child);
+        var pin = child.SnapshotEvents()
+            .Select(sessionEvent => sessionEvent.Data)
+            .OfType<ApprovalPolicyPayload>()
+            .Single();
+        Assert.Equal(ApprovalPolicy.Auto, pin.Policy);
+        Assert.Equal(ApprovalPolicy.Auto, fixture.Approval.EffectivePolicy(child));
+    }
+
+    [Fact]
     public async Task ForkDelegation_ChildInheritsCompletedTurnPrefix()
     {
         using var fixture = new SubagentFixture(
