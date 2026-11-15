@@ -169,16 +169,8 @@ public sealed class RemoteHostNotifyTests
         Assert.Equal(first, Assert.Single(paged.Items).SessionId);
     }
 
-    private static async Task<RemoteNotifyPage> QueryRpcAsync(HostNotificationCenter notifications, RemoteNotifyQuery query, CancellationToken cancellationToken)
-    {
-        var message = new JsonRpcMessage
-        {
-            Method = NotificationsProtocol.MethodNotifyList,
-            Params = JsonSerializer.SerializeToElement(query, NotificationsProtocolJsonContext.Default.RemoteNotifyQuery)
-        };
-        var result = await HostNotifyMethods.HandleAsync(notifications, NotificationsProtocol.MethodNotifyList, message, cancellationToken);
-        return JsonSerializer.Deserialize(result!.Value, NotificationsProtocolJsonContext.Default.RemoteNotifyPage)!;
-    }
+    private static Task<RemoteNotifyPage> QueryRpcAsync(HostNotificationCenter notifications, RemoteNotifyQuery query, CancellationToken cancellationToken)
+        => new HostNotifyMethods(notifications, static () => { }).ListAsync(query, cancellationToken);
 
     /** Pauses the real read operation after it owns the mutation gate, before it commits to NotificationHistory. */
     private sealed class PausedReadIds(IReadOnlyList<string> ids, CancellationToken cancellationToken) : IReadOnlyList<string>, IDisposable
