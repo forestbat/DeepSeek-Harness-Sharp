@@ -1,3 +1,6 @@
+using Dsh.RemoteHost.Rpc;
+using StreamJsonRpc.Protocol;
+using StreamJsonRpc;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -35,11 +38,11 @@ public sealed class EditorBridgeTests
         Assert.True((await editor.OpenAsync(new EditorRequest { WorkspaceRoot = core.Root, ExecutionTarget = EditorExecutionTarget.Local }, Ct)).Success);
         Assert.Single(service.Requests);
 
+        // 线上多出来的字段只能被丢掉: 契约里没有 Command/Environment, 注入的内容到不了启动器。
         using var injected = JsonDocument.Parse("{\"OperationId\":\"" + Guid.NewGuid() + "\",\"Request\":{\"WorkspaceRoot\":" + JsonSerializer.Serialize(core.Root) + ",\"Command\":\"untrusted-command\",\"Environment\":{\"X\":\"untrusted\"}}}");
-        await Assert.ThrowsAsync<JsonRpcException>(() => connection.Client.RequestAsync(EditorProtocol.MethodOpen, injected.RootElement, Ct));
-        Assert.Single(service.Requests);
-        await Assert.ThrowsAsync<JsonRpcException>(() => editor.OpenAsync(new EditorRequest { WorkspaceRoot = Path.GetPathRoot(core.Root)! }, Ct));
-        Assert.Single(service.Requests);
+        Assert.True((await connection.Client.ForwardAsync(EditorProtocol.MethodOpen, injected.RootElement, Ct)).GetProperty("Success").GetBoolean());
+        Assert.Equal(core.Root, service.Requests.Last().WorkspaceRoot);
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => editor.OpenAsync(new EditorRequest { WorkspaceRoot = Path.GetPathRoot(core.Root)! }, Ct));
     }
 
     [Fact(Timeout = 10000)]
@@ -49,8 +52,8 @@ public sealed class EditorBridgeTests
         var server = new RemoteHostServer(new("editor-test-token"), core);
         await using var connection = await Connection.CreateAsync(server, Ct);
         Assert.False(connection.Client.Supports(EditorProtocol.Capability));
-        var error = await Assert.ThrowsAsync<JsonRpcException>(() => connection.Client.Editor.ListAsync(Ct));
-        Assert.Equal(JsonRpcPeer.MethodNotFound, error.Code);
+        var error = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => connection.Client.Editor.ListAsync(Ct));
+        Assert.Equal(JsonRpcErrorCode.MethodNotFound, (JsonRpcErrorCode)error.ErrorCode);
     }
 
     [Fact(Timeout = 10000)]
@@ -61,10 +64,10 @@ public sealed class EditorBridgeTests
         var service = new RecordingService();
         var server = new RemoteHostServer(new("editor-test-token"), new Backend(core, new EditorBackend(service, clients, core.Files.Policy)));
         await using var raw = await RawConnection.CreateAsync(server, Ct);
-        var denied = await Assert.ThrowsAsync<JsonRpcException>(() => raw.Peer.RequestAsync(EditorProtocol.MethodRegister,
+        var denied = await Assert.ThrowsAsync<RemoteInvocationException>(() => raw.Peer.InvokeAsync(EditorProtocol.MethodRegister,
             JsonSerializer.SerializeToElement(new RemoteEditorClientRegistration(), EditorProtocolJsonContext.Default.RemoteEditorClientRegistration), Ct));
-        Assert.Equal(-32001, denied.Code);
-        await Assert.ThrowsAsync<JsonRpcException>(() => raw.Peer.RequestAsync(EditorProtocol.MethodOpen,
+        Assert.Equal(-32001, (int)denied.ErrorCode);
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => raw.Peer.InvokeAsync(EditorProtocol.MethodOpen,
             JsonSerializer.SerializeToElement(new RemoteEditorOpen(Guid.NewGuid(), new EditorRequest { WorkspaceRoot = core.Root }), EditorProtocolJsonContext.Default.RemoteEditorOpen), Ct));
         Assert.Empty(clients.Clients);
         Assert.Empty(service.Requests);
@@ -532,9 +535,9 @@ public sealed class EditorBridgeTests
         public ValueTask DisposeAsync() => new(_dispose ??= DisposeCoreAsync());
         private async Task DisposeCoreAsync() { await Client.DisposeAsync(); await transport.DisposeAsync(); }
     }
-    private sealed class RawConnection(TcpClient client, TcpClient serverClient, Task serve, JsonRpcPeer? peer) : IAsyncDisposable
+    private sealed class RawConnection(TcpClient client, TcpClient serverClient, Task serve, JsonRpcChannel? peer) : IAsyncDisposable
     {
-        public JsonRpcPeer Peer => peer ?? throw new InvalidOperationException();
+        public JsonRpcChannel Peer => peer ?? throw new InvalidOperationException();
         public Stream Stream => client.GetStream();
         public static async Task<RawConnection> CreateAsync(RemoteHostServer server, CancellationToken cancellationToken, bool createPeer = true)
         {
@@ -545,13 +548,12 @@ public sealed class EditorBridgeTests
             await client.ConnectAsync((IPEndPoint)listener.LocalEndpoint, cancellationToken);
             var serverClient = await accept;
             var serve = server.ServeAsync(serverClient.GetStream(), cancellationToken);
-            var peer = createPeer ? new JsonRpcPeer(client.GetStream()) : null;
-            peer?.Start();
+            var peer = createPeer ? JsonRpcChannel.Connect(client.GetStream(), HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default)) : null;
             return new RawConnection(client, serverClient, serve, peer);
         }
         public async ValueTask DisposeAsync()
         {
-            if (peer is not null) await peer.DisposeAsync();
+            if (peer is not null) peer.Dispose();
             client.Dispose();
             await serve.WaitAsync(Ct);
             serverClient.Dispose();

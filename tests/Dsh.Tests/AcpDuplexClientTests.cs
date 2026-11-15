@@ -161,7 +161,7 @@ public sealed class AcpDuplexClientTests : IAsyncDisposable
         var other = await _client.PermissionRequests.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(StepTimeout, TestContext.Current.CancellationToken);
         if (failed)
         {
-            await AgentSendAsync($$$"""{"jsonrpc":"2.0","id":{{{request.GetProperty("id").GetRawText()}}},"error":{"code":{{{JsonRpcPeer.MethodNotFound}}},"message":"prompt is no longer available"}}""");
+            await AgentSendAsync($$$"""{"jsonrpc":"2.0","id":{{{request.GetProperty("id").GetRawText()}}},"error":{"code":{{{-32601}}},"message":"prompt is no longer available"}}""");
             await Assert.ThrowsAsync<JsonRpcResponseError>(() => prompt.WaitAsync(StepTimeout, TestContext.Current.CancellationToken));
         }
         else
@@ -193,7 +193,7 @@ public sealed class AcpDuplexClientTests : IAsyncDisposable
         var response = await AgentReadAsync();
 
         Assert.Equal("7", response.GetProperty("id").GetRawText());
-        Assert.Equal(JsonRpcPeer.MethodNotFound, response.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(-32601, response.GetProperty("error").GetProperty("code").GetInt32());
     }
 
     [Fact]

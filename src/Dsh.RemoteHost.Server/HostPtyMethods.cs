@@ -1,68 +1,52 @@
-using System.Text.Json;
-using Dsh.Transport;
-using static Dsh.RemoteHost.HostRpc;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** Connection-local PTY RPC adapter. The connection owns subscription pumps, not PTY lifetimes. */
 internal sealed class HostPtyMethods(
     IRemotePtyBackend backend,
+    Action ensureAuthenticated,
     Func<string, string, Task> attach,
-    Action<string> detach)
+    Action<string> detach) : IPtyRpc
 {
-    /** Decode and register reader ownership in receive order; acquisition continues off the frame reader. */
-    public ValueTask<JsonElement?>? Prepare(string name, JsonRpcMessage message)
+    public async Task<RemotePtyRef> StartAsync(RemotePtyStartRequest request, CancellationToken cancellationToken)
     {
-        switch (name)
-        {
-            case PtyProtocol.MethodPtyAttach:
-            {
-                var request = Require(message, PtyProtocolJsonContext.Default.RemotePtyAttachRequest, "pty attach requires ptyId and subscriptionId");
-                return AttachAsync(request);
-            }
-            case PtyProtocol.MethodPtyDetach:
-                detach(Require(message, PtyProtocolJsonContext.Default.RemoteSubscriptionRef, "pty detach requires subscriptionId").SubscriptionId);
-                return ValueTask.FromResult<JsonElement?>(True);
-            default:
-                return null;
-        }
+        ensureAuthenticated();
+        return new RemotePtyRef(await backend.StartPtyAsync(request, cancellationToken).ConfigureAwait(false));
     }
 
-    private async ValueTask<JsonElement?> AttachAsync(RemotePtyAttachRequest request)
+    public async Task<bool> WriteAsync(RemotePtyInput request, CancellationToken cancellationToken)
     {
+        ensureAuthenticated();
+        await backend.WritePtyAsync(request.PtyId, Convert.FromBase64String(request.Base64), cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> StopAsync(RemotePtyRef request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        await backend.StopPtyAsync(request.PtyId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> AttachAsync(RemotePtyAttachRequest request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
         await attach(request.SubscriptionId, request.PtyId).ConfigureAwait(false);
-        return True;
+        return true;
     }
 
-    public async ValueTask<JsonElement?> HandleAsync(string name, JsonRpcMessage message, CancellationToken cancellationToken)
+    public Task<bool> DetachAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken)
     {
-        switch (name)
-        {
-            case PtyProtocol.MethodPtyStart:
-            {
-                var request = Require(message, PtyProtocolJsonContext.Default.RemotePtyStartRequest, "pty start requires fileName");
-                var ptyId = await backend.StartPtyAsync(request, cancellationToken).ConfigureAwait(false);
-                return Serialize(new RemotePtyRef(ptyId), PtyProtocolJsonContext.Default.RemotePtyRef);
-            }
-            case PtyProtocol.MethodPtyWrite:
-            {
-                var request = Require(message, PtyProtocolJsonContext.Default.RemotePtyInput, "pty write requires ptyId");
-                await backend.WritePtyAsync(request.PtyId, Convert.FromBase64String(request.Base64), cancellationToken).ConfigureAwait(false);
-                return True;
-            }
-            case PtyProtocol.MethodPtyResize:
-            {
-                var request = Require(message, PtyProtocolJsonContext.Default.RemotePtyResize, "pty resize requires ptyId, columns and rows");
-                await backend.ResizePtyAsync(request.PtyId, request.Columns, request.Rows, cancellationToken).ConfigureAwait(false);
-                return True;
-            }
-            case PtyProtocol.MethodPtyStop:
-                await backend.StopPtyAsync(Require(message, PtyProtocolJsonContext.Default.RemotePtyRef, "pty stop requires ptyId").PtyId, cancellationToken).ConfigureAwait(false);
-                return True;
-            default:
-                throw MethodNotFound(name);
-        }
+        ensureAuthenticated();
+        detach(request.SubscriptionId);
+        return Task.FromResult(true);
+    }
+
+    public async Task<bool> ResizeAsync(RemotePtyResize request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        await backend.ResizePtyAsync(request.PtyId, request.Columns, request.Rows, cancellationToken).ConfigureAwait(false);
+        return true;
     }
 }
-
-

@@ -1,33 +1,30 @@
-using static Dsh.RemoteHost.RemoteHostRpc;
 using Dsh.GitInspect;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Git domain. */
 public sealed class RemoteGitClient : IWorkspaceGit
 {
-    private readonly RemoteHostClient _host;
+    private readonly IGitRpc _rpc;
 
-    internal RemoteGitClient(RemoteHostClient host) => _host = host;
+    internal RemoteGitClient(RemoteHostClient host, IGitRpc rpc) => _rpc = rpc;
 
     public Task<GitStatus> GitStatusAsync(string projectPath, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitStatus, Serialize(new RemoteGitRequest(projectPath), GitProtocolJsonContext.Default.RemoteGitRequest), GitProtocolJsonContext.Default.GitStatus, cancellationToken);
+        => _rpc.StatusAsync(new RemoteGitRequest(projectPath), cancellationToken);
 
     public Task<GitDiff> GitDiffAsync(RemoteGitDiffRequest request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitDiff, Serialize(request, GitProtocolJsonContext.Default.RemoteGitDiffRequest), GitProtocolJsonContext.Default.GitDiff, cancellationToken);
+        => _rpc.DiffAsync(request, cancellationToken);
 
     public Task<IReadOnlyList<GitCommitSummary>> GitLogAsync(RemoteGitLogRequest request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitLog, Serialize(request, GitProtocolJsonContext.Default.RemoteGitLogRequest), GitProtocolJsonContext.Default.IReadOnlyListGitCommitSummary, cancellationToken);
+        => _rpc.LogAsync(request, cancellationToken);
 
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string projectPath, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitWorktreeList, Serialize(new RemoteGitRequest(projectPath), GitProtocolJsonContext.Default.RemoteGitRequest), GitProtocolJsonContext.Default.IReadOnlyListGitWorktree, cancellationToken);
+        => _rpc.ListWorktreesAsync(new RemoteGitRequest(projectPath), cancellationToken);
 
     public Task<GitWorktree> AddWorktreeAsync(RemoteGitWorktreeAdd request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitWorktreeAdd, Serialize(request, GitProtocolJsonContext.Default.RemoteGitWorktreeAdd), GitProtocolJsonContext.Default.GitWorktree, cancellationToken);
+        => _rpc.AddWorktreeAsync(request, cancellationToken);
 
-    public Task RemoveWorktreeAsync(RemoteGitWorktreeRemove request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(GitProtocol.MethodGitWorktreeRemove, Serialize(request, GitProtocolJsonContext.Default.RemoteGitWorktreeRemove), GitProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task RemoveWorktreeAsync(RemoteGitWorktreeRemove request, CancellationToken cancellationToken = default)
+        => await _rpc.RemoveWorktreeAsync(request, cancellationToken).ConfigureAwait(false);
 }
-
-
-

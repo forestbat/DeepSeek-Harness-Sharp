@@ -1,33 +1,30 @@
-using System.Text.Json;
-using static Dsh.RemoteHost.RemoteHostRpc;
 using System.Threading.Channels;
-using Dsh.Transport;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Notifications domain. */
 public sealed class RemoteNotificationsClient : IWorkspaceNotifications
 {
-    private readonly RemoteHostClient _host;
+    private readonly INotificationsRpc _rpc;
 
-    internal RemoteNotificationsClient(RemoteHostClient host) => _host = host;
+    internal RemoteNotificationsClient(RemoteHostClient host, INotificationsRpc rpc) => _rpc = rpc;
 
     private readonly Channel<RemoteNotificationChange> _notificationChanges = Channel.CreateUnbounded<RemoteNotificationChange>(new UnboundedChannelOptions { SingleReader = true });
 
     public Task<RemoteNotifyPage> ListNotificationsAsync(RemoteNotifyQuery? query = null, CancellationToken cancellationToken = default)
-        => _host.SendAsync(NotificationsProtocol.MethodNotifyList, Serialize(query ?? new RemoteNotifyQuery(), NotificationsProtocolJsonContext.Default.RemoteNotifyQuery), NotificationsProtocolJsonContext.Default.RemoteNotifyPage, cancellationToken);
+        => _rpc.ListAsync(query ?? new RemoteNotifyQuery(), cancellationToken);
 
     public Task<int> MarkNotificationsReadAsync(RemoteNotifyMarkRead request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(NotificationsProtocol.MethodNotifyMarkRead, Serialize(request, NotificationsProtocolJsonContext.Default.RemoteNotifyMarkRead), NotificationsProtocolJsonContext.Default.Int32, cancellationToken);
+        => _rpc.MarkReadAsync(request, cancellationToken);
 
     public IAsyncEnumerable<RemoteNotificationChange> NotificationChangesAsync(CancellationToken cancellationToken = default)
         => _notificationChanges.Reader.ReadAllAsync(cancellationToken);
 
-    internal void OnNotification(JsonRpcMessage message)
+    internal Task OnChangedAsync(RemoteNotificationChange change)
     {
-        if (message.Method == NotificationsProtocol.NotificationNotifyChanged && message.Params is { } parameters
-            && JsonSerializer.Deserialize(parameters, NotificationsProtocolJsonContext.Default.RemoteNotificationChange) is { } changed)
-            _notificationChanges.Writer.TryWrite(changed);
+        _notificationChanges.Writer.TryWrite(change);
+        return Task.CompletedTask;
     }
 
     internal void OnClosed(Exception failure)
@@ -35,6 +32,3 @@ public sealed class RemoteNotificationsClient : IWorkspaceNotifications
         _notificationChanges.Writer.TryComplete(failure);
     }
 }
-
-
-

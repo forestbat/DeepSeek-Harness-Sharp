@@ -67,11 +67,23 @@ public sealed class HostSessionSnapshotTests
         var session = host.Environment.Agent.Session;
         var expected = FillOversizedHistory(session);
 
-        var snapshot = await reader.GetSessionSnapshotAsync(session.Id.Value, Ct);
+        // 单次请求只回一页(受字节预算约束), 整段历史由调用方按页续取。
+        var events = new List<SessionEvent>();
+        var total = 0L;
+        while (true)
+        {
+            var page = await reader.GetSessionSnapshotFromAsync(session.Id.Value, events.Count, Ct);
+            total = page.TotalEventCount;
+            if (page.Events.Count == 0)
+                break;
+            events.AddRange(page.Events);
+            if (events.Count >= total)
+                break;
+        }
 
-        Assert.Equal(expected, snapshot.TotalEventCount);
-        Assert.Equal(expected, snapshot.Events.Count);
-        Assert.Equal(expected, snapshot.Events[^1].Seq + 1);
+        Assert.Equal(expected, total);
+        Assert.Equal(expected, events.Count);
+        Assert.Equal(expected, events[^1].Seq + 1);
         // 一帧超限不能顺手把整条连接带走: 后续请求还得能用。
         await reader.PingAsync(Ct);
     }
@@ -186,7 +198,7 @@ public sealed class HostSessionSnapshotTests
     {
         var request = new RemoteSessionSnapshotRequest(sessionId, fromEvent, pageBytes);
         var parameters = JsonSerializer.SerializeToElement(request, HostProtocolJsonContext.Default.RemoteSessionSnapshotRequest);
-        var result = await client.RequestAsync(HostProtocol.MethodSessionSnapshot, parameters, Ct);
+        var result = await client.ForwardAsync(HostProtocol.MethodSessionSnapshot, parameters, Ct);
         return JsonSerializer.Deserialize(result, HostProtocolJsonContext.Default.RemoteSessionSnapshot)!;
     }
 
