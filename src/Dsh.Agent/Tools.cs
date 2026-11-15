@@ -628,14 +628,13 @@ public sealed class ToolRuntime : Service
             // Known denials precede every other approval hook, including root escalation.
             if (GuardReason(exec) is { } blocked)
                 throw new UnauthorizedAccessException(blocked);
+            var definition = exec.Registration.Definition;
+            PermissionDecision? safetyDecision = null;
             if (SafetyBoundary.Resolve(Ctx) is { } safety)
-            {
-                var definition = exec.Registration.Definition;
-                await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true).ConfigureAwait(false);
-            }
+                safetyDecision = await safety.AdmitAsync(exec, definition?.MediatesFileAccess == true).ConfigureAwait(false);
             var gate = WriteRootGate(exec, NormalizePreDecision(await Ctx.Events.Waterfall(
                 carrier, new ToolPreExecuteNotification(exec),
-                () => new ValueTask<object?>(new PreToolDecision.Allow()))));
+                () => new ValueTask<object?>(new PreToolDecision.Allow()))), safetyDecision);
             var (decision, approvalCancelled) = gate is PreToolDecision.Ask ask
                 ? await ServiceAsk(exec, ask)
                 : (gate, false);
@@ -665,9 +664,12 @@ public sealed class ToolRuntime : Service
 
 
     /** Writes outside the session's write permission root need approval, whatever the session's current directory is. */
-    private PreToolDecision WriteRootGate(ToolRunContext exec, PreToolDecision gate)
+    private PreToolDecision WriteRootGate(ToolRunContext exec, PreToolDecision gate, PermissionDecision? safetyDecision)
     {
         if (gate is PreToolDecision.Deny || exec.Agent is not { } agent)
+            return gate;
+        // 只有全局 autoApprove("不要问我")才免除第二道闸: 按工具放行的 whitelist 规则没有对路径表态, 不能顺带放行越界写。
+        if (safetyDecision?.AutoApprove == true)
             return gate;
         var tool = exec.Registration.Definition;
         var targets = tool?.WriteTargets?.Invoke(exec.Arguments, exec) ?? [];

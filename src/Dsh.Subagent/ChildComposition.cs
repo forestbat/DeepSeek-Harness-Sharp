@@ -17,9 +17,8 @@ public static class ChildCompositionSupport
 {
     public const string DelegationContextText =
         "You are running as a delegated subagent within your delegation scope: "
-        + "operations that require approval are rejected automatically, and your "
-        + "sandbox mode is fixed at the delegation point and cannot be changed or "
-        + "widened for this session.";
+        + "your approval policy and sandbox mode are fixed at the delegation point and cannot be "
+        + "changed or widened for this session.";
 
     public static SessionHeader ChildSessionHeader(
         SubagentStartRequest request, int childDepth, SessionId childId, bool isSeeded, SubagentDescriptorPayload descriptor)
@@ -71,8 +70,16 @@ public static class ChildCompositionSupport
             : resolved;
     }
 
+    /**
+     * 子会话没有稳定的人类应答通道, 所以只继承"自动放行"这一档: 父会话 full access 时子会话也是 full access,
+     * 其余(ask/never)一律 never, 避免请求落到无人应答的 waterfall 上再被拒绝。
+     */
     public static DelegatedPolicyOverrides CaptureDelegatedPolicyOverrides(IAgent parent)
-        => new(parent.Ctx.Get(ApprovalService.ServiceName, false) is null ? null : ApprovalPolicy.Never);
+    {
+        if (parent.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false) is not { } approval)
+            return new DelegatedPolicyOverrides(null);
+        return new(approval.EffectivePolicy(parent.Session) == ApprovalPolicy.Auto ? ApprovalPolicy.Auto : ApprovalPolicy.Never);
+    }
 
     public static void AppendDelegatedPolicyOverrides(Session childSession, DelegatedPolicyOverrides inherited)
     {
