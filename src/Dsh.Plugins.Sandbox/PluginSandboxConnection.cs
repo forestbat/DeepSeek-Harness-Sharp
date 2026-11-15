@@ -8,6 +8,8 @@ using Dsh.Runtime;
 using Dsh.Sandbox;
 using Dsh.Transport;
 using Dsh.Agent;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 
 namespace Dsh.Plugins.Sandbox;
 
@@ -24,7 +26,7 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     private readonly ConcurrentDictionary<string, Invocation> _invocations = new(StringComparer.Ordinal);
     private OwnedProcess? _process;
     private Task<OwnedProcess>? _launching;
-    private JsonRpcPeer? _peer;
+    private JsonRpcChannel? _peer;
     private Task? _stderr;
     private Task? _cleanup;
     private int _aborted;
@@ -62,19 +64,13 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
             connection._process = await launching.WaitAsync(startup.Token).ConfigureAwait(false);
             var stream = new StandardIoDuplexStream(connection._process.StandardOutput,
                 connection._process.StandardInput, ownsStreams: true);
-            connection._peer = new JsonRpcPeer(stream, PluginSandboxMethods.MaximumFrameBytes)
-            {
-                RequestPreparation = connection.Prepare,
-            };
-            connection._peer.NotificationReceived += connection.Notification;
-            connection._peer.Closed += _ => connection.Fault("The shared plugin worker connection closed.");
+            var channel = JsonRpcChannel.ServeMethods(stream, PluginSandboxWire.Formatter(), connection.Methods());
+            connection._peer = channel;
+            _ = connection.ObserveClosedAsync(channel);
             connection._stderr = connection.DrainStderrAsync();
-            connection._peer.Start();
             _ = connection.ObserveExitAsync();
-            var ready = await connection.RequestAsync(PluginSandboxMethods.Ready, new PluginSandboxAck(),
-                PluginSandboxJsonContext.Default.PluginSandboxAck, startup.Token).ConfigureAwait(false);
-            var value = ready?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxReady);
-            if (value is null || value.Version != PluginSandboxMethods.Version || value.Pid <= 0)
+            var ready = await channel.InvokeAsync<PluginSandboxReady>(PluginSandboxMethods.Ready, startup.Token, new PluginSandboxAck()).ConfigureAwait(false);
+            if (ready is null || ready.Version != PluginSandboxMethods.Version || ready.Pid <= 0)
                 throw new IOException("The isolated worker returned an incompatible handshake.");
             return connection;
         }
@@ -94,57 +90,85 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         }
     }
 
-    private ValueTask<JsonElement?>? Prepare(JsonRpcMessage message, CancellationToken cancellationToken)
-        => new ValueTask<JsonElement?>(Task.Run(() => HandleAsync(message, cancellationToken), CancellationToken.None));
+    private async Task ObserveClosedAsync(JsonRpcChannel channel)
+    {
+        try
+        {
+            await channel.Completion.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 断连本身由 Fault 统一收口, 这里只负责让 Fault 被触发一次。
+        }
+        Fault("The shared plugin worker connection closed.");
+    }
 
-    private async Task<JsonElement?> HandleAsync(JsonRpcMessage message, CancellationToken cancellationToken)
+    public async Task<PluginSandboxAck> RegisterToolAsync(PluginSandboxToolRequest request, CancellationToken cancellationToken)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         await _inbound.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            var parameters = message.Params ?? throw new ArgumentException("The sandbox request has no parameters.");
-            switch (message.Method)
-            {
-                case PluginSandboxMethods.RegisterTool:
-                    Register(parameters.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxToolRequest)
-                        ?? throw new ArgumentException("The tool registration is invalid."));
-                    return Ack();
-                case PluginSandboxMethods.UnregisterTool:
-                    Unregister(parameters.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool)
-                        ?? throw new ArgumentException("The tool unregistration is invalid."));
-                    return Ack();
-                case PluginSandboxMethods.HostCall:
-                    return await HostCallAsync(parameters.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxHostCall)
-                        ?? throw new ArgumentException("The host call is invalid."), linked.Token).ConfigureAwait(false);
-                case PluginSandboxMethods.Log:
-                    Log(parameters.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxLog)
-                        ?? throw new ArgumentException("The plugin log is invalid."));
-                    return Ack();
-                default:
-                    Fault("The shared plugin worker sent an unsupported broker method.");
-                    throw new IOException("The isolated worker requested an unsupported method.");
-            }
+            Register(request);
+            return new PluginSandboxAck();
+        }
+        catch (Exception error)
+        {
+            throw Failed(error);
         }
         finally { _inbound.Release(); }
     }
 
-    private void Notification(JsonRpcMessage message)
+    public async Task<PluginSandboxAck> UnregisterToolAsync(PluginSandboxUnregisterTool request, CancellationToken cancellationToken)
     {
-        if (message.Method != PluginSandboxMethods.Log)
-        {
-            Fault("The shared plugin worker sent an unsupported notification.");
-            return;
-        }
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _inbound.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            if (message.Params is not { } parameters)
-                throw new ArgumentException("The plugin log has no parameters.");
-            Log(parameters.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxLog)
-                ?? throw new ArgumentException("The plugin log is invalid."));
+            Unregister(request);
+            return new PluginSandboxAck();
         }
-        catch (Exception error) { _owner.Diagnostic($"A plugin log was rejected: {error.Message}"); }
+        catch (Exception error)
+        {
+            throw Failed(error);
+        }
+        finally { _inbound.Release(); }
     }
+
+    public async Task<JsonElement> HostCallAsync(PluginSandboxHostCall request, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _inbound.WaitAsync(linked.Token).ConfigureAwait(false);
+        try
+        {
+            return await CallHostAsync(request, linked.Token).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            throw Failed(error);
+        }
+        finally { _inbound.Release(); }
+    }
+
+    public async Task<PluginSandboxAck> LogAsync(PluginSandboxLog request, CancellationToken cancellationToken)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        await _inbound.WaitAsync(linked.Token).ConfigureAwait(false);
+        try
+        {
+            Log(request);
+            return new PluginSandboxAck();
+        }
+        catch (Exception error)
+        {
+            _owner.Diagnostic($"A plugin log was rejected: {error.Message}");
+            throw Failed(error);
+        }
+        finally { _inbound.Release(); }
+    }
+
+    private static JsonRpcException Failed(Exception error)
+        => error as JsonRpcException ?? new JsonRpcException((int)JsonRpcErrorCode.InternalError, error.Message);
 
     private PluginSandboxSupervisor.Binding Binding(string package, bool checkAuthority = true)
     {
@@ -208,16 +232,15 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
             throw new IOException("The isolated invocation token could not be allocated.");
         try
         {
-            var result = await RequestAsync(PluginSandboxMethods.Invoke,
-                new PluginSandboxInvokeRequest(binding.Package, tool, arguments, token),
-                PluginSandboxJsonContext.Default.PluginSandboxInvokeRequest, linked.Token).ConfigureAwait(false);
+            var result = await SendAsync<JsonElement>(PluginSandboxMethods.Invoke,
+                new PluginSandboxInvokeRequest(binding.Package, tool, arguments, token), linked.Token).ConfigureAwait(false);
             _owner.CheckAuthority(_domain, binding.Package);
-            return result ?? throw new IOException("The isolated tool returned no result.");
+            return result;
         }
         finally { _invocations.TryRemove(token, out _); }
     }
 
-    private async Task<JsonElement> HostCallAsync(PluginSandboxHostCall request, CancellationToken cancellationToken)
+    private async Task<JsonElement> CallHostAsync(PluginSandboxHostCall request, CancellationToken cancellationToken)
     {
         var binding = Binding(request.Package);
         if (request.Invocation is not { } token)
@@ -233,8 +256,17 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
     private void Log(PluginSandboxLog message)
         => Binding(message.Package, checkAuthority: false).Host.Log(message.Level, message.Message);
 
-    internal async Task<JsonElement?> RequestAsync<T>(string method, T value, JsonTypeInfo<T> type,
-        CancellationToken cancellationToken)
+    /** 四条 broker 方法按线协议名登记, 不为此定义只实现一次的接口。 */
+    private (string Method, Delegate Handler)[] Methods() =>
+    [
+        (PluginSandboxMethods.RegisterTool, (Func<PluginSandboxToolRequest, CancellationToken, Task<PluginSandboxAck>>)RegisterToolAsync),
+        (PluginSandboxMethods.UnregisterTool, (Func<PluginSandboxUnregisterTool, CancellationToken, Task<PluginSandboxAck>>)UnregisterToolAsync),
+        (PluginSandboxMethods.HostCall, (Func<PluginSandboxHostCall, CancellationToken, Task<JsonElement>>)HostCallAsync),
+        (PluginSandboxMethods.Log, (Func<PluginSandboxLog, CancellationToken, Task<PluginSandboxAck>>)LogAsync),
+    ];
+
+    /** 单次出向调用: 受 16 并发上限约束, worker 已退役后不再发。 */
+    private async Task<T> SendAsync<T>(string method, object request, CancellationToken cancellationToken)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         await _outbound.WaitAsync(linked.Token).ConfigureAwait(false);
@@ -242,13 +274,20 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         {
             if (Volatile.Read(ref _aborted) != 0)
                 throw new IOException("The isolated worker is no longer available.");
-            var parameters = JsonSerializer.SerializeToElement(value, type);
             using var cancellation = cancellationToken.Register(() => Fault("The shared plugin worker operation was cancelled or timed out."));
-            return await (_peer ?? throw new IOException("The isolated protocol is unavailable."))
-                .RequestAsync(method, parameters, linked.Token).ConfigureAwait(false);
+            return await (_peer ?? throw new IOException("The isolated protocol is unavailable.")).InvokeAsync<T>(method, linked.Token, request).ConfigureAwait(false);
         }
         finally { _outbound.Release(); }
     }
+
+    internal Task<PluginSandboxAck> LoadAsync(PluginSandboxLoadRequest request, CancellationToken cancellationToken)
+        => SendAsync<PluginSandboxAck>(PluginSandboxMethods.Load, request, cancellationToken);
+
+    internal Task<PluginSandboxInspection> InspectAsync(PluginSandboxInspectRequest request, CancellationToken cancellationToken)
+        => SendAsync<PluginSandboxInspection>(PluginSandboxMethods.Inspect, request, cancellationToken);
+
+    internal Task<PluginSandboxAck> UnloadAsync(PluginSandboxUnloadRequest request, CancellationToken cancellationToken)
+        => SendAsync<PluginSandboxAck>(PluginSandboxMethods.Unload, request, cancellationToken);
 
     private async Task DrainStderrAsync()
     {
@@ -319,7 +358,8 @@ internal sealed class PluginSandboxConnection : IAsyncDisposable
         }
         foreach (var registration in registrations)
             registration.Dispose();
-        var peerCleanup = _peer?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+        var peerCleanup = Task.CompletedTask;
+        _peer?.Dispose();
         var processCleanup = ReleaseProcessAsync();
         await Task.WhenAll(peerCleanup, processCleanup, _stderr ?? Task.CompletedTask).ConfigureAwait(false);
     }

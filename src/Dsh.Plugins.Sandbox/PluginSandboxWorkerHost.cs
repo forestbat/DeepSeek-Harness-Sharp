@@ -60,8 +60,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         if (parameters.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("Plugin tool parameters must be a JSON object.");
         var schema = parameters.Clone();
-        var request = Serialize(new PluginSandboxToolRequest(package, id, name, description, schema),
-            PluginSandboxJsonContext.Default.PluginSandboxToolRequest);
+        var request = new PluginSandboxToolRequest(package, id, name, description, schema);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_stopped, this);
@@ -71,7 +70,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
             _tools.Add(id, new Tool(execute));
             try
             {
-                session.Reverse(PluginSandboxMethods.RegisterTool, request, Lifetime.Token).GetAwaiter().GetResult();
+                session.RegisterToolAsync(request, Lifetime.Token).GetAwaiter().GetResult();
             }
             catch
             {
@@ -89,9 +88,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
             if (!_tools.Remove(handle))
                 return false;
             session.ReleaseTool();
-            session.Reverse(PluginSandboxMethods.UnregisterTool,
-                Serialize(new PluginSandboxUnregisterTool(package, handle),
-                    PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool), CancellationToken.None)
+            session.UnregisterToolAsync(new PluginSandboxUnregisterTool(package, handle), CancellationToken.None)
                 .GetAwaiter().GetResult();
             return true;
         }
@@ -115,9 +112,8 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         using var linked = invocation is null
             ? CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token, cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token, cancellationToken, invocation.Cancellation.Token);
-        var request = Serialize(new PluginSandboxHostCall(package, invocation?.Token, operation, arguments.Clone()),
-            PluginSandboxJsonContext.Default.PluginSandboxHostCall);
-        return await session.Reverse(PluginSandboxMethods.HostCall, request, linked.Token).ConfigureAwait(false);
+        var request = new PluginSandboxHostCall(package, invocation?.Token, operation, arguments.Clone());
+        return await session.HostCallAsync(request, linked.Token).ConfigureAwait(false);
     }
 
     public string CallHost(string operation, string argumentsJson)
@@ -127,9 +123,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
     {
         lock (_gate)
             ObjectDisposedException.ThrowIf(_stopped, this);
-        session.Reverse(PluginSandboxMethods.Log,
-            Serialize(new PluginSandboxLog(package, level, message), PluginSandboxJsonContext.Default.PluginSandboxLog),
-            Lifetime.Token).GetAwaiter().GetResult();
+        session.LogAsync(new PluginSandboxLog(package, level, message), Lifetime.Token).GetAwaiter().GetResult();
     }
 
     internal async Task<JsonElement> InvokeAsync(int id, JsonElement arguments, PluginSandboxWorker.Invocation invocation)
@@ -207,9 +201,7 @@ internal sealed class PluginSandboxWorkerHost(PluginSandboxWorker.Session sessio
         foreach (var (id, _) in tools)
         {
             session.ReleaseTool();
-            session.Reverse(PluginSandboxMethods.UnregisterTool,
-                Serialize(new PluginSandboxUnregisterTool(package, id),
-                    PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool), CancellationToken.None)
+            session.UnregisterToolAsync(new PluginSandboxUnregisterTool(package, id), CancellationToken.None)
                 .GetAwaiter().GetResult();
         }
     }

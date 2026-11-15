@@ -3,6 +3,8 @@ using System.Text.Json;
 using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Transport;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 using static Dsh.Plugins.Sandbox.PluginSandboxWorkerWire;
 
 namespace Dsh.Plugins.Sandbox;
@@ -12,12 +14,21 @@ internal static class PluginSandboxWorker
 {
     internal const string HostArgument = "--plugin-worker";
 
+    /** 参数不合法时的退出码: 非零即可, 值是任意的, 只为让调用方拿到明确失败。 */
+    private const int InvalidInvocationExitCode = 2;
+
     internal static ValueTask<int>? TryRunAsync(string[] args)
     {
         if (Array.IndexOf(args, HostArgument) < 0)
             return null;
         if (args.Length != 1)
-            throw new ArgumentException("The plugin worker requires only its worker argument.", nameof(args));
+        {
+            // 参数错误是预期内的调用方问题, 写成错误输出并返回非零码。
+            // 不能靠抛未处理异常来表达: .NET 11 在终止前会先做进程内崩溃报告, 进程要十几秒才退出,
+            // 调用方的超时会先触发, 表现为"工作进程无响应"而不是"参数非法"。
+            Console.Error.WriteLine("The plugin worker requires only its worker argument.");
+            return new ValueTask<int>(InvalidInvocationExitCode);
+        }
         return new ValueTask<int>(RunAsync());
     }
 
@@ -30,12 +41,26 @@ internal static class PluginSandboxWorker
         Console.SetOut(TextWriter.Null);
         Console.SetIn(TextReader.Null);
         await using var stream = new StandardIoDuplexStream(input, output, ownsStreams: true);
-        await using var peer = new JsonRpcPeer(stream, PluginSandboxMethods.MaximumFrameBytes);
-        var session = new Session(peer);
-        peer.RequestPreparation = session.Prepare;
-        peer.Closed += session.Closed;
-        peer.Start();
+        var session = new Session();
+        using var channel = JsonRpcChannel.ServeMethods(stream, PluginSandboxWire.Formatter(), session.Methods());
+        session.AttachChannel(channel);
+        _ = ObserveClosedAsync(channel, session);
         return await session.Completion.ConfigureAwait(false);
+    }
+
+    /** 连接结束就是 worker 的结束: 失败原因交给退出码, 正常 EOF 退出 0。 */
+    private static async Task ObserveClosedAsync(JsonRpcChannel channel, Session session)
+    {
+        Exception? failure = null;
+        try
+        {
+            await channel.Completion.ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+        session.Closed(failure);
     }
 
     internal sealed class Invocation
@@ -84,7 +109,7 @@ internal static class PluginSandboxWorker
         }
     }
 
-    internal sealed class Session(JsonRpcPeer peer)
+    internal sealed class Session
     {
         private readonly Lock _gate = new();
         private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -95,114 +120,121 @@ internal static class PluginSandboxWorker
         private readonly TaskCompletionSource<int> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly SemaphoreSlim _inbound = new(PluginSandboxMethods.MaximumPendingRequests);
         private readonly SemaphoreSlim _reverse = new(PluginSandboxMethods.MaximumPendingRequests);
+        private JsonRpcChannel? _channel;
         private int _toolCount;
         private int _failed;
 
         internal Task<int> Completion => _closed.Task;
 
-        internal ValueTask<JsonElement?>? Prepare(JsonRpcMessage message, CancellationToken cancellationToken)
+        internal void AttachChannel(JsonRpcChannel channel) => _channel = channel;
+
+        /** 五条宿主调用按线协议名登记, 不为此定义只实现一次的接口。 */
+        internal (string Method, Delegate Handler)[] Methods() =>
+        [
+            (PluginSandboxMethods.Ready, (Func<PluginSandboxAck, CancellationToken, Task<PluginSandboxReady>>)ReadyAsync),
+            (PluginSandboxMethods.Inspect, (Func<PluginSandboxInspectRequest, CancellationToken, Task<PluginSandboxInspection>>)InspectAsync),
+            (PluginSandboxMethods.Load, (Func<PluginSandboxLoadRequest, CancellationToken, Task<PluginSandboxAck>>)LoadAsync),
+            (PluginSandboxMethods.Unload, (Func<PluginSandboxUnloadRequest, CancellationToken, Task<PluginSandboxAck>>)UnloadAsync),
+            (PluginSandboxMethods.Invoke, (Func<PluginSandboxInvokeRequest, CancellationToken, Task<JsonElement>>)InvokeAsync),
+        ];
+
+        public async Task<PluginSandboxReady> ReadyAsync(PluginSandboxAck request, CancellationToken cancellationToken)
         {
-            Invocation? invocation = null;
-            PluginSandboxInvokeRequest? invoke = null;
-            Exception? preparationFailure = null;
+            await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { return new PluginSandboxReady(PluginSandboxMethods.Version, Environment.ProcessId); }
+            finally { _inbound.Release(); }
+        }
+
+        public async Task<PluginSandboxInspection> InspectAsync(PluginSandboxInspectRequest request, CancellationToken cancellationToken)
+        {
+            await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (message.Method == PluginSandboxMethods.Invoke)
-                {
-                    invoke = Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxInvokeRequest);
-                    if (invoke.Invocation.Length == 0)
-                        throw new InvalidOperationException("Missing invocation authority.");
-                    lock (_gate)
-                    {
-                        if (_invocations.ContainsKey(invoke.Invocation))
-                            throw new InvalidOperationException("Duplicate invocation authority.");
-                        invocation = new Invocation(invoke.Invocation, _lifetime.Token);
-                        _invocations.Add(invoke.Invocation, invocation);
-                    }
-                }
+                await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try { return await InspectAsync(request).ConfigureAwait(false); }
+                finally { _lifecycle.Release(); }
             }
-            catch (Exception error)
-            {
-                preparationFailure = error;
-            }
-            // Constructors, initialization and synchronous reverse interop never occupy the reader.
-            return new ValueTask<JsonElement?>(Task.Run(async () =>
-            {
-                var admitted = false;
-                try
-                {
-                    await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    admitted = true;
-                    if (preparationFailure is not null)
-                        throw preparationFailure;
-                    if (invoke is not null && invocation is not null)
-                        return await InvokeAsync(invoke, invocation).ConfigureAwait(false);
-                    return await DispatchAsync(message, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception error)
-                {
-                    throw new JsonRpcException(error is JsonRpcException rpc ? rpc.Code : JsonRpcPeer.InternalError,
-                        BoundedFailure(error));
-                }
-                finally
-                {
-                    if (invocation is not null)
-                    {
-                        invocation.End();
-                        lock (_gate)
-                            _invocations.Remove(invocation.Token);
-                    }
-                    if (admitted)
-                        _inbound.Release();
-                }
-            }));
+            catch (Exception error) { throw Failure(error); }
+            finally { _inbound.Release(); }
         }
 
-        private async Task<JsonElement?> DispatchAsync(JsonRpcMessage message, CancellationToken cancellationToken)
+        public async Task<PluginSandboxAck> LoadAsync(PluginSandboxLoadRequest request, CancellationToken cancellationToken)
         {
-            switch (message.Method)
+            await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                case PluginSandboxMethods.Ready:
-                    return Serialize(new PluginSandboxReady(PluginSandboxMethods.Version, Environment.ProcessId),
-                        PluginSandboxJsonContext.Default.PluginSandboxReady);
-                case PluginSandboxMethods.Inspect:
-                case PluginSandboxMethods.Load:
-                case PluginSandboxMethods.Unload:
-                    await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    try
-                    {
-                        if (message.Method == PluginSandboxMethods.Inspect)
-                            return Serialize(await InspectAsync(Read(message.Params,
-                                PluginSandboxJsonContext.Default.PluginSandboxInspectRequest)).ConfigureAwait(false),
-                                PluginSandboxJsonContext.Default.PluginSandboxInspection);
-                        if (message.Method == PluginSandboxMethods.Unload)
-                            await UnloadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxUnloadRequest)).ConfigureAwait(false);
-                        else
-                            await LoadAsync(Read(message.Params, PluginSandboxJsonContext.Default.PluginSandboxLoadRequest),
-                                cancellationToken).ConfigureAwait(false);
-                        return Ack();
-                    }
-                    finally
-                    {
-                        _lifecycle.Release();
-                    }
-                default:
-                    throw new JsonRpcException(JsonRpcPeer.MethodNotFound, "Unknown worker method.");
+                await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try { await LoadCoreAsync(request, cancellationToken).ConfigureAwait(false); return new PluginSandboxAck(); }
+                finally { _lifecycle.Release(); }
+            }
+            catch (Exception error) { throw Failure(error); }
+            finally { _inbound.Release(); }
+        }
+
+        public async Task<PluginSandboxAck> UnloadAsync(PluginSandboxUnloadRequest request, CancellationToken cancellationToken)
+        {
+            await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try { await UnloadAsync(request).ConfigureAwait(false); return new PluginSandboxAck(); }
+                finally { _lifecycle.Release(); }
+            }
+            catch (Exception error) { throw Failure(error); }
+            finally { _inbound.Release(); }
+        }
+
+        public async Task<JsonElement> InvokeAsync(PluginSandboxInvokeRequest request, CancellationToken cancellationToken)
+        {
+            if (request.Invocation.Length == 0)
+                throw Failure(new InvalidOperationException("Missing invocation authority."));
+            Invocation invocation;
+            lock (_gate)
+            {
+                if (_invocations.ContainsKey(request.Invocation))
+                    throw Failure(new InvalidOperationException("Duplicate invocation authority."));
+                invocation = new Invocation(request.Invocation, _lifetime.Token);
+                _invocations.Add(request.Invocation, invocation);
+            }
+            await _inbound.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await InvokeAsync(request, invocation).ConfigureAwait(false);
+            }
+            catch (Exception error) { throw Failure(error); }
+            finally
+            {
+                invocation.End();
+                lock (_gate)
+                    _invocations.Remove(invocation.Token);
+                _inbound.Release();
             }
         }
 
-        internal async Task<JsonElement> Reverse(string method, JsonElement parameters, CancellationToken cancellationToken)
+        private static JsonRpcException Failure(Exception error)
+            => error as JsonRpcException
+                ?? new JsonRpcException((int)JsonRpcErrorCode.InternalError, BoundedFailure(error));
+
+        internal Task<PluginSandboxAck> RegisterToolAsync(PluginSandboxToolRequest request, CancellationToken cancellationToken)
+            => BrokerAsync<PluginSandboxAck>(PluginSandboxMethods.RegisterTool, request, cancellationToken);
+
+        internal Task<PluginSandboxAck> UnregisterToolAsync(PluginSandboxUnregisterTool request, CancellationToken cancellationToken)
+            => BrokerAsync<PluginSandboxAck>(PluginSandboxMethods.UnregisterTool, request, cancellationToken);
+
+        internal Task<JsonElement> HostCallAsync(PluginSandboxHostCall request, CancellationToken cancellationToken)
+            => BrokerAsync<JsonElement>(PluginSandboxMethods.HostCall, request, cancellationToken);
+
+        internal Task<PluginSandboxAck> LogAsync(PluginSandboxLog request, CancellationToken cancellationToken)
+            => BrokerAsync<PluginSandboxAck>(PluginSandboxMethods.Log, request, cancellationToken);
+
+        private async Task<T> BrokerAsync<T>(string method, object request, CancellationToken cancellationToken)
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
             await _reverse.WaitAsync(linked.Token).ConfigureAwait(false);
             try
             {
-                var result = await peer.RequestAsync(method, parameters, linked.Token).ConfigureAwait(false)
-                    ?? throw new IOException("Missing parent response.");
-                if (method != PluginSandboxMethods.HostCall
-                    && !Read(result, PluginSandboxJsonContext.Default.PluginSandboxAck).Success)
-                    throw new InvalidOperationException("Parent rejected the worker operation.");
-                return result;
+                var channel = _channel ?? throw new IOException("The parent broker is unavailable.");
+                return await channel.InvokeAsync<T>(method, linked.Token, request).ConfigureAwait(false);
             }
             finally
             {
@@ -238,7 +270,7 @@ internal static class PluginSandboxWorker
             return await package.Host.InvokeAsync(request.ToolId, request.Arguments, invocation).ConfigureAwait(false);
         }
 
-        private async Task LoadAsync(PluginSandboxLoadRequest request, CancellationToken cancellationToken)
+        private async Task LoadCoreAsync(PluginSandboxLoadRequest request, CancellationToken cancellationToken)
         {
             var configuration = request.Configuration;
             lock (_gate)
