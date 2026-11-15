@@ -93,10 +93,10 @@ public static class WorktreeTool
         var from = Argument(args, "from") ?? DefaultRevision;
         if (name.StartsWith('-') || from.StartsWith('-'))
             throw new ArgumentException("create_worktree: name and from must not start with '-'");
-        await Git(subprocess, repository, ["check-ref-format", "--branch", name], exec.Signal);
-        var baseCommit = await Git(subprocess, repository, ["rev-parse", "--verify", $"{from}^{{commit}}"], exec.Signal);
+        await Git(subprocess, repository, ["check-ref-format", "--branch", name], exec);
+        var baseCommit = await Git(subprocess, repository, ["rev-parse", "--verify", $"{from}^{{commit}}"], exec);
         var checkout = await AllocateCheckout(repository, name, exec);
-        await Git(subprocess, repository, ["worktree", "add", "-b", name, checkout, baseCommit], exec.Signal);
+        await Git(subprocess, repository, ["worktree", "add", "-b", name, checkout, baseCommit], exec);
         return new CreatedWorktreeValue(SessionWorkingDirectory.Change(session, checkout), name, baseCommit, repository);
     }
 
@@ -137,7 +137,7 @@ public static class WorktreeTool
         return checkout;
     }
 
-    private static async Task<string> Git(SubprocessService subprocess, string repository, IReadOnlyList<string> arguments, CancellationToken signal)
+    private static async Task<string> Git(SubprocessService subprocess, string repository, IReadOnlyList<string> arguments, ToolRunContext run)
     {
         using var handle = await subprocess.SpawnAsync(new SubprocessSpawnSpec
         {
@@ -146,10 +146,10 @@ public static class WorktreeTool
             Env = GitEnvironment,
             Stdout = new SubprocessCollect(GitOutputBytes, null),
             Stderr = new SubprocessCollect(GitOutputBytes, null),
-            Signal = signal,
-        });
+            Signal = run.Signal,
+        }, run);
         var outcome = await handle.Done;
-        signal.ThrowIfCancellationRequested();
+        run.Signal.ThrowIfCancellationRequested();
         if (outcome.ExitCode != 0)
             throw new InvalidOperationException($"git {arguments[0]} failed: {handle.StderrReader.ReadFrom(0).Text.Trim()}");
         return handle.StdoutReader.ReadFrom(0).Text.Trim();

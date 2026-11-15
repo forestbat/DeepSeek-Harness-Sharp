@@ -60,7 +60,7 @@ public sealed class SafetyBoundary : Service
         return (rules, input, decision);
     }
 
-    public async Task AdmitAsync(ToolRunContext run, bool mediatedFiles)
+    public async Task<PermissionDecision> AdmitAsync(ToolRunContext run, bool mediatedFiles)
     {
         var space = run.PermissionNamespace;
         var (rules, input, decision) = DecideAndRecord(space, run);
@@ -94,9 +94,10 @@ public sealed class SafetyBoundary : Service
         if (decision.Decision == "notify" && mediatedFiles)
         {
             _ = DemandSessionPolicy(run, input, decision, space);
-            return;
+            return decision;
         }
         run.SafetyApprovalRevision = await ApproveAsync(run, input, decision, space, Revision(rules), run.Signal).ConfigureAwait(false);
+        return decision;
     }
 
     public static Task AuthorizeInvocationAsync(Context? context, ToolRunContext? run, bool mediatesFileAccess,
@@ -138,7 +139,7 @@ public sealed class SafetyBoundary : Service
             && Ctx.GetProp("harnessOptions") is HarnessOptions options
             && Dsh.Runtime.CanonicalFilePath.SameFile(canonical, options.Home.SettingsFile))
         {
-            _ = DemandSessionPolicy(run, input, decision, space);
+            if (decision.Decision != "allow") _ = DemandSessionPolicy(run, input, decision, space);
             return;
         }
         var revision = Revision(rules);
@@ -147,6 +148,24 @@ public sealed class SafetyBoundary : Service
             lifecycleOwner: lifecycleOwner, request: settings?.Request).ConfigureAwait(false);
         if (!approved && run is not null && decision.Decision == "notify")
             run.RememberFileApproval(authorization, canonical, intent);
+    }
+
+    /**
+     * 进程启动是宿主可中介的效果点: 与文件访问一样按 (可执行文件, 工作目录) 授权, 不依赖工具自己声明有没有副作用。
+     * 审计里 intent 记为 "spawn"; 同一调用内已有的授权(同一 revision)直接复用, 不再问第二次。
+     */
+    public async Task AuthorizeProcessAsync(string space, ToolRunContext? run, string executable, string cwd,
+        CancellationToken signal)
+    {
+        signal.ThrowIfCancellationRequested();
+        var canonical = Dsh.Runtime.CanonicalFilePath.Canonicalize(cwd);
+        var (rules, input, decision) = DecideAndRecord(space, run, canonical, "spawn");
+        var revision = Revision(rules);
+        var approved = run?.HasFileApproval($"{space}:{revision}", canonical, "spawn") == true;
+        var authorization = await ApproveAsync(run, input, decision, space, revision, signal, approved,
+            reason: $"{space}: approve starting {Path.GetFileName(executable)} in {canonical}").ConfigureAwait(false);
+        if (!approved && run is not null && decision.Decision == "notify")
+            run.RememberFileApproval(authorization, canonical, "spawn");
     }
 
     public void RevalidateFile(string space, ToolRunContext? run, string path, string intent, CancellationToken signal)
@@ -160,7 +179,7 @@ public sealed class SafetyBoundary : Service
             RecordDecision(Ctx, run, input, decision, space, outcome: "policy-changed");
             Reject(decision, space);
         }
-        _ = DemandSessionPolicy(run, input, decision, space);
+        if (decision.Decision != "allow") _ = DemandSessionPolicy(run, input, decision, space);
         if (decision.Decision != "allow" && run?.HasFileApproval($"{space}:{Revision(rules)}", input.Path!, intent) != true)
         {
             RecordDecision(Ctx, run, input, decision, space, outcome: "policy-changed");
@@ -183,16 +202,20 @@ public sealed class SafetyBoundary : Service
 
     private async Task<string> ApproveAsync(ToolRunContext? run, PermissionInput input, PermissionDecision decision,
         string space, string revision, CancellationToken signal, bool alreadyApproved = false, string? lifecycleOwner = null,
-        ApprovalRequest? request = null)
+        ApprovalRequest? request = null, string? reason = null)
     {
         signal.ThrowIfCancellationRequested();
-        var approval = DemandSessionPolicy(run, input, decision, space);
-        if (decision.Decision != "allow" && !alreadyApproved)
+        // 会话策略(never/auto)只决定"需要审批"的调用怎么结束: 已经 allow 的调用不需要任何人批准。
+        var needsApproval = decision.Decision != "allow" && !alreadyApproved;
+        var approval = needsApproval ? DemandSessionPolicy(run, input, decision, space) : null;
+        if (needsApproval)
         {
             if (run?.Agent is null || approval is null)
                 throw new UnauthorizedAccessException("The operation requires approval with an active session and call; lifecycle operations cannot fabricate invocation context.");
             var outcome = await approval.Request(request ?? new(run.Agent, run.Name, run.CallId,
-                input.Path is null ? $"{space}: approve this entire tool call, including its actual file operations." : $"{space}: approve only {input.Intent} {input.Path}",
+                reason ?? (input.Path is null
+                    ? $"{space}: approve this entire tool call, including its actual file operations."
+                    : $"{space}: approve only {input.Intent} {input.Path}"),
                 run.Arguments.GetRawText()), signal).ConfigureAwait(false);
             var name = outcome switch
             {
@@ -213,7 +236,7 @@ public sealed class SafetyBoundary : Service
         if (latest.Decision == "deny" || currentRevision != revision)
             RecordDecision(Ctx, run, input, latest, space, lifecycleOwner, "policy-changed");
         Reject(latest, space);
-        _ = DemandSessionPolicy(run, input, latest, space);
+        if (needsApproval) _ = DemandSessionPolicy(run, input, latest, space);
         if (currentRevision != revision && latest.Decision != "allow")
             throw new UnauthorizedAccessException("The policy changed while approval was pending; a new authorization is required.");
         return $"{space}:{currentRevision}";
