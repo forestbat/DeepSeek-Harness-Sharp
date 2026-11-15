@@ -9,18 +9,26 @@ namespace Dsh.Tests;
 public sealed class ToolsAuditTests
 {
     [Theory]
-    [InlineData(true, "*.txt", true)]
-    [InlineData(true, "input.txt", true)]
-    [InlineData(true, "*.{txt,md}", true)]
-    [InlineData(true, "*.cs", false)]
-    [InlineData(false, "*.txt", true)]
-    [InlineData(false, "*.cs", false)]
-    public async Task Grep_IncludeFiltersFileNamesForExplicitFilesAndDirectories(bool explicitFile, string include, bool expectedMatch)
+    [InlineData(true, "*.txt", true, "input.txt")]
+    [InlineData(true, "input.txt", true, "input.txt")]
+    [InlineData(true, "*.{txt,md}", true, "input.txt")]
+    [InlineData(true, "*.cs", false, "input.txt")]
+    [InlineData(false, "*.txt", true, "input.txt")]
+    [InlineData(false, "*.cs", false, "input.txt")]
+    [InlineData(true, "MixedName.Txt", true, "MixedName.Txt")]
+    [InlineData(true, "*.Txt", true, "MixedName.Txt")]
+    [InlineData(true, "*.txt", false, "MixedName.Txt")]
+    [InlineData(true, "mixedname.Txt", false, "MixedName.Txt")]
+    [InlineData(false, "MixedName.Txt", true, "MixedName.Txt")]
+    [InlineData(false, "*.Txt", true, "MixedName.Txt")]
+    [InlineData(false, "*.txt", false, "MixedName.Txt")]
+    [InlineData(false, "mixedname.Txt", false, "MixedName.Txt")]
+    public async Task Grep_IncludeFiltersFileNamesForExplicitFilesAndDirectories(bool explicitFile, string include, bool expectedMatch, string fileName)
     {
         var directory = TempTree.CreateDirectory("grep-file-filter");
         try
         {
-            var file = Path.Combine(directory, "input.txt");
+            var file = Path.Combine(directory, fileName);
             await File.WriteAllTextAsync(file, "first line\nneedle on second line\n", TestContext.Current.CancellationToken);
             var ctx = new Context();
             _ = new SystemPrompt(ctx, new SystemPromptConfig());
@@ -42,7 +50,7 @@ public sealed class ToolsAuditTests
                 return;
             }
             var match = Assert.Single(matches);
-            Assert.Equal(file, Path.GetFullPath(match.GetProperty("path").GetString()!, Environment.CurrentDirectory));
+            Assert.True(CanonicalFilePath.SameFile(file, Path.GetFullPath(match.GetProperty("path").GetString()!, Environment.CurrentDirectory)));
             Assert.Equal(2, match.GetProperty("lineNumber").GetInt32());
             Assert.Equal("needle on second line", match.GetProperty("line").GetString());
         }
