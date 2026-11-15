@@ -437,6 +437,7 @@ public sealed class HarnessSettings
     public static Task CommitApprovedMutationAsync(string path, string before, string after, Func<string, CancellationToken, Task> commit, CancellationToken signal)
         => Task.Run(() =>
         {
+            path = ResolvePublicationPath(path);
             using var transaction = new SettingsWriteLock(path);
             signal.ThrowIfCancellationRequested();
             var current = File.Exists(path) ? ReadSettingsTextShared(path) : "";
@@ -476,6 +477,7 @@ public sealed class HarnessSettings
     /** 先写同目录临时文件再改名,避免进程中断留下半截配置; settings.yaml 一律收紧为仅属主可读写。 */
     private static void WriteAtomic(string path, string content)
     {
+        path = ResolvePublicationPath(path);
         var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
@@ -489,6 +491,12 @@ public sealed class HarnessSettings
         {
             File.Delete(temporary);
         }
+    }
+
+    private static string ResolvePublicationPath(string path)
+    {
+        var file = new FileInfo(path);
+        return file.LinkTarget is null ? path : file.ResolveLinkTarget(returnFinalTarget: true)!.FullName;
     }
 
     /** The mutex covers the document, not just its rename; unrelated homes never share a lock. */

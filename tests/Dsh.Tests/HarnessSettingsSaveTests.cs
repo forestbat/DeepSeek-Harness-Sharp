@@ -210,6 +210,76 @@ public sealed class HarnessSettingsSaveTests
             var actual = HarnessSettings.Load(home);
             Assert.Equal("beta/model-b", actual.GlobalDefaultModel);
             Assert.True(actual.Safety!.AutoApprove);
+            Assert.NotNull(new FileInfo(home.SettingsFile).LinkTarget);
+            var savedTarget = HarnessSettings.Load(target);
+            Assert.Equal("beta/model-b", savedTarget.GlobalDefaultModel);
+            Assert.True(savedTarget.Safety!.AutoApprove);
+        }
+        catch (Exception error) when (OperatingSystem.IsWindows()
+            && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+        {
+            Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+            TempTree.Delete(target.Root);
+        }
+    }
+
+    [Fact]
+    public async Task ApprovedMutation_PreservesSettingsLinkAndTargetFileName()
+    {
+        var home = CreateHome("\n");
+        var target = CreateHome("\n");
+        const string targetName = "SharedSettings.YaMl";
+        var targetPath = Path.Combine(target.Root, targetName);
+        try
+        {
+            File.Move(target.SettingsFile, targetPath);
+            File.Delete(home.SettingsFile);
+            File.CreateSymbolicLink(home.SettingsFile, targetPath);
+            var before = File.ReadAllText(targetPath);
+            var after = before.Replace("alpha/model-a", "beta/model-b", StringComparison.Ordinal);
+
+            await HarnessSettings.CommitApprovedMutationAsync(home.SettingsFile, before, after,
+                (temporary, signal) => File.WriteAllTextAsync(temporary, after, signal), TestContext.Current.CancellationToken);
+
+            Assert.NotNull(new FileInfo(home.SettingsFile).LinkTarget);
+            Assert.Equal(after, File.ReadAllText(targetPath));
+            Assert.Equal(after, ReadSettings(home));
+            Assert.Equal([targetName], Directory.GetFiles(target.Root).Select(Path.GetFileName));
+        }
+        catch (Exception error) when (OperatingSystem.IsWindows()
+            && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+        {
+            Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+            TempTree.Delete(target.Root);
+        }
+    }
+
+    [Fact]
+    public void SavePlugins_PreservesSettingsLinkAndUpdatesItsTarget()
+    {
+        var home = CreateHome("\n");
+        var target = CreateHome("\n");
+        try
+        {
+            File.Delete(home.SettingsFile);
+            File.CreateSymbolicLink(home.SettingsFile, target.SettingsFile);
+            var settings = HarnessSettings.Load(home);
+            settings.Plugins["@deepseek-ai/dsh-memory"] = new PluginSetting { Enabled = true };
+
+            settings.SavePlugins(home);
+
+            Assert.NotNull(new FileInfo(home.SettingsFile).LinkTarget);
+            Assert.True(HarnessSettings.Load(target).Plugins["@deepseek-ai/dsh-memory"].Enabled);
+            Assert.Equal(ReadSettings(target), ReadSettings(home));
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(target.Root).Select(Path.GetFileName));
         }
         catch (Exception error) when (OperatingSystem.IsWindows()
             && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
