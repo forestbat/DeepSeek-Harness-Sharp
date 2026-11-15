@@ -248,7 +248,8 @@ public sealed partial class MessageViewModel : ObservableObject
                 _preview = BuildPreview(Text);
                 _previewFor = Text;
             }
-            return _preview;
+            // 上面的分支保证这里已赋值; 字段可空只是为了区分"还没算过"。
+            return _preview!;
         }
     }
 

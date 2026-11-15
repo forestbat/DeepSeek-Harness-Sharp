@@ -46,7 +46,7 @@ public static class PhoneAgentTools
                         ["package"] = new JsonObject { ["type"] = "string", ["description"] = "Android 包名，例如 com.miui.calculator" },
                     },
                 },
-                (args, _) => Answered(device.LaunchApp(MobileTool.Text(args, "package"))))),
+                (args, _) => Answered(device.LaunchApp(Required(args, "package"))))),
             tools.Register(MobileTool.Create(ListAppsName,
                 "列出手机上可启动的应用; filter 按包名或应用名做不区分大小写的子串匹配。",
                 new JsonObject
@@ -71,7 +71,7 @@ public static class PhoneAgentTools
                         ["url"] = new JsonObject { ["type"] = "string", ["description"] = "要打开的链接" },
                     },
                 },
-                (args, _) => Answered(device.OpenUrl(MobileTool.Text(args, "url"))))),
+                (args, _) => Answered(device.OpenUrl(Required(args, "url"))))),
             tools.Register(MobileTool.Create(DeviceInfoName,
                 "读取这台手机的型号、设备代号与 DSH 包名。",
                 new JsonObject
@@ -209,6 +209,10 @@ public static class PhoneAgentTools
                 appAttachments)),
         ]);
     }
+
+    /** 必填的文本参数: 缺失属于调用方错误, 直接给出可读消息而不是把 null 传下去。 */
+    private static string Required(JsonElement args, string name)
+        => MobileTool.Text(args, name) is { Length: > 0 } text ? text : throw new InvalidOperationException($"需要 {name} 参数");
 
     private static async Task<MobileToolAnswer> CapturedAsync(Task<PhoneCapture> pending)
     {
