@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dsh.Agent;
 using Dsh.Core;
 using Dsh.Runtime;
 using Dsh.Subprocess;
@@ -30,6 +31,7 @@ public sealed class PtcScriptHostClient
     private readonly Func<PtcToolCall, CancellationToken, Task<PtcToolReply>> _dispatch;
     private readonly int _outputLimitBytes;
     private readonly int _maxPendingCalls;
+    private readonly ToolRunContext? _run;
     private readonly Lock _writeGate = new();
 
     public PtcScriptHostClient(
@@ -38,7 +40,8 @@ public sealed class PtcScriptHostClient
         IReadOnlyList<string> bindings,
         Func<PtcToolCall, CancellationToken, Task<PtcToolReply>> dispatch,
         int outputLimitBytes = DefaultOutputLimitBytes,
-        int maxPendingCalls = MaxPendingCalls)
+        int maxPendingCalls = MaxPendingCalls,
+        ToolRunContext? run = null)
     {
         _subprocess = subprocess;
         _cwd = cwd;
@@ -46,6 +49,7 @@ public sealed class PtcScriptHostClient
         _dispatch = dispatch;
         _outputLimitBytes = outputLimitBytes;
         _maxPendingCalls = maxPendingCalls;
+        _run = run;
     }
 
     /**
@@ -78,7 +82,7 @@ public sealed class PtcScriptHostClient
             Signal = signal,
             Stdout = new SubprocessCollect(_outputLimitBytes + FrameSlackBytes, null),
             Stderr = new SubprocessCollect(MaxStderrBytes, null),
-        });
+        }, _run);
         try
         {
             return await DriveAsync(handle, program, timeoutMs, signal);

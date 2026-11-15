@@ -334,13 +334,15 @@ public static class GrepTool
             : Path.IsPathRooted(pathArg)
                 ? Path.GetFullPath(pathArg)
                 : Path.GetFullPath(Path.Combine(workdir, pathArg));
+        var requestedFileName = Path.GetFileName(root);
         var canonicalRoot = Dsh.Runtime.CanonicalFilePath.Canonicalize(root);
         workdir = root == workdir ? canonicalRoot : Dsh.Runtime.CanonicalFilePath.Canonicalize(workdir);
         root = canonicalRoot;
         var includeMatcher = include is null ? null : SearchFiles.CreateMatcher(include);
         var matches = new List<GrepMatchValue>();
         IEnumerable<string> files;
-        if (File.Exists(root))
+        var singleFile = File.Exists(root);
+        if (singleFile)
         {
             files = [root];
             root = Path.GetDirectoryName(root)!;
@@ -358,7 +360,7 @@ public static class GrepTool
         foreach (var file in files)
         {
             exec.Signal.ThrowIfCancellationRequested();
-            if (includeMatcher is not null && !SearchFiles.Matches(includeMatcher, Path.GetRelativePath(root, file)))
+            if (includeMatcher is not null && !SearchFiles.Matches(includeMatcher, singleFile ? requestedFileName : Path.GetRelativePath(root, file)))
                 continue;
             if (await SearchFiles.LooksBinary(file, exec).ConfigureAwait(false))
                 continue;

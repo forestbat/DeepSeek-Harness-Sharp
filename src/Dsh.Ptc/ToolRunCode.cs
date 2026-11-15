@@ -99,7 +99,7 @@ public sealed class ToolRunCode
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
         var dispatcher = new PtcSubDispatch(_tools, exec);
-        var client = new PtcScriptHostClient(_subprocess, _cwd, bindings, dispatcher.DispatchAsync);
+        var client = new PtcScriptHostClient(_subprocess, _cwd, bindings, dispatcher.DispatchAsync, run: exec);
         var outcome = await client.RunAsync(code, timeoutMs, exec.Signal);
         if (!outcome.Ok)
             throw new PtcRunException(outcome.Kind ?? PtcFailureKinds.Exception, ComposeFailure(outcome));

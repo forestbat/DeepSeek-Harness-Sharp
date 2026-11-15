@@ -107,7 +107,8 @@ public sealed class SettingsMutationTests
     [InlineData(false, true, false, true)]
     [InlineData(true, true, false, true)]
     [InlineData(false, false, false, false)]
-    [InlineData(true, false, true, true)]
+    // never 只拦"需要审批"的调用: autoApprove 已经放行时, 会话策略不再追加拒绝。
+    [InlineData(true, false, true, false)]
     public async Task SettingsPolicy_UsesRuleMaps_AndPreservesDenyPrecedence(bool autoApprove, bool blacklist, bool never, bool rejected)
     {
         using var fixture = new Fixture();
@@ -140,7 +141,8 @@ public sealed class SettingsMutationTests
         {
             Assert.Equal("alpha/new", HarnessSettings.Load(fixture.Home).GlobalDefaultModel);
             Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is ApprovalAskedPayload);
-            Assert.Contains(fixture.SafetyAudits, audit => audit.RuleId == $"allow-{tool}" && audit.Decision == "allow");
+            Assert.Contains(fixture.SafetyAudits, audit => audit.Tool == tool && audit.Decision == "allow"
+                && (autoApprove || audit.RuleId == $"allow-{tool}"));
             Assert.Equal("committed", Assert.Single(fixture.Audits).Outcome);
         }
     }
