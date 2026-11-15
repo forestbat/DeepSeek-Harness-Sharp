@@ -48,7 +48,8 @@ public sealed class SettingsMutationGate : IDisposable
                 ?? throw new InvalidOperationException("Settings mutations require the active safety boundary.");
             await safety.AuthorizeFileAsync(SafetyBoundary.SafetyNamespace, run, target, "write", linked.Token,
                 settings: new SettingsApproval(approval)).ConfigureAwait(false);
-            await HarnessSettings.CommitApprovedMutationAsync(target, request.Before, request.After, async (temporary, signal) =>
+            // 落盘用用户的真实路径: target 是大写化的比较身份, 拿它写会把 settings.yaml 改名成 SETTINGS.YAML。
+            await HarnessSettings.CommitApprovedMutationAsync(home.SettingsFile, request.Before, request.After, async (temporary, signal) =>
             {
                 if (target != SettingsPath || !Owns(request.Path))
                     throw new InvalidOperationException("The active settings path changed while approval was pending.");

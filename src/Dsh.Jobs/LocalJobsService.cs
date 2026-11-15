@@ -150,7 +150,8 @@ public sealed class LocalJobsService : JobsService
                 return JobKillOutcome.AlreadyFinished;
             }
             job.Cancel(reason);
-            job.Status = JobStatus.Stopping;
+            if (!JobStatusWire.IsTerminal(job.Status))
+                job.Status = JobStatus.Stopping;
             job.Reported = true;
             owner = job.Owner;
         }
@@ -422,7 +423,10 @@ public sealed class LocalJobsService : JobsService
             {
                 job.Cancel(reason);
                 lock (_gate)
-                    job.Status = JobStatus.Stopping;
+                {
+                    if (!JobStatusWire.IsTerminal(job.Status))
+                        job.Status = JobStatus.Stopping;
+                }
                 owner = job.Owner;
                 NotifyChanged(owner);
             }
