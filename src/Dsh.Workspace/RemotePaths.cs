@@ -25,8 +25,10 @@ public static class RemotePaths
         var token = (path ?? "").Trim().Trim('"', '\'');
         if (token.Length == 0 || IsAbsolute(token, style))
             return token;
-        var basePath = (cwd ?? "").TrimEnd('/', '\\');
-        return basePath.Length == 0 ? token : $"{basePath}{Separator(style)}{token}";
+        if (string.IsNullOrEmpty(cwd))
+            return token;
+        var basePath = style == RemotePathStyle.Windows ? cwd.TrimEnd('/', '\\') : cwd.TrimEnd('/');
+        return $"{basePath}{Separator(style)}{token}";
     }
 
     public static bool IsAbsolute(string path, RemotePathStyle style)

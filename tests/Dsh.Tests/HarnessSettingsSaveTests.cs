@@ -67,6 +67,7 @@ public sealed class HarnessSettingsSaveTests
 
             settings.Save(home);
 
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(home.Root).Select(Path.GetFileName));
             var text = ReadSettings(home);
             Assert.Equal(text.ReplaceLineEndings(newline), text);
             Assert.Contains("# 用户注释: 保留", text);
@@ -127,6 +128,32 @@ public sealed class HarnessSettingsSaveTests
             var text = ReadSettings(home);
             Assert.Contains("# 用户注释: 保留", text);
             Assert.Contains("custom_key: keep-me", text);
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
+    /** 旧版本把文件写成了大写 SETTINGS.YAML: 新版本用小写名落盘只能接管它, 不能把内容丢掉。 */
+    [Fact]
+    public void Save_TakesOverTheUppercaseFileLeftByOlderBuilds()
+    {
+        var home = CreateHome("\n");
+        try
+        {
+            var uppercase = Path.Combine(home.Root, "SETTINGS.YAML");
+            File.Move(home.SettingsFile, uppercase);
+
+            var settings = HarnessSettings.Load(home);
+            settings.Safety!.AutoApprove = true;
+            settings.Save(home);
+
+            var text = ReadSettings(home);
+            Assert.Contains("# 用户注释: 保留", text);
+            Assert.Contains("custom_key: keep-me", text);
+            Assert.Contains("autoApprove: true", text);
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(home.Root).Select(Path.GetFileName));
         }
         finally
         {
@@ -209,6 +236,7 @@ public sealed class HarnessSettingsSaveTests
             settings.SavePlugins(home);
 
             var text = ReadSettings(home);
+            Assert.Equal(["settings.yaml", "settings.yaml.bak"], Directory.GetFiles(home.Root).Select(Path.GetFileName).Order(StringComparer.Ordinal));
             Assert.Contains("timeline: true # value comment", text);
             Assert.Contains("future_option: keep # unknown option comment", text);
             Assert.Contains("future_history: [a, b] # future nested comment", text);
