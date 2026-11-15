@@ -178,7 +178,7 @@ public sealed class PluginTemplateTests
             root = root.Parent;
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
         var path = Path.Combine(root?.FullName ?? AppContext.BaseDirectory,
-            "templates", "managed-plugin", "bin", configuration, "net10.0", "plugin", "DshPluginTemplate.dll");
+            "templates", "managed-plugin", "bin", configuration, "net11.0", "plugin", "DshPluginTemplate.dll");
         if (!File.Exists(path))
             Assert.Skip("the managed plugin template has not been built");
         return path;

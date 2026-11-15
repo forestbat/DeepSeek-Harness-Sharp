@@ -90,7 +90,7 @@ for attempt in {1..20}; do
     sleep 0.1
 done
 printf -v command 'test "$(id -u)" -ne 0 && ! launchctl print "gui/$(id -u)" >/dev/null 2>&1 && export PATH=%q:"$PATH" && cd %q && exec %q -noColor -failSkips -method Dsh.Tests.IrohReceiverEndToEndTests.TargetCli_Lan_Readiness_And_Restart_Work_Without_A_Relay' \
-    "$IROH_DIRECTORY" "$ROOT_DIR" "$ROOT_DIR/tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+    "$IROH_DIRECTORY" "$ROOT_DIR" "$ROOT_DIR/tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests"
 ssh -F /dev/null -i "$WORK_DIR/client_key" -o IdentitiesOnly=yes -o BatchMode=yes \
     -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WORK_DIR/known_hosts" \
     -o GlobalKnownHostsFile=/dev/null -p "$SSH_PORT" "$ACCOUNT@127.0.0.1" "$command"

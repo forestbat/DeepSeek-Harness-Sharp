@@ -2,13 +2,16 @@
 
   <Import Project="..\Dsh.Plugins.Generator\DshPluginHost.props" />
 
+  <!-- 本机的 JDK 与 Android SDK 位置写在 android.local.props 里(不入库), 这里只按存在性导入。 -->
+  <Import Project="android.local.props" Condition="Exists('android.local.props')" />
+
   <PropertyGroup>
-    <TargetFramework>net10.0-android</TargetFramework>
+    <TargetFramework>net11.0-android</TargetFramework>
     <SupportedOSPlatformVersion>34</SupportedOSPlatformVersion>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <LangVersion>14</LangVersion>
+    <LangVersion>15</LangVersion>
     <ApplicationId>ai.dsh.mobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>0.4.0</ApplicationDisplayVersion>

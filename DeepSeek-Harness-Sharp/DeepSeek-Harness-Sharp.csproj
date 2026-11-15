@@ -10,7 +10,7 @@
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <AssemblyName>dsharp</AssemblyName>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <RootNamespace>DeepSeek_Harness_Sharp</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -48,11 +48,18 @@
       <SettingsTemplateMode Condition="'$(UpdateSettingsTemplate)' == 'true'">--write-template</SettingsTemplateMode>
       <SettingsTemplateMode Condition="'$(UpdateSettingsTemplate)' != 'true'">--verify</SettingsTemplateMode>
       <SettingsTemplateExe Condition="$([MSBuild]::IsOSPlatform('Windows'))">.exe</SettingsTemplateExe>
+      <!--
+        宿主 exe 是 apphost: 它按 DOTNET_ROOT(缺省为机器级安装)找运行时。构建用的 SDK 未必装在机器级位置,
+        直接调用会报"找不到 Microsoft.NETCore.App 11.0"(MSB3073)。把 DOTNET_ROOT 指到构建用 SDK 的目录即可。
+      -->
+      <SettingsTemplateDotnetRoot>$([System.IO.Path]::GetDirectoryName('$(DOTNET_HOST_PATH)'))</SettingsTemplateDotnetRoot>
+      <SettingsTemplateEnvironment Condition="'$(SettingsTemplateDotnetRoot)' != ''">DOTNET_ROOT=$(SettingsTemplateDotnetRoot)</SettingsTemplateEnvironment>
     </PropertyGroup>
 
     <Target Name="SettingsTemplateHookBuild" AfterTargets="Build"
             Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(TargetDir)$(AssemblyName)$(SettingsTemplateExe)')">
       <Exec Command="&quot;$(TargetDir)$(AssemblyName)$(SettingsTemplateExe)&quot; config schema $(SettingsTemplateMode) --path &quot;$(SettingsTemplateFile)&quot;"
+            EnvironmentVariables="$(SettingsTemplateEnvironment)"
             WorkingDirectory="$(MSBuildThisFileDirectory).."
             ContinueOnError="false" />
     </Target>
@@ -64,6 +71,7 @@
       </PropertyGroup>
       <Exec Condition="Exists('$(_SettingsTemplatePublishHost)')"
             Command="&quot;$(_SettingsTemplatePublishHost)&quot; config schema $(SettingsTemplateMode) --path &quot;$(SettingsTemplateFile)&quot;"
+            EnvironmentVariables="$(SettingsTemplateEnvironment)"
             WorkingDirectory="$(MSBuildThisFileDirectory).."
             ContinueOnError="false" />
     </Target>

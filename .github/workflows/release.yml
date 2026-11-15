@@ -241,16 +241,16 @@ jobs:
           # The Web entry keeps its runtime closure in a separate optional asset.
           dotnet publish Dsh.WebHost/Dsh.WebHost.csproj -c Release -r "$RID" "${PUBLISH_ARGS[@]}" \
             -p:Version="$VERSION" -p:DebugSymbols=false -p:DebugType=none --nologo -v m
-          WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
+          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
           if [ "$FLAVOR" = "aot" ]; then
             bash scripts/assert-aot-output.sh "$WEB_PUB" dsharp-web
           fi
           pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
             -WebPublishDir "$WEB_PUB" \
-            -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish" \
-            -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
-          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
+            -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish" \
+            -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
           test -d "$PUB"
           test -d "$GUI_PUB"
           cp -R "$GUI_PUB"/. "$PUB"/
@@ -359,7 +359,7 @@ jobs:
           ARCHIVE: ${{ matrix.archive }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $webPub = "Dsh.WebHost/bin/Release/net10.0/$env:RID/publish"
+          $webPub = "Dsh.WebHost/bin/Release/net11.0/$env:RID/publish"
           $webArchive = $env:ARCHIVE -replace '^dsharp-', 'dsharp-web-'
           $out = "artifacts/release-stage/$webArchive"
           New-Item -ItemType Directory -Force "$webPub/plugins" | Out-Null
@@ -373,8 +373,8 @@ jobs:
             tar -xf $out -C $verify
             if ($LASTEXITCODE -ne 0) { throw 'WebHost archive extraction failed' }
             ./scripts/smoke-web-host.ps1 -WebPublishDir $verify `
-              -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/$env:RID/publish" `
-              -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/$env:RID/publish"
+              -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net11.0/$env:RID/publish" `
+              -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/$env:RID/publish"
           } finally { Remove-Item $verify -Recurse -Force }
 
       - uses: actions/upload-artifact@v4
