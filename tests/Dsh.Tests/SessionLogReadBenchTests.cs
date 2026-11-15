@@ -33,7 +33,17 @@ public sealed class SessionLogReadBenchTests
             var clock = Stopwatch.StartNew();
             using var handle = store.Open(id, SessionAccess.Read);
             var open = clock.ElapsedMilliseconds;
-            var events = handle.Read();
+            IReadOnlyList<SessionEvent> events;
+            try
+            {
+                events = handle.Read();
+            }
+            catch (SessionFormatUnsupportedException)
+            {
+                // 现场日志里带着插件事件(如 todo/write、compaction/prune), 它们的事件编码在插件启动时登记;
+                // 本进程没组合过插件目录时读不动这份日志, 基准也就无从谈起 —— 与"找不到现场日志"同样跳过。
+                return;
+            }
             costs.Add((open, clock.ElapsedMilliseconds - open, events.Count));
         }
         TestContext.Current.SendDiagnosticMessage(
