@@ -256,7 +256,6 @@ public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
             var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", (uint)daemonPort);
             client.AddForwardedPort(forward);
             forward.Start();
-            DiagnoseParseCost();
             await DiagnoseChannelsAsync(client, cancellationToken).ConfigureAwait(false);
             var tcp = new TcpClient { NoDelay = true };
             try
@@ -300,63 +299,6 @@ public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
      * 桌面同样数据只要几十毫秒, 手机上却报一秒; 只有用同一份数据把"解压/建文档/造对象"分开量,
      * 才知道差在哪一段, 而不是把原因归给"手机 CPU 慢"。
      */
-    private static void DiagnoseParseCost()
-    {
-        try
-        {
-            const int count = 3000;
-            var events = new List<Dsh.Core.SessionEvent>(count);
-            for (var index = 0; index < count; index += 1)
-                events.Add(new Dsh.Core.SessionEvent
-                {
-                    Type = Dsh.Core.SessionEventTypes.AssistantChunk,
-                    Seq = index,
-                    Time = 1_700_000_000_000,
-                    Data = new Dsh.Core.AssistantChunkPayload(1, 1, new Dsh.Llm.StreamChunk.TextDelta(0, new string('x', 400))),
-                });
-            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
-                new Dsh.RemoteHost.RemoteSessionSnapshot(default!, events, count, null),
-                Dsh.RemoteHost.HostProtocolJsonContext.Default.RemoteSessionSnapshot);
-
-            // 解压: 只看 zstd 这一层。
-            using var compressed = new MemoryStream();
-            Dsh.Transport.FrameCodec.WriteFrameAsync(compressed, json, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-            var wire = compressed.ToArray();
-            var inflateClock = System.Diagnostics.Stopwatch.StartNew();
-            for (var round = 0; round < 3; round += 1)
-            {
-                using var input = new MemoryStream(wire);
-                _ = Dsh.Transport.FrameCodec.ReadFrameAsync(input, cancellationToken: CancellationToken.None).AsTask().GetAwaiter().GetResult();
-            }
-            var inflate = inflateClock.ElapsedMilliseconds / 3;
-
-            // 建文档: 只 ParseValue, 不造对象。
-            var documentClock = System.Diagnostics.Stopwatch.StartNew();
-            for (var round = 0; round < 3; round += 1)
-            {
-                using var document = System.Text.Json.JsonDocument.Parse(json);
-                _ = document.RootElement.ValueKind;
-            }
-            var documentCost = documentClock.ElapsedMilliseconds / 3;
-
-            // 造对象: 完整反序列化, 与客户端实际路径一致。
-            var objectClock = System.Diagnostics.Stopwatch.StartNew();
-            for (var round = 0; round < 3; round += 1)
-            {
-                var snapshot = System.Text.Json.JsonSerializer.Deserialize(json, Dsh.RemoteHost.HostProtocolJsonContext.Default.RemoteSessionSnapshot);
-                if (snapshot!.Events.Count != count)
-                    throw new InvalidOperationException("event count mismatch");
-            }
-            var objectCost = objectClock.ElapsedMilliseconds / 3;
-
-            MobileLog.Info($"parse cost: json={json.Length / 1024}KB wire={wire.Length / 1024}KB inflate={inflate}ms document={documentCost}ms objects={objectCost}ms");
-        }
-        catch (Exception error) when (error is not OperationCanceledException)
-        {
-            MobileLog.Info($"parse cost failed: {error.GetType().Name}: {error.Message}");
-        }
-    }
-
     private static async Task DiagnoseChannelsAsync(SshClient client, CancellationToken cancellationToken)
     {        const int bytes = 4 * 1024 * 1024;
         try

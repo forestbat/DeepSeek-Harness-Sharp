@@ -20,9 +20,6 @@ public sealed class FleetProxyProbe(FleetOptions options) : IWorkspaceProxyProbe
     public static readonly TimeSpan RemoteTimeout = TimeSpan.FromSeconds(35);
     private const int LayerCount = 3;
     private readonly int[] _running = new int[LayerCount];
-    private readonly ProxyProbeResult?[] _results = new ProxyProbeResult?[LayerCount];
-
-    public ProxyProbeResult? ResultFor(ProxyProbeLayer layer) => Volatile.Read(ref _results[(int)layer]);
 
     public Task<ProxyProbeResult> ProbeSshAsync(MachineSpec machine, Guid operationId, CancellationToken cancellationToken)
         => RunAsync(new Operation(ProxyProbeLayer.Ssh, machine.Name, machine.HarnessHome, operationId, machine),
@@ -100,9 +97,7 @@ public sealed class FleetProxyProbe(FleetOptions options) : IWorkspaceProxyProbe
             };
             deadline.CancelAfter(timeout);
             await RunOperationAsync(operation, probe, deadline.Token, cancellationToken, timeout).ConfigureAwait(false);
-            var result = operation.Result();
-            Volatile.Write(ref _results[index], result);
-            return result;
+            return operation.Result();
         }
         finally
         {
