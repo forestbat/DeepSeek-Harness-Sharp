@@ -140,6 +140,14 @@ public sealed class HarnessSettings
 
     private static HarnessSettings LoadSnapshot(string path, string canonicalPath)
     {
+        var legacyPath = Path.Combine(Path.GetDirectoryName(path)!, "SETTINGS.YAML");
+        if (File.Exists(legacyPath) && !Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!)
+                .Any(entry => string.Equals(Path.GetFileName(entry), Path.GetFileName(path), StringComparison.Ordinal)))
+        {
+            File.Move(legacyPath, path);
+            using var recovered = new SettingsWriteLock(path);
+            return LoadSnapshot(path, recovered.CanonicalPath);
+        }
         var text = ReadDocument(path, out var notice);
         var settings = Parse(text);
         settings.Plugins = PluginSettingsSection.ParseDocument(text);

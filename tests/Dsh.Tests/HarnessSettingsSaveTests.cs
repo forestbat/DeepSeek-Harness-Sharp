@@ -161,8 +161,100 @@ public sealed class HarnessSettingsSaveTests
         }
     }
 
-    [Fact]
-    public void Load_MissingSettings_DoesNotWriteTemplate()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Load_RecoversLegacySettingsWithoutChangingTheirBytes(bool forReview)
+    {
+        var home = CreateHome("\r\n");
+        try
+        {
+            var original = File.ReadAllBytes(home.SettingsFile);
+            File.Move(home.SettingsFile, Path.Combine(home.Root, "SETTINGS.YAML"));
+
+            var settings = forReview ? HarnessSettings.LoadForReview(home) : HarnessSettings.Load(home);
+
+            Assert.Equal("alpha/model-a", settings.GlobalDefaultModel);
+            Assert.False(settings.Safety!.AutoApprove);
+            Assert.False(settings.Plugins["@deepseek-ai/dsh-memory"].Enabled);
+            Assert.Equal(original, File.ReadAllBytes(home.SettingsFile));
+            Assert.Equal(["settings.yaml"], Directory.GetFiles(home.Root).Select(Path.GetFileName));
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Save_AfterRecoveringLegacySettingsLink_PreservesAnotherWritersChanges(bool forReview)
+    {
+        var home = CreateHome("\n");
+        var target = CreateHome("\n");
+        try
+        {
+            File.Delete(home.SettingsFile);
+            File.CreateSymbolicLink(Path.Combine(home.Root, "SETTINGS.YAML"), target.SettingsFile);
+            var settings = forReview ? HarnessSettings.LoadForReview(home) : HarnessSettings.Load(home);
+
+            Assert.True(HarnessSettings.Update(target, current =>
+            {
+                current.GlobalDefaultModel = "beta/model-b";
+                return true;
+            }));
+            settings.Safety!.AutoApprove = true;
+            settings.Save(home);
+
+            var actual = HarnessSettings.Load(home);
+            Assert.Equal("beta/model-b", actual.GlobalDefaultModel);
+            Assert.True(actual.Safety!.AutoApprove);
+        }
+        catch (Exception error) when (OperatingSystem.IsWindows()
+            && error is IOException or UnauthorizedAccessException && (error.HResult & 0xffff) == 1314)
+        {
+            Assert.Skip("The test account lacks the Windows symbolic-link creation privilege.");
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+            TempTree.Delete(target.Root);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Load_PrefersExistingSettingsAndPreservesADistinctLegacyFile(bool forReview)
+    {
+        var home = CreateHome("\n");
+        try
+        {
+            var uppercase = Path.Combine(home.Root, "SETTINGS.YAML");
+            var distinctLegacyFile = !File.Exists(uppercase);
+            const string legacy = "# legacy document\nglobal_default_model: legacy/model\n";
+            if (distinctLegacyFile)
+                File.WriteAllText(uppercase, legacy);
+            var original = File.ReadAllBytes(home.SettingsFile);
+
+            var settings = forReview ? HarnessSettings.LoadForReview(home) : HarnessSettings.Load(home);
+
+            Assert.Equal("alpha/model-a", settings.GlobalDefaultModel);
+            Assert.Equal(original, File.ReadAllBytes(home.SettingsFile));
+            if (distinctLegacyFile)
+                Assert.Equal(legacy, File.ReadAllText(uppercase));
+        }
+        finally
+        {
+            TempTree.Delete(home.Root);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Load_MissingSettings_DoesNotWriteTemplate(bool forReview)
     {
         var home = CreateHome("\n");
         try
@@ -170,7 +262,7 @@ public sealed class HarnessSettingsSaveTests
             var active = Path.Combine(home.Root, "settings.yaml");
             File.Delete(active);
 
-            var settings = HarnessSettings.Load(home);
+            var settings = forReview ? HarnessSettings.LoadForReview(home) : HarnessSettings.Load(home);
 
             Assert.NotNull(settings.Plugins);
             Assert.False(File.Exists(active));
