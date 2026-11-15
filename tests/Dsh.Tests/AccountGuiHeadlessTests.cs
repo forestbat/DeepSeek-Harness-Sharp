@@ -62,8 +62,6 @@ public sealed class AccountGuiHeadlessTests
     [Fact]
     public async Task TitleBar_AccountButtonIsCenteredClickableAndLeftOfMinimize() => await HeadlessGui.RunAsync(async () =>
     {
-        if (!OperatingSystem.IsWindows())
-            Assert.Skip("The custom title bar is enabled only on Windows.");
         var environment = await GuiTestEnvironment.CreateAsync();
         await using var environmentScope = environment;
         var window = new MainWindow(environment.App, await environment.OpenChatAsync()) { Width = 1200, Height = 800 };
@@ -109,8 +107,6 @@ public sealed class AccountGuiHeadlessTests
     [Fact]
     public async Task TitleBar_AccountButtonSurvivesSignIn() => await HeadlessGui.RunAsync(async () =>
     {
-        if (!OperatingSystem.IsWindows())
-            Assert.Skip("The custom title bar is enabled only on Windows.");
         var environment = await GuiTestEnvironment.CreateAsync();
         await using var environmentScope = environment;
         var window = new MainWindow(environment.App, await environment.OpenChatAsync()) { Width = 1200, Height = 800 };
