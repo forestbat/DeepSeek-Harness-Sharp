@@ -400,8 +400,13 @@ public sealed class SubprocessService : Service, IDisposable
         }
         throw new FileNotFoundException($"subprocess: executable \"{command}\" not found on PATH");
     }
-    public Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec)
-        => Task.FromResult(SpawnDirect(spec));
+    public async Task<SubprocessHandle> SpawnAsync(SubprocessSpawnSpec spec, ToolRunContext? run = null)
+    {
+        if (run is not null && SafetyBoundary.Resolve(Ctx) is { } safety)
+            await safety.AuthorizeProcessAsync(run.PermissionNamespace, run, spec.Argv[0], spec.Cwd, spec.Signal)
+                .ConfigureAwait(false);
+        return SpawnDirect(spec);
+    }
 
     public async Task<SubprocessHandle> SpawnScriptAsync(SubprocessSpawnSpec spec, ToolRunContext? run = null)
     {
