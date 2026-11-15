@@ -200,8 +200,6 @@ public sealed partial class MainWindow : Window
 
     private void SetUpTitleBar()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
         ExtendClientAreaToDecorationsHint = true;
         ExtendClientAreaTitleBarHeightHint = TitleBarHeight;
         WindowDecorations = WindowDecorations.BorderOnly;
