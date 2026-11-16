@@ -114,8 +114,6 @@ public sealed class Session
 
     public IReadOnlyList<SessionEvent> OwnEvents() => SnapshotEvents(InheritedEventCount);
 
-    public bool IsOwnSeq(long seq) => seq >= InheritedEventCount && seq < Seq;
-
     public long Seq => Volatile.Read(ref _snapshot).Count;
 
     /** 就地截断到 eventCount: 只剩 [0, eventCount), 重建 surface 与 header/context 折叠。仅限本会话自有区间。 */

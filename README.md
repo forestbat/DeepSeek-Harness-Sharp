@@ -27,7 +27,7 @@ irm https://raw.githubusercontent.com/forestbat/DeepSeek-Harness-Sharp/master/sc
    ```bash
    dotnet build # 只构建不运行
    dotnet run --project DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj  # 执行构建并启动
-   DeepSeek-Harness-Sharp/bin/Debug(Release)/net10.0/dsharp 启动构建结果
+   DeepSeek-Harness-Sharp/bin/Debug(Release)/net11.0/dsharp 启动构建结果
    ```
    `DSH_HOME`(或 `settings.yaml` 的 `storage.root`)可以指定独立的配置/会话目录,便于用不同配置试跑构建产物。
 
@@ -100,7 +100,7 @@ plugins:
 展开或折叠消息时保留当前阅读位置。
 
 ```bash
-Dsh.GuiHost/bin/Debug/net10.0/dsh-gui.exe   # Windows
+Dsh.GuiHost/bin/Debug/net11.0/dsh-gui.exe   # Windows
 dsharp gui                                  # 从控制台宿主进入 GUI
 ```
 

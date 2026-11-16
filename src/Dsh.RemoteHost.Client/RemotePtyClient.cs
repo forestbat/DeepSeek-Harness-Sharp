@@ -1,7 +1,7 @@
-using System.Text.Json;
-using static Dsh.RemoteHost.RemoteHostRpc;
+using StreamJsonRpc;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
 
 namespace Dsh.RemoteHost;
@@ -10,14 +10,19 @@ namespace Dsh.RemoteHost;
 public sealed class RemotePtyClient : IWorkspaceTerminals
 {
     private readonly RemoteHostClient _host;
+    private readonly IPtyRpc _rpc;
 
-    internal RemotePtyClient(RemoteHostClient host) => _host = host;
+    internal RemotePtyClient(RemoteHostClient host, IPtyRpc rpc)
+    {
+        _host = host;
+        _rpc = rpc;
+    }
 
     private readonly ConcurrentDictionary<string, Channel<RemotePtyOutput>> _ptyStreams = new(StringComparer.Ordinal);
 
     public async Task<string> StartPtyAsync(RemotePtyStartRequest request, CancellationToken cancellationToken = default)
     {
-        var reference = await _host.SendAsync(PtyProtocol.MethodPtyStart, Serialize(request, PtyProtocolJsonContext.Default.RemotePtyStartRequest), PtyProtocolJsonContext.Default.RemotePtyRef, cancellationToken).ConfigureAwait(false);
+        var reference = await _rpc.StartAsync(request, cancellationToken).ConfigureAwait(false);
         return reference.PtyId;
     }
 
@@ -31,7 +36,7 @@ public sealed class RemotePtyClient : IWorkspaceTerminals
         Task pumpInput = Task.CompletedTask;
         try
         {
-            await _host.SendAsync(PtyProtocol.MethodPtyAttach, Serialize(new RemotePtyAttachRequest(ptyId, subscriptionId), PtyProtocolJsonContext.Default.RemotePtyAttachRequest), PtyProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+            await _rpc.AttachAsync(new RemotePtyAttachRequest(ptyId, subscriptionId), cancellationToken).ConfigureAwait(false);
             pumpInput = PumpPtyInputAsync(ptyId, input, inputLifetime.Token);
             await foreach (var item in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -46,14 +51,14 @@ public sealed class RemotePtyClient : IWorkspaceTerminals
         {
             _ptyStreams.TryRemove(subscriptionId, out _);
             await inputLifetime.CancelAsync().ConfigureAwait(false);
-            await StopStreamAsync(PtyProtocol.MethodPtyDetach, subscriptionId).ConfigureAwait(false);
+            await StopStreamAsync(subscriptionId).ConfigureAwait(false);
             await output.FlushAsync(CancellationToken.None).ConfigureAwait(false);
             await pumpInput.ConfigureAwait(false);
         }
     }
 
-    public Task StopPtyAsync(string ptyId, CancellationToken cancellationToken = default)
-        => _host.SendAsync(PtyProtocol.MethodPtyStop, Serialize(new RemotePtyRef(ptyId), PtyProtocolJsonContext.Default.RemotePtyRef), PtyProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task StopPtyAsync(string ptyId, CancellationToken cancellationToken = default)
+        => await _rpc.StopAsync(new RemotePtyRef(ptyId), cancellationToken).ConfigureAwait(false);
 
     private async Task PumpPtyInputAsync(string ptyId, Stream input, CancellationToken cancellationToken)
     {
@@ -62,36 +67,34 @@ public sealed class RemotePtyClient : IWorkspaceTerminals
         {
             int read;
             while ((read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
-                await _host.SendAsync(PtyProtocol.MethodPtyWrite, Serialize(new RemotePtyInput(ptyId, Convert.ToBase64String(buffer.AsSpan(0, read))), PtyProtocolJsonContext.Default.RemotePtyInput), PtyProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+                await _rpc.WriteAsync(new RemotePtyInput(ptyId, Convert.ToBase64String(buffer.AsSpan(0, read))), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (error is OperationCanceledException or IOException)
         {
         }
     }
 
-    private async Task StopStreamAsync(string method, string subscriptionId)
+    private async Task StopStreamAsync(string subscriptionId)
     {
         if (_host.IsClosed)
             return;
         try
         {
-            await _host.SendAsync(method, Serialize(new RemoteSubscriptionRef(subscriptionId), PtyProtocolJsonContext.Default.RemoteSubscriptionRef), PtyProtocolJsonContext.Default.Boolean, CancellationToken.None).ConfigureAwait(false);
+            await _rpc.DetachAsync(new RemoteSubscriptionRef(subscriptionId), CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is IOException or ObjectDisposedException)
+        catch (Exception error) when (error is IOException or ObjectDisposedException or ConnectionLostException)
         {
         }
     }
 
-    public Task ResizePtyAsync(string ptyId, int columns, int rows, CancellationToken cancellationToken = default)
-        => _host.SendAsync(PtyProtocol.MethodPtyResize, Serialize(new RemotePtyResize(ptyId, columns, rows), PtyProtocolJsonContext.Default.RemotePtyResize), PtyProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task ResizePtyAsync(string ptyId, int columns, int rows, CancellationToken cancellationToken = default)
+        => await _rpc.ResizeAsync(new RemotePtyResize(ptyId, columns, rows), cancellationToken).ConfigureAwait(false);
 
-    internal void OnNotification(JsonRpcMessage message)
+    internal Task OnOutputAsync(RemotePtyFrame frame)
     {
-        if (message.Method != PtyProtocol.NotificationPtyOutput || message.Params is not { } parameters)
-            return;
-        var frame = JsonSerializer.Deserialize(parameters, PtyProtocolJsonContext.Default.RemotePtyFrame);
         if (_ptyStreams.TryGetValue(frame.SubscriptionId, out var stream))
             stream.Writer.TryWrite(frame.Output);
+        return Task.CompletedTask;
     }
 
     internal void OnClosed(Exception failure)
@@ -100,6 +103,3 @@ public sealed class RemotePtyClient : IWorkspaceTerminals
             stream.Writer.TryComplete(failure);
     }
 }
-
-
-

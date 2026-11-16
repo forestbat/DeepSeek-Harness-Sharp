@@ -1,0 +1,80 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginHost.props" />
+
+  <!-- 本机的 JDK 与 Android SDK 位置写在 android.local.props 里(不入库), 这里只按存在性导入。 -->
+  <Import Project="android.local.props" Condition="Exists('android.local.props')" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0-android</TargetFramework>
+    <!--
+      显式写平台版本: 少了它, 装了 android 工作负载的 SDK 会自己推, 没装的 SDK(例如只装了 10.0.100 那档清单的)
+      推不出来就得到 0.0, 于是 NETSDK1135 "SupportedOSPlatformVersion 34 高于 TargetPlatformVersion 0.0" ——
+      IDE 里表现为整个项目加载失败, 与代码无关。
+    -->
+    <TargetPlatformVersion>37.0</TargetPlatformVersion>
+    <SupportedOSPlatformVersion>34</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>15</LangVersion>
+    <ApplicationId>ai.dsh.mobile</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.4.0</ApplicationDisplayVersion>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <!-- 侧载安装(文件管理器点开 APK)不会走 fast deployment, 程序集必须打进 APK 才能独立启动。 -->
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+    <!--
+      Android SDK 只在 Debug 配置下把 UseInterpreter 设成 true(见 Microsoft.Android.Sdk.DefaultProperties.targets),
+      而桌面 Debug 一直是 JIT —— 平台默认值不同, 不是硬件差异。
+      历史加载的热路径(JSON 解析 + zstd 解压)在解释执行下: 1.6MB 事件页要 1.7 秒, 桌面同一份数据 26 毫秒。
+      这里关掉解释器, 让 Debug 构建也走 JIT, 调试时的耗时才代表真实体验。
+    -->
+    <UseInterpreter>false</UseInterpreter>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <_JdkFromLocal Condition="Exists('$(LOCALAPPDATA)\Microsoft')">$([System.IO.Directory]::GetDirectories('$(LOCALAPPDATA)\Microsoft', 'jdk-21*'))</_JdkFromLocal>
+    <_JdkFromProgramFiles Condition="Exists('$(ProgramFiles)\Microsoft')">$([System.IO.Directory]::GetDirectories('$(ProgramFiles)\Microsoft', 'jdk-21*'))</_JdkFromProgramFiles>
+  </PropertyGroup>
+
+  <!-- JDK/Android SDK 自动发现: IDE 直接打开 slnx 时没有命令行 -p 参数, 找不到 JDK 会让整个项目加载失败。 -->
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(JAVA_HOME)' != '' and Exists('$(JAVA_HOME)\bin\javac.exe')">
+    <JavaSdkDirectory>$(JAVA_HOME)</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(_JdkFromLocal)' != ''">
+    <JavaSdkDirectory>$([System.String]::Copy('$(_JdkFromLocal)').Split(';')[0])</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(JavaSdkDirectory)' == '' and '$(_JdkFromProgramFiles)' != ''">
+    <JavaSdkDirectory>$([System.String]::Copy('$(_JdkFromProgramFiles)').Split(';')[0])</JavaSdkDirectory>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AndroidSdkDirectory)' == '' and Exists('$(LOCALAPPDATA)\Android\Sdk')">
+    <AndroidSdkDirectory>$(LOCALAPPDATA)\Android\Sdk</AndroidSdkDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 本机 host 首次启动要用它生成 settings.yaml; 桌面端靠 Content 拷到输出目录, APK 里只能以资源形式随包。 -->
+    <AndroidAsset Include="..\Dsh.Boot\Profiles\Templates\settings.yaml" Link="Profiles\Templates\settings.yaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Android" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dsh.Account\Dsh.Account.csproj" />
+    <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
+    <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\Dsh.Gui.Shared\Dsh.Gui.Shared.csproj" />
+    <ProjectReference Include="..\..\Dsh.Host\Dsh.Host.csproj" />
+    <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Server\Dsh.RemoteHost.Server.csproj" />
+    <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
+  </ItemGroup>
+
+</Project>

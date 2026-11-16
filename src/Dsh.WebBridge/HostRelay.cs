@@ -48,7 +48,7 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
                 var received = await socket.ReceiveAsync(chunk.AsMemory(), _lifetime.Token).ConfigureAwait(false);
                 if (received.MessageType == WebSocketMessageType.Close)
                     break;
-                if (received.MessageType != WebSocketMessageType.Text || message.Length + received.Count > FrameCodec.DefaultMaxFrameBytes)
+                if (received.MessageType != WebSocketMessageType.Text || message.Length + received.Count > JsonRpcChannel.MaxFrameBytes)
                 {
                     await socket.CloseOutputAsync(WebSocketCloseStatus.InvalidMessageType, "expected a JSON-RPC text message within the host frame limit", _lifetime.Token).ConfigureAwait(false);
                     break;
@@ -183,7 +183,7 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
         var lease = ConnectedLease();
         if (request.Method == HostProtocol.MethodHello)
             return JsonSerializer.SerializeToElement(lease.Client.Hello, HostProtocolJsonContext.Default.HostHelloResponse);
-        return await lease.Client.RequestAsync(request.Method!, parameters, _lifetime.Token).ConfigureAwait(false);
+        return await lease.Client.ForwardAsync(request.Method!, parameters, _lifetime.Token).ConfigureAwait(false);
     }
 
     private async Task<JsonElement> BeginUploadAsync(JsonElement? parameters)
@@ -191,7 +191,7 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
         var lease = ConnectedLease();
         // Once sent, begin must reach its response even if this browser closes. Otherwise the
         // newly created UploadId and its FileShare.None temporary handle would be orphaned.
-        var result = await lease.Client.RequestAsync(FilesProtocol.MethodFsUploadBegin, parameters, lease.Lifetime).ConfigureAwait(false);
+        var result = await lease.Client.ForwardAsync(FilesProtocol.MethodFsUploadBegin, parameters, lease.Lifetime).ConfigureAwait(false);
         var uploadId = Required(result, "UploadId");
         _uploads[uploadId] = lease;
         if (_lifetime.IsCancellationRequested && _uploads.TryRemove(uploadId, out _))
@@ -206,7 +206,7 @@ internal sealed class HostRelay(WebSocket socket, MachineConnection machine, Fun
             throw new JsonRpcException(-32602, "unknown upload for this browser");
         // Join an operation already sent before disconnect cleanup aborts its temporary file.
         JsonElement result;
-        try { result = await lease.Client.RequestAsync(method, parameters, lease.Lifetime).ConfigureAwait(false); }
+        try { result = await lease.Client.ForwardAsync(method, parameters, lease.Lifetime).ConfigureAwait(false); }
         catch
         {
             if (method is FilesProtocol.MethodFsUploadCommit or FilesProtocol.MethodFsUploadAbort

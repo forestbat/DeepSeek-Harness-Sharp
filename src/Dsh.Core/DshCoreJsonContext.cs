@@ -52,7 +52,7 @@ namespace Dsh.Core;
 [JsonSerializable(typeof(SessionHeader))]
 [JsonSerializable(typeof(IReadOnlyList<long>))]
 [JsonSerializable(typeof(JsonElement))]
-internal sealed partial class DshCoreJsonContext : JsonSerializerContext
+public sealed partial class DshCoreJsonContext : JsonSerializerContext
 {
 }
 

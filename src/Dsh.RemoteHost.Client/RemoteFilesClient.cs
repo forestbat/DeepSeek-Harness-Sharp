@@ -1,5 +1,5 @@
-using System.Text.Json;
-using static Dsh.RemoteHost.RemoteHostRpc;
+using StreamJsonRpc;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
 
 namespace Dsh.RemoteHost;
@@ -8,51 +8,52 @@ namespace Dsh.RemoteHost;
 public sealed class RemoteFilesClient : IWorkspaceFiles
 {
     private readonly RemoteHostClient _host;
+    private readonly IFilesRpc _rpc;
 
-    internal RemoteFilesClient(RemoteHostClient host) => _host = host;
+    internal RemoteFilesClient(RemoteHostClient host, IFilesRpc rpc)
+    {
+        _host = host;
+        _rpc = rpc;
+    }
 
     public async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken = default)
     {
-        var content = await _host.SendAsync(FilesProtocol.MethodFileRead, Serialize(new RemoteFilePath(path), FilesProtocolJsonContext.Default.RemoteFilePath), FilesProtocolJsonContext.Default.RemoteFileContent, cancellationToken).ConfigureAwait(false);
+        var content = await _rpc.ReadFileAsync(new RemoteFilePath(path), cancellationToken).ConfigureAwait(false);
         return Convert.FromBase64String(content.Base64);
     }
 
-    public Task WriteFileAsync(string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFileWrite, Serialize(new RemoteFileContent(path, Convert.ToBase64String(content.Span)), FilesProtocolJsonContext.Default.RemoteFileContent), FilesProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task WriteFileAsync(string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
+        => await _rpc.WriteFileAsync(new RemoteFileContent(path, Convert.ToBase64String(content.Span)), cancellationToken).ConfigureAwait(false);
 
     public Task<RemoteDirectoryListing> ListDirectoryAsync(string path, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFileList, Serialize(new RemoteFilePath(path), FilesProtocolJsonContext.Default.RemoteFilePath), FilesProtocolJsonContext.Default.RemoteDirectoryListing, cancellationToken);
+        => _rpc.ListDirectoryAsync(new RemoteFilePath(path), cancellationToken);
 
     public Task<RemoteFileStat> StatAsync(string path, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsStat, FilePath(path), FilesProtocolJsonContext.Default.RemoteFileStat, cancellationToken);
+        => _rpc.StatAsync(new RemoteFilePath(path), cancellationToken);
 
-    public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsMkdir, FilePath(path), FilesProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
+        => await _rpc.CreateDirectoryAsync(new RemoteFilePath(path), cancellationToken).ConfigureAwait(false);
 
-    public Task RenameAsync(string from, string to, bool overwrite = false, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsRename, Serialize(new RemoteFsRename(from, to, overwrite), FilesProtocolJsonContext.Default.RemoteFsRename), FilesProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task RenameAsync(string from, string to, bool overwrite = false, CancellationToken cancellationToken = default)
+        => await _rpc.RenameAsync(new RemoteFsRename(from, to, overwrite), cancellationToken).ConfigureAwait(false);
 
-    public Task DeleteAsync(string path, bool recursive = false, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsDelete, Serialize(new RemoteFsDelete(path, recursive), FilesProtocolJsonContext.Default.RemoteFsDelete), FilesProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task DeleteAsync(string path, bool recursive = false, CancellationToken cancellationToken = default)
+        => await _rpc.DeleteAsync(new RemoteFsDelete(path, recursive), cancellationToken).ConfigureAwait(false);
 
     public Task<RemoteUploadRef> BeginUploadAsync(string path, bool overwrite = true, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsUploadBegin, Serialize(new RemoteUploadBegin(path, overwrite), FilesProtocolJsonContext.Default.RemoteUploadBegin), FilesProtocolJsonContext.Default.RemoteUploadRef, cancellationToken);
+        => _rpc.BeginUploadAsync(new RemoteUploadBegin(path, overwrite), cancellationToken);
 
     public Task<long> UploadChunkAsync(string uploadId, long offset, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
-        => _host.SendAsync(
-            FilesProtocol.MethodFsUploadChunk,
-            Serialize(new RemoteUploadChunk(uploadId, offset, Convert.ToBase64String(content.Span)), FilesProtocolJsonContext.Default.RemoteUploadChunk),
-            FilesProtocolJsonContext.Default.Int64,
-            cancellationToken);
+        => _rpc.UploadChunkAsync(new RemoteUploadChunk(uploadId, offset, Convert.ToBase64String(content.Span)), cancellationToken);
 
     public Task<RemoteFileStat> CommitUploadAsync(string uploadId, long? size = null, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsUploadCommit, Serialize(new RemoteUploadCommit(uploadId, size), FilesProtocolJsonContext.Default.RemoteUploadCommit), FilesProtocolJsonContext.Default.RemoteFileStat, cancellationToken);
+        => _rpc.CommitUploadAsync(new RemoteUploadCommit(uploadId, size), cancellationToken);
 
-    public Task AbortUploadAsync(string uploadId, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsUploadAbort, Serialize(new RemoteUploadRef(uploadId), FilesProtocolJsonContext.Default.RemoteUploadRef), FilesProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task AbortUploadAsync(string uploadId, CancellationToken cancellationToken = default)
+        => await _rpc.AbortUploadAsync(new RemoteUploadRef(uploadId), cancellationToken).ConfigureAwait(false);
 
     public Task<RemoteFileChunk> DownloadChunkAsync(string path, long offset, int? length = null, CancellationToken cancellationToken = default)
-        => _host.SendAsync(FilesProtocol.MethodFsDownload, Serialize(new RemoteDownloadRequest(path, offset, length), FilesProtocolJsonContext.Default.RemoteDownloadRequest), FilesProtocolJsonContext.Default.RemoteFileChunk, cancellationToken);
+        => _rpc.DownloadAsync(new RemoteDownloadRequest(path, offset, length), cancellationToken);
 
     public async Task<RemoteFileStat> UploadFileAsync(string path, Stream source, bool overwrite = true, CancellationToken cancellationToken = default)
     {
@@ -96,13 +97,8 @@ public sealed class RemoteFilesClient : IWorkspaceFiles
         {
             await AbortUploadAsync(uploadId, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or ObjectDisposedException)
+        catch (Exception error) when (error is IOException or JsonRpcException or ObjectDisposedException or ConnectionLostException)
         {
         }
     }
-
-    private static JsonElement FilePath(string path) => Serialize(new RemoteFilePath(path), FilesProtocolJsonContext.Default.RemoteFilePath);
 }
-
-
-

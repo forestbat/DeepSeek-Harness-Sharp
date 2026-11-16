@@ -1,21 +1,17 @@
-using static Dsh.RemoteHost.RemoteHostRpc;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional Plugins domain. */
 public sealed class RemotePluginsClient : IWorkspacePlugins
 {
-    private readonly RemoteHostClient _host;
+    private readonly IPluginsRpc _rpc;
 
-    internal RemotePluginsClient(RemoteHostClient host) => _host = host;
+    internal RemotePluginsClient(RemoteHostClient host, IPluginsRpc rpc) => _rpc = rpc;
 
     public Task<IReadOnlyList<RemotePluginInfo>> ListPluginsAsync(CancellationToken cancellationToken = default)
-        => _host.SendAsync(PluginsProtocol.MethodPluginsList, null, PluginsProtocolJsonContext.Default.IReadOnlyListRemotePluginInfo, cancellationToken);
+        => _rpc.ListAsync(cancellationToken);
 
     public Task<string> SetPluginPermissionAsync(string package, string permission, bool allowed, CancellationToken cancellationToken = default)
-        => _host.SendAsync(PluginsProtocol.MethodPluginPermission, Serialize(new RemotePluginPermissionRequest(package, permission, allowed), PluginsProtocolJsonContext.Default.RemotePluginPermissionRequest), PluginsProtocolJsonContext.Default.String, cancellationToken);
-
+        => _rpc.SetPermissionAsync(new RemotePluginPermissionRequest(package, permission, allowed), cancellationToken);
 }
-
-
-

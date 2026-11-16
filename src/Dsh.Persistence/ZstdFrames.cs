@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
-using ZstdSharp;
-using ZstdSharp.Unsafe;
+using System.IO.Compression;
 
 namespace Dsh.Persistence;
 
@@ -64,17 +63,20 @@ public static class ZstdFrames
 
     public static byte[] CompressFrame(ReadOnlySpan<byte> input)
     {
-        using var compressor = new Compressor();
-        compressor.SetParameter(ZSTD_cParameter.ZSTD_c_checksumFlag, 1);
-        return compressor.Wrap(input).ToArray();
+        using var encoder = new ZstandardEncoder(new ZstandardCompressionOptions { AppendChecksum = true });
+        // 声明源长度: 帧头因此带上 content size, Scan 才能按同一套规则切帧。
+        encoder.SetSourceLength(input.Length);
+        using var output = new MemoryStream(Math.Max(64, input.Length / 2));
+        using (var stream = new ZstandardStream(output, encoder, leaveOpen: true))
+            stream.Write(input);
+        return output.ToArray();
     }
 
     public static byte[] DecompressFrame(ReadOnlySpan<byte> frame, int frameStart)
     {
         try
         {
-            using var decompressor = new Decompressor();
-            return decompressor.Unwrap(frame).ToArray();
+            return DecompressBytes(frame, Math.Max(1024, frame.Length * 4));
         }
         catch (Exception error)
         {
@@ -83,39 +85,31 @@ public static class ZstdFrames
     }
 
     /**
-     * 连续解压多帧时复用同一个 Decompressor。
+     * 连续解压多帧。
      *
      * 会话日志每落盘一批就多一帧(256 条/1 秒), 十万级事件的会话有上百帧;
-     * 每帧 new 一个 Decompressor 等于每帧重新分配一次解压上下文, 而它本可以继续用。
-     * 输出逐帧追加到同一块缓冲, 不再为每帧分配一个新数组。
-     *
-     * 这里用 TryUnwrap 的 Span 重载(库没有 IBufferWriter 重载), 因此需要自己按帧扩缩目标缓冲:
-     * 先按上一帧的大小给一个估计值, 放不下就按 zstd 报的所需容量重试。
+     * 拼接的多帧可以一次读完, 不必逐帧新建解压上下文。
+     * 只喂完整帧: 末尾写了一半的帧由 Scan 排除在 frames 之外, 一并喂给流式解压会因截断数据抛错。
      */
     public static byte[] DecompressFrames(IReadOnlyList<FrameRange> frames, byte[] buffer, int skip = 0)
     {
         using var output = new MemoryStream(Math.Max(16, buffer.Length));
-        using var decompressor = new Decompressor();
-        var scratch = new byte[Math.Max(4096, buffer.Length)];
-        for (var index = skip; index < frames.Count; index += 1)
+        if (skip < frames.Count)
         {
-            var (start, end) = (frames[index].Start, frames[index].End);
-            var frame = new ReadOnlySpan<byte>(buffer, start, end - start);
-            int written;
-            while (!decompressor.TryUnwrap(frame, scratch, out written))
+            var from = frames[skip].Start;
+            var to = frames[^1].End;
+            try
             {
-                // 目标太小不是"帧损坏": 按需扩一倍再试, 只有连续失败到上限才算真损坏。
-                if (scratch.Length >= MaxFrameBytes)
-                    throw new FormatException($"corrupt Zstandard session log: frame at byte {start} failed validation");
-                scratch = new byte[Math.Min(MaxFrameBytes, scratch.Length * 2)];
+                var decoded = DecompressBytes(new ReadOnlySpan<byte>(buffer, from, to - from), buffer.Length);
+                output.Write(decoded, 0, decoded.Length);
             }
-            output.Write(scratch, 0, written);
+            catch (Exception error)
+            {
+                throw new FormatException($"corrupt Zstandard session log: frame at byte {from} failed validation", error);
+            }
         }
         return output.ToArray();
     }
-
-    /** 单帧解压后的上限: 一帧来自一次落盘批次(256 条事件), 远超这个量说明不是数据而是爆了。 */
-    private const int MaxFrameBytes = 256 * 1024 * 1024;
 
     public static byte[] DecompressPrefix(byte[] tornBytes)
     {
@@ -123,15 +117,25 @@ public static class ZstdFrames
         try
         {
             using var input = new MemoryStream(tornBytes, writable: false);
-            using var stream = new DecompressionStream(input, StreamBufferSize, checkEndOfStream: false, leaveOpen: false);
+            using var stream = new ZstandardStream(input, CompressionMode.Decompress);
             var buffer = new byte[StreamBufferSize];
             int read;
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
                 output.Write(buffer, 0, read);
         }
-        catch (ZstdException)
+        catch (InvalidDataException)
         {
         }
+        return output.ToArray();
+    }
+
+    /** 从一段连续字节读出解压结果: 多帧拼接可一次读完, 半截输入会抛 InvalidDataException。 */
+    private static byte[] DecompressBytes(ReadOnlySpan<byte> bytes, int capacity)
+    {
+        using var input = new MemoryStream(bytes.ToArray(), writable: false);
+        using var stream = new ZstandardStream(input, CompressionMode.Decompress);
+        using var output = new MemoryStream(capacity);
+        stream.CopyTo(output);
         return output.ToArray();
     }
 }

@@ -1,32 +1,29 @@
-using static Dsh.RemoteHost.RemoteHostRpc;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** Client implementation of the optional SessionEditing domain. */
 public sealed class RemoteSessionEditingClient : IWorkspaceSessionEditing
 {
-    private readonly RemoteHostClient _host;
+    private readonly ISessionEditingRpc _rpc;
 
-    internal RemoteSessionEditingClient(RemoteHostClient host) => _host = host;
+    internal RemoteSessionEditingClient(RemoteHostClient host, ISessionEditingRpc rpc) => _rpc = rpc;
 
     public Task<RemoteCommandResult> ExecuteSessionCommandAsync(string sessionId, string line, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionCommand, Serialize(new RemoteCommandRequest(sessionId, line), SessionEditingProtocolJsonContext.Default.RemoteCommandRequest), SessionEditingProtocolJsonContext.Default.RemoteCommandResult, cancellationToken);
+        => _rpc.ExecuteCommandAsync(new RemoteCommandRequest(sessionId, line), cancellationToken);
 
     public Task<IReadOnlyList<RemoteCommandDescriptor>> ListSessionCommandsAsync(string sessionId, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionCommands, Serialize(new RemoteSessionRef(sessionId), SessionEditingProtocolJsonContext.Default.RemoteSessionRef), SessionEditingProtocolJsonContext.Default.IReadOnlyListRemoteCommandDescriptor, cancellationToken);
+        => _rpc.ListCommandsAsync(new RemoteCommandRequest(sessionId, string.Empty), cancellationToken);
 
-    public Task RenameSessionAsync(string sessionId, string title, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionRename, Serialize(new RemoteSessionRenameRequest(sessionId, title), SessionEditingProtocolJsonContext.Default.RemoteSessionRenameRequest), SessionEditingProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task RenameSessionAsync(string sessionId, string title, CancellationToken cancellationToken = default)
+        => await _rpc.RenameAsync(new RemoteSessionRenameRequest(sessionId, title), cancellationToken).ConfigureAwait(false);
 
-    public Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionDelete, Serialize(new RemoteSessionRef(sessionId), SessionEditingProtocolJsonContext.Default.RemoteSessionRef), SessionEditingProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default)
+        => await _rpc.DeleteAsync(new RemoteSessionRef(sessionId), cancellationToken).ConfigureAwait(false);
 
-    public Task SetSessionApprovalPolicyAsync(string sessionId, string policy, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionApprovalPolicy, Serialize(new RemoteSessionPolicyRequest(sessionId, policy), SessionEditingProtocolJsonContext.Default.RemoteSessionPolicyRequest), SessionEditingProtocolJsonContext.Default.Boolean, cancellationToken);
+    public async Task SetSessionApprovalPolicyAsync(string sessionId, string policy, CancellationToken cancellationToken = default)
+        => await _rpc.SetApprovalPolicyAsync(new RemoteSessionPolicyRequest(sessionId, policy), cancellationToken).ConfigureAwait(false);
 
     public Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(string rootSessionId, CancellationToken cancellationToken = default)
-        => _host.SendAsync(SessionEditingProtocol.MethodSessionSubagents, Serialize(new RemoteSessionRef(rootSessionId), SessionEditingProtocolJsonContext.Default.RemoteSessionRef), SessionEditingProtocolJsonContext.Default.IReadOnlyListRemoteSubagentInfo, cancellationToken);
+        => _rpc.ListSubagentsAsync(new RemoteSessionRef(rootSessionId), cancellationToken);
 }
-
-
-

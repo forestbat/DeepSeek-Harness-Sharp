@@ -146,7 +146,7 @@ internal static class BrowserProtocol
             [nameof(TurnEndReason.Completed)] = new TurnEndReason.Completed().Kind,
         });
         script.Append("export const JsonRpc = Object.freeze(")
-            .Append(JsonSerializer.Serialize(new BrowserRpcProtocol(new JsonRpcMessage().Version, JsonRpcPeer.MethodNotFound), WebBridgeJsonContext.Default.BrowserRpcProtocol))
+            .Append(JsonSerializer.Serialize(new BrowserRpcProtocol(new JsonRpcMessage().Version, JsonRpcException.MethodNotFound), WebBridgeJsonContext.Default.BrowserRpcProtocol))
             .Append(");\n");
         return new StaticAsset(Encoding.UTF8.GetBytes(script.ToString()), "text/javascript; charset=utf-8");
     }

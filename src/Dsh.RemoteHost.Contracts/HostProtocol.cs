@@ -88,6 +88,9 @@ public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Pl
 /** 源生成的 JSON 上下文(AOT/裁剪安全)。 */
 [JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(HostHelloRequest))]
+// 中继与错误数据里会直接出现原始 JSON; StreamJsonRpc 的 JSON-RPC 外壳也按这两种类型序列化。
+[JsonSerializable(typeof(System.Text.Json.JsonElement))]
+[JsonSerializable(typeof(StreamJsonRpc.Protocol.CommonErrorData))]
 [JsonSerializable(typeof(HostHelloResponse))]
 [JsonSerializable(typeof(HostInfo))]
 [JsonSerializable(typeof(long))]

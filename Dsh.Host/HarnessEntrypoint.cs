@@ -50,6 +50,7 @@ public static class HarnessEntrypoint
         var hostStdio = false;
         var hostServe = false;
         string? hostToken = null;
+        string? hostListen = null;
         var positional = new List<string>();
         for (var index = 0; index < args.Length; index++)
         {
@@ -75,6 +76,9 @@ public static class HarnessEntrypoint
                     break;
                 case "--token" when index + 1 < args.Length:
                     hostToken = args[++index];
+                    break;
+                case "--listen" when index + 1 < args.Length:
+                    hostListen = args[++index];
                     break;
                 case "--gpu-screenshot" when index + 1 < args.Length:
                     gpuScreenshot = args[++index];
@@ -189,7 +193,7 @@ public static class HarnessEntrypoint
                 {
                     var subcommand = positional.Skip(1).FirstOrDefault();
                     if (subcommand is "serve" || hostServe)
-                        return await RunHostServeAsync(harnessHome, hostStdio, hostToken);
+                        return await RunHostServeAsync(harnessHome, hostStdio, hostToken, hostListen);
                     await Console.Error.WriteLineAsync("dsharp: host requires a subcommand (serve | web)");
                     return 1;
                 }
@@ -210,9 +214,12 @@ public static class HarnessEntrypoint
         }
     }
 
-    private static async Task<int> RunHostServeAsync(HarnessHome home, bool useStdio, string? token)
+    private static async Task<int> RunHostServeAsync(HarnessHome home, bool useStdio, string? token, string? listen)
     {
         if (useStdio) return await HostStdio.RunAsync(home, token).ConfigureAwait(false);
+
+        if (listen is not null)
+            return await RunHostListenAsync(home, listen, token);
 
         using var instance = HostAutostart.TryAcquireInstance(home);
         if (instance is null)
@@ -241,6 +248,41 @@ public static class HarnessEntrypoint
             cancellation.Cancel();
         });
         await Dsh.RemoteHost.RemoteHostListener.ServeLoopbackAsync(server, home.Root, cancellation.Token);
+        return 0;
+    }
+
+    /**
+     * 局域网监听(手机客户端等): 直接服务 JSON-RPC, token 在握手里校验, 不写 run 目录的端口文件。
+     * 非回环地址必须带 token: 否则一条裸 TCP 端口就能拿到这个宿主的全部会话与工具能力。
+     */
+    private static async Task<int> RunHostListenAsync(HarnessHome home, string listen, string? token)
+    {
+        if (!System.Net.IPEndPoint.TryParse(listen, out var endpoint))
+        {
+            await Console.Error.WriteLineAsync($"dsharp: invalid --listen \"{listen}\" (expected address:port, e.g. 0.0.0.0:47321)");
+            return 2;
+        }
+        token = Dsh.RemoteHost.RemoteHostListener.ResolveExposedToken(endpoint, token);
+        using var app = await ConfigBoot.Compose(new HarnessOptions(home, Directory.GetCurrentDirectory(), IsTui: false));
+        await using var backend = await HarnessRemoteHostBackend.CreateAsync(app);
+        var server = new Dsh.RemoteHost.RemoteHostServer(new Dsh.RemoteHost.RemoteHostServerOptions(token), backend);
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        using var termination = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, context =>
+        {
+            context.Cancel = true;
+            cancellation.Cancel();
+        });
+        await Dsh.RemoteHost.RemoteHostListener.ServeEndpointAsync(server, endpoint, async actual =>
+        {
+            await Console.Out.WriteLineAsync($"dsharp host listening on {actual}");
+            if (token is { Length: > 0 })
+                await Console.Out.WriteLineAsync($"token: {token}");
+        }, cancellation.Token);
         return 0;
     }
 
@@ -356,7 +398,7 @@ public static class HarnessEntrypoint
                    dsharp gui [--session <id>]
                    dsharp web [--port N] [--print-token]   (启动独立安装的 dsharp-web，不在本进程加载 Web 框架)
                    dsharp headless "task"
-                   dsharp host serve [--stdio] [--token <t>]   (后台工作区宿主；--stdio 承载 Host 帧及已启用的 LSP 协议能力)
+                   dsharp host serve [--stdio] [--token <t>] [--listen <addr:port>]   (后台工作区宿主: --stdio 通过 ssh 桥接并承载 Host 帧及已启用的 LSP 协议能力; --listen 供手机等外部客户端直连)
                    dsharp host web [--port N] [--print-token]   (同上；只监听 127.0.0.1，跨设备用 ssh -L 转发)
                    dsharp register-terminal    (Linux: 注册为桌面环境的默认终端)
                    dsharp storage paths        (打印 storage.root 与各分区解析结果)

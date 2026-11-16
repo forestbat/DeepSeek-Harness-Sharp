@@ -57,17 +57,7 @@ public static class ImageAttachments
         };
     }
 
-    public static string ExtensionFor(string mediaType)
-        => mediaType switch
-        {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            "image/avif" => "avif",
-            _ => "bin",
-        };
-}
+    }
 
 /** 请求期把 ImageBlock 的引用解析为真实字节; 缺字节时给出可读错误。 */
 public static class AttachmentResolution

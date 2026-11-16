@@ -44,7 +44,7 @@ bash .agents/skills/interactive-ssh/scripts/open-session.sh \
 
 - runner 已检出目标 ref，并准备好 `packages/` 下的 DryIoc feed。
 - 构建测试项目：`dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo -p:DshNativeCompiler=<cl|clang>`；Windows 用 `cl`，Linux/macOS 用 `clang`，与正式 CI 一致。
-- 运行测试：`tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests[.exe] -noColor -class <类> -method <方法>`，并按 AGENTS.md 加上排除 GPU、渲染压测和 LLM 联网的 trait 过滤。
+- 运行测试：`tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests[.exe] -noColor -class <类> -method <方法>`，并按 AGENTS.md 加上排除 GPU、渲染压测和 LLM 联网的 trait 过滤。
 - 需要正式 CI 的额外前置条件时（真实 C# 前端、PTY daemon、Iroh 夹具），照 `.github/workflows/ci-tests.yml` 对应步骤在会话里补齐，不猜测环境。
 
 ## 同步代码

@@ -1,3 +1,4 @@
+using StreamJsonRpc;
 using System.Text.Json;
 using Dsh.AgentAdapters;
 using Dsh.Core;
@@ -7,6 +8,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Notifications;
 using Dsh.RemoteHost;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
 using Dsh.SessionQuery;
 
@@ -61,6 +63,26 @@ public sealed class RemoteHostAgentTests : IDisposable
 
     public RemoteHostAgentTests() => Directory.CreateDirectory(_workspace);
 
+    /** 只关心会话变化推送的客户端目标。 */
+    private sealed class SessionsChangedTap(TaskCompletionSource<string> pushed) : IHostPush
+    {
+        public Task EventAsync(RemoteEventFrame frame, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task PendingChangedAsync(RemotePendingChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task SessionsChangedAsync(RemoteSessionChange change, CancellationToken cancellationToken = default)
+        {
+            var json = JsonSerializer.Serialize(change, HostProtocolJsonContext.Default.RemoteSessionChange);
+            if (json.Contains("private agent", StringComparison.Ordinal))
+                pushed.TrySetResult(json);
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyChangedAsync(RemoteNotificationChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public void Dispose()
@@ -82,7 +104,7 @@ public sealed class RemoteHostAgentTests : IDisposable
 
         var session = await client.Agent.StartAgentAsync(new RemoteAgentStartRequest(
             AgentKinds.Terminal, _workspace, Command: script, Title: "unknown agent"), Ct);
-        await Assert.ThrowsAsync<JsonRpcException>(() => client.Agent.PromptAgentAsync(session.SessionId, "y", Ct));
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => client.Agent.PromptAgentAsync(session.SessionId, "y", Ct));
         await using var terminal = RemoteHostPtyTests.TerminalCapture.Attach(client, session.SessionId);
         await terminal.WaitForAsync("Proceed? [y/N]", TimeSpan.FromSeconds(5));
         var atPrompt = Assert.Single(await client.ListHostSessionsAsync(Ct), item => item.SessionId == session.SessionId);
@@ -115,21 +137,19 @@ public sealed class RemoteHostAgentTests : IDisposable
             Environment: new Dictionary<string, string> { ["PRIVATE_AGENT_TOKEN"] = "private-environment-42" });
         RemoteSessionSummary session;
         await using (var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct))
-        await using (var peer = new JsonRpcPeer(transport))
         {
             var pushed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            peer.NotificationReceived += message =>
+            using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(), new SessionsChangedTap(pushed));
+            var rpc = peer.Attach<IHostRpc>();
+            var agents = peer.Attach<IAgentRpc>();
+            session = await agents.StartAsync(request, Ct);
+            var listed = await rpc.ListRegistryAsync(Ct);
+            foreach (var json in new[]
             {
-                if (message.Method == HostProtocol.NotificationSessionsChanged && message.Params is { } parameters
-                    && parameters.GetRawText().Contains("private agent", StringComparison.Ordinal))
-                    pushed.TrySetResult(parameters.GetRawText());
-            };
-            peer.Start();
-            var started = (await peer.RequestAsync(AgentProtocol.MethodAgentStart,
-                JsonSerializer.SerializeToElement(request, AgentProtocolJsonContext.Default.RemoteAgentStartRequest), Ct))!.Value;
-            session = JsonSerializer.Deserialize(started, AgentProtocolJsonContext.Default.RemoteSessionSummary)!;
-            var listed = (await peer.RequestAsync(HostProtocol.MethodSessionsList, cancellationToken: Ct))!.Value;
-            foreach (var json in new[] { started.GetRawText(), listed.GetRawText(), await pushed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct) })
+                JsonSerializer.Serialize(session, HostProtocolJsonContext.Default.RemoteSessionSummary),
+                JsonSerializer.Serialize(listed, HostProtocolJsonContext.Default.IReadOnlyListRemoteSessionSummary),
+                await pushed.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct),
+            })
             {
                 Assert.DoesNotContain("private-argument-42", json);
                 Assert.DoesNotContain("private-environment-42", json);
@@ -163,7 +183,7 @@ public sealed class RemoteHostAgentTests : IDisposable
         await using var host = await HarnessHostFixture.CreateAsync("maf", TestContext.Current.CancellationToken);
         var client = await host.ConnectAsync("failed-acp", Ct);
         var original = await client.ListSessionsAsync(Ct);
-        await Assert.ThrowsAsync<JsonRpcException>(() => client.Agent.StartAgentAsync(
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => client.Agent.StartAgentAsync(
             new RemoteAgentStartRequest(AgentKinds.Acp, _workspace,
                 Command: new RemoteAgentCommand("/bin/sh", ["-c", "exit 9"])), Ct));
         Assert.Empty(await client.ListHostSessionsAsync(Ct));

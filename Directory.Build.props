@@ -10,5 +10,11 @@
     -->
     <Version>0.3.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <!--
+      语言版本统一到 C# 15, 目标框架统一 net11.0。
+      runtime-async 打开后 async 方法由运行时直接调度, 不再编译成状态机。
+    -->
+    <LangVersion>15</LangVersion>
+    <Features>runtime-async=on</Features>
   </PropertyGroup>
 </Project>

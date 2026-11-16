@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.Loader;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -16,8 +16,9 @@ public static class PtcProgramCompiler
     private static readonly Lazy<IReadOnlyList<MetadataReference>> References = new(() =>
     {
         var trusted = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ?? [];
+        // TPA 只是 deps.json 声明的清单, 文件未必都在(裁剪/发布后某些依赖可能缺席); 缺文件不该让编译整体失败。
         return trusted
-            .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
             .ToList();
     });

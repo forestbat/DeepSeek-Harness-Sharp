@@ -1,3 +1,5 @@
+using StreamJsonRpc.Protocol;
+using StreamJsonRpc;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -18,6 +20,11 @@ namespace Dsh.Tests;
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class RemoteHostCapabilityTests
 {
+    /** 旧代理收到的是 JSON-RPC 位置参数数组, 转发前要拆回单个载荷。 */
+    private static JsonElement? Single(JsonElement? parameters)
+        => parameters is { ValueKind: JsonValueKind.Array } array
+            ? array.GetArrayLength() == 0 ? null : array[0]
+            : parameters;
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact(Timeout = 5000)]
@@ -154,14 +161,14 @@ public sealed class RemoteHostCapabilityTests
     public async Task GenericApprovalCancellationKeepsOldHostPendingUntilOrdinaryReject()
     {
         await using var backend = await FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
-        await using var origin = await HostFixture.CreateAsync(backend, TestContext.Current.CancellationToken);
-        await using var fixture = await MissingDecisionCapabilityRelay.CreateAsync(origin.Client, TestContext.Current.CancellationToken);
+        // 同一个真实 host, 只是握手时不通告决策取消能力。
+        await using var fixture = await HostFixture.CreateAsync(new RemoteHostServerOptions(null, [DecisionProtocol.Capability]), backend, TestContext.Current.CancellationToken);
         Assert.False(fixture.Client.Supports(DecisionProtocol.Capability));
         var waiting = backend.Pending.AskApprovalAsync(new RemoteApprovalRequest("legacy-approval", "session-1", "bash", null, "Approve?"), cancellationToken: Ct);
         var parameters = JsonSerializer.SerializeToElement(
             new RemoteApprovalResponse("legacy-approval", false, null, Cancelled: true),
             HostProtocolJsonContext.Default.RemoteApprovalResponse);
-        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.RequestAsync(HostProtocol.MethodApprovalRespond, parameters, Ct));
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.ForwardAsync(HostProtocol.MethodApprovalRespond, parameters, Ct));
         Assert.False(waiting.IsCompleted);
         Assert.Contains((await fixture.Client.ListPendingAsync(Ct)).Approvals, request => request.RequestId == "legacy-approval");
         Assert.True(await fixture.Client.RespondApprovalAsync("legacy-approval", false, cancellationToken: Ct));
@@ -174,15 +181,15 @@ public sealed class RemoteHostCapabilityTests
     public async Task GenericQuestionDismissalKeepsOldHostPendingUntilOrdinaryAnswer()
     {
         await using var backend = await FakeBackend.CreateAsync(TestContext.Current.CancellationToken);
-        await using var origin = await HostFixture.CreateAsync(backend, TestContext.Current.CancellationToken);
-        await using var fixture = await MissingDecisionCapabilityRelay.CreateAsync(origin.Client, TestContext.Current.CancellationToken);
+        // 同一个真实 host, 只是握手时不通告决策取消能力。
+        await using var fixture = await HostFixture.CreateAsync(new RemoteHostServerOptions(null, [DecisionProtocol.Capability]), backend, TestContext.Current.CancellationToken);
         Assert.False(fixture.Client.Supports(DecisionProtocol.Capability));
         var waiting = backend.Pending.AskQuestionAsync(new RemoteQuestionRequest("legacy-question", "session-1",
             [new RemoteQuestionItem("choice", "Choose.", null, null, [new RemoteQuestionOption("A", null), new RemoteQuestionOption("B", null)], false)]), cancellationToken: TestContext.Current.CancellationToken);
         var parameters = JsonSerializer.SerializeToElement(
             new RemoteQuestionResponse("legacy-question", [], "dismissed", "user_cancelled"),
             HostProtocolJsonContext.Default.RemoteQuestionResponse);
-        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.RequestAsync(HostProtocol.MethodQuestionRespond, parameters, Ct));
+        await Assert.ThrowsAsync<NotSupportedException>(() => fixture.Client.ForwardAsync(HostProtocol.MethodQuestionRespond, parameters, Ct));
         Assert.False(waiting.IsCompleted);
         Assert.Contains((await fixture.Client.ListPendingAsync(Ct)).Questions, request => request.RequestId == "legacy-question");
         Assert.True(await fixture.Client.RespondQuestionAsync("legacy-question", [new RemoteQuestionAnswerItem("choice", ["B"], null)], Ct));
@@ -223,11 +230,11 @@ public sealed class RemoteHostCapabilityTests
         }
         else
         {
-            var denied = await Assert.ThrowsAsync<JsonRpcException>(() => client.Files.WriteFileAsync(file, "denied"u8.ToArray(), Ct));
-            Assert.Equal(JsonRpcPeer.MethodNotFound, denied.Code);
+            var denied = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => client.Files.WriteFileAsync(file, "denied"u8.ToArray(), Ct));
+            Assert.Equal(JsonRpcErrorCode.MethodNotFound, denied.ErrorCode);
             Assert.False(File.Exists(file));
-            var editDenied = await Assert.ThrowsAsync<JsonRpcException>(() => client.SessionEditing.RenameSessionAsync(created.Id, "denied", Ct));
-            Assert.Equal(JsonRpcPeer.MethodNotFound, editDenied.Code);
+            var editDenied = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => client.SessionEditing.RenameSessionAsync(created.Id, "denied", Ct));
+            Assert.Equal(JsonRpcErrorCode.MethodNotFound, editDenied.ErrorCode);
             Func<Task>[] otherDomains =
             [
                 () => client.Agent.AgentCatalogAsync(Ct),
@@ -241,8 +248,8 @@ public sealed class RemoteHostCapabilityTests
             ];
             foreach (var operation in otherDomains)
             {
-                var unsupported = await Assert.ThrowsAsync<JsonRpcException>(operation);
-                Assert.Equal(JsonRpcPeer.MethodNotFound, unsupported.Code);
+                var unsupported = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(operation);
+                Assert.Equal(JsonRpcErrorCode.MethodNotFound, unsupported.ErrorCode);
             }
             Assert.Equal(created.Id, (await client.ResumeSessionAsync(created.Id, cancellationToken: Ct)).Id);
         }
@@ -274,8 +281,8 @@ public sealed class RemoteHostCapabilityTests
         Assert.Equal(["GET http://example.com/before-host-reload HTTP/1.1"], first.Requests);
         Assert.Equal(["GET http://example.com/after-host-reload HTTP/1.1"], second.Requests);
         using var snapshot = JsonDocument.Parse("""{"network":{"outbound_proxy":{"url":"http://unexpected.invalid:3128"}}}""");
-        var rejected = await Assert.ThrowsAsync<JsonRpcException>(() => fixture.Client.RequestAsync(NetworkProtocol.MethodReload, snapshot.RootElement, Ct));
-        Assert.Equal(-32602, rejected.Code);
+        var rejected = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => fixture.Client.ForwardAsync(NetworkProtocol.MethodReload, snapshot.RootElement, Ct));
+        Assert.Equal(JsonRpcErrorCode.InvalidParams, rejected.ErrorCode);
         Assert.Equal(saved, await File.ReadAllTextAsync(home.SettingsFile, Ct));
         Assert.Equal(TestForwardProxy.ProxiedBody, await consumer.GetStringAsync("http://example.com/snapshot-did-not-apply", Ct));
         Assert.Single(first.Requests);
@@ -297,8 +304,8 @@ public sealed class RemoteHostCapabilityTests
         var saved = await File.ReadAllTextAsync(environment.App.Home.SettingsFile, Ct);
         Assert.True((await client.Network.ProbeOutboundAsync(new(ProbeUrl: "http://example.com/old-host-probe"), Ct)).Reachable);
         await Assert.ThrowsAsync<NotSupportedException>(() => client.Network.ReloadAsync(Ct));
-        var unsupported = await Assert.ThrowsAsync<JsonRpcException>(() => client.RequestAsync(NetworkProtocol.MethodReload, null, Ct));
-        Assert.Equal(JsonRpcPeer.MethodNotFound, unsupported.Code);
+        var unsupported = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => client.ForwardAsync(NetworkProtocol.MethodReload, null, Ct));
+        Assert.Equal(JsonRpcErrorCode.MethodNotFound, unsupported.ErrorCode);
         Assert.Equal(saved, await File.ReadAllTextAsync(environment.App.Home.SettingsFile, Ct));
         Assert.Equal(["GET http://example.com/old-host-probe HTTP/1.1"], forwarding.Requests);
     }
@@ -475,40 +482,6 @@ public sealed class RemoteHostCapabilityTests
         }
     }
 
-    private sealed class MissingDecisionCapabilityRelay(TcpClient socket, TcpClient serverSocket, JsonRpcPeer peer, RemoteHostClient client) : IAsyncDisposable
-    {
-        public RemoteHostClient Client { get; } = client;
-
-        public static async Task<MissingDecisionCapabilityRelay> CreateAsync(RemoteHostClient upstream, CancellationToken cancellationToken)
-        {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            var accept = listener.AcceptTcpClientAsync(cancellationToken);
-            var socket = new TcpClient();
-            await socket.ConnectAsync(IPAddress.Loopback, port, cancellationToken);
-            var serverSocket = await accept;
-            listener.Stop();
-            var hello = upstream.Hello with { Capabilities = upstream.Hello.Capabilities?.Where(capability => capability != DecisionProtocol.Capability).ToArray() };
-            var peer = new JsonRpcPeer(serverSocket.GetStream());
-            // Only handshake metadata is downgraded; the real Host server handles every decision.
-            peer.RequestHandler = async (request, token) => request.Method == HostProtocol.MethodHello
-                ? JsonSerializer.SerializeToElement(hello, HostProtocolJsonContext.Default.HostHelloResponse)
-                : await upstream.RequestAsync(request.Method!, request.Params, token);
-            peer.Start();
-            var client = await RemoteHostClient.ConnectAsync(socket.GetStream(), cancellationToken: cancellationToken);
-            return new MissingDecisionCapabilityRelay(socket, serverSocket, peer, client);
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await Client.DisposeAsync();
-            await peer.DisposeAsync();
-            socket.Dispose();
-            serverSocket.Dispose();
-        }
-    }
-
     private sealed class HostFixture : IAsyncDisposable
     {
         private readonly TcpClient _serverClient;
@@ -525,7 +498,10 @@ public sealed class RemoteHostCapabilityTests
 
         public RemoteHostClient Client { get; }
 
-        public static async Task<HostFixture> CreateAsync(IRemoteHostBackend backend, CancellationToken cancellationToken)
+        public static Task<HostFixture> CreateAsync(IRemoteHostBackend backend, CancellationToken cancellationToken)
+            => CreateAsync(new RemoteHostServerOptions(null), backend, cancellationToken);
+
+        public static async Task<HostFixture> CreateAsync(RemoteHostServerOptions options, IRemoteHostBackend backend, CancellationToken cancellationToken)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
@@ -536,9 +512,9 @@ public sealed class RemoteHostCapabilityTests
             var serverClient = await acceptTask;
             listener.Stop();
 
-            var server = new RemoteHostServer(new RemoteHostServerOptions(null), backend);
+            var server = new RemoteHostServer(options, backend);
             var serve = Task.Run(() => server.ServeAsync(serverClient.GetStream(), cancellationToken), cancellationToken);
-            var hostClient = await RemoteHostClient.ConnectAsync(client.GetStream(), null, cancellationToken);
+            var hostClient = await RemoteHostClient.ConnectAsync(client.GetStream(), options.Token, cancellationToken);
             return new HostFixture(serverClient, client, serve, hostClient);
         }
 

@@ -1,14 +1,12 @@
-using System.Text.Json;
-using Dsh.Core;
+using StreamJsonRpc;
+using Dsh.Ide;
 using Dsh.Ide.Bridge;
 using Dsh.Transport;
-using static Dsh.RemoteHost.RemoteHostRpc;
-using Dsh.Ide;
 
 namespace Dsh.RemoteHost;
 
 /// <summary>Independent IDE domain plus the local half of the typed, cancellable extension protocol.</summary>
-public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable, IRemoteEditors
+public sealed class RemoteEditorClient(RemoteHostClient host, JsonRpcChannel rpc) : IAsyncDisposable, IRemoteEditors
 {
     private readonly object _gate = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -20,18 +18,22 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
     private bool _disposed;
 
     public Task<EditorRemoteList> ListAsync(CancellationToken cancellationToken = default, bool refresh = false)
-        => host.SendAsync(EditorProtocol.MethodList, Serialize(new RemoteEditorList(refresh), EditorProtocolJsonContext.Default.RemoteEditorList), EditorProtocolJsonContext.Default.EditorRemoteList, cancellationToken);
+        => rpc.InvokeAsync<EditorRemoteList>(EditorProtocol.MethodList, cancellationToken, new RemoteEditorList(refresh));
+
     public Task<EditorRemoteStatus> StatusAsync(string workspaceRoot, CancellationToken cancellationToken = default, string? sessionId = null)
-        => host.SendAsync(EditorProtocol.MethodStatus, Serialize(new RemoteEditorWorkspace(workspaceRoot, sessionId), EditorProtocolJsonContext.Default.RemoteEditorWorkspace), EditorProtocolJsonContext.Default.EditorRemoteStatus, cancellationToken);
+        => rpc.InvokeAsync<EditorRemoteStatus>(EditorProtocol.MethodStatus, cancellationToken, new RemoteEditorWorkspace(workspaceRoot, sessionId));
+
     public Task<IReadOnlyList<EditorDiagnostic>> DoctorAsync(string workspaceRoot, CancellationToken cancellationToken = default)
-        => host.SendAsync(EditorProtocol.MethodDoctor, Serialize(new RemoteEditorWorkspace(workspaceRoot), EditorProtocolJsonContext.Default.RemoteEditorWorkspace), EditorProtocolJsonContext.Default.IReadOnlyListEditorDiagnostic, cancellationToken);
+        => rpc.InvokeAsync<IReadOnlyList<EditorDiagnostic>>(EditorProtocol.MethodDoctor, cancellationToken, new RemoteEditorWorkspace(workspaceRoot));
 
     public async Task<EditorResult> OpenAsync(EditorRequest request, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();
         try
         {
-            return await host.SendAsync(EditorProtocol.MethodOpen, Serialize(new RemoteEditorOpen(id, request), EditorProtocolJsonContext.Default.RemoteEditorOpen), EditorProtocolJsonContext.Default.EditorResult, cancellationToken).ConfigureAwait(false);
+            // 取消走显式的 host.ide.cancel, 不依赖 $/cancelRequest: 打开动作在 host 侧还牵着反向调用和本端工作,
+            // 必须由 host 主动收尾, 否则本地启动器会一直挂着。
+            return await rpc.InvokeAsync<EditorResult>(EditorProtocol.MethodOpen, CancellationToken.None, new RemoteEditorOpen(id, request)).WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -44,8 +46,8 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
         }
     }
 
-    private Task<bool> CancelAsync(Guid id)
-        => host.SendAsync(EditorProtocol.MethodCancel, Serialize(new RemoteEditorCancel(id), EditorProtocolJsonContext.Default.RemoteEditorCancel), EditorProtocolJsonContext.Default.Boolean, _lifetime.Token);
+    private async Task<bool> CancelAsync(Guid id)
+        => await rpc.InvokeAsync<bool>(EditorProtocol.MethodCancel, _lifetime.Token, new RemoteEditorCancel(id)).ConfigureAwait(false);
 
     /// <summary>The mapping is trusted local configuration; absence never treats remote filesystem paths as local.</summary>
     public async Task<IAsyncDisposable> RegisterClientAsync(IEditorService localService, CancellationToken cancellationToken = default, Func<EditorRequest, EditorRequest>? map = null, bool isLocalMachine = false, bool hasMappings = false)
@@ -60,7 +62,7 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
         }
         try
         {
-            await host.SendAsync(EditorProtocol.MethodRegister, Serialize(new RemoteEditorClientRegistration(IsLocalMachine: isLocalMachine, HasMappings: hasMappings), EditorProtocolJsonContext.Default.RemoteEditorClientRegistration), EditorProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+            await rpc.InvokeAsync<bool>(EditorProtocol.MethodRegister, cancellationToken, new RemoteEditorClientRegistration(IsLocalMachine: isLocalMachine, HasMappings: hasMappings)).ConfigureAwait(false);
             return new Registration(this);
         }
         catch
@@ -76,24 +78,23 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
     }
 
     public Task<bool> SelectForSessionAsync(string sessionId, CancellationToken cancellationToken = default)
-        => host.SendAsync(EditorProtocol.MethodSelect, Serialize(new RemoteEditorSelect(sessionId), EditorProtocolJsonContext.Default.RemoteEditorSelect), EditorProtocolJsonContext.Default.Boolean, cancellationToken);
+        => rpc.InvokeAsync<bool>(EditorProtocol.MethodSelect, cancellationToken, new RemoteEditorSelect(sessionId));
 
-    internal ValueTask<JsonElement?>? Prepare(JsonRpcMessage message, CancellationToken cancellationToken)
+    /** 反向调用 client.ide.open: host 请本端按本地映射打开文件。 */
+    internal async Task<EditorResult> ClientOpenAsync(RemoteEditorOpen request, CancellationToken cancellationToken)
     {
-        if (!host.Hello.Ok) return null;
-        if (message.Method == EditorProtocol.MethodClientOpen)
-        {
-            var request = message.Params is { } value ? JsonSerializer.Deserialize(value, EditorProtocolJsonContext.Default.RemoteEditorOpen) : null;
-            if (request is null) throw new JsonRpcException(-32602, "client.ide.open requires a typed request.");
-            return ResultAsync(_incoming.Start(request.OperationId, ct => LaunchLocalAsync(request.Request, ct, cancellationToken)));
-        }
-        if (message.Method == EditorProtocol.MethodClientCancel)
-        {
-            var request = message.Params is { } value ? JsonSerializer.Deserialize(value, EditorProtocolJsonContext.Default.RemoteEditorCancel) : null;
-            if (request is null) throw new JsonRpcException(-32602, "client.ide.cancel requires operationId.");
-            return AcknowledgeAsync(_incoming.CancelAsync(request.OperationId));
-        }
-        return null;
+        if (!host.Hello.Ok)
+            throw new JsonRpcException(-32602, "client.ide.open requires a typed request.");
+        // host 侧的 $/cancelRequest 落到这条反向调用上, 要转成本地操作的取消, 否则本地工作不会停。
+        using var registration = cancellationToken.Register(() => _ = _incoming.CancelAsync(request.OperationId));
+        return await _incoming.Start(request.OperationId, token => LaunchLocalAsync(request.Request, token, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /** 反向调用 client.ide.cancel。 */
+    internal async Task<bool> ClientCancelAsync(RemoteEditorCancel request, CancellationToken cancellationToken)
+    {
+        await _incoming.CancelAsync(request.OperationId).ConfigureAwait(false);
+        return true;
     }
 
     private async ValueTask<EditorResult> LaunchLocalAsync(EditorRequest request, CancellationToken cancellationToken, CancellationToken connectionClosed)
@@ -124,23 +125,18 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
         }
     }
 
-    private static async ValueTask<JsonElement?> ResultAsync(Task<EditorResult> operation)
-        => Serialize(await operation.ConfigureAwait(false), EditorProtocolJsonContext.Default.EditorResult);
-    private static async ValueTask<JsonElement?> AcknowledgeAsync(Task operation)
-    {
-        await operation.ConfigureAwait(false);
-        return Serialize(true, EditorProtocolJsonContext.Default.Boolean);
-    }
     private async ValueTask UnregisterAsync()
     {
         lock (_gate) { _registered = false; _local = null; _map = null; }
         if (!host.IsClosed)
-            await host.SendAsync(EditorProtocol.MethodUnregister, null, EditorProtocolJsonContext.Default.Boolean, _lifetime.Token).ConfigureAwait(false);
+            await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, _lifetime.Token).ConfigureAwait(false);
     }
+
     public ValueTask DisposeAsync()
     {
         lock (_gate) return new ValueTask(_retirement ??= DisposeCoreAsync());
     }
+
     private async Task DisposeCoreAsync()
     {
         lock (_gate)
@@ -154,6 +150,7 @@ public sealed class RemoteEditorClient(RemoteHostClient host) : IAsyncDisposable
         await _incoming.DisposeAsync().ConfigureAwait(false);
         _lifetime.Dispose();
     }
+
     private sealed class Registration(RemoteEditorClient owner) : IAsyncDisposable
     {
         private int _disposed;

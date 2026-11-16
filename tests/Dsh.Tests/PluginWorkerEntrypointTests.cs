@@ -4,6 +4,8 @@ using System.Text.Json;
 using Dsh.Boot;
 using Dsh.Plugins.Sandbox;
 using Dsh.Transport;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 
 namespace Dsh.Tests;
 
@@ -28,42 +30,26 @@ public sealed class PluginWorkerEntrypointTests
             }
             process = Start(consumer, root, "--plugin-worker");
             var error = process.StandardError.ReadToEndAsync(signal);
-            await using var stream = new StandardIoDuplexStream(process.StandardOutput.BaseStream,
-                process.StandardInput.BaseStream, ownsStreams: false);
-            await using var peer = new JsonRpcPeer(stream, PluginSandboxMethods.MaximumFrameBytes);
+            await using var stream = new StandardIoDuplexStream(process.StandardOutput.BaseStream, process.StandardInput.BaseStream);
             var tools = new ConcurrentDictionary<string, PluginSandboxToolRequest>(StringComparer.Ordinal);
-            peer.RequestHandler = (message, _) =>
+            using var peer = JsonRpcChannel.ServeMethods(stream, PluginSandboxWire.Formatter(), new Broker(tools).Methods());
+            Task<T> Ask<T>(string method, object request) => peer.InvokeAsync<T>(method, signal, request);
+            PluginSandboxReady ready;
+            try { ready = await Ask<PluginSandboxReady>(PluginSandboxMethods.Ready, new PluginSandboxAck()).WaitAsync(TimeSpan.FromSeconds(6)); }
+            catch (Exception handshake)
             {
-                if (message.Method == PluginSandboxMethods.RegisterTool)
-                {
-                    var tool = message.Params!.Value.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxToolRequest)!;
-                    Assert.True(tools.TryAdd(tool.Package, tool));
-                }
-                else if (message.Method == PluginSandboxMethods.UnregisterTool)
-                {
-                    var tool = message.Params!.Value.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxUnregisterTool)!;
-                    Assert.True(tools.TryRemove(tool.Package, out var removed));
-                    Assert.NotNull(removed);
-                    Assert.Equal(tool.ToolId, removed.ToolId);
-                }
-                else
-                    throw new JsonRpcException(JsonRpcPeer.MethodNotFound, "Unexpected worker callback.");
-                return ValueTask.FromResult<JsonElement?>(JsonSerializer.SerializeToElement(new PluginSandboxAck(),
-                    PluginSandboxJsonContext.Default.PluginSandboxAck));
-            };
-            peer.Start();
-            var ready = (await peer.RequestAsync(PluginSandboxMethods.Ready, cancellationToken: signal))!.Value
-                .Deserialize(PluginSandboxJsonContext.Default.PluginSandboxReady)!;
-            Assert.Equal(PluginSandboxMethods.Version, ready.Version);
+                process.StandardInput.Close();
+                process.Kill(entireProcessTree: true);
+                string detail;
+                try { detail = await error.WaitAsync(TimeSpan.FromSeconds(2)); } catch (Exception) { detail = ""; }
+                throw new InvalidOperationException($"{handshake.GetType().Name}: {handshake.Message}; stderr: {detail}", handshake);
+            }            Assert.Equal(PluginSandboxMethods.Version, ready.Version);
             Assert.Equal(process.Id, ready.Pid);
-            var unknown = await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync("sandbox/unknown", cancellationToken: signal));
-            Assert.Equal(JsonRpcPeer.MethodNotFound, unknown.Code);
+            var unknown = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => peer.InvokeAsync("sandbox/unknown", null, signal));
+            Assert.Equal(JsonRpcErrorCode.MethodNotFound, unknown.ErrorCode);
 
             var artifact = Path.Combine(root, "Dsh.SandboxPluginSample.dll");
-            var inspection = (await peer.RequestAsync(PluginSandboxMethods.Inspect,
-                JsonSerializer.SerializeToElement(new PluginSandboxInspectRequest(artifact),
-                    PluginSandboxJsonContext.Default.PluginSandboxInspectRequest), signal))!.Value
-                .Deserialize(PluginSandboxJsonContext.Default.PluginSandboxInspection)!;
+            var inspection = await Ask<PluginSandboxInspection>(PluginSandboxMethods.Inspect, new PluginSandboxInspectRequest(artifact));
             Assert.Empty(inspection.Errors);
             Assert.True(inspection.Released);
             Assert.Equal(new[] { "test/sandbox-alpha", "test/sandbox-beta" }, inspection.Packages.Select(package => package.Package).Order());
@@ -71,14 +57,10 @@ public sealed class PluginWorkerEntrypointTests
             using var arguments = JsonDocument.Parse("{\"operation\":\"identity\"}");
             foreach (var package in new[] { "test/sandbox-alpha", "test/sandbox-beta" })
             {
-                var loaded = await peer.RequestAsync(PluginSandboxMethods.Load,
-                    JsonSerializer.SerializeToElement(new PluginSandboxLoadRequest(artifact, package, configuration.RootElement),
-                        PluginSandboxJsonContext.Default.PluginSandboxLoadRequest), signal);
-                Assert.True(loaded!.Value.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxAck)!.Success);
+                var loaded = await Ask<PluginSandboxAck>(PluginSandboxMethods.Load, new PluginSandboxLoadRequest(artifact, package, configuration.RootElement));                Assert.True(loaded.Success);
                 var tool = tools[package];
-                var identity = (await peer.RequestAsync(PluginSandboxMethods.Invoke,
-                    JsonSerializer.SerializeToElement(new PluginSandboxInvokeRequest(package, tool.ToolId, arguments.RootElement,
-                        Guid.NewGuid().ToString("N")), PluginSandboxJsonContext.Default.PluginSandboxInvokeRequest), signal))!.Value;
+                var identity = await Ask<JsonElement>(PluginSandboxMethods.Invoke,
+                    new PluginSandboxInvokeRequest(package, tool.ToolId, arguments.RootElement, Guid.NewGuid().ToString("N")));
                 Assert.Equal(ready.Pid, identity.GetProperty("processId").GetInt32());
                 Assert.Equal(ready.Pid, identity.GetProperty("constructorProcessId").GetInt32());
                 Assert.Equal(ready.Pid, identity.GetProperty("initializationProcessId").GetInt32());
@@ -86,15 +68,10 @@ public sealed class PluginWorkerEntrypointTests
             Assert.Equal(2, tools.Count);
             foreach (var package in tools.Keys.ToArray())
             {
-                var unloaded = await peer.RequestAsync(PluginSandboxMethods.Unload,
-                    JsonSerializer.SerializeToElement(new PluginSandboxUnloadRequest(package),
-                        PluginSandboxJsonContext.Default.PluginSandboxUnloadRequest), signal);
-                Assert.True(unloaded!.Value.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxAck)!.Success);
+                var unloaded = await Ask<PluginSandboxAck>(PluginSandboxMethods.Unload, new PluginSandboxUnloadRequest(package));                Assert.True(unloaded.Success);
             }
-            Assert.Empty(tools);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(signal);
-            Assert.Equal(0, process.ExitCode);
+            Assert.Empty(tools);            process.StandardInput.Close();
+            await process.WaitForExitAsync(signal);            Assert.Equal(0, process.ExitCode);
             Assert.Empty(await error);
         }
         finally { await StopAsync(process, root); }
@@ -128,6 +105,38 @@ public sealed class PluginWorkerEntrypointTests
         finally { await StopAsync(process, root); }
     }
 
+    /** 测试替身: 只记工具登记, 其余宿主能力调用一律拒绝。 */
+    private sealed class Broker(ConcurrentDictionary<string, PluginSandboxToolRequest> tools)
+    {
+        public (string Method, Delegate Handler)[] Methods() =>
+        [
+            (PluginSandboxMethods.RegisterTool, (Func<PluginSandboxToolRequest, CancellationToken, Task<PluginSandboxAck>>)RegisterToolAsync),
+            (PluginSandboxMethods.UnregisterTool, (Func<PluginSandboxUnregisterTool, CancellationToken, Task<PluginSandboxAck>>)UnregisterToolAsync),
+            (PluginSandboxMethods.HostCall, (Func<PluginSandboxHostCall, CancellationToken, Task<JsonElement>>)HostCallAsync),
+            (PluginSandboxMethods.Log, (Func<PluginSandboxLog, CancellationToken, Task<PluginSandboxAck>>)LogAsync),
+        ];
+
+        public Task<PluginSandboxAck> RegisterToolAsync(PluginSandboxToolRequest request, CancellationToken cancellationToken = default)
+        {
+            Assert.True(tools.TryAdd(request.Package, request));
+            return Task.FromResult(new PluginSandboxAck());
+        }
+
+        public Task<PluginSandboxAck> UnregisterToolAsync(PluginSandboxUnregisterTool request, CancellationToken cancellationToken = default)
+        {
+            Assert.True(tools.TryRemove(request.Package, out var removed));
+            Assert.NotNull(removed);
+            Assert.Equal(request.ToolId, removed.ToolId);
+            return Task.FromResult(new PluginSandboxAck());
+        }
+
+        public Task<JsonElement> HostCallAsync(PluginSandboxHostCall request, CancellationToken cancellationToken = default)
+            => throw new LocalRpcException("Unexpected worker host call.") { ErrorCode = JsonRpcException.MethodNotFound };
+
+        public Task<PluginSandboxAck> LogAsync(PluginSandboxLog request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new PluginSandboxAck());
+    }
+
     private static Process Start(string consumer, string root, params string[] args)
     {
         var repository = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
@@ -136,7 +145,7 @@ public sealed class PluginWorkerEntrypointTests
         {
             "tests" => Path.Combine(AppContext.BaseDirectory, "Dsh.Tests" + suffix),
             "cli" => RealHostProcesses.Executable,
-            "web" => Path.Combine(repository, "Dsh.WebHost", "bin", "Debug", "net10.0", "dsharp-web" + suffix),
+            "web" => Path.Combine(repository, "Dsh.WebHost", "bin", "Debug", BuildTargetFramework.Value, "dsharp-web" + suffix),
             _ => throw new ArgumentOutOfRangeException(nameof(consumer)),
         };
         Assert.True(File.Exists(executable), "The real consumer executable must be built with the tests.");

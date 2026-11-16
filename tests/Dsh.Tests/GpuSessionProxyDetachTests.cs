@@ -142,7 +142,7 @@ public sealed class GpuSessionProxyDetachTests
             "DeepSeek-Harness-Sharp",
             "bin",
             "Debug",
-            "net10.0",
+            BuildTargetFramework.Value,
             name);
 
         var startInfo = new System.Diagnostics.ProcessStartInfo(executable)

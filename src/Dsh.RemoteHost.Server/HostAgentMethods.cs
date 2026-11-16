@@ -1,42 +1,46 @@
-using System.Text.Json;
-using Dsh.Transport;
-using static Dsh.RemoteHost.HostRpc;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
 /** host.agent.* requests, forwarded to the backend that owns the agent processes. */
-internal static class HostAgentMethods
+internal sealed class HostAgentMethods(IRemoteAgentBackend backend, Action ensureAuthenticated) : IAgentRpc
 {
-    public static async ValueTask<JsonElement?> HandleAsync(IRemoteAgentBackend backend, string name, JsonRpcMessage message, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<RemoteAgentCatalogEntry>> CatalogAsync(CancellationToken cancellationToken)
     {
-        switch (name)
-        {
-            case AgentProtocol.MethodAgentCatalog:
-                return Serialize(await backend.AgentCatalogAsync(cancellationToken).ConfigureAwait(false), AgentProtocolJsonContext.Default.IReadOnlyListRemoteAgentCatalogEntry);
-            case AgentProtocol.MethodAgentStart:
-            {
-                var request = Require(message, AgentProtocolJsonContext.Default.RemoteAgentStartRequest, "agent start requires agentKind and projectPath");
-                return Serialize(await backend.StartAgentAsync(request, cancellationToken).ConfigureAwait(false), AgentProtocolJsonContext.Default.RemoteSessionSummary);
-            }
-            case AgentProtocol.MethodAgentPrompt:
-            {
-                var request = Require(message, AgentProtocolJsonContext.Default.RemoteAgentPrompt, "agent prompt requires sessionId and text");
-                await backend.PromptAgentAsync(request.SessionId, request.Text, cancellationToken).ConfigureAwait(false);
-                return True;
-            }
-            case AgentProtocol.MethodAgentCancel:
-                await backend.CancelAgentAsync(SessionOf(message, "agent cancel requires sessionId"), cancellationToken).ConfigureAwait(false);
-                return True;
-            case AgentProtocol.MethodAgentStop:
-                await backend.StopAgentAsync(SessionOf(message, "agent stop requires sessionId"), cancellationToken).ConfigureAwait(false);
-                return True;
-            case AgentProtocol.MethodAgentResume:
-                return Serialize(await backend.ResumeAgentAsync(SessionOf(message, "agent resume requires sessionId"), cancellationToken).ConfigureAwait(false), AgentProtocolJsonContext.Default.RemoteSessionSummary);
-            default:
-                throw MethodNotFound(name);
-        }
+        ensureAuthenticated();
+        return await backend.AgentCatalogAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static string SessionOf(JsonRpcMessage message, string error)
-        => Require(message, AgentProtocolJsonContext.Default.RemoteSessionRef, error).SessionId;
+    public async Task<RemoteSessionSummary> StartAsync(RemoteAgentStartRequest request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        return await backend.StartAgentAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> PromptAsync(RemoteAgentPrompt request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        await backend.PromptAgentAsync(request.SessionId, request.Text, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> CancelAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        await backend.CancelAgentAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> StopAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        await backend.StopAgentAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<RemoteSessionSummary> ResumeAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        return await backend.ResumeAgentAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+    }
 }

@@ -1,3 +1,4 @@
+using StreamJsonRpc;
 using Dsh.GitInspect;
 using Dsh.RemoteHost;
 using Dsh.Transport;
@@ -92,8 +93,8 @@ public sealed class RemoteHostGitTests : IDisposable
         await using var host = await HarnessHostFixture.CreateAsync("mgr", TestContext.Current.CancellationToken);
         var client = await host.ConnectAsync("git", Ct);
 
-        var error = await Assert.ThrowsAsync<JsonRpcException>(() => client.Git.GitStatusAsync("/etc", Ct));
-        await Assert.ThrowsAsync<JsonRpcException>(() => client.Git.AddWorktreeAsync(new RemoteGitWorktreeAdd(_repo.Root, "/etc/dsh-worktree"), Ct));
+        var error = await Assert.ThrowsAsync<RemoteInvocationException>(() => client.Git.GitStatusAsync("/etc", Ct));
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => client.Git.AddWorktreeAsync(new RemoteGitWorktreeAdd(_repo.Root, "/etc/dsh-worktree"), Ct));
 
         Assert.Contains("outside", error.Message, StringComparison.Ordinal);
     }

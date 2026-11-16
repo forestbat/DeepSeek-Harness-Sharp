@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Dsh.Fleet;
 using Dsh.RemoteHost;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
+using StreamJsonRpc;
 
 namespace Dsh.Tests;
 
@@ -60,26 +62,42 @@ public sealed class FleetBootstrapTests
         var preamble = new byte[LocalEndpointToken.ValueLength];
         await stream.ReadExactlyAsync(preamble, cancellationToken);
         Assert.True(token.Matches(Encoding.UTF8.GetString(preamble)));
-        await using var peer = new JsonRpcPeer(stream);
-        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        peer.Closed += _ => closed.TrySetResult();
-        peer.RequestHandler = async (message, requestCancellation) =>
-        {
-            string[] capabilities = [HostProtocol.PendingBroadcastCapability, HostProtocol.SessionRegistryCapability];
-            if (message.Method == HostProtocol.MethodHello)
-                return JsonSerializer.SerializeToElement(new HostHelloResponse(true, HostProtocol.Version, HostProtocol.ReleaseVersion, null, capabilities), HostProtocolJsonContext.Default.HostHelloResponse);
-            if (message.Method == HostProtocol.MethodInfo)
-                return JsonSerializer.SerializeToElement(new HostInfo(HostProtocol.Version, HostProtocol.ReleaseVersion, "linux", root, capabilities), HostProtocolJsonContext.Default.HostInfo);
-            if (message.Method == HostProtocol.MethodPing)
-            {
-                await Task.Delay(Timeout.Infinite, requestCancellation);
-                return null;
-            }
-            throw new JsonRpcException(JsonRpcPeer.MethodNotFound, "The fault endpoint only provides metadata.");
-        };
-        peer.Start();
-        try { await closed.Task.WaitAsync(cancellationToken); }
+        using var peer = JsonRpcChannel.Serve(stream, HostRpcFormatter.CreateJson(), new MetadataOnlyEndpoint(root));
+        try { await peer.Completion.WaitAsync(cancellationToken); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    /** 只回握手与元数据, 其余方法一律不存在, 且 ping 永不回。 */
+    private sealed class MetadataOnlyEndpoint(string root) : IHostRpc
+    {
+        private static IReadOnlyList<string> Capabilities { get; } =
+            [HostProtocol.PendingBroadcastCapability, HostProtocol.SessionRegistryCapability];
+
+        public Task<HostHelloResponse> HelloAsync(HostHelloRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new HostHelloResponse(true, HostProtocol.Version, HostProtocol.ReleaseVersion, null, Capabilities));
+
+        public Task<HostInfo> InfoAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new HostInfo(HostProtocol.Version, HostProtocol.ReleaseVersion, "linux", root, Capabilities));
+
+        public Task<long> PingAsync(CancellationToken cancellationToken = default)
+            => throw new LocalRpcException("The fault endpoint never answers ping.") { ErrorCode = JsonRpcException.MethodNotFound };
+
+        public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemoteSessionSummary> CreateSessionAsync(RemoteSessionCreateRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemoteSessionSummary> ResumeSessionAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemoteSubscriptionRef> SubscribeAsync(RemoteSubscribeRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> UnsubscribeAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> SendMessageAsync(RemoteMessageRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> InterruptAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<IReadOnlyList<RemoteSessionSummary>> ListRegistryAsync(CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> RespondApprovalAsync(RemoteApprovalResponse request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> RespondQuestionAsync(RemoteQuestionResponse request, CancellationToken cancellationToken = default) => throw Missing();
+
+        private static LocalRpcException Missing()
+            => new("The fault endpoint only provides metadata.") { ErrorCode = JsonRpcException.MethodNotFound };
     }
 }
 

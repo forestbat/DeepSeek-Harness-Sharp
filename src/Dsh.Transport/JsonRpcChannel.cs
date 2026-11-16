@@ -1,0 +1,87 @@
+using StreamJsonRpc;
+
+namespace Dsh.Transport;
+
+/**
+ * 跨进程 RPC 的唯一入口。
+ *
+ * 给定一条 Stream 和契约接口类型, 返回已 Attach 的强类型代理; 服务端把实现契约的对象挂在同一条 Stream 上。
+ * 帧格式固定为长度前缀, 序列化由调用方传入的 formatter 决定: 生产用源生成 JSON, 抓包排障时换别的 formatter。
+ * 关闭与断线统一由 JsonRpc.Completion 表达, 调用方不再自己维护运行状态。
+ */
+public sealed class JsonRpcChannel : IDisposable
+{
+    /** 单帧上限: 供需要自己判断载荷大小的调用方(浏览器 WebSocket)使用。 */
+    public const int MaxFrameBytes = 16 * 1024 * 1024;
+
+    /** 长度前缀占 4 字节(大端)。 */
+    public const int HeaderLength = 4;
+
+    /** JSON-RPC 标准错误码: 方法不存在。 */
+    public const int MethodNotFound = -32601;
+
+    private readonly JsonRpc _rpc;
+
+    private JsonRpcChannel(JsonRpc rpc) => _rpc = rpc;
+
+    /** 连接结束(正常关闭或对端断开)时完成。 */
+    public Task Completion => _rpc.Completion;
+
+    /** 发起方: 拿到契约接口的代理; targets 是本端实现的契约对象, 供对端反向调用。 */
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
+
+    /** 服务方: 把每个实现契约的对象挂到同一条 Stream 上; 一个对象可以实现多个契约接口。 */
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
+
+    /** 服务方: 契约对象 + 只实现一次的方法名委托, 两类可以混用。 */
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
+        (string Method, Delegate Handler)[] methods)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
+
+    /** 发起方: 契约对象 + 只实现一次的方法名委托。 */
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
+        (string Method, Delegate Handler)[] methods)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
+
+    /** 只实现一次的内部协议: 直接按方法名挂委托, 不必为此定义接口。 */
+    public static JsonRpcChannel ServeMethods(Stream duplex, IJsonRpcMessageFormatter formatter,
+        params (string Method, Delegate Handler)[] methods)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), [], methods);
+
+    private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, object[] targets,
+        (string Method, Delegate Handler)[] methods)
+    {
+        var rpc = new JsonRpc(handler);
+        foreach (var target in targets)
+            rpc.AddLocalRpcTarget(target);
+        foreach (var (method, handler1) in methods)
+            rpc.AddLocalRpcMethod(method, handler1);
+        rpc.StartListening();
+        return new JsonRpcChannel(rpc);
+    }
+
+    /** 取契约接口的代理, 指向对端注册的那份实现。 */
+    public T Attach<T>() where T : class => _rpc.Attach<T>();
+
+    /** 按方法名调用(不带接口)。参数按位置序列化。 */
+    public async Task<T> InvokeAsync<T>(string method, CancellationToken cancellationToken, params object?[] args)
+        => await _rpc.InvokeAsync<T>(method, args).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+    /**
+     * 按方法名调用并拿回原始 JSON。
+     * 只给"对端协议本身就是字符串方法名"的适配层用(浏览器中继), 业务代码一律走 Attach 出来的强类型代理。
+     * 参数按"单个位置参数"发送: host 侧契约方法都只收一个 DTO, 按命名参数发会因属性名对不上而找不到方法。
+     * 这条路径不支持调用方取消(StreamJsonRpc 的位置参数重载没有 CancellationToken); 中继靠关闭连接来中止。
+     */
+    public async Task<System.Text.Json.JsonElement> InvokeAsync(string method, System.Text.Json.JsonElement? parameters, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return parameters is { } payload
+            ? await _rpc.InvokeAsync<System.Text.Json.JsonElement>(method, new object?[] { payload }).ConfigureAwait(false)
+            : await _rpc.InvokeAsync<System.Text.Json.JsonElement>(method, []).ConfigureAwait(false);
+    }
+
+    public void Dispose() => _rpc.Dispose();
+}
