@@ -192,19 +192,31 @@ internal static class GuiScenarios
         var source = Path.Combine(pair.Root, "gui-transfer-source.bin");
         var destination = Path.Combine(pair.Root, "gui-transfer-result.bin");
         byte[] content = [.. Encoding.UTF8.GetBytes("GUI transfer integrity consumer\n"), 0, 255, 128];
+        var expectedHash = global::Blake3.Hasher.Hash(content).ToString();
         await File.WriteAllBytesAsync(source, content, cancellationToken);
         SelectRemote(remote, "transfer", "upload");
         Text(remote, "path", "data:/gui-transfer.bin");
         Text(remote, "local_path", source);
         await RunRemoteAsync(remote, cancellationToken);
         NativeRuntimePair.Check(!remote.HasPending && Labels(remote.Results).Contains("verified transfer"), "GUI upload must complete through the verified transfer driver.");
+        AssertTransferPresentation(remote, content.Length, expectedHash);
         SelectRemote(remote, "transfer", "download");
         Text(remote, "path", "data:/gui-transfer.bin");
         Text(remote, "local_path", destination);
         await RunRemoteAsync(remote, cancellationToken);
         NativeRuntimePair.Check(!remote.HasPending && Labels(remote.Results).Contains("verified transfer"), "GUI download must expose the verified transfer result.");
+        AssertTransferPresentation(remote, content.Length, expectedHash);
         NativeRuntimePair.Check((await File.ReadAllBytesAsync(destination, cancellationToken)).SequenceEqual(content), "GUI transfer must preserve both text and non-text bytes.");
         await NativeRuntimePair.PassedAsync("GUI upload/download uses real MA2A transfer streams and BLAKE3 verification.");
+    }
+
+    private static void AssertTransferPresentation(Ma2aRemoteViewModel remote, int size, string hash)
+    {
+        var result = remote.Results.Single(node => node.Label == "verified transfer");
+        var labels = Labels(result.Children);
+        NativeRuntimePair.Check(labels.Contains($"Bytes: {size}") && labels.Contains($"Size: {size}"),
+            "The GUI must render the exact verified byte counts using its existing result field names.");
+        NativeRuntimePair.Check(labels.Contains($"Blake3: {hash}"), "The GUI must render the actual verified content hash.");
     }
 
     private static async Task ExecAsync(Ma2aView view, Window window, Ma2aRemoteViewModel remote,

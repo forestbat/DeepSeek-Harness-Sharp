@@ -19,7 +19,7 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
         new("files", "stat", [Text("path")], p => Ma2aServiceRequests.Stat(S(p, "path"))),
         new("files", "mkdir", [Text("path"), Flag("parents")], p => Ma2aServiceRequests.Mkdir(S(p, "path"), B(p, "parents"))),
         new("files", "read", [Text("path"), Number("offset"), Number("length", 1, 65_536, 65_536)], p => Ma2aServiceRequests.Read(S(p, "path"), U(p, "offset"), (uint)U(p, "length"))),
-        new("files", "write", [Text("path"), new("content_hex", JsonSerializer.SerializeToElement(new { type = "string", max_bytes = Ma2aServiceSession.MaximumDataLength * 2 })), Flag("replace")], p => Ma2aServiceRequests.Write(S(p, "path"), (uint)Convert.FromHexString(S(p, "content_hex")).Length, B(p, "replace"))),
+        new("files", "write", [Text("path"), Field("content_hex", new JsonObject { ["type"] = "string", ["max_bytes"] = Ma2aServiceSession.MaximumDataLength * 2 }), Flag("replace")], p => Ma2aServiceRequests.Write(S(p, "path"), (uint)Convert.FromHexString(S(p, "content_hex")).Length, B(p, "replace"))),
         new("files", "rename", [Text("from"), Text("to"), Flag("replace")], p => Ma2aServiceRequests.Rename(S(p, "from"), S(p, "to"), B(p, "replace"))),
         new("files", "remove", [Text("path"), Flag("recursive")], p => Ma2aServiceRequests.Remove(S(p, "path"), B(p, "recursive"))),
         new("transfer", "download", [Text("path"), Text("local_path"), Flag("replace")], null),
@@ -58,18 +58,28 @@ public sealed record Ma2aRemoteOperation(string Family, string Name, IReadOnlyLi
     {
         JsonNode schema = new JsonObject { ["type"] = "string", ["max_bytes"] = 4096 };
         if (nullable) schema = new JsonObject { ["nullable"] = schema };
-        return new(name, JsonSerializer.SerializeToElement(schema));
+        return Field(name, schema);
     }
 
-    private static Ma2aFieldViewModel Flag(string name) => new(name, JsonSerializer.SerializeToElement(new { type = "boolean" }));
+    private static Ma2aFieldViewModel Flag(string name) => Field(name, new JsonObject { ["type"] = "boolean" });
 
     private static Ma2aFieldViewModel Number(string name, ulong minimum = 0, ulong maximum = ulong.MaxValue, ulong? value = null)
-        => new(name, JsonSerializer.SerializeToElement(new { type = "integer", minimum, maximum })) { Number = value ?? minimum };
+    {
+        var field = Field(name, new JsonObject { ["type"] = "integer", ["minimum"] = minimum, ["maximum"] = maximum });
+        field.Number = value ?? minimum;
+        return field;
+    }
+
+    private static Ma2aFieldViewModel Field(string name, JsonNode schema)
+    {
+        using var document = JsonDocument.Parse(schema.ToJsonString());
+        return new Ma2aFieldViewModel(name, document.RootElement.Clone());
+    }
 
     private static IReadOnlyList<Ma2aFieldViewModel> ProgramFields(bool optionalProgram = false) =>
     [
         Text("program", optionalProgram),
-        new("args", JsonSerializer.SerializeToElement(new { type = "array", max_items = 256, items = new { type = "string", max_bytes = 4096 } })),
+        Field("args", new JsonObject { ["type"] = "array", ["max_items"] = 256, ["items"] = new JsonObject { ["type"] = "string", ["max_bytes"] = 4096 } }),
         Text("cwd", true),
     ];
 }

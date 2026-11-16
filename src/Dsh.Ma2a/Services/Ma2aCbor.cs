@@ -67,7 +67,8 @@ public static class Ma2aCbor
 
     private static void WriteScalar(CborWriter writer, JsonValue value)
     {
-        var element = JsonSerializer.SerializeToElement(value);
+        using var document = JsonDocument.Parse(value.ToJsonString());
+        var element = document.RootElement;
         switch (element.ValueKind)
         {
             case JsonValueKind.String: writer.WriteTextString(element.GetString()!); break;

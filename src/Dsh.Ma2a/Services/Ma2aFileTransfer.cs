@@ -137,11 +137,31 @@ public static class Ma2aFileTransfer
         DemandTransferFile(metadata, allowMissing: false);
         if (!resume) throw new IOException("A previous download exists; choose another destination or resume it.");
         await using var source = File.OpenRead(metadata);
-        var identity = await JsonSerializer.DeserializeAsync<DownloadIdentity>(source, cancellationToken: cancellationToken)
+        using var document = await JsonDocument.ParseAsync(source, cancellationToken: cancellationToken);
+        var identity = DecodeIdentity(document.RootElement)
             ?? throw new InvalidDataException("Invalid partial download identity.");
         if (identity.Endpoint != endpoint || identity.Path != path)
             throw new InvalidDataException("The partial download belongs to another source.");
         return identity;
+    }
+
+    private static DownloadIdentity? DecodeIdentity(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Object) throw new JsonException("Invalid partial download identity.");
+        string? endpoint = null, path = null;
+        ulong size = 0, modified = 0;
+        foreach (var property in value.EnumerateObject())
+        {
+            switch (property.Name)
+            {
+                case nameof(DownloadIdentity.Endpoint): endpoint = property.Value.GetString(); break;
+                case nameof(DownloadIdentity.Path): path = property.Value.GetString(); break;
+                case nameof(DownloadIdentity.Size): size = property.Value.GetUInt64(); break;
+                case nameof(DownloadIdentity.ModifiedNanoseconds): modified = property.Value.GetUInt64(); break;
+            }
+        }
+        return new DownloadIdentity(endpoint!, path!, size, modified);
     }
 
     private static async Task HashPrefixAsync(FileStream source, Hasher hasher, CancellationToken cancellationToken)
@@ -166,7 +186,15 @@ public static class Ma2aFileTransfer
         await using (var file = new FileStream($"{path}.new", FileMode.Create, FileAccess.Write, FileShare.None,
             4096, FileOptions.Asynchronous))
         {
-            await JsonSerializer.SerializeAsync(file, identity, cancellationToken: cancellationToken);
+            using var writer = new Utf8JsonWriter(file);
+            new JsonObject
+            {
+                [nameof(identity.Endpoint)] = identity.Endpoint,
+                [nameof(identity.Path)] = identity.Path,
+                [nameof(identity.Size)] = identity.Size,
+                [nameof(identity.ModifiedNanoseconds)] = identity.ModifiedNanoseconds,
+            }.WriteTo(writer);
+            await writer.FlushAsync(cancellationToken);
             await file.FlushAsync(cancellationToken);
             file.Flush(flushToDisk: true);
         }

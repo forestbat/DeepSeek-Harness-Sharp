@@ -25,6 +25,22 @@ public sealed class ServiceProtocolTests
     }
 
     [Fact]
+    public void ConstructedAndParsedScalarsRetainCanonicalTypesWithoutReflection()
+    {
+        var value = new JsonArray((byte)1, 24, long.MaxValue, ulong.MaxValue, "文本", true, false, null);
+        var expected = Convert.FromHexString("880118181b7fffffffffffffff1bffffffffffffffff66e69687e69cacf5f4f6");
+        Assert.Equal(expected, Ma2aCbor.Encode(value));
+        Assert.Equal(expected, Ma2aCbor.Encode(JsonNode.Parse(value.ToJsonString())));
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1.5")]
+    [InlineData("18446744073709551616")]
+    public void NonUnsignedJsonNumbersRemainInvalidServiceScalars(string json)
+        => Assert.Throws<FormatException>(() => Ma2aCbor.Encode(JsonNode.Parse(json)));
+
+    [Fact]
     public void NativeTerminationPreservesTheUnsignedExitCodeBitPattern()
     {
         var decoded = Ma2aCbor.Decode(Convert.FromHexString("82001affffffff"));

@@ -140,7 +140,12 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
             result = await Ma2aFileTransfer.DownloadArtifactAsync(_pendingClient!, _pendingTarget!, Ma2aRemoteOperation.S(values, "agent"), Ma2aRemoteOperation.S(values, "task_id"), Ma2aRemoteOperation.S(values, "name"), localPath, RequestId, replace, progress: progress, cancellationToken: cancellationToken);
         else
             result = await Ma2aFileTransfer.DownloadAsync(_pendingClient!, _pendingTarget!, Ma2aRemoteOperation.S(values, "path"), localPath, RequestId, replace, progress: progress, cancellationToken: cancellationToken);
-        AddResult("verified transfer", JsonSerializer.SerializeToNode(result));
+        AddResult("verified transfer", new JsonObject
+        {
+            [nameof(result.Bytes)] = result.Bytes,
+            [nameof(result.Size)] = result.Size,
+            [nameof(result.Blake3)] = result.Blake3,
+        });
         Status = $"传输完成，已验证 BLAKE3：{result.Blake3}";
         if (operation.IsMutation) ClearUncertain();
         return true;
@@ -248,7 +253,8 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     private void AddResult(string label, JsonNode? value)
     {
         if (Results.Count >= MaximumResultEntries) Results.RemoveAt(0);
-        Results.Add(new Ma2aResultNode(label, Ma2aResultNode.ChildrenOf(JsonSerializer.SerializeToElement(value))));
+        using var document = JsonDocument.Parse(value?.ToJsonString() ?? "null");
+        Results.Add(new Ma2aResultNode(label, Ma2aResultNode.ChildrenOf(document.RootElement)));
     }
 
     private void Report(string message) => Dispatcher.UIThread.Post(() => Status = message);

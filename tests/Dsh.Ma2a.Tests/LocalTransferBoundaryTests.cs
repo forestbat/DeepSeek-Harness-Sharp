@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using Dsh.Ma2a.Services;
 
 namespace Dsh.Ma2a.Tests;
@@ -65,6 +66,30 @@ public sealed class LocalTransferBoundaryTests : IDisposable
         Assert.True(File.Exists($"{destination}{Ma2aFileTransfer.PartialFileSuffix}"));
         foreach (var path in new[] { rustPart, rustMetadata, rustLock })
             Assert.Equal("native-cli-state", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    [Trait("Platform", "UnixOnly")]
+    public async Task ExistingDownloadIdentityRemainsReadableWithItsOriginalJsonFields()
+    {
+        var destination = Path.Combine(_directory, "resumed.bin");
+        var partial = $"{destination}{Ma2aFileTransfer.PartialFileSuffix}";
+        var identity = $$"""{"Endpoint":"{{new string('1', 64)}}","Path":"data:/file","Size":4,"ModifiedNanoseconds":18446744073709551615}""";
+        await File.WriteAllBytesAsync(partial, new byte[] { 0, 255 }, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync($"{partial}.meta", identity, TestContext.Current.CancellationToken);
+        var repository = Directory.GetParent(_directory)!.Parent!.FullName;
+        var controlPath = Path.Combine(repository, "run-v1", "control.sock");
+        Assert.False(File.Exists(controlPath));
+        _ = new UnixDomainSocketEndPoint(controlPath);
+        var client = new Ma2aClient(repository);
+
+        await Assert.ThrowsAsync<SocketException>(() => Ma2aFileTransfer.DownloadAsync(client, new string('1', 64),
+            "data:/file", destination, new string('2', 32), cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.False(TestContext.Current.CancellationToken.IsCancellationRequested);
+        Assert.Equal(new byte[] { 0, 255 }, await File.ReadAllBytesAsync(partial, TestContext.Current.CancellationToken));
+        Assert.Equal(identity, await File.ReadAllTextAsync($"{partial}.meta", TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(destination));
     }
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -74,7 +75,7 @@ public sealed class Ma2aClient
     private static async Task<JsonElement> ExchangeAsync(Stream stream, JsonObject command, CancellationToken cancellationToken)
     {
         var correlation = unchecked((ulong)Interlocked.Increment(ref _nextCorrelation));
-        await Ma2aConnection.WriteAsync(stream, correlation, JsonSerializer.SerializeToUtf8Bytes(command), cancellationToken);
+        await Ma2aConnection.WriteAsync(stream, correlation, Encoding.UTF8.GetBytes(command.ToJsonString()), cancellationToken);
         try { return await ReadResponseAsync(stream, correlation, command, cancellationToken); }
         catch (Exception error) when (error is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or OverflowException)
         { throw new Ma2aProtocolException("invalid_frame", "The local response does not match the protocol envelope."); }

@@ -22,7 +22,7 @@ namespace Dsh.Tests;
  * Sessions are real: terminal sessions run real shell commands, harness sessions are real agents whose events are appended without calling a model.
  */
 [Collection(GuiSerialCollection.CollectionName)]
-public sealed class GuiWorkspaceTests
+public sealed class GuiWorkspaceTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task RecentCards_MixMachines_AndProjectFoldSurvivesRefresh()
@@ -526,12 +526,15 @@ public sealed class GuiWorkspaceTests
     [Fact(Timeout = 5000)]
     public async Task ContributedPages_FollowTheSessionAndTheConnection()
     {
+        output.WriteLine("Contributed pages: preparing isolated hosts.");
         var ct = TestContext.Current.CancellationToken;
         SkipOnWindows();
         using var repo = new GitTestRepository();
         repo.Commit(("readme.md", "hello\n"));
         await using var alpha = await HarnessHostFixture.CreateAsync("gpa", ct);
+        output.WriteLine("Contributed pages: first host ready.");
         await using var beta = await HarnessHostFixture.CreateAsync("gpb", ct);
+        output.WriteLine("Contributed pages: second host ready; entering the GUI dispatcher.");
         await HeadlessGui.RunAsync(async () =>
         {
             var store = new MachineStore(new HarnessHome(alpha.Root));
@@ -544,25 +547,33 @@ public sealed class GuiWorkspaceTests
             try
             {
                 await ConnectedAsync(workspace);
+                output.WriteLine("Contributed pages: workspace connected.");
                 Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Ma2a], workspace.Pages.Available.Select(page => page.Id));
                 var session = await StartTerminalAsync(workspace, "alpha", repo.Root, "repo shell", "sleep 30");
+                output.WriteLine("Contributed pages: terminal started.");
                 await UntilAsync(() => Card(workspace, "alpha", session) is not null, "the session card");
+                output.WriteLine("Contributed pages: terminal card received.");
                 workspace.OpenSession("alpha", session);
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Files));
                 var files = Assert.IsType<HostPageViewModel>(workspace.PageContent);
                 Assert.Equal(("alpha", repo.Root), (files.Machine, files.Path));
                 await UntilAsync(() => files.Content is FilesViewModel { Roots: [{ Path: var root }] } && root == repo.Root, "files on the session's project");
+                output.WriteLine("Contributed pages: files loaded; restarting the host.");
                 var firstLink = files.Content;
                 await alpha.RestartHostAsync(ct);
+                output.WriteLine("Contributed pages: host restarted; waiting for files to rebuild.");
                 await UntilAsync(() => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink), "files rebuilt on the new link");
+                output.WriteLine("Contributed pages: files rebuilt.");
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Git));
                 Assert.Null(files.Content);
                 var git = Assert.IsType<HostPageViewModel>(workspace.PageContent);
                 await UntilAsync(() => git.Content is GitViewModel { Worktrees.Count: > 0 }, "the repository's worktrees");
+                output.WriteLine("Contributed pages: Git loaded.");
                 var repository = (GitViewModel)git.Content!;
                 await repository.RequestSessionCommand.ExecuteAsync(repository.Worktrees[0]);
+                output.WriteLine("Contributed pages: session form opened.");
                 Assert.Equal(("alpha", repository.Worktrees[0].Path), (form?.Machine, form?.ProjectPath));
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Machines));
@@ -571,15 +582,19 @@ public sealed class GuiWorkspaceTests
                 machines.NewLocalCommand.Execute(null);
                 (machines.Editor!.Name, machines.Editor.HarnessHome) = ("gamma", beta.Root);
                 await machines.SaveCommand.ExecuteAsync(null);
+                output.WriteLine("Contributed pages: machine saved; waiting for its connection.");
                 var connected = MachineRowViewModel.StateLabel(MachineConnectionState.Connected);
                 await UntilAsync(() => machines.Machines.FirstOrDefault(row => row.Name == "gamma")?.StateText == connected, "machine management shows the new client");
+                output.WriteLine("Contributed pages: saved machine connected.");
                 Assert.Equal(MachineConnectionState.Connected, workspace.Fleet.Find("gamma")!.State);
                 Assert.Same(machines, workspace.PageContent);
             }
             finally
             {
+                output.WriteLine("Contributed pages: disposing the workspace.");
                 form?.Dispose();
                 await workspace.DisposeAsync();
+                output.WriteLine("Contributed pages: workspace disposed.");
             }
         });
     }

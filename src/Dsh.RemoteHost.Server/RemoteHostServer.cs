@@ -69,7 +69,7 @@ public sealed class RemoteHostServer(
         try
         {
             using (var channel = JsonRpcChannel.Serve(duplex, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default),
-                [connection, ..connection.CreateTargets()], connection.EditorMethods()))
+                contracts: [new(RpcTargetMetadata.FromShape<IHostRpc>(), connection), ..connection.CreateTargets()], methods: connection.EditorMethods()))
             {
                 using var registration = cancellationToken.Register(channel.Dispose);
                 try
@@ -151,29 +151,28 @@ public sealed class RemoteHostServer(
         /** 编辑器域的方法名委托; 域没有编辑器后端时为空。 */
     public (string Method, Delegate Handler)[] EditorMethods() => _editor?.Methods() ?? [];
 
-    public IReadOnlyList<object> CreateTargets()
+    public IReadOnlyList<JsonRpcTarget> CreateTargets()
         {
             if (server._backend is not { } backend)
                 return [];
-            List<object> targets = [];
+            List<JsonRpcTarget> targets = [];
             var uploads = Uploads;
-            if (backend.Agent is { } agent) targets.Add(new HostAgentMethods(agent, EnsureAuthenticated));
+            if (backend.Agent is { } agent) targets.Add(new(RpcTargetMetadata.FromShape<IAgentRpc>(), new HostAgentMethods(agent, EnsureAuthenticated)));
             if (backend.Pty is { } pty)
-                targets.Add(new HostPtyMethods(pty, EnsureAuthenticated, (subscriptionId, ptyId) => StartPtyPumpAsync(pty, subscriptionId, ptyId), _ptyPumps.Stop));
-            if (backend.Files is { } files) targets.Add(new HostFileMethods(files, uploads, EnsureAuthenticated));
-            if (backend.Git is { } git) targets.Add(new HostGitMethods(git, EnsureAuthenticated));
-            if (backend.Notifications is { } notifications) targets.Add(new HostNotifyMethods(notifications, EnsureAuthenticated));
-            if (backend.SessionEditing is { } editing) targets.Add(new HostSessionEditingMethods(editing, EnsureAuthenticated));
-            if (backend.Plugins is { } plugins) targets.Add(new HostPluginsMethods(plugins, EnsureAuthenticated));
+                targets.Add(new(RpcTargetMetadata.FromShape<IPtyRpc>(), new HostPtyMethods(pty, EnsureAuthenticated, (subscriptionId, ptyId) => StartPtyPumpAsync(pty, subscriptionId, ptyId), _ptyPumps.Stop)));
+            if (backend.Files is { } files) targets.Add(new(RpcTargetMetadata.FromShape<IFilesRpc>(), new HostFileMethods(files, uploads, EnsureAuthenticated)));
+            if (backend.Git is { } git) targets.Add(new(RpcTargetMetadata.FromShape<IGitRpc>(), new HostGitMethods(git, EnsureAuthenticated)));
+            if (backend.Notifications is { } notifications) targets.Add(new(RpcTargetMetadata.FromShape<INotificationsRpc>(), new HostNotifyMethods(notifications, EnsureAuthenticated)));
+            if (backend.SessionEditing is { } editing) targets.Add(new(RpcTargetMetadata.FromShape<ISessionEditingRpc>(), new HostSessionEditingMethods(editing, EnsureAuthenticated)));
+            if (backend.Plugins is { } plugins) targets.Add(new(RpcTargetMetadata.FromShape<IPluginsRpc>(), new HostPluginsMethods(plugins, EnsureAuthenticated)));
             if (backend.Network is { } network)
             {
                 _network = new HostNetworkMethods(network, EnsureAuthenticated, network as IRemoteNetworkReloadBackend, lifetime);
-                targets.Add(_network);
+                targets.Add(new(RpcTargetMetadata.FromShape<INetworkRpc>(), _network));
             }
             if (backend.Editor is { } editor)
             {
                 _editor = new HostEditorMethods(editor, EnsureAuthenticated, id, lifetime);
-                targets.Add(_editor);
             }
             return targets;
         }

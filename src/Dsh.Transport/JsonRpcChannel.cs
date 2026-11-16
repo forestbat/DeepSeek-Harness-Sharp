@@ -2,6 +2,9 @@ using StreamJsonRpc;
 
 namespace Dsh.Transport;
 
+/** A statically described contract and its implementation on one RPC connection. */
+public readonly record struct JsonRpcTarget(RpcTargetMetadata Metadata, object Instance);
+
 /**
  * 跨进程 RPC 的唯一入口。
  *
@@ -45,10 +48,18 @@ public sealed class JsonRpcChannel : IDisposable
         (string Method, Delegate Handler)[] methods)
         => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
 
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, IReadOnlyList<JsonRpcTarget> contracts,
+        (string Method, Delegate Handler)[] methods)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, methods);
+
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, IReadOnlyList<JsonRpcTarget> contracts,
+        (string Method, Delegate Handler)[] methods)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, methods);
+
     /** 只实现一次的内部协议: 直接按方法名挂委托, 不必为此定义接口。 */
     public static JsonRpcChannel ServeMethods(Stream duplex, IJsonRpcMessageFormatter formatter,
         params (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), [], methods);
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets: [], methods: methods);
 
     private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, object[] targets,
         (string Method, Delegate Handler)[] methods)
@@ -58,6 +69,18 @@ public sealed class JsonRpcChannel : IDisposable
             rpc.AddLocalRpcTarget(target);
         foreach (var (method, handler1) in methods)
             rpc.AddLocalRpcMethod(method, handler1);
+        rpc.StartListening();
+        return new JsonRpcChannel(rpc);
+    }
+
+    private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, IReadOnlyList<JsonRpcTarget> contracts,
+        (string Method, Delegate Handler)[] methods)
+    {
+        var rpc = new JsonRpc(handler);
+        foreach (var contract in contracts)
+            rpc.AddLocalRpcTarget(contract.Metadata, contract.Instance, null);
+        foreach (var (method, implementation) in methods)
+            rpc.AddLocalRpcMethod(method, implementation);
         rpc.StartListening();
         return new JsonRpcChannel(rpc);
     }
