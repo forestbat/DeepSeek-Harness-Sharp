@@ -353,6 +353,21 @@ Windows 默认目录为本机 LocalAppData 下的 `ma2a`。
 文件路径使用 `ROOT:/path`，其中 ROOT 是对端暴露的根名称。
 传输执行 BLAKE3 校验，下载被中断后保留带来源标识的部分文件，重试时可继续下载。
 
+远端已经运行 HTTP／SOCKS 代理时，可以在远端服务页创建 `proxy / forward`，将 `host`、`port` 设为该代理在目标 Runtime 一侧的监听地址。
+这里的 `127.0.0.1` 指目标机器自身。
+将 `local_port` 设为本机空闲端口后，在现有网络设置中使用这个转发地址；例如界面已成功监听本机 `17890`，且远端是 HTTP 代理时：
+
+```yaml
+network:
+  borrowed_outbound_machine: null
+  outbound_proxy:
+    url: http://127.0.0.1:17890
+```
+
+SOCKS 代理应使用匹配的 URL scheme，例如 `socks5://127.0.0.1:17890`。
+使用期间保持转发运行，并清空原 Fleet 借用出口选择，避免它覆盖配置的代理。
+TCP Proxy 提供授权后的字节隧道，远端 HTTP／SOCKS 服务需要事先存在。
+
 模型可以通过 `@deepseek-ai/dsh-ma2a` 插件使用相同的原生客户端实现：
 
 - `ma2a_describe`、`ma2a_command`：查看原生命令字段并管理本机 Runtime 资源。

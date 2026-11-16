@@ -8,7 +8,7 @@ if (args.Length is 6 or 8 && args[0] == "--cross-state" && args[2] == "--target-
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
         var platform = args.Length == 8 && args[6] == "--platform" ? args[7] : "linux";
-        await CrossMachineScenarios.RunAsync(args[1], target.RootElement.GetProperty("endpoint_id").GetString()!, args[5], cancellation.Token, platform);
+        await CrossMachineScenarios.RunAsync(args[1], target.RootElement.GetProperty("result").GetProperty("payload").GetProperty("endpoint_id").GetString()!, args[5], cancellation.Token, platform);
         return 0;
     }
     catch (Exception error)

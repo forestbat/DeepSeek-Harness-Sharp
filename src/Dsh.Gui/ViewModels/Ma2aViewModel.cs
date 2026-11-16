@@ -19,6 +19,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private JsonObject? _pendingCommand;
     private string? _pendingDirectory;
     private string? _stamp;
+    private string? _snapshotJson;
     private Task? _observer;
     private bool _disposed;
     private const int RefreshIntervalSeconds = 5;
@@ -53,6 +54,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     {
         StopObservation();
         _stamp = null;
+        _snapshotJson = null;
         Connected = false;
         Snapshot.Clear();
     }
@@ -101,6 +103,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     {
         StopObservation();
         _stamp = null;
+        _snapshotJson = null;
         await RefreshAsync(cancellationToken);
         if (!Connected || _disposed) return;
         _observation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -113,6 +116,8 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
         StopObservation();
         Remote.Cancel();
         Connected = false;
+        _stamp = null;
+        _snapshotJson = null;
         Snapshot.Clear();
         Endpoint = "未连接";
         Status = "已解除附着；Runtime、持久进程和 Agent 保持运行。";
@@ -135,13 +140,13 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
         var client = CreateClient();
         var stamp = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
         var fingerprint = Stamp(stamp);
-        if (_stamp == fingerprint && Connected) return;
         var snapshot = await client.GetSnapshotAsync(cancellationToken);
         var after = await client.CallAsync(new JsonObject { ["operation"] = "snapshot_stamp" }, cancellationToken);
         if (fingerprint != Stamp(after) || directory != StateDirectory || _disposed)
         {
             Snapshot.Clear();
             _stamp = null;
+            _snapshotJson = null;
             Status = "状态在读取期间变化，正在等待重新同步。";
             return;
         }
@@ -150,7 +155,10 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
             throw new InvalidDataException("MA2A snapshot boot identifier differs from its stamp.");
         if (payload.GetProperty("revision").GetUInt64() != stamp.GetProperty("result").GetProperty("payload").GetProperty("revision").GetUInt64())
             throw new InvalidDataException("MA2A snapshot revision differs from its stamp.");
-        ReplaceNodes(Snapshot, payload);
+        var projection = payload.GetRawText();
+        if (_stamp != fingerprint || _snapshotJson != projection || !Connected)
+            ReplaceNodes(Snapshot, payload);
+        _snapshotJson = projection;
         Endpoint = payload.GetProperty("endpoint").GetProperty("endpoint_id").GetString()!;
         _stamp = fingerprint;
         Connected = true;
@@ -203,6 +211,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
             if (mutation) ClearPending();
             Status = "操作已完成。";
             _stamp = null;
+            _snapshotJson = null;
             if (Connected) await RefreshAsync(linked.Token);
         }
         catch (Exception error)
@@ -270,6 +279,7 @@ public sealed partial class Ma2aViewModel : ObservableObject, IDisposable
     private void Invalidate(Exception error)
     {
         _stamp = null;
+        _snapshotJson = null;
         Connected = false;
         Snapshot.Clear();
         Endpoint = "状态不可用";
