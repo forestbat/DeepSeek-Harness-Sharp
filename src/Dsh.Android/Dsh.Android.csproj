@@ -7,6 +7,12 @@
 
   <PropertyGroup>
     <TargetFramework>net11.0-android</TargetFramework>
+    <!--
+      显式写平台版本: 少了它, 装了 android 工作负载的 SDK 会自己推, 没装的 SDK(例如只装了 10.0.100 那档清单的)
+      推不出来就得到 0.0, 于是 NETSDK1135 "SupportedOSPlatformVersion 34 高于 TargetPlatformVersion 0.0" ——
+      IDE 里表现为整个项目加载失败, 与代码无关。
+    -->
+    <TargetPlatformVersion>37.0</TargetPlatformVersion>
     <SupportedOSPlatformVersion>34</SupportedOSPlatformVersion>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>

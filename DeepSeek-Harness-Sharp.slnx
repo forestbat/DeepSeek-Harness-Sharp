@@ -8,12 +8,17 @@
     <File Path="compose.yaml" />
   </Folder>
   <Folder Name="/src/">
+    <!--
+      Dsh.Android 不在解决方案里: 它需要 android 工作负载与 JDK/Android SDK, 缺任何一个,
+      IDE 都会把该项目整体加载失败并把它下面的每个文件标成错误。
+      需要时单独构建: dotnet build src/Dsh.Android/Dsh.Android.csproj
+    -->
     <Project Path="src/Dsh.A2A/Dsh.A2A.csproj" />
     <Project Path="src/Dsh.Account/Dsh.Account.csproj" />
     <Project Path="src/Dsh.Acp/Dsh.Acp.csproj" />
     <Project Path="src/Dsh.AgentAdapters/Dsh.AgentAdapters.csproj" />
     <Project Path="src/Dsh.AgentInstructions/Dsh.AgentInstructions.csproj" />
-    <Project Path="src/Dsh.Android/Dsh.Android.csproj" />
+    
     <Project Path="src/Dsh.Board/Dsh.Board.csproj" />
         <Project Path="src/Dsh.Agent/Dsh.Agent.csproj" />
 <Project Path="src/Dsh.Boot/Dsh.Boot.csproj" />
