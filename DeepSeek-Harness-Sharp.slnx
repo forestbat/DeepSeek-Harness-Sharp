@@ -40,6 +40,8 @@
     <Project Path="src/Dsh.Llm.OpenAi/Dsh.Llm.OpenAi.csproj" />
     <Project Path="src/Dsh.Llm/Dsh.Llm.csproj" />
     <Project Path="src/Dsh.Lsp/Dsh.Lsp.csproj" />
+    <Project Path="src/Dsh.Ma2a/Dsh.Ma2a.csproj" />
+    <Project Path="src/Dsh.Ma2a.Tools/Dsh.Ma2a.Tools.csproj" />
     <Project Path="src/Dsh.Mcp/Dsh.Mcp.csproj" />
     <Project Path="src/Dsh.Memory/Dsh.Memory.csproj" />
     <Project Path="src/Dsh.Notifications/Dsh.Notifications.csproj" />
@@ -83,6 +85,9 @@
     <Project Path="tests/Dsh.ManagedPluginSample/Dsh.ManagedPluginSample.csproj" />
     <Project Path="tests/Dsh.SandboxPluginSample/Dsh.SandboxPluginSample.csproj" />
     <Project Path="tests/Dsh.McpResourceServerSample/Dsh.McpResourceServerSample.csproj" />
+    <Project Path="tests/Dsh.Ma2a.Tests/Dsh.Ma2a.Tests.csproj" />
+    <Project Path="tests/Dsh.Ma2a.ToolTests/Dsh.Ma2a.ToolTests.csproj" />
+    <Project Path="tests/Dsh.Ma2a.Integration/Dsh.Ma2a.Integration.csproj" />
     <Project Path="tests/Dsh.Tests/Dsh.Tests.csproj" />
   </Folder>
   <Folder Name="/templates/">

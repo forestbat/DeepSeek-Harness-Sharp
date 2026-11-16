@@ -152,6 +152,18 @@ jobs:
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo
           -p:DshNativeCompiler=${{ inputs.native-cc }}
 
+      - name: Verify native MA2A protocol and tool permissions
+        if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'remainder-a-m')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build tests/Dsh.Ma2a.Tests/Dsh.Ma2a.Tests.csproj -c Debug -m:1 --nologo
+          MA2A_ARGS=(-failSkips)
+          if [[ "$RUNNER_OS" == "Windows" ]]; then MA2A_ARGS+=(-trait- "Platform=UnixOnly"); fi
+          dotnet tests/Dsh.Ma2a.Tests/bin/Debug/net10.0/Dsh.Ma2a.Tests.dll "${MA2A_ARGS[@]}"
+          dotnet build tests/Dsh.Ma2a.ToolTests/Dsh.Ma2a.ToolTests.csproj -c Debug -m:1 --nologo
+          dotnet tests/Dsh.Ma2a.ToolTests/bin/Debug/net10.0/Dsh.Ma2a.ToolTests.dll -failSkips
+
       - name: Validate the explicitly installed native Iroh test fixture
         if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: bash

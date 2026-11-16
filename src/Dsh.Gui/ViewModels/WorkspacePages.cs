@@ -30,6 +30,7 @@ public sealed class WorkspacePages
     public const string Files = "files";
     public const string Git = "git";
     public const string Machines = "machines";
+    public const string Ma2a = "ma2a";
 
     public ObservableCollection<WorkspacePageEntry> Available { get; } = [];
 

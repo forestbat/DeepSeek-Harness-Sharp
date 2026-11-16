@@ -544,7 +544,7 @@ public sealed class GuiWorkspaceTests
             try
             {
                 await ConnectedAsync(workspace);
-                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines], workspace.Pages.Available.Select(page => page.Id));
+                Assert.Equal([WorkspacePages.Files, WorkspacePages.Git, WorkspacePages.Machines, WorkspacePages.Ma2a], workspace.Pages.Available.Select(page => page.Id));
                 var session = await StartTerminalAsync(workspace, "alpha", repo.Root, "repo shell", "sleep 30");
                 await UntilAsync(() => Card(workspace, "alpha", session) is not null, "the session card");
                 workspace.OpenSession("alpha", session);

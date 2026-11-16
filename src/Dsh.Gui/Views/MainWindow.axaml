@@ -101,6 +101,9 @@
             <DataTemplate DataType="vm:MachinesViewModel">
               <views:MachinesView />
             </DataTemplate>
+            <DataTemplate DataType="vm:Ma2aViewModel">
+              <views:Ma2aView />
+            </DataTemplate>
           </ContentControl.DataTemplates>
         </ContentControl>
         <views:ChatView Grid.Row="1" IsVisible="{Binding IsChatPage}" />

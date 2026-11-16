@@ -246,6 +246,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
             folderPicker: () => FolderPicker?.Invoke() ?? Task.FromResult<string?>(null),
             pathSelected: (machine, path) => (GitWorkspaceMachine, GitWorkspacePath) = (machine, path))));
         Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
+        Pages.Register(new WorkspacePageEntry(WorkspacePages.Ma2a, "MA2A", machinesIcon, _ => new Ma2aViewModel()));
     }
 
     /** Opens the new-session form, preset to a machine and project when started from one. */
