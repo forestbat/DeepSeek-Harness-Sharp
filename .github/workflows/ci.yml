@@ -304,7 +304,7 @@ jobs:
         run: git merge-base --is-ancestor "$EXPECTED_HEAD_SHA" HEAD
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
       - name: Download the DryIoc feed prepared for this run
@@ -327,7 +327,7 @@ jobs:
               -p:DebugSymbols=false -p:DebugType=none \
               -p:DshNativeCompiler=${{ matrix.native-cc }} \
               --nologo -v m
-            PUB="$PROJECT/bin/Release/net10.0/${{ matrix.rid }}/publish"
+            PUB="$PROJECT/bin/Release/net11.0/${{ matrix.rid }}/publish"
             if find "$PUB" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
               echo "::error::$PROJECT must not bundle the optional native Iroh command"
               exit 1
@@ -339,7 +339,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PUB="Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
+          PUB="Dsh.GuiHost/bin/Release/net11.0/${{ matrix.rid }}/publish"
           EXE="$PUB/dsh-gui"
           test -f "$EXE" || { echo "::error::找不到 $EXE"; exit 1; }
           chmod +x "$EXE"
@@ -363,9 +363,9 @@ jobs:
         run: |
           set -euo pipefail
           pwsh -NoProfile -File scripts/smoke-web-host.ps1 \
-            -WebPublishDir "Dsh.WebHost/bin/Release/net10.0/${{ matrix.rid }}/publish" \
-            -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net10.0/${{ matrix.rid }}/publish" \
-            -GuiPublishDir "Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish"
+            -WebPublishDir "Dsh.WebHost/bin/Release/net11.0/${{ matrix.rid }}/publish" \
+            -TuiPublishDir "DeepSeek-Harness-Sharp/bin/Release/net11.0/${{ matrix.rid }}/publish" \
+            -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/${{ matrix.rid }}/publish"
       - name: 归档三个入口的独立完整发布根
         shell: bash
         run: |
@@ -375,9 +375,9 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             TAR="$(cygpath -u "$WINDIR")/System32/tar.exe"
           fi
-          "$TAR" -cf "artifacts/${{ matrix.rid }}-cli.tar" -C "DeepSeek-Harness-Sharp/bin/Release/net10.0/${{ matrix.rid }}/publish" .
-          "$TAR" -cf "artifacts/${{ matrix.rid }}-gui.tar" -C "Dsh.GuiHost/bin/Release/net10.0/${{ matrix.rid }}/publish" .
-          "$TAR" -cf "artifacts/${{ matrix.rid }}-web.tar" -C "Dsh.WebHost/bin/Release/net10.0/${{ matrix.rid }}/publish" .
+          "$TAR" -cf "artifacts/${{ matrix.rid }}-cli.tar" -C "DeepSeek-Harness-Sharp/bin/Release/net11.0/${{ matrix.rid }}/publish" .
+          "$TAR" -cf "artifacts/${{ matrix.rid }}-gui.tar" -C "Dsh.GuiHost/bin/Release/net11.0/${{ matrix.rid }}/publish" .
+          "$TAR" -cf "artifacts/${{ matrix.rid }}-web.tar" -C "Dsh.WebHost/bin/Release/net11.0/${{ matrix.rid }}/publish" .
       - uses: actions/upload-artifact@v4
         with:
           name: jit-${{ matrix.rid }}

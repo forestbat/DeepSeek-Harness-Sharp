@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Text;
@@ -26,6 +26,69 @@ public static class RemoteHostListener
             await ServeTcpAsync(server, root, token, cancellationToken).ConfigureAwait(false);
         else
             await ServeUnixAsync(server, root, token, cancellationToken).ConfigureAwait(false);
+    }
+
+    /**
+     * 非回环监听必须带令牌: 一条裸 TCP 端口就能拿到这个宿主的全部会话与工具能力。
+     * 调用方没给令牌时现生成一个, 回环监听则允许不带。
+     */
+    public static string? ResolveExposedToken(IPEndPoint endpoint, string? requested)
+        => requested is { Length: > 0 }
+            ? requested
+            : endpoint.Address.Equals(IPAddress.Loopback)
+                ? null
+                : Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    /**
+     * 局域网监听(手机等外部客户端): 直接服务 JSON-RPC, 令牌由 RemoteHostServer 在握手里校验,
+     * 因此不写 run 目录的端口文件、也不读连接前的裸令牌前缀。
+     */
+    public static async Task ServeEndpointAsync(
+        RemoteHostServer server,
+        IPEndPoint endpoint,
+        Func<IPEndPoint, Task>? ready,
+        CancellationToken cancellationToken)
+    {
+        var listener = new TcpListener(endpoint);
+        listener.Start();
+        try
+        {
+            if (ready is not null)
+                await ready((IPEndPoint)listener.LocalEndpoint).ConfigureAwait(false);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                TcpClient client;
+                try
+                {
+                    client = await listener.AcceptTcpClientAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception error) when (cancellationToken.IsCancellationRequested
+                    && error is OperationCanceledException or SocketException or ObjectDisposedException)
+                {
+                    break;
+                }
+                _ = ServeExposedConnectionAsync(server, new NetworkStream(client.Client, ownsSocket: true), client, cancellationToken);
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task ServeExposedConnectionAsync(RemoteHostServer server, Stream stream, IDisposable owner, CancellationToken cancellationToken)
+    {
+        using (owner)
+        await using (stream)
+        {
+            try
+            {
+                await server.ServeAsync(stream, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is IOException or OperationCanceledException or SocketException)
+            {
+            }
+        }
     }
 
     private static async Task ServeTcpAsync(RemoteHostServer server, string? root, LocalEndpointToken token, CancellationToken cancellationToken)

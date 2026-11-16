@@ -262,10 +262,9 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
                 : JsonSerializer.SerializeToElement(configuration, PluginConfigurationJsonContext.Default.Object);
             using var initialization = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
             initialization.CancelAfter(PluginSandboxLaunch.InitializationBudget);
-            var loaded = await domain.Connection!.RequestAsync(PluginSandboxMethods.Load,
-                new PluginSandboxLoadRequest(artifact, package, configurationJson),
-                PluginSandboxJsonContext.Default.PluginSandboxLoadRequest, initialization.Token).ConfigureAwait(false);
-            if (loaded?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxAck)?.Success != true)
+            var loaded = await domain.Connection!.LoadAsync(
+                new PluginSandboxLoadRequest(artifact, package, configurationJson), initialization.Token).ConfigureAwait(false);
+            if (!loaded.Success)
                 throw new IOException("The isolated plugin did not acknowledge successful initialization.");
             CheckAuthority(domain, package);
             binding.Loading = false;
@@ -298,11 +297,8 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
             var staged = Stage(domain, artifactPath, out staging);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, domain.Cancellation.Token, _shutdown.Token);
             timeout.CancelAfter(PluginSandboxLaunch.InspectionBudget);
-            var result = await domain.Connection!.RequestAsync(PluginSandboxMethods.Inspect,
-                new PluginSandboxInspectRequest(staged, package), PluginSandboxJsonContext.Default.PluginSandboxInspectRequest,
-                timeout.Token).ConfigureAwait(false);
-            var inspection = result?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxInspection)
-                ?? throw new IOException("The isolated inspection returned no metadata.");
+            var inspection = await domain.Connection!.InspectAsync(
+                new PluginSandboxInspectRequest(staged, package), timeout.Token).ConfigureAwait(false);
             if (!inspection.Released)
                 Fault(domain, "The isolated inspection could not release its code; explicit retirement and reload are required.");
             return inspection;
@@ -389,10 +385,9 @@ internal sealed class PluginSandboxSupervisor(Context context, PluginExecutionEn
                 return;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(domain.Cancellation.Token, _shutdown.Token);
             timeout.CancelAfter(PluginSandboxLaunch.ShutdownBudget);
-            var result = await domain.Connection!.RequestAsync(PluginSandboxMethods.Unload,
-                new PluginSandboxUnloadRequest(package), PluginSandboxJsonContext.Default.PluginSandboxUnloadRequest,
-                timeout.Token).ConfigureAwait(false);
-            if (result?.Deserialize(PluginSandboxJsonContext.Default.PluginSandboxAck)?.Success != true)
+            var result = await domain.Connection!.UnloadAsync(
+                new PluginSandboxUnloadRequest(package), timeout.Token).ConfigureAwait(false);
+            if (!result.Success)
                 throw new IOException("The isolated plugin did not acknowledge unloading.");
             domain.Connection.ReleasePackage(package);
             if (domain.Bindings.TryRemove(package, out var binding))

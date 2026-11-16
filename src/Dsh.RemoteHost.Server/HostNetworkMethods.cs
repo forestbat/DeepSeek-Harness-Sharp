@@ -1,77 +1,56 @@
-using System.Text.Json;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
-using static Dsh.RemoteHost.HostRpc;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 
 namespace Dsh.RemoteHost;
 
-internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend, CancellationToken lifetime) : IAsyncDisposable
+/**
+ * host.network.* requests. 探测请求在开始时登记归属, 取消请求据此找到在途探测;
+ * 连接结束时先取消全部在途探测并等它们的回调跑完, 才让连接关闭。
+ */
+internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend,
+    Action ensureAuthenticated, IRemoteNetworkReloadBackend? reload, CancellationToken lifetime)
+    : INetworkRpc, IAsyncDisposable
 {
+    private const string SetError = "outbound.set requires expectedRevision and settings";
+
     private readonly object _gate = new();
     private readonly Dictionary<Guid, ProbeOperation> _probes = [];
     private bool _disposed;
 
-    /** Register probe ownership and initiate cancellation in frame-receive order. */
-    public ValueTask<JsonElement?>? Prepare(string name, JsonRpcMessage message)
+    public async Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken)
     {
-        switch (name)
-        {
-            case NetworkProtocol.MethodOutboundProbe:
-            {
-                var request = Require(message, NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeRequest, "outbound.probe requires a request");
-                var operationId = request.OperationId ?? Guid.NewGuid();
-                ProbeOperation operation;
-                lock (_gate)
-                {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
-                    if (_probes.ContainsKey(operationId))
-                        throw new JsonRpcException(InvalidParams, "outbound.probe operationId is already active on this connection");
-                    operation = new ProbeOperation(lifetime);
-                    _probes.Add(operationId, operation);
-                }
-                return ProbeAsync(operationId, operation, request);
-            }
-            case NetworkProtocol.MethodOutboundProbeCancel:
-            {
-                var request = Require(message, NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeCancelRequest, "outbound.probe.cancel requires operationId");
-                lock (_gate)
-                {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
-                    if (!_probes.TryGetValue(request.OperationId, out var operation))
-                        return ValueTask.FromResult<JsonElement?>(True);
-                    return AcknowledgeCancellationAsync(operation, operation.Cancel());
-                }
-            }
-            default:
-                return null;
-        }
+        ensureAuthenticated();
+        return await backend.GetOutboundAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<JsonElement?> HandleAsync(string name, JsonRpcMessage message, CancellationToken cancellationToken)
+    public async Task<RemoteOutboundProxyState> SetOutboundAsync(RemoteOutboundProxySetRequest request, CancellationToken cancellationToken)
     {
-        switch (name)
-        {
-            case NetworkProtocol.MethodOutboundGet:
-                return Serialize(await backend.GetOutboundAsync(cancellationToken).ConfigureAwait(false), NetworkProtocolJsonContext.Default.RemoteOutboundProxyState);
-            case NetworkProtocol.MethodOutboundSet:
-            {
-                const string error = "outbound.set requires expectedRevision and settings";
-                var request = Require(message, NetworkProtocolJsonContext.Default.RemoteOutboundProxySetRequest, error);
-                if (request.Settings is null || string.IsNullOrWhiteSpace(request.ExpectedRevision))
-                    throw new JsonRpcException(InvalidParams, error);
-                return Serialize(await backend.SetOutboundAsync(request, cancellationToken).ConfigureAwait(false), NetworkProtocolJsonContext.Default.RemoteOutboundProxyState);
-            }
-            default:
-                throw MethodNotFound(name);
-        }
+        ensureAuthenticated();
+        if (request.Settings is null || string.IsNullOrWhiteSpace(request.ExpectedRevision))
+            throw new LocalRpcException(SetError) { ErrorCode = JsonRpcException.InvalidParams };
+        return await backend.SetOutboundAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask<JsonElement?> ProbeAsync(Guid operationId, ProbeOperation operation, RemoteOutboundProxyProbeRequest request)
+    public async Task<RemoteOutboundProxyProbeResult> ProbeAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken)
     {
-        await Task.Yield();
+        ensureAuthenticated();
+        var operationId = request.OperationId ?? Guid.NewGuid();
+        ProbeOperation operation;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_probes.ContainsKey(operationId))
+                throw new LocalRpcException("outbound.probe operationId is already active on this connection") { ErrorCode = JsonRpcException.InvalidParams };
+            operation = new ProbeOperation(lifetime);
+            _probes.Add(operationId, operation);
+        }
+
         try
         {
             operation.Token.ThrowIfCancellationRequested();
-            return Serialize(await backend.ProbeOutboundAsync(request, operation.Token).ConfigureAwait(false), NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeResult);
+            return await backend.ProbeOutboundAsync(request, operation.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -97,10 +76,29 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend, Cancella
         }
     }
 
-    private static async ValueTask<JsonElement?> AcknowledgeCancellationAsync(ProbeOperation operation, Task callbacks)
+    public async Task<bool> CancelProbeAsync(RemoteOutboundProxyProbeCancelRequest request, CancellationToken cancellationToken)
     {
-        await WaitForCancellationAsync(operation, callbacks).ConfigureAwait(false);
-        return True;
+        ensureAuthenticated();
+        ProbeOperation operation;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_probes.TryGetValue(request.OperationId, out var found))
+                return true;
+            operation = found;
+        }
+        await WaitForCancellationAsync(operation, operation.Cancel()).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> ReloadAsync(CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        // 声明了 network.reload 的 host 才有这个能力; 没实现的 host 对这个方法名就当它不存在。
+        if (reload is null)
+            throw new LocalRpcException("network.reload is not supported by this host") { ErrorCode = (int)JsonRpcErrorCode.MethodNotFound };
+        await reload.ReloadAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     private static async Task WaitForCancellationAsync(ProbeOperation operation, Task callbacks)
@@ -117,6 +115,7 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend, Cancella
 
     public async ValueTask DisposeAsync()
     {
+        ensureAuthenticated();
         List<Task> pending;
         lock (_gate)
         {
@@ -178,13 +177,5 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend, Cancella
                 _source.Dispose();
             }
         }
-    }
-
-    public static async ValueTask<JsonElement?> ReloadAsync(IRemoteNetworkReloadBackend backend, JsonRpcMessage message, CancellationToken cancellationToken)
-    {
-        if (message.Params is { ValueKind: not JsonValueKind.Null })
-            throw new JsonRpcException(InvalidParams, "network.reload takes no configuration parameters");
-        await backend.ReloadAsync(cancellationToken).ConfigureAwait(false);
-        return Serialize(true, HostProtocolJsonContext.Default.Boolean);
     }
 }

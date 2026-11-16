@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Cache NuGet packages without a post-job dotnet invocation
         uses: actions/cache@v4
@@ -160,9 +160,9 @@ jobs:
           dotnet build tests/Dsh.Ma2a.Tests/Dsh.Ma2a.Tests.csproj -c Debug -m:1 --nologo
           MA2A_ARGS=(-failSkips)
           if [[ "$RUNNER_OS" == "Windows" ]]; then MA2A_ARGS+=(-trait- "Platform=UnixOnly"); fi
-          dotnet tests/Dsh.Ma2a.Tests/bin/Debug/net10.0/Dsh.Ma2a.Tests.dll "${MA2A_ARGS[@]}"
+          dotnet tests/Dsh.Ma2a.Tests/bin/Debug/net11.0/Dsh.Ma2a.Tests.dll "${MA2A_ARGS[@]}"
           dotnet build tests/Dsh.Ma2a.ToolTests/Dsh.Ma2a.ToolTests.csproj -c Debug -m:1 --nologo
-          dotnet tests/Dsh.Ma2a.ToolTests/bin/Debug/net10.0/Dsh.Ma2a.ToolTests.dll -failSkips
+          dotnet tests/Dsh.Ma2a.ToolTests/bin/Debug/net11.0/Dsh.Ma2a.ToolTests.dll -failSkips
           dotnet build tests/Dsh.Ma2a.Integration/Dsh.Ma2a.Integration.csproj -c Debug -m:1 --nologo
 
       - name: Validate the explicitly installed native Iroh test fixture
@@ -201,7 +201,7 @@ jobs:
           fi
           export DSH_HOME
           echo "DSH_HOME=$DSH_HOME" >> "$GITHUB_ENV"
-          DAEMON="DeepSeek-Harness-Sharp/bin/Debug/net10.0/dsharp"
+          DAEMON="DeepSeek-Harness-Sharp/bin/Debug/net11.0/dsharp"
           if [ ! -x "$DAEMON" ]; then
             DAEMON="$DAEMON.exe"
           fi
@@ -226,7 +226,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests -noColor \
+          tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests -noColor \
             -class Dsh.Tests.TuiRawModeEndToEndTests \
             -trait- "Category=LlmSmoke" -failSkips
 
@@ -238,7 +238,7 @@ jobs:
           # GpuStress needs real GPU stress testing; OnlyGpu needs GPU/desktop rendering.
           # RenderBench needs desktop rendering; LlmSmoke needs external model access and credentials.
           # Hosted runners have no GPU; run GPU measurements on a GPU host without trait filtering.
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+          EXE="tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
@@ -299,7 +299,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+          EXE="tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
@@ -345,7 +345,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe"
+          EXE="tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests.exe"
           "$EXE" -noColor -parallelMode none -reporter verbose \
             -method Dsh.Tests.Mcp.McpSettingsBoundaryTests.OwnedStdio_PreservesToolOutput_ButNeverMutatesSettings \
             -trait- Category=GpuStress -trait- Category=OnlyGpu \
@@ -355,11 +355,11 @@ jobs:
         if: inputs.suite == 'quick' && (inputs.quick-cohort == 'all' || inputs.quick-cohort == 'fleet-iroh')
         shell: pwsh
         run: |
-          $runtime = Get-Content tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.runtimeconfig.json -Raw | ConvertFrom-Json -AsHashtable
+          $runtime = Get-Content tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests.runtimeconfig.json -Raw | ConvertFrom-Json -AsHashtable
           $runtime.runtimeOptions.configProperties['System.Globalization.Invariant'] = $true
           $config = Join-Path $env:RUNNER_TEMP 'schedule-invariant.runtimeconfig.json'
           $runtime | ConvertTo-Json -Depth 20 | Set-Content $config
-          dotnet exec --runtimeconfig $config tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.dll -noColor -class 'Dsh.Tests.ScheduleTests+Rules' -class 'Dsh.Tests.ScheduleClockCompatibilityTests' -class 'Dsh.Tests.ScheduleCronCompatibilityTests' -class 'Dsh.Tests.ScheduleToolCompatibilityTests' -class 'Dsh.Tests.ScheduleUpstreamReferenceTests' -failSkips
+          dotnet exec --runtimeconfig $config tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests.dll -noColor -class 'Dsh.Tests.ScheduleTests+Rules' -class 'Dsh.Tests.ScheduleClockCompatibilityTests' -class 'Dsh.Tests.ScheduleCronCompatibilityTests' -class 'Dsh.Tests.ScheduleToolCompatibilityTests' -class 'Dsh.Tests.ScheduleUpstreamReferenceTests' -failSkips
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check native containment (NativeGuardTests, ${{ inputs.native-cc }}, no skips)
@@ -367,7 +367,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          EXE="tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests"
+          EXE="tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests"
           if [ ! -x "$EXE" ]; then
             EXE="$EXE.exe"
           fi
@@ -382,7 +382,7 @@ jobs:
             -p:DshNativeCompiler=${{ inputs.native-cc-alt }} "-flp:verbosity=normal;logfile=native-alt.log"
           # Verify that the alternate driver rebuilt both the guard and the probe.
           grep -E '${{ inputs.native-cc-alt }} /nologo' native-alt.log
-          tests/Dsh.Tests/bin/Debug/net10.0/Dsh.Tests.exe -noColor -class Dsh.Tests.NativeGuardTests -failSkips
+          tests/Dsh.Tests/bin/Debug/net11.0/Dsh.Tests.exe -noColor -class Dsh.Tests.NativeGuardTests -failSkips
 
       - name: Verify the SDK still runs after macOS test consumers
         if: runner.os == 'macOS'

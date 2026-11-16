@@ -1,4 +1,4 @@
-using static Dsh.RemoteHost.RemoteHostRpc;
+using Dsh.RemoteHost.Rpc;
 
 namespace Dsh.RemoteHost;
 
@@ -7,25 +7,30 @@ public sealed class RemoteNetworkClient : IWorkspaceNetwork
 {
     private const int ProbeCancellationAcknowledgementTimeoutSeconds = 5;
     private readonly RemoteHostClient _host;
+    private readonly INetworkRpc _rpc;
 
-    internal RemoteNetworkClient(RemoteHostClient host) => _host = host;
+    internal RemoteNetworkClient(RemoteHostClient host, INetworkRpc rpc)
+    {
+        _host = host;
+        _rpc = rpc;
+    }
 
     public Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken = default)
-        => _host.SendAsync(NetworkProtocol.MethodOutboundGet, null, NetworkProtocolJsonContext.Default.RemoteOutboundProxyState, cancellationToken);
+        => _rpc.GetOutboundAsync(cancellationToken);
 
     public Task<RemoteOutboundProxyState> SetOutboundAsync(RemoteOutboundProxySetRequest request, CancellationToken cancellationToken = default)
-        => _host.SendAsync(NetworkProtocol.MethodOutboundSet, Serialize(request, NetworkProtocolJsonContext.Default.RemoteOutboundProxySetRequest), NetworkProtocolJsonContext.Default.RemoteOutboundProxyState, cancellationToken);
+        => _rpc.SetOutboundAsync(request, cancellationToken);
 
     public async Task<RemoteOutboundProxyProbeResult> ProbeOutboundAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken = default)
     {
         if (!_host.Supports(NetworkProtocol.CancellableProbeCapability))
-            return await _host.SendAsync(NetworkProtocol.MethodOutboundProbe, Serialize(request, NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeRequest), NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeResult, cancellationToken).ConfigureAwait(false);
+            return await _rpc.ProbeAsync(request, cancellationToken).ConfigureAwait(false);
 
         if (request.OperationId is null)
             request = request with { OperationId = Guid.NewGuid() };
         try
         {
-            return await _host.SendAsync(NetworkProtocol.MethodOutboundProbe, Serialize(request, NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeRequest), NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeResult, cancellationToken).ConfigureAwait(false);
+            return await _rpc.ProbeAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -33,9 +38,7 @@ public sealed class RemoteNetworkClient : IWorkspaceNetwork
             bool acknowledged;
             try
             {
-                acknowledged = await _host.SendAsync(NetworkProtocol.MethodOutboundProbeCancel,
-                    Serialize(new RemoteOutboundProxyProbeCancelRequest(request.OperationId.Value), NetworkProtocolJsonContext.Default.RemoteOutboundProxyProbeCancelRequest),
-                    HostProtocolJsonContext.Default.Boolean, cleanup.Token).ConfigureAwait(false);
+                acknowledged = await _rpc.CancelProbeAsync(new RemoteOutboundProxyProbeCancelRequest(request.OperationId.Value), cleanup.Token).ConfigureAwait(false);
             }
             catch (Exception error)
             {
@@ -51,8 +54,6 @@ public sealed class RemoteNetworkClient : IWorkspaceNetwork
     {
         if (!_host.Supports(NetworkProtocol.ReloadCapability))
             throw new NotSupportedException("The target Host does not support network.reload; upgrade it to reload its own network settings.");
-        await _host.SendAsync(NetworkProtocol.MethodReload, null, HostProtocolJsonContext.Default.Boolean, cancellationToken).ConfigureAwait(false);
+        await _rpc.ReloadAsync(cancellationToken).ConfigureAwait(false);
     }
 }
-
-

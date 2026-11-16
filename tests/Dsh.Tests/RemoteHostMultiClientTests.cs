@@ -8,6 +8,8 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.Pty;
 using Dsh.RemoteHost;
+using Dsh.RemoteHost.Rpc;
+using StreamJsonRpc;
 using Dsh.Transport;
 using Dsh.Agent;
 
@@ -22,6 +24,50 @@ public sealed class RemoteHostMultiClientTests
 {
     private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(5);
 
+    /** 旧代理收到的是 JSON-RPC 位置参数数组, 转发前要拆回单个载荷。 */
+    private static JsonElement? Single(JsonElement? parameters)
+        => parameters is { ValueKind: JsonValueKind.Array } array
+            ? array.GetArrayLength() == 0 ? null : array[0]
+            : parameters;
+    /** 中继: 握手时把决策取消能力从通告里摘掉, 其余方法原样转给真实的上游客户端。 */
+    private sealed class HiddenCapabilityRelay(RemoteHostClient upstream) : IHostRpc
+    {
+        public Task<HostHelloResponse> HelloAsync(HostHelloRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(upstream.Hello with
+            {
+                Capabilities = upstream.Hello.Capabilities?.Where(capability => capability != DecisionProtocol.Capability).ToArray(),
+            });
+
+        public Task<long> PingAsync(CancellationToken cancellationToken = default) => upstream.PingAsync(cancellationToken);
+        public Task<HostInfo> InfoAsync(CancellationToken cancellationToken = default) => upstream.InfoAsync(cancellationToken);
+        public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken = default) => upstream.ListSessionsAsync(cancellationToken);
+        public Task<RemoteSessionSummary> CreateSessionAsync(RemoteSessionCreateRequest request, CancellationToken cancellationToken = default) => upstream.CreateSessionAsync(request.Cwd, cancellationToken);
+        public Task<RemoteSessionSummary> ResumeSessionAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => upstream.ResumeSessionAsync(request.SessionId, cancellationToken);
+        public Task<RemoteSubscriptionRef> SubscribeAsync(RemoteSubscribeRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<bool> UnsubscribeAsync(RemoteSubscriptionRef request, CancellationToken cancellationToken = default) => throw Missing();
+        public async Task<bool> SendMessageAsync(RemoteMessageRequest request, CancellationToken cancellationToken = default)
+        {
+            await upstream.SendMessageAsync(request.SessionId, request.Text, request.Images ?? [], cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        public async Task<bool> InterruptAsync(RemoteSessionRef request, CancellationToken cancellationToken = default)
+        {
+            await upstream.InterruptAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken = default)
+            => upstream.GetSessionSnapshotRangeAsync(request.SessionId, request.FromEvent, int.MaxValue, cancellationToken);
+        public Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => upstream.ListToolsAsync(request.SessionId, cancellationToken);
+        public Task<IReadOnlyList<RemoteSessionSummary>> ListRegistryAsync(CancellationToken cancellationToken = default) => upstream.ListHostSessionsAsync(cancellationToken);
+        public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default) => upstream.ListPendingAsync(cancellationToken);
+        public Task<bool> RespondApprovalAsync(RemoteApprovalResponse request, CancellationToken cancellationToken = default)
+            => upstream.RespondApprovalAsync(request.RequestId, request.Allow, request.Reason, cancellationToken, request.RememberForSession, request.Cancelled);
+        public Task<bool> RespondQuestionAsync(RemoteQuestionResponse request, CancellationToken cancellationToken = default)
+            => upstream.RespondQuestionAsync(request.RequestId, request.Answers ?? [], cancellationToken, request.Status, request.Reason);
+
+        private static LocalRpcException Missing()
+            => new("This relay only forwards host methods.") { ErrorCode = JsonRpcException.MethodNotFound };
+    }
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory(Timeout = 5000)]
@@ -266,18 +312,7 @@ public sealed class RemoteHostMultiClientTests
         var accept = listener.AcceptTcpClientAsync(Ct);
         await socket.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, Ct);
         using var accepted = await accept;
-        await using var peer = new JsonRpcPeer(accepted.GetStream());
-        // Only negotiation is filtered. Every decision and pending query reaches the real harness Host.
-        peer.RequestHandler = async (message, token) =>
-        {
-            if (message.Method == HostProtocol.MethodHello)
-                return JsonSerializer.SerializeToElement(upstream.Hello with
-                {
-                    Capabilities = upstream.Hello.Capabilities!.Where(capability => capability != DecisionProtocol.Capability).ToArray(),
-                }, HostProtocolJsonContext.Default.HostHelloResponse);
-            return await upstream.RequestAsync(message.Method!, message.Params, token);
-        };
-        peer.Start();
+        using var peer = JsonRpcChannel.Serve(accepted.GetStream(), HostRpcFormatter.CreateJson(), new HiddenCapabilityRelay(upstream));
         await using var client = await RemoteHostClient.ConnectAsync(socket.GetStream(), cancellationToken: Ct);
         var approval = RaiseApprovalAsync(host, host.Environment.Agent, "write");
         var question = AskQuestionAsync(host, host.Environment.Agent);

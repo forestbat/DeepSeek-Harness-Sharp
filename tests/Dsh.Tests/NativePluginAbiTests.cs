@@ -206,7 +206,7 @@ public sealed class NativePluginAbiTests
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "DeepSeek-Harness-Sharp.slnx")))
             directory = directory.Parent;
         var path = Path.Combine(directory?.FullName ?? AppContext.BaseDirectory,
-            "tests", "Dsh.NativePluginSample", "bin", "Release", "net10.0", "linux-x64", "publish", "Dsh.NativePluginSample.so");
+            "tests", "Dsh.NativePluginSample", "bin", "Release", BuildTargetFramework.Value, "linux-x64", "publish", "Dsh.NativePluginSample.so");
         if (!File.Exists(path))
             Assert.Skip($"未发布原生样例({path}), 先运行 dotnet publish tests/Dsh.NativePluginSample -c Release");
         return path;

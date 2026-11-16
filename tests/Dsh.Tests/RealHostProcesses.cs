@@ -27,7 +27,7 @@ internal static class RealHostProcesses
         {
             var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
             var name = OperatingSystem.IsWindows() ? "dsharp.exe" : "dsharp";
-            var executable = Path.Combine(root, "DeepSeek-Harness-Sharp", "bin", "Debug", "net10.0", name);
+            var executable = Path.Combine(root, "DeepSeek-Harness-Sharp", "bin", "Debug", BuildTargetFramework.Value, name);
             Assert.True(File.Exists(executable), "The real dsharp executable must be built with the tests.");
             return executable;
         }

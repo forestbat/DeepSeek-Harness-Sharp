@@ -8,7 +8,7 @@
     exe 直接引用 exe 会触发 .NET 的 SelfContained 一致性校验导致 Release 构建失败, 抽库后两个 exe 的发布形态各自独立。
   -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\src\Dsh.*\*.csproj"
-                      Exclude="..\src\Dsh.WebBridge\Dsh.WebBridge.csproj;..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
+                      Exclude="..\src\Dsh.Android\Dsh.Android.csproj;..\src\Dsh.WebBridge\Dsh.WebBridge.csproj;..\src\Dsh.Boot\Dsh.Boot.csproj;..\src\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj;..\src\Dsh.Plugins.Host\Dsh.Plugins.Host.csproj;..\src\Dsh.Plugins.Generator\Dsh.Plugins.Generator.csproj" />
   </ItemGroup>
 
   <!--

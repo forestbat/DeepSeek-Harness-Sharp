@@ -41,3 +41,6 @@ secrets.yaml
 .boto
 .s3cfg
 kubeconfig
+
+# 本机构建环境路径(JDK/Android SDK)
+android.local.props

@@ -14,9 +14,6 @@ public static class Surface
     public static bool IsSurfaceEvent(SessionEvent sessionEvent)
         => IsSurfaceEligibleType(sessionEvent.Type) && sessionEvent.SurfaceOp is not null;
 
-    public static bool IsAppendSurfaceEvent(SessionEvent sessionEvent)
-        => IsSurfaceEvent(sessionEvent) && sessionEvent.SurfaceOp is SurfaceOp.Append;
-
     public static bool IsReplacementSurfaceEvent(SessionEvent sessionEvent)
         => IsSurfaceEvent(sessionEvent) && sessionEvent.SurfaceOp is SurfaceOp.Replace;
 

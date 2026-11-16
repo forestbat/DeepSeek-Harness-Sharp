@@ -656,6 +656,7 @@ private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) 
     /** Polls on the UI thread, running the posted UI work between checks. */
     internal static async Task UntilAsync(Func<bool> condition, string what)
     {
+        TestContext.Current.SendDiagnosticMessage($"Waiting for workspace condition: {what}");
         var deadline = DateTime.UtcNow + Arrival;
         while (true)
         {

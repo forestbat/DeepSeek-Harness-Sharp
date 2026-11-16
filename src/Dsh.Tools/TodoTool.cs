@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dsh.Plugins;
 using Dsh.Runtime;
 using Dsh.Core;
 using Dsh.Llm;
@@ -54,7 +55,6 @@ public static class TodoWriteTool
 
     public static IDisposable Register(Context ctx, bool allowParallelInProgress = true)
     {
-        SessionEventCodec.Register<TodoWritePayload>(TodoWritePayload.EventType);
         var tools = ctx.Get<ToolRuntime>(ToolRuntime.ServiceName)!;
         return tools.Register(new ToolDefinition
         {
@@ -168,4 +168,16 @@ public static class TodoWriteTool
             throw new ArgumentException($"invalid todos: at most one task may be in_progress (got {active})");
         return todos;
     }
+}
+
+
+/**
+ * 会话日志里的 todo/write 必须在启动时就认识: 日志可能在 todo 工具注册(甚至该工具被关掉)之前被读写,
+ * 与其它模块的事件类型一样由生成的 bootstrap 显式调用。
+ */
+internal static class TodoCodecRegistration
+{
+    [DshPluginInitializer]
+    internal static void Register()
+        => SessionEventCodec.Register<TodoWritePayload>(TodoWritePayload.EventType);
 }

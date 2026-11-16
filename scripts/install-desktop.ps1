@@ -11,8 +11,8 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 
 if (-not $Target) {
     $candidates = @(
-        (Join-Path $repoRoot "Dsh.GuiHost\bin\Release\net10.0\dsh-gui.exe"),
-        (Join-Path $repoRoot "Dsh.GuiHost\bin\Debug\net10.0\dsh-gui.exe"),
+        (Join-Path $repoRoot "Dsh.GuiHost\bin\Release\net11.0\dsh-gui.exe"),
+        (Join-Path $repoRoot "Dsh.GuiHost\bin\Debug\net11.0\dsh-gui.exe"),
         (Join-Path $repoRoot "artifacts020\gui\dsh-gui.exe")
     )
     $Target = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1

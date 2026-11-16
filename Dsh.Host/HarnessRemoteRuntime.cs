@@ -15,8 +15,25 @@ internal sealed class HarnessRemoteRuntime(HarnessApp app, HostSessionRegistry s
     private readonly ConcurrentDictionary<string, AgentHandle> _handles = new(StringComparer.Ordinal);
 
     internal HarnessApp App => app;
-    internal AgentOptions DefaultAgentOptions { get; } = new(
-        app.Provider, app.Model, app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort));
+
+    /**
+     * 新建/恢复会话用的默认模型在需要时才读 settings.yaml。
+     * 启动时算一次存成字段的话, 之后用 /model 或 App 里换了模型, 新会话仍旧按老模型开。
+     * 命令行显式给了 provider/model 时以它为准, 那是用户当次的意图。
+     */
+    internal AgentOptions DefaultAgentOptions
+    {
+        get
+        {
+            var configured = HarnessSettings.Load(app.Home).ResolveDefaultModel();
+            var provider = app.Provider.Length > 0 ? app.Provider : configured?.Provider ?? "";
+            var model = app.Model.Length > 0 ? app.Model : configured?.Model ?? "";
+            return new AgentOptions(
+                provider,
+                model,
+                app.ReasoningEffort is null ? null : ReasoningEffortId.Create(app.ReasoningEffort));
+        }
+    }
     internal HostSessionRegistry Sessions => sessions;
     internal HostPendingDecisions Pending => pending;
     internal AgentRegistry Registry => app.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)

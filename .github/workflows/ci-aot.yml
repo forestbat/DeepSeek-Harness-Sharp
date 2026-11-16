@@ -34,13 +34,13 @@ jobs:
         include:
           - entry: cli
             project: DeepSeek-Harness-Sharp/DeepSeek-Harness-Sharp.csproj
-            publish-root: DeepSeek-Harness-Sharp/bin/Release/net10.0
+            publish-root: DeepSeek-Harness-Sharp/bin/Release/net11.0
           - entry: gui
             project: Dsh.GuiHost/Dsh.GuiHost.csproj
-            publish-root: Dsh.GuiHost/bin/Release/net10.0
+            publish-root: Dsh.GuiHost/bin/Release/net11.0
           - entry: web
             project: Dsh.WebHost/Dsh.WebHost.csproj
-            publish-root: Dsh.WebHost/bin/Release/net10.0
+            publish-root: Dsh.WebHost/bin/Release/net11.0
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +58,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
 
@@ -119,7 +119,7 @@ jobs:
           # Archive each complete entry root before artifact upload changes Unix modes.
           "$TAR" -cf "artifacts/aot-$RID-${{ matrix.entry }}.tar" -C "$ROOT" .
           if [ "$RID" = "linux-x64" ] && [ '${{ matrix.entry }}' = "cli" ]; then
-            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish"
+            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net11.0/linux-x64/publish"
             test -f "$SAMPLE/Dsh.NativePluginSample.so"
             "$TAR" -cf "artifacts/native-plugin-$RID.tar" -C "$SAMPLE" .
           fi
@@ -154,7 +154,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
 
@@ -200,12 +200,12 @@ jobs:
               gui) PROJECT="Dsh.GuiHost" ;;
               web) PROJECT="Dsh.WebHost" ;;
             esac
-            ROOT="$PROJECT/bin/Release/net10.0/$RID/publish"
+            ROOT="$PROJECT/bin/Release/net11.0/$RID/publish"
             mkdir -p "$ROOT"
             "$TAR" -xf "artifacts/aot-$RID-$ENTRY.tar" -C "$ROOT"
           done
           if [ "$RID" = "linux-x64" ]; then
-            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net10.0/linux-x64/publish"
+            SAMPLE="tests/Dsh.NativePluginSample/bin/Release/net11.0/linux-x64/publish"
             mkdir -p "$SAMPLE"
             "$TAR" -xf "artifacts/native-plugin-$RID.tar" -C "$SAMPLE"
             test -f "$SAMPLE/Dsh.NativePluginSample.so"
@@ -216,9 +216,9 @@ jobs:
         run: |
           set -euo pipefail
           RID='${{ inputs.rid }}'
-          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
-          WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
+          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
           for OUTPUT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
             if find "$OUTPUT" -type f \( -name iroh-ssh -o -name iroh-ssh.exe \) -print -quit | grep -q .; then
               echo "::error::NativeAOT products must not bundle the optional native Iroh command"
@@ -258,8 +258,8 @@ jobs:
         run: |
           set -euo pipefail
           RID='${{ inputs.rid }}'
-          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          BIN="tests/Dsh.Tests/bin/Debug/net10.0"
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
+          BIN="tests/Dsh.Tests/bin/Debug/net11.0"
           CLASSES=(-class Dsh.Tests.NativeGuardTests)
           dotnet build tests/Dsh.Tests/Dsh.Tests.csproj -c Debug --nologo -v m -p:DshNativeCompiler='${{ inputs.native-cc }}'
           if [ "$RID" = "linux-x64" ]; then
@@ -284,9 +284,9 @@ jobs:
         run: |
           set -euo pipefail
           RID='${{ inputs.rid }}'
-          PUB="DeepSeek-Harness-Sharp/bin/Release/net10.0/$RID/publish"
-          GUI_PUB="Dsh.GuiHost/bin/Release/net10.0/$RID/publish"
-          WEB_PUB="Dsh.WebHost/bin/Release/net10.0/$RID/publish"
+          PUB="DeepSeek-Harness-Sharp/bin/Release/net11.0/$RID/publish"
+          GUI_PUB="Dsh.GuiHost/bin/Release/net11.0/$RID/publish"
+          WEB_PUB="Dsh.WebHost/bin/Release/net11.0/$RID/publish"
           for ROOT in "$PUB" "$GUI_PUB" "$WEB_PUB"; do
             test -d "$ROOT"
             rm -f "$ROOT"/*.pdb "$ROOT"/*.dbg

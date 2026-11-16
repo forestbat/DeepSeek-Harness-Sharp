@@ -3,7 +3,7 @@ using Dsh.Runtime.Ioc;
 // IServiceRegistry 的 NativeAOT 冒烟:注册/解析/注销/委托注册/作用域在 AOT 发布下可用。
 // 运行方式(项目根目录):
 //   DOTNET_ROOT=/home/pub/.dotnet /home/pub/.dotnet/dotnet publish tests/Dsh.IocAotSmoke/Dsh.IocAotSmoke.csproj -c Release -r linux-x64
-//   ./tests/Dsh.IocAotSmoke/bin/Release/net10.0/linux-x64/publish/Dsh.IocAotSmoke
+//   ./tests/Dsh.IocAotSmoke/bin/Release/net11.0/linux-x64/publish/Dsh.IocAotSmoke
 
 var registry = new DryIocServiceRegistry();
 var root = new Probe("root");

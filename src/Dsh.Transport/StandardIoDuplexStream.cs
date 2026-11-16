@@ -20,9 +20,12 @@ public sealed class StandardIoDuplexStream(Stream input, Stream output, bool own
         set => throw new NotSupportedException();
     }
 
-    public override void Flush() => output.Flush();
+    /** 管道没有用户态缓冲: 写入即发送, flush 不必下传(匿名管道的 FlushAsync 会阻塞或直接不支持)。 */
+    public override void Flush()
+    {
+    }
 
-    public override Task FlushAsync(CancellationToken cancellationToken) => output.FlushAsync(cancellationToken);
+    public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     public override int Read(byte[] buffer, int offset, int count) => input.Read(buffer, offset, count);
 

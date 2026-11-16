@@ -6,7 +6,7 @@ namespace Dsh.Host;
 
 internal static class HostStdio
 {
-    private const int MaxFramePrefixByte = FrameCodec.DefaultMaxFrameBytes >> ((FrameCodec.HeaderLength - 1) * 8);
+    private const int MaxFramePrefixByte = JsonRpcChannel.MaxFrameBytes >> ((JsonRpcChannel.HeaderLength - 1) * 8);
 
     public static async Task<int> RunAsync(HarnessHome home, string? token)
     {

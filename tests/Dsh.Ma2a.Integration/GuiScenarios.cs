@@ -224,7 +224,7 @@ internal static class GuiScenarios
         NativeRuntimePair.Check(Labels(remote.Results).Contains("terminal"), "The GUI must retain native terminal admission/outcome metadata.");
         using var image = window.CaptureRenderedFrame();
         NativeRuntimePair.Check(image is not null, "The native GUI acceptance view must produce a rendered frame.");
-        image!.Save(Path.Combine(pair.Root, "gui-native-terminal.png"));
+        image!.Save(Path.Combine(pair.Root, "gui-native-terminal.png"), Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
         await NativeRuntimePair.PassedAsync("Real Exec stdout reaches the existing GUI VT terminal and a rendered MA2A view.");
     }
 

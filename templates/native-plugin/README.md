@@ -18,7 +18,7 @@ csproj（`tests/Dsh.NativePluginSample/Dsh.NativePluginSample.csproj` 即范例�
   <!-- 引入生成器：托管清单与原生 ABI 胶水都由它产出 -->
   <Import Project="..\..\src\Dsh.Plugins.Generator\DshPluginPackage.props" />
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- ABI 函数表用函数指针，必须开 unsafe -->

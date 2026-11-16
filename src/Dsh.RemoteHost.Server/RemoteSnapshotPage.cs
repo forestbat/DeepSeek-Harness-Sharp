@@ -10,15 +10,18 @@ namespace Dsh.RemoteHost;
 internal static class RemoteSnapshotPage
 {
     /** 切一页历史: 从 fromEvent 起逐条累加到预算用尽; 单条就超预算时也发出, 否则这条事件永远取不到。 */
-    public static RemoteSessionSnapshot Slice(RemoteSessionSnapshot snapshot, long fromEvent, int maxBytes)
+    public static RemoteSessionSnapshot Slice(RemoteSessionSnapshot snapshot, long fromEvent, int maxBytes, int maxEvents = 0)
     {
         var events = snapshot.Events;
         var start = (int)Math.Clamp(fromEvent, 0L, events.Count);
         var budget = Math.Clamp(maxBytes, 1, HostProtocol.SnapshotPageBytes);
+        var limit = maxEvents > 0 ? maxEvents : int.MaxValue;
         var page = new List<SessionEvent>();
         var bytes = 0;
         for (var index = start; index < events.Count; index += 1)
         {
+            if (page.Count >= limit)
+                break;
             var size = EncodedSize(events[index]);
             if (page.Count > 0 && bytes + size > budget)
                 break;

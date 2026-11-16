@@ -25,18 +25,18 @@ internal static class PluginSandboxMethods
     internal const int MaximumFailureCharacters = 2048;
 }
 
-internal sealed record PluginSandboxReady(int Version, int Pid);
-internal sealed record PluginSandboxInspectRequest(string? ArtifactPath, string? Package = null);
-internal sealed record PluginSandboxMetadata(string Package, PluginForm Form, string? Entry, bool SupportsCapabilities);
-internal sealed record PluginSandboxInspection(PluginSandboxMetadata[] Packages, string[] Errors, bool Released = true);
-internal sealed record PluginSandboxLoadRequest(string? ArtifactPath, string Package, JsonElement Configuration);
-internal sealed record PluginSandboxUnloadRequest(string Package);
-internal sealed record PluginSandboxInvokeRequest(string Package, int ToolId, JsonElement Arguments, string Invocation);
-internal sealed record PluginSandboxToolRequest(string Package, int ToolId, string Name, string Description, JsonElement Parameters);
-internal sealed record PluginSandboxUnregisterTool(string Package, int ToolId);
-internal sealed record PluginSandboxHostCall(string Package, string? Invocation, string Operation, JsonElement Arguments);
-internal sealed record PluginSandboxLog(string Package, int Level, string Message);
-internal sealed record PluginSandboxAck(bool Success = true);
+public sealed record PluginSandboxReady(int Version, int Pid);
+public sealed record PluginSandboxInspectRequest(string? ArtifactPath, string? Package = null);
+public sealed record PluginSandboxMetadata(string Package, PluginForm Form, string? Entry, bool SupportsCapabilities);
+public sealed record PluginSandboxInspection(PluginSandboxMetadata[] Packages, string[] Errors, bool Released = true);
+public sealed record PluginSandboxLoadRequest(string? ArtifactPath, string Package, JsonElement Configuration);
+public sealed record PluginSandboxUnloadRequest(string Package);
+public sealed record PluginSandboxInvokeRequest(string Package, int ToolId, JsonElement Arguments, string Invocation);
+public sealed record PluginSandboxToolRequest(string Package, int ToolId, string Name, string Description, JsonElement Parameters);
+public sealed record PluginSandboxUnregisterTool(string Package, int ToolId);
+public sealed record PluginSandboxHostCall(string Package, string? Invocation, string Operation, JsonElement Arguments);
+public sealed record PluginSandboxLog(string Package, int Level, string Message);
+public sealed record PluginSandboxAck(bool Success = true);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
@@ -51,4 +51,7 @@ internal sealed record PluginSandboxAck(bool Success = true);
 [JsonSerializable(typeof(PluginSandboxHostCall))]
 [JsonSerializable(typeof(PluginSandboxLog))]
 [JsonSerializable(typeof(PluginSandboxAck))]
-internal sealed partial class PluginSandboxJsonContext : JsonSerializerContext;
+// JSON-RPC 外壳本身也要这两样: 错误数据与原始 JSON 载荷, 缺了会让应答序列化失败并把连接带走。
+[JsonSerializable(typeof(JsonElement))]
+[JsonSerializable(typeof(StreamJsonRpc.Protocol.CommonErrorData))]
+public sealed partial class PluginSandboxJsonContext : JsonSerializerContext;

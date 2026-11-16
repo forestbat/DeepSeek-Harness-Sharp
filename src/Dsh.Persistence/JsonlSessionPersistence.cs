@@ -24,6 +24,14 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     private readonly Dictionary<SessionId, JsonlSessionHandle?> _writers = [];
     private readonly Dictionary<SessionId, PendingSession> _pending = [];
     private readonly HashSet<JsonlSessionHandle> _openHandles = [];
+
+    /**
+     * 已解析的日志, 按文件版本号命中。
+     * 一份长日志解析要解压整份文件再逐行解析, 手机滚动看历史时会反复请求同一条会话的相邻片段;
+     * 文件没变就没有理由每次都重来一遍。
+     */
+    private readonly Dictionary<string, (string Revision, StoredLog Log)> _parsed = new(StringComparer.Ordinal);
+    private readonly object _parsedGate = new();
     private int _pendingCounter;
     private readonly Lazy<bool> _rootEncodingCheck;
 
@@ -268,7 +276,32 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
 
     internal StoredLog ReadStoredLog(string path, SessionId expectedId)
     {
+        // 先只看文件元数据: 没变就不必把整份日志读进内存。
+        var probe = new FileInfo(path);
+        probe.Refresh();
+        var probeRevision = FileRevision(probe);
+        lock (_parsedGate)
+        {
+            if (_parsed.TryGetValue(path, out var cached) && cached.Revision == probeRevision)
+                return cached.Log;
+        }
         var (buffer, revision) = ReadStableFile(path);
+        if (revision != probeRevision)
+        {
+            lock (_parsedGate)
+            {
+                if (_parsed.TryGetValue(path, out var reread) && reread.Revision == revision)
+                    return reread.Log;
+            }
+        }
+        var log = ParseStoredLog(buffer, path, expectedId, revision);
+        lock (_parsedGate)
+            _parsed[path] = (revision, log);
+        return log;
+    }
+
+    private StoredLog ParseStoredLog(byte[] buffer, string path, SessionId expectedId, string revision)
+    {
         ParsedLog parsed;
         try
         {

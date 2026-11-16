@@ -3,9 +3,14 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Dsh.Core;
+using Dsh.Ide;
+using Dsh.Ide.Bridge;
 using Dsh.Llm;
 using Dsh.RemoteHost;
+using Dsh.RemoteHost.Rpc;
 using Dsh.Transport;
+using StreamJsonRpc;
+using StreamJsonRpc.Protocol;
 
 namespace Dsh.Tests;
 
@@ -36,27 +41,25 @@ public sealed class RemoteHostReaderInitializationTests
         }
 
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
-        await using var peer = new JsonRpcPeer(transport);
-        var received = Channel.CreateUnbounded<JsonRpcMessage>();
-        peer.NotificationReceived += message => received.Writer.TryWrite(message);
-        peer.Start();
+        var tap = new PushTap();
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), [tap], tap.Methods());
         var gate = delayed!;
-        var pending = peer.RequestAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
+        var pending = peer.InvokeAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
             Parameters(pty, resource, "cancelled-view"), Ct);
         try
         {
             await gate.Ready.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
             // The second view reads the same real resource while the first is still initializing.
-            await peer.RequestAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
+            await peer.InvokeAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
                 Parameters(pty, resource, "surviving-view"), Ct);
-            await peer.RequestAsync(pty ? PtyProtocol.MethodPtyDetach : HostProtocol.MethodSessionUnsubscribe,
+            await peer.InvokeAsync(pty ? PtyProtocol.MethodPtyDetach : HostProtocol.MethodSessionUnsubscribe,
                 JsonSerializer.SerializeToElement(new RemoteSubscriptionRef("cancelled-view"), HostProtocolJsonContext.Default.RemoteSubscriptionRef), Ct);
             gate.Release.TrySetResult();
             try
             {
                 await pending;
             }
-            catch (JsonRpcException)
+            catch (Exception error) when (error is RemoteRpcException or OperationCanceledException)
             {
                 // Cancellation may reject the outstanding subscribe, but initialization errors must never be ACKed early.
             }
@@ -68,7 +71,7 @@ public sealed class RemoteHostReaderInitializationTests
                 var command = OperatingSystem.IsWindows()
                     ? "set /a readerResult=40+2 & echo reader-survives-!readerResult!\r\n"
                     : "printf 'reader-survives-%s\\n' \"$((40+2))\"\n";
-                await peer.RequestAsync(PtyProtocol.MethodPtyWrite,
+                await peer.InvokeAsync(PtyProtocol.MethodPtyWrite,
                     JsonSerializer.SerializeToElement(new RemotePtyInput(resource, Convert.ToBase64String(Encoding.UTF8.GetBytes(command))), PtyProtocolJsonContext.Default.RemotePtyInput), Ct);
             }
             else
@@ -78,22 +81,11 @@ public sealed class RemoteHostReaderInitializationTests
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             var output = new StringBuilder();
-            await foreach (var message in received.Reader.ReadAllAsync(deadline.Token))
+            await foreach (var frame in tap.ReadAsync(pty, deadline.Token))
             {
-                if (pty && message.Method == PtyProtocol.NotificationPtyOutput && message.Params is { } bytes)
-                {
-                    var frame = JsonSerializer.Deserialize(bytes, PtyProtocolJsonContext.Default.RemotePtyFrame)!;
-                    Assert.NotEqual("cancelled-view", frame.SubscriptionId);
-                    if (frame.SubscriptionId == "surviving-view")
-                        output.Append(Encoding.UTF8.GetString(Convert.FromBase64String(frame.Output.Base64)));
-                }
-                else if (!pty && message.Method == HostProtocol.NotificationEvent && message.Params is { } events)
-                {
-                    var frame = JsonSerializer.Deserialize(events, HostProtocolJsonContext.Default.RemoteEventFrame)!;
-                    Assert.NotEqual("cancelled-view", frame.SubscriptionId);
-                    if (frame.SubscriptionId == "surviving-view" && frame.Event.Event is { } sessionEvent)
-                        output.Append(DshJson.Serialize(sessionEvent));
-                }
+                Assert.NotEqual("cancelled-view", frame.Reader);
+                if (frame.Reader == "surviving-view")
+                    output.Append(frame.Text);
                 if (output.ToString().Contains(marker, StringComparison.Ordinal))
                     return;
             }
@@ -112,9 +104,8 @@ public sealed class RemoteHostReaderInitializationTests
     {
         await using var host = await HarnessHostFixture.CreateAsync("rm", TestContext.Current.CancellationToken);
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
-        await using var peer = new JsonRpcPeer(transport);
-        peer.Start();
-        await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync(
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default));
+        await Assert.ThrowsAsync<RemoteInvocationException>(() => peer.InvokeAsync(
             pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
             Parameters(pty, "missing-resource", "missing-view"), Ct));
     }
@@ -137,19 +128,17 @@ public sealed class RemoteHostReaderInitializationTests
         else
             resource = (await client.CreateSessionAsync(host.Environment.App.Home.Root, cancellationToken: Ct)).Id;
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
-        await using var peer = new JsonRpcPeer(transport);
-        var received = Channel.CreateUnbounded<JsonRpcMessage>();
-        peer.NotificationReceived += message => received.Writer.TryWrite(message);
-        peer.Start();
+        var tap = new PushTap();
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), [tap], tap.Methods());
         var subscribe = pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe;
         var stop = pty ? PtyProtocol.MethodPtyDetach : HostProtocol.MethodSessionUnsubscribe;
-        List<Task<JsonElement?>> starts = [];
-        List<Task<JsonElement?>> stops = [];
+        List<Task<JsonElement>> starts = [];
+        List<Task<JsonElement>> stops = [];
         for (var index = 0; index < 64; index++)
         {
             var reader = $"cancelled-{index}";
-            starts.Add(peer.RequestAsync(subscribe, Parameters(pty, resource, reader), Ct));
-            stops.Add(peer.RequestAsync(stop,
+            starts.Add(peer.InvokeAsync(subscribe, Parameters(pty, resource, reader), Ct));
+            stops.Add(peer.InvokeAsync(stop,
                 JsonSerializer.SerializeToElement(new RemoteSubscriptionRef(reader), HostProtocolJsonContext.Default.RemoteSubscriptionRef), Ct));
         }
         await Task.WhenAll(stops).WaitAsync(TimeSpan.FromSeconds(5), Ct);
@@ -159,24 +148,24 @@ public sealed class RemoteHostReaderInitializationTests
             {
                 await start.WaitAsync(TimeSpan.FromSeconds(5), Ct);
             }
-            catch (JsonRpcException)
+            catch (Exception error) when (error is RemoteRpcException or OperationCanceledException)
             {
                 // A stop received before acquisition finishes rejects that subscribe, not the connection.
             }
         }
         await tracked!.ReadersReleasedAsync().WaitAsync(TimeSpan.FromSeconds(5), Ct);
         // A completed or unknown stop must not poison a later owner of the same reader ID.
-        await peer.RequestAsync(stop,
+        await peer.InvokeAsync(stop,
             JsonSerializer.SerializeToElement(new RemoteSubscriptionRef("surviving-view"), HostProtocolJsonContext.Default.RemoteSubscriptionRef), Ct);
-        await peer.RequestAsync(subscribe, Parameters(pty, resource, "surviving-view"), Ct);
-        await peer.RequestAsync(subscribe, Parameters(pty, resource, "cancelled-0"), Ct);
+        await peer.InvokeAsync(subscribe, Parameters(pty, resource, "surviving-view"), Ct);
+        await peer.InvokeAsync(subscribe, Parameters(pty, resource, "cancelled-0"), Ct);
         const string marker = "ordered-reader-42";
         if (pty)
         {
             var command = OperatingSystem.IsWindows()
                 ? "set /a orderedResult=40+2 & echo ordered-reader-!orderedResult!\r\n"
                 : "printf 'ordered-reader-%s\\n' \"$((40+2))\"\n";
-            await peer.RequestAsync(PtyProtocol.MethodPtyWrite,
+            await peer.InvokeAsync(PtyProtocol.MethodPtyWrite,
                 JsonSerializer.SerializeToElement(new RemotePtyInput(resource, Convert.ToBase64String(Encoding.UTF8.GetBytes(command))), PtyProtocolJsonContext.Default.RemotePtyInput), Ct);
         }
         else
@@ -186,31 +175,15 @@ public sealed class RemoteHostReaderInitializationTests
         deadline.CancelAfter(TimeSpan.FromSeconds(5));
         Dictionary<string, StringBuilder> output = new(StringComparer.Ordinal);
         HashSet<string> completed = [];
-        await foreach (var message in received.Reader.ReadAllAsync(deadline.Token))
+        await foreach (var frame in tap.ReadAsync(pty, deadline.Token))
         {
-            string reader;
-            string text;
-            if (pty && message.Method == PtyProtocol.NotificationPtyOutput && message.Params is { } bytes)
-            {
-                var frame = JsonSerializer.Deserialize(bytes, PtyProtocolJsonContext.Default.RemotePtyFrame)!;
-                reader = frame.SubscriptionId;
-                text = Encoding.UTF8.GetString(Convert.FromBase64String(frame.Output.Base64));
-            }
-            else if (!pty && message.Method == HostProtocol.NotificationEvent && message.Params is { } events)
-            {
-                var frame = JsonSerializer.Deserialize(events, HostProtocolJsonContext.Default.RemoteEventFrame)!;
-                reader = frame.SubscriptionId;
-                text = frame.Event.Event is { } sessionEvent ? DshJson.Serialize(sessionEvent) : "";
-            }
-            else
-                continue;
-            if (!output.TryGetValue(reader, out var content))
-                output[reader] = content = new StringBuilder();
-            content.Append(text);
+            if (!output.TryGetValue(frame.Reader, out var content))
+                output[frame.Reader] = content = new StringBuilder();
+            content.Append(frame.Text);
             if (!content.ToString().Contains(marker, StringComparison.Ordinal))
                 continue;
-            Assert.True(reader is "surviving-view" or "cancelled-0", $"Stopped reader {reader} received new resource output.");
-            completed.Add(reader);
+            Assert.True(frame.Reader is "surviving-view" or "cancelled-0", $"Stopped reader {frame.Reader} received new resource output.");
+            completed.Add(frame.Reader);
             if (completed.Count == 2)
                 return;
         }
@@ -224,18 +197,63 @@ public sealed class RemoteHostReaderInitializationTests
     {
         await using var host = await HarnessHostFixture.CreateAsync("rv", TestContext.Current.CancellationToken);
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
-        await using var peer = new JsonRpcPeer(transport);
-        peer.Start();
-        var error = await Assert.ThrowsAsync<JsonRpcException>(() => peer.RequestAsync(
-            pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe, cancellationToken: Ct));
-        Assert.Equal(-32602, error.Code);
-        Assert.NotNull(await peer.RequestAsync(HostProtocol.MethodPing, cancellationToken: Ct));
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default));
+        var error = await Assert.ThrowsAsync<RemoteMethodNotFoundException>(() => peer.InvokeAsync(
+            pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe, null, Ct));
+        Assert.Equal(JsonRpcErrorCode.InvalidParams, (JsonRpcErrorCode)error.ErrorCode);
+        Assert.NotEqual(default, await peer.InvokeAsync(HostProtocol.MethodPing, null, Ct));
     }
 
     private static JsonElement Parameters(bool pty, string resource, string reader)
         => pty
             ? JsonSerializer.SerializeToElement(new RemotePtyAttachRequest(resource, reader), PtyProtocolJsonContext.Default.RemotePtyAttachRequest)
             : JsonSerializer.SerializeToElement(new RemoteSubscribeRequest(resource, 0, reader), HostProtocolJsonContext.Default.RemoteSubscribeRequest);
+
+    /** 一条推送帧归一成"哪个 reader 收到什么文本", 让事件流与 PTY 流共用同一段断言。 */
+    private readonly record struct PushedFrame(string Reader, string Text);
+
+    /** 客户端侧的推送目标: 把强类型推送帧倒进通道, 供测试按顺序观察。 */
+    private sealed class PushTap : IHostPush
+    {
+        private readonly Channel<PushedFrame> _frames = Channel.CreateUnbounded<PushedFrame>(new UnboundedChannelOptions { SingleReader = true });
+
+        public Task EventAsync(RemoteEventFrame frame, CancellationToken cancellationToken = default)
+        {
+            _frames.Writer.TryWrite(new PushedFrame(frame.SubscriptionId,
+                frame.Event.Event is { } sessionEvent ? DshJson.Serialize(sessionEvent) : ""));
+            return Task.CompletedTask;
+        }
+
+        public Task PtyOutputAsync(RemotePtyFrame frame, CancellationToken cancellationToken = default)
+        {
+            _frames.Writer.TryWrite(new PushedFrame(frame.SubscriptionId,
+                Encoding.UTF8.GetString(Convert.FromBase64String(frame.Output.Base64))));
+            return Task.CompletedTask;
+        }
+
+        public Task PendingChangedAsync(RemotePendingChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task SessionsChangedAsync(RemoteSessionChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyChangedAsync(RemoteNotificationChange change, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        /** client.ide.* 两条反向方法按线协议名登记。 */
+        public (string Method, Delegate Handler)[] Methods() =>
+        [
+            (EditorProtocol.MethodClientOpen, (Func<RemoteEditorOpen, CancellationToken, Task<EditorResult>>)ClientOpenAsync),
+            (EditorProtocol.MethodClientCancel, (Func<RemoteEditorCancel, CancellationToken, Task<bool>>)ClientCancelAsync),
+        ];
+
+        private static Task<EditorResult> ClientOpenAsync(RemoteEditorOpen request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new EditorResult { Error = EditorErrorCode.CLIENT_UNAVAILABLE });
+
+        private static Task<bool> ClientCancelAsync(RemoteEditorCancel request, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        /** 两种帧都写在同一条通道里, 顺序就是到达顺序。 */
+        public IAsyncEnumerable<PushedFrame> ReadAsync(bool pty, CancellationToken cancellationToken)
+            => _frames.Reader.ReadAllAsync(cancellationToken);
+    }
 
     /** Observes disposal or delays delivery of real readers without replacing session or PTY behavior. */
     private sealed class DelayedBackend(IRemoteHostBackend backend, bool delayPty) : IRemoteHostBackend, IRemoteSessionBackend, IRemotePtyBackend
@@ -341,9 +359,3 @@ public sealed class RemoteHostReaderInitializationTests
         }
     }
 }
-
-
-
-
-
-
