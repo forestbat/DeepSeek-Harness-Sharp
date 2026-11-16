@@ -25,7 +25,7 @@ public sealed partial class JsonRpcChannelTests
     public async Task RoundTrip_OverLengthPrefixedFrames()
     {
         var (clientSide, serverSide) = FullDuplexStream.CreatePair();
-        using var server = JsonRpcChannel.Serve(serverSide, new SystemTextJsonFormatter(), new Echo());
+        using var server = JsonRpcChannel.Serve(serverSide, new SystemTextJsonFormatter(), new JsonRpcTarget(RpcTargetMetadata.FromShape<IEcho>(), new Echo()));
         using var client = JsonRpcChannel.Connect(clientSide, new SystemTextJsonFormatter());
         var proxy = client.Attach<IEcho>();
 
@@ -53,7 +53,7 @@ public sealed partial class JsonRpcChannelTests
         var (serverToClientRead, serverToClientWrite) = FullDuplexStream.CreatePair();
         await using var serverStream = new StandardIoDuplexStream(clientToServerRead, serverToClientWrite);
         await using var clientStream = new StandardIoDuplexStream(serverToClientRead, clientToServerWrite);
-        using var server = JsonRpcChannel.Serve(serverStream, new SystemTextJsonFormatter(), new Echo());
+        using var server = JsonRpcChannel.Serve(serverStream, new SystemTextJsonFormatter(), new JsonRpcTarget(RpcTargetMetadata.FromShape<IEcho>(), new Echo()));
         using var client = JsonRpcChannel.Connect(clientStream, new SystemTextJsonFormatter());
 
         Assert.Equal("echo:hi", await client.Attach<IEcho>().EchoAsync("hi", TestContext.Current.CancellationToken));

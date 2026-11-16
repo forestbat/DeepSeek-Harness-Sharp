@@ -30,23 +30,13 @@ public sealed class JsonRpcChannel : IDisposable
     /** 连接结束(正常关闭或对端断开)时完成。 */
     public Task Completion => _rpc.Completion;
 
-    /** 发起方: 拿到契约接口的代理; targets 是本端实现的契约对象, 供对端反向调用。 */
-    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
+    /** Registers statically described local contracts for reverse calls on an outgoing connection. */
+    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, params JsonRpcTarget[] contracts)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, []);
 
-    /** 服务方: 把每个实现契约的对象挂到同一条 Stream 上; 一个对象可以实现多个契约接口。 */
-    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, params object[] targets)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, []);
-
-    /** 服务方: 契约对象 + 只实现一次的方法名委托, 两类可以混用。 */
-    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
-        (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
-
-    /** 发起方: 契约对象 + 只实现一次的方法名委托。 */
-    public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, object[] targets,
-        (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets, methods);
+    /** Registers statically described local contracts on an incoming connection. */
+    public static JsonRpcChannel Serve(Stream duplex, IJsonRpcMessageFormatter formatter, params JsonRpcTarget[] contracts)
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts, []);
 
     public static JsonRpcChannel Connect(Stream duplex, IJsonRpcMessageFormatter formatter, IReadOnlyList<JsonRpcTarget> contracts,
         (string Method, Delegate Handler)[] methods)
@@ -59,19 +49,7 @@ public sealed class JsonRpcChannel : IDisposable
     /** 只实现一次的内部协议: 直接按方法名挂委托, 不必为此定义接口。 */
     public static JsonRpcChannel ServeMethods(Stream duplex, IJsonRpcMessageFormatter formatter,
         params (string Method, Delegate Handler)[] methods)
-        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), targets: [], methods: methods);
-
-    private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, object[] targets,
-        (string Method, Delegate Handler)[] methods)
-    {
-        var rpc = new JsonRpc(handler);
-        foreach (var target in targets)
-            rpc.AddLocalRpcTarget(target);
-        foreach (var (method, handler1) in methods)
-            rpc.AddLocalRpcMethod(method, handler1);
-        rpc.StartListening();
-        return new JsonRpcChannel(rpc);
-    }
+        => Build(new LengthHeaderMessageHandler(duplex, duplex, formatter), contracts: [], methods: methods);
 
     private static JsonRpcChannel Build(IJsonRpcMessageHandler handler, IReadOnlyList<JsonRpcTarget> contracts,
         (string Method, Delegate Handler)[] methods)
