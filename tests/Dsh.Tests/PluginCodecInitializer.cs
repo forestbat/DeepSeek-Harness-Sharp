@@ -32,7 +32,6 @@ internal static class PluginCodecInitializer
             return;
         var bootstrap = assembly.GetType($"{name}.Generated.DshPluginBootstrap", throwOnError: false);
         if (bootstrap is null) return;
-        Console.Error.WriteLine($"DIAG register {name}");
         bootstrap.GetMethod("Register", BindingFlags.Public | BindingFlags.Static, Type.EmptyTypes)?.Invoke(null, null);
     }
 }
