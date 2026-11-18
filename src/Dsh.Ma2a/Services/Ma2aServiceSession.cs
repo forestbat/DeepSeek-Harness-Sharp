@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Formats.Cbor;
 using System.Text.Json.Nodes;
 
 namespace Dsh.Ma2a.Services;
@@ -29,32 +30,40 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
     public const int MaximumDataLength = 65_536;
     private const int HeaderLength = 5;
     private const int MaximumHeaderPayload = 16_384;
+    private const byte InvalidInputStatus = 2;
     private const byte OutcomeUnknownStatus = 10;
     private readonly Stream _stream;
     private readonly bool _opaqueControls;
+    private readonly Ma2aServiceResponseState _response;
     private readonly SemaphoreSlim _readGate = new(1, 1);
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly HashSet<byte> _endedInputs = [];
     private readonly HashSet<byte> _endedOutputs = [];
     private bool _accepted;
-    private bool _terminal;
+    private volatile bool _terminal;
     private bool _disposed;
 
-    private Ma2aServiceSession(Stream stream, string service)
+    internal Ma2aServiceSession(Stream stream, string service, JsonNode body)
+        : this(stream, service, new Ma2aServiceResponseState(service, body)) { }
+
+    private Ma2aServiceSession(Stream stream, string service, Ma2aServiceResponseState response)
     {
         _stream = stream;
         Service = service;
         _opaqueControls = service == "service";
+        _response = response;
     }
 
     public string Service { get; }
+    public bool IsTerminal => _terminal;
 
     public static async Task<Ma2aServiceSession> OpenAsync(Ma2aClient client, string targetEndpointId,
         string service, string requestId, JsonNode body, CancellationToken cancellationToken = default)
     {
         var payload = EncodeOpen(targetEndpointId, service, requestId, body);
+        var response = new Ma2aServiceResponseState(service, body);
         var stream = await client.OpenServiceStreamAsync(targetEndpointId, service, requestId, cancellationToken);
-        var session = new Ma2aServiceSession(stream, service);
+        var session = new Ma2aServiceSession(stream, service, response);
         try
         {
             await session.WriteAsync(Ma2aFrameKind.Open, payload, cancellationToken);
@@ -99,19 +108,30 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         await _readGate.WaitAsync(cancellationToken);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_terminal) throw new InvalidOperationException("The service operation has ended.");
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await ReadIncomingAsync(cancellationToken);
+        }
+        finally { _readGate.Release(); }
+    }
+
+    private async Task<Ma2aServiceFrame> ReadIncomingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
             var frame = await Ma2aServiceFraming.ReadAsync(_stream, cancellationToken);
             ValidateIncoming(frame);
             return frame;
         }
-        catch (Exception error) when (error is OperationCanceledException || error is IOException and not Ma2aServiceException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or InvalidDataException or CborContentException
+            or InvalidOperationException or FormatException or OverflowException or ArgumentException)
         {
             await DisposeAsync();
-            if (error is OperationCanceledException) throw;
-            throw new Ma2aServiceException(OutcomeUnknownStatus, false, "Service stream ended without a terminal outcome.", error);
+            if (error is OperationCanceledException or Ma2aServiceException) throw;
+            var malformed = error is not IOException || error is InvalidDataException;
+            throw new Ma2aServiceException(malformed ? InvalidInputStatus : OutcomeUnknownStatus, false,
+                malformed ? "The service sent an invalid response." : "Service stream ended without a terminal outcome.", error);
         }
-        finally { _readGate.Release(); }
     }
 
     private void ValidateIncoming(Ma2aServiceFrame frame)
@@ -122,7 +142,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         {
             case Ma2aFrameKind.Accept:
                 if (_accepted) throw new InvalidDataException("Repeated service admission.");
-                frame.DecodeCbor();
+                _response.ValidateAccept(frame.DecodeCbor());
                 _accepted = true;
                 break;
             case Ma2aFrameKind.Reject:
@@ -132,11 +152,13 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
                 throw new Ma2aServiceException(frame.Payload.Span[0], true, "Target refused the service operation.");
             case Ma2aFrameKind.Outcome: ValidateOutcome(frame); break;
             case Ma2aFrameKind.Data or Ma2aFrameKind.End:
+                _response.ValidateFrame(frame);
                 if (frame.Channel > 2 || _endedOutputs.Contains(frame.Channel))
                     throw new InvalidDataException("Unknown or ended service channel.");
                 if (frame.Kind == Ma2aFrameKind.End) _endedOutputs.Add(frame.Channel);
                 break;
             case Ma2aFrameKind.Control:
+                _response.ValidateFrame(frame);
                 if (!_opaqueControls) frame.DecodeCbor();
                 break;
             default: throw new InvalidDataException("Invalid server service frame.");
@@ -147,15 +169,17 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
     {
         var envelope = frame.DecodeCbor() as JsonObject ?? throw new InvalidDataException("Invalid service outcome.");
         if (envelope.Count != 2 || !envelope.ContainsKey("1")) throw new InvalidDataException("Invalid service outcome envelope.");
-        var status = envelope["0"]!.GetValue<ulong>();
+        var status = envelope["0"]?.GetValue<ulong>() ?? throw new InvalidDataException("Missing service status.");
         if (status > byte.MaxValue) throw new InvalidDataException("Invalid service status.");
-        _terminal = true;
         if (status != 0)
         {
             ValidateStatus((byte)status);
             if (envelope["1"] is not null) throw new InvalidDataException("Failed outcome must have a null result.");
+            _terminal = true;
             throw new Ma2aServiceException((byte)status, false, "Service operation failed.");
         }
+        _response.ValidateSuccess(envelope["1"]);
+        _terminal = true;
     }
 
     private static void ValidateStatus(byte status)
@@ -171,6 +195,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         try
         {
             if (channel > 2 || _endedInputs.Contains(channel)) throw new InvalidOperationException("Channel is unavailable for input.");
+            if (_response.IsHostedCall && channel != 0) throw new InvalidOperationException("Hosted input must use channel 0.");
             if (!_accepted) throw new InvalidOperationException("Read service admission before sending data.");
             while (!bytes.IsEmpty)
             {
@@ -190,6 +215,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
         await _writeGate.WaitAsync(cancellationToken);
         try
         {
+            if (_response.IsHostedCall && channel != 0) throw new InvalidOperationException("Hosted input must use channel 0.");
             if (!_accepted || channel > 2 || !_endedInputs.Add(channel)) throw new InvalidOperationException("Channel cannot be ended.");
             await WriteFrameAsync(Ma2aFrameKind.End, new byte[] { channel }, cancellationToken);
         }
@@ -204,7 +230,7 @@ public sealed class Ma2aServiceSession : IAsyncDisposable
 
     public Task ControlBytesAsync(ReadOnlyMemory<byte> control, CancellationToken cancellationToken = default)
     {
-        if (!_accepted || !_opaqueControls)
+        if (!_accepted || !_response.IsHostedCall)
             throw new InvalidOperationException("Opaque controls require an admitted hosted service call.");
         return WriteAsync(Ma2aFrameKind.Control, control, cancellationToken);
     }

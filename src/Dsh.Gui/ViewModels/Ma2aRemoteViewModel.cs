@@ -184,17 +184,38 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
     {
         await using var output = string.IsNullOrWhiteSpace(RawOutputPath) ? null
             : new FileStream(RawOutputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 65_536, FileOptions.Asynchronous);
-        while (true)
+        using var exchanging = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task sending = Task.CompletedTask;
+        Task<Ma2aServiceFrame>? reading = null;
+        try
         {
-            var frame = await session.ReadAsync(cancellationToken);
-            if (frame.Kind == Ma2aFrameKind.Data) await ReceiveDataAsync(frame, output, cancellationToken);
-            else if (frame.Kind == Ma2aFrameKind.Control && session.Service == "service") AddResult("Control bytes", Ma2aCbor.Bytes(frame.Payload.Span));
-            else if (frame.Kind is Ma2aFrameKind.Accept or Ma2aFrameKind.Control or Ma2aFrameKind.Outcome) AddResult(frame.Kind.ToString(), frame.DecodeCbor());
-            if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name is "process stdin" or "write") await SendInputAsync(session, cancellationToken);
-            if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name == "call") await StartHostedInputAsync(session, cancellationToken);
-            if (frame.Kind != Ma2aFrameKind.Outcome) continue;
-            Status = "远端操作已完成。";
-            return;
+            while (true)
+            {
+                reading = session.ReadAsync(exchanging.Token);
+                if (!sending.IsCompletedSuccessfully)
+                {
+                    await Task.WhenAny(reading, sending);
+                    if (!reading.IsCompleted && !session.IsTerminal) await sending;
+                }
+                var frame = await reading;
+                reading = null;
+                if (frame.Kind == Ma2aFrameKind.Data) await ReceiveDataAsync(frame, output, exchanging.Token);
+                else if (frame.Kind == Ma2aFrameKind.Control && session.Service == "service") AddResult("Control bytes", Ma2aCbor.Bytes(frame.Payload.Span));
+                else if (frame.Kind is Ma2aFrameKind.Accept or Ma2aFrameKind.Control or Ma2aFrameKind.Outcome) AddResult(frame.Kind.ToString(), frame.DecodeCbor());
+                if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name is "process stdin" or "write") sending = SendInputAsync(session, exchanging.Token);
+                if (frame.Kind == Ma2aFrameKind.Accept && _pendingOperation!.Name == "call") sending = StartHostedInputAsync(session, exchanging.Token);
+                if (frame.Kind != Ma2aFrameKind.Outcome) continue;
+                Status = "远端操作已完成。";
+                return;
+            }
+        }
+        finally
+        {
+            await exchanging.CancelAsync();
+            try { await sending; }
+            catch (Exception) when (exchanging.IsCancellationRequested) { }
+            try { if (reading is not null) await reading; }
+            catch (Exception) when (exchanging.IsCancellationRequested) { }
         }
     }
 
@@ -224,9 +245,24 @@ public sealed partial class Ma2aRemoteViewModel(Func<Ma2aClient> client) : Obser
 
     private async Task StartHostedInputAsync(Ma2aServiceSession session, CancellationToken cancellationToken)
     {
-        var bytes = Convert.FromHexString(Ma2aRemoteOperation.S(_pendingValues!, "input_hex"));
-        if (bytes.Length > 0) await session.SendDataAsync(0, bytes, cancellationToken);
+        if (Ma2aRemoteOperation.O(_pendingValues!, "input_file") is { } path)
+            await SendHostedFileAsync(session, path, cancellationToken);
+        else
+        {
+            var bytes = Convert.FromHexString(Ma2aRemoteOperation.S(_pendingValues!, "input_hex"));
+            if (bytes.Length > 0) await session.SendDataAsync(0, bytes, cancellationToken);
+        }
         if (!Ma2aRemoteOperation.B(_pendingValues!, "keep_input_open")) await session.EndAsync(cancellationToken: cancellationToken);
+    }
+
+    private static async Task SendHostedFileAsync(Ma2aServiceSession session, string path, CancellationToken cancellationToken)
+    {
+        await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            Ma2aServiceSession.MaximumDataLength, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var buffer = new byte[Ma2aServiceSession.MaximumDataLength];
+        int count;
+        while ((count = await input.ReadAsync(buffer, cancellationToken)) > 0)
+            await session.SendDataAsync(0, buffer.AsMemory(0, count), cancellationToken);
     }
 
     [RelayCommand]

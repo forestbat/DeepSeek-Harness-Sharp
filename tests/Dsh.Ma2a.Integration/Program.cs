@@ -1,6 +1,6 @@
 using Dsh.Ma2a.Integration;
 
-if (args.Length is 6 or 8 && args[0] == "--cross-state" && args[2] == "--target-file" && args[4] == "--root")
+if (args.Length is 6 or 8 && args[0] is "--cross-state" or "--cross-full" && args[2] == "--target-file" && args[4] == "--root")
 {
     try
     {
@@ -8,7 +8,15 @@ if (args.Length is 6 or 8 && args[0] == "--cross-state" && args[2] == "--target-
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
         var platform = args.Length == 8 && args[6] == "--platform" ? args[7] : "linux";
-        await CrossMachineScenarios.RunAsync(args[1], target.RootElement.GetProperty("result").GetProperty("payload").GetProperty("endpoint_id").GetString()!, args[5], cancellation.Token, platform);
+        var endpoint = target.RootElement.GetProperty("result").GetProperty("payload").GetProperty("endpoint_id").GetString()!;
+        await CrossMachineScenarios.RunAsync(args[1], endpoint, args[5], cancellation.Token, platform);
+        if (args[0] == "--cross-full")
+        {
+            var fixture = target.RootElement.GetProperty("acceptance");
+            await CrossMachineServiceScenarios.RunAsync(new Dsh.Ma2a.Ma2aClient(args[1]), endpoint,
+                fixture.GetProperty("agent").GetString()!, fixture.GetProperty("service").GetString()!,
+                fixture.GetProperty("proxyPort").GetUInt16(), cancellation.Token);
+        }
         return 0;
     }
     catch (Exception error)

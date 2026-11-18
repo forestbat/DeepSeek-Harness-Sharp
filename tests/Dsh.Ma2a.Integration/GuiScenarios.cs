@@ -68,6 +68,14 @@ internal static class GuiScenarios
             await ProxyOutboundAsync(pair, cancellationToken);
             await RestartAsync(caller, pair, cancellationToken);
             await StopAndStartAsync(caller, pair, cancellationToken);
+            await GuiManagementScenarios.RunAsync(caller, target, pair, cancellationToken);
+            var agent = await GuiManagementScenarios.StartAgentAsync(target, pair, cancellationToken);
+            try
+            {
+                await AgentServiceScenarios.WithHostedServiceAsync(pair,
+                    (service, token) => GuiRemoteServicesScenarios.RunAsync(caller.Remote, pair, agent, service, token), cancellationToken);
+            }
+            finally { await GuiManagementScenarios.StopAgentAsync(target, pair, agent, CancellationToken.None); }
         }
         finally { window.Close(); }
     }
@@ -337,32 +345,32 @@ internal static class GuiScenarios
         await NativeRuntimePair.PassedAsync("GUI lifecycle stop proves Runtime absence; explicit start restores the same Endpoint and a live native connection.");
     }
 
-    private static void SelectManagement(Ma2aViewModel model, string operation)
+    internal static void SelectManagement(Ma2aViewModel model, string operation)
     {
         var command = Ma2aCommandCatalog.Commands.Single(command => command.Operation == operation);
         model.SelectedGroup = command.Group;
         model.SelectedCommand = command;
     }
 
-    private static void SelectRemote(Ma2aRemoteViewModel model, string family, string operation)
+    internal static void SelectRemote(Ma2aRemoteViewModel model, string family, string operation)
         => model.SelectedOperation = model.Operations.Single(item => item.Family == family && item.Name == operation);
 
-    private static void Text(Ma2aRemoteViewModel model, string name, string value)
+    internal static void Text(Ma2aRemoteViewModel model, string name, string value)
         => model.Fields.Single(field => field.Name == name).Text = value;
 
-    private static void AddArgument(Ma2aFieldViewModel field, string value)
+    internal static void AddArgument(Ma2aFieldViewModel field, string value)
     {
         field.AddItemCommand.Execute(null);
         field.Items[^1].Text = value;
     }
 
-    private static async Task RunRemoteAsync(Ma2aRemoteViewModel model, CancellationToken cancellationToken)
+    internal static async Task RunRemoteAsync(Ma2aRemoteViewModel model, CancellationToken cancellationToken)
     {
         model.Confirmed = true;
         await model.RunCommand.ExecuteAsync(null).WaitAsync(cancellationToken);
     }
 
-    private static IReadOnlyList<string> Labels(IEnumerable<Ma2aResultNode> nodes)
+    internal static IReadOnlyList<string> Labels(IEnumerable<Ma2aResultNode> nodes)
         => nodes.SelectMany(node => new[] { node.Label }.Concat(Labels(node.Children))).ToArray();
 
     private static bool ScreenContains(TerminalSession? terminal, string value)
@@ -371,7 +379,7 @@ internal static class GuiScenarios
         lock (terminal.Gate) return terminal.Screen.Snapshot().Contains(value, StringComparison.Ordinal);
     }
 
-    private static async Task UntilAsync(Func<bool> condition, string failure, CancellationToken cancellationToken)
+    internal static async Task UntilAsync(Func<bool> condition, string failure, CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
         while (!condition())

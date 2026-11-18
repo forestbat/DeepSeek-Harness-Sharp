@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using Dsh.Ma2a.Services;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -119,6 +121,120 @@ public sealed class Ma2aGuiTests
             finally { window.Close(); }
             return Task.CompletedTask;
         });
+    }
+
+    [Theory]
+    [InlineData("submit")]
+    [InlineData("send")]
+    public void RemoteAgentMessage_UsesTheNativeUtf8ByteBoundary(string name)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "agent" && item.Name == name);
+        var message = operation.Fields.Single(field => field.Name == "message");
+        message.Text = new string('界', Ma2aServiceRequests.MaximumAgentMessageBytes / Encoding.UTF8.GetByteCount("界"));
+
+        Assert.Equal(Ma2aServiceRequests.MaximumAgentMessageBytes, Encoding.UTF8.GetByteCount(message.BuildValue()!.GetValue<string>()));
+        message.Text += "a";
+        Assert.Throws<InvalidOperationException>(() => message.BuildValue());
+    }
+
+    [Fact]
+    public void HostedInlineBody_UsesTheNativeBinaryBoundary()
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "service" && item.Name == "call");
+        var body = operation.Fields.Single(field => field.Name == "body_hex");
+        body.Text = Convert.ToHexStringLower(new byte[Ma2aServiceRequests.MaximumHostedCallBodyBytes]);
+        operation.Fields.Single(field => field.Name == "version").Number = 1;
+        operation.Fields.Single(field => field.Name == "service").Text = "example";
+        operation.Fields.Single(field => field.Name == "operation").Text = "echo";
+
+        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
+        Assert.NotNull(operation.Build!(values));
+        body.Text += "00";
+        Assert.Throws<InvalidOperationException>(() => body.BuildValue());
+    }
+
+    [Theory]
+    [InlineData(null, "00", true)]
+    [InlineData("payload.bin", "", true)]
+    [InlineData("payload.bin", "00", false)]
+    [InlineData("", "", false)]
+    [InlineData(" ", "", false)]
+    public void HostedInputFile_IsOptionalAndExclusiveWithInlineInput(string? path, string hex, bool valid)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "service" && item.Name == "call");
+        var file = operation.Fields.Single(field => field.Name == "input_file");
+        Assert.True(file.IsNullable && file.IsNull);
+        file.Text = path ?? "";
+        file.IsNull = path is null;
+        operation.Fields.Single(field => field.Name == "service").Text = "example";
+        operation.Fields.Single(field => field.Name == "operation").Text = "pipe";
+        operation.Fields.Single(field => field.Name == "version").Number = 2;
+        operation.Fields.Single(field => field.Name == "input_hex").Text = hex;
+        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
+
+        if (valid) Assert.NotNull(operation.Build!(values));
+        else Assert.Throws<ArgumentException>(() => operation.Build!(values));
+    }
+
+    [Theory]
+    [InlineData("service", "call", "input_hex", true)]
+    [InlineData("process", "process stdin", "input", false)]
+    public void StreamInput_PreservesPayloadsLargerThanOneNativeFrame(string family, string name, string fieldName, bool hex)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == family && item.Name == name);
+        var field = operation.Fields.Single(item => item.Name == fieldName);
+        var payload = new string('界', Ma2aServiceSession.MaximumDataLength);
+        field.Text = hex ? Convert.ToHexStringLower(Encoding.UTF8.GetBytes(payload)) : payload;
+
+        Assert.Equal(field.Text, field.BuildValue()!.GetValue<string>());
+        Assert.True(Encoding.UTF8.GetByteCount(payload) > Ma2aServiceSession.MaximumDataLength);
+    }
+
+    [Theory]
+    [InlineData("files", "list", "path")]
+    [InlineData("files", "stat", "path")]
+    [InlineData("files", "mkdir", "path")]
+    [InlineData("files", "read", "path")]
+    [InlineData("files", "write", "path")]
+    [InlineData("files", "rename", "from")]
+    [InlineData("files", "rename", "to")]
+    [InlineData("files", "remove", "path")]
+    [InlineData("transfer", "download", "path")]
+    [InlineData("transfer", "upload", "path")]
+    public void RemotePaths_KeepTheRootAndSeparatorsOutsideTheComponentByteBudget(string family, string name, string fieldName)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == family && item.Name == name);
+        var field = operation.Fields.Single(item => item.Name == fieldName);
+        field.Text = $"{new string('a', 64)}:/{string.Join('/', Enumerable.Repeat(new string('b', 64), 64))}";
+
+        Assert.Equal(Ma2aServiceRequests.MaximumRemotePathTextBytes, Encoding.UTF8.GetByteCount(field.BuildValue()!.GetValue<string>()));
+        Assert.NotNull(Ma2aServiceRequests.Path(field.Text));
+        field.Text += "b";
+        Assert.Throws<InvalidOperationException>(() => field.BuildValue());
+    }
+
+    [Fact]
+    public void FilesRead_PreservesTheNativeZeroLengthRequest()
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == "files" && item.Name == "read");
+        operation.Fields.Single(field => field.Name == "path").Text = "data:/file";
+        operation.Fields.Single(field => field.Name == "length").Number = 0;
+        var values = operation.Fields.ToDictionary(field => field.Name, field => field.BuildValue());
+
+        Assert.Equal(0U, operation.Build!(values)[3]!.GetValue<uint>());
+    }
+
+    [Theory]
+    [InlineData("transfer", "upload")]
+    [InlineData("transfer", "download")]
+    [InlineData("agent", "artifact")]
+    public void LocalTransferPaths_AreValidatedByTheLocalFilesystem(string family, string name)
+    {
+        var operation = Ma2aRemoteOperation.Create().Single(item => item.Family == family && item.Name == name);
+        var field = operation.Fields.Single(item => item.Name == "local_path");
+        field.Text = new string('p', 4097);
+
+        Assert.Equal(field.Text, field.BuildValue()!.GetValue<string>());
     }
 
     [Fact]

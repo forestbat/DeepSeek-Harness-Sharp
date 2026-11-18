@@ -71,16 +71,20 @@ internal static class CrossMachineScenarios
             var source = Path.Combine(local, "source.bin");
             var destination = Path.Combine(local, "received.bin");
             var bytes = new byte[TransferBytes];
+            // Synthetic binary acceptance content is transferred through the real remote Runtime.
             Random.Shared.NextBytes(bytes);
             await File.WriteAllBytesAsync(source, bytes, cancellationToken);
             var uploaded = await Ma2aFileTransfer.UploadAsync(client, target, remoteTransfer, source, RequestId(), cancellationToken: cancellationToken);
             transferCreated = true;
-            var downloaded = await Ma2aFileTransfer.DownloadAsync(client, target, remoteTransfer, destination, RequestId(), cancellationToken: cancellationToken);
+            var (downloaded, prefixLength) = await ResumeCancelledDownloadAsync(client, target, remoteTransfer,
+                destination, bytes.Length, cancellationToken);
             var received = await File.ReadAllBytesAsync(destination, cancellationToken);
+            var expectedHash = global::Blake3.Hasher.Hash(bytes).ToString();
             NativeRuntimePair.Check(uploaded.Size == (ulong)bytes.Length && downloaded.Size == uploaded.Size
-                && uploaded.Blake3 == downloaded.Blake3 && bytes.SequenceEqual(received),
+                && downloaded.Bytes == (ulong)(bytes.Length - prefixLength)
+                && uploaded.Blake3 == expectedHash && downloaded.Blake3 == expectedHash && bytes.SequenceEqual(received),
                 "Cross-machine transfers must match their complete bytes, size and BLAKE3 digest.");
-            await NativeRuntimePair.PassedAsync("Cross-machine native Transfer verified complete content with BLAKE3.");
+            await NativeRuntimePair.PassedAsync("Cross-machine native Transfer cancellation preserves sidecars, resumes the exact suffix and verifies the complete BLAKE3 content.");
         }
         finally
         {
@@ -88,6 +92,37 @@ internal static class CrossMachineScenarios
             if (smallCreated) await RemoveOwnedFileAsync(client, target, small, errors);
             if (transferCreated) await RemoveOwnedFileAsync(client, target, remoteTransfer, errors);
             if (errors.Count != 0) throw new AggregateException("Cross-machine acceptance file cleanup failed.", errors);
+        }
+    }
+
+    private static async Task<(Ma2aTransferResult Result, long PrefixLength)> ResumeCancelledDownloadAsync(
+        Ma2aClient client, string target, string remote, string destination, int size, CancellationToken cancellationToken)
+    {
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            await Ma2aFileTransfer.DownloadAsync(client, target, remote, destination, RequestId(),
+                progress: new InterruptDownload(interruption), cancellationToken: interruption.Token);
+            throw new InvalidOperationException("Cross-machine download completed without exercising cancellation.");
+        }
+        catch (OperationCanceledException) when (interruption.IsCancellationRequested && !cancellationToken.IsCancellationRequested) { }
+        var part = $"{destination}{Ma2aFileTransfer.PartialFileSuffix}";
+        NativeRuntimePair.Check(!File.Exists(destination) && File.Exists(part) && File.Exists($"{part}.meta"),
+            "Cross-machine cancellation must retain partial bytes and source identity without publishing the destination.");
+        var prefixLength = new FileInfo(part).Length;
+        NativeRuntimePair.Check(prefixLength > 0 && prefixLength < size,
+            "Cross-machine cancellation must interrupt a nonempty partial download before the complete content.");
+        var downloaded = await Ma2aFileTransfer.DownloadAsync(client, target, remote, destination, RequestId(), cancellationToken: cancellationToken);
+        NativeRuntimePair.Check(!File.Exists(part) && !File.Exists($"{part}.meta"),
+            "Cross-machine verified publication must consume the partial content and resume identity.");
+        return (downloaded, prefixLength);
+    }
+
+    private sealed class InterruptDownload(CancellationTokenSource cancellation) : IProgress<Ma2aTransferProgress>
+    {
+        public void Report(Ma2aTransferProgress value)
+        {
+            if (value.Completed > 0 && value.Completed < value.Total) cancellation.Cancel();
         }
     }
 
@@ -147,7 +182,7 @@ internal static class CrossMachineScenarios
 
     private static string RequestId() => Guid.NewGuid().ToString("N");
 
-    private static async Task<(JsonNode? Outcome, byte[] Output)> CallAsync(Ma2aClient client, string target, string family,
+    internal static async Task<(JsonNode? Outcome, byte[] Output)> CallAsync(Ma2aClient client, string target, string family,
         JsonNode request, byte[]? input, CancellationToken cancellationToken)
     {
         await using var session = await Ma2aServiceSession.OpenAsync(client, target, family, RequestId(), request, cancellationToken);

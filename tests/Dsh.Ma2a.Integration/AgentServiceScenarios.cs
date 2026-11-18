@@ -104,7 +104,7 @@ internal static class AgentServiceScenarios
         peer.Client.Shutdown(SocketShutdown.Send);
     }
 
-    private static string ExampleBinary(NativeRuntimePair pair, string name)
+    internal static string ExampleBinary(NativeRuntimePair pair, string name)
     {
         var path = Path.Combine(Path.GetDirectoryName(pair.BinaryPath)!, OperatingSystem.IsWindows() ? $"{name}.exe" : name);
         NativeRuntimePair.Check(File.Exists(path), "Build the MA2A SDK example binaries next to the selected Runtime before acceptance.");
@@ -202,7 +202,30 @@ internal static class AgentServiceScenarios
         NativeRuntimePair.Check((await File.ReadAllBytesAsync(destination, cancellationToken)).SequenceEqual(content), "Native Agent artifact download returns the verified published content.");
     }
 
-    private static async Task HostedServiceAsync(NativeRuntimePair pair, CancellationToken cancellationToken)
+    private static Task HostedServiceAsync(NativeRuntimePair pair, CancellationToken cancellationToken)
+        => WithHostedServiceAsync(pair, async (_, token) =>
+        {
+            var (descriptors, _) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.Describe(), null, token);
+            NativeRuntimePair.Check(descriptors!.ToJsonString().Contains(ServiceName, StringComparison.Ordinal), "Native service discovery contains the exposed hosted service.");
+            var (echo, _) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 1, "echo", Encoding.UTF8.GetBytes("native-hosted")), null, token);
+            NativeRuntimePair.Check(DecodeBytes(echo?["1"]).SequenceEqual(Encoding.UTF8.GetBytes("native-hosted")), "Hosted unary call preserves version-one body bytes.");
+            var bytes = new byte[] { 0, 255, 128, 13, 10 };
+            var (pipe, output) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 2, "pipe", []), bytes, token);
+            NativeRuntimePair.Check(output.SequenceEqual(bytes) && Encoding.UTF8.GetString(DecodeBytes(pipe?["1"])) == bytes.Length.ToString(), "Hosted bytes interaction preserves binary data and final result.");
+            await OpaqueControlAsync(pair, bytes, token);
+            var (_, count) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 2, "count", Encoding.UTF8.GetBytes("3")), null, token);
+            NativeRuntimePair.Check(Encoding.UTF8.GetString(count) == "1\n2\n3\n", "Hosted stream delivers every ordered event.");
+            await using var held = await Ma2aServiceSession.OpenAsync(pair.Caller, pair.TargetId, "service", RequestId(),
+                Ma2aServiceRequests.ServiceCall(ServiceName, 2, "hold", []), token);
+            NativeRuntimePair.Check((await held.ReadAsync(token)).Kind == Ma2aFrameKind.Accept, "Hosted resource is accepted.");
+            await held.CancelAsync(token);
+            try { await ReadTerminalAsync(held, token); throw new InvalidOperationException("Hosted resource ignored cancellation."); }
+            catch (Ma2aServiceException error) when (error.Status == 6 && !error.Rejected) { }
+            await NativeRuntimePair.PassedAsync("native Hosted Service discovery/unary/bytes/stream/resource cancellation using real SDK example");
+        }, cancellationToken);
+
+    internal static async Task WithHostedServiceAsync(NativeRuntimePair pair,
+        Func<string, CancellationToken, Task> scenario, CancellationToken cancellationToken)
     {
         var binary = ExampleBinary(pair, "ma2a-example-service");
         var manifestStart = new ProcessStartInfo(binary) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
@@ -229,23 +252,7 @@ internal static class AgentServiceScenarios
         try
         {
             await WaitReadyAsync(pair, host, cancellationToken);
-            var (descriptors, _) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.Describe(), null, cancellationToken);
-            NativeRuntimePair.Check(descriptors!.ToJsonString().Contains(ServiceName, StringComparison.Ordinal), "Native service discovery contains the exposed hosted service.");
-            var (echo, _) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 1, "echo", Encoding.UTF8.GetBytes("native-hosted")), null, cancellationToken);
-            NativeRuntimePair.Check(DecodeBytes(echo?["1"]).SequenceEqual(Encoding.UTF8.GetBytes("native-hosted")), "Hosted unary call preserves version-one body bytes.");
-            var bytes = new byte[] { 0, 255, 128, 13, 10 };
-            var (pipe, output) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 2, "pipe", []), bytes, cancellationToken);
-            NativeRuntimePair.Check(output.SequenceEqual(bytes) && Encoding.UTF8.GetString(DecodeBytes(pipe?["1"])) == bytes.Length.ToString(), "Hosted bytes interaction preserves binary data and final result.");
-            await OpaqueControlAsync(pair, bytes, cancellationToken);
-            var (_, count) = await ServicesScenarios.RunAsync(pair, "service", Ma2aServiceRequests.ServiceCall(ServiceName, 2, "count", Encoding.UTF8.GetBytes("3")), null, cancellationToken);
-            NativeRuntimePair.Check(Encoding.UTF8.GetString(count) == "1\n2\n3\n", "Hosted stream delivers every ordered event.");
-            await using var held = await Ma2aServiceSession.OpenAsync(pair.Caller, pair.TargetId, "service", RequestId(),
-                Ma2aServiceRequests.ServiceCall(ServiceName, 2, "hold", []), cancellationToken);
-            NativeRuntimePair.Check((await held.ReadAsync(cancellationToken)).Kind == Ma2aFrameKind.Accept, "Hosted resource is accepted.");
-            await held.CancelAsync(cancellationToken);
-            try { await ReadTerminalAsync(held, cancellationToken); throw new InvalidOperationException("Hosted resource ignored cancellation."); }
-            catch (Ma2aServiceException error) when (error.Status == 6 && !error.Rejected) { }
-            await NativeRuntimePair.PassedAsync("native Hosted Service discovery/unary/bytes/stream/resource cancellation using real SDK example");
+            await scenario(ServiceName, cancellationToken);
         }
         finally
         {

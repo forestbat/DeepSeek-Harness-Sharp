@@ -8,16 +8,25 @@ public static class Ma2aServiceRequests
 {
     public const uint DefaultLogLimit = 4_194_304;
     public const ulong MaximumLifetimeMilliseconds = 86_400_000;
+    public const int MaximumAgentMessageBytes = 12_288;
+    public const int MaximumHostedCallBodyBytes = 8_192;
+    public const int MaximumHostedCallResultBytes = 60_000;
+    private const int MaximumRootNameBytes = 64;
+    private const int MaximumPathComponents = 64;
+    private const int MaximumPathComponentBytes = 255;
+    private const int MaximumRemotePathBytes = 4_096;
+    public const int MaximumRemotePathTextBytes = MaximumRemotePathBytes + MaximumRootNameBytes + 2 + MaximumPathComponents - 1;
 
     public static JsonArray Path(string path)
     {
         var separator = path.IndexOf(":/", StringComparison.Ordinal);
         if (separator < 1) throw new ArgumentException("Expected ROOT:/relative/path.", nameof(path));
         var root = path[..separator];
-        if (root.Length > 64 || !IsRootName(root)) throw new ArgumentException("Invalid MA2A root name.", nameof(path));
+        if (root.Length > MaximumRootNameBytes || !IsRootName(root)) throw new ArgumentException("Invalid MA2A root name.", nameof(path));
         var suffix = path[(separator + 2)..];
         var components = suffix.Length == 0 ? [] : suffix.Split('/');
-        if (components.Length > 64 || Encoding.UTF8.GetByteCount(path) > 4096 || components.Any(InvalidComponent))
+        if (components.Length > MaximumPathComponents || components.Any(InvalidComponent)
+            || components.Sum(component => Encoding.UTF8.GetByteCount(component)) > MaximumRemotePathBytes)
             throw new ArgumentException("Invalid MA2A root-relative path.", nameof(path));
         return new JsonArray(root, new JsonArray(components.Select(component => JsonValue.Create(component)).ToArray()));
     }
@@ -27,7 +36,7 @@ public static class Ma2aServiceRequests
             && root.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-');
 
     private static bool InvalidComponent(string component)
-        => component is "" or "." or ".." || Encoding.UTF8.GetByteCount(component) > 255
+        => component is "" or "." or ".." || Encoding.UTF8.GetByteCount(component) > MaximumPathComponentBytes
             || component.Any(character => char.IsControl(character) || character is '/' or '\\' or ':');
 
     public static JsonArray Stat(string path) => new(0, Path(path));
@@ -114,7 +123,13 @@ public static class Ma2aServiceRequests
     public static JsonArray LogNow() => new(1);
 
     public static JsonArray Agents(string? after = null) => new(0, after);
-    public static JsonArray AgentMessage(string text) => new("user", new JsonArray(new JsonArray(0, text)));
+    public static JsonArray AgentMessage(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (Encoding.UTF8.GetByteCount(text) > MaximumAgentMessageBytes || text.Contains('\0'))
+            throw new ArgumentException("Agent message exceeds its UTF-8 bound or contains NUL.", nameof(text));
+        return new JsonArray("user", new JsonArray(new JsonArray(0, text)));
+    }
     public static JsonArray AgentSubmit(string agent, string text, string? fromAgent = null) => new(1, new JsonArray(agent, AgentMessage(text), fromAgent));
     public static JsonArray AgentSend(string agent, string task, string text) => new(2, agent, Id(task), AgentMessage(text));
     public static JsonArray AgentGet(string agent, string task) => new(3, agent, Id(task));
@@ -127,7 +142,7 @@ public static class Ma2aServiceRequests
 
     public static JsonArray Describe(string? after = null) => new(0, after);
     public static JsonArray ServiceCall(string name, ushort version, string operation, ReadOnlySpan<byte> body)
-        => version != 0 && body.Length <= 8192 ? new(1, name, version, operation, Ma2aCbor.Bytes(body))
+        => version != 0 && body.Length <= MaximumHostedCallBodyBytes ? new(1, name, version, operation, Ma2aCbor.Bytes(body))
             : throw new ArgumentException("Service calls need a nonzero version and at most 8 KiB of inline bytes.");
 
     private static JsonObject Id(string id) => Ma2aCbor.Bytes(Ma2aServiceSession.DecodeIdentifier(id, 16));
