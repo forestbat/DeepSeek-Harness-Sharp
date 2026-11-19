@@ -76,6 +76,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly IEditorService? _editors;
     private readonly GuiEditorTerminalHost _editorTerminalHost;
     private readonly GuiEditorClientBinding _editorClientBinding;
+    private readonly GuiPluginCoordinator _pluginCoordinator;
 
     [ObservableProperty]
     private EditorOpenWithViewModel? _editorPicker;
@@ -89,6 +90,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _ctx = app.Ctx;
         _maintenance = _ctx.Get<IContextMaintenancePresenter>(IContextMaintenancePresenter.ServiceName, false);
         _chat = chat;
+        _pluginCoordinator = new GuiPluginCoordinator(_ctx, chat);
+        Workbench = _ctx.Get<GuiWorkbench>(GuiWorkbench.ServiceName, false) ?? new GuiWorkbench();
         Home = app.Home;
         Subagents = new SubagentPanelViewModel(chat);
         Subagents.Changed += PopulateSubagentCards;
@@ -102,7 +105,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _onlyWithSessions = snapshot.ShowOnlyWithSessions;
         _isSidebarVisible = snapshot.SidebarVisible;
         Preferences = new SettingsViewModel(
-            _ctx, app.Home, chat.RunAsync, Gui, _settings,
+            _ctx, app.Home, _pluginCoordinator.RunAsync, Gui, _settings,
             async () => (await chat.ClientAsync()).Plugins);
         Preferences.Models.CollectionChanged += (_, _) => RefreshFilteredModels();
         Preferences.ReasoningEfforts.CollectionChanged += (_, _) => HasReasoningEfforts = Preferences.ReasoningEfforts.Count > 0;
@@ -137,6 +140,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         ShowSession();
         chat.Follow();
         Page = AppPage.Dashboard;
+        Workbench.AttachViewModel(this);
     }
 
     private WorkspaceViewModel CreateWorkspace(FleetWorkspace fleet)
@@ -168,6 +172,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     internal bool IsDisposed => _disposed;
 
     public GuiSettings Gui { get; }
+
+    public GuiWorkbench Workbench { get; }
 
     public SettingsViewModel Preferences { get; }
 
@@ -548,7 +554,29 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     private void UpdateCurrentWorkspace()
-        => CurrentWorkspace = SessionCatalog.WorkspacePath(_chat.Header.Cwd);
+    {
+        var updated = SessionCatalog.WorkspacePath(_chat.Header.Cwd);
+        if (string.Equals(CurrentWorkspace, updated, StringComparison.Ordinal))
+            return;
+        CurrentWorkspace = updated;
+        Workbench.NotifyWorkspaceChanged();
+    }
+
+    internal GuiShellContext CreateShellContext()
+        => new(
+            Workspace.ActiveSession?.Machine ?? _chat.Machine,
+            CurrentWorkspace,
+            id => Workspace.OpenPage(Workspace.Pages.Available.FirstOrDefault(entry => entry.Id == id)),
+            ShowToast,
+            _pluginCoordinator.RunAsync);
+
+    internal GuiSessionContext CreateSessionContext()
+        => new(
+            _chat.Machine,
+            _chat.Id.Value,
+            CurrentWorkspace,
+            _pluginCoordinator.RunAsync,
+            SetStatus);
 
     [RelayCommand]
     private async Task PickWorkspaceAsync()
@@ -1151,6 +1179,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         _disposed = true;
+        Workbench.DetachViewModel(this);
         _suggestionCancellation?.Cancel();
         _suggestionCancellation?.Dispose();
         _suggestionCancellation = null;
@@ -1490,7 +1519,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task RunCommandAsync(string text)
     {
-        var execution = await _chat.ExecuteAsync(text);
+        var execution = await _pluginCoordinator.ExecuteAsync(text);
         if (!execution.Known)
         {
             await _chat.SendAsync(ExpandMentions(text));
@@ -1552,6 +1581,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
+        Workbench.NotifySessionChanged();
     }
 
     /**
@@ -2111,9 +2141,24 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             "session" => [.. _catalog.Load().Select(node => node.SessionId.Value)],
             "skill" => _skillNames,
             "provider" => ProviderCandidates(argument),
+            "plugins" => PluginCandidates(argument),
             "timestamp" => TimestampCandidates(argument),
             _ => [],
         };
+
+    private IReadOnlyList<string> PluginCandidates(string argument)
+    {
+        var space = argument.IndexOf(' ', StringComparison.Ordinal);
+        string[] subcommands = ["list", "doctor", "add", "remove", "disable", "enable", "reload"];
+        if (space < 0 && !subcommands.Skip(3).Contains(argument, StringComparer.Ordinal))
+            return subcommands;
+        var action = space < 0 ? argument : argument[..space];
+        if (action is not ("remove" or "disable" or "enable" or "reload"))
+            return [];
+        var packages = _ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames
+            ?? [.. Preferences.Plugins.Select(item => item.Package)];
+        return [.. packages.Select(package => $"{action} {package}")];
+    }
 
     /**
      * `/timestamp` 的参数: 先选动作, 再选 `#seq`。

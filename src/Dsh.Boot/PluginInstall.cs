@@ -8,12 +8,12 @@ namespace Dsh.Boot;
 public static class PluginInstall
 {
     private const int MaximumDependencyManifestBytes = 4 * 1024 * 1024;
-    public static string Install(string sourcePath, string pluginsRoot)
+    public static string Install(string sourcePath, string pluginsRoot, bool overwrite = false)
     {
         var staging = Path.Combine(pluginsRoot, Path.GetFileNameWithoutExtension(sourcePath));
         Directory.CreateDirectory(staging);
         foreach (var file in ArtifactFiles(sourcePath))
-            CopyIfChanged(file, Path.Combine(staging, Path.GetFileName(file)));
+            CopyIfChanged(file, Path.Combine(staging, Path.GetFileName(file)), overwrite);
         return Path.Combine(staging, Path.GetFileName(sourcePath));
     }
 
@@ -83,15 +83,19 @@ public static class PluginInstall
         return JsonDocument.Parse(bytes);
     }
 
-    private static void CopyIfChanged(string source, string destination)
+    private static void CopyIfChanged(string source, string destination, bool overwrite)
     {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), comparison))
+            return;
         if (File.Exists(destination))
         {
             if (ContentEquals(source, destination))
                 return;
-            throw new InvalidOperationException($"conflicting file already installed: {destination}");
+            if (!overwrite)
+                throw new InvalidOperationException($"conflicting file already installed: {destination}");
         }
-        File.Copy(source, destination);
+        File.Copy(source, destination, overwrite: overwrite);
     }
 
     private static bool ContentEquals(string a, string b)

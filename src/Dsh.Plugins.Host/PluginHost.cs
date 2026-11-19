@@ -24,7 +24,8 @@ public sealed record ManagedPlugin(
     string Package,
     PluginLoadContext Context,
     IReadOnlyList<string> SharedDependencies,
-    string? InstallDirectory = null);
+    string? InstallDirectory = null,
+    string? ArtifactPath = null);
 
 public class PluginHost
 {
@@ -285,9 +286,10 @@ public class PluginHost
             skipped.Add(new PluginSkip(file,
                 "平铺布局已废弃,将在下个版本停止扫描:请把插件及其依赖移入 plugins/<目录>/"));
         }
+        var fullPath = Path.GetFullPath(file);
         foreach (var package in result.Packages)
         {
-            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, installDirectory));
+            managed.Add(new ManagedPlugin(package, result.Context!, result.SharedDependencies, installDirectory, fullPath));
             packages.Add(package);
         }
     }

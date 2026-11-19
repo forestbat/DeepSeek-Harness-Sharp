@@ -44,7 +44,7 @@
             <ItemsControl ItemsSource="{Binding Preferences.Plugins}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:PluginRowViewModel">
-                  <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,4">
+                  <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,4">
                     <StackPanel Spacing="2">
                       <TextBlock Text="{Binding Package}" Classes="Mono" />
                       <TextBlock Text="{Binding Description}" Classes="Tertiary" TextWrapping="Wrap" />
@@ -65,7 +65,10 @@
                             Content="{Binding ActionLabel}"
                             Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).Preferences.PluginActionCommand}"
                             CommandParameter="{Binding WireAction}" />
-                    <Button Grid.Column="3" Classes="Ghost" VerticalAlignment="Center" Content="移除"
+                    <Button Grid.Column="3" Classes="Ghost" VerticalAlignment="Center" Content="重载"
+                            Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).Preferences.PluginActionCommand}"
+                            CommandParameter="{Binding ReloadAction}" />
+                    <Button Grid.Column="4" Classes="Ghost" VerticalAlignment="Center" Content="移除"
                             Command="{Binding $parent[UserControl].((vm:MainViewModel)DataContext).Preferences.PluginActionCommand}"
                             CommandParameter="{Binding RemoveAction}" />
                   </Grid>

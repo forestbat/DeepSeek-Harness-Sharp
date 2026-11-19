@@ -42,4 +42,19 @@ public sealed class WorkspacePages
         else
             Available[Available.IndexOf(existing)] = entry;
     }
+
+    /** Inserts a default host page at its canonical slot unless a plugin already supplied that id. */
+    public void RegisterDefault(int index, WorkspacePageEntry entry)
+    {
+        if (Available.Any(item => item.Id == entry.Id))
+            return;
+        Available.Insert(Math.Clamp(index, 0, Available.Count), entry);
+    }
+
+    /** Removes the contributed page with the given id when its owning plugin deactivates. */
+    public bool Remove(string id)
+    {
+        var existing = Available.FirstOrDefault(item => item.Id == id);
+        return existing is not null && Available.Remove(existing);
+    }
 }

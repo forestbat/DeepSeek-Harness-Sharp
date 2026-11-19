@@ -72,6 +72,37 @@ public sealed class PluginCommandTests
         }
     }
 
+    [Fact]
+    public async Task PluginsReload_ValidatesArguments_AndReloadsActivePackage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"dsh-plugins-cmd-{Guid.NewGuid():N}");
+        try
+        {
+            using var app = await HarnessComposer.Compose(new HarnessOptions(
+                new HarnessHome(Path.Combine(root, "home")), root, PluginsDirectory: Path.Combine(root, "plugins")), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
+            var commands = app.Ctx.Get<CommandsService>(CommandsService.ServiceName)!;
+            var agent = new FakeAgent(app.Ctx);
+
+            var missingArgs = await commands.Execute(agent, "/plugins reload", TestContext.Current.CancellationToken);
+            Assert.Contains("usage:", Assert.IsType<CommandResult.Error>(missingArgs!.Result).Text);
+
+            var reloaded = await commands.Execute(agent, "/plugins reload @deepseek-ai/dsh-tool-todo", TestContext.Current.CancellationToken);
+            var text = Assert.IsType<CommandResult.Success>(reloaded!.Result).Text ?? "";
+            Assert.Contains("reloaded", text, StringComparison.Ordinal);
+            Assert.Equal(ActivationState.Active, app.Composition!.Find("@deepseek-ai/dsh-tool-todo")?.State);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private sealed class FakeAgent : IAgent
     {
         public FakeAgent(Context ctx)

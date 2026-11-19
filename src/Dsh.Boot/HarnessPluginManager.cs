@@ -18,6 +18,7 @@ public sealed class HarnessPluginManager : IDisposable
     private readonly Dictionary<string, PluginLoadContext> _loadedContexts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _sharedDependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _installedDirectories = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _artifactPaths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, INativePlugin> _nativePlugins = new(StringComparer.Ordinal);
     private readonly HashSet<string> _leaked = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _mutation = new(1, 1);
@@ -127,6 +128,7 @@ public sealed class HarnessPluginManager : IDisposable
             message = $"{Removed(trimmed, domain.Any(_leaked.Contains))}; {message}";
         if (domain.Any(_leaked.Contains))
             return message;
+        _artifactPaths.Remove(trimmed);
         var uninstall = await UninstallInstalledAsync(trimmed);
         return uninstall is null ? message : $"{message}; {uninstall}";
     }
@@ -209,6 +211,32 @@ public sealed class HarnessPluginManager : IDisposable
     {
         await _mutation.WaitAsync();
         try { return await EnableCoreAsync(package, commit); }
+        finally { _mutation.Release(); }
+    }
+
+    public async Task<string> ReloadAsync(string package, string? artifactPath = null,
+        SettingsCommit? commit = null,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutation.WaitAsync(cancellationToken);
+        try { return await ReloadCoreAsync(package, artifactPath, commit, cancellationToken); }
+        finally { _mutation.Release(); }
+    }
+
+    /** Releases in-process plugin state before a separate local Host process mutates shared files. */
+    public async Task DetachForExternalMutationAsync(string package, bool reclaimArtifact,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutation.WaitAsync(cancellationToken);
+        try { await DetachExternalCoreAsync(package, reclaimArtifact, cancellationToken); }
+        finally { _mutation.Release(); }
+    }
+
+    /** Reconciles in-process plugin activations with updated settings.yaml and plugins directory artifacts. */
+    public async Task SynchronizeWithDiskAsync(CancellationToken cancellationToken = default)
+    {
+        await _mutation.WaitAsync(cancellationToken);
+        try { await SynchronizeCoreAsync(cancellationToken); }
         finally { _mutation.Release(); }
     }
 
@@ -296,12 +324,20 @@ public sealed class HarnessPluginManager : IDisposable
         var directory = Path.GetDirectoryName(installPath)!;
         foreach (var package in packages)
             _installedDirectories[package] = directory;
+        return await LoadAndActivateArtifactAsync(installPath, signal);
+    }
+
+    private async Task<string> LoadAndActivateArtifactAsync(string installPath, CancellationToken signal)
+    {
+        var parentDirectory = Path.GetDirectoryName(installPath)!;
+        var directory = IsInstallationDirectory(parentDirectory) ? parentDirectory : null;
         if (_sandbox is not null)
         {
             var loaded = await _sandbox.LoadAsync(installPath, signal);
             Track(loaded.Loaded);
-            foreach (var package in loaded.Packages)
-                _installedDirectories[package] = directory;
+            if (directory is not null)
+                foreach (var package in loaded.Packages)
+                    _installedDirectories[package] = directory;
             if (loaded.Packages.Count == 0)
             {
                 var failures = loaded.Loaded.Skipped.Concat(_sandbox.Failures.Where(skip => skip.File == installPath));
@@ -310,7 +346,7 @@ public sealed class HarnessPluginManager : IDisposable
             }
             return string.Join('\n', await ActivatePackagesAsync(loaded.Packages));
         }
-        if (Path.GetExtension(path) is ".so" or ".dylib" || !RuntimeFeature.IsDynamicCodeSupported)
+        if (Path.GetExtension(installPath) is ".so" or ".dylib" || !RuntimeFeature.IsDynamicCodeSupported)
             return await ActivateNativeAsync(installPath);
         PluginLoadResult result;
         try
@@ -331,12 +367,221 @@ public sealed class HarnessPluginManager : IDisposable
             return reasons.Length == 0 ? $"assembly has no DSH plugin: {installPath}" : $"plugin load skipped: {reasons}";
         }
         Track(new PluginScanResult(result.Packages.Select(package =>
-            new ManagedPlugin(package, result.Context!, result.SharedDependencies, directory)).ToArray(), [], []));
+            new ManagedPlugin(package, result.Context!, result.SharedDependencies, directory, installPath)).ToArray(), [], []));
         var messages = await ActivatePackagesAsync(result.Packages);
         foreach (var notice in _host.SharedPool?.DrainNotices() ?? [])
             messages.Add($"note: {notice}");
         return string.Join('\n', messages);
     }
+
+    private async Task<string> ReloadCoreAsync(string package, string? artifactPath,
+        SettingsCommit? commit, CancellationToken signal)
+    {
+        var trimmed = package.Trim();
+        if (trimmed.Length == 0)
+            return "usage: /plugins reload <package> [path]";
+        _settings.Plugins = HarnessSettings.Load(_home).Plugins;
+        var sourcePath = await ValidateReloadSourceAsync(trimmed, artifactPath, signal);
+        if (sourcePath.Error is not null)
+            return sourcePath.Error;
+        if (sourcePath.Path is null && !IsKnown(trimmed))
+            return $"plugin package not found: {trimmed}";
+        if (_settings.Plugins.GetValueOrDefault(trimmed) is { Enabled: false } || !_settings.Plugins.ContainsKey(trimmed) && sourcePath.Path is not null)
+            await PersistAsync(trimmed, existing => Toggled(existing, enabled: true), commit);
+        var domain = CaptureDomain(trimmed);
+        var existingArtifact = _artifactPaths.GetValueOrDefault(trimmed);
+        var previousDirectory = _installedDirectories.GetValueOrDefault(trimmed);
+        var unloaded = await UnloadDomainForReloadAsync(trimmed, domain, signal);
+        if (unloaded is not null)
+            return unloaded;
+        var targetArtifact = sourcePath.Path is not null
+            ? await InstallReloadArtifactAsync(trimmed, sourcePath.Path, previousDirectory)
+            : (Path: existingArtifact, Error: (string?)null);
+        if (targetArtifact.Error is not null)
+            return targetArtifact.Error;
+        if (targetArtifact.Path is { } path)
+            return $"plugin {trimmed} reloaded; {await LoadAndActivateArtifactAsync(path, signal)}";
+        if (_sandbox is not null)
+            Track(await _sandbox.ScanAsync(signal));
+        var messages = await ActivatePackagesAsync(domain);
+        return messages.Count == 0 ? $"plugin {trimmed} reloaded" : $"plugin {trimmed} reloaded; {string.Join("; ", messages)}";
+    }
+
+    private async Task<(string? Path, string? Error)> ValidateReloadSourceAsync(string package, string? artifactPath, CancellationToken signal)
+    {
+        if (string.IsNullOrWhiteSpace(artifactPath))
+            return (null, null);
+        var fullPath = Path.GetFullPath(artifactPath.Trim());
+        if (!File.Exists(fullPath))
+            return (null, $"plugin file not found: {fullPath}");
+        var inspected = _sandbox is not null
+            ? await _sandbox.InspectPackagesAsync(fullPath, signal)
+            : InspectLegacyPackages(fullPath);
+        return inspected.Contains(package, StringComparer.Ordinal)
+            ? (fullPath, null)
+            : (null, $"plugin {package} was not found in {fullPath}");
+    }
+
+    private async Task<string?> UnloadDomainForReloadAsync(string package, IReadOnlyList<string> domain, CancellationToken signal)
+    {
+        if (_sandbox is not null)
+            await _sandbox.RetireDomainAsync(package, signal);
+        foreach (var member in domain)
+        {
+            if (!await StopActivationAsync(member, force: false))
+                continue;
+            _leaked.Add(member);
+            return $"plugin {package} reload aborted: previous activation did not settle (marked leaked)";
+        }
+        foreach (var member in domain)
+        {
+            var reclaim = IsManaged(member) || _nativePlugins.ContainsKey(member) || _artifactPaths.ContainsKey(member);
+            var weak = ReleaseRegistration(member, reclaim: reclaim, removeRegistration: reclaim);
+            if (reclaim)
+                _artifactPaths.Remove(member);
+            if (weak is not null)
+                await VerifyCollectionAsync(member, weak);
+        }
+        return null;
+    }
+
+    private async Task<(string? Path, string? Error)> InstallReloadArtifactAsync(string package, string sourcePath, string? previousDirectory)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var installed = PluginInstall.Install(sourcePath, _pluginsDirectory, overwrite: true);
+                var directory = Path.GetDirectoryName(installed)!;
+                if (previousDirectory is not null && !PathsEqual(previousDirectory, directory))
+                    await UninstallInstalledAsync(package);
+                _installedDirectories[package] = directory;
+                return (installed, null);
+            }
+            catch (Exception error) when (attempt < 60 && error is IOException or UnauthorizedAccessException)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                GC.WaitForPendingFinalizers();
+                await Task.Delay(50);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return (null, $"plugin install failed: {error.Message}");
+            }
+        }
+    }
+
+    private async Task DetachExternalCoreAsync(string package, bool reclaimArtifact, CancellationToken signal)
+    {
+        var trimmed = package.Trim();
+        if (trimmed.Length == 0 || !IsKnown(trimmed))
+            return;
+        var domain = CaptureDomain(trimmed);
+        if (_sandbox is not null && reclaimArtifact)
+            await _sandbox.RetireDomainAsync(trimmed, signal);
+        foreach (var member in domain)
+        {
+            if (await StopActivationAsync(member, force: false))
+            {
+                _leaked.Add(member);
+                continue;
+            }
+            var reclaim = reclaimArtifact && (IsManaged(member) || _nativePlugins.ContainsKey(member) || _artifactPaths.ContainsKey(member));
+            var weak = ReleaseRegistration(member, reclaim: reclaim, removeRegistration: reclaim);
+            if (reclaim)
+            {
+                _artifactPaths.Remove(member);
+                _installedDirectories.Remove(member);
+            }
+            if (weak is not null)
+                await VerifyCollectionAsync(member, weak);
+        }
+    }
+
+    private async Task SynchronizeCoreAsync(CancellationToken signal)
+    {
+        _settings.Plugins = HarnessSettings.Load(_home).Plugins;
+        foreach (var active in _composition.Activations.Select(item => item.Name).ToArray())
+        {
+            var disabled = _settings.Plugins.GetValueOrDefault(active) is { Enabled: false };
+            var missing = _artifactPaths.TryGetValue(active, out var artifact) && !File.Exists(artifact);
+            if (!disabled && !missing)
+                continue;
+            var leaked = await StopActivationAsync(active, force: false);
+            if (leaked || !missing)
+                continue;
+            var weak = ReleaseRegistration(active, reclaim: true, removeRegistration: true);
+            _artifactPaths.Remove(active);
+            _installedDirectories.Remove(active);
+            if (weak is not null)
+                _ = VerifyCollectionAsync(active, weak);
+        }
+        await LoadUntrackedArtifactsAsync(signal);
+        foreach (var package in _host.Catalog.PackageNames.OrderBy(name => name, StringComparer.Ordinal).ToArray())
+        {
+            if (_settings.Plugins.GetValueOrDefault(package)?.Enabled != false && _composition.Find(package) is null)
+                await ActivateAsync(package);
+        }
+    }
+
+    private async Task LoadUntrackedArtifactsAsync(CancellationToken signal)
+    {
+        if (_sandbox is not null)
+        {
+            Track(await _sandbox.ScanAsync(signal));
+            return;
+        }
+        if (!Directory.Exists(_pluginsDirectory))
+            return;
+        var tracked = new HashSet<string>(_artifactPaths.Values,
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        foreach (var subdirectory in Directory.EnumerateDirectories(_pluginsDirectory).OrderBy(path => path, StringComparer.Ordinal))
+        {
+            if (Path.GetFileName(subdirectory) == PluginHost.SharedPoolDirectoryName)
+                continue;
+            foreach (var file in Directory.EnumerateFiles(subdirectory).OrderBy(path => path, StringComparer.Ordinal))
+            {
+                var fullPath = Path.GetFullPath(file);
+                if (IsLibraryPath(fullPath) && !tracked.Contains(fullPath))
+                    LoadUntrackedFile(fullPath, subdirectory);
+            }
+        }
+    }
+
+    private void LoadUntrackedFile(string fullPath, string subdirectory)
+    {
+        if (Path.GetExtension(fullPath).Equals(".dll", StringComparison.OrdinalIgnoreCase) && RuntimeFeature.IsDynamicCodeSupported)
+        {
+            try
+            {
+                var result = _host.TryLoad(fullPath);
+                if (result.Packages.Count > 0)
+                {
+                    var directory = IsInstallationDirectory(subdirectory) ? subdirectory : null;
+                    Track(new PluginScanResult(result.Packages.Select(package =>
+                        new ManagedPlugin(package, result.Context!, result.SharedDependencies, directory, fullPath)).ToArray(), [], []));
+                }
+                return;
+            }
+            catch (BadImageFormatException)
+            {
+            }
+            catch (Exception)
+            {
+                return;
+            }
+        }
+        if (_nativeBridge is null)
+            return;
+        var native = _host.LoadNativePlugin(fullPath, _nativeBridge);
+        if (native.Succeeded)
+            Track(new PluginScanResult([], [native.Plugin!], []));
+    }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     // With isolation disabled, discovery retains legacy in-process metadata execution, but never publishes it to the live catalog.
     private static IReadOnlyList<string> InspectLegacyPackages(string path)
@@ -373,7 +618,10 @@ public sealed class HarnessPluginManager : IDisposable
             return $"native plugin load failed: {load.Reason}";
         var plugin = load.Plugin!;
         _nativePlugins[plugin.Package] = plugin;
-        _installedDirectories[plugin.Package] = Path.GetDirectoryName(installPath)!;
+        _artifactPaths[plugin.Package] = installPath;
+        var parent = Path.GetDirectoryName(installPath)!;
+        if (IsInstallationDirectory(parent))
+            _installedDirectories[plugin.Package] = parent;
         return await ActivateAsync(plugin.Package);
     }
 
@@ -443,22 +691,31 @@ public sealed class HarnessPluginManager : IDisposable
             _loadedContexts[entry.Package] = entry.Context;
             if (entry.SharedDependencies.Count > 0)
                 _sharedDependencies[entry.Package] = entry.SharedDependencies;
+            if (entry.ArtifactPath is { } artifactPath)
+                _artifactPaths[entry.Package] = artifactPath;
             if (entry.InstallDirectory is { } directory && IsInstallationDirectory(directory))
                 _installedDirectories[entry.Package] = directory;
         }
         foreach (var plugin in loaded.Native)
         {
             _nativePlugins[plugin.Package] = plugin;
-            if (plugin is NativePluginLibrary library && Path.GetDirectoryName(library.Context.SourcePath) is { } directory
-                && IsInstallationDirectory(directory))
-                _installedDirectories[plugin.Package] = directory;
+            if (plugin is NativePluginLibrary library)
+            {
+                _artifactPaths[plugin.Package] = library.Context.SourcePath;
+                if (Path.GetDirectoryName(library.Context.SourcePath) is { } directory && IsInstallationDirectory(directory))
+                    _installedDirectories[plugin.Package] = directory;
+            }
         }
         if (_sandbox is not null)
         {
             foreach (var package in _host.Catalog.PackageNames)
-                if (_sandbox.ArtifactPath(package) is { } path && Path.GetDirectoryName(path) is { } directory
-                    && IsInstallationDirectory(directory))
+            {
+                if (_sandbox.ArtifactPath(package) is not { } path)
+                    continue;
+                _artifactPaths[package] = path;
+                if (Path.GetDirectoryName(path) is { } directory && IsInstallationDirectory(directory))
                     _installedDirectories[package] = directory;
+            }
         }
     }
 
@@ -596,6 +853,7 @@ public sealed class HarnessPluginManager : IDisposable
         }
         _nativePlugins.Clear();
         _installedDirectories.Clear();
+        _artifactPaths.Clear();
         _mutation.Dispose();
     }
 

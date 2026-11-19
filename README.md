@@ -120,6 +120,8 @@ plugins:
 ```
 </details>
 
+插件无需替换整个 `gui` 入口，即可通过 `GuiWorkbench` 服务自定义工作台侧栏导航页、主窗口顶栏操作区、会话顶栏动作、会话横幅面板、底部状态栏以及「设置 → 插件与 MCP」分区面板，并可在「插件市场」或通过 `/plugins reload <包名> [路径]` 在运行期热加载与原地热重载。
+
 ### 编辑器与 IDE支持
 
 `@deepseek-ai/dsh-ide` 提供外部编辑器启动、文件/行列定位、diff、历史记录和客户端桥接等功能。
@@ -280,7 +282,7 @@ storage:
 
 ### 插件与扩展
 
-支持托管 JIT 插件与原生 NativeAOT 共享库插件，使用 `/plugins` 命令管理，也可以按 `plugins/<目录>/` 布局部署到安装目录。
+支持托管 JIT 插件与原生 NativeAOT 共享库插件，使用 `/plugins` 命令（`list`、`add`、`enable`、`disable`、`reload`、`remove`）或 GUI「插件市场」管理，也可以按 `plugins/<目录>/` 布局部署到安装目录；原地重载会保留 `settings.yaml` 中的插件参数与权限设置。
 
 | 插件 | 能力 | 使用边界 |
 |---|---|---|

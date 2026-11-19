@@ -216,13 +216,29 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         NavigationRequested?.Invoke(WorkspaceDestination.Page);
     }
 
+    /** Removes a contributed page, clears cached content, and returns to the dashboard when that page was in view. */
+    public void RemoveContributedPage(string id, bool returnToDashboard = true)
+    {
+        var active = ActivePage?.Id == id;
+        Pages.Remove(id);
+        if (!active)
+            return;
+        if (returnToDashboard)
+        {
+            ShowDashboard();
+            return;
+        }
+        PageContent = null;
+        ActivePage = null;
+    }
+
     /**
      * The pages this module contributes: files and Git on the machine and project of the session in view (this computer's home directory from the dashboard), and machine management.
      * Files and Git need the host capabilities fs.transfer and git.inspect; a new session asked for from a Git worktree opens the new-session form in that worktree.
      */
     public void RegisterHostPages(Geometry filesIcon, Geometry gitIcon, Geometry machinesIcon)
     {
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Files, "文件", filesIcon, context => new HostPageViewModel(
+        Pages.RegisterDefault(0, new WorkspacePageEntry(WorkspacePages.Files, "文件", filesIcon, context => new HostPageViewModel(
             Fleet, "文件", FilesProtocol.Capability, context.Machine ?? MachineSpec.LocalName, context.ProjectPath ?? RemotePaths.Home,
             async (host, machine, path, style) =>
             {
@@ -234,7 +250,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
                 }
                 return files;
             })));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Git, "Git", gitIcon, context => new HostPageViewModel(
+        Pages.RegisterDefault(1, new WorkspacePageEntry(WorkspacePages.Git, "Git", gitIcon, context => new HostPageViewModel(
             Fleet, "Git", GitProtocol.Capability, context.Machine ?? MachineSpec.LocalName, context.ProjectPath ?? "",
             async (host, machine, path, style) =>
             {
@@ -245,7 +261,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
             },
             folderPicker: () => FolderPicker?.Invoke() ?? Task.FromResult<string?>(null),
             pathSelected: (machine, path) => (GitWorkspaceMachine, GitWorkspacePath) = (machine, path))));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
+        Pages.RegisterDefault(2, new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
     }
 
     /** Opens the new-session form, preset to a machine and project when started from one. */

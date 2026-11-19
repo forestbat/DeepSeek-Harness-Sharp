@@ -30,7 +30,11 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend,
         ensureAuthenticated();
         if (request.Settings is null || string.IsNullOrWhiteSpace(request.ExpectedRevision))
             throw new LocalRpcException(SetError) { ErrorCode = JsonRpcException.InvalidParams };
-        return await backend.SetOutboundAsync(request, cancellationToken).ConfigureAwait(false);
+        try { return await backend.SetOutboundAsync(request, cancellationToken).ConfigureAwait(false); }
+        catch (JsonRpcException error)
+        {
+            throw new LocalRpcException(error.Message) { ErrorCode = error.Code, ErrorData = error.ErrorData };
+        }
     }
 
     public async Task<RemoteOutboundProxyProbeResult> ProbeAsync(RemoteOutboundProxyProbeRequest request, CancellationToken cancellationToken)
@@ -43,7 +47,7 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend,
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_probes.ContainsKey(operationId))
                 throw new LocalRpcException("outbound.probe operationId is already active on this connection") { ErrorCode = JsonRpcException.InvalidParams };
-            operation = new ProbeOperation(lifetime);
+            operation = new ProbeOperation(lifetime, cancellationToken);
             _probes.Add(operationId, operation);
         }
 
@@ -134,13 +138,18 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend,
         private readonly object _gate = new();
         private readonly CancellationTokenSource _source = new();
         private readonly CancellationTokenRegistration _lifetimeCancellation;
+        private readonly CancellationTokenRegistration _requestCancellation;
         private Task? _cancellation;
         private bool _finishing;
 
-        /** Link connection cancellation through the tracked task so callback completion remains observable. */
-        public ProbeOperation(CancellationToken lifetime)
+        /** Link request and connection cancellation through the tracked task so callback completion remains observable. */
+        public ProbeOperation(CancellationToken lifetime, CancellationToken request)
         {
             _lifetimeCancellation = lifetime.UnsafeRegister(static state =>
+            {
+                _ = ((ProbeOperation)state!).Cancel();
+            }, this);
+            _requestCancellation = request.UnsafeRegister(static state =>
             {
                 _ = ((ProbeOperation)state!).Cancel();
             }, this);
@@ -174,6 +183,7 @@ internal sealed class HostNetworkMethods(IRemoteNetworkBackend backend,
             finally
             {
                 _lifetimeCancellation.Dispose();
+                _requestCancellation.Dispose();
                 _source.Dispose();
             }
         }

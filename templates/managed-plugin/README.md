@@ -80,6 +80,18 @@ public sealed class Plugin(string packageName) : IDshPlugin
 ## 安装与卸载
 
 - `/plugins add <路径>`：把目标 dll 及其 deps.json 闭包拷入 `plugins/<dll 文件名>/`（宿主镜像已有的程序集自动跳过），随后热装载。
+- `/plugins reload <包名> [新构建的 dll]`：保留 `settings.yaml` 中的插件参数、权限与执行角色，协作式卸载旧加载上下文后原地装载并重新激活；传入新 dll 路径时会更新安装目录中的插件文件。
 - `/plugins remove <包名>`：协作式卸载；仍有下游 Inject 其服务的共享库会被拒绝并列出依赖方。
-- 更新插件：先 `/plugins remove <包名>`（卸载效果、释放文件占用，并删除 `/plugins add` 落盘的 `plugins/<目录名>/`，目录名就是 dll 文件名；手工摆放的目录不归 add 管，remove 只做摘除，需你自己替换文件），然后 `/plugins add <新构建的 dll>`。同名文件内容不一致时 add 一律拒绝——这是为了不覆盖手放或他人写的同名插件，所以更新必须先 `remove` 旧副本（或手工删掉旧文件）。
+- 更新插件：可直接执行 `/plugins reload <包名> <新构建的 dll>`（或在 GUI「插件市场」填入新 dll 路径后点击「重载」）；常规 `/plugins add` 在同名文件内容不一致时仍会拒绝覆盖，以防误覆盖手放或他人同名插件。
 - 工具重名不再是错误：后注册者自动以 `<包名末段>-<工具名>` 可见并 WARN；PTC 模式下非标识符工具名用 `tools.call("<name>", args)` 调用。
+
+## 自定义局部 GUI（`GuiWorkbench`）
+
+桌面端 `@deepseek-ai/dsh-gui` 向宿主 `Context` 提供 `GuiWorkbench` 服务（服务名 `"guiWorkbench"`），进程内插件可通过 `InjectTypes => [typeof(GuiWorkbench)]` 注入并向现有窗口贡献局部界面：
+
+- `workbench.RegisterPage(id, label, factory, icon)`：向左侧工作台导航栏添加或原地替换自定义页面（`factory` 可直接返回 Avalonia `Control`，或返回配合 `RegisterDataTemplate` 渲染的视图模型）。
+- `workbench.RegisterToolbarItem(id, factory)`：向主窗口顶栏操作区注册按钮或控件。
+- `workbench.RegisterChatHeaderItem(id, factory)`、`RegisterChatBanner(id, factory)`、`RegisterStatusItem(id, factory)`：向当前会话顶栏、横幅区或底部状态栏注册局部控件。
+- `workbench.RegisterSettingsPanel(id, title, factory)` 与 `RegisterDataTemplate(template)`：向「设置 → 插件与 MCP」挂载自定义配置卡片，或动态注册窗口级数据模板。
+
+上述注册方法均返回 `IDisposable`；将其随插件 `Apply` 返回值一并释放，即可在禁用、移除或热重载时自动摘除界面节点并回收可卸载 `PluginLoadContext`。启用沙箱（`sandbox.enabled: true`）时，访问 `GuiWorkbench` 的外部插件须在 `settings.yaml` 中配置 `execution: host`。

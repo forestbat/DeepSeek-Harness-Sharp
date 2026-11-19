@@ -60,6 +60,9 @@ public static class PluginCommand
                         return RunAsync(manager.DisableAsync(tokens[1]));
                     case "enable" when tokens.Length > 1:
                         return RunAsync(manager.EnableAsync(tokens[1]));
+                    case "reload" when tokens.Length > 1:
+                        var reloadPath = tokens.Length > 2 ? string.Join(' ', tokens.Skip(2)).Trim() : null;
+                        return RunAsync(manager.ReloadAsync(tokens[1], reloadPath));
                     case BanRead or EnableRead when tokens.Length > 1:
                         return RunAsync(manager.SetPermissionAsync(tokens[1], PluginPermission.Read, allowed: tokens[0] == EnableRead));
                     case BanWrite or EnableWrite when tokens.Length > 1:
@@ -80,7 +83,7 @@ public static class PluginCommand
     private const string EnableWrite = "enable_write";
     private const string BanNetwork = "ban_network";
     private const string EnableNetwork = "enable_network";
-    private const string PackageOps = $"remove <pkg> [--force] | disable <pkg> | enable <pkg> | {BanRead} <pkg> | {EnableRead} <pkg> | {BanWrite} <pkg> | {EnableWrite} <pkg> | {BanNetwork} <pkg> | {EnableNetwork} <pkg>";
+    private const string PackageOps = $"remove <pkg> [--force] | disable <pkg> | enable <pkg> | reload <pkg> [path] | {BanRead} <pkg> | {EnableRead} <pkg> | {BanWrite} <pkg> | {EnableWrite} <pkg> | {BanNetwork} <pkg> | {EnableNetwork} <pkg>";
 
     private static string Ops => RuntimeFeature.IsDynamicCodeSupported
         ? $"ops: list | doctor | add <pkg|path> | {PackageOps}"
@@ -101,6 +104,8 @@ public static class PluginCommand
                 new CommandDescriptor("remove", "Uninstall a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("disable", "Disable a plugin", ArgumentSchemas: [package]),
                 new CommandDescriptor("enable", "Enable a plugin", ArgumentSchemas: [package]),
+                new CommandDescriptor("reload", "Reload a plugin in place or from a new library path",
+                    ArgumentSchemas: [package, new CommandArgumentSchema("path", "text", "Optional updated plugin library path", Required: false)]),
                 new CommandDescriptor(BanRead, "Deny reads through the sandbox broker", ArgumentSchemas: [package]),
                 new CommandDescriptor(EnableRead, "Allow reads through the sandbox broker", ArgumentSchemas: [package]),
                 new CommandDescriptor(BanWrite, "Deny writes through the sandbox broker", ArgumentSchemas: [package]),
