@@ -2,9 +2,12 @@ bin/
 obj/
 /packages/
 riderModule.iml
+# 基准的中间产物: BenchmarkDotNet 在项目目录里放 .bdn 与自动生成的宿主工程, 它们每次运行都会变
+**/.bdn/
 /_ReSharper.Caches/
-/artifacts
-/artifacts020
+# 试验构建产物与测试中间结果: 名字由各次运行自定(artifacts020/artifacts-n3/...), 一律不进版本库
+/artifacts*/
+/tests/.scratch/
 /.daemon-tests
 /plans
 /.idea
