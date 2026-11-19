@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Styling;
 using Avalonia.Threading;
 
@@ -36,7 +37,8 @@ public sealed class MarkdownView : UserControl
     private const string DefaultCodeLanguage = "code";
     private const string MonoFontFallback = "Consolas, monospace";
 
-    private static readonly IBrush TranslucentGray = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+    // The fallback survives headless dispatcher replacement, so it must not retain dispatcher affinity.
+    private static readonly IBrush TranslucentGray = new ImmutableSolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
     private static readonly InlineDelimiter[] InlineDelimiters =
     [
         new("`", false, false, true),

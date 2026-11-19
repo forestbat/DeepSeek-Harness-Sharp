@@ -211,9 +211,26 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         var context = _pageContext?.Invoke() ?? new WorkspacePageContext(ActiveSession?.Machine, ActiveSession?.Card.ProjectPath);
         if (entry.Id == WorkspacePages.Git && GitWorkspacePath is { Length: > 0 } explicitGitPath)
             context = new(GitWorkspaceMachine ?? context.Machine, explicitGitPath);
-        PageContent = entry.Create(context);
+        var content = entry.Create(context);
         ActivePage = entry;
         NavigationRequested?.Invoke(WorkspaceDestination.Page);
+        PageContent = content;
+    }
+
+    /** Removes a contributed page, clears cached content, and returns to the dashboard when that page was in view. */
+    public void RemoveContributedPage(string id, bool returnToDashboard = true)
+    {
+        var active = ActivePage?.Id == id;
+        Pages.Remove(id);
+        if (!active)
+            return;
+        if (returnToDashboard)
+        {
+            ShowDashboard();
+            return;
+        }
+        PageContent = null;
+        ActivePage = null;
     }
 
     /**
@@ -222,7 +239,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
      */
     public void RegisterHostPages(Geometry filesIcon, Geometry gitIcon, Geometry machinesIcon)
     {
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Files, "文件", filesIcon, context => new HostPageViewModel(
+        Pages.RegisterDefault(0, new WorkspacePageEntry(WorkspacePages.Files, "文件", filesIcon, context => new HostPageViewModel(
             Fleet, "文件", FilesProtocol.Capability, context.Machine ?? MachineSpec.LocalName, context.ProjectPath ?? RemotePaths.Home,
             async (host, machine, path, style) =>
             {
@@ -234,7 +251,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
                 }
                 return files;
             })));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Git, "Git", gitIcon, context => new HostPageViewModel(
+        Pages.RegisterDefault(1, new WorkspacePageEntry(WorkspacePages.Git, "Git", gitIcon, context => new HostPageViewModel(
             Fleet, "Git", GitProtocol.Capability, context.Machine ?? MachineSpec.LocalName, context.ProjectPath ?? "",
             async (host, machine, path, style) =>
             {
@@ -245,7 +262,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
             },
             folderPicker: () => FolderPicker?.Invoke() ?? Task.FromResult<string?>(null),
             pathSelected: (machine, path) => (GitWorkspaceMachine, GitWorkspacePath) = (machine, path))));
-        Pages.Register(new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
+        Pages.RegisterDefault(2, new WorkspacePageEntry(WorkspacePages.Machines, "机器", machinesIcon, _ => Machines));
     }
 
     /** Opens the new-session form, preset to a machine and project when started from one. */
