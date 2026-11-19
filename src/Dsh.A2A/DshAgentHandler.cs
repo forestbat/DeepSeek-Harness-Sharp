@@ -29,6 +29,8 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
     private readonly string? _provider;
     private readonly string? _model;
     private readonly Dictionary<string, SessionRecord> _sessions = [];
+    /** task id -> 正在执行的任务所属会话: 取消请求只带 task id。 */
+    private readonly Dictionary<string, SessionRecord> _byTask = [];
     private readonly Lock _gate = new();
 
     public DshAgentHandler(Context ctx, string? provider = null, string? model = null)
@@ -47,6 +49,10 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
             if (string.IsNullOrEmpty(text))
                 throw new A2AException("message has no text parts", A2AErrorCode.ContentTypeNotSupported);
             var record = await ResolveSessionAsync(context, cancellationToken);
+            // 取消请求只带 task id, 不带 contextId —— 没有这张表, 取消就找不到正在跑的 agent,
+            // 任务状态会翻成 canceled 而底下的 LLM 请求照样在跑, 拆机时就会一直等它。
+            lock (_gate)
+                _byTask[context.TaskId] = record;
             await updater.SubmitAsync(cancellationToken: cancellationToken);
             await updater.StartWorkAsync(cancellationToken: cancellationToken);
             await record.Gate.WaitAsync(cancellationToken);
@@ -70,6 +76,11 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
             }
             finally
             {
+                lock (_gate)
+                {
+                    if (_byTask.TryGetValue(context.TaskId, out var current) && ReferenceEquals(current, record))
+                        _byTask.Remove(context.TaskId);
+                }
                 record.Gate.Release();
             }
         }
@@ -87,12 +98,27 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
         }
     }
 
-    public async Task CancelAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
+    /**
+     * 让这个任务正在跑的 agent 停手。返回是否找到并取消了它。
+     *
+     * 取消请求只带 task id, 不带 contextId, 所以查找必须走 task 表;
+     * 而且必须在 A2A SDK 的取消路径之前调用 —— SDK 那一步要与事件通知器抢锁,
+     * 而锁正被卡在 LLM 请求上的执行体持有; 不先解开这一步, 取消就会一直等下去。
+     */
+    public bool CancelAgentForTask(string taskId)
     {
         SessionRecord? record;
         lock (_gate)
-            _sessions.TryGetValue(context.ContextId, out record);
-        record?.Agent.Cancel(new AgentCancelCause.User());
+            _byTask.TryGetValue(taskId, out record);
+        if (record is null)
+            return false;
+        record.Agent.Cancel(new AgentCancelCause.User());
+        return true;
+    }
+
+    public async Task CancelAsync(RequestContext context, AgentEventQueue eventQueue, CancellationToken cancellationToken)
+    {
+        CancelAgentForTask(context.TaskId);
         var updater = new TaskUpdater(eventQueue, context.TaskId, context.ContextId);
         await updater.CancelAsync(cancellationToken: cancellationToken);
     }
@@ -104,6 +130,7 @@ public sealed class DshAgentHandler : IAgentHandler, IDisposable
         {
             records = [.. _sessions.Values];
             _sessions.Clear();
+            _byTask.Clear();
         }
         foreach (var record in records)
         {

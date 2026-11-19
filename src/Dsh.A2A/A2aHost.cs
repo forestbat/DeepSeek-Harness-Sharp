@@ -20,7 +20,14 @@ public sealed class A2aHost : IDisposable
 
     private const string BearerPrefix = "Bearer ";
 
+    /**
+     * 拆机时等待在途请求的上限。取消已经会中止 agent 的 LLM 请求, 这里只是兜底:
+     * 一个卡住的子任务不该让宿主(及其测试)永远退不出去。
+     */
+    private static readonly TimeSpan TeardownWait = TimeSpan.FromSeconds(5);
+
     private readonly A2AServer _server;
+    private readonly DshAgentHandler _handler;
     private AgentCard? _card;
     private readonly A2aHostOptions _options;
     private readonly string _host;
@@ -46,6 +53,7 @@ public sealed class A2aHost : IDisposable
         Endpoint = $"http://{_authority}";
         _listener = new TcpListener(BindAddress(host), port);
         _server = new A2AServer(handler, new InMemoryTaskStore(), new ChannelEventNotifier(), NullLogger<A2AServer>.Instance);
+        _handler = handler;
     }
 
     /** The actual bound endpoint is published by Start, after the socket owns its assigned port. */
@@ -69,7 +77,7 @@ public sealed class A2aHost : IDisposable
             return;
         _stop.Cancel();
         _listener.Stop();
-        _loop?.GetAwaiter().GetResult();
+        WaitQuietly(_loop);
         TcpClient[] clients;
         Task[] handlers;
         lock (_clients)
@@ -79,9 +87,21 @@ public sealed class A2aHost : IDisposable
         }
         foreach (var client in clients)
             client.Dispose();
-        Task.WhenAll(handlers).GetAwaiter().GetResult();
-        _server.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        WaitQuietly(Task.WhenAll(handlers));
+        WaitQuietly(_server.DisposeAsync().AsTask());
         _stop.Dispose();
+    }
+
+    /**
+     * 等在途任务收尾, 最多等 TeardownWait。取消已经会中止 agent 的 LLM 请求, 这里只是兜底:
+     * 一个卡住的子任务不该让宿主(及其测试)永远退不出去。
+     * 用 WhenAny 而不是 Wait —— 被等的任务失败或被取消都无所谓, 拆机途中没有补救动作。
+     */
+    private static void WaitQuietly(Task? task)
+    {
+        if (task is null)
+            return;
+        Task.WhenAny(task, Task.Delay(TeardownWait)).GetAwaiter().GetResult();
     }
 
     private async Task AcceptLoopAsync()
@@ -186,25 +206,29 @@ public sealed class A2aHost : IDisposable
             {
                 case A2AMethods.SendMessage:
                     await WriteJsonAsync(stream, JsonRpcResponse.CreateJsonRpcResponse(rpc.Id,
-                        await _server.SendMessageAsync(Require<SendMessageRequest>(rpc), cancellationToken)));
+                        await _server.SendMessageAsync(Require<SendMessageRequest>(rpc), null, cancellationToken)));
                     return;
                 case A2AMethods.GetTask:
                     await WriteJsonAsync(stream, JsonRpcResponse.CreateJsonRpcResponse(rpc.Id,
-                        await _server.GetTaskAsync(Require<GetTaskRequest>(rpc), cancellationToken)));
+                        await _server.GetTaskAsync(Require<GetTaskRequest>(rpc), null, cancellationToken)));
                     return;
                 case A2AMethods.ListTasks:
                     await WriteJsonAsync(stream, JsonRpcResponse.CreateJsonRpcResponse(rpc.Id,
-                        await _server.ListTasksAsync(Require<ListTasksRequest>(rpc), cancellationToken)));
+                        await _server.ListTasksAsync(Require<ListTasksRequest>(rpc), null, cancellationToken)));
                     return;
                 case A2AMethods.CancelTask:
+                    var cancelRequest = Require<CancelTaskRequest>(rpc);
+                    // 先让真正在跑的 agent 停手, 再交给 SDK 改任务状态: SDK 那条路要与事件通知器抢锁,
+                    // 而锁正被卡在 LLM 请求上的执行体持有, 两边对调就是一个谁都退不出来的等。
+                    var agentStopped = _handler.CancelAgentForTask(cancelRequest.Id);
                     await WriteJsonAsync(stream, JsonRpcResponse.CreateJsonRpcResponse(rpc.Id,
-                        await _server.CancelTaskAsync(Require<CancelTaskRequest>(rpc), cancellationToken)));
+                        await CancelTaskAsync(cancelRequest, agentStopped, cancellationToken)));
                     return;
                 case A2AMethods.SendStreamingMessage:
-                    await WriteStreamAsync(stream, rpc.Id, _server.SendStreamingMessageAsync(Require<SendMessageRequest>(rpc), cancellationToken), cancellationToken);
+                    await WriteStreamAsync(stream, rpc.Id, _server.SendStreamingMessageAsync(Require<SendMessageRequest>(rpc), null, cancellationToken), cancellationToken);
                     return;
                 case A2AMethods.SubscribeToTask:
-                    await WriteStreamAsync(stream, rpc.Id, _server.SubscribeToTaskAsync(Require<SubscribeToTaskRequest>(rpc), cancellationToken), cancellationToken);
+                    await WriteStreamAsync(stream, rpc.Id, _server.SubscribeToTaskAsync(Require<SubscribeToTaskRequest>(rpc), null, cancellationToken), cancellationToken);
                     return;
                 default:
                     await WriteJsonAsync(stream, JsonRpcResponse.MethodNotFoundResponse(rpc.Id, $"unknown method: {rpc.Method}"));
@@ -218,6 +242,30 @@ public sealed class A2aHost : IDisposable
         catch (Exception error) when (error is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             await WriteJsonAsync(stream, JsonRpcResponse.InternalErrorResponse(rpc.Id, error.Message));
+        }
+    }
+
+    /**
+     * 取消任务。agent 已经被抢先停掉时, 执行体自己会把任务标成 canceled,
+     * 于是 SDK 看到"已是终态"并报错 —— 那正是取消要的结果, 所以这里按成功返回该任务;
+     * 其它终态(已完成/已失败)仍按错误上报。
+     */
+    private async Task<AgentTask> CancelTaskAsync(CancelTaskRequest request, bool agentStopped, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _server.CancelTaskAsync(request, null, cancellationToken);
+        }
+        catch (A2AException)
+        {
+            // 只有"我们刚刚亲自停掉了 agent"才可能撞上这个终态: 执行体先一步把任务标成 canceled。
+            // 对本来就已取消/已完成的任务, 错误照旧上报 —— 重复取消应当失败。
+            if (!agentStopped)
+                throw;
+            var task = await _server.GetTaskAsync(new GetTaskRequest { Id = request.Id }, null, cancellationToken);
+            if (task.Status.State == TaskState.Canceled)
+                return task;
+            throw;
         }
     }
 
