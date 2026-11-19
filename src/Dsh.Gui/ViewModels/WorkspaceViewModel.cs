@@ -211,9 +211,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         var context = _pageContext?.Invoke() ?? new WorkspacePageContext(ActiveSession?.Machine, ActiveSession?.Card.ProjectPath);
         if (entry.Id == WorkspacePages.Git && GitWorkspacePath is { Length: > 0 } explicitGitPath)
             context = new(GitWorkspaceMachine ?? context.Machine, explicitGitPath);
-        PageContent = entry.Create(context);
+        var content = entry.Create(context);
         ActivePage = entry;
         NavigationRequested?.Invoke(WorkspaceDestination.Page);
+        PageContent = content;
     }
 
     /** Removes a contributed page, clears cached content, and returns to the dashboard when that page was in view. */

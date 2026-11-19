@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -58,6 +59,8 @@ public sealed class GuiSlotItem(string id, string? title = null) : INotifyProper
 public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
 {
     public const string ServiceName = "guiWorkbench";
+
+    private const int UiDispatchTimeoutMilliseconds = 5000;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -419,21 +422,17 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         var inView = viewModel.Page == AppPage.WorkspacePage && wasActive;
         var reopen = inView || (viewModel.Page == AppPage.Dashboard && _evictedPageId == page.Id);
         if (wasActive)
+        {
             ScrubObject(viewModel.Workspace.PageContent);
+            viewModel.Workspace.PageContent = null;
+            viewModel.Workspace.ActivePage = null;
+            FlushDetachedLayout();
+        }
         viewModel.Workspace.Pages.Register(entry);
         if (reopen)
         {
             _evictedPageId = null;
             viewModel.Workspace.OpenPage(entry);
-            if (wasActive)
-                FlushDetachedLayout();
-            return;
-        }
-        if (wasActive)
-        {
-            viewModel.Workspace.PageContent = null;
-            viewModel.Workspace.ActivePage = null;
-            FlushDetachedLayout();
         }
     }
 
@@ -557,8 +556,13 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         Window? window;
         lock (_gate)
             window = _window;
-        if (window is { IsVisible: true })
-            window.UpdateLayout();
+        if (window is null)
+            return;
+        foreach (var presenter in window.GetVisualDescendants().OfType<ContentPresenter>())
+        {
+            if (presenter.Content is null && presenter.Child is not null)
+                presenter.UpdateChild();
+        }
     }
 
     private void OnPropertyChanged(string propertyName)
@@ -583,7 +587,7 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
             return;
         }
         var operation = Dispatcher.UIThread.InvokeAsync(action);
-        operation.GetTask().Wait(TimeSpan.FromMilliseconds(500));
+        operation.GetTask().Wait(TimeSpan.FromMilliseconds(UiDispatchTimeoutMilliseconds));
     }
 
     private void ScrubObject(object? value)
