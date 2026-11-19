@@ -167,7 +167,9 @@ public sealed class SkillCatalog : IDisposable
     private static CatalogState RecoverState(Session session)
     {
         var state = new CatalogState();
-        foreach (var sessionEvent in session.SnapshotEvents())
+        // 状态是"最后发布的那份摘要": 只看常驻尾窗。窗口化恢复的会话里前缀要按页读回来(383MB 会话实测 24s),
+        // 而那次发布若在窗口之前, 代价就是每恢复一次多一条目录消息 —— 比整份日志读一遍便宜得多。
+        foreach (var sessionEvent in session.ResidentEvents())
         {
             if (sessionEvent.Data is not UserMessagePayload payload
                 || payload.Message.Source is not PluginMessageSource source

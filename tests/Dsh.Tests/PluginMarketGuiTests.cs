@@ -22,7 +22,7 @@ public sealed class PluginMarketGuiTests
     private const string BrowseTip = "浏览并选择插件文件";
 
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "gui-screenshots"));
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch", "gui-screenshots"));
 
     [Fact]
     public async Task Market_PermissionToggles_And_TuiCommand_ShareSettings() => await HeadlessGui.RunAsync(async () =>

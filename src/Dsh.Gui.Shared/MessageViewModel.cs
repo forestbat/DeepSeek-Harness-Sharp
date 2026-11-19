@@ -55,6 +55,9 @@ public sealed partial class MessageViewModel : ObservableObject
     /** 这条记录对应的事件序号; 时间线跳转/回退/分叉都按它定位(合成出来的界面行没有序号)。 */
     public long? Seq { get; init; }
 
+    /** 产生这条记录的事件序号(合成行取当时正在应用的那一条): 会话被截断时据此删掉尾部消息。 */
+    public long RenderSeq { get; set; }
+
     /** 产生这条记录的事件时间(epoch 毫秒); 合成行没有事件时间。 */
     public long? Time { get; init; }
 

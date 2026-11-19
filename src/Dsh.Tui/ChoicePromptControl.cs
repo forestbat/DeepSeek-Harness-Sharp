@@ -88,6 +88,10 @@ public sealed class ChoicePromptControl
             case ConsoleKey.Spacebar when _footerFocus == 0:
                 State.Select(State.FocusedIndex);
                 return;
+            // GPU 窗口的文本事件没有键名, 空格只以字符形式到达。
+            case ConsoleKey.NoName when key.KeyChar == ' ' && _footerFocus == 0:
+                State.Select(State.FocusedIndex);
+                return;
         }
         if (_footerFocus != 1 && key.KeyChar is >= '1' and <= '9')
         {

@@ -13,6 +13,8 @@ public static class SessionErrorCodes
     public const string Corruption = "SessionCorruption";
     public const string NotFound = "SessionNotFound";
     public const string ReadOnly = "SessionReadOnly";
+    public const string LeaseHeld = "SessionLeaseHeld";
+    public const string LeaseLost = "SessionLeaseLost";
 }
 
 public abstract class SessionPersistenceException : Exception
@@ -64,6 +66,25 @@ public sealed class SessionPersistenceCorruptionException(string message, Except
     : SessionPersistenceException(message, innerException)
 {
     public override string Code => SessionErrorCodes.Corruption;
+}
+
+/** 会话已被别的进程持有写租约: 这份日志只能由它追加, 调用方要么连到它那里, 要么显式 take-over。 */
+public sealed class SessionLeaseHeldException(SessionLeaseHolder? holder, string message)
+    : SessionPersistenceException(message)
+{
+    public SessionLeaseHolder? Holder { get; } = holder;
+    public override string Code => SessionErrorCodes.LeaseHeld;
+}
+
+/** 本进程的写租约已被别人接管(fencing): 必须立刻停止落盘, 否则两套序号会交织进同一份日志。 */
+public sealed class SessionLeaseLostException(int pid, SessionLeaseHolder? holder)
+    : SessionPersistenceException(
+        $"session lease held by pid {pid} was taken over by "
+        + (holder is { Pid: > 0 } ? $"pid {holder.Pid} on {holder.Machine} (epoch {holder.Epoch})" : "another writer")
+        + "; stopping this writer")
+{
+    public SessionLeaseHolder? Holder { get; } = holder;
+    public override string Code => SessionErrorCodes.LeaseLost;
 }
 
 public sealed record SessionLocation(string Kind, string Path);

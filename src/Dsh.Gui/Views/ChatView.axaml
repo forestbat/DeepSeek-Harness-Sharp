@@ -285,12 +285,16 @@
     <!--
       视口不在底部时(例如点开上面某条折叠、被特意留在原处之后)才出现: 它只在用户自己点的时候回到最新,
       不做任何自动贴底 —— 自动贴底会把用户正在读的位置抢走。
+      尺寸取 64(原 32 的四倍面积): 32 太小, 深色主题下三级文字色又几乎看不见箭头。
+      箭头用主题主文字色, 按钮自带卡片底色和细边框, 深浅两套主题下都清晰。
     -->
-    <Button Grid.Column="0" Name="JumpToLatest" Classes="Icon" Width="32" Height="32"
+    <Button Grid.Column="0" Name="JumpToLatest" Classes="Icon" Width="64" Height="64"
             HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,14"
             IsVisible="False" ZIndex="5" ToolTip.Tip="回到最新"
+            Background="{DynamicResource Brush.Bg.Card}"
+            BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1"
             Click="OnJumpToLatestClick">
-      <TextBlock Text="↓" Classes="Tertiary" />
+      <TextBlock Text="↓" FontSize="26" Foreground="{DynamicResource Brush.Text.Primary}" />
     </Button>
     </Grid>
 

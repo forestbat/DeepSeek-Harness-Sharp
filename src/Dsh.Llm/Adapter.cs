@@ -133,6 +133,13 @@ public abstract class LlmAdapter
 
     public virtual LlmResolvedModelInfo? ResolveModel(string model) => null;
 
+    /**
+     * 端点自报的上下文窗口: 目录(models.dev)没有这个模型时的兜底(自建中转站的模型都没有目录条目)。
+     * 默认不支持; 实现方负责缓存与超时, 失败返回 null 即可。
+     */
+    public virtual Task<int?> ProbeContextWindowAsync(string model, CancellationToken cancellationToken)
+        => Task.FromResult<int?>(null);
+
     public virtual PreparedAdapterCall PrepareCall(string model, CancellationToken cancellationToken)
         => new(model, Stream);
 }

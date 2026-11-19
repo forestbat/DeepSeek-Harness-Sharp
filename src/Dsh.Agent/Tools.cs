@@ -300,7 +300,8 @@ public sealed class ToolRuntime : Service
         var key = session.Header.Id.Value;
         if (!_hydratedSessions.TryAdd(key, 0))
             return;
-        foreach (var sessionEvent in session.SnapshotEvents())
+        // 只看常驻尾窗: 窗口化恢复的会话里前缀要按页读回来, 而这里只是给工具可见性打底。
+        foreach (var sessionEvent in session.ResidentEvents())
             if (sessionEvent.Data is ToolDisclosedPayload disclosed)
                 _disclosedGroups[GroupKey(key, disclosed.Group)] = 0;
     }

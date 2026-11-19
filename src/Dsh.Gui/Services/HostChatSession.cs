@@ -44,6 +44,8 @@ public sealed class HostChatSession : IDisposable
     public IReadOnlyList<RemoteCommandDescriptor> Commands { get; private set; } = [];
     public event Action? Reset;
     public event Action<IReadOnlyList<SessionEvent>>? Received;
+    /** 会话被就地截断(撤回): 参数是保留下来的事件条数。视图据此按序号增量截断, 不必整屏重建。 */
+    public event Action<long>? Truncated;
     public event Action<string>? Failed;
 
     public static async Task<HostChatSession> OpenAsync(FleetWorkspace fleet, string cwd, string? sessionId, CancellationToken cancellationToken = default)
@@ -56,11 +58,65 @@ public sealed class HostChatSession : IDisposable
         var info = sessionId is null
             ? await OpenRecentOrCreateAsync(lease.Client, cwd, cancellationToken)
             : await lease.Client.ResumeSessionAsync(sessionId, cancellationToken);
-        var snapshot = await lease.Client.GetSessionSnapshotAsync(info.Id, cancellationToken);
+        var snapshot = await LoadSnapshotAsync(lease.Client, info.Id, cancellationToken);
         var chat = new HostChatSession(fleet, MachineSpec.LocalName, HostSessionKinds.Harness, info, snapshot);
         chat.Commands = await lease.Client.SessionEditing.ListSessionCommandsAsync(info.Id, cancellationToken);
         return chat;
     }
+
+    /**
+     * 打开时带哪些历史。
+     *
+     * 一次快照只回**一页**(受 HostProtocol.SnapshotPageBytes 限制), 所以过去按 TotalEventCount 续取到齐:
+     * 一页一页把整段历史拖下来, 代价与历史长度成正比 —— 383MB / 1,043,710 条会话实测 24 分钟仍未完成、
+     * 堆 1.3GB, 而这只是为了"打开会话接着往下聊"。所以超大会话只取尾部一窗(更早的历史留给按需取页),
+     * 中小会话照旧整段取齐: 那里整段也就几页, 少了反而让人看不到刚聊完的内容。
+     */
+    private static async Task<RemoteSessionSnapshot> LoadSnapshotAsync(
+        IWorkspaceHost client,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        if (client is not RemoteHostClient paged)
+            return await client.GetSessionSnapshotAsync(id, cancellationToken).ConfigureAwait(false);
+        var total = await paged.TotalEventCountAsync(id, cancellationToken).ConfigureAwait(false);
+        if (total > WholeSnapshotEventLimit)
+            return await paged.GetSessionSnapshotAsync(id, OpenTailEvents, cancellationToken).ConfigureAwait(false);
+        return await LoadWholeHistoryAsync(paged, id, cancellationToken).ConfigureAwait(false);
+    }
+
+    /** 打开时整段带走的历史上限: 再多就是几十页、分钟级的打开。 */
+    private const int WholeSnapshotEventLimit = 200_000;
+
+    /** 超大会话打开时只带尾部这么多条: 几十个回合, 与 Host 恢复时的尾窗同量级。 */
+    private const int OpenTailEvents = 20_000;
+
+    /** 按 TotalEventCount 续取到齐(中小会话的路径)。 */
+    private static async Task<RemoteSessionSnapshot> LoadWholeHistoryAsync(
+        RemoteHostClient client,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        var first = await client.GetSessionSnapshotAsync(id, cancellationToken).ConfigureAwait(false);
+        if (first.Events.Count >= first.TotalEventCount)
+            return first;
+        var events = new List<SessionEvent>(first.Events);
+        var from = NextSeqOf(first.Events);
+        while (events.Count < first.TotalEventCount)
+        {
+            var page = await client.GetSessionSnapshotFromAsync(id, from, cancellationToken).ConfigureAwait(false);
+            var next = NextSeqOf(page.Events);
+            if (next <= from)
+                break;
+            events.AddRange(page.Events);
+            from = next;
+        }
+        return first with { Events = events };
+    }
+
+    /** 下一条事件的序号。序号是全局的, 而事件列表可能不是从 0 开始(窗口化/分页快照), 所以条数不能当序号用。 */
+    private static long NextSeqOf(IReadOnlyList<SessionEvent> events)
+        => events.Count == 0 ? 0 : events[^1].Seq + 1;
 
     /**
      * 未显式指定会话时恢复同工作区最近一次会话, 没有可恢复的才新建。
@@ -123,24 +179,33 @@ public sealed class HostChatSession : IDisposable
             Follow();
     }
 
+    /** 订阅起点: 本地已有的下一条事件。用序号而不是条数: 窗口化/分页快照的列表不从 0 开始。 */
+    private long NextSeq => NextSeqOf(_events);
+
     private async Task FollowAsync(IWorkspaceMachine machine, string id, long generation, CancellationToken cancellationToken)
     {
         var events = new DispatcherBridge<SessionEvent>(batch =>
         {
             if (generation != _generation || cancellationToken.IsCancellationRequested)
                 return;
+            var next = NextSeq;
             foreach (var sessionEvent in batch)
-                if (sessionEvent.Seq >= _events.Count)
+                if (sessionEvent.Seq >= next)
                     _events.Add(sessionEvent);
             Received?.Invoke(batch);
         });
         try
         {
-            await foreach (var item in machine.SubscribeAsync(id, _events.Count, cancellationToken))
+            await foreach (var item in machine.SubscribeAsync(id, NextSeq, cancellationToken))
             {
                 if (item.Reset)
                 {
                     await ReloadAsync(cancellationToken);
+                    continue;
+                }
+                if (item.TruncatedTo is { } keep)
+                {
+                    await TruncateProjectionAsync(keep, cancellationToken);
                     continue;
                 }
                 if (item.Event is { } sessionEvent)
@@ -157,6 +222,28 @@ public sealed class HostChatSession : IDisposable
     public async Task<IWorkspaceHost> ClientAsync(CancellationToken cancellationToken = default)
         => (await Fleet.Find(_machine)!.WaitConnectedAsync(cancellationToken)).Client;
 
+    /**
+     * 会话在服务端被就地截断了: 本地事件列表按序号删掉尾部, 再把条数通知视图。
+     * 视图据此增量截断消息, 不整屏重建。
+     *
+     * 之后补一次**非强制**的快照: 撤回后新写入的事件会复用同一个序号, 而它可能在截断通知之前
+     * 就已经到达并被当成重复丢掉。非强制的 ReloadAsync 只把快照里多出来的尾部追加进来
+     * (TryAppend), 前缀一致时不会重建界面, 正好把那条漏掉的事件补回来。
+     */
+    private async Task TruncateProjectionAsync(long keepEventCount, CancellationToken cancellationToken)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_lifetime.IsCancellationRequested)
+                return;
+            var keep = (int)Math.Clamp(keepEventCount, 0, _events.Count);
+            if (keep < _events.Count)
+                _events.RemoveRange(keep, _events.Count - keep);
+            Truncated?.Invoke(keep);
+        });
+        await ReloadAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task SwitchAsync(string id, CancellationToken cancellationToken = default)
         => await SwitchToAsync(_machine, id, _kind, cancellationToken);
 
@@ -172,7 +259,7 @@ public sealed class HostChatSession : IDisposable
         var info = kind == HostSessionKinds.Harness
             ? await client.ResumeSessionAsync(id, cancellationToken).ConfigureAwait(false)
             : ToInfo(await ResumeAgentAsync(connection, client, id, cancellationToken).ConfigureAwait(false));
-        var snapshotTask = client.GetSessionSnapshotAsync(id, cancellationToken);
+        var snapshotTask = LoadSnapshotAsync(client, id, cancellationToken);
         var commandsTask = kind == HostSessionKinds.Harness
             ? client.SessionEditing.ListSessionCommandsAsync(id, cancellationToken)
             : Task.FromResult<IReadOnlyList<RemoteCommandDescriptor>>([]);
@@ -207,7 +294,7 @@ public sealed class HostChatSession : IDisposable
         var id = Info.Id;
         var generation = _generation;
         var reload = ++_reloadGeneration;
-        var snapshot = await (await ClientAsync(cancellationToken).ConfigureAwait(false)).GetSessionSnapshotAsync(id, cancellationToken).ConfigureAwait(false);
+        var snapshot = await LoadSnapshotAsync(await ClientAsync(cancellationToken).ConfigureAwait(false), id, cancellationToken).ConfigureAwait(false);
         var header = snapshot.Header;
         var replacement = snapshot.Events;
 

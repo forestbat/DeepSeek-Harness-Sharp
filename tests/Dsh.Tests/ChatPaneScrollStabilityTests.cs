@@ -17,7 +17,7 @@ namespace Dsh.Tests;
 public sealed class ChatPaneScrollStabilityTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -144,7 +144,7 @@ public sealed class ChatPaneScrollStabilityTests : IDisposable
             agent.Session.Append(new AssistantChunkPayload(2, index, new StreamChunk.TextDelta(0, $"后续 {index}")));
         Draw(chat);
 
-        Assert.True(pane.TryScrollToUserMessage(0));
+        Assert.True(pane.TryScrollToUserMessage(0, 1));
         var messageOffset = pane.ScrollOffset;
         // 用户消息在上面那行输出之后, 所以定位必须比它更靠下。
         Assert.True(messageOffset > 0, $"应当定位到用户消息所在行, 实际停在 {messageOffset}");

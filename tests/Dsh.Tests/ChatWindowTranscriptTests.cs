@@ -16,7 +16,7 @@ namespace Dsh.Tests;
 public sealed class ChatWindowTranscriptTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -356,7 +356,7 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         chat.DrainUi();
 
         var collapsed = DrawFrame(chat);
-        Assert.Contains("⚙ bash", collapsed);
+        Assert.Contains("▸ bash", collapsed);
         Assert.DoesNotContain("seq 1 45", collapsed);
         Assert.DoesNotContain("page-row-01", collapsed);
 
@@ -387,6 +387,76 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         Assert.Contains("page-row-45", tail);
         chat.HandleMouseWheel(-3, 20, headerRow + 2, layout);
         Assert.NotEqual(offsetBefore, chat.InputPane.ScrollOffset);
+    }
+
+    /**
+     * 折叠头与正文分工: 点头部只切换折叠(一次点击就收起来), 点正文才翻下一页。
+     * 否则 423 行的工具结果必须翻完所有页才能折叠回去。
+     */
+    [Fact]
+    public async Task FoldHeaderClick_Collapses_WhileBodyClick_Pages()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        var callSeq = agent.Session.Seq;
+        var callId = ToolCallId.Create("call-paged");
+        agent.Session.Append(new ToolCallPayload(1, 1, callId, "bash", """{"command":"seq 1 45"}"""));
+        agent.Session.Append(
+            new ToolResultPayload(1, 1, MessageFactory.CreateToolResultMessage(
+                callId,
+                [new TextBlock(string.Join('\n', Enumerable.Range(1, 45).Select(index => $"page-row-{index:D2}")))],
+                false)),
+            new SurfaceOp.Append(),
+            [callSeq]);
+        chat.DrainUi();
+
+        var layout = LayoutEngine.Calculate(120, 40);
+        Press(chat, ConsoleKey.Tab);
+        Press(chat, ConsoleKey.Enter);
+        var expanded = DrawRows(chat, layout);
+        Assert.Contains(expanded, row => row.Contains("page-row-01", StringComparison.Ordinal));
+        var headerRow = expanded.FindIndex(row => row.Contains("▾ bash", StringComparison.Ordinal));
+        Assert.True(headerRow >= 0, "展开态折叠头应带 ▾\n" + string.Join('\n', expanded));
+
+        // 点头部: 立刻收起, 不经过第二页。
+        chat.HandleMouseClick(2, headerRow, layout);
+        var collapsed = DrawRows(chat, layout);
+        Assert.Contains(collapsed, row => row.Contains("▸ bash", StringComparison.Ordinal));
+        Assert.DoesNotContain(collapsed, row => row.Contains("page-row-01", StringComparison.Ordinal));
+        Assert.DoesNotContain(collapsed, row => row.Contains("第 21-", StringComparison.Ordinal));
+
+        // 再展开, 点正文: 翻到下一页。
+        chat.HandleMouseClick(2, headerRow, layout);
+        chat.DrainUi();
+        var reopened = DrawRows(chat, layout);
+        var reopenedHeader = reopened.FindIndex(row => row.Contains("▾ bash", StringComparison.Ordinal));
+        Assert.True(reopenedHeader >= 0);
+        chat.HandleMouseClick(2, reopenedHeader + 3, layout);
+        var paged = DrawRows(chat, layout);
+        Assert.Contains(paged, row => row.Contains($"第 {DiffCardDisplay.PageLines + 1}-", StringComparison.Ordinal));
+        Assert.Contains(paged, row => row.Contains($"page-row-{DiffCardDisplay.PageLines + 1:D2}", StringComparison.Ordinal));
+        Assert.DoesNotContain(paged, row => row.Contains("page-row-01", StringComparison.Ordinal));
+    }
+
+    /** Shift+Enter 与 Ctrl+J 在草稿里换行: 换行不能被粘贴路径压成空格, 否则用户看到"按了没反应"。 */
+    [Fact]
+    public async Task ShiftEnter_And_CtrlJ_InsertLineBreaks_InTheDraft()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        chat.DrainUi();
+
+        Type(chat, "第一行");
+        chat.HandleKey(new ConsoleKeyInfo('\r', ConsoleKey.Enter, true, false, false));
+        Type(chat, "第二行");
+        chat.HandleKey(new ConsoleKeyInfo('\n', ConsoleKey.J, false, false, true));
+        Type(chat, "第三行");
+
+        Assert.Equal("第一行\n第二行\n第三行", chat.InputPane.Input);
+        // 两次换行都没有把消息发出去(草稿还在输入区)。
+        Assert.False(chat.InputPane.Busy);
+        Assert.Equal(3, chat.InputPane.Input.Split('\n').Length);
     }
 
     private static int RowOf(string frame, string needle)
@@ -434,10 +504,38 @@ public sealed class ChatWindowTranscriptTests : IDisposable
         agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
     }
 
+    /**
+     * 展开"整段内容只占一行"的折叠(行内代码围栏就是这个形状)必须照常出图。
+     * 这类折叠的 End 落在它起始的那一行里, 视口重排若拿 End 所在行当下一行就会原地打转:
+     * 表现为 TUI 单核 100% CPU、按键无响应, 而 agent 线程仍在跑(2026-11-18 实测卡死)。
+     */
+    [Fact]
+    [Trait("Category", "Regression")]
+    public async Task ExpandingSingleLineFold_RendersInsteadOfSpinning()
+    {
+        var (ctx, agent, home) = await CreateAgent();
+        using var chat = new ChatWindow(ctx, agent, home);
+        agent.Session.Append(new TurnStartPayload(1));
+        // 行内代码围栏: 开围栏与闭围栏落在同一行里, 折叠区间因此不跨行。
+        agent.Session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, "前言\n```bash``` 行内代码")));
+        agent.Session.Append(new AssistantChunkPayload(1, 2, new StreamChunk.TextDelta(0, "```\n后续正文")));
+        agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        chat.DrainUi();
+
+        var layout = LayoutEngine.Calculate(120, 40);
+        var collapsed = DrawRows(chat, layout);
+        var foldRow = collapsed.FindIndex(row => row.Contains("bash", StringComparison.Ordinal));
+        Assert.True(foldRow >= 0, "折叠态应有 ```bash 预览行");
+
+        chat.HandleMouseClick(2, foldRow, layout);
+        var expanded = DrawRows(chat, layout);
+        Assert.Contains(expanded, row => row.Contains("行内代码", StringComparison.Ordinal));
+        Assert.Contains(expanded, row => row.Contains("后续正文", StringComparison.Ordinal));
+    }
+
     /** 鼠标点击 fold 头行切换折叠, 与键盘 Tab/Enter 走同一入口(阶段 3.1)。 */
     [Fact]
-    public async Task MouseClick_On_CodeFence_FoldRow_Toggles_Expansion()
-    {
+    public async Task MouseClick_On_CodeFence_FoldRow_Toggles_Expansion()    {
         var (ctx, agent, home) = await CreateAgent();
         using var chat = new ChatWindow(ctx, agent, home);
         agent.Session.Append(new TurnStartPayload(1));

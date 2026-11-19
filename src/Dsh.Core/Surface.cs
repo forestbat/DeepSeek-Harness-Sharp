@@ -38,11 +38,12 @@ public static class Surface
             throw new InvalidOperationException("system/message payload must carry a plugin-sourced message");
     }
 
-    private static void AssertSystemHeadRewrite(SessionEvent sessionEvent, FoldState state, int startIdx, int endIdx, IReadOnlyList<SessionEvent> events, long baseSeq)
+    private static void AssertSystemHeadRewrite(
+        SessionEvent sessionEvent, FoldState state, int startIdx, int endIdx, Func<long, SessionEvent?> eventAt)
     {
         if (startIdx != 0 || state.Nodes.Count == 0)
             return;
-        if (events[(int)(state.Nodes[0] - baseSeq)].Type != SessionEventTypes.SystemMessage)
+        if (eventAt(state.Nodes[0])?.Type != SessionEventTypes.SystemMessage)
             return;
         if (sessionEvent.Type == SessionEventTypes.SystemMessage && endIdx == 0)
             return;
@@ -75,7 +76,8 @@ public static class Surface
             throw new InvalidOperationException($"surface replace: sourceEventSeqs must include every shadowed surface node; missing {string.Join(", ", missing)}");
     }
 
-    private static void AssertToolResultRewrite(SessionEvent sessionEvent, IReadOnlyList<long> shadowedSeqs, IReadOnlyList<SessionEvent> events, long baseSeq)
+    private static void AssertToolResultRewrite(
+        SessionEvent sessionEvent, IReadOnlyList<long> shadowedSeqs, Func<long, SessionEvent?> eventAt)
     {
         if (sessionEvent.Type != SessionEventTypes.ToolResult || sessionEvent.Data is not ToolResultPayload replacement)
             return;
@@ -83,7 +85,7 @@ public static class Surface
             throw new InvalidOperationException("tool/result surface replacement must rewrite exactly one current node");
         foreach (var originalSeq in shadowedSeqs)
         {
-            if (events[(int)(originalSeq - baseSeq)].Data is not ToolResultPayload original)
+            if (eventAt(originalSeq)?.Data is not ToolResultPayload original)
                 throw new InvalidOperationException("tool/result surface replacement must target a current tool/result");
             var originalMessage = original.Message;
             var replacementMessage = replacement.Message;
@@ -112,10 +114,12 @@ public static class Surface
     private sealed class FoldState
     {
         public List<long> Nodes = [];
+
         public int ReplaceGeneration;
     }
 
-    private static Plan? PlanSurfaceEvent(FoldState state, SessionEvent sessionEvent, long expectedSeq, IReadOnlyList<SessionEvent> events, long baseSeq)
+    private static Plan? PlanSurfaceEvent(
+        FoldState state, SessionEvent sessionEvent, long expectedSeq, Func<long, SessionEvent?> eventAt)
     {
         if (sessionEvent.Seq != expectedSeq)
             throw new InvalidOperationException($"session event seq {sessionEvent.Seq} is not contiguous; expected {expectedSeq}");
@@ -138,18 +142,29 @@ public static class Surface
         }
         var replace = (SurfaceOp.Replace)surfaceOp;
         var startIdx = state.Nodes.IndexOf(replace.Start);
-        if (startIdx == -1)
-            throw new InvalidOperationException($"surface replace: start seq {replace.Start} not found in surface");
         var endIdx = state.Nodes.IndexOf(replace.End);
+        // 窗口化会话的 surface 天然只是局部一段: 跨边界 replace 的起点可能在窗口之前, 那样它本来就不在表上。
+        // 此时"本地要收掉的"就是表头到终点那一段(终点也不在表上就是空), 摘要节点插到表头。
+        // 事件自带的 sourceEventSeqs 是**全集**, 而 provenance 校验要求"阴影 ⊆ 来源", 所以子集成立。
+        if (startIdx == -1)
+        {
+            var shadowedHere = endIdx < 0 ? [] : state.Nodes.GetRange(0, endIdx + 1);
+            if (endIdx >= 0)
+                AssertSystemHeadRewrite(sessionEvent, state, 0, endIdx, eventAt);
+            AssertProvenance(sessionEvent, shadowedHere);
+            AssertToolResultRewrite(sessionEvent, shadowedHere, eventAt);
+            AssertSystemMessage(sessionEvent);
+            return new Plan.Replace(sessionEvent.Seq, replace.Start, replace.End, 0, endIdx, shadowedHere);
+        }
         if (endIdx == -1)
             throw new InvalidOperationException($"surface replace: end seq {replace.End} not found in surface");
         if (startIdx > endIdx)
             throw new InvalidOperationException($"surface replace: start seq {replace.Start} (index {startIdx}) is after end seq {replace.End} (index {endIdx})");
-        AssertSystemHeadRewrite(sessionEvent, state, startIdx, endIdx, events, baseSeq);
+        AssertSystemHeadRewrite(sessionEvent, state, startIdx, endIdx, eventAt);
         AssertSystemMessage(sessionEvent);
         var shadowed = state.Nodes.GetRange(startIdx, endIdx - startIdx + 1);
         AssertProvenance(sessionEvent, shadowed);
-        AssertToolResultRewrite(sessionEvent, shadowed, events, baseSeq);
+        AssertToolResultRewrite(sessionEvent, shadowed, eventAt);
         return new Plan.Replace(sessionEvent.Seq, replace.Start, replace.End, startIdx, endIdx, shadowed);
     }
 
@@ -176,45 +191,51 @@ public static class Surface
         var replacements = new List<SurfaceFoldReplacement>();
         for (var index = 0; index < events.Count; index++)
         {
-            var replacement = ApplyPlan(state, PlanSurfaceEvent(state, events[index], index, events, 0));
+            var replacement = ApplyPlan(state, PlanSurfaceEvent(state, events[index], index, seq => events[(int)seq]));
             if (replacement is not null)
                 replacements.Add(replacement);
         }
         return new SurfaceFoldResult([.. state.Nodes], replacements);
     }
 
+    /**
+     * 折叠状态机。
+     *
+     * 日志按**绝对 seq** 取事件: baseSeq 是本次折叠的起点(fork 前缀之后, 或窗口会话的尾窗起点)。
+     * 前缀不在内存里的窗口会话因此只折尾窗, 而不必把整份历史重新展开。
+     */
     public sealed class Manager
     {
         private readonly Func<IReadOnlyList<SessionEvent>> _logProvider;
-        private readonly long _baseSeq;
-        private readonly FoldState _state = new();
+        /** 常驻窗口之外的事件按需取(窗口化会话); null 表示"全部在内存里"。 */
+        private readonly Func<long, SessionEvent?>? _outsideWindow;
+        private readonly FoldState _state;
         private readonly List<SurfaceFoldReplacement> _replacements = [];
         private long _lastProcessedSeq;
         private (SessionEvent Event, long ExpectedSeq, Plan? Plan)? _pendingPlan;
 
-        public Manager(Func<IReadOnlyList<SessionEvent>> logProvider, long baseSeq = 0)
+        public Manager(Func<IReadOnlyList<SessionEvent>> logProvider, long baseSeq = 0,
+            Func<long, SessionEvent?>? outsideWindow = null)
         {
             _logProvider = logProvider;
-            _baseSeq = baseSeq;
+            _outsideWindow = outsideWindow;
+            _state = new FoldState();
             _lastProcessedSeq = baseSeq == 0 ? -1 : baseSeq - 1;
         }
 
         public void ValidateNext(SessionEvent sessionEvent)
         {
             var log = _logProvider();
-            if (_lastProcessedSeq < _baseSeq + log.Count - 1)
-                ProcessDelta(log);
-            var expectedSeq = _baseSeq + log.Count;
-            _pendingPlan = (sessionEvent, expectedSeq, PlanSurfaceEvent(_state, sessionEvent, expectedSeq, log, _baseSeq));
+            EnsureProcessed(log);
+            var expectedSeq = log.Count;
+            _pendingPlan = (sessionEvent, expectedSeq, PlanSurfaceEvent(_state, sessionEvent, expectedSeq, Accessor(log)));
         }
 
         public int ReplaceGeneration
         {
             get
             {
-                var log = _logProvider();
-                if (_lastProcessedSeq < _baseSeq + log.Count - 1)
-                    ProcessDelta(log);
+                EnsureProcessed();
                 return _state.ReplaceGeneration;
             }
         }
@@ -223,9 +244,7 @@ public static class Surface
         {
             get
             {
-                var log = _logProvider();
-                if (_lastProcessedSeq < _baseSeq + log.Count - 1)
-                    ProcessDelta(log);
+                EnsureProcessed();
                 return _state.Nodes;
             }
         }
@@ -235,24 +254,44 @@ public static class Surface
         {
             get
             {
-                var log = _logProvider();
-                if (_lastProcessedSeq < _baseSeq + log.Count - 1)
-                    ProcessDelta(log);
+                EnsureProcessed();
                 return _replacements;
             }
         }
 
+        /** 日志末条事件的绝对 seq; 空日志返回 baseSeq - 1。 */
+        private long TailSeq(IReadOnlyList<SessionEvent> log) => log.Count - 1;
+
+        private void EnsureProcessed()
+        {
+            var log = _logProvider();
+            EnsureProcessed(log);
+        }
+
+        private void EnsureProcessed(IReadOnlyList<SessionEvent> log)
+        {
+            if (_lastProcessedSeq < TailSeq(log))
+                ProcessDelta(log);
+        }
+
+        /**
+         * 按**绝对序号**取事件。窗口化会话里常驻窗口只覆盖尾部, 之前的事件走 `outsideWindow` 按页取 ——
+         * 这样一次跨边界 replace 不再要求"整段历史都塞进窗口", 折叠到那个节点时按需取一条即可。
+         */
+        private Func<long, SessionEvent?> Accessor(IReadOnlyList<SessionEvent> log)
+            => seq => seq >= 0 && seq < log.Count ? log[(int)seq] : _outsideWindow?.Invoke(seq);
+
         private void ProcessDelta(IReadOnlyList<SessionEvent> log)
         {
-            var tailSeq = _baseSeq + log.Count - 1;
+            var tailSeq = TailSeq(log);
+            var eventAt = Accessor(log);
             for (var seq = _lastProcessedSeq + 1; seq <= tailSeq; seq++)
             {
-                var index = (int)(seq - _baseSeq);
-                var sessionEvent = log[index];
+                var sessionEvent = log[(int)seq];
                 var pending = _pendingPlan;
                 var replacement = pending is { } plan && ReferenceEquals(plan.Event, sessionEvent) && plan.ExpectedSeq == seq
                     ? ApplyPlan(_state, plan.Plan)
-                    : ApplyPlan(_state, PlanSurfaceEvent(_state, sessionEvent, seq, log, _baseSeq));
+                    : ApplyPlan(_state, PlanSurfaceEvent(_state, sessionEvent, seq, eventAt));
                 if (replacement is not null)
                     _replacements.Add(replacement);
                 if (pending is not null && pending.Value.ExpectedSeq <= seq)

@@ -10,6 +10,9 @@ public enum CellStyle : byte
     Italic = 8,
     Underline = 16,
     Strikethrough = 32,
+
+    /** 单元格内容属于正文/用户输入: 落屏时保持原字符, 不做等宽替换(见 TerminalSafeGlyphs)。 */
+    Literal = 64,
 }
 
 public enum AnsiColor : byte

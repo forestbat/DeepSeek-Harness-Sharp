@@ -23,6 +23,8 @@ public interface ISessionHandle : IDisposable
     SessionHeader Header { get; }
     long InheritedEventCount { get; }
     SessionAccess Access { get; }
+    /** 日志里的事件总数: 写句柄取自游标, 读句柄取自已解析缓冲(必要时才整份读)。 */
+    long Count { get; }
     IReadOnlyList<SessionEvent> Read(long offset = 0, long? length = null);
     void Append(IReadOnlyList<SessionEvent> events);
     /** 就地截断日志到 eventCount(D3 revert), 并把游标重置到该位置。 */
@@ -41,6 +43,12 @@ public interface ISessionPersistence
     IReadOnlyList<SessionPersistenceSnapshot> List();
     void Rename(SessionId id, string title);
     void Delete(SessionId id);
+
+    /**
+     * 窗口化打开: 只把尾部一段事件读进内存, 更早的留给按页重读。
+     * 不支持的实现(以及日志太小、结构不可信的后端判断)返回 null, 调用方退回 Open + Read。
+     */
+    SessionWindow? TryOpenWindow(SessionId id, int tailEvents) => null;
 }
 
 public static class SessionPersistenceMetadata

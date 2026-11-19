@@ -8,8 +8,16 @@ using Dsh.Transport;
 namespace Dsh.RemoteHost;
 
 
-/** One host stream item: the authoritative session event, or a reset marker before a full replay. */
-public sealed record RemoteSessionEvent(string SessionId, SessionEvent? Event = null, bool Reset = false);
+/**
+ * One host stream item: the authoritative session event, a reset marker before a full replay,
+ * or a truncation marker that only carries how many events survive (§D: revert is incremental).
+ */
+public sealed record RemoteSessionEvent(
+    string SessionId,
+    SessionEvent? Event = null,
+    bool Reset = false,
+    long? TruncatedTo = null,
+    long TruncatedAt = 0);
 
 /** 每个读者有独立订阅标识，历史和实时事件均由 Host 提供。 */
 public sealed record RemoteSubscribeRequest(string SessionId, long FromSeq, string SubscriptionId);

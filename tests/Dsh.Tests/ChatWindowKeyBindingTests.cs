@@ -20,7 +20,7 @@ public sealed class ChatWindowKeyBindingTests : IDisposable
     private const string OverviewTitle = "总览 Pty";
 
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     public void Dispose()

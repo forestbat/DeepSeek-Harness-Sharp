@@ -15,7 +15,7 @@ public static class SessionCommand
         {
             Name = "session",
             Description = "List or delete persistent sessions",
-            Input = new CommandInputDescriptor("list | delete <id>"),
+            Input = new CommandInputDescriptor("list | delete <id> | lease <id> | take-over <id>"),
             MenuSchema = new CommandMenuSchema("Persistent sessions", "session id or title"),
             ArgumentSchemas = [new CommandArgumentSchema("session", "select", "Session id or title")],
             Handler = invocation => HandleSession(invocation, persistence, ctx)
@@ -68,6 +68,32 @@ public static class SessionCommand
             if (snapshot is not null)
                 persistence.Delete(id);
             return Task.FromResult<CommandResult>(new CommandResult.Success($"deleted session {id}"));
+        }
+
+        if (string.Equals(parts[0], "lease", StringComparison.OrdinalIgnoreCase))
+        {
+            if (parts.Length < 2)
+                return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /session lease <id>"));
+            var leaseId = SessionId.Create(parts[1]);
+            if (persistence is not JsonlSessionPersistence jsonl)
+                return Task.FromResult<CommandResult>(new CommandResult.Error("this backend has no session leases"));
+            var holder = jsonl.InspectLease(leaseId);
+            return Task.FromResult<CommandResult>(new CommandResult.Success(holder is null
+                ? $"session {leaseId} has no writer lease"
+                : $"session {leaseId} is written by pid {holder.Pid} on {holder.Machine} (epoch {holder.Epoch})"));
+        }
+
+        if (string.Equals(parts[0], "take-over", StringComparison.OrdinalIgnoreCase))
+        {
+            if (parts.Length < 2)
+                return Task.FromResult<CommandResult>(new CommandResult.Error("usage: /session take-over <id>"));
+            var takeoverId = SessionId.Create(parts[1]);
+            if (persistence is not JsonlSessionPersistence jsonl)
+                return Task.FromResult<CommandResult>(new CommandResult.Error("this backend has no session leases"));
+            // 强制接管只翻 epoch: 原持有者的下一次落盘会失败并停写, 不会有第二套序号进入日志。
+            var taken = jsonl.ForceTakeOverLease(takeoverId);
+            return Task.FromResult<CommandResult>(new CommandResult.Success(
+                $"took over the writer lease of {takeoverId} (epoch {taken.Epoch}); the previous writer stops on its next write"));
         }
 
         var match = persistence.List().FirstOrDefault(snapshot =>

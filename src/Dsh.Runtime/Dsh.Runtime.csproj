@@ -3,8 +3,8 @@
   <ItemGroup>
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <PackageReference Include="Vecc.YamlDotNet.Analyzers.StaticGenerator" Version="18.1.0" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="11.0.0" />
     <!--
       DryIoc.dll 不发布到 nuget.org(该 ID 线上最高只到 6.0.0-preview-09, 且与上游 2026 构建不同), 需从 dadhi/DryIoC 的构建产物取得;
       故引用固定版本并由 scripts/fetch-dryioc-feed.ps1 与 NuGet.config 的 local-dsh 源提供。上游当前产出 6.0.0。

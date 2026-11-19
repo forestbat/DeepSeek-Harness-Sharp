@@ -21,7 +21,7 @@ public sealed class ToonLlmExperimentTests
     [Fact]
     public async Task ToonExperiment_RealLlmCallsBash()
     {
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+        var root = TempTree.RepositoryRoot;
         var home = Path.Combine(root, HomePath);
         Assert.True(File.Exists(Path.Combine(home, "settings.yaml")), $"实验 home 不存在: {home}");
         _ = typeof(Dsh.Toon.Plugin).Assembly.FullName;

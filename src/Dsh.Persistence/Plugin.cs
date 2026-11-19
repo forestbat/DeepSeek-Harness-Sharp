@@ -29,7 +29,9 @@ public sealed class Plugin(string packageName) : IDshPlugin
     {
         var paths = DshPaths.FromContext(ctx)
             ?? throw new InvalidOperationException("dshPaths/dshHomePath is required for the persistence plugin");
-        var persistence = new JsonlSessionPersistence(paths.SessionsPath);
+        var persistence = new JsonlSessionPersistence(
+            paths.SessionsPath,
+            warn: message => ctx.LoggerFor("sessionPersistence").Warn(message));
         ctx.Provide(ISessionPersistence.ServiceName, persistence);
         var command = SessionCommand.Register(ctx, persistence);
         var wiring = WirePersistence(ctx, persistence);
@@ -43,45 +45,89 @@ public sealed class Plugin(string packageName) : IDshPlugin
         // → 开两个写句柄 → ClaimWrite 抛 SessionAlreadyOwnedException"这条路径。
         var gate = new Lock();
         var handles = new Dictionary<SessionId, ISessionHandle>();
+        // 终局性的落盘失败只报一次, 之后这个会话不再重试: 旧行为是每条事件都撞同一批错误,
+        // 异常总线为每次失败打一份栈(2026-11-16 事故: 7 分钟、5489 条同样的栈)。原因留在 failures 里,
+        // 由本轮的 flush 抛回给结束这一轮的人, 而不是静静丢事件。
+        var failures = new Dictionary<SessionId, SessionPersistenceException>();
         var created = ctx.On<SessionCreatedNotification>(notification =>
         {
             var session = notification.Session;
             lock (gate)
             {
-                if (handles.ContainsKey(session.Id))
+                if (handles.ContainsKey(session.Id) || failures.ContainsKey(session.Id))
                     return;
                 // 恢复既有会话时日志已在磁盘上, 只能接管不能重建;
                 // 新会话先只留在内存里, 等第一条真实事件到来才建日志, 避免空会话落出垃圾文件。
-                if (persistence.Stat(session.Id) is not null)
+                if (persistence.Stat(session.Id) is null)
+                    return;
+                try
+                {
                     handles[session.Id] = Adopt(persistence, session);
+                }
+                catch (SessionPersistenceException error) when (IsTerminal(error))
+                {
+                    Latch(ctx, failures, session.Id, error);
+                }
             }
         });
         var eventHandler = ctx.On<SessionEventNotification>(notification =>
         {
             ISessionHandle? handle;
-            var created = false;
+            var materialized = false;
             var session = notification.Session;
             lock (gate)
             {
+                if (failures.ContainsKey(session.Id))
+                    return;
                 if (!handles.TryGetValue(session.Id, out handle))
                 {
-                    handle = persistence.Stat(session.Id) is null
-                        ? Materialize(persistence, session)
-                        : Adopt(persistence, session);
+                    try
+                    {
+                        handle = persistence.Stat(session.Id) is null
+                            ? Materialize(persistence, session)
+                            : Adopt(persistence, session);
+                    }
+                    catch (SessionPersistenceException error) when (IsTerminal(error))
+                    {
+                        Latch(ctx, failures, session.Id, error);
+                        return;
+                    }
+
                     handles[session.Id] = handle;
-                    created = true;
+                    materialized = true;
                 }
             }
             // 新建句柄时 Materialize 已经把当时的会话事件全量写入(含本条), 再追加会重复。
-            if (!created)
-                handle!.Append([notification.Event]);
+            if (!materialized)
+            {
+                try
+                {
+                    handle.Append([notification.Event]);
+                }
+                catch (SessionPersistenceException error) when (IsTerminal(error))
+                {
+                    lock (gate)
+                        handles.Remove(session.Id);
+                    CloseFailed(handle);
+                    Latch(ctx, failures, session.Id, error);
+                    return;
+                }
+            }
+
             DeriveTitle(ctx, persistence, session, notification.Event);
         });
         var flush = ctx.On<SessionFlushNotification>(notification =>
         {
             ISessionHandle? handle;
+            SessionPersistenceException? failure;
             lock (gate)
+            {
+                failures.TryGetValue(notification.Session.Id, out failure);
                 handles.TryGetValue(notification.Session.Id, out handle);
+            }
+            // 落盘已经报废: 把原因抛给结束这一轮的人, 不让这一轮看起来正常结束。
+            if (failure is not null)
+                throw failure;
             handle?.Flush();
         });
         var truncated = ctx.On<SessionTruncateNotification>(notification =>
@@ -110,6 +156,36 @@ public sealed class Plugin(string packageName) : IDshPlugin
             new CallbackDisposable(() => disposed()));
     }
 
+
+    /** 重试也不会好的错误: 日志被别的写入方推进, 会话已被别的写句柄占用, 或写租约在别人手里/已被接管。 */
+    private static bool IsTerminal(SessionPersistenceException error)
+        => error is SessionPersistenceCorruptionException
+            or SessionAlreadyOwnedException
+            or SessionLeaseHeldException
+            or SessionLeaseLostException;
+
+    /** 记录终局失败: 只报一次(不带栈), 之后该会话不再尝试落盘。 */
+    private static void Latch(Context ctx, Dictionary<SessionId, SessionPersistenceException> failures,
+        SessionId id, SessionPersistenceException error)
+    {
+        if (!failures.TryAdd(id, error))
+            return;
+        ctx.LoggerFor("sessionPersistence").Error(
+            $"session \"{id}\": persistence failed, later events of this session are not saved: {error.Message}");
+    }
+
+    /** 失败的句柄关闭时还会再撞同一个错误; 已经记录过, 这里只求把进程内的写句柄让出来。 */
+    private static void CloseFailed(ISessionHandle handle)
+    {
+        try
+        {
+            handle.Close();
+        }
+        catch (SessionPersistenceException)
+        {
+            // 同一次终局错误, 已经由 Latch 记录。
+        }
+    }
 
     /** 首条用户消息落盘时补一个标题(只做一次); 失败只记录, 标题是展示元数据, 不能影响会话推进。 */
     private static void DeriveTitle(Context ctx, ISessionPersistence persistence, Session session, SessionEvent sessionEvent)
@@ -144,10 +220,11 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static ISessionHandle Adopt(ISessionPersistence persistence, Session session)
     {
         var handle = persistence.Open(session.Id, SessionAccess.Write);
-        var stored = handle.Read();
-        var own = session.OwnEvents();
-        if (own.Count > stored.Count)
-            handle.Append([.. own.Skip(stored.Count)]);
+        // 只比个数: 窗口化会话的事件不全在内存里, 为了比长度把它们全部读回来等于放弃窗口化。
+        var storedCount = handle.Count;
+        var ownCount = session.Seq - session.InheritedEventCount;
+        if (ownCount > storedCount)
+            handle.Append([.. session.SnapshotEvents(session.InheritedEventCount + storedCount)]);
         return handle;
     }
 

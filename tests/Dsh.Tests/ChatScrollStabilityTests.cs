@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Avalonia.Controls;
@@ -146,6 +147,74 @@ public sealed class ChatScrollStabilityTests
         }
     });
 
+    /**
+     * 用户已经在底部、再往下滚一格: 视口一动没动, 这不等于"离开底部"。
+     * 这趟手势留下的标记若泄漏到随后那条流式增长的布局帧, 就会按已经长高的 extent 判成"不在底部",
+     * 视口被拽回中段(现场表现为跳回会话开头)。
+     */
+    [Fact]
+    public async Task WheelDownAtTheTailThenStreaming_KeepsFollowing() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var scene = await ChatScene.CreateAsync();
+        var streaming = scene.LastStreamingMessage();
+        scene.ScrollToEnd();
+        scene.Render();
+        var tail = scene.Scroll.Offset.Y;
+
+        scene.Wheel(-1);
+        scene.Render();
+        Assert.True(Math.Abs(scene.Scroll.Offset.Y - tail) <= PositionTolerance,
+            $"precondition: the wheel at the tail must not move the viewport ({tail:0} → {scene.Scroll.Offset.Y:0})");
+
+        for (var chunk = 0; chunk < 5; chunk++)
+        {
+            streaming.Append($"\n刷消息 {chunk} A: 用户已经在底部还往下滚, 这不等于离开底部。"
+                + $"\n刷消息 {chunk} B: 这一行只是撑高当前消息, 好让误判有可见后果。"
+                + $"\n刷消息 {chunk} C: 视口必须停在末尾。");
+            streaming.FlushPending();
+            scene.Render();
+            AssertAtTail(scene, $"streaming chunk {chunk}");
+        }
+    });
+
+    /**
+     * 滚轮打在内层滚动区域(工具的长时间结果)上: 内层吃掉这一格, 外层的跟随意图不该被改判。
+     * 随后流式追加仍须贴底。
+     */
+    [Fact]
+    public async Task WheelOverNestedScrollAreaThenStreaming_KeepsFollowing() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var scene = await ChatScene.CreateAsync();
+        var streaming = scene.LastStreamingMessage();
+        AddLongToolResultBeforeTail(scene);
+        scene.ScrollToEnd();
+        scene.Render();
+
+        var inner = scene.List.GetVisualDescendants().OfType<ScrollViewer>()
+            .FirstOrDefault(candidate => !ReferenceEquals(candidate, scene.Scroll)
+                && candidate.IsEffectivelyVisible
+                && candidate.Extent.Height - candidate.Viewport.Height > 1);
+        Assert.NotNull(inner);
+        var outerBefore = scene.Scroll.Offset.Y;
+        var point = inner!.TranslatePoint(new Point(inner.Bounds.Width / 2, inner.Bounds.Height / 2), scene.Window)!.Value;
+
+        scene.Window.MouseWheel(point, new Vector(0, -1));
+        scene.Render();
+        Assert.True(inner.Offset.Y > 0, "precondition: the wheel must scroll the inner area");
+        Assert.True(Math.Abs(scene.Scroll.Offset.Y - outerBefore) <= PositionTolerance,
+            $"precondition: the outer list must not move ({outerBefore:0} → {scene.Scroll.Offset.Y:0})");
+
+        for (var chunk = 0; chunk < 5; chunk++)
+        {
+            streaming.Append($"\n刷消息 {chunk} A: 滚轮落在内层, 外层不该因此判成离开底部。"
+                + $"\n刷消息 {chunk} B: 这一行只是撑高当前消息, 好让误判有可见后果。"
+                + $"\n刷消息 {chunk} C: 视口必须停在末尾。");
+            streaming.FlushPending();
+            scene.Render();
+            AssertAtTail(scene, $"streaming chunk {chunk}");
+        }
+    });
+
     /** 展开/折叠之后再来的流式输出, 同样不得挪动用户正在看的那条消息。 */
     [Fact]
     public async Task TogglingThenStreaming_KeepsTheToggledMessageInPlace() => await HeadlessGui.RunAsync(async () =>
@@ -255,6 +324,33 @@ public sealed class ChatScrollStabilityTests
             AssertStill(scene, anchor, anchorTop, $"streaming after toggle {chunk}", StreamingTolerance);
         }
     });
+
+    /** 视口离末尾 24px 以内就算"跟随中"(与 ChatView 的贴底容差同一量级)。 */
+    private const double TailTolerance = 24;
+
+    /** 在末尾那条(正在流式输出的)消息之前插一条展开的长工具结果: 它自带一个可滚动的内层视口。 */
+    private static void AddLongToolResultBeforeTail(ChatScene scene)
+    {
+        var tool = new MessageViewModel("bash", "工具调用", MessageKind.Tool, false)
+        {
+            Seq = 1_000,
+            ArgumentText = "dotnet test",
+        };
+        tool.SetToolResult(string.Join('\n', Enumerable.Range(0, 60)
+            .Select(line => $"第 {line} 行工具结果: 用来撑高内层滚动区域。")), false);
+        tool.IsExpanded = true;
+        scene.ViewModel.Messages.Insert(scene.ViewModel.Messages.Count - 1, tool);
+        scene.Render();
+    }
+
+    /** 跟随态判据: 视口离末尾不超过容差。 */
+    private static void AssertAtTail(ChatScene scene, string label)
+    {
+        var scroll = scene.Scroll;
+        var maximum = scroll.Extent.Height - scroll.Viewport.Height;
+        Assert.True(maximum - scroll.Offset.Y <= TailTolerance,
+            $"{label}: following was lost: offset {scroll.Offset.Y:0}, max {maximum:0}, gap {maximum - scroll.Offset.Y:0}");
+    }
 
     /** 顶部那条消息的屏幕位置不许动(它被回收时按"不在视口里"处理, 直接失败)。 */
     private static void AssertStill(ChatScene scene, MessageViewModel anchor, double anchorTop, string label,

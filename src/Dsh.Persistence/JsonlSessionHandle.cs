@@ -35,6 +35,24 @@ internal sealed class JsonlSessionHandle(
     public SessionAccess Access { get; } = access;
     public long InheritedEventCount => state.InheritedEventCount;
 
+    /** 写句柄的事件总数就是游标; 读句柄没有别的地方知道总数, 只能退回整份读(已有缓存)。 */
+    public long Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                AssertOpen("count");
+                if (state.Primed is { } primed)
+                    return primed.Count;
+                if (Access == SessionAccess.Write && state.Materialized)
+                    return state.Cursor;
+            }
+
+            return Read().Count;
+        }
+    }
+
     internal void UpdateHeader(SessionHeader header)
     {
         lock (_gate)
@@ -49,14 +67,17 @@ internal sealed class JsonlSessionHandle(
         lock (_gate)
         {
             AssertOpen("read");
-            if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset), "read offset must be a non-negative integer");
+            if (offset < 0)
+                throw new ArgumentOutOfRangeException(nameof(offset), "read offset must be a non-negative integer");
             var limit = length ?? long.MaxValue;
-            if (limit < 0) throw new ArgumentOutOfRangeException(nameof(length), "read length must be a non-negative integer");
+            if (limit < 0)
+                throw new ArgumentOutOfRangeException(nameof(length), "read length must be a non-negative integer");
             if (state.Primed is { } primed)
             {
                 _observedLength = Math.Max(_observedLength, primed.Count);
                 return Slice(primed, offset, limit);
             }
+
             DrainLocked();
             if (Access == SessionAccess.Write && !state.Materialized) return [];
             var path = storage.ResolveLog(Id);
@@ -65,6 +86,16 @@ internal sealed class JsonlSessionHandle(
                 if (storage.HasPendingSession(Id)) return [];
                 throw new SessionPersistenceNotFoundException(Id);
             }
+
+            // 要一个窗口就走缺页重读: 解压命中帧即可, 不必把整份日志展开成事件数组。
+            if (length is { } window && window < int.MaxValue && offset > 0
+                && storage.TryReadWindow(path, Id, offset, (int)window) is { } windowed)
+            {
+                // 窗口已按 [offset, offset + window) 过滤过, 这里不能再按绝对 offset 切一遍。
+                // 也不更新 _observedLength: 窗口不代表日志总量, 那会让后续全量读误判"日志缩水"。
+                return windowed.Events;
+            }
+
             var events = storage.ReadStoredLog(path, Id).Events;
             if (events.Count < _observedLength)
                 throw new SessionPersistenceCorruptionException(
@@ -81,18 +112,31 @@ internal sealed class JsonlSessionHandle(
             AssertOpen("append");
             if (Access != SessionAccess.Write) throw new SessionReadOnlyException(Id, "append");
             if (events.Count == 0) return;
+            var wasEmpty = _buffered.Count == 0;
+            // 先整体校验序号: 一批里有一条对不上就整批拒绝, 不能把前一半悄悄收进缓冲。
             for (var index = 0; index < events.Count; index += 1)
             {
                 if (events[index].Seq != state.Cursor + index)
                     throw new SessionPersistenceCorruptionException(
                         $"append seq mismatch for \"{Id}\": expected {state.Cursor + index} at index {index}, got {events[index].Seq}");
             }
-            var wasEmpty = _buffered.Count == 0;
-            _buffered.AddRange(events);
-            state.Cursor += events.Count;
+
+            foreach (var sessionEvent in events)
+            {
+                // 缓冲吃满条数上限就先落盘: 条数是唯一能在"收进缓冲之前"结算的判据。
+                // 字节预算不在这里判 —— 一行占多少字节只有编码之后才知道(见 DrainLocked)。
+                if (_buffered.Count >= storage.WriteBatch.MaxEvents)
+                    DrainLocked();
+                _buffered.Add(sessionEvent);
+                state.Cursor += 1;
+            }
+
             state.Primed = null;
             _observedLength = state.Cursor;
-            if (_buffered.Count >= storage.WriteBatch.MaxEvents || events.Any(sessionEvent => sessionEvent.Data is not AssistantChunkPayload))
+            // 首次落盘立刻写: 日志文件的存在与可见性(会话目录、侧栏列表)依赖它。
+            // 之后的每一批(消息、工具调用、回合边界与 chunk 一视同仁)按"条数上限 / Interval"攒批,
+            // 边界事件不再单独触发落盘 —— 那是帧粒度退化成"一条事件一帧"的原因。
+            if (!state.Materialized || _buffered.Count >= storage.WriteBatch.MaxEvents)
                 DrainLocked();
             else if (wasEmpty)
                 ScheduleDrain();
@@ -124,6 +168,7 @@ internal sealed class JsonlSessionHandle(
             state.TornTruncateTo = null;
             state.WrittenLength = truncateTo;
         }
+
         if (state.RecoveredTail is { } recovered)
         {
             if (recovered.Count > 0)
@@ -131,6 +176,7 @@ internal sealed class JsonlSessionHandle(
             state.Materialized = true;
             state.RecoveredTail = null;
         }
+
         storage.PersistBatch(Header, _buffered, state);
         state.Materialized = true;
         _buffered.Clear();
@@ -166,7 +212,8 @@ internal sealed class JsonlSessionHandle(
         {
             AssertOpen("truncate");
             if (Access != SessionAccess.Write) throw new SessionReadOnlyException(Id, "truncate");
-            if (eventCount < 0) throw new ArgumentOutOfRangeException(nameof(eventCount), "truncate target must be non-negative");
+            if (eventCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(eventCount), "truncate target must be non-negative");
             DrainLocked();
             if (state.Materialized && eventCount >= state.Cursor)
                 return;
@@ -204,6 +251,11 @@ internal sealed class JsonlSessionHandle(
             try
             {
                 DrainLocked();
+            }
+            catch (SessionLeaseLostException)
+            {
+                // 已被人接管: 缓冲区里的事件不能再落盘, 丢弃并让出写权 —— 这就是"停写"。
+                _buffered.Clear();
             }
             finally
             {

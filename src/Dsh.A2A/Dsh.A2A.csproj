@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="A2A" Version="1.0.0-preview2" />
+    <PackageReference Include="A2A" Version="1.0.0-preview4" />
   </ItemGroup>
 
 </Project>

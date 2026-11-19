@@ -118,13 +118,15 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             return await CompactRegion(overflowRange.Start, overflowRange.End, agent, signal);
         }
 
-        var contextWindow = _llm.ResolveModelInfo(target.Value.Provider, target.Value.Model).ContextWindow;
+        // 目录(models.dev)没有这个模型时(自建中转站)回落到端点自报的上下文窗口, 拿不到才报配置错误。
+        var contextWindow = await _llm.ResolveContextWindowAsync(target.Value.Provider, target.Value.Model, signal)
+            .ConfigureAwait(false);
         CompactionRegion.AssertNoActiveCompaction(agent.Session, "automatic pressure compaction");
         var targetKey = $"{target.Value.Provider}/{target.Value.Model}";
         if (contextWindow is null)
             throw new TargetPressureConfigError(
                 targetKey,
-                $"compaction-basic: no context window for {targetKey}; automatic compaction takes the model's models.dev limit.context, which this model does not declare");
+                $"compaction-basic: no context window for {targetKey}; neither models.dev nor the provider endpoint's /models declares one (set a limit.context for this model or expose context_length on the endpoint)");
         var spec = CompactionConfigResolver.ResolveCompactSpec(policy, contextWindow.Value);
         if (measurement.TotalTokens < spec.ThresholdTokens)
         {

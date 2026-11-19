@@ -56,6 +56,19 @@ public sealed class TimestampCommandTests
         Assert.Equal(["only question"], timeline);
     }
 
+    /** 检查点不可用时, 回退必须说明"文件没恢复": 只截断会话却报 reverted, 用户会以为文件也回去了。 */
+    [Fact]
+    public async Task Revert_ReportsThatFilesWereNotRestored_WhenCheckpointsAreUnavailable()
+    {
+        using var fixture = new Fixture();
+        fixture.AppendUser("keep me");
+        var seq = fixture.AppendUser("drop me");
+
+        var result = Assert.IsType<CommandResult.Success>(await fixture.RunAsync($"/timestamp revert #{seq}"));
+
+        Assert.Contains("files not restored", result.Text);
+    }
+
     /** 回退停在"这条消息所属回合之前": 消息本身连同它那一回合都不留在会话里(原文回输入区)。 */
     [Fact]
     public async Task Revert_TruncatesBeforeTheTurnThatOwnsTheChosenMessage()
@@ -116,7 +129,7 @@ public sealed class TimestampCommandTests
     private sealed class Fixture : IDisposable
     {
         private readonly string _root = Path.Combine(
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+            Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
             $"timestamp-{Guid.NewGuid():N}");
 
         public Fixture()

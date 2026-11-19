@@ -22,22 +22,25 @@
     <DshBuildFaultProbe Condition="'$(DshGuardOwner)' == 'true' And '$(DshShipFaultProbe)' == 'true'">true</DshBuildFaultProbe>
   </PropertyGroup>
 
-  <!-- VS 2022 起默认装在 64 位 Program Files 下, 由 vswhere 按 C++ 工具集定位 VsDevCmd.bat。 -->
-  <Target Name="ResolveDshVsDevCmd" Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-    <Exec Condition="Exists('$(DshVsWhere)')"
-          Command="&quot;$(DshVsWhere)&quot; -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find Common7\Tools\VsDevCmd.bat"
-          ConsoleToMSBuild="true" StandardOutputImportance="low">
-      <Output TaskParameter="ConsoleOutput" PropertyName="DshVsDevCmd" />
-    </Exec>
-  </Target>
-
-  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild" DependsOnTargets="ResolveDshVsDevCmd"
-          Condition="'$(DshGuardOwner)' == 'true'">
+  <!--
+    增量: Inputs/Outputs 让 MSBuild 在源文件与产物都没变时整段跳过 —— vswhere 与 VsDevCmd.bat 的启动开销
+    (每次数秒) 不该出现在每个 warm build 里。VsDevCmd 的解析因此挪进目标内部, 只在真的要编译时才跑。
+  -->
+  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild"
+          Condition="'$(DshGuardOwner)' == 'true'"
+          Inputs="$(DshGuardSource)"
+          Outputs="$(IntermediateOutputPath)dsh-guard\$(DshGuardFile)">
     <PropertyGroup>
       <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
       <DshGuardOutput>$(DshGuardOutputDir)$(DshGuardFile)</DshGuardOutput>
     </PropertyGroup>
     <MakeDir Directories="$(DshGuardOutputDir)" />
+    <!-- VS 2022 起默认装在 64 位 Program Files 下, 由 vswhere 按 C++ 工具集定位 VsDevCmd.bat。 -->
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(DshVsWhere)')"
+          Command="&quot;$(DshVsWhere)&quot; -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find Common7\Tools\VsDevCmd.bat"
+          ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="DshVsDevCmd" />
+    </Exec>
     <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmd)' != ''"
           Command="call &quot;$(DshVsDevCmd)&quot; -arch=x64 -no_logo &amp;&amp; $(DshNativeCompiler) /nologo /utf-8 /TC /LD &quot;$(DshGuardSource)&quot; /Fo:&quot;$(DshGuardOutputDir)guard.obj&quot; /Fe:&quot;$(DshGuardOutput)&quot;"
           StandardOutputImportance="low" />
@@ -67,16 +70,23 @@
   </Target>
 
   <!-- 会访问违例的真实原生探针, 验证 guard 的遏制: 测试工程以 DshBuildFaultProbe=true 自建, 发布以 DshShipFaultProbe=true 附带。 -->
-  <Target Name="BuildDshFaultProbe" BeforeTargets="BeforeBuild" DependsOnTargets="ResolveDshVsDevCmd"
-          Condition="'$(DshBuildFaultProbe)' == 'true'">
+  <Target Name="BuildDshFaultProbe" BeforeTargets="BeforeBuild"
+          Condition="'$(DshBuildFaultProbe)' == 'true'"
+          Inputs="$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c"
+          Outputs="$(IntermediateOutputPath)dsh-guard\$(DshProbeFile)">
     <PropertyGroup>
       <DshProbeSource>$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c</DshProbeSource>
       <DshProbeOutputDir>$(IntermediateOutputPath)dsh-guard\</DshProbeOutputDir>
       <DshProbeOutput>$(DshProbeOutputDir)$(DshProbeFile)</DshProbeOutput>
     </PropertyGroup>
     <MakeDir Directories="$(DshProbeOutputDir)" />
-    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmd)' != ''"
-          Command="call &quot;$(DshVsDevCmd)&quot; -arch=x64 -no_logo &amp;&amp; $(DshNativeCompiler) /nologo /utf-8 /TC /LD &quot;$(DshProbeSource)&quot; /Fo:&quot;$(DshProbeOutputDir)fault_probe.obj&quot; /Fe:&quot;$(DshProbeOutput)&quot;"
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(DshVsWhere)')"
+          Command="&quot;$(DshVsWhere)&quot; -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find Common7\Tools\VsDevCmd.bat"
+          ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="DshVsDevCmdProbe" />
+    </Exec>
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(DshVsDevCmdProbe)' != ''"
+          Command="call &quot;$(DshVsDevCmdProbe)&quot; -arch=x64 -no_logo &amp;&amp; $(DshNativeCompiler) /nologo /utf-8 /TC /LD &quot;$(DshProbeSource)&quot; /Fo:&quot;$(DshProbeOutputDir)fault_probe.obj&quot; /Fe:&quot;$(DshProbeOutput)&quot;"
           StandardOutputImportance="low" />
     <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))"
           Command="$(DshNativeCompiler) -O2 -fPIC -shared -o &quot;$(DshProbeOutput)&quot; &quot;$(DshProbeSource)&quot;"

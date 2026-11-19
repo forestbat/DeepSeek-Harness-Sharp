@@ -38,11 +38,24 @@ public sealed class Inbox : IDisposable
     {
         _nextTurn.Clear();
         _nextStep.Clear();
-        foreach (var sessionEvent in _session.OwnEvents())
+        // 收件箱只关心"现在还有什么没被取走"。窗口化恢复的会话里, 前缀要按页读回来(383MB 会话实测 24s),
+        // 所以只重放常驻段; 那时指向窗口之前的 splice 无从校验 —— 放不进当前列表就跳过, 那不是日志损坏。
+        var windowed = _session.ResidentFrom > 0;
+        var from = Math.Max(_session.InheritedEventCount, _session.ResidentFrom);
+        foreach (var sessionEvent in _session.SnapshotEvents(from))
         {
-            if (sessionEvent.Data is InboxSplicePayload splice)
-                Apply(splice);
+            if (sessionEvent.Data is not InboxSplicePayload splice)
+                continue;
+            if (windowed && !Fits(splice))
+                continue;
+            Apply(splice);
         }
+    }
+
+    private bool Fits(InboxSplicePayload splice)
+    {
+        var inbox = ListFor(splice.Target);
+        return splice.Start >= 0 && splice.Start + (splice.RemovedCount ?? 0) <= inbox.Count;
     }
 
     /**

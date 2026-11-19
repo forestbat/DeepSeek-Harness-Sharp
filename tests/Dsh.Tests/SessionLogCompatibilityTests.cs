@@ -113,15 +113,24 @@ public sealed class SessionLogCompatibilityTests : IDisposable
             events);
     }
 
+    /**
+     * 本 harness 不认识的"必须类型"不再被跳过, 而是按不透明记录保留 ——
+     * 跳过会逼着读侧重排序号, 序号一重排, 指向别的节点的事件就全错位(见 A2)。
+     */
     [Fact]
-    public void ReaderWithoutTheType_RefusesRequiredEvent()
+    public void ReaderWithoutTheType_PreservesRequiredEventAsOpaqueAndOpens()
     {
         var id = WriteLog(new ProbePayload(RequiredType, "state change"));
 
-        var error = Assert.Throws<TargetInvocationException>(() => LegacyRead(id));
+        var events = LegacyRead(id);
 
-        Assert.Contains($"\"{RequiredType}\"", error.InnerException?.Message);
-        Assert.Contains("not marked ignorable", error.InnerException?.Message);
+        Assert.Equal(
+            [
+                (SessionEventTypes.TurnStart, nameof(TurnStartPayload)),
+                (RequiredType, nameof(UnknownSessionEventPayload)),
+                (SessionEventTypes.TurnEnd, nameof(TurnEndPayload)),
+            ],
+            events);
     }
 
     [Fact]

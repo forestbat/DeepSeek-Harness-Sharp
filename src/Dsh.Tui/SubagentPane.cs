@@ -69,7 +69,10 @@ internal sealed class SubagentPane : ITuiPane
 
     public void ReplayEvents()
     {
-        foreach (var sessionEvent in _session.SnapshotEvents())
+        // 与主窗格一致: 窗口化会话只回放常驻段, 前缀留一行说明 —— 遍历前缀会把页全拉回来。
+        if (_session.ResidentFrom > 0)
+            Renderer.AppendPrefixWindowNotice(_session.ResidentFrom);
+        foreach (var sessionEvent in _session.ResidentEvents())
             ProcessSessionEvent(sessionEvent, replay: true);
     }
 

@@ -188,7 +188,8 @@ public sealed class MemoryCapture : Service, IDisposable
     private static string ExtractTranscript(Session session, int maxChars)
     {
         var builder = new StringBuilder();
-        foreach (var sessionEvent in session.SnapshotEvents())
+        // 只要尾部 maxChars: 窗口会话里读整段历史等于把 383MB 日志按页全读回来, 而前面的内容最终会被截掉。
+        foreach (var sessionEvent in session.ResidentEvents())
         {
             switch (sessionEvent.Data)
             {

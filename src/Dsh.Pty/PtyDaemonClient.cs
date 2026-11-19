@@ -22,6 +22,19 @@ public static class PtyDaemonClient
     }
 
     /** 终止 daemon 里指定的 PTY 会话。 */
+    public static Task<bool> ProbeAsync(string id, CancellationToken cancellationToken = default)
+        => ProbeAsync(id, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
+
+    /** 这个 id 是不是(或曾经是)daemon 的 pty: 已退出但有启动记录时也算, attach 会按记录复活它。 */
+    public static async Task<bool> ProbeAsync(string id, string socketPath, string? portFile, CancellationToken cancellationToken = default)
+    {
+        using var socket = await ConnectAsync(socketPath, portFile, cancellationToken);
+        using var stream = new NetworkStream(socket, ownsSocket: true);
+        await WriteRequestAsync(stream, new PtyDaemonRequest { Method = "probe", Id = id }, socketPath, portFile, cancellationToken);
+        // 探测的语义是"有没有": daemon 回答"没有"不是错误。
+        var response = await ReadResponseAsync(stream, cancellationToken, throwOnError: false);
+        return response.Ok;
+    }
     public static Task<IReadOnlyList<string>> KillAsync(string id, CancellationToken cancellationToken = default)
         => KillAsync(id, PtyDaemonPaths.SocketPath(), OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null, cancellationToken);
 
@@ -484,13 +497,13 @@ public static class PtyDaemonClient
         await stream.FlushAsync(cancellationToken);
     }
 
-    private static async Task<PtyDaemonResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken)
+    private static async Task<PtyDaemonResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken, bool throwOnError = true)
     {
         var line = await ReadLineAsync(stream, cancellationToken)
             ?? throw new IOException("daemon closed the connection");
         var response = JsonSerializer.Deserialize(line, PtyDaemonJsonContext.Default.PtyDaemonResponse)
             ?? throw new InvalidOperationException("daemon returned an invalid response");
-        if (!response.Ok)
+        if (!response.Ok && throwOnError)
             throw new InvalidOperationException(response.Error ?? "daemon request failed");
         return response;
     }

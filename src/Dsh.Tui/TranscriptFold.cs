@@ -2,7 +2,8 @@ namespace Dsh.Tui;
 
 public sealed class TranscriptFold
 {
-    public required int Start { get; init; }
+    /** 起点随转录裁头整体平移, 因此不是 init-only。 */
+    public required int Start { get; set; }
 
     public required int End { get; set; }
 

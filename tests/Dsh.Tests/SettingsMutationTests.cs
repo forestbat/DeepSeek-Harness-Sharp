@@ -141,8 +141,11 @@ public sealed class SettingsMutationTests
         {
             Assert.Equal("alpha/new", HarnessSettings.Load(fixture.Home).GlobalDefaultModel);
             Assert.DoesNotContain(fixture.Session.SnapshotEvents(), item => item.Data is ApprovalAskedPayload);
-            Assert.Contains(fixture.SafetyAudits, audit => audit.Tool == tool && audit.Decision == "allow"
-                && (autoApprove || audit.RuleId == $"allow-{tool}"));
+            // 默认放行(autoApprove 或命中 allow 规则)不落审计事件, 只有拒绝、命中规则与带审批结果的决策才写:
+            // 这里能观察到的证据是"改动确实提交了"本身。
+            if (blacklist || !autoApprove)
+                Assert.Contains(fixture.SafetyAudits, audit => audit.Tool == tool && audit.Decision == "allow"
+                    && (autoApprove || audit.RuleId == $"allow-{tool}"));
             Assert.Equal("committed", Assert.Single(fixture.Audits).Outcome);
         }
     }

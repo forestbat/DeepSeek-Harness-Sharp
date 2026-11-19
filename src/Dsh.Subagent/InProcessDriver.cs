@@ -45,13 +45,9 @@ public static class InProcessDriver
 
     private static int LastTurnOf(Session session)
     {
-        var lastTurn = 0;
-        foreach (var sessionEvent in session.SnapshotEvents())
-        {
-            if (sessionEvent.Data is TurnStartPayload turnStart)
-                lastTurn = turnStart.Turn;
-        }
-        return lastTurn;
+        // 只看常驻段: 窗口化恢复的会话里往前扫到 seq 0 等于把整份日志按页读回来。
+        var lastStart = session.LastResidentEventWhere(sessionEvent => sessionEvent.Data is TurnStartPayload);
+        return lastStart?.Data is TurnStartPayload turnStart ? turnStart.Turn : 0;
     }
 
     internal static SubagentStopReason ToStopReason(TurnEndReason reason) => reason switch

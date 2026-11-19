@@ -75,6 +75,7 @@ internal sealed class ChatScene : IAsyncDisposable
     public void ScrollToEnd()
         => Scroll.Offset = new Vector(Scroll.Offset.X, Math.Max(0, Scroll.Extent.Height - Scroll.Viewport.Height));
 
+
     /** 折叠后的对齐要跨多轮布局: 回收/实体化目标项、修正偏移、再确认稳定。 */
     public void Settle()
     {

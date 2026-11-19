@@ -161,11 +161,17 @@ public class SessionTests
         Assert.Equal([1L, 2L], restored.SourceEventSeqs);
     }
 
+    /**
+     * 不认识的类型按不透明记录保留, 与 ignorable 无关: 丢掉它们就得重排序号,
+     * 而序号一重排, sourceEventSeqs 与 surfaceOp.start 指向的节点就全错位。
+     */
     [Fact]
-    public void EventJson_UnknownTypeWithoutIgnorableRefuses()
+    public void EventJson_UnknownTypeWithoutIgnorableIsKeptOpaque()
     {
         const string json = """{"type":"plugin/x","seq":0,"time":0,"data":{}}""";
-        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SessionEvent>(json, DshJson.Options));
+        var restored = JsonSerializer.Deserialize<SessionEvent>(json, DshJson.Options);
+        var payload = Assert.IsType<UnknownSessionEventPayload>(restored!.Data);
+        Assert.Equal("plugin/x", payload.Type);
     }
 
     [Fact]

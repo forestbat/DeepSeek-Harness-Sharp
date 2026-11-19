@@ -25,6 +25,9 @@ internal enum TuiAction
     FocusNextPane,
     Interrupt,
     PromptCommandMenu,
+
+    /** 复制当前结果浮层的全文到系统剪贴板。 */
+    CopyOverlay,
 }
 
 /** 按键发生时的焦点: 聊天输入认全部动作; shell 窗格只认窗口级动作, 其余按键直达 shell。 */
@@ -74,6 +77,8 @@ internal sealed class KeyBindingTable
         [TuiAction.FocusNextPane] = "Ctrl+X O",
         [TuiAction.Interrupt] = "Ctrl+C",
         [TuiAction.PromptCommandMenu] = "Ctrl+P",
+        // 避开 Ctrl+Y(Word/Cherry Studio 的 redo)与终端的 Ctrl+Shift+C(复制选择)。
+        [TuiAction.CopyOverlay] = "Alt+C",
     };
 
     private static readonly Dictionary<string, TuiAction> ActionsByName = Enum.GetValues<TuiAction>()

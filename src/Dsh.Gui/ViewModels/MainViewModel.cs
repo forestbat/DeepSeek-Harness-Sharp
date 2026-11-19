@@ -135,6 +135,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             _ctx.Get<Func<string, string, bool>>("editorClientHasMapping", false));
         chat.Fleet.Changed += OnFleetChanged;
         chat.Reset += ShowSession;
+        chat.Truncated += TruncateTo;
         chat.Received += OnChatReceived;
         chat.Failed += SetStatus;
         ShowSession();
@@ -220,6 +221,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     /** 会话流内容发生变化, 视图据此保持贴底滚动。 */
     public event Action? MessagesChanged;
+
+    /** 转录整段重建之后请视图重新落点(null = 这条会话没有记录, 直接贴最新)。 */
+    public event Action<TranscriptAnchor?>? TranscriptRestoreRequested;
+
+    /** 视图附加时要还原的阅读位置: 会话重建发生在视图创建之前, 那时事件还没有订阅者。 */
+    public TranscriptAnchor? TranscriptRestoreAnchor
+        => _transcriptAnchors.TryGetValue(_chat.Id.Value, out var anchor) ? anchor : null;
 
 
     /** 统一「需要你决定」窗口由视图实现: 审批与 ask_user_question 都走这里。 */
@@ -597,6 +605,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
      */
     private readonly Dictionary<string, ComposerDraft> _drafts = new(StringComparer.Ordinal);
 
+    /** 每个会话上次的阅读位置(像素 + 视口顶部那条的身份): 切回来时按它还原, 而不是一上来就滑到最新。 */
+    private readonly Dictionary<string, TranscriptAnchor> _transcriptAnchors = new(StringComparer.Ordinal);
+
+    /** 正在整段重放历史: 这期间的逐条通知没有意义(见 AppendMessage)。 */
+    private bool _replaying;
+
+    /** 正在应用的那条事件序号: 每条界面行记下它, 会话被截断时据此删掉尾部消息。 */
+    private long _currentSeq;
+
+    /** 视图报告当前阅读位置; 只有视图知道这个量, 这里只负责按会话记住它。 */
+    public void ReportTranscriptAnchor(TranscriptAnchor anchor) => _transcriptAnchors[_chat.Id.Value] = anchor;
+
     private sealed record ComposerDraft(string Text, int Caret, IReadOnlyList<AttachmentViewModel> Attachments);
 
     /** 当前输入区正在显示哪条会话的草稿; null 表示还没显示过任何会话。 */
@@ -923,17 +943,20 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     [RelayCommand]
     private Task RevertToMessageAsync(MessageViewModel? message)
-        => RunTimelineCommandAsync(message, "revert", reload: true);
+        => RunTimelineCommandAsync(message, "revert", revert: true);
 
     [RelayCommand]
     private Task ForkAtMessageAsync(MessageViewModel? message)
-        => RunTimelineCommandAsync(message, "fork", reload: false);
+        => RunTimelineCommandAsync(message, "fork", revert: false);
 
     /**
      * 回退/分叉共用: 服务端把会话截断到"这条消息所属回合之前", 这里再把这条消息的原文放回输入区,
      * 于是用户看到的是"编辑并重发", 而不是一条留在转录里、界面还以为在跑的用户消息。
+     *
+     * 撤回之后的界面由截断通知驱动(见 TruncateTo): 一次撤回只增量删掉尾部消息, 不再重取整份快照 ——
+     * 否则同一件事要走两遍(一遍逐事件重放、一遍分页快照), 观感就是整屏重建两次。
      */
-    private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool reload)
+    private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool revert)
     {
         if (message?.Seq is not { } seq)
             return;
@@ -941,10 +964,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var output = await _chat.RunAsync($"/timestamp {action} #{seq}");
         if (output.Length > 0)
             AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
-        if (reload)
+        if (revert)
         {
-            // 会话已在服务端被截断: 重新取一份快照, 否则界面还留着一堆已经不存在的事件。
-            await _chat.ReloadAsync(forceReset: true);
+            // 会话已在服务端被截断: 截断通知会把尾部消息按序号删掉(见 TruncateTo), 这里只把原文放回输入区。
             FillComposer(text);
             return;
         }
@@ -1192,6 +1214,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pendingDialogs.Clear();
         _chat.Fleet.Changed -= OnFleetChanged;
         _chat.Reset -= ShowSession;
+        _chat.Truncated -= TruncateTo;
         _chat.Received -= OnChatReceived;
         _chat.Failed -= SetStatus;
         _contentSearch?.Cancel();
@@ -1581,6 +1604,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Subagents.SetRoot(_chat.Id);
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
+        // 整段重放已经结束, 现在请视图重新落点: 上次读的那条还在就回到它, 不在就贴最新。
+        TranscriptRestoreRequested?.Invoke(TranscriptRestoreAnchor);
         Workbench.NotifySessionChanged();
     }
 
@@ -1618,23 +1643,75 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     /** 实时事件: 不是重放, 因此压缩状态要按真实生命周期切换。 */
     private void OnChatReceived(IReadOnlyList<SessionEvent> batch) => ApplyEvents(batch);
 
+    /**
+     * 会话在服务端被就地截断(撤回): 只删掉由已经不存在的事件产生的尾部消息, 整屏不重建。
+     * 用户正在读的那条还在的话视口一帧都不动(视图按锚点重新落点), 被删掉了才贴最新。
+     */
+    private void TruncateTo(long keepEventCount)
+    {
+        if (_disposed)
+            return;
+        for (var index = Messages.Count - 1; index >= 0; index--)
+        {
+            if (Messages[index].RenderSeq >= keepEventCount)
+                Messages.RemoveAt(index);
+        }
+        for (var index = TraceItems.Count - 1; index >= 0; index--)
+        {
+            var trace = TraceItems[index];
+            if (trace.Seq < keepEventCount)
+                continue;
+            TraceItems.RemoveAt(index);
+            TraceView.Remove(trace);
+        }
+        _lastUserMessages.RemoveAll(message => message.RenderSeq >= keepEventCount);
+        _pendingToolCalls.Clear();
+        _openAssistant = null;
+        _openReasoning = null;
+        // 交付物清单由事件派生: 截断之后重建一遍, 否则被回退掉的那次"交付"还留在侧栏里。
+        Deliverables.Reset(canOpen: true);
+        foreach (var sessionEvent in _chat.Events)
+        {
+            if (sessionEvent.Data is DeliverablesPresentedPayload)
+                Deliverables.Observe(sessionEvent);
+        }
+        _renderedSeq = keepEventCount;
+        _renderedAny = keepEventCount > 0;
+        MessagesChanged?.Invoke();
+        // 截断通知可能晚于"截断之后新写入的事件"到达: 那条事件的序号正好等于截断后的条数,
+        // 在截断之前因为序号回退被丢掉了。这里把它按序号补回来, 否则用户撤回后发的那条消息就永远不显示。
+        var resumed = _chat.Events.Where(sessionEvent => sessionEvent.Seq >= keepEventCount).ToList();
+        if (resumed.Count > 0)
+            ApplyEvents(resumed, replay: true);
+        TranscriptRestoreRequested?.Invoke(TranscriptRestoreAnchor);
+    }
+
     /** replay=true 表示在重放既有历史(切会话/重新加载), 而不是收到了实时事件。 */
     private void ApplyEvents(IReadOnlyList<SessionEvent> batch, bool replay = false)
     {
         if (_disposed)
             return;
-        foreach (var sessionEvent in batch)
+        _replaying = replay;
+        try
         {
-            if (sessionEvent.Seq < _renderedSeq)
-                continue;
-            if (_renderedAny && sessionEvent.Seq > _renderedSeq)
+            foreach (var sessionEvent in batch)
             {
-                RequestResync(sessionEvent.Seq);
-                return;
+                if (sessionEvent.Seq < _renderedSeq)
+                    continue;
+                if (_renderedAny && sessionEvent.Seq > _renderedSeq)
+                {
+                    RequestResync(sessionEvent.Seq);
+                    return;
+                }
+                _renderedAny = true;
+                _renderedSeq = sessionEvent.Seq + 1;
+                _currentSeq = sessionEvent.Seq;
+                ApplyEvent(sessionEvent, replay);
             }
-            _renderedAny = true;
-            _renderedSeq = sessionEvent.Seq + 1;
-            ApplyEvent(sessionEvent, replay);
+        }
+        finally
+        {
+            _replaying = false;
         }
         if (!replay)
             return;
@@ -1991,9 +2068,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private MessageViewModel AppendMessage(MessageViewModel message)
     {
+        message.RenderSeq = _currentSeq;
         message.Updated += _ => MessagesChanged?.Invoke();
         Messages.Add(message);
-        MessagesChanged?.Invoke();
+        // 整段重放时逐条通知会把长会话的加载拖成一堆贴底与布局轮次; 重放结束由 ApplyEvents 通知一次。
+        if (!_replaying)
+            MessagesChanged?.Invoke();
         return message;
     }
 

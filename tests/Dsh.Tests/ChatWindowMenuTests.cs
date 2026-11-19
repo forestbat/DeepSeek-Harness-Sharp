@@ -17,7 +17,7 @@ namespace Dsh.Tests;
 public class ChatWindowMenuTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     private AgentLoopAgent? _lastAgent;
@@ -522,17 +522,18 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "/dump");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => DrawFrame(chat).Contains("row-1"));
+        await SettleAsync(chat, () => chat.InputPane.Result.IsActive);
 
+        // 命令结果进浮层(Info), 转录里不出现: 两者混在一起用户分不清哪句是自己说的。
         var frame = DrawFrame(chat);
         Assert.Contains("row-1", frame);
-        Assert.DoesNotContain("row-9", frame);
+        Assert.True(chat.InputPane.Result.IsActive);
 
-        Press(chat, ConsoleKey.Tab);
-        Press(chat, ConsoleKey.Enter);
+        Press(chat, ConsoleKey.Escape);
 
         frame = DrawFrame(chat);
-        Assert.Contains("row-9", frame);
+        Assert.DoesNotContain("row-1", frame);
+        Assert.False(chat.InputPane.Result.IsActive);
     }
 
 
@@ -878,12 +879,9 @@ public class ChatWindowMenuTests : IDisposable
             Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(rows)),
         }));
 
-        Type(chat, "/dump");
-        Press(chat, ConsoleKey.Enter);
+        chat.InputPane.Renderer.AppendRaw(string.Join('\n', Enumerable.Range(1, 40).Select(index => $"row-{index:D2}")) + "\n");
+        chat.InputPane.Renderer.BumpVersion();
         await SettleAsync(chat, () => DrawFrame(chat).Contains("row-40"));
-
-        Press(chat, ConsoleKey.Tab);
-        Press(chat, ConsoleKey.Enter);
 
         var frame = DrawFrame(chat);
         Assert.Contains("row-40", frame);
@@ -911,11 +909,9 @@ public class ChatWindowMenuTests : IDisposable
             Handler = _ => Task.FromResult<CommandResult>(new CommandResult.Success(rows)),
         }));
 
-        Type(chat, "/dump");
-        Press(chat, ConsoleKey.Enter);
+        chat.InputPane.Renderer.AppendRaw(string.Join('\n', Enumerable.Range(1, RowCount).Select(index => $"row-{index:D2}")) + "\n");
+        chat.InputPane.Renderer.BumpVersion();
         await SettleAsync(chat, () => DrawFrame(chat).Contains("row-40"));
-        Press(chat, ConsoleKey.Tab);
-        Press(chat, ConsoleKey.Enter);
 
         var layout = LayoutEngine.Calculate(100, 30);
         var frame = DrawFrame(chat);

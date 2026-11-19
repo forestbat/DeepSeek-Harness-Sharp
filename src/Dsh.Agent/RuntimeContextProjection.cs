@@ -55,7 +55,8 @@ public sealed class RuntimeContextProjection : IDisposable
         _retained = null;
         _neverExisted = true;
         var surface = new HashSet<long>(session.SurfaceManager.Nodes);
-        for (var index = session.Seq - 1; index >= 0; index--)
+        // 只看常驻尾窗: 窗口化恢复的会话往前扫到 seq 0 等于把整份日志按页读回来。尾窗里没有就等于"这次进程没有留过快照"。
+        for (var index = session.Seq - 1; index >= session.ResidentFrom; index--)
         {
             if (session.EventAt(index) is not { Data: UserMessagePayload userMessage } sessionEvent
                 || !IsOwned(userMessage.Message))

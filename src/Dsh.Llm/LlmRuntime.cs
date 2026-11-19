@@ -80,6 +80,18 @@ public sealed class LlmRuntime : Service
         return registration.Adapter.ResolveModel(model) ?? new LlmResolvedModelInfo(provider, model, model);
     }
 
+    /**
+     * 上下文窗口: 先取目录(models.dev 快照/adapter 声明), 目录没有这个模型时问端点自己。
+     * 自动压缩用它算触发阈值; 都拿不到才返回 null, 由调用方决定怎么降级。
+     */
+    public async Task<int?> ResolveContextWindowAsync(string provider, string model, CancellationToken cancellationToken)
+    {
+        var registration = RegistrationFor(provider);
+        if (registration.Adapter.ResolveModel(model)?.ContextWindow is { } declared)
+            return declared;
+        return await registration.Adapter.ProbeContextWindowAsync(model, cancellationToken).ConfigureAwait(false);
+    }
+
     private Registration RegistrationFor(string provider)
     {
         if (string.IsNullOrWhiteSpace(provider))
