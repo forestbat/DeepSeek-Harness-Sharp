@@ -37,20 +37,116 @@ internal static class ChunkRows
         => type is TextChunksTag or ReasoningChunksTag or ToolCallChunksTag;
 
     public static string EncodeEventLines(IReadOnlyList<SessionEvent> events, bool packChunks)
+        => string.Join('\n', EncodeRecords(events, packChunks).Select(record => record.Line));
+
+    /**
+     * 把一批事件编成存储行, 连同每行覆盖的事件(行首序号与条数)一起返回。
+     *
+     * 一行在盘上是**一条记录**: 普通事件各占一行, 连续的同类 chunk 被打包成一行(见 PackRuns)。
+     * 写侧按行的真实字节切帧, 所以这里必须把"一行代表几条事件"带出来 —— 索引要记的是事件条数,
+     * 帧边界也只能落在行边界上(把一行劈开就成了读不回来的残缺记录)。
+     */
+    public static IReadOnlyList<EncodedRecord> EncodeRecords(IReadOnlyList<SessionEvent> events, bool packChunks)
     {
         var records = packChunks ? PackRuns(events) : events.Cast<object>().ToList();
-        var lines = new List<string>(records.Count);
+        var encoded = new List<EncodedRecord>(records.Count);
         foreach (var record in records)
-            lines.Add(record is PackedChunkRow row ? SerializeRow(row) : SerializeEvent((SessionEvent)record));
-        return string.Join('\n', lines);
+        {
+            if (record is PackedChunkRow row)
+                encoded.Add(new EncodedRecord(SerializeRow(row), row.Seq0, row.Members.Length, long.MaxValue));
+            else
+            {
+                var sessionEvent = (SessionEvent)record;
+                // 打包行进不来这里(SurfaceOp 非空的事件不可打包), 所以 replace 只会出现在普通记录上。
+                var replaceStart = sessionEvent.SurfaceOp is SurfaceOp.Replace replace ? replace.Start : long.MaxValue;
+                encoded.Add(new EncodedRecord(SerializeEvent(sessionEvent), sessionEvent.Seq, 1, replaceStart));
+            }
+        }
+        return encoded;
     }
+
+    /**
+     * 一帧明文里有多少条事件、首条序号是多少 —— **只扫描, 不物化 payload**。
+     *
+     * 窗口化要先知道每帧覆盖多少条事件才能决定尾窗起点, 而那一步如果走完整解码,
+     * 就会把整份日志的事件对象全部物化一遍, 之后正式取窗口再物化一遍(实测 327,855 条解了两遍)。
+     * 这里只读 type/seq/seq0 与打包行的成员数组长度, 不建 SessionEvent。
+     */
+    internal static (long FirstSeq, int EventCount) MeasureStorageRecords(ReadOnlySpan<byte> plain)
+    {
+        long firstSeq = -1;
+        var total = 0;
+        var lineStart = 0;
+        while (lineStart < plain.Length)
+        {
+            var newline = plain[lineStart..].IndexOf((byte)'\n');
+            if (newline < 0)
+                break;
+            var lineEnd = lineStart + newline;
+            if (lineEnd > lineStart)
+            {
+                var (seq, count) = MeasureStorageRecord(plain[lineStart..lineEnd]);
+                if (firstSeq < 0)
+                    firstSeq = seq;
+                total += count;
+            }
+            lineStart = lineEnd + 1;
+        }
+        return (firstSeq, total);
+    }
+
+    /** 一条存储记录的(首序号, 事件条数); 打包行的条数来自它的成员数组长度。 */
+    internal static (long FirstSeq, int EventCount) MeasureStorageRecord(ReadOnlySpan<byte> line)
+    {
+        long seq = -1;
+        var count = 0;
+        var inMembers = false;
+        var reader = new Utf8JsonReader(line);
+        try
+        {
+            while (reader.Read())
+            {
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.PropertyName when reader.ValueTextEquals("seq"u8) && seq < 0:
+                    case JsonTokenType.PropertyName when reader.ValueTextEquals("seq0"u8) && seq < 0:
+                        reader.Read();
+                        seq = reader.TokenType == JsonTokenType.Number ? reader.GetInt64() : 0;
+                        break;
+                    case JsonTokenType.PropertyName when reader.ValueTextEquals("texts"u8) || reader.ValueTextEquals("args"u8):
+                        reader.Read();
+                        if (reader.TokenType == JsonTokenType.StartArray)
+                            inMembers = true;
+                        break;
+                    case JsonTokenType.String when inMembers:
+                        count += 1;
+                        break;
+                    case JsonTokenType.EndArray:
+                        inMembers = false;
+                        break;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // 解不出来交给真正的解码路径去报错: 这里只负责"大致有多少条"。
+            return (seq < 0 ? 0 : seq, 0);
+        }
+        // 普通事件没有成员数组: 它就是一条。
+        return (seq < 0 ? 0 : seq, count > 0 ? count : 1);
+    }
+
+    /** 一条存储行原文, 以及它在序号轴上覆盖的起点与条数。
+     * MinReplaceStart 是这条记录里 replace 指向的序号(没有则 long.MaxValue): 写侧顺手带上,
+     * 帧索引据此记下"这一帧有没有指向更早节点的 replace", 读侧才算得准尾窗起点。
+     */
+    internal readonly record struct EncodedRecord(string Line, long FirstSeq, int EventCount, long MinReplaceStart);
 
     public static IReadOnlyList<SessionEvent> DecodeStorageRecord(JsonObject record)
     {
         ExpandProvenance(record);
         var type = ReadTypeTag(record);
         if (IsChunkRowTag(type)) return ExpandRow(record, type!);
-        ValidateTypeTag(type, IsIgnorable(record));
         if (type == SessionEventTypes.RequestHeader
             && record["data"] is JsonObject data
             && data["reason"] is JsonValue reasonValue
@@ -81,6 +177,118 @@ internal static class ChunkRows
         return [sessionEvent];
     }
 
+    /**
+     * 窗口读取专用: 只解出信封(type/seq/time/ignorable/surfaceOp), `data` 留到访问时再解。
+     *
+     * 事件持有的是"这一帧明文数组里的一条记录", 一帧的记录共用同一个数组, 所以每条事件不额外分配字节。
+     * 全量读取不走这里 —— 那条路径要把整份日志留在内存里, 逐条留原始记录等于明文再存一份。
+     */
+    public static IReadOnlyList<SessionEvent> DecodeStorageRecordLazy(ReadOnlyMemory<byte> record)
+    {
+        var span = record.Span;
+        // chunk 打包行与区间编码来源要展开成多条, 没有"一段连续明文"可用, 只能当场物化。
+        if (NeedsDom(span))
+            return DecodeStorageRecord(span);
+        ValidateTypeTag(span);
+        return [ParseEnvelope(record)];
+    }
+
+    private static SessionEvent ParseEnvelope(ReadOnlyMemory<byte> record)
+    {
+        var reader = new Utf8JsonReader(record.Span);
+        string? type = null;
+        var seq = -1L;
+        var time = 0L;
+        var ignorable = false;
+        SurfaceOp? surfaceOp = null;
+        var hasData = false;
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            throw new FormatException("stored session records must be objects");
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+                break;
+            if (reader.TokenType != JsonTokenType.PropertyName)
+                throw new FormatException("stored session record has an invalid envelope");
+            if (reader.ValueTextEquals("type"u8))
+            {
+                reader.Read();
+                type = reader.GetString();
+            }
+            else if (reader.ValueTextEquals("seq"u8))
+            {
+                reader.Read();
+                seq = reader.GetInt64();
+            }
+            else if (reader.ValueTextEquals("time"u8))
+            {
+                reader.Read();
+                time = reader.GetInt64();
+            }
+            else if (reader.ValueTextEquals("ignorable"u8))
+            {
+                reader.Read();
+                ignorable = reader.GetBoolean();
+            }
+            else if (reader.ValueTextEquals("surfaceOp"u8))
+            {
+                reader.Read();
+                surfaceOp = ReadSurfaceOp(ref reader);
+            }
+            else if (reader.ValueTextEquals("data"u8))
+            {
+                reader.Read();
+                hasData = true;
+                reader.Skip();
+            }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
+        }
+        if (type is null || seq < 0 || !hasData)
+            throw new FormatException("stored session record has an invalid envelope");
+        return new SessionEvent(type, seq, time, ignorable, surfaceOp, null, record);
+    }
+
+    private static SurfaceOp ReadSurfaceOp(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+            return reader.ValueTextEquals("append"u8)
+                ? new SurfaceOp.Append()
+                : throw new FormatException("invalid surfaceOp");
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new FormatException("invalid surfaceOp");
+        var replace = false;
+        var start = 0L;
+        var end = 0L;
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            if (reader.ValueTextEquals("op"u8))
+            {
+                reader.Read();
+                replace = reader.ValueTextEquals("replace"u8);
+            }
+            else if (reader.ValueTextEquals("start"u8))
+            {
+                reader.Read();
+                start = reader.GetInt64();
+            }
+            else if (reader.ValueTextEquals("end"u8))
+            {
+                reader.Read();
+                end = reader.GetInt64();
+            }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
+        }
+        return replace ? new SurfaceOp.Replace(start, end) : throw new FormatException("invalid replace surfaceOp");
+    }
+
     /** 是否需要 Dom: chunk 打包行(要按行展开)与带区间编码来源(要展开 sourceEventSeqs)。 */
     private static bool NeedsDom(ReadOnlySpan<byte> line)
         => line.IndexOf("\"text-chunks\""u8) >= 0
@@ -89,21 +297,24 @@ internal static class ChunkRows
             || line.IndexOf("\"sourceEventSeqs\""u8) >= 0;
 
     /** 未转义的 UTF-8 字节与常量比较: type 标签都是纯 ASCII, 不需要解码成字符串。 */
-    private static bool IsType(ReadOnlySpan<byte> value, string expected)
-        => value.SequenceEqual(Encoding.UTF8.GetBytes(expected));
+    private static readonly byte[] RequestHeaderType = Encoding.UTF8.GetBytes(SessionEventTypes.RequestHeader);
+
+    private static bool IsType(ReadOnlySpan<byte> value, ReadOnlySpan<byte> expected) => value.SequenceEqual(expected);
 
     private static JsonObject ParseRecord(ReadOnlySpan<byte> line)
         => JsonNode.Parse(Encoding.UTF8.GetString(line)) as JsonObject
             ?? throw new FormatException("stored session records must be objects");
 
     /**
-     * 快速路径上的类型标签校验: 未知类型与退役格式必须拒绝, 这条约束不能因为跳过 DOM 而失效。
-     * 只顺序扫到 type/ignorable 与 request/header 的 data.reason 就停, 不建树。
+     * 快速路径上的类型标签校验: 只拒绝**已退役的目录内格式**, 未知类型照样收下。
+     *
+     * 未知类型(多半来自更新的 harness)不再拒绝解释: 它们被解码成不透明记录原样保留,
+     * 序号不重排, 于是 sourceEventSeqs / surfaceOp.start 这类"指向别的序号"的字段仍然对得上。
+     * 只顺序扫到 type 与 request/header 的 data.reason 就停, 不建树。
      */
     private static void ValidateTypeTag(ReadOnlySpan<byte> line)
     {
         ReadOnlySpan<byte> type = default;
-        bool ignorable = false;
         bool fallback = false;
         var reader = new Utf8JsonReader(line);
         try
@@ -116,11 +327,6 @@ internal static class ChunkRows
                 {
                     reader.Read();
                     type = reader.TokenType == JsonTokenType.String ? reader.ValueSpan : default;
-                }
-                else if (reader.ValueTextEquals("ignorable"u8))
-                {
-                    reader.Read();
-                    ignorable = reader.TokenType == JsonTokenType.True;
                 }
                 else if (reader.ValueTextEquals("data"u8))
                 {
@@ -154,16 +360,9 @@ internal static class ChunkRows
                     reader.Skip();
                     continue;
                 }
-                // 已知且非 request/header 的类型直接通过, 不必再扫剩余字段;
-                // 未知类型必须继续找 ignorable(标记了忽略的未知事件要放行), request/header 还要看 data.reason。
-                if (!type.IsEmpty)
-                {
-                    var known = SessionEventCodec.IsRegistered(Encoding.UTF8.GetString(type));
-                    if (known && !IsType(type, SessionEventTypes.RequestHeader))
-                        break;
-                    if (!known && ignorable)
-                        break;
-                }
+                // 只有 request/header 才需要继续扫 data.reason(退役格式要拒绝); 其余类型(含未知类型)到此为止。
+                if (!type.IsEmpty && !IsType(type, RequestHeaderType))
+                    break;
             }
         }
         catch (JsonException error)
@@ -172,25 +371,15 @@ internal static class ChunkRows
         }
         if (type.IsEmpty)
             return;
-        var name = Encoding.UTF8.GetString(type);
-        ValidateTypeTag(name, ignorable);
-        if (name == SessionEventTypes.RequestHeader && fallback)
+        // 只有退役格式(request/header 的 reason="fallback")要拒绝; 其余类型(含本 harness 不认识的)一律放行,
+        // 未知类型由 SessionEventCodec 解成不透明记录原样保留。
+        if (IsType(type, RequestHeaderType) && fallback)
             throw new SessionFormatUnsupportedException(
                 "session log contains a request/header event with the unsupported legacy reason \"fallback\"; refusing to interpret the log — it was written by a retired pre-release harness");
     }
 
-    private static void ValidateTypeTag(string? type, bool ignorable)
-    {
-        if (type is not null && !SessionEventCodec.IsRegistered(type) && !ignorable)
-            throw new SessionFormatUnsupportedException(
-                $"session log contains event type \"{type}\" unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness");
-    }
-
     private static string? ReadTypeTag(JsonObject record)
         => record["type"] is JsonValue value && value.TryGetValue<string>(out var type) ? type : null;
-
-    private static bool IsIgnorable(JsonObject record)
-        => record["ignorable"] is JsonValue value && value.TryGetValue<bool>(out var ignorable) && ignorable;
 
     private static void ExpandProvenance(JsonObject record)
     {
@@ -259,6 +448,24 @@ internal static class ChunkRows
                 _ => null,
             }
             : null;
+    }
+
+    /**
+     * 这条事件会不会被打包进一行(而不是自己占一行)。
+     * 写侧的字节预算要按打包后的形态估算 —— 一段连续 chunk 在盘上只有一行, 外壳只付一次。
+     */
+    internal static bool IsPackable(SessionEvent sessionEvent)
+        => Classify(sessionEvent) is not null;
+
+    /**
+     * next 是否接着 prev 的同一次流式输出: 是的话它在盘上只是同一行里的一个成员, 不另付外壳。
+     * 与 PackRuns 的合并条件同源(同 turn/step、同 block、序号连续), 于是逐条估算与整批编码对同一件事说同一句话。
+     */
+    internal static bool ContinuesRun(SessionEvent prev, SessionEvent next)
+    {
+        if (Classify(prev) is not { } kind || Classify(next) is not { } nextKind || kind != nextKind)
+            return false;
+        return Continues(prev, next, kind);
     }
 
     private static bool Continues(SessionEvent prev, SessionEvent next, DeltaKind kind)

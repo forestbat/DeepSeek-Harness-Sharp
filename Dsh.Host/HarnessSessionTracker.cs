@@ -34,7 +34,9 @@ internal sealed class HarnessSessionTracker : IDisposable
     public void Track(IAgent agent)
     {
         var header = agent.Session.Header;
-        var events = agent.Session.SnapshotEvents();
+        // 种子(fork)里的最后一条用户消息带的是父会话的旧时间: 活动时间不能早于本会话的创建时间。
+        // 只看常驻尾窗: 恢复一个窗口化会话时, 往前扫到 seq 0 就是把 383MB 日志按页读一遍(实测 140s)。
+        var lastActivity = agent.Session.LastResidentEventWhere(IsUserActivity)?.Time ?? header.CreatedAt;
         _tracked[agent.Id.Value] = 0;
         _registry.Register(new RemoteSessionSummary(
             agent.Id.Value,
@@ -44,8 +46,7 @@ internal sealed class HarnessSessionTracker : IDisposable
             header.Title,
             StatusOf(agent.Status),
             header.CreatedAt,
-            // 种子(fork)里的最后一条用户消息带的是父会话的旧时间: 活动时间不能早于本会话的创建时间。
-            Math.Max(events.LastOrDefault(IsUserActivity)?.Time ?? header.CreatedAt, header.CreatedAt),
+            Math.Max(lastActivity, header.CreatedAt),
             0,
             null));
     }

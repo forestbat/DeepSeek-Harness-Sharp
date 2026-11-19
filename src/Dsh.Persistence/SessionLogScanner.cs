@@ -3,19 +3,36 @@ using Dsh.Core;
 
 namespace Dsh.Persistence;
 
-internal sealed record SessionLogScan(SessionHeader Meta, long InheritedEventCount, List<SessionEvent> Events, long CommittedBytes);
+internal sealed record SessionLogScan(
+    SessionHeader Meta,
+    long InheritedEventCount,
+    List<SessionEvent> Events,
+    long CommittedBytes,
+    LogDamage Damage);
 
+/**
+ * 逐行解析会话日志的已提交区。
+ *
+ * 容错是硬要求: 一条记录读不出来(跨版本 codec 漂移、半行、被外部工具改坏)不能让整份会话打不开 ——
+ * 打开一个降级的会话比打不开更有价值。所以这里把读不出来的记录记成 LogDamage 并跳过, 绝不抛异常;
+ * 只要出现过损伤, 整个事件的 seq 就不再可信, 收尾时统重编号成 0..n-1(Session 要求 seq 从 0 连续)。
+ */
 internal sealed class SessionLogScanner
 {
     private const byte Newline = (byte)'\n';
     private readonly List<SessionEvent> _events = [];
     private readonly List<byte> _fragment = [];
-    private string? _issue;
+    private readonly long _seqBase;
     private bool _finished;
-    private long _eventLine;
+    private LogDamage _damage = LogDamage.None;
 
-    public SessionLogScanner(ReadOnlySpan<byte> headerRecord)
+    /**
+     * seqBase: 扫描起点对应的绝对 seq。缺页重读拿到的是一段中间帧, 它本来就从中途开始,
+     * 不能按"seq 必须从 0 开始"判损伤, 也不能在损伤时重编号(窗口要按绝对 seq 过滤)。
+     */
+    public SessionLogScanner(ReadOnlySpan<byte> headerRecord, long seqBase = 0)
     {
+        _seqBase = seqBase;
         var parsed = SessionLogHeader.ParseHeaderRecord(headerRecord);
         Meta = parsed.Meta;
         InheritedEventCount = parsed.InheritedEventCount;
@@ -24,9 +41,13 @@ internal sealed class SessionLogScanner
     }
 
     public SessionHeader Meta { get; }
-    public long InheritedEventCount { get; }
+    public long InheritedEventCount { get; private set; }
     public long InputBytes { get; private set; }
+
+    /** 最后一个完整、可解析记录的结束位置; 只在没有损伤时用作"尾部半帧"的截断点。 */
     public long CommittedBytes { get; private set; }
+
+    public LogDamage Damage => _damage;
 
     public void Write(ReadOnlySpan<byte> chunk)
     {
@@ -61,31 +82,33 @@ internal sealed class SessionLogScanner
     public SessionLogScan Finish()
     {
         _finished = true;
-        return new SessionLogScan(Meta, InheritedEventCount, _events, CommittedBytes);
+        if (_fragment.Count > 0)
+        {
+            // 尾部半行: 断电或被杀时写了一半的记录。
+            _damage = _damage.Plus(1, InputBytes - _fragment.Count, CommittedBytes);
+            _fragment.Clear();
+        }
+        if (_damage.Any && _seqBase == 0) Normalize();
+        return new SessionLogScan(Meta, InheritedEventCount, _events, CommittedBytes, _damage);
     }
 
     private void ConsumeEventLine(ReadOnlySpan<byte> line, long endByte)
     {
-        _eventLine += 1;
         IReadOnlyList<SessionEvent> decoded;
         try
         {
             decoded = DecodeRecord(line);
         }
-        catch (SessionFormatUnsupportedException)
-        {
-            if (_issue is null) throw;
-            return;
-        }
         catch (Exception)
         {
-            _issue ??= $"corrupt session log: unparsable committed event at line {_eventLine}";
+            // 读不出来就是损伤, 不是"整份日志有毒"; 记下位置继续读后面的记录。
+            _damage = _damage.Plus(1, endByte - line.Length - 1, CommittedBytes);
             return;
         }
-        if (_issue is not null)
+        if (_damage.Any)
         {
-            if (decoded.Any(candidate => candidate.Type == SessionEventTypes.TurnEnd))
-                throw new SessionPersistenceCorruptionException(_issue);
+            // 已经知道 seq 不可信了, 直接收下, 收尾统一重编号。
+            _events.AddRange(decoded);
             return;
         }
         if (IsStaleReplay(decoded))
@@ -96,13 +119,12 @@ internal sealed class SessionLogScanner
         var rowStart = _events.Count;
         foreach (var sessionEvent in decoded)
         {
-            if (sessionEvent.Seq != _events.Count)
+            if (sessionEvent.Seq != _seqBase + _events.Count)
             {
-                var expected = _events.Count;
+                // 序号断裂同样只是损伤: 丢掉这一行刚加的部分, 记为损伤, 交给收尾重编号。
                 _events.RemoveRange(rowStart, _events.Count - rowStart);
-                _issue = $"corrupt session log: seq gap in committed region at line {_eventLine} (expected {expected}, got {sessionEvent.Seq})";
-                if (decoded.Any(candidate => candidate.Type == SessionEventTypes.TurnEnd))
-                    throw new SessionPersistenceCorruptionException(_issue);
+                _damage = _damage.Plus(1, endByte - line.Length - 1, CommittedBytes);
+                _events.AddRange(decoded);
                 return;
             }
             _events.Add(sessionEvent);
@@ -111,11 +133,26 @@ internal sealed class SessionLogScanner
     }
 
     /**
+     * 损伤之后的重编号: 事件必须 0..n-1 连续(Session 的构造契约), 同时把 seed 切点夹到事件数以内,
+     * 否则 Session 会因为"继承事件数超过日志长度"拒绝构造。
+     */
+    private void Normalize()
+    {
+        for (var index = 0; index < _events.Count; index += 1)
+        {
+            if (_events[index].Seq != index)
+                _events[index] = _events[index] with { Seq = index };
+        }
+        if (InheritedEventCount > _events.Count)
+            InheritedEventCount = _events.Count;
+    }
+
+    /**
      * 落后的重放块: 另一个写入者带着落后于已提交区间的序号, 把同一段历史又追加了一遍。
-     * 整块都落在已提交区间内才认定为重放并整体丢弃; 与已提交区间交错仍是缺口, 交给上面的缺口判定。
+     * 整块都落在已提交区间内才认定为重放并整体丢弃; 与已提交区间交错则是损伤, 交给上面的判定。
      */
     private bool IsStaleReplay(IReadOnlyList<SessionEvent> decoded)
-        => decoded[0].Seq < _events.Count && decoded[^1].Seq < _events.Count;
+        => decoded[0].Seq < _seqBase + _events.Count && decoded[^1].Seq < _seqBase + _events.Count;
 
     /**
      * 直接按字节解码: 普通事件不需要 DOM, 只有 chunk 打包行与带区间来源的记录才退回 JsonNode。
