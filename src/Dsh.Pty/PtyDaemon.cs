@@ -26,6 +26,7 @@ public sealed class PtyDaemon : IAsyncDisposable
 
     /** 每个 pty 的跨进程归属与输入通道: agent 会话 id、窗格快照、控制消息队列。 */
     private readonly ConcurrentDictionary<string, PtyRemoteState> _remote = new(StringComparer.Ordinal);
+    private readonly string? _runRoot;
 
     private sealed class PtyRemoteState
     {
@@ -48,6 +49,8 @@ public sealed class PtyDaemon : IAsyncDisposable
         _host = host ?? new PtyHost();
         _socketPath = socketPath ?? (OperatingSystem.IsWindows() ? null : PtyDaemonPaths.SocketPath());
         _portFile = portFile ?? (OperatingSystem.IsWindows() ? PtyDaemonPaths.PortFile() : null);
+        // 记录与尺寸文件跟着端点走: 测试用临时端点时, 不能写进用户真实的 ~/.dsh/run(反之亦然)。
+        _runRoot = Path.GetDirectoryName(_portFile ?? _socketPath ?? PtyDaemonPaths.SocketPath());
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -250,6 +253,28 @@ public sealed class PtyDaemon : IAsyncDisposable
                     return false;
                 }
 
+            case "probe":
+                {
+                    // "这个 id 是不是(或曾经是)一个 pty?": CLI 据此区分"接管 daemon 的 pty"与"恢复 harness 会话"。
+                    // 已退出但有记录的 pty 也算认识 —— attach 会按记录把它复活。
+                    if (request.Id is not { Length: > 0 } id)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = "probe requires id" }, cancellationToken);
+                        return false;
+                    }
+
+                    var live = _host.Get(id);
+                    var recorded = PtyRecords.TryLoad(id, _runRoot);
+                    var known = live is not null || recorded is not null;
+                    await WriteResponseAsync(stream, new PtyDaemonResponse
+                    {
+                        Ok = known,
+                        Error = known ? null : $"PTY session not found: {id}",
+                        Session = live is not null ? ToDto(live.ToInfo()) : recorded is null ? null : ToDto(recorded),
+                    }, cancellationToken);
+                    return false;
+                }
+
             case "kill":
                 {
                     if (request.Id is not { Length: > 0 } target)
@@ -264,6 +289,8 @@ public sealed class PtyDaemon : IAsyncDisposable
                         return false;
                     }
 
+                    PtyRecords.Delete(target, _runRoot);
+                    DeleteSizeFile(target);
                     PruneRemote(_host.List());
                     await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Killed = [target] }, cancellationToken);
                     return false;
@@ -298,7 +325,26 @@ public sealed class PtyDaemon : IAsyncDisposable
                             Columns = parameters.Columns,
                             WantsMouse = parameters.WantsMouse,
                         };
+                        // 同一个 id 复活时, 旧进程的归属与输入通道都属于上一代, 不能带过来。
+                        if (_host.Get(id) is { } previous && previous.Status == PtySessionStatus.Exited)
+                        {
+                            _remote.TryRemove(id, out _);
+                            DeleteSizeFile(id);
+                        }
                         var session = await _host.StartAsync(startInfo, id, cancellationToken);
+                        PtyRecords.Save(record: new PtyRecord
+                        {
+                            Id = id,
+                            FileName = parameters.FileName,
+                            Arguments = parameters.Arguments,
+                            WorkingDirectory = parameters.WorkingDirectory,
+                            Environment = parameters.Environment,
+                            Home = parameters.Home,
+                            Rows = parameters.Rows,
+                            Columns = parameters.Columns,
+                            WantsMouse = parameters.WantsMouse,
+                            AgentSessionId = PtyRecords.TryLoad(id, _runRoot)?.AgentSessionId,
+                        });
                         WriteSessionSize(session);
                         await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true, Session = ToDto(session.ToInfo()) }, cancellationToken);
                     }
@@ -354,16 +400,40 @@ public sealed class PtyDaemon : IAsyncDisposable
                     }
 
                     var session = _host.Get(id);
-                    if (session is null)
+                    if (session is null || session.Status != PtySessionStatus.Running)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
-                        return false;
-                    }
+                        // 已退出(或 daemon 重启后只剩记录)的 pty 按同一 id 复活: 参数来自落盘的记录。
+                        if (PtyRecords.TryLoad(id, _runRoot) is not { } record)
+                        {
+                            await WriteResponseAsync(stream, new PtyDaemonResponse
+                            {
+                                Ok = false,
+                                Error = session is null
+                                    ? $"PTY session not found: {id}"
+                                    : $"PTY session {id} is not running and has no recorded start parameters"
+                                        + AttachRecoveryHint(PtyRecords.TryLoad(id, _runRoot)?.AgentSessionId),
+                            }, cancellationToken);
+                            return false;
+                        }
 
-                    if (session.Status != PtySessionStatus.Running)
-                    {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session {id} is not running" }, cancellationToken);
-                        return false;
+                        _host.StopAsync(id).GetAwaiter().GetResult();
+                        _remote.TryRemove(id, out _);
+                        try
+                        {
+                            session = await _host.StartAsync(StartInfoOf(record), id, cancellationToken);
+                        }
+                        catch (Exception error)
+                        {
+                            await WriteResponseAsync(stream, new PtyDaemonResponse
+                            {
+                                Ok = false,
+                                Error = $"PTY session {id} could not be revived: {error.Message}"
+                                    + AttachRecoveryHint(record.AgentSessionId),
+                            }, cancellationToken);
+                            return false;
+                        }
+
+                        WriteSessionSize(session);
                     }
 
                     // 新 proxy 接管前先丢掉队列里的历史输出(含早先的 detach 标记): 画面由快照重建, 历史字节只会误导。
@@ -426,6 +496,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     }
 
                     RemoteFor(id).AgentSessionId = request.AgentSessionId;
+                    SaveAgentSessionId(id, request.AgentSessionId);
                     await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
                     return false;
                 }
@@ -440,7 +511,10 @@ public sealed class PtyDaemon : IAsyncDisposable
 
                     var remote = RemoteFor(id);
                     if (request.AgentSessionId is { Length: > 0 } sessionId)
+                    {
                         remote.AgentSessionId = sessionId;
+                        SaveAgentSessionId(id, sessionId);
+                    }
                     remote.Panes = request.Panes;
                     Interlocked.Exchange(ref remote.PublishedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
                     await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
@@ -638,6 +712,20 @@ public sealed class PtyDaemon : IAsyncDisposable
         return dto;
     }
 
+    /** 只有记录、没有活进程的 pty: 状态恒为 Exited, attach 会按记录里的参数复活它。 */
+    private static PtyDaemonSessionDto ToDto(PtyRecord record) => new()
+    {
+        Id = record.Id,
+        Command = string.Join(' ', new[] { record.FileName }.Concat(record.Arguments)),
+        StartedAt = record.UpdatedAt,
+        Status = nameof(PtySessionStatus.Exited),
+        Columns = record.Columns,
+        Rows = record.Rows,
+        WantsMouse = record.WantsMouse,
+        Home = record.Home,
+        AgentSessionId = record.AgentSessionId,
+    };
+
     /** 清掉已不存在的 pty 的归属与输入通道, 避免 list 长期累积。 */
     private void PruneRemote(IReadOnlyList<PtySessionInfo> sessions)
     {
@@ -685,19 +773,80 @@ public sealed class PtyDaemon : IAsyncDisposable
     private static readonly ConcurrentDictionary<string, long> SizeGenerations = new();
 
     /** 会话尺寸落盘: ConPTY 子进程读不到 resize 后的窗口尺寸, 由尺寸的权威方(daemon)写文件给常驻 TUI 自己读。 */
-    private static void WriteSessionSize(PtySession session)
+    private void WriteSessionSize(PtySession session)
     {
         try
         {
             var info = session.ToInfo();
-            var generation = SizeGenerations.AddOrUpdate(session.Id.ToString(), 1, static (_, current) => current + 1);
-            Directory.CreateDirectory(PtyDaemonPaths.RunDirectory());
-            File.WriteAllText(
-                PtyDaemonPaths.SessionSizeFile(session.Id.ToString()),
-                $"{info.Columns} {info.Rows} {generation}");
+            var id = session.Id.ToString();
+            // 代次跨 daemon 重启单调: 首个代次从落盘记录续上, 否则重启后回退到 1, 常驻 TUI 会与旧代次撞号。
+            var seeded = PtyRecords.TryLoad(id, _runRoot)?.SizeGeneration ?? 0;
+            var generation = SizeGenerations.AddOrUpdate(id, _ => seeded + 1, static (_, current) => current + 1);
+            Directory.CreateDirectory(_runRoot ?? PtyDaemonPaths.RunDirectory());
+            File.WriteAllText(SizeFile(id), $"{info.Columns} {info.Rows} {generation}");
+            if (PtyRecords.TryLoad(id, _runRoot) is { } record)
+            {
+                record.SizeGeneration = generation;
+                record.Columns = info.Columns;
+                record.Rows = info.Rows;
+                PtyRecords.Save(record, _runRoot);
+            }
         }
         catch (IOException)
         {
         }
     }
+
+    private string SizeFile(string id) => Path.Combine(_runRoot ?? PtyDaemonPaths.RunDirectory(), $"size-{id}");
+
+    private void DeleteSizeFile(string id)
+    {
+        try
+        {
+            if (SizeFile(id) is { } path && File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /** identify / publish-panes 上报的 agent 会话 id 写回记录: pty 退出后, 这是"继续那条会话"的入口。 */
+    private void SaveAgentSessionId(string id, string? agentSessionId)
+    {
+        if (PtyRecords.TryLoad(id, _runRoot) is not { } record)
+            return;
+        record.AgentSessionId = agentSessionId;
+        PtyRecords.Save(record, _runRoot);
+    }
+
+    private static PtyStartInfo StartInfoOf(PtyRecord record)
+    {
+        var environment = new Dictionary<string, string?>(record.Environment ?? new Dictionary<string, string?>())
+        {
+            [PtySessionProtocol.SessionVariable] = record.Id,
+        };
+        if (record.Home is { Length: > 0 } childHome)
+            environment[PtySessionProtocol.ChildHomeVariable] = childHome;
+        return new PtyStartInfo
+        {
+            FileName = record.FileName,
+            Arguments = record.Arguments,
+            WorkingDirectory = record.WorkingDirectory,
+            Environment = environment,
+            Home = record.Home,
+            Rows = record.Rows == 0 ? 24 : record.Rows,
+            Columns = record.Columns == 0 ? 80 : record.Columns,
+            WantsMouse = record.WantsMouse,
+        };
+    }
+
+    /** attach 失败时的出口: 告诉用户那条会话怎么继续, 而不是只说"没在跑"。 */
+    private static string AttachRecoveryHint(string? agentSessionId)
+        => agentSessionId is { Length: > 0 }
+            ? $" (agent session {agentSessionId}; continue it with `dsharp tui --session {agentSessionId}` or `dsharp gui --session {agentSessionId}`)"
+            : "";
 }

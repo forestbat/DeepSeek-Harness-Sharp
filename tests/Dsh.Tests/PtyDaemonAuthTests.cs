@@ -45,6 +45,7 @@ public sealed class PtyDaemonAuthTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await WithDaemonAsync("pr", async (socketPath, portFile) =>
         {
+            var before = await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken);
             var request = new PtyDaemonRequest
             {
                 Method = "start",
@@ -56,7 +57,20 @@ public sealed class PtyDaemonAuthTests
 
             Assert.Contains("\"ok\":false", reply);
             Assert.Contains("unauthorized", reply);
-            Assert.Empty(await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken));
+            // 列表里可能有别的 pty 记录(daemon 的 run 目录由端点决定, 而测试端点位于共享的 .daemon-tests 下);
+            // 这里要证明的是"这次请求没有拉起任何东西", 所以比对前后两次列表。
+            Assert.Equal(before.Count, (await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken)).Count);
+        });
+    }
+
+    /** 探测未知 id 是"没有"而不是错误: attach 用它判断该走 daemon 还是本地恢复会话。 */
+    [Fact]
+    public async Task Probe_OfAnUnknownSession_IsFalse_InsteadOfThrowing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await WithDaemonAsync("pp", async (socketPath, portFile) =>
+        {
+            Assert.False(await PtyDaemonClient.ProbeAsync("no-such-session", socketPath, portFile, cancellationToken));
         });
     }
 
@@ -66,10 +80,11 @@ public sealed class PtyDaemonAuthTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await WithDaemonAsync("pm", async (socketPath, portFile) =>
         {
+            var before = await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken);
             var reply = await SendRawAsync(socketPath, portFile, "{not json", cancellationToken);
 
             Assert.Contains("\"ok\":false", reply);
-            Assert.Empty(await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken));
+            Assert.Equal(before.Count, (await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken)).Count);
         });
     }
 
@@ -79,10 +94,11 @@ public sealed class PtyDaemonAuthTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await WithDaemonAsync("po", async (socketPath, portFile) =>
         {
+            var before = await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken);
             var reply = await SendRawAsync(socketPath, portFile, new string('x', OversizedLineBytes), cancellationToken);
 
             Assert.DoesNotContain("\"ok\":true", reply);
-            Assert.Empty(await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken));
+            Assert.Equal(before.Count, (await PtyDaemonClient.ListAsync(socketPath, portFile, cancellationToken)).Count);
         });
     }
 

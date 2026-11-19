@@ -11,16 +11,24 @@ public sealed class PtyHost : IDisposable
     public async Task<PtySession> StartAsync(PtyStartInfo info, string? id = null, CancellationToken cancellationToken = default)
     {
         var sessionId = PtySessionId.Create(id ?? $"pty-{Guid.NewGuid():N}");
+        PtySession? replaced = null;
+        PtySession session;
         lock (_gate)
         {
-            if (_sessions.ContainsKey(sessionId))
-                throw new InvalidOperationException($"PTY session already exists: {sessionId}");
+            if (_sessions.TryGetValue(sessionId, out var existing))
+            {
+                // 同 id 复活: 只允许覆盖已经退出的那一份 —— 它已经没有任何活着的子进程,
+                // 而正在跑的 pty 被悄悄替换会让原来的 attach 客户端对着一个空壳。
+                if (existing.Status != PtySessionStatus.Exited)
+                    throw new InvalidOperationException($"PTY session already exists: {sessionId}");
+                replaced = existing;
+            }
+
+            session = new PtySession(sessionId, info);
+            _sessions[sessionId] = session;
         }
 
-        var session = new PtySession(sessionId, info);
-        lock (_gate)
-            _sessions[sessionId] = session;
-
+        replaced?.Dispose();
         try
         {
             await session.StartAsync(cancellationToken);

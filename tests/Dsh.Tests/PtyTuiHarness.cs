@@ -15,7 +15,7 @@ internal sealed class PtyTuiHarness : IDisposable
     public const int Rows = 30;
 
     private static readonly string TranscriptPath = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "debug-screenshots", "tui-pty-stream.txt"));
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch", "debug-screenshots", "tui-pty-stream.txt"));
 
     private readonly PtyHost _host;
     private readonly StringBuilder _text = new();
@@ -107,7 +107,7 @@ internal sealed class PtyTuiHarness : IDisposable
                 Rows = 40,
                 Columns = 140,
                 Home = home,
-                WorkingDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../")),
+                WorkingDirectory = Path.Combine(TempTree.RepositoryRoot, ""),
                 Environment = new Dictionary<string, string?>
                 {
                     [HarnessHome.HomeEnv] = home,
@@ -313,13 +313,13 @@ internal sealed class PtyTuiHarness : IDisposable
     }
 
     /**
-     * 隔离 home(项目内 artifacts020 下, 不污染用户目录): 复制真实 home 的配置与凭据, 保证插件能解析。
-     * Linux 上域套接字路径上限 108 字符, home 必须短: 用 artifacts020 下的 8 位目录名而非 GUID 全称。
+     * 隔离 home(项目内 tests/.scratch 下, 不污染用户目录): 复制真实 home 的配置与凭据, 保证插件能解析。
+     * Linux 上域套接字路径上限 108 字符, home 必须短: 用 tests/.scratch 下的 8 位目录名而非 GUID 全称。
      */
     private static string PrepareIsolatedHome()
     {
         var home = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", $"h{Guid.NewGuid():N}"[..9]));
+            TempTree.RepositoryRoot, "tests/.scratch", $"h{Guid.NewGuid():N}"[..9]));
         RealHostProcesses.CopyRealConfiguration(home);
 
         // 用例断言的是默认布局几何: 去掉上一层会话里拖出来的 TUI 布局参数(侧栏宽度/输入栏高度),
