@@ -49,7 +49,9 @@ public sealed class TuiSessionResumeTests
         {
             var home = new HarnessHome(Path.Combine(directory, "home"));
             var sessionId = await SaveSessionAsync(home, directory);
-            var log = Assert.Single(Directory.GetFiles(home.SessionsPath, "session.jsonl*", SearchOption.AllDirectories));
+            // 日志旁边还有 .frames 物理索引(缺页重读用), 不是日志本身。
+            var log = Assert.Single(Directory.GetFiles(home.SessionsPath, "session.jsonl*", SearchOption.AllDirectories)
+                .Where(path => !path.EndsWith(SessionLogIndex.Extension, StringComparison.Ordinal)));
             if (corruptLog)
                 await File.WriteAllTextAsync(log, "invalid session log", TestContext.Current.CancellationToken);
             else

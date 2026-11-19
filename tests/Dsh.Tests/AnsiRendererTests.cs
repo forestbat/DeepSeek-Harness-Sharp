@@ -29,6 +29,21 @@ public class AnsiRendererTests
         }
     }
 
+    /** 正文里的中文标点必须原样落屏: 换成 ASCII 等于篡改用户输入(用户报"引号/省略号打不进去")。 */
+    [Fact]
+    public void Prose_Cjk_Punctuation_Survives_The_Ansi_Output()
+    {
+        var grid = new CellGrid(40, 4);
+        CellText.Draw(grid, 0, 1, "他说“好”……——就这样", literal: true);
+
+        var ansi = new AnsiRenderer().Render(grid, 0, 0, forceFull: true);
+
+        Assert.Contains('“', ansi);
+        Assert.Contains('”', ansi);
+        Assert.Contains('…', ansi);
+        Assert.Contains('—', ansi);
+    }
+
     [Fact]
     public void Diff_After_Popup_Close_Over_Cjk_Line_Leaves_No_Remnants()
     {

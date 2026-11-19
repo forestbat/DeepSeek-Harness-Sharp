@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using Dsh.Tui;
@@ -95,7 +95,7 @@ public class VkRenderBenchmarkTests
 
         var fileName = $"vk-render-bench-{OsTag()}-{RuntimeInformation.RuntimeIdentifier}.txt";
         BenchReport.Write(fileName, report);
-        Console.Out.WriteLine($"[vk-bench] 离屏报告: artifacts020/bench/{fileName}");
+        Console.Out.WriteLine($"[vk-bench] 离屏报告: tests/.scratch/bench/{fileName}");
     }
 
     private static void RunTier(StringBuilder report, VkGpuDevice gpu, VkRenderCore core, GlyphAtlas atlas,
@@ -502,7 +502,7 @@ public unsafe class VkWindowRenderBenchmarkTests
 
         var fileName = $"vk-render-bench-window-{OsTag()}-{RuntimeInformation.RuntimeIdentifier}.txt";
         BenchReport.Write(fileName, report);
-        Console.Out.WriteLine($"[vk-bench] 窗口报告: artifacts020/bench/{fileName}");
+        Console.Out.WriteLine($"[vk-bench] 窗口报告: tests/.scratch/bench/{fileName}");
     }
 
     /** 一段墨迹的竖向范围(含首末行); 由调用方自行换算跨度。 */

@@ -102,6 +102,7 @@ public sealed partial class ChatWindow : IDisposable
         _inputPaneId = 0;
         _nextPaneId = 1;
         _paneLayout = LayoutEngine.EvaluatePanes(_paneTree, _paneArea);
+        StartActivityTicker();
 
         _unsubscribe = ctx.On<Dsh.Core.SessionEventNotification>(notification =>
         {
@@ -457,6 +458,9 @@ public sealed partial class ChatWindow : IDisposable
             case TuiAction.PromptCommandMenu:
                 input.OpenPromptCommandMenu();
                 return;
+            case TuiAction.CopyOverlay:
+                input.CopyResultToClipboard();
+                return;
         }
     }
 
@@ -602,6 +606,18 @@ public sealed partial class ChatWindow : IDisposable
 
         if (cellY < layout.Input.Y && cellY >= layout.Input.Y - 2)
         {
+            // 双击输入区上分割线: 回到"按内容自动增高"(并清掉持久化的固定高度)。
+            var now = Environment.TickCount64;
+            if (now - _inputDividerClickAt <= DoubleClickWindowMs)
+            {
+                _inputDividerClickAt = 0;
+                _inputHeight = null;
+                _settings.InputHeight = null;
+                _inputDrag = false;
+                RenderVersion++;
+                return;
+            }
+            _inputDividerClickAt = now;
             _inputDrag = true;
             return;
         }
@@ -743,13 +759,19 @@ public sealed partial class ChatWindow : IDisposable
      */
     private UiLayout Effective(UiLayout layout)
     {
-        // 没有用户覆盖值就不要重算: 直接用宿主给的布局, 免得与宿主计算出现任何偏差。
-        if (_rightPanelWidth is null && _inputHeight is null)
-            return layout;
         var width = Math.Max(layout.Main.Right, layout.RightPanel.Right);
         var height = Math.Max(layout.Status.Bottom, layout.Input.Bottom);
-        return LayoutEngine.Calculate(width, height, _rightPanelWidth, _inputHeight);
+        // 输入区按内容自动增高: 用户拖过的高度优先(固定), 没拖过就按软换行后的行数算。
+        var rows = _inputHeight ?? AutoInputRows(width) ?? LayoutEngine.InputHeight;
+        // 没有覆盖值且行数与默认一致: 直接用宿主给的布局, 免得与宿主计算出现任何偏差。
+        if (_rightPanelWidth is null && _inputHeight is null && rows == LayoutEngine.InputHeight)
+            return layout;
+        return LayoutEngine.Calculate(width, height, _rightPanelWidth, rows);
     }
+
+    /** 自动高度: 焦点窗格的输入内容按当前宽度软换行后需要多少行(含说明行)。 */
+    private int? AutoInputRows(int width)
+        => FocusedPane is ChatPane pane && width > 0 ? pane.RequiredInputRows(width) : null;
 
     /** 单窗格右栏竖分割线所在列; 没有右栏时返回 -1。 */
     private static int RightPanelDividerColumn(UiLayout layout)
@@ -760,6 +782,11 @@ public sealed partial class ChatWindow : IDisposable
         => _rightPanelWidth = LayoutEngine.ClampRightPanelWidth(ConsoleWidthOf(layout), ConsoleWidthOf(layout) - 1 - cellX);
 
     /** 拖动输入栏上沿: 指针行换算成输入栏高度(夹取由 LayoutEngine 统一负责)。 */
+    private const int DoubleClickWindowMs = 400;
+
+    /** 上次按下输入区上分割线的时刻: 双击回到自动高度。 */
+    private long _inputDividerClickAt;
+
     private void DragInputHeight(int cellY, UiLayout layout)
     {
         var height = Math.Max(layout.Status.Bottom, layout.Input.Bottom);
@@ -877,7 +904,7 @@ public sealed partial class ChatWindow : IDisposable
                 DrawOverview(grid);
             if (_agentsActive)
                 DrawAgentList(grid);
-            ChoicePane?.DrawChoicePrompt(grid);
+            ChoicePane?.DrawChoicePrompt(grid, layout.Input);
             return;
         }
 
@@ -910,7 +937,7 @@ public sealed partial class ChatWindow : IDisposable
         if (_agentsActive)
             DrawAgentList(grid);
         DrawPaneOverlays(grid, layout);
-        ChoicePane?.DrawChoicePrompt(grid);
+        ChoicePane?.DrawChoicePrompt(grid, layout.Input);
     }
 
     /**
@@ -945,6 +972,7 @@ public sealed partial class ChatWindow : IDisposable
         // CI (Windows): a test deleted the home while the refresh still held models-dev.json.<guid>.tmp open.
         _lifetime.Cancel();
         _providerCatalogRefresh.GetAwaiter().GetResult();
+        _activityTicker?.Dispose();
         _paneTools?.Dispose();
         _editorTerminalRegistration?.Dispose();
         foreach (var pane in _panes.Values)
@@ -967,6 +995,26 @@ public sealed partial class ChatWindow : IDisposable
     /** 外部(如 shell 输出泵)请求重绘: 只推版本号, 真正的合并由主循环完成。 */
     internal void Invalidate()
         => RenderVersion++;
+
+    /**
+     * 有回合或上下文整理在跑时每秒重绘一次。
+     * 状态行的已用时长、忙动画都按时间变化, 没有这个节拍它们会停在第一帧上 ——
+     * 压缩跑了 12 分钟, 用户看到的却是一行不动的"正在压缩", 或者更糟: 以为早就结束了。
+     */
+    private void StartActivityTicker()
+    {
+        _activityTicker ??= new Timer(
+            _ =>
+            {
+                if (_panes.Values.Any(pane => pane is ChatPane { IsActive: true }))
+                    Invalidate();
+            },
+            null,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1));
+    }
+
+    private Timer? _activityTicker;
 
     /** 窗格目录条目: pane_read/pane_list 工具的只读元数据。 */
     internal sealed record PaneCatalogEntry(
@@ -1300,16 +1348,28 @@ public sealed partial class ChatWindow : IDisposable
                 return;
             }
 
-            string? resultText = execution.Result switch
+            // 命令结果按展示意图落地: Info 进结果浮层(单行进状态行), Silent 最多在状态行留一句。
+            // 绝不写转录 —— 命令输出与对话消息混在一起, 用户分不清哪句是自己说过的。
+            if (execution.Result is { } performed)
             {
-                CommandResult.Success { Text: { } successText } when successText.Length > 0 => $"  {successText}\n",
-                CommandResult.Error error => $"  {error.Text}\n",
-                _ => null,
-            };
-            if (resultText is not null)
-            {
-                var captured = resultText;
-                QueueAction(() => pane.AppendRaw(captured));
+                var resultBody = performed switch
+                {
+                    CommandResult.Success { Text: { Length: > 0 } success } => success,
+                    CommandResult.Error error => error.Text,
+                    _ => "",
+                };
+                if (resultBody.Length > 0)
+                {
+                    var silent = performed.Presentation == CommandPresentation.Silent;
+                    var commandName = text.Split(' ', 2)[0].TrimStart('/');
+                    QueueAction(() =>
+                    {
+                        if (silent)
+                            pane.StatusText = resultBody;
+                        else
+                            pane.ShowResult($"/{commandName} 结果", resultBody, performed is CommandResult.Error);
+                    });
+                }
             }
 
             // 命令 + 提示词: 提示词由命令决定(成功或失败都可能带), 作为下一步用户消息发出。
@@ -1449,6 +1509,12 @@ public sealed partial class ChatWindow : IDisposable
         return $"{path} @ {entry.Time.ToLocalTime():HH:mm:ss} ({entry.Provider}){(entry.MatchesGitHead is true ? " [git HEAD]" : "")}";
     }
 
+    /** 时间线浮层选中的动作: 复用同一个命令入口; revert 带上 --confirm(浮层里已经确认过)。 */
+    private Task RunTimestampActionAsync(ChatPane pane, string action, string value)
+        => TimestampCommand(pane, action == "revert"
+            ? $"timestamp revert --confirm {value}"
+            : $"timestamp {action} {value}");
+
     /** `/timestamp [jump|revert|fork] <#seq|ide|...>`: 无参数列出时间线; revert 回退文件+会话, fork 派生新会话。 */
     private async Task TimestampCommand(ChatPane pane, string text)
     {
@@ -1458,8 +1524,8 @@ public sealed partial class ChatWindow : IDisposable
         var parts = arguments.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
-            foreach (var candidate in TimestampCandidates())
-                pane.AppendRaw($"  {candidate.Value} {candidate.Label}\n");
+            // 裸执行打开时间线浮层(先选消息, 再选动作), 不再把列表打印进转录。
+            pane.OpenTimeline(TimestampCandidates(), (action, value) => _ = RunTimestampActionAsync(pane, action, value));
             return;
         }
 
@@ -1505,7 +1571,7 @@ public sealed partial class ChatWindow : IDisposable
         switch (action)
         {
             case "jump":
-                await JumpToMessage(pane, message, targetSeq, messages.FindIndex(entry => entry.Seq == targetSeq));
+                await JumpToMessage(pane, targetSeq, messages.FindIndex(entry => entry.Seq == targetSeq), messages.Count);
                 return;
             case "revert":
                 await RevertToAsync(pane, targetSeq, message.Text);
@@ -1618,12 +1684,15 @@ public sealed partial class ChatWindow : IDisposable
     private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
         => [.. SessionTimeline.UserMessages(session).Select(entry => (entry.Seq, entry.Time, entry.Text))];
 
-    /** jump: 只滚到该消息(不改会话/文件); 按它在用户消息序列里的位置定位首行。 */
-    private static Task JumpToMessage(ChatPane pane, (long Seq, long Time, string Text) target, long seq, int index)
+    /**
+     * jump: 只滚到该消息(不改会话/文件); 目标消息必须落在视口最上方 —— 这是 jump 的全部意义。
+     * 跳不过去(消息已随转录裁头丢失)时明说, 不再让用户"先渲染一次再试"。
+     */
+    private static Task JumpToMessage(ChatPane pane, long seq, int index, int total)
     {
         // 只定位: 目标消息滚到顶上; 不打印 "jumped to"(那会把视图重新贴回底部, 跳转看不到效果)。
-        if (!pane.TryScrollToUserMessage(index))
-            pane.AppendRaw($"  jump: 未在视口缓存中找到 #{seq}(先让它渲染一次再试)\n");
+        if (!pane.TryScrollToUserMessage(index, total))
+            pane.AppendRaw($"  jump 失败: 消息 #{seq} 已不在当前转录里(更早的内容已被裁剪)\n");
         return Task.CompletedTask;
     }
 

@@ -1,12 +1,10 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
-using Dsh.Plugins;
 using Dsh.Agent;
 
 namespace Dsh.Tui;
@@ -29,10 +27,13 @@ public sealed class ChatPane : ITuiPane
     private int _stashedCursor;
     private IReadOnlyList<string> _mentionCandidates = [];
     /** 会话的上下文占用(最近一次请求提示词 / 模型窗口), 显示在状态行。 */
-    private readonly ContextUsage _context = new();
+    private readonly SessionStatistics _stats = new();
 
     /** 上下文整理是否在跑: 它不属于回合, 需要单独的状态位才能在状态行上显示出来。 */
     private bool _maintaining;
+
+    /** 整理开始时刻(TickCount64): 状态行按它显示"已经压了多久", 压缩慢时用户能看出还在进行。 */
+    private long _maintenanceStartedAt;
 
     /** 由插件提供的中立呈现接缝; 没安装该插件时为 null, 只是不显示整理进度。 */
     private readonly IContextMaintenancePresenter? _maintenance;
@@ -60,6 +61,7 @@ public sealed class ChatPane : ITuiPane
     private bool _sessionRenamedSubscribed;
     private int _wrapCacheVersion = -1;
     private int _wrapCacheWidth = -1;
+    private int _wrapCacheTrimVersion = -1;
     private List<string>? _wrapCacheLines;
     private int _wrapProcessedLine;
     private readonly List<VisualRow> _visualRows = [];
@@ -103,9 +105,159 @@ public sealed class ChatPane : ITuiPane
     public IReadOnlyList<string> SnapshotLines() => Renderer.SnapshotLines();
 
     /** 命令/mention 浮层画在整帧最后一层(见 ChatWindow.DrawPaneOverlays), 避免被右栏/输入/状态覆盖。 */
-    public bool HasOverlay => CommandMenu?.IsActive == true || _mentionActive;
+    public bool HasOverlay => CommandMenu?.IsActive == true || _mentionActive || Result.IsActive || Timeline.IsActive;
 
-    public void DrawOverlay(CellGrid grid, ConsoleRect rect) => DrawMenuOverlay(grid, rect);
+    /** `/timestamp` 时间线浮层: 一级选消息, 二级选动作。 */
+    internal TimelineOverlay Timeline { get; } = new();
+
+    /** 动作确认后由 ChatWindow 执行(它持有 fork/revert 的真正实现)。 */
+    private Action<string, string>? _timelineExecute;
+
+    /** 打开时间线浮层; 空候选时退化为状态行一句话。 */
+    public void OpenTimeline(IReadOnlyList<CommandCandidate> candidates, Action<string, string> execute)
+    {
+        if (candidates.Count == 0)
+        {
+            ShowResult("/timestamp 结果", "本会话还没有用户消息", isError: false);
+            return;
+        }
+        _timelineExecute = execute;
+        Timeline.Open(candidates);
+        if (CommandMenu?.IsActive == true)
+        {
+            CommandMenu.Close();
+            RefreshMenuStatus();
+        }
+    }
+
+    /** 审批用 y/a/n/c 快捷回答, 其余按键交给提问面板本身(方向键/空格/数字/回车/Esc)。 */
+    private void HandleChoicePromptKey(ConsoleKeyInfo key)
+    {
+        if (_choicePrompt is null)
+            return;
+        if (PendingApproval is not null && (key.Modifiers & (ConsoleModifiers.Control | ConsoleModifiers.Alt)) != 0)
+            return;
+        var approvalShortcut = PendingApproval is not null;
+        if (approvalShortcut && (key.Key == ConsoleKey.Y || key.KeyChar is 'y' or 'Y'))
+            AnswerApproval(ApprovalOutcome.AllowedOnce);
+        else if (approvalShortcut && (key.Key == ConsoleKey.A || key.KeyChar is 'a' or 'A'))
+            AnswerApproval(ApprovalOutcome.AllowedForSession);
+        else if (approvalShortcut && (key.Key == ConsoleKey.N || key.KeyChar is 'n' or 'N'))
+            AnswerApproval(ApprovalOutcome.Rejected);
+        else if (approvalShortcut && (key.Key == ConsoleKey.C || key.KeyChar is 'c' or 'C'))
+            AnswerApproval(ApprovalOutcome.Cancelled);
+        else
+            _choicePrompt.HandleKey(key);
+    }
+
+    private void HandleTimelineKey(ConsoleKeyInfo key)
+    {
+        if (Timeline.AwaitingConfirm)
+        {
+            if (key.Key == ConsoleKey.Y || key.KeyChar is 'y' or 'Y')
+            {
+                // 确认回退: 交给 ChatWindow 走既有的 "--confirm" 执行路径。
+                ExecuteTimeline("revert");
+                return;
+            }
+            if (key.Key == ConsoleKey.N || key.KeyChar is 'n' or 'N' || key.Key == ConsoleKey.Escape)
+            {
+                Timeline.AnswerConfirm(false);
+            }
+            Renderer.BumpVersion();
+            return;
+        }
+
+        switch (key.Key)
+        {
+            case ConsoleKey.UpArrow:
+                Timeline.Move(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                Timeline.Move(1);
+                break;
+            case ConsoleKey.Escape:
+                Timeline.Back();
+                break;
+            case ConsoleKey.Backspace:
+                Timeline.BackspaceFilter();
+                break;
+            case ConsoleKey.Enter:
+                if (Timeline.ConfirmSelection() is { } action)
+                    ExecuteTimeline(action);
+                break;
+            default:
+                if (key.KeyChar is { } character && !char.IsControl(character))
+                    Timeline.AppendFilter(character);
+                break;
+        }
+        Renderer.BumpVersion();
+    }
+
+    /** 复制结果浮层全文: 长输出常常是要贴到别处的, 让用户不必手工选择。 */
+    public void CopyResultToClipboard()
+    {
+        if (!Result.IsActive || Result.Text.Length == 0)
+            return;
+        var text = Result.Text;
+        _ = Clipboard.TrySetTextAsync(text).ContinueWith(
+            copied => _window.QueueAction(() => StatusText = copied.Result ? "已复制结果到剪贴板" : "复制失败: 剪贴板不可用"),
+            TaskScheduler.Default);
+    }
+
+    private void ExecuteTimeline(string action)
+    {
+        var target = Timeline.Selected?.Value;
+        var execute = _timelineExecute;
+        Timeline.Close();
+        _timelineExecute = null;
+        if (target is null || execute is null)
+            return;
+        execute(action, target);
+    }
+
+
+    /** 命令结果浮层: 只读、非模态; 与命令菜单互斥(见 ShowResult)。 */
+    internal ResultOverlay Result { get; } = new();
+
+    /**
+     * 命令结果落点: 单行且放得下 → 状态行(不弹浮层); 多行 → 结果浮层。
+     * 单行结果保持到下一次输入或下一次状态切换(见 SetStatusQuiet)。
+     */
+    public void ShowResult(string title, string text, bool isError)
+    {
+        if (!text.Contains('\n', StringComparison.Ordinal))
+        {
+            _stickyStatus = isError ? $"x {text}" : text;
+            SetStatusReady();
+            return;
+        }
+        // 结果浮层优先于命令菜单: 两者同时出现会互相遮挡。
+        if (CommandMenu?.IsActive == true)
+        {
+            CommandMenu.Close();
+            RefreshMenuStatus();
+        }
+        Result.Show(title, text, isError);
+    }
+
+
+    public void DrawOverlay(CellGrid grid, ConsoleRect rect)
+    {
+        if (Timeline.IsActive)
+        {
+            DrawTimelineOverlay(grid, rect);
+            return;
+        }
+        // 结果浮层压在命令菜单之上: 先画结果, 用户按 Esc 关掉后才看得到底层菜单。
+        if (Result.IsActive)
+        {
+            Result.VisibleRows = Math.Max(1, PopupList.WindowOf(rect, 0, Result.Lines.Count, Result.First).Visible);
+            PopupList.Draw(grid, rect, Result.Title, [], Result.Lines, Result.First, null, scrollbar: true);
+            return;
+        }
+        DrawMenuOverlay(grid, rect);
+    }
 
     public string Input { get; set; } = "";
 
@@ -117,10 +269,17 @@ public sealed class ChatPane : ITuiPane
      * 滚到第 index 条用户消息的首行(供 /timestamp jump)。
      * 按"渲染时记下的源偏移"定位, 而不是按文本匹配: 文本匹配会命中更早引用过同一句话的工具输出/消息,
      * 首行被折行折断时还会找不到。
+     * index 是全量用户消息里的位置; 转录裁头丢掉更早的消息后, 渲染侧序号要相应前移(total - 渲染数)。
      */
-    internal bool TryScrollToUserMessage(int index)
+    internal bool TryScrollToUserMessage(int index, int total)
     {
-        if (_visualRows is not { Count: > 0 } rows || Renderer.UserMessageStartAt(index) is not { } offset)
+        var adjusted = index - Math.Max(0, total - Renderer.UserMessageCount);
+        if (adjusted < 0 || Renderer.UserMessageStartAt(adjusted) is not { } offset)
+            return false;
+        // 视口缓存是绘制时按宽度建的: 刚切会话/刚裁过头时它是空的, 这里补建一次,
+        // 否则"跳不过去"取决于用户有没有先滚一下。
+        EnsureWrapCache();
+        if (_visualRows is not { Count: > 0 } rows)
             return false;
         // 源偏移 -> 视觉行: 找最后一个 SourceStart <= offset 的视觉行。
         var low = 0;
@@ -133,11 +292,20 @@ public sealed class ChatPane : ITuiPane
             else
                 high = middle;
         }
-        if (low == 0)
-            return false;
         StickToBottom = false;
-        ScrollOffset = rows[low - 1].FlatStart;
+        ScrollOffset = low == 0 ? 0 : rows[low - 1].FlatStart;
         return true;
+    }
+
+    /** 上次绘制正文用的宽度: 跳转要按需重建视口缓存时用它。 */
+    private int _lastTranscriptWidth;
+
+    private void EnsureWrapCache()
+    {
+        if (_wrapCacheLines is { Count: > 0 } || _lastTranscriptWidth <= 0)
+            return;
+        RebuildWrapCache(_lastTranscriptWidth);
+        _wrapCacheVersion = Renderer.Version;
     }
 
     public bool StickToBottom { get; set; } = true;
@@ -180,21 +348,27 @@ public sealed class ChatPane : ITuiPane
 
     public void HandleKey(ConsoleKeyInfo key)
     {
+        // 提问/审批面板优先于所有浮层: 面板在等用户回答, 方向键/空格不能被浮层吃掉。
         if (_choicePrompt is not null)
         {
-            if (PendingApproval is not null && (key.Modifiers & (ConsoleModifiers.Control | ConsoleModifiers.Alt)) != 0)
-                return;
-            var approvalShortcut = PendingApproval is not null;
-            if (approvalShortcut && (key.Key == ConsoleKey.Y || key.KeyChar is 'y' or 'Y'))
-                AnswerApproval(ApprovalOutcome.AllowedOnce);
-            else if (approvalShortcut && (key.Key == ConsoleKey.A || key.KeyChar is 'a' or 'A'))
-                AnswerApproval(ApprovalOutcome.AllowedForSession);
-            else if (approvalShortcut && (key.Key == ConsoleKey.N || key.KeyChar is 'n' or 'N'))
-                AnswerApproval(ApprovalOutcome.Rejected);
-            else if (approvalShortcut && (key.Key == ConsoleKey.C || key.KeyChar is 'c' or 'C'))
-                AnswerApproval(ApprovalOutcome.Cancelled);
-            else
-                _choicePrompt.HandleKey(key);
+            HandleChoicePromptKey(key);
+            return;
+        }
+        // 时间线浮层是选择器: 打开期间独占按键(含可打印字符, 用来过滤候选)。
+        if (Timeline.IsActive)
+        {
+            HandleTimelineKey(key);
+            return;
+        }
+        // 结果浮层非模态: 只拦截导航键, 其余按键继续往下走, 用户可以一边看结果一边敲提示词。
+        if (Result.HandleKey(key))
+        {
+            Renderer.BumpVersion();
+            return;
+        }
+        if (_choicePrompt is not null)
+        {
+            HandleChoicePromptKey(key);
             return;
         }
 
@@ -368,12 +542,24 @@ public sealed class ChatPane : ITuiPane
 
         switch (key.Key)
         {
+            case ConsoleKey.J when (key.Modifiers & ConsoleModifiers.Control) != 0:
+                // 有的宿主把 Shift+Enter 与 Enter 送成同一个键(收不到 Shift), Ctrl+J 是可靠的换行替代。
+                InsertLineBreak();
+                break;
+            case ConsoleKey.Enter when (key.Modifiers & ConsoleModifiers.Shift) != 0:
+                // Shift+Enter 写多行草稿: 长提示词要能分段, 而不是只能攒成一行。
+                InsertLineBreak();
+                break;
             case ConsoleKey.Enter:
                 Submit();
                 break;
             case ConsoleKey.Escape:
                 if (Busy)
                     Agent.Cancel(new AgentCancelCause.User());
+                break;
+            case ConsoleKey.UpArrow when MoveCursorByRow(-1):
+                break;
+            case ConsoleKey.DownArrow when MoveCursorByRow(1):
                 break;
             case ConsoleKey.UpArrow:
                 RecallHistory(-1);
@@ -437,6 +623,20 @@ public sealed class ChatPane : ITuiPane
         }
     }
 
+    /**
+     * 草稿换行(Shift+Enter / Ctrl+J)。不能复用 InsertText: 那条路径为括号粘贴把 \r\n 压成空格,
+     * 换行会被悄悄吃掉, 用户看到的就是"按了 Shift+Enter 没反应"。
+     */
+    internal void InsertLineBreak()
+    {
+        if (_choicePrompt is not null)
+            return;
+        _stickyStatus = null;
+        Input = Input.Insert(Cursor, "\n");
+        Cursor += 1;
+        RefreshMenus();
+    }
+
     public void InsertText(string text)
     {
         if (string.IsNullOrEmpty(text))
@@ -449,6 +649,7 @@ public sealed class ChatPane : ITuiPane
         var sanitized = text.Replace('\r', ' ').Replace('\n', ' ');
         if (sanitized.Length == 0)
             return;
+        _stickyStatus = null;
         Input = Input.Insert(Cursor, sanitized);
         Cursor += sanitized.Length;
         RefreshMenus();
@@ -542,8 +743,19 @@ public sealed class ChatPane : ITuiPane
     /** 切换会话后回放历史事件, 让恢复/重进的会话立刻可见; 序列守卫会跳过与滞留事件的重合部分。 */
     public void ReplayEvents()
     {
-        foreach (var sessionEvent in Agent.Session.SnapshotEvents())
+        var session = Agent.Session;
+        // 窗口化会话只常驻尾部: 回放常驻段, 前缀留一行说明 —— 遍历前缀会把页全拉回来, 等于放弃窗口化。
+        if (session.ResidentFrom > 0)
+            Renderer.AppendPrefixWindowNotice(session.ResidentFrom);
+        foreach (var sessionEvent in session.SnapshotEvents(session.ResidentFrom))
             ProcessSessionEvent(sessionEvent, replay: true);
+        // 还在 inbox 里排队、尚未被回合取用的消息不是事件, 回放不会画出来; 这里按当前排队状态补上,
+        // 否则切走会话再切回来, 用户会以为自己那条提示丢了。
+        if (Agent is AgentLoopAgent loop)
+        {
+            foreach (var queued in loop.Inbox.NextTurn.Concat(loop.Inbox.NextStep))
+                Renderer.AppendQueuedUserMessage(queued);
+        }
     }
 
     public void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false)
@@ -620,13 +832,24 @@ public sealed class ChatPane : ITuiPane
         switch (payload)
         {
             case RequestContextPayload context:
-                _context.ObserveRequest(context.ContextWindow);
+                // 上下文窗口到达 = 一次请求开始: 从这里起算首 token 与 LLM 用时。
+                _stats.ObserveRequestContext(context.ContextWindow);
+                _stats.RequestStarted();
                 break;
             case AssistantChunkPayload { Chunk: StreamChunk.Usage usage }:
-                _context.ObserveUsage(usage.Value);
+                _stats.ObserveUsage(usage.Value);
                 break;
-            case AssistantMessagePayload { Usage: { } messageUsage }:
-                _context.ObserveUsage(messageUsage);
+            case AssistantChunkPayload chunk:
+                _stats.ObserveTurn(chunk.Turn, chunk.Step);
+                _stats.FirstTokenArrived();
+                break;
+            case AssistantMessagePayload { Usage: { } messageUsage } message:
+                _stats.ObserveTurn(message.Turn, message.Step);
+                _stats.ObserveUsage(messageUsage);
+                _stats.RequestFinished();
+                break;
+            case ToolCallPayload call:
+                _stats.ObserveTurn(call.Turn, call.Step);
                 break;
         }
     }
@@ -671,6 +894,15 @@ public sealed class ChatPane : ITuiPane
             return;
 
         var transcriptVersion = Renderer.Version;
+        _lastTranscriptWidth = rect.Width;
+        if (Renderer.TrimVersion != _wrapCacheTrimVersion)
+        {
+            // 转录裁过头部: 行号整体位移, 按行号缓存的包裹行与折叠快照都不再对得上, 丢弃重算。
+            _wrapCacheTrimVersion = Renderer.TrimVersion;
+            _wrapCacheLines = null;
+            _visualRows.Clear();
+            _foldSnapshot.Clear();
+        }
         if (_wrapCacheLines is null || _wrapCacheVersion != transcriptVersion || _wrapCacheWidth != rect.Width)
         {
             RebuildWrapCache(rect.Width);
@@ -697,10 +929,34 @@ public sealed class ChatPane : ITuiPane
             var lineIndex = start + row;
             if (lineIndex >= wrapped.Count)
                 break;
-            CellText.Draw(grid, rect.X, rect.Y + row, wrapped[lineIndex]);
+            CellText.Draw(grid, rect.X, rect.Y + row, wrapped[lineIndex], literal: true);
             ApplyTintHighlight(grid, rect, row, lineIndex);
             ApplySelectionHighlight(grid, rect, row, lineIndex);
         }
+    }
+
+    /** 时间线浮层: 一级列消息(含 IDE 历史项), 二级列动作; revert 的确认走同一浮层的提示行。 */
+    private void DrawTimelineOverlay(CellGrid grid, ConsoleRect rect)
+    {
+        if (Timeline.PickingAction)
+        {
+            var headers = new List<string> { Timeline.Selected?.Label ?? "" };
+            if (Timeline.AwaitingConfirm)
+            {
+                headers.Add("确认回退? y=执行(截断会话并回滚文件) n=取消");
+                PopupList.Draw(grid, rect, "revert 确认", headers, [], 0);
+                return;
+            }
+            PopupList.Draw(grid, rect, Timeline.Title, headers, Timeline.ActionLabels, Timeline.ActionIndex);
+            return;
+        }
+
+        var panel = new List<string>();
+        if (Timeline.Filter.Length > 0)
+            panel.Add($"> 过滤: {Timeline.Filter}");
+        var labels = Timeline.Candidates.Select(candidate => candidate.Label).ToList();
+        var descriptions = Timeline.Candidates.Select(candidate => candidate.Description ?? "").ToList();
+        PopupList.Draw(grid, rect, Timeline.Title, panel, labels, Timeline.Index, descriptions, scrollbar: true);
     }
 
     private void DrawMenuOverlay(CellGrid grid, ConsoleRect rect)
@@ -878,6 +1134,7 @@ public sealed class ChatPane : ITuiPane
         [
             "Enter 发送 - / 命令 - @ 引用",
             "Tab 下一个参数/折叠 - Esc 取消",
+            "Enter 发送 - Shift+Enter 换行",
             "^/v 历史 - PgUp/PgDn 滚动",
             $"{keys.Keys(TuiAction.Interrupt)}×2 退出",
             keys.Line(new("新会话", TuiAction.NewSession), new("会话", TuiAction.SessionMenu)),
@@ -898,39 +1155,55 @@ public sealed class ChatPane : ITuiPane
 
     private sealed record RightPanelLine(string Text, bool Separator, bool Header);
 
+    /**
+     * 输入区需要的高度(含说明行): 内容按当前宽度软换行后的行数。
+     * 布局在自动模式(用户没拖过高度)下用它, 长提示词因此能整体可见。
+     */
+    public int RequiredInputRows(int width)
+    {
+        // 面板自带标题/选项/脚注, 给足行数; 上限由布局按屏幕高度夹取。
+        if (_choicePrompt is not null)
+            return 14;
+        var prompt = PendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
+        var rows = InputLayout.Wrap(Input, Math.Max(1, width - prompt.Length)).Count;
+        return rows + 1;
+    }
+
     public void DrawInput(CellGrid grid, ConsoleRect rect)
     {
         if (rect.Width <= 0 || rect.Height <= 0)
             return;
         if (_choicePrompt is not null)
-            return;
-
-        var prompt = PendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
-        var caret = Math.Clamp(Cursor, 0, Input.Length);
-        var availableWidth = Math.Max(0, rect.Width - prompt.Length);
-        var textStart = caret;
-        var visibleWidth = 0;
-        while (textStart > 0)
         {
-            var characterWidth = TerminalTextWidth.Of(Input[textStart - 1]);
-            if (visibleWidth + characterWidth > availableWidth)
-                break;
-            visibleWidth += characterWidth;
-            textStart--;
+            DrawChoicePrompt(grid, rect);
+            return;
         }
 
-        var visible = Input.AsSpan(textStart);
+        var prompt = PendingApproval is not null ? "approval (y/n/c) " : InputPrompt;
+        var availableWidth = Math.Max(1, rect.Width - prompt.Length);
+        _lastInputWidth = availableWidth;
+        var rows = InputLayout.Wrap(Input, availableWidth);
+        var caret = InputLayout.Cursor(Input, Cursor, availableWidth);
+        // 最后一行留给说明行: 内容区从 rect.Y 到 rect.Bottom - 1。
+        var contentRows = Math.Max(1, rect.Height - 1);
+        var first = Math.Clamp(caret.Row - contentRows + 1, 0, Math.Max(0, rows.Count - contentRows));
 
-        // 输入行与说明行锚在输入区底部(上沿往上拖时, 多出来的空行留在上方, 说明行始终紧贴状态行)。
-        var inputRow = rect.Height >= 2 ? rect.Bottom - 2 : rect.Y;
-        CellText.Draw(grid, rect.X, inputRow, prompt, AnsiColor.Default, AnsiColor.Default, PendingApproval is null ? CellStyle.None : CellStyle.Bold);
-        CellText.Draw(grid, rect.X + prompt.Length, inputRow, visible);
+        for (var index = 0; index < contentRows; index++)
+        {
+            var rowIndex = first + index;
+            if (rowIndex >= rows.Count)
+                break;
+            var row = rows[rowIndex];
+            var y = rect.Y + index;
+            if (index == 0)
+                CellText.Draw(grid, rect.X, y, prompt, AnsiColor.Default, AnsiColor.Default, PendingApproval is null ? CellStyle.None : CellStyle.Bold);
+            var visible = Input.AsSpan(row.Start, row.Length);
+            // 行首第一行缩进到提示符之后, 续行与正文对齐, 读起来是一整段。
+            CellText.Draw(grid, rect.X + prompt.Length, y, visible, literal: true);
+        }
 
-        var caretColumn = TerminalTextWidth.Of(Input.AsSpan(textStart, caret - textStart));
-        var cursorX = rect.X + Math.Min(prompt.Length + caretColumn, rect.Width - 1);
-        var cursorY = inputRow;
-        cursorX = Math.Clamp(cursorX, 0, grid.Width - 1);
-        cursorY = Math.Clamp(cursorY, 0, grid.Height - 1);
+        var cursorX = Math.Clamp(rect.X + prompt.Length + caret.Column, 0, Math.Max(0, grid.Width - 1));
+        var cursorY = Math.Clamp(rect.Y + (caret.Row - first), 0, Math.Max(0, grid.Height - 1));
         var cursorCell = grid[cursorX, cursorY];
         grid[cursorX, cursorY] = cursorCell with { Style = cursorCell.Style | CellStyle.Reverse };
         CursorScreenX = cursorX;
@@ -938,7 +1211,7 @@ public sealed class ChatPane : ITuiPane
 
         if (rect.Height < 2)
             return;
-        var infoY = inputRow + 1;
+        var infoY = rect.Bottom - 1;
         if (infoY >= grid.Height)
             return;
         var hint = $"Enter 发送 - / 命令 - @ 引用 - Tab 下一个参数 - {_window.KeyBindings.Leader(TuiAction.SessionMenu)} 会话";
@@ -954,10 +1227,14 @@ public sealed class ChatPane : ITuiPane
 
     public bool HasChoicePrompt => _choicePrompt is not null;
 
-    public void DrawChoicePrompt(CellGrid grid)
+    /**
+     * 提问面板画在输入区内, 不再铺满整屏: 用户回答时要能看见上面的消息,
+     * 否则提问一出现历史就被清空, 判断"该选哪一项"没有上下文。
+     */
+    public void DrawChoicePrompt(CellGrid grid, ConsoleRect rect)
     {
         if (_choicePrompt is not null)
-            _choicePrompt.Draw(grid, new ConsoleRect(0, 0, grid.Width, grid.Height));
+            _choicePrompt.Draw(grid, rect);
     }
 
     public bool HandleChoicePointer(int x, int y, bool click)
@@ -1446,16 +1723,39 @@ public sealed class ChatPane : ITuiPane
     private string ReadyStatus
         => $"ready - Enter to send, ^ history, Esc cancels a running turn, {_window.KeyBindings.Keys(TuiAction.Interrupt)}×2 quits";
 
-    private string BusyStatus => _maintaining ? "compacting context~ (Esc to cancel)" : "working~ (Esc to cancel)";
+    private string BusyStatus => _maintaining
+        ? $"compacting context {ElapsedSince(_maintenanceStartedAt)} (Esc to cancel)"
+        : "working~ (Esc to cancel)";
+
+    /** 已过时间: 用户要能看出整理还在跑, 而不是以为它早就结束了。 */
+    internal static string ElapsedSince(long startedAt)
+    {
+        var elapsed = TimeSpan.FromMilliseconds(Math.Max(0, Environment.TickCount64 - startedAt));
+        return elapsed < TimeSpan.FromMinutes(1)
+            ? $"{Math.Max(1, (int)elapsed.TotalSeconds)}s"
+            : $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s";
+    }
+
+    /** 有回合或整理在跑: 界面需要定时重绘, 否则时长/动画会停在第一次画出来的样子上。 */
+    internal bool IsActive => Busy || _maintaining;
 
     public void SetStatusReady()
         => StatusText = Busy || _maintaining
             ? BusyStatus
-            : ReadyStatus;
+            : _stickyStatus ?? ReadyStatus;
+
+    /** 单行命令结果: 粘在状态行直到下一次输入或状态切换, 免得被忙碌提示立刻顶掉。 */
+    private string? _stickyStatus;
+
+    /** 上次绘制输入区时的内容宽度: 按行移动光标与这里有同一个换行口径。 */
+    private int _lastInputWidth;
 
     /** 上下文占用跟在状态行前面; 还没有任何用量时(_context 为空)保持原样, 不给状态行添乱。 */
     private string ContextStatusOf(string status)
-        => _context.Label == ContextUsage.Empty ? status : $"{_context.Label} | {status}";
+    {
+        var segments = _stats.Segments();
+        return segments.Count == 0 ? status : $"{string.Join(" | ", segments)} | {status}";
+    }
 
     /** 整理的开始/结束单独记账, 与回合的忙碌位分开: 整理结束后不能替回合清掉忙碌。 */
     private void TrackMaintenance(ContextMaintenanceEvent maintenance)
@@ -1464,6 +1764,7 @@ public sealed class ChatPane : ITuiPane
         {
             case ContextMaintenanceEvent.Started:
                 _maintaining = true;
+                _maintenanceStartedAt = Environment.TickCount64;
                 SetStatusReady();
                 break;
             case ContextMaintenanceEvent.Finished or ContextMaintenanceEvent.Failed:
@@ -1529,7 +1830,11 @@ public sealed class ChatPane : ITuiPane
             displayBlocks.Add(new ImageBlock(attachment));
         if (displayBlocks.Count == 0)
             displayBlocks.Add(new TextBlock("[image]"));
-        Renderer.AppendUserMessage(MessageFactory.CreateUserMessage(displayBlocks));
+        // 忙碌时这一条只是排进 inbox: 标成"已排队", 别让它看起来已经发出去了。
+        if (Busy || _maintaining)
+            Renderer.AppendQueuedUserMessage(MessageFactory.CreateUserMessage(displayBlocks));
+        else
+            Renderer.AppendUserMessage(MessageFactory.CreateUserMessage(displayBlocks));
         RequestStickToBottom();
 
         SendUserText(text);
@@ -1665,6 +1970,24 @@ public sealed class ChatPane : ITuiPane
         _attachments.Clear();
         SetBusy(true);
         Agent.Followup(MessageFactory.CreateUserMessage(content));
+    }
+
+    /**
+     * 多行输入里 ↑/↓ 先在视觉行之间移动光标, 到首行/末行才让位给历史记录。
+     * 返回 true 表示这次按键已被"按行移动"消费。
+     */
+    private bool MoveCursorByRow(int delta)
+    {
+        if (!Input.Contains('\n', StringComparison.Ordinal))
+            return false;
+        var width = _lastInputWidth > 0 ? _lastInputWidth : Math.Max(1, 80 - InputPrompt.Length);
+        var caret = InputLayout.Cursor(Input, Cursor, width);
+        var target = caret.Row + delta;
+        var rows = InputLayout.Wrap(Input, width);
+        if (target < 0 || target >= rows.Count)
+            return false;
+        Cursor = InputLayout.OffsetAt(Input, target, caret.Column, width);
+        return true;
     }
 
     private void RecallHistory(int direction)
@@ -1823,7 +2146,7 @@ public sealed class ChatPane : ITuiPane
             if (x < 0 || x >= grid.Width)
                 continue;
             var cell = grid[x, rect.Y + row];
-            grid[x, rect.Y + row] = new Cell(cell.Character, foreground, background, style);
+            grid[x, rect.Y + row] = new Cell(cell.Character, foreground, background, style | (cell.Style & CellStyle.Literal));
         }
     }
 
@@ -1847,18 +2170,46 @@ public sealed class ChatPane : ITuiPane
         }
     }
 
-    /** 命中 fold 头行(折叠态=预览行, 展开态=首行)时切换折叠; 命中返回 true。 */
+    /**
+     * 折叠头行点击 = 切换折叠(展开↔收起), 展开的分页折叠正文行点击 = 翻下一页。
+     * 分开的理由: 头行点击若也参与翻页, 用户必须翻完所有页才能收起(实测很难受)。
+     */
     public bool TryToggleFoldAt(int cellY, ConsoleRect rect)
     {
         var wrappedIndex = ScrollOffset + (cellY - rect.Y);
         var offset = SourceOffsetAt(wrappedIndex);
         if (offset is null)
             return false;
-        var fold = Renderer.Folds.FirstOrDefault(candidate => candidate.Start == offset.Value && candidate.End > candidate.Start);
-        if (fold is null)
+        var header = Renderer.Folds.FirstOrDefault(candidate => candidate.Start == offset.Value && candidate.End > candidate.Start);
+        if (header is not null)
+        {
+            SetFoldCollapsed(header, !header.Collapsed);
+            return true;
+        }
+        var body = Renderer.Folds.FirstOrDefault(candidate =>
+            !candidate.Collapsed && candidate.Paged && candidate.Start < offset.Value && offset.Value < candidate.End);
+        if (body is null)
             return false;
-        ToggleFold(fold);
+        PageFold(body);
         return true;
+    }
+
+    /** 只改折叠态(不动滚动位置): 展开从头开始看, 收起清掉页码。 */
+    private void SetFoldCollapsed(TranscriptFold fold, bool collapsed)
+    {
+        fold.Collapsed = collapsed;
+        if (collapsed || fold.Scroll >= fold.Lines)
+            fold.Scroll = 0;
+        Renderer.BumpVersion();
+    }
+
+    /** 翻到下一页; 已在最后一页时回到第一页(循环, 不会卡在末页)。 */
+    private void PageFold(TranscriptFold fold)
+    {
+        var step = DiffCardDisplay.PageLines;
+        var next = fold.Scroll + step;
+        fold.Scroll = next + step > fold.Lines ? 0 : next;
+        Renderer.BumpVersion();
     }
 
     /** 键盘(Enter)与鼠标点击共用同一切换入口: 展开 → 逐页翻 → 收起。 */
@@ -1962,7 +2313,7 @@ public sealed class ChatPane : ITuiPane
     private sealed class VisualRow
     {
         public required int SourceStart { get; init; }
-        public required int FlatStart { get; init; }
+        public required int FlatStart { get; set; }
     }
 
     private void RebuildWrapCache(int width)
@@ -1989,6 +2340,30 @@ public sealed class ChatPane : ITuiPane
         RebuildWrapFromLines(lines, starts, tail, tailStart, folds, width, from);
         SnapshotFolds(folds);
         _wrapCacheWidth = width;
+        TrimWrapRows();
+    }
+
+    /**
+     * 折行缓存也要有上限: 它按行存了转录的第二份文本, 一份 4M 字符的转录折行后会到十万行量级。
+     * 超出就丢掉最老的一整批行(按行边界丢, 不会切开某一行); 更早的内容仍在 renderer 里,
+     * 只是不再预先折行 —— 用户滚到顶会看到缓存从哪里开始。
+     */
+    private const int MaxWrapRows = 40_000;
+
+    private void TrimWrapRows()
+    {
+        if (_wrapCacheLines is not { Count: > MaxWrapRows } wrapped)
+            return;
+        var target = wrapped.Count - MaxWrapRows;
+        var cut = _visualRows.FindIndex(row => row.FlatStart >= target);
+        if (cut <= 0)
+            return;
+        var drop = _visualRows[cut].FlatStart;
+        wrapped.RemoveRange(0, drop);
+        _visualRows.RemoveRange(0, cut);
+        foreach (var row in _visualRows)
+            row.FlatStart -= drop;
+        ScrollOffset = Math.Max(0, ScrollOffset - drop);
     }
 
     /** 行索引空间的增量重排: 全文不再物化, 行文本直接取 renderer 的行列表; fold 偏移经 LineStarts 二分映射为行号。 */
@@ -2012,6 +2387,17 @@ public sealed class ChatPane : ITuiPane
             if (expanded is not null)
             {
                 var endLine = LineIndexOf(starts, lines.Count, tailStart, expanded.End);
+                // 折叠内容可能整段落在同一行里(单行 thinking、行内代码围栏、被裁头夹到折叠起点的那段):
+                // 这时 endLine 就是当前行, 以它作下一行会让外层循环原地打转(TUI 100% CPU 卡死、按键无响应)。
+                // 这种退化情形按"这一行就是折叠体"渲染, 保证至少前进一行。
+                if (endLine <= lineIndex)
+                {
+                    var inline = raw.EndsWith('\r') ? raw[..^1] : raw;
+                    AddRow(lineStart, inline, width);
+                    lineIndex += 1;
+                    continue;
+                }
+
                 var foldLines = Math.Max(0, endLine - lineIndex);
                 expanded.Lines = foldLines;
                 var pageCount = !expanded.Paged
@@ -2024,7 +2410,7 @@ public sealed class ChatPane : ITuiPane
                 {
                     var last = Math.Min(foldLines, expanded.Scroll + DiffCardDisplay.PageLines);
                     AddRow(expanded.Start,
-                        $"{expanded.Preview} [第 {expanded.Scroll + 1}-{last} 行 / 共 {foldLines} 行]  (滚轮滚动, 点击翻页)",
+                        $"{FoldHeader(expanded)} [第 {expanded.Scroll + 1}-{last} 行 / 共 {foldLines} 行]  (滚轮滚动, 点正文翻页)",
                         width);
                 }
                 var bodyStart = expanded.Paged ? lineIndex + expanded.Scroll : lineIndex;
@@ -2039,18 +2425,19 @@ public sealed class ChatPane : ITuiPane
                         pageContent = $"{pageContent} [1/{pageCount}]";
                     AddRow(pageStartOffset, pageContent, width);
                 }
-                lineIndex = endLine;
+                lineIndex = Math.Max(endLine, lineIndex + 1);
                 continue;
             }
             var fold = FindCollapsedFold(folds, lineStart);
             if (fold is not null)
             {
-                AddRow(lineStart, fold.Preview, width);
+                AddRow(lineStart, FoldHeader(fold), width);
                 var endLine = LineIndexOf(starts, lines.Count, tailStart, fold.End);
                 var endLineStart = endLine < lines.Count ? starts[endLine] : tailStart;
                 if (fold.End <= endLineStart)
                 {
-                    lineIndex = endLine;
+                    // 与展开态同一个不变量: 下一行必须比当前行靠后, 否则外层循环不前进。
+                    lineIndex = Math.Max(endLine, lineIndex + 1);
                 }
                 else
                 {
@@ -2087,6 +2474,10 @@ public sealed class ChatPane : ITuiPane
         }
         return Math.Max(0, low - 1);
     }
+
+    /** 折叠头: ▸ 已折叠 / ▾ 展开中 —— 三角是"可展开"的通行写法, 点它或标题文字都切换折叠。 */
+    private static string FoldHeader(TranscriptFold fold)
+        => $"{(fold.Collapsed ? "▸" : "▾")} {fold.Preview.TrimStart()}";
 
     private static TranscriptFold? FindCollapsedFold(IReadOnlyList<TranscriptFold> folds, int position)
     {

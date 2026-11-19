@@ -101,7 +101,7 @@ public sealed class AnsiRenderer
                     continue;
 
                 _sgr.Apply(builder, cell);
-                builder.Append(Sanitize(cell.Character));
+                builder.Append(Sanitize(cell));
             }
 
             if (y < grid.Height - 1)
@@ -128,7 +128,7 @@ public sealed class AnsiRenderer
                 }
 
                 _sgr.Apply(builder, cell);
-                builder.Append(Sanitize(cell.Character));
+                builder.Append(Sanitize(cell));
                 x++;
             }
             row.CopyTo(previous.RawCells.AsSpan(y * row.Length, row.Length));
@@ -179,8 +179,14 @@ public sealed class AnsiRenderer
         return 40 + (color - AnsiColor.Black);
     }
 
-    private static char Sanitize(char value)
-        => value == '\0' ? ' ' : TerminalSafeGlyphs.AsciiSafe(value);
+    /** 正文格(CellStyle.Literal)原样落屏; 界面自绘的符号按 TerminalSafeGlyphs 换成等宽 ASCII。 */
+    private static char Sanitize(Cell cell)
+    {
+        var value = cell.Character;
+        if (value == '\0')
+            return ' ';
+        return (cell.Style & CellStyle.Literal) != 0 ? value : TerminalSafeGlyphs.AsciiSafe(value);
+    }
 
     /** 终端当前 SGR 状态的本机记录; Apply 只发与当前态的差异属性。 */
     private struct SgrState

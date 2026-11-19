@@ -30,6 +30,7 @@ public sealed class TerminalSafeGlyphsTests
     public void Ambiguous_Glyph_Maps_To_Ascii(char input, char expected)
         => Assert.Equal(expected, TerminalSafeGlyphs.AsciiSafe(input));
 
+    /** 正文格(CellStyle.Literal)不走这张表: 中文标点原样落屏。见 AnsiRendererTests.Prose_Cjk_Punctuation_Survives_The_Ansi_Output。 */
     [Fact]
     public void Ascii_Is_Unchanged()
     {
