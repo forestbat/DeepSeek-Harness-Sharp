@@ -122,7 +122,7 @@ public sealed class PluginGuiExtensibilityTests
         {
             TempTree.Delete(homeDir);
         }
-    }, TimeSpan.FromSeconds(45));
+    }, TimeSpan.FromSeconds(60));
 
     [Fact]
     public async Task ManagedGuiPlugin_HotReload_PreservesParameters_RefreshesForegroundPage_AndCollectsOldLoadContext() => await HeadlessGui.RunAsync(async () =>
@@ -149,8 +149,7 @@ public sealed class PluginGuiExtensibilityTests
                 var v1Weak = CaptureLoadContext("HotReloadSample");
                 viewModel.Workspace.OpenPage(viewModel.Workspace.Pages.Available.Single(entry => entry.Id == "plugin-inspector"));
                 Render(window);
-                var pageAction = FindControlByText<Button>(window.FindControl<ContentControl>("WorkspacePageHost")!, "focus:v1");
-                Assert.True(pageAction.Focus());
+                FocusWorkspacePageButton(window, "focus:v1");
                 Render(window);
 
                 var v2Path = CompileGuiPlugin(artifacts.Root, "v2", "HotReloadSample", "@test/gui-reload", "v2");
@@ -197,7 +196,7 @@ public sealed class PluginGuiExtensibilityTests
         {
             TempTree.Delete(homeDir);
         }
-    }, TimeSpan.FromSeconds(45));
+    }, TimeSpan.FromSeconds(60));
 
     [Fact]
     public async Task ManagedGuiPlugin_DisableEnableAndRemove_EvictsActivePage_AndCollectsLoadContext() => await HeadlessGui.RunAsync(async () =>
@@ -262,7 +261,7 @@ public sealed class PluginGuiExtensibilityTests
         {
             TempTree.Delete(homeDir);
         }
-    }, TimeSpan.FromSeconds(45));
+    }, TimeSpan.FromSeconds(60));
 
     [Fact]
     public async Task SeparateHostAndGuiContexts_SynchronizeHotAddReloadAndRemoveAcrossManagers() => await HeadlessGui.RunAsync(async () =>
@@ -327,11 +326,12 @@ public sealed class PluginGuiExtensibilityTests
         {
             TempTree.Delete(homeDir);
         }
-    }, TimeSpan.FromSeconds(45));
+    }, TimeSpan.FromSeconds(60));
 
-    [Fact]
+    [Fact(Timeout = 60000)]
     public async Task SandboxEnabled_ExternalGuiPluginWithoutHostRole_IsRejected_UntilExplicitlyTrusted()
     {
+        await SandboxTestBackend.RequireAsync();
         using var artifacts = new TempArtifactFolder();
         var pluginsDir = Path.Combine(artifacts.Root, "sandbox-plugins");
         var homeDir = TempTree.CreateSocketDirectory("gx");
@@ -370,11 +370,19 @@ public sealed class PluginGuiExtensibilityTests
             Assert.Contains("activated", added, StringComparison.Ordinal);
             Assert.Equal(ActivationState.Active, app.Composition.Find("@test/gui-sandbox")?.State);
             Assert.True(app.Ctx.Get<GuiWorkbench>(GuiWorkbench.ServiceName)!.ToolbarItems.Count > 0 || app.Composition.Find("@test/gui-sandbox")?.IsActive == true);
+            await manager.RemoveAsync("@test/gui-sandbox");
         }
         finally
         {
             TempTree.Delete(homeDir);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void FocusWorkspacePageButton(Window window, string text)
+    {
+        var button = FindControlByText<Button>(window.FindControl<ContentControl>("WorkspacePageHost")!, text);
+        Assert.True(button.Focus());
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

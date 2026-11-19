@@ -139,7 +139,12 @@ public sealed class HarnessPluginManager : IDisposable
         if (leaked)
             _leaked.Add(package);
         if (weak is not null)
-            _ = VerifyCollectionAsync(package, weak);
+        {
+            if (_installedDirectories.ContainsKey(package))
+                await VerifyCollectionAsync(package, weak);
+            else
+                _ = VerifyCollectionAsync(package, weak);
+        }
         return Removed(package, leaked);
     }
 

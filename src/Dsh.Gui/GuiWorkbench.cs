@@ -323,12 +323,15 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
                 InstallPage(viewModel, fallback);
                 return;
             }
-            var inView = viewModel.Page == AppPage.WorkspacePage && viewModel.Workspace.ActivePage?.Id == registration.Id;
-            if (viewModel.Workspace.ActivePage?.Id == registration.Id)
+            var wasActive = viewModel.Workspace.ActivePage?.Id == registration.Id;
+            var inView = viewModel.Page == AppPage.WorkspacePage && wasActive;
+            if (wasActive)
                 ScrubObject(viewModel.Workspace.PageContent);
             if (inView)
                 _evictedPageId = registration.Id;
             viewModel.Workspace.RemoveContributedPage(registration.Id, returnToDashboard: inView);
+            if (wasActive)
+                FlushDetachedLayout();
         });
     }
 
@@ -422,12 +425,15 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         {
             _evictedPageId = null;
             viewModel.Workspace.OpenPage(entry);
+            if (wasActive)
+                FlushDetachedLayout();
             return;
         }
         if (wasActive)
         {
             viewModel.Workspace.PageContent = null;
             viewModel.Workspace.ActivePage = null;
+            FlushDetachedLayout();
         }
     }
 
@@ -487,6 +493,7 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         string flagProperty,
         bool forceRecreate)
     {
+        var detached = false;
         var desiredIds = desired.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         for (var index = target.Count - 1; index >= 0; index--)
         {
@@ -498,6 +505,7 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
             removed.Owner = null;
             ScrubControl(old);
             target.RemoveAt(index);
+            detached = true;
         }
         for (var index = 0; index < desired.Count; index++)
         {
@@ -514,17 +522,23 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
                 existing.Owner = owner;
                 existing.Content = factory();
                 if (!ReferenceEquals(previous, existing.Content))
+                {
                     ScrubControl(previous);
+                    detached = true;
+                }
             }
             var currentIndex = target.IndexOf(existing);
             if (currentIndex != index)
                 target.Move(currentIndex, index);
         }
         OnPropertyChanged(flagProperty);
+        if (detached)
+            FlushDetachedLayout();
     }
 
     private void ClearSlotCollection(ObservableCollection<GuiSlotItem> target, string flagProperty)
     {
+        var hadItems = target.Count > 0;
         foreach (var item in target)
         {
             var old = item.Content;
@@ -534,6 +548,17 @@ public sealed class GuiWorkbench : INotifyPropertyChanged, IDisposable
         }
         target.Clear();
         OnPropertyChanged(flagProperty);
+        if (hadItems)
+            FlushDetachedLayout();
+    }
+
+    private void FlushDetachedLayout()
+    {
+        Window? window;
+        lock (_gate)
+            window = _window;
+        if (window is { IsVisible: true })
+            window.UpdateLayout();
     }
 
     private void OnPropertyChanged(string propertyName)
