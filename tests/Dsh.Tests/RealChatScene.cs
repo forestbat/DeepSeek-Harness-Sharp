@@ -194,6 +194,13 @@ internal sealed class RealChatScene : IAsyncDisposable
      */
     public FoldTarget? EnsureFoldButtonVisible(MessageViewModel message, FoldKind kind = FoldKind.Message)
     {
+        // 用户离开底部用的是滚轮, 而程序写 offset 不算"用户接管了视口"(跟随意图只由真实手势改判):
+        // 先滚一下退出跟随, 之后再把目标挪到视口中间, 否则下一次布局会把视口拽回末尾。
+        if (IsSticky)
+        {
+            Wheel(2);
+            Pump(2);
+        }
         for (var attempt = 0; attempt < 6; attempt++)
         {
             if (FoldButtonOf(message, kind) is { } visible

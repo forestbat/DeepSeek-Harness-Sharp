@@ -25,7 +25,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
 {
     private const int BulkMessages = 1000;
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "gui-screenshots"));
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch", "gui-screenshots"));
 
     [Fact]
     public async Task MainWindow_RendersEveryPage() => await HeadlessGui.RunAsync(async () =>
@@ -128,6 +128,96 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             decision.AllowAlwaysCommand.Execute(null);
             Dispatcher.UIThread.RunJobs();
             Assert.Equal(ApprovalOutcome.AllowedForSession, decision.Result);
+        });
+
+    /** 「提交」按钮本身: 选中选项后必须变成可点, 且点它真的会出答案(旧实现只测到 CanSubmit 属性)。 */
+    [Fact]
+    public async Task DecisionDialog_QuestionSubmitButton_BecomesClickableAfterSelectingAnOption() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            await using var environmentScope = environment;
+            var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
+                [
+                    new AskUserQuestionItem(
+                        "q1",
+                        "杀掉这两个 TUI 进程?",
+                        Options: [new AskUserQuestionOption("杀掉", Value: "kill"), new AskUserQuestionOption("不用动", Value: "keep")]),
+                ],
+                environment.Agent));
+            var dialog = new DecisionDialog(decision);
+            dialog.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var submit = dialog.GetVisualDescendants().OfType<Button>().Single(button => button.Content as string == "提交");
+            Assert.False(submit.IsEffectivelyEnabled);
+            // 未答完时要说清"为什么点不了提交", 否则只有一个灰按钮(2026-11-18 实测困惑来源)。
+            var hint = dialog.GetVisualDescendants().OfType<TextBlock>()
+                .Single(block => block.Text is { } text && text.Contains("才能提交", StringComparison.Ordinal));
+            Assert.True(hint.IsEffectivelyVisible);
+
+            var single = decision.Questions[0];
+            var option = dialog.GetVisualDescendants().OfType<Button>()
+                .Single(button => ReferenceEquals(button.DataContext, single.Options[0]));
+            var point = option.TranslatePoint(new Point(option.Bounds.Width / 2, option.Bounds.Height / 2), dialog)!.Value;
+            dialog.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            dialog.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(decision.CanSubmit);
+            Assert.True(submit.IsEffectivelyEnabled, "选中选项后「提交」必须可点");
+            Assert.False(hint.IsEffectivelyVisible);
+
+            // 真点一下(不是 RaiseEvent(Click): 那条路不执行 Command, 只能证明处理器接线)。
+            var submitPoint = submit.TranslatePoint(new Point(submit.Bounds.Width / 2, submit.Bounds.Height / 2), dialog)!.Value;
+            dialog.MouseDown(submitPoint, MouseButton.Left, RawInputModifiers.None);
+            dialog.MouseUp(submitPoint, MouseButton.Left, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            var answer = Assert.IsType<AskUserQuestionAnswer>(decision.Result);
+            Assert.Equal("kill", Assert.Single(answer.Answers).Selected[0]);
+
+            dialog.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+
+    /**
+     * 多问题时「提交」要等每个问题都有答案: 只答第一个(点选项)不够 ——
+     * 没有选项的问题(allowCustom 默认 true)只能直接输入, 漏掉它就一直点不了提交。
+     */
+    [Fact]
+    public async Task DecisionDialog_SubmitStaysDisabledUntilEveryQuestionIsAnswered() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            await using var environmentScope = environment;
+            var decision = DecisionViewModel.ForQuestion(new AskUserQuestionRequest(
+                [
+                    new AskUserQuestionItem("first", "要杀掉那两个进程吗?", Options: [new AskUserQuestionOption("杀掉"), new AskUserQuestionOption("不用动")]),
+                    new AskUserQuestionItem("second", "还有什么要补的吗?"),
+                ],
+                environment.Agent));
+            var dialog = new DecisionDialog(decision);
+            dialog.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var first = decision.Questions[0];
+            var option = dialog.GetVisualDescendants().OfType<Button>()
+                .Single(button => ReferenceEquals(button.DataContext, first.Options[0]));
+            var point = option.TranslatePoint(new Point(option.Bounds.Width / 2, option.Bounds.Height / 2), dialog)!.Value;
+            dialog.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            dialog.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            var submit = dialog.GetVisualDescendants().OfType<Button>().Single(button => button.Content as string == "提交");
+            Assert.True(first.Options[0].IsSelected);
+            Assert.False(decision.CanSubmit, "第二个问题还没答, 提交必须仍不可用");
+            Assert.False(submit.IsEffectivelyEnabled);
+
+            decision.Questions[1].CustomText = "没有了";
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(decision.CanSubmit);
+            Assert.True(submit.IsEffectivelyEnabled);
+
+            dialog.Close();
+            Dispatcher.UIThread.RunJobs();
         });
 
     [Fact]
@@ -461,7 +551,7 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
         }
     });
 
-    /** diff 卡片真实渲染截图(阶段 4): 折叠态与展开态各一张, 供与参考图 artifacts020/bugs/7925849368c492dfb053dda75d5b683f.png 对照。 */
+    /** diff 卡片真实渲染截图(阶段 4): 折叠态与展开态各一张, 供与参考图 tests/.scratch/bugs/7925849368c492dfb053dda75d5b683f.png 对照。 */
     [Fact]
     public async Task DiffCard_RendersCollapsedAndExpanded() => await HeadlessGui.RunAsync(async () =>
         {

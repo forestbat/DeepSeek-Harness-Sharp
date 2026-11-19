@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using Dsh.Boot;
 using Dsh.Gui.Services;
@@ -9,6 +10,9 @@ namespace Dsh.Gui;
 
 public static class GuiRunner
 {
+    /** 启动时等本机 Host 完成握手的上限: 超过它必须给出可见的失败窗口和重试入口。 */
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(90);
+
     /** startLocalHost launches the local Host on demand; the configured workspace provider owns its connections. */
     public static async Task<int> Run(
         HarnessApp app,
@@ -49,12 +53,12 @@ public static class GuiRunner
     /** A persisted pre-Fleet session is resumed by Host under the same id; GUI never opens a writer. */
     private static async Task<HostChatSession> OpenChatAsync(
         HarnessApp app, string cwd, string? resumeSessionId,
-        Func<string, CancellationToken, Task>? startLocalHost)
+        Func<string, CancellationToken, Task>? startLocalHost, CancellationToken cancellationToken)
     {
         var fleet = FleetWorkspace.ForContext(app.Ctx, app.Home, startLocalHost);
         try
         {
-            return await HostChatSession.OpenAsync(fleet, cwd, resumeSessionId);
+            return await HostChatSession.OpenAsync(fleet, cwd, resumeSessionId, cancellationToken);
         }
         catch
         {
@@ -102,23 +106,89 @@ public static class GuiRunner
         Func<string, CancellationToken, Task>? startLocalHost)
     {
         MainWindow? window = null;
+        StartupFailureWindow? failure = null;
         // 本进程就是 GUI 本体: 允许退出兜底强杀自己(见 MainWindow.ShutdownApplication)。
         MainWindow.OwnsProcess = true;
-        instance.ActivationRequested += () =>
+        instance.ActivationRequested += () => Dispatcher.UIThread.Post(() =>
         {
+            // 第二次启动或托盘图标: 主窗口建好了就把它带回前台; 还在连接、或停在失败窗口时, 把手上那个窗口带到前面。
             if (window is not null)
-                Dispatcher.UIThread.Post(() => window.ShowFromTray());
-        };
+                window.ShowFromTray();
+            else
+                failure?.Activate();
+        });
         App.StartupAppearance = application => ThemeService.Apply(application, settings);
-        App.StartupWindowFactory = () =>
-        {
-            // Platform/dispatcher must exist before FleetWorkspace starts posting UI events.
-            // Connection setup runs without the UI synchronization context while this synchronous factory waits.
-            var chat = Task.Run(() => OpenChatAsync(app, cwd, resumeSessionId, startLocalHost)).GetAwaiter().GetResult();
-            window = new MainWindow(app, chat);
-            return window;
-        };
+        // 启动路径只登记后台流程, 不同步等握手: 连不上时必须落到失败窗口, 而不是"进程活着但没有窗口"。
+        App.StartupHook = () => _ = RunStartupAsync();
         return BuildApp(settings).StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
+
+        // 连上就换主窗口; 连不上(超时或抛异常)就摆出失败窗口让用户重试或退出。
+        // 所有窗口动作都显式投递到 UI 线程: 握手在线程池上等, 续体落在哪个线程不该影响窗口。
+        async Task RunStartupAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    if (await TryOpenMainWindowAsync() is not { } reason)
+                        return;
+                    var retry = await Dispatcher.UIThread.InvokeAsync(async () =>
+                    {
+                        failure = new StartupFailureWindow(reason);
+                        try
+                        {
+                            return await failure.ShowAndWaitAsync();
+                        }
+                        finally
+                        {
+                            failure = null;
+                        }
+                    });
+                    if (retry)
+                        continue;
+                    Dispatcher.UIThread.Post(Shutdown);
+                    return;
+                }
+            }
+            catch (Exception error)
+            {
+                // 连失败窗口都摆不出来时至少让进程退出: 留一个没有窗口的进程等于什么都没告诉用户。
+                app.Ctx.LoggerFor("gui").Error($"GUI 启动失败: {error.Message}", error);
+                Dispatcher.UIThread.Post(Shutdown);
+            }
+        }
+
+        // 返回 null 表示主窗口已经显示; 否则返回失败原因。
+        async Task<string?> TryOpenMainWindowAsync()
+        {
+            using var handshake = new CancellationTokenSource(HandshakeTimeout);
+            try
+            {
+                var chat = await Task.Run(() => OpenChatAsync(app, cwd, resumeSessionId, startLocalHost, handshake.Token));
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    window = new MainWindow(app, chat);
+                    if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                        desktop.MainWindow = window;
+                    window.Show();
+                });
+                return null;
+            }
+            catch (OperationCanceledException) when (handshake.IsCancellationRequested)
+            {
+                return $"本机 Host 在 {HandshakeTimeout.TotalSeconds:0} 秒内没有完成握手。";
+            }
+            catch (Exception error)
+            {
+                return Runtime.OutboundProxy.Redact(error.Message);
+            }
+        }
+
+        static void Shutdown()
+        {
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                desktop.Shutdown();
+        }
     }
 
     private static AppBuilder BuildApp(GuiSettingsSnapshot settings)
