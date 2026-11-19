@@ -21,6 +21,9 @@ public sealed record DshPaths(string Root, IReadOnlyDictionary<string, string> P
     public const string Telemetry = "telemetry";
     public const string Run = "run";
 
+    /** 命令输出溢出的原文目录: 跟随存储根派生, 不作为 `storage:` 配置键暴露。 */
+    public const string Spill = "spill";
+
     /** 分区清单: 也是 `storage:` 段支持的键与迁移搬运清单。 */
     public static readonly IReadOnlyList<string> Names =
     [
@@ -82,6 +85,7 @@ public sealed record DshPaths(string Root, IReadOnlyDictionary<string, string> P
     public string CheckpointsPath => Path(Checkpoints);
     public string AttachmentsPath => Path(Attachments);
     public string ToolResultsPath => Path(ToolResults);
+    public string SpillPath => Path(Spill);
     public string TelemetryPath => Path(Telemetry);
     public string RunPath => Path(Run);
 

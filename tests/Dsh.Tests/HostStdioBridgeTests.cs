@@ -115,7 +115,12 @@ public sealed class HostStdioBridgeTests
             if (File.Exists(candidate))
                 return candidate;
         }
-        throw new InvalidOperationException("dsh-gui.dll not found under artifacts/*/bin/Dsh.GuiHost/debug");
+        // 也认默认布局(各项目自己的 bin): 这是"不做实验性外置产物"时的正常位置。
+        var framework = new DirectoryInfo(AppContext.BaseDirectory);
+        var conventional = Path.Combine(directory.FullName, "Dsh.GuiHost", "bin", framework.Parent!.Name, framework.Name, "dsh-gui.dll");
+        if (File.Exists(conventional))
+            return conventional;
+        throw new InvalidOperationException("dsh-gui.dll not found under artifacts/*/bin/Dsh.GuiHost/debug or Dsh.GuiHost/bin");
     }
 
     /** 把子进程的 stdin/stdout 当成一条双向字节流。 */

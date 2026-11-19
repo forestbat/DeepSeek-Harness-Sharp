@@ -271,7 +271,8 @@ public sealed class AcpServer
     private static string LastStopReason(Session session)
     {
         TurnEndReason? end = null;
-        foreach (var sessionEvent in session.SnapshotEvents())
+        // 最后一个 turn/end 一定在常驻尾窗里: 遍历前缀只会把整份日志按页读回来。
+        foreach (var sessionEvent in session.ResidentEvents())
         {
             if (sessionEvent.Data is TurnEndPayload turnEnd)
                 end = turnEnd.Reason;

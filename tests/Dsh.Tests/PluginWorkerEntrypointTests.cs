@@ -139,13 +139,13 @@ public sealed class PluginWorkerEntrypointTests
 
     private static Process Start(string consumer, string root, params string[] args)
     {
-        var repository = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+        var repository = Path.Combine(TempTree.RepositoryRoot, "");
         var suffix = OperatingSystem.IsWindows() ? ".exe" : "";
         var executable = consumer switch
         {
             "tests" => Path.Combine(AppContext.BaseDirectory, "Dsh.Tests" + suffix),
             "cli" => RealHostProcesses.Executable,
-            "web" => Path.Combine(repository, "Dsh.WebHost", "bin", "Debug", BuildTargetFramework.Value, "dsharp-web" + suffix),
+            "web" => WebHost(),
             _ => throw new ArgumentOutOfRangeException(nameof(consumer)),
         };
         Assert.True(File.Exists(executable), "The real consumer executable must be built with the tests.");
@@ -160,6 +160,14 @@ public sealed class PluginWorkerEntrypointTests
         info.Environment[HarnessHome.HomeEnv] = root;
         return TestProcessScope.Start(info);
     }
+
+    private static string WebHost()
+    {
+        var repository = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+        var suffix = OperatingSystem.IsWindows() ? ".exe" : "";
+        return Path.Combine(repository, "Dsh.WebHost", "bin", "Debug", BuildTargetFramework.Value, "dsharp-web" + suffix);
+    }
+
 
     private static async Task StopAsync(Process? process, string root)
     {

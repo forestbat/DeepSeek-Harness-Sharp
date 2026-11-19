@@ -20,8 +20,7 @@ public sealed class AcpAgentProcessSmokeTests : IDisposable
         ["OPENCODE_CONFIG_CONTENT"] = """{"permission":{"bash":"ask","edit":"ask"}}""",
     };
 
-    private readonly string _workspace = Path.GetFullPath(Path.Combine(
-        AppContext.BaseDirectory, "../../../../../artifacts020/test-tmp", $"acp-{Guid.NewGuid():N}"));
+    private readonly string _workspace = Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-tmp", $"acp-{Guid.NewGuid():N}");
 
     public AcpAgentProcessSmokeTests() => Directory.CreateDirectory(_workspace);
 

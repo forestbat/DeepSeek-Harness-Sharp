@@ -9,11 +9,20 @@ namespace Dsh.RemoteHost;
  */
 internal static class RemoteSnapshotPage
 {
-    /** 切一页历史: 从 fromEvent 起逐条累加到预算用尽; 单条就超预算时也发出, 否则这条事件永远取不到。 */
+    /**
+     * 切一页历史: 从 fromEvent 起逐条累加到预算用尽; 单条就超预算时也发出, 否则这条事件永远取不到。
+     *
+     * fromEvent 是**绝对序号**, 而窗口化会话的 Events 只从 ResidentFrom 开始, 两者不能混:
+     * 客户端按 total - tailCount 要尾部一页时, 直接把绝对序号当下标会切出一页空的
+     * (1,043,710 条历史里的第 1,023,710 条, 在只有 39,561 条的窗口里根本没有这个下标)。
+     */
     public static RemoteSessionSnapshot Slice(RemoteSessionSnapshot snapshot, long fromEvent, int maxBytes, int maxEvents = 0)
     {
         var events = snapshot.Events;
-        var start = (int)Math.Clamp(fromEvent, 0L, events.Count);
+        // 整份历史的列表从 0 开始, 窗口化的列表从 ResidentFrom 开始: 用序号把它换算成下标。
+        // 取末条的序号反推而不是首条的: 窗口化视图的 [0] 会触发一次前缀缺页读(一整页帧), 而末尾永远常驻。
+        var baseSeq = events.Count > 0 ? events[events.Count - 1].Seq + 1 - events.Count : 0L;
+        var start = (int)Math.Clamp(fromEvent - baseSeq, 0L, events.Count);
         var budget = Math.Clamp(maxBytes, 1, HostProtocol.SnapshotPageBytes);
         var limit = maxEvents > 0 ? maxEvents : int.MaxValue;
         var page = new List<SessionEvent>();

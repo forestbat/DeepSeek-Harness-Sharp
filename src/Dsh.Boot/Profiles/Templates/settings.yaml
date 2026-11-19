@@ -985,19 +985,14 @@ plugins:
 #   toolName: "workflow"
 # <<< generated
 
-# MCP 服务器
-mcp:
-  filesystem:
-    # stdio | streamable-http | sse（必填）
-    transport: stdio
-    # stdio 启动命令
-    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem"]
-    # 额外参数(transport: stdio 时使用)
-    args: []
-    # HTTP 端点(transport: streamable-http 或 sse 时使用)
-    url: null
-    # 是否启用（必填）
-    enabled: true
+# MCP 服务器(默认不挂任何服务器; 需要时按下列形状添加, 空映射是合法配置)
+# mcp:
+#   <名称>:
+#     transport: stdio | streamable-http | sse   # 必填
+#     command: ["<exe>", "<arg>"]                # stdio: 启动命令
+#     args: []                                   # stdio: 额外参数
+#     url: null                                  # streamable-http/sse: 端点
+#     enabled: true                              # 必填
 
 # 自动压缩选项
 compaction:

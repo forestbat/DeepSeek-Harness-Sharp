@@ -386,8 +386,8 @@ public class SubagentTests
                 payload.Message.Content.Count > 0);
             Assert.Null(result.Error);
             Assert.DoesNotContain(events.OfType<SafetyDecisionAuditPayload>(), audit => audit.Outcome == "rejected");
-            Assert.Contains(events.OfType<SafetyDecisionAuditPayload>(), audit =>
-                audit.Tool == "list_agents" && audit.Decision == "allow");
+            // 默认放行的决策不再逐条落盘(见 SafetyPolicyBoundary.RecordDecision), 所以这里看的是"子代理真的跑成了",
+            // 而不是"有一条 allow 审计"。拒绝一类的决策仍然必须出现在审计里, 由上一条断言守着。
         }
         finally
         {

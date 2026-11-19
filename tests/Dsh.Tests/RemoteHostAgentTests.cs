@@ -58,8 +58,7 @@ public sealed class RemoteHostAgentTests : IDisposable
         done
         """;
 
-    private readonly string _workspace = Path.GetFullPath(Path.Combine(
-        AppContext.BaseDirectory, "../../../../../artifacts020/test-tmp", $"agent-{Guid.NewGuid():N}"));
+    private readonly string _workspace = Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-tmp", $"agent-{Guid.NewGuid():N}");
 
     public RemoteHostAgentTests() => Directory.CreateDirectory(_workspace);
 

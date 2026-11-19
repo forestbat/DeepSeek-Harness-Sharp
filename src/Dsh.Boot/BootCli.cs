@@ -4,7 +4,6 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Dsh.Runtime;
-using Dsh.Plugins;
 
 namespace Dsh.Boot;
 
@@ -129,7 +128,7 @@ public static class BootCli
         }
     }
 
-    /** 该 id 是否是 daemon 里活着的 PTY 会话; 只查不拉起 daemon(attach harness 会话时不该凭空起 daemon)。 */
+    /** 该 id 是否是 daemon 的 PTY 会话(含已退出但可复活的记录); 只查不拉起 daemon(attach harness 会话时不该凭空起 daemon)。 */
     public static async Task<bool> IsDaemonPtyAsync(string id, CancellationToken cancellationToken = default)
     {
         try
@@ -137,6 +136,18 @@ public static class BootCli
             var clientType = RequireType("Dsh.Pty.PtyDaemonClient", "Dsh.Pty");
             if (!await (Task<bool>)InvokeStatic(clientType, "IsRunningAsync", cancellationToken)!)
                 return false;
+            var probe = clientType.GetMethod("ProbeAsync", [typeof(string), typeof(CancellationToken)]);
+            if (probe is not null)
+            {
+                try
+                {
+                    return await (Task<bool>)probe.Invoke(null, [id, cancellationToken])!;
+                }
+                catch (Exception)
+                {
+                    // 更早版本起的 daemon 不认识 probe: 退回列表扫描(它也没有"可复活记录"的概念)。
+                }
+            }
             var task = (Task)InvokeStatic(clientType, "ListAsync", cancellationToken)!;
             await task;
             var sessions = task.GetType().GetProperty("Result")!.GetValue(task)!;

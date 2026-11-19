@@ -84,11 +84,7 @@ public sealed class AgentLoop : Service
             ?? throw new InvalidOperationException("no session persistence backend configured for resume");
         // 只读取历史; 写入句柄由持久化接线在会话进入 store 后接管, 否则两处会争同一把写锁。
         using var handle = persistence.Open(options.SessionId, SessionAccess.Read);
-        var persisted = handle.Read();
-        // 只对"本会话自有"的事件补中断收尾; 种子(fork 前缀)是冻结历史, 不在其中(见 InterruptedTurnClosers)。
-        var closers = SessionRepair.InterruptedTurnClosers(persisted, handle.InheritedEventCount);
-        var events = closers.Count > 0 ? [.. persisted, .. closers] : persisted;
-        var session = Session.FromRestore(options.SessionId, events, handle.Header, handle.InheritedEventCount);
+        var session = Restore(options.SessionId, persistence, handle);
         var sessions = Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         // 与 Create 一致: 会话进入 store 后由 agent 生命周期持有, 不能在这里就解绑, 否则事件不再转发/落盘。
         sessions.Enter(session);
@@ -98,14 +94,32 @@ public sealed class AgentLoop : Service
         return Task.FromResult<IAgent>(agent);
     }
 
+    /** 能窗口化就只读尾部一段(超大会话的打开代价由此与历史长度脱钩), 否则整份恢复。 */
+    private static Session Restore(SessionId id, ISessionPersistence persistence, ISessionHandle handle)
+    {
+        if (persistence.TryOpenWindow(id, ResumeTailEvents) is { } paged)
+        {
+            // 中断收尾只看尾部: 未闭合的 turn / 悬空工具调用只可能出现在最后。
+            var closers = SessionRepair.InterruptedTurnClosers(paged.Resident);
+            var resident = closers.Count > 0 ? [.. paged.Resident, .. closers] : paged.Resident;
+            return Session.FromWindow(id,
+                paged with { Resident = resident, TotalEvents = paged.TotalEvents + closers.Count },
+                handle.Header, handle.InheritedEventCount);
+        }
+        var persisted = handle.Read();
+        // 只对"本会话自有"的事件补中断收尾; 种子(fork 前缀)是冻结历史, 不在其中(见 InterruptedTurnClosers)。
+        var fullClosers = SessionRepair.InterruptedTurnClosers(persisted, handle.InheritedEventCount);
+        var events = fullClosers.Count > 0 ? [.. persisted, .. fullClosers] : persisted;
+        return Session.FromRestore(id, events, handle.Header, handle.InheritedEventCount);
+    }
+
+    /** 窗口化恢复的尾窗大小: 几十个回合的量, 渲染与压缩都在这段里工作。 */
+    private const int ResumeTailEvents = 20_000;
+
+    /** 恢复出来的会话从哪个回合接着数: 只看常驻尾窗, 否则窗口化打开等于把整份日志按页读回来。 */
     internal static int LastTurnOf(Session session)
     {
-        var lastTurn = 0;
-        foreach (var sessionEvent in session.SnapshotEvents())
-        {
-            if (sessionEvent.Data is TurnStartPayload turnStart)
-                lastTurn = turnStart.Turn;
-        }
-        return lastTurn;
+        var lastTurnStart = session.LastResidentEventWhere(sessionEvent => sessionEvent.Data is TurnStartPayload);
+        return lastTurnStart?.Data is TurnStartPayload turnStart ? turnStart.Turn : 0;
     }
 }

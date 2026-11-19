@@ -289,7 +289,7 @@ public sealed class GitInspectTests : IDisposable
     }
 }
 
-/** A throwaway git repository under artifacts020 (inside the worktree, ignored by git) with a fixed identity and branch name. */
+/** A throwaway git repository under tests/.scratch (inside the worktree, ignored by git) with a fixed identity and branch name. */
 internal sealed class GitTestRepository : IDisposable
 {
     public const string AuthorName = "Dsh Test";
@@ -299,7 +299,7 @@ internal sealed class GitTestRepository : IDisposable
 
     public GitTestRepository()
     {
-        Sandbox = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-tmp", $"git-{Guid.NewGuid():N}"));
+        Sandbox = Path.GetFullPath(Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-tmp", $"git-{Guid.NewGuid():N}"));
         Root = Path.Combine(Sandbox, "repo");
         Directory.CreateDirectory(Root);
         Git("init", "-q", "-b", "main");
