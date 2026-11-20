@@ -1,0 +1,69 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dsh.Gui.ViewModels"
+             xmlns:views="using:Dsh.Gui.Views"
+             xmlns:term="using:Dsh.Gui.Terminal"
+             x:Class="Dsh.Gui.Views.Ma2aRemoteView"
+             x:DataType="vm:Ma2aRemoteViewModel"
+             x:CompileBindings="True">
+  <UserControl.DataTemplates>
+    <TreeDataTemplate DataType="vm:Ma2aResultNode" x:DataType="vm:Ma2aResultNode" ItemsSource="{Binding Children}">
+      <SelectableTextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+    </TreeDataTemplate>
+  </UserControl.DataTemplates>
+  <Grid ColumnDefinitions="*,6,2*" Margin="0,12,0,0">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="8">
+      <TextBlock Text="目标 EndpointId" FontWeight="SemiBold" />
+      <TextBox Grid.Row="1" Text="{Binding TargetEndpoint, Mode=TwoWay}" IsEnabled="{Binding !Busy}" AutomationProperties.Name="目标 EndpointId" />
+      <ComboBox Grid.Row="2" ItemsSource="{Binding Operations}" SelectedItem="{Binding SelectedOperation, Mode=TwoWay}"
+                IsEnabled="{Binding !Busy}" HorizontalAlignment="Stretch" AutomationProperties.Name="MA2A 远端操作">
+        <ComboBox.ItemTemplate><DataTemplate x:DataType="vm:Ma2aRemoteOperation"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+      </ComboBox>
+      <TextBlock Grid.Row="3" Text="Files 使用 ROOT:/path；program 与 args 分开填写。传输完成后验证 BLAKE3。" TextWrapping="Wrap" Classes="Secondary" />
+      <ScrollViewer Grid.Row="4">
+        <StackPanel IsEnabled="{Binding !Busy}" Spacing="8" Margin="0,0,8,0">
+          <ItemsControl ItemsSource="{Binding Fields}">
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:Ma2aFieldViewModel"><views:Ma2aFieldView /></DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Expander Header="保存原始输出字节（可选）">
+            <StackPanel Spacing="6">
+              <TextBlock Text="用于 Files read 等数据帧；使用新文件路径，不覆盖已有文件。终端和完整传输使用各自的界面。" TextWrapping="Wrap" Classes="Secondary" />
+              <TextBox Text="{Binding RawOutputPath, Mode=TwoWay}" AutomationProperties.Name="原始字节输出路径" />
+            </StackPanel>
+          </Expander>
+        </StackPanel>
+      </ScrollViewer>
+      <StackPanel Grid.Row="5" Spacing="8">
+        <SelectableTextBlock IsVisible="{Binding HasPending}" Text="{Binding PendingRequestId, StringFormat='待核实 RequestId: {0}'}" Classes="Mono" TextWrapping="Wrap" />
+        <Expander Header="托管服务流交互">
+          <StackPanel Spacing="6">
+            <TextBlock Text="输入字节（十六进制）" />
+            <TextBox Text="{Binding InputHex, Mode=TwoWay}" AutomationProperties.Name="服务输入字节" />
+            <Button Content="发送输入" Command="{Binding SendBytesCommand}" />
+            <TextBlock Text="控制字节（十六进制）" />
+            <TextBox Text="{Binding ControlHex, Mode=TwoWay}" AutomationProperties.Name="服务控制字节" />
+            <Button Content="发送控制" Command="{Binding SendControlCommand}" />
+          </StackPanel>
+        </Expander>
+        <CheckBox Content="我已核实远端目标及操作参数" IsChecked="{Binding Confirmed, Mode=TwoWay}" />
+        <WrapPanel ItemSpacing="8" LineSpacing="8">
+          <Button Content="执行" Command="{Binding RunCommand}" IsEnabled="{Binding !Busy}" />
+          <Button Content="取消 / 解除附着" Command="{Binding DetachCommand}" />
+          <Button Content="关闭 stdin" Command="{Binding EndInputCommand}" />
+          <Button Content="重试相同请求" Command="{Binding RetryCommand}" IsVisible="{Binding HasPending}" />
+          <Button Content="已核实上次结果" Command="{Binding AcknowledgePendingCommand}" IsVisible="{Binding HasPending}" />
+        </WrapPanel>
+      </StackPanel>
+    </Grid>
+    <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent" />
+    <Grid Grid.Column="2" RowDefinitions="Auto,Auto,Auto,*,*" RowSpacing="8" Margin="8,0,0,0">
+      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+      <SelectableTextBlock Grid.Row="1" Text="{Binding RequestId, StringFormat='RequestId: {0}'}" Classes="Mono Tertiary" TextWrapping="Wrap" />
+      <ProgressBar Grid.Row="2" Value="{Binding Progress}" Maximum="100" IsVisible="{Binding Transferring}" />
+      <Border Grid.Row="3" BorderBrush="{DynamicResource Brush.Border.Subtle}" BorderThickness="1">
+        <term:TerminalControl Session="{Binding Terminal}" MinHeight="180" />
+      </Border>
+      <TreeView Grid.Row="4" ItemsSource="{Binding Results}" />
+    </Grid>
+  </Grid>
+</UserControl>

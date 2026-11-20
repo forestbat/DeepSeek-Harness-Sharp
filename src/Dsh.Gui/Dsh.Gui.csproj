@@ -4,6 +4,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dsh.Agent\Dsh.Agent.csproj" />
+    <ProjectReference Include="..\Dsh.Ma2a\Dsh.Ma2a.csproj" />
     <ProjectReference Include="..\Dsh.Sdk\Dsh.Sdk.csproj" />
     <ProjectReference Include="..\Dsh.Account\Dsh.Account.csproj" />
     <ProjectReference Include="..\Dsh.SessionQuery\Dsh.SessionQuery.csproj" />
@@ -29,6 +30,9 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
   </ItemGroup>
 
   <ItemGroup Condition="Exists('Assets\icon.png')">

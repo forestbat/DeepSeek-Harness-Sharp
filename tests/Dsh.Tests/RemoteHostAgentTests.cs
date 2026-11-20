@@ -138,7 +138,7 @@ public sealed class RemoteHostAgentTests : IDisposable
         await using (var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct))
         {
             var pushed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(), new SessionsChangedTap(pushed));
+            using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(), new JsonRpcTarget(RpcTargetMetadata.FromShape<IHostPush>(), new SessionsChangedTap(pushed)));
             var rpc = peer.Attach<IHostRpc>();
             var agents = peer.Attach<IAgentRpc>();
             session = await agents.StartAsync(request, Ct);

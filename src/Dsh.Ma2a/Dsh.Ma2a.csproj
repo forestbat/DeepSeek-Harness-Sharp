@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\Dsh.Plugins.Generator\DshPluginPackage.props" />
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Blake3" Version="3.0.2" />
+    <PackageReference Include="System.Formats.Cbor" Version="10.0.15" />
+    <ProjectReference Include="..\Dsh.Plugins.Abstractions\Dsh.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <InternalsVisibleTo Include="Dsh.Ma2a.Tests" />
+    <EmbeddedResource Include="LocalApiCatalog.json" />
+  </ItemGroup>
+</Project>

@@ -55,6 +55,19 @@ public sealed class RemoteHostTcpListenerTests
         }
     }
 
+    [Fact(Timeout = 5000)]
+    public async Task StoppingLoopbackHostClosesAnEstablishedClient()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var host = await HarnessHostFixture.CreateAsync("hsc", cancellationToken);
+        await using var client = await host.ConnectAsync("host-stop-test", cancellationToken);
+        await client.PingAsync(cancellationToken);
+
+        await host.StopHostAsync();
+
+        await client.WhenClosed.WaitAsync(cancellationToken);
+    }
+
     /** 非回环端点没给令牌时必须现生成一个, 回环端点才允许裸监听。 */
     [Fact]
     public void ExposedToken_IsGeneratedForNonLoopbackAndOptionalForLoopback()

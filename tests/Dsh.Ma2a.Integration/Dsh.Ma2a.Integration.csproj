@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Ma2a\Dsh.Ma2a.csproj" />
+    <ProjectReference Include="../../src/Dsh.Ma2a.Tools/Dsh.Ma2a.Tools.csproj" />
+    <ProjectReference Include="../../src/Dsh.Gui/Dsh.Gui.csproj" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
+  </ItemGroup>
+</Project>

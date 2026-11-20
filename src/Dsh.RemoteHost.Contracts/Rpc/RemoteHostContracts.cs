@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using Dsh.GitInspect;
 using StreamJsonRpc;
+using PolyType;
+
+[assembly: ExportRpcContractProxies]
 
 namespace Dsh.RemoteHost.Rpc;
 
@@ -13,7 +16,8 @@ namespace Dsh.RemoteHost.Rpc;
  */
 
 /** 握手、会话与决策: 每条连接都必须有的核心域。 */
-public interface IHostRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IHostRpc
 {
     [JsonRpcMethod(HostProtocol.MethodHello)]
     Task<HostHelloResponse> HelloAsync(HostHelloRequest request, CancellationToken cancellationToken = default);
@@ -65,7 +69,8 @@ public interface IHostRpc
 }
 
 /** 可选的 Agent 域: 只在宿主机装了 Agent 适配器时通告。 */
-public interface IAgentRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IAgentRpc
 {
     [JsonRpcMethod(AgentProtocol.MethodAgentCatalog)]
     Task<IReadOnlyList<RemoteAgentCatalogEntry>> CatalogAsync(CancellationToken cancellationToken = default);
@@ -87,7 +92,8 @@ public interface IAgentRpc
 }
 
 /** 文件传输域: 小文件一次读写, 大文件走 upload.begin/chunk/commit 与 download 分片。 */
-public interface IFilesRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IFilesRpc
 {
     [JsonRpcMethod(FilesProtocol.MethodFileRead)]
     Task<RemoteFileContent> ReadFileAsync(RemoteFilePath request, CancellationToken cancellationToken = default);
@@ -127,7 +133,8 @@ public interface IFilesRpc
 }
 
 /** Git 观察域。 */
-public interface IGitRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IGitRpc
 {
     [JsonRpcMethod(GitProtocol.MethodGitStatus)]
     Task<GitStatus> StatusAsync(RemoteGitRequest request, CancellationToken cancellationToken = default);
@@ -149,7 +156,8 @@ public interface IGitRpc
 }
 
 /** 出站网络配置域。 */
-public interface INetworkRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface INetworkRpc
 {
     [JsonRpcMethod(NetworkProtocol.MethodOutboundGet)]
     Task<RemoteOutboundProxyState> GetOutboundAsync(CancellationToken cancellationToken = default);
@@ -167,7 +175,8 @@ public interface INetworkRpc
     Task<bool> ReloadAsync(CancellationToken cancellationToken = default);
 }
 
-/** 通知历史域。 */public interface INotificationsRpc
+/** 通知历史域。 */[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface INotificationsRpc
 {
     [JsonRpcMethod(NotificationsProtocol.MethodNotifyList)]
     Task<RemoteNotifyPage> ListAsync(RemoteNotifyQuery? request, CancellationToken cancellationToken = default);
@@ -177,7 +186,8 @@ public interface INetworkRpc
 }
 
 /** 插件管理域。 */
-public interface IPluginsRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IPluginsRpc
 {
     [JsonRpcMethod(PluginsProtocol.MethodPluginsList)]
     Task<IReadOnlyList<RemotePluginInfo>> ListAsync(CancellationToken cancellationToken = default);
@@ -187,7 +197,8 @@ public interface IPluginsRpc
 }
 
 /** Pty 域: 输出走通知, 这里只管控制面。 */
-public interface IPtyRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IPtyRpc
 {
     [JsonRpcMethod(PtyProtocol.MethodPtyStart)]
     Task<RemotePtyRef> StartAsync(RemotePtyStartRequest request, CancellationToken cancellationToken = default);
@@ -209,7 +220,8 @@ public interface IPtyRpc
 }
 
 /** 会话编辑域。 */
-public interface ISessionEditingRpc
+[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface ISessionEditingRpc
 {
     [JsonRpcMethod(SessionEditingProtocol.MethodSessionCommand)]
     Task<RemoteCommandResult> ExecuteCommandAsync(RemoteCommandRequest request, CancellationToken cancellationToken = default);
@@ -230,7 +242,8 @@ public interface ISessionEditingRpc
     Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default);
 }
 
-/** 服务端对客户端发起的推送: 实现方在 host 端, 由客户端对象订阅。 */public interface IHostPush
+/** 服务端对客户端发起的推送: 实现方在 host 端, 由客户端对象订阅。 */[JsonRpcContract, GenerateShape(IncludeMethods = MethodShapeFlags.PublicInstance)]
+public partial interface IHostPush
 {
     [JsonRpcMethod(HostProtocol.NotificationEvent)]
     Task EventAsync(RemoteEventFrame frame, CancellationToken cancellationToken = default);
