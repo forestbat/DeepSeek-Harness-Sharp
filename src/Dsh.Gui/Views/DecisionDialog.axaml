@@ -111,6 +111,8 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
 
+        <TextBlock Classes="Tertiary" Text="每个问题都要先作答(选一个选项或直接输入)才能提交"
+                   TextWrapping="Wrap" IsVisible="{Binding !CanSubmit}" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
           <Button Classes="Primary" Content="提交"
                   Command="{Binding $parent[Window].((vm:DecisionViewModel)DataContext).SubmitCommand}"

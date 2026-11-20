@@ -29,7 +29,7 @@ public sealed class ChatWindowPaneTests : IDisposable
     private static readonly TimeSpan PanePollInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     [Fact]

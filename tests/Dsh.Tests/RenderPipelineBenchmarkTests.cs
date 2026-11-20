@@ -170,7 +170,7 @@ public class RenderPipelineBenchmarkTests
         const int height = 135;
         var markdownLines = MarkdownCorpus.Build(CorpusLines, width, Seed);
         var pixelLines = RenderBenchmarkTests.BuildPixelLines(CorpusLines, width, Seed);
-        var directory = Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/bench");
+        var directory = Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/bench");
         Directory.CreateDirectory(directory);
         var temp = Path.Combine(Path.GetTempPath(), $"dsh-terminal-bench-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temp);

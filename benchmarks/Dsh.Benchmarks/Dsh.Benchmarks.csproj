@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    微基准工程: BenchmarkDotNet 的硬性形态是独立 exe, 所以它不进解决方案、不参与默认构建,
+    需要时显式运行, 用法见 Program.cs 的类注释。
+    产物(BenchmarkDotNet.Artifacts)被重定向到仓库根的 artifacts/benchmarks/, 与其它构建产物同处。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- 基准必须跑在 Release 上, 用 Debug 量出来的数字没有意义。 -->
+    <Optimize>true</Optimize>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.16.0-preview.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Persistence\Dsh.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Tui\Dsh.Tui.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Compaction\Dsh.Compaction.csproj" />
+  </ItemGroup>
+
+</Project>

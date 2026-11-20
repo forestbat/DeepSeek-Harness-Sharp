@@ -20,6 +20,15 @@ public sealed class TranscriptRenderer
     private readonly Dictionary<ToolCallId, (string Name, string Arguments, TranscriptFold Fold)> _pendingToolCalls = [];
     private readonly List<int> _lineStarts = [];
     private readonly List<(int Start, UserMessage Message)> _userMessageStarts = [];
+
+    /**
+     * 转录文本的驻留上限(字符)。一段 1M 事件的会话光正文就上千万字符, 而屏幕只看得见最后一屏 ——
+     * 超过上限就在"安全点"(所有流式块都已闭合、最后一行已完整)把最老的整行连同它们的折叠/行起点一起丢掉,
+     * 丢掉的字数记在 DroppedChars 里。历史仍在磁盘上, 重新打开会话就能看到。
+     */
+    private const int MaxRetainedChars = 4 * 1024 * 1024;
+    private const int TrimTargetChars = MaxRetainedChars / 2;
+    private int _droppedChars;
     private readonly StringBuilder _tail = new();
     private int _tailStart;
     private bool _reasoningOpen;
@@ -58,6 +67,19 @@ public sealed class TranscriptRenderer
     }
 
     public IReadOnlyList<TranscriptFold> Folds => _folds;
+
+    /** 已被裁掉的头部字数: 绝对位置 = 当前偏移 + DroppedChars。 */
+    public int DroppedChars
+    {
+        get
+        {
+            lock (_buffer)
+                return _droppedChars;
+        }
+    }
+
+    /** 每裁一次自增: 行号与包裹行缓存已经位移, 消费方据此丢弃按行号缓存的状态。 */
+    public int TrimVersion { get; private set; }
 
     /** 线程安全快照(完成行+非空尾行的拷贝): 非 UI 线程的读取方(窗格读取工具)走这里, 不碰 UI 亲和的 CompletedLines/Tail。 */
     public IReadOnlyList<string> SnapshotLines()
@@ -104,6 +126,17 @@ public sealed class TranscriptRenderer
 
     public void AppendRaw(string text) => Append(text);
 
+    /**
+     * 窗口化会话的前缀不在内存里: 在转录顶端留一行说明。
+     * 什么都不画的话, 用户滚到顶只会看到记录"凭空开始", 会以为历史丢了。
+     */
+    public void AppendPrefixWindowNotice(long droppedEvents)
+    {
+        if (droppedEvents <= 0)
+            return;
+        Append($"\n⋯ 更早的 {droppedEvents} 条事件未载入内存(仍在会话日志里)\n");
+    }
+
     public void AppendSystemMessage(string text)
     {
         text = UserFacingText.StripSystemReminders(text);
@@ -139,6 +172,20 @@ public sealed class TranscriptRenderer
     }
 
     /**
+     * 已排上队(在 inbox 里等着)的用户消息。
+     * 它还不是 user/message 事件, 所以既不能当历史画, 也不能不画 —— 不画的话切走会话再切回来就"消失"了。
+     */
+    public void AppendQueuedUserMessage(UserMessage message)
+    {
+        var text = UserFacingText.StripSystemReminders(string.Concat(message.Content.OfType<TextBlock>().Select(block => block.Text)));
+        if (text.Length == 0)
+            return;
+        var imageNames = message.Content.OfType<ImageBlock>().Select(block => ImageName(block.Attachment)).ToList();
+        var suffix = imageNames.Count == 0 ? "" : $" [图片: {string.Join(", ", imageNames)}]";
+        Append($"\n⏸ 已排队: {text}{suffix}\n");
+    }
+
+    /**
      * 用户消息在全文里的起始偏移, 供 `/timestamp jump` 按消息(而不是按文本内容)定位:
      * 按文本找首个命中会跳到更早引用过同一句话的地方, 首行被折行时也找不到。
      */
@@ -155,6 +202,9 @@ public sealed class TranscriptRenderer
     /** 第 index 条用户消息的全文偏移(按渲染顺序); 越界返回 null。 */
     public int? UserMessageStartAt(int index)
         => index >= 0 && index < _userMessageStarts.Count ? _userMessageStarts[index].Start : null;
+
+    /** 当前仍留在转录里的用户消息条数: 裁头会丢早的消息, 跳转据此把序号前移。 */
+    public int UserMessageCount => _userMessageStarts.Count;
 
     /** 只显示文件名, 绝不渲染包含账户目录的完整路径。 */
     private static string ImageName(ImageAttachmentRef attachment)
@@ -196,7 +246,8 @@ public sealed class TranscriptRenderer
                     Start = toolStart,
                     End = _buffer.Length,
                     Label = "tool",
-                    Preview = $"⚙ {call.Name}",
+                    // 折叠头只给名字: 三角标记由渲染侧统一加(⚙ 在部分字体里缺字形, 会显示成 *).
+                    Preview = call.Name,
                     // 工具参数与结果可能很长: 展开后按 20 行分页, 而不是一次铺满屏幕。
                     Paged = true,
                 };
@@ -560,8 +611,51 @@ public sealed class TranscriptRenderer
             var baseOffset = _buffer.Length;
             _buffer.Append(text);
             UpdateLines(text, baseOffset);
+            TrimHeadIfOverBudget();
             BumpVersion();
         }
+    }
+
+    /**
+     * 只在安全点裁头: 尾部没有半行、没有悬空的代码围栏, 流式块也都闭合。
+     * 这样丢掉的是若干整行, 行起点、折叠区间与用户消息位置都只是整体平移, 不会切开任何一块。
+     */
+    private void TrimHeadIfOverBudget()
+    {
+        if (_buffer.Length <= MaxRetainedChars || _tail.Length > 0 || _codeFenceStart is not null)
+            return;
+        if (_reasoningOpen || _assistantOpen || _lines.Count <= 1)
+            return;
+        var cut = _buffer.Length - TrimTargetChars;
+        if (cut <= 0)
+            return;
+        // 对齐到一个行起点: 只从整行边界裁, 保证剩下的行起点仍然指向自己的文本。
+        var dropped = 0;
+        while (dropped < _lineStarts.Count && _lineStarts[dropped] <= cut)
+            dropped += 1;
+        if (dropped == 0 || dropped >= _lineStarts.Count)
+            return;
+        var trimAt = _lineStarts[dropped];
+        _buffer.Remove(0, trimAt);
+        _lines.RemoveRange(0, dropped);
+        _tints.RemoveRange(0, dropped);
+        _lineStarts.RemoveRange(0, dropped);
+        for (var index = 0; index < _lineStarts.Count; index += 1)
+            _lineStarts[index] -= trimAt;
+        _folds.RemoveAll(fold => fold.End <= trimAt);
+        foreach (var fold in _folds)
+        {
+            fold.Start = Math.Max(0, fold.Start - trimAt);
+            fold.End -= trimAt;
+        }
+        _userMessageStarts.RemoveAll(item => item.Start < trimAt);
+        for (var index = 0; index < _userMessageStarts.Count; index += 1)
+            _userMessageStarts[index] = (_userMessageStarts[index].Start - trimAt, _userMessageStarts[index].Message);
+        if (_reasoningFoldStart > 0)
+            _reasoningFoldStart = Math.Max(0, _reasoningFoldStart - trimAt);
+        _tailStart -= trimAt;
+        _droppedChars += trimAt;
+        TrimVersion += 1;
     }
 
     /** 把新追加的文本增量并入行列表: 完整行落定到 _lines, 末尾不足一行留在 _tail。 */

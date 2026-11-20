@@ -215,7 +215,7 @@ public sealed class ChoicePromptLlmSmokeTests
         public static async Task<RealTui> StartAsync(string arguments, string heading)
         {
             // Fail before CopyRealConfiguration can read a personal home, or a model request can escape.
-            var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+            var root = Path.Combine(TempTree.RepositoryRoot, "");
             var template = HarnessHome.Default();
             var qa = Environment.GetEnvironmentVariable(HarnessHome.HomeEnv);
             Assert.True(!string.IsNullOrWhiteSpace(qa), "Set DSH_HOME to an isolated project-local QA template before explicitly running this smoke.");

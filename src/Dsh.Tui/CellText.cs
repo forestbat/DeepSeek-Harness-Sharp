@@ -10,8 +10,9 @@ internal static class CellText
         string text,
         CellColor foreground = default,
         CellColor background = default,
-        CellStyle style = CellStyle.None)
-        => Draw(grid, x, y, text.AsSpan(), foreground, background, style);
+        CellStyle style = CellStyle.None,
+        bool literal = false)
+        => Draw(grid, x, y, text.AsSpan(), foreground, background, style, literal);
 
     public static void Draw(
         CellGrid grid,
@@ -20,10 +21,14 @@ internal static class CellText
         ReadOnlySpan<char> text,
         CellColor foreground = default,
         CellColor background = default,
-        CellStyle style = CellStyle.None)
+        CellStyle style = CellStyle.None,
+        bool literal = false)
     {
         if (y < 0 || y >= grid.Height || x >= grid.Width)
             return;
+        // 正文标记: 落屏时保留原字符(中文引号/省略号等不被替换成 ASCII)。
+        if (literal)
+            style |= CellStyle.Literal;
         var column = Math.Max(0, x);
         foreach (var raw in text)
         {

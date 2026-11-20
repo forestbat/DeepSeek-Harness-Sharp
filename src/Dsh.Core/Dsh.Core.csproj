@@ -13,12 +13,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
+    <PackageReference Include="JsonSchema.Net" Version="9.7.0" />
   </ItemGroup>
 
   <ItemGroup>
 
     <InternalsVisibleTo Include="Dsh.Agent" />
+    <InternalsVisibleTo Include="Dsh.Persistence" />
 
   </ItemGroup>
 

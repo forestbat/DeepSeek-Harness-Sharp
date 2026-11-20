@@ -106,8 +106,22 @@ public static class CommandMenuCatalog
     };
 }
 
+/**
+ * 命令结果的展示意图: 由命令自己声明, 前端据此决定要不要把文本当"消息"呈现。
+ * Info: 产出了给人看的内容, 不属于对话, 禁止写进转录(前端用浮层或状态行显示)。
+ * Silent: 只是状态转移(/new、/session <id>、/gpu 写入等), 最多在状态行留一句, 不开浮层。
+ */
+public enum CommandPresentation
+{
+    Info,
+    Silent,
+}
+
 public abstract record CommandResult
 {
+    /** 展示意图默认 Info: 老命令不改也会走浮层, 不会继续污染转录。 */
+    public CommandPresentation Presentation { get; init; } = CommandPresentation.Info;
+
     /** FollowupPrompt: "命令 + 提示词"里的提示词。命令结束(成功或失败)后由前端作为下一步用户消息发出。 */
     public sealed record Success(string? Text = null, long? SourceEventSeq = null, string? FollowupPrompt = null) : CommandResult;
 

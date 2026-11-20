@@ -20,7 +20,7 @@ public sealed class TerminalControlHeadlessTests
 {
     private static readonly TimeSpan OutputTimeout = TimeSpan.FromSeconds(5);
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "gui-screenshots"));
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch", "gui-screenshots"));
 
     [Fact]
     public async Task Typed_Text_Reaches_The_Pty_And_Resize_Reaches_The_Child() => await HeadlessGui.RunAsync(async () =>

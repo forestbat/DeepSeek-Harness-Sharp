@@ -10,10 +10,15 @@ public sealed class ScheduleLedger
 
     public IReadOnlyList<ScheduleRecord> Active => [.. _active];
 
+    /**
+     * 本会话自己的 schedule/change 事件描述的提醒。
+     * 只看常驻段: 窗口化恢复的会话里往前扫到第一条事件等于把整份日志按页读回来(383MB 会话实测 24s);
+     * 仍然有效的提醒每次派发都会再写一条 change, 所以尾部一段就足以还原"现在还有哪些"。
+     */
     public static ScheduleLedger Of(Session session)
     {
         var ledger = new ScheduleLedger();
-        foreach (var sessionEvent in session.OwnEvents())
+        foreach (var sessionEvent in session.SnapshotEvents(Math.Max(session.InheritedEventCount, session.ResidentFrom)))
         {
             if (sessionEvent.Data is ScheduleChangePayload payload)
                 ledger.Apply(payload.Change);

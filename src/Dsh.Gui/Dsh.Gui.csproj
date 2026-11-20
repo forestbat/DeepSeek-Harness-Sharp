@@ -9,6 +9,8 @@
     <ProjectReference Include="..\Dsh.Account\Dsh.Account.csproj" />
     <ProjectReference Include="..\Dsh.SessionQuery\Dsh.SessionQuery.csproj" />
     <ProjectReference Include="..\Dsh.RemoteHost.Contracts\Dsh.RemoteHost.Contracts.csproj" />
+    <!-- 会话历史按 TotalEventCount 续页: 单页快照只覆盖一段, 分页重载在具体客户端上。 -->
+    <ProjectReference Include="..\Dsh.RemoteHost.Client\Dsh.RemoteHost.Client.csproj" />
     <ProjectReference Include="..\Dsh.Workspace\Dsh.Workspace.csproj" />
     <ProjectReference Include="..\Dsh.Boot\Dsh.Boot.csproj" />
     <ProjectReference Include="..\Dsh.Core\Dsh.Core.csproj" />
@@ -23,9 +25,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.4" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>

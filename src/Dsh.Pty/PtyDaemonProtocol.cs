@@ -36,6 +36,23 @@ public static class PtyDaemonPaths
      */
     public static string SessionSizeFile(string sessionId, string? root = null)
         => Path.Combine(RunDirectory(root), $"size-{sessionId}");
+
+    /** pty 被杀/复活时清掉上一代的尺寸文件: 它只对那一代子进程有意义。 */
+    public static void DeleteSessionSize(string sessionId, string? root = null)
+    {
+        try
+        {
+            var path = SessionSizeFile(sessionId, root);
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 }
 
 public sealed class PtyDaemonRequest

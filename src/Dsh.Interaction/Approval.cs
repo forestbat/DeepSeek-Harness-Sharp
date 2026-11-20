@@ -80,29 +80,25 @@ public sealed class ApprovalService : Service, IApprovalService
     public static void SetApprovalPolicy(Session session, ApprovalPolicy policy)
         => session.Append(new ApprovalPolicyPayload(policy));
 
+    /**
+     * 会话里最后一次显式设置过的策略; 只看常驻尾窗。
+     * 窗口化恢复的会话往前扫到 seq 0 等于把整份日志按页读回来(实测 26s), 而策略是会话级设置, 最近的就在尾巴上。
+     */
     public static ApprovalPolicy? OverrideOf(Session session)
-    {
-        for (var seq = session.Seq - 1; seq >= 0; seq--)
-        {
-            if (session.EventAt(seq)?.Data is ApprovalPolicyPayload payload)
-                return payload.Policy;
-        }
-        return null;
-    }
+        => session.LastResidentEventWhere(sessionEvent => sessionEvent.Data is ApprovalPolicyPayload)?.Data
+            is ApprovalPolicyPayload payload
+            ? payload.Policy
+            : null;
 
-    /** 会话级授权: 只要该工具在本会话被「总是允许」过, 后续调用不再询问。 */
+    /**
+     * 会话级授权: 只要该工具在本会话被「总是允许」过, 后续调用不再询问。
+     * 同样只看常驻尾窗: 尾窗外的授权查不到就再问一次, 方向是更保守而不是更松。
+     */
     public static bool HasGrant(Session session, string toolName)
-    {
-        for (var seq = session.Seq - 1; seq >= session.InheritedEventCount; seq--)
-        {
-            if (session.EventAt(seq)?.Data is ApprovalGrantedPayload payload
+        => session.LastResidentEventWhere(sessionEvent =>
+                sessionEvent.Data is ApprovalGrantedPayload payload
                 && string.Equals(payload.ToolName, toolName, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+            is not null;
 
     public ApprovalPolicy EffectivePolicy(Session session) => OverrideOf(session) ?? _config.Policy;
     public bool IsDenied(IAgent agent) => EffectivePolicy(agent.Session) == ApprovalPolicy.Never;

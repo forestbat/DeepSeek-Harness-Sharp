@@ -17,7 +17,7 @@ namespace Dsh.Tests;
 public sealed class ChatPaneContextStatusTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -62,7 +62,8 @@ public sealed class ChatPaneContextStatusTests : IDisposable
 
         var status = chat.InputPane.StatusText;
         Assert.StartsWith("上下文 7.2k", status, StringComparison.Ordinal);
-        Assert.DoesNotContain("%", status, StringComparison.Ordinal);
+        // 容量未知时不编造"已用/总量"的分数; 状态行里其它百分比(如缓存命中率)与容量无关, 不在断言范围内。
+        Assert.DoesNotContain("上下文 7.2k/", status, StringComparison.Ordinal);
     }
 
     /** 没有任何用量时状态行保持原样, 不出现占位符噪音。 */

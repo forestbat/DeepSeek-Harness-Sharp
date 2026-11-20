@@ -264,6 +264,17 @@ public sealed class SafetyBoundary : Service
             decision.AutoApprove, decision.Decision, run?.Name, PermissionEngine.DialectName(PermissionEngine.DialectOf(run?.Name)),
             matchedFields, matchedPatterns, input.Path, input.Intent, run?.Agent?.Session.Id.Value,
             run?.CallId.Value, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), space, owner, outcome);
+        // 默认放行(autoApprove、未命中任何规则、也没有审批结果)不带信息, 却占到会话日志九成以上的事件量:
+        // 它不落盘, 只发通知供审计看板/遥测按需消费。拒绝、命中规则、以及带审批结果的决策照旧逐条落盘。
+        var persist = decision.Match is not null
+            || decision.Decision != "allow"
+            || !decision.AutoApprove
+            || outcome is not null;
+        if (!persist)
+        {
+            context.Emit(new SafetyDecisionNotification(payload));
+            return;
+        }
         if (run?.Agent is { } agent) agent.Session.Append(payload);
         else
         {

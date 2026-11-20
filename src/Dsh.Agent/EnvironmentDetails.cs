@@ -51,8 +51,12 @@ public static class EnvironmentDetails
     private static Dictionary<string, Snapshot> UserSnapshots(Session session)
     {
         var snapshots = new Dictionary<string, Snapshot>(StringComparer.Ordinal);
-        var workingDirectory = session.Header.Cwd ?? "";
-        foreach (var sessionEvent in session.SnapshotEvents())
+        // 窗口会话里只有尾巴上的消息会被追加事实块: 从常驻段起点折起, 不把前缀按页读回来。
+        // 窗口内的第一条消息若之前还有一次工作目录变更(在窗口之前), 它拿到的是当前工作目录而不是当时那个。
+        var workingDirectory = session.ResidentFrom > 0
+            ? session.WorkingDirectory ?? session.Header.Cwd ?? ""
+            : session.Header.Cwd ?? "";
+        foreach (var sessionEvent in session.ResidentEvents())
         {
             if (sessionEvent.Data is WorkingDirectoryChangedPayload change)
                 workingDirectory = change.Cwd;

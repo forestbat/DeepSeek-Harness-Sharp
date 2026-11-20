@@ -15,7 +15,7 @@ namespace Dsh.Tests;
 [Collection("TuiTheme")]
 public sealed class ChoicePromptTests : IDisposable
 {
-    private readonly string _home = Path.Combine(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")), Guid.NewGuid().ToString("N"));
+    private readonly string _home = Path.Combine(Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"), Guid.NewGuid().ToString("N"));
 
     [Fact]
     public void Defaults_DisabledAndValues_AreSharedByQuestionConsumers()
@@ -456,15 +456,24 @@ public sealed class ChoicePromptTests : IDisposable
         Assert.Equal(before, chat.RenderVersion);
         var pending = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         chat.InputPane.ShowQuestionPrompt(new([new("q", "Pick", Options: [new("A"), new("B")])]), pending);
-        chat.Draw(new CellGrid(80, 24), LayoutEngine.Calculate(80, 24));
-        before = chat.RenderVersion;
-        chat.HandleMouseMove(1, 2);
-        Assert.Equal(before, chat.RenderVersion);
-        chat.HandleMouseMove(1, 3);
-        Assert.True(chat.RenderVersion > before);
-        before = chat.RenderVersion;
-        chat.HandleMouseMove(2, 3);
-        Assert.Equal(before, chat.RenderVersion);
+        // 面板画在输入区内: 选项行相对输入区顶部是 标题(+1) → 选项(+1/+2)。
+        var promptLayout = LayoutEngine.Calculate(80, 24, null, 14);
+        chat.Draw(new CellGrid(80, 24), promptLayout);
+        // 面板内的行距随标题/描述变化: 逐行找一个"悬停会改高亮"的选项行, 再验证重复悬停不重绘。
+        var changed = false;
+        for (var y = promptLayout.Input.Y; y < promptLayout.Input.Bottom; y++)
+        {
+            before = chat.RenderVersion;
+            chat.HandleMouseMove(2, y);
+            if (chat.RenderVersion <= before)
+                continue;
+            changed = true;
+            before = chat.RenderVersion;
+            chat.HandleMouseMove(2, y);
+            Assert.Equal(before, chat.RenderVersion);
+            break;
+        }
+        Assert.True(changed, "面板里至少有一行选项会因悬停改变高亮");
         chat.HandleKey(Key(ConsoleKey.Escape));
     }
 

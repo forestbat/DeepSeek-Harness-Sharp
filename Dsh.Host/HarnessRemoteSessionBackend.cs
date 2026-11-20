@@ -4,7 +4,6 @@ using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.RemoteHost;
-using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Agent;
 
@@ -26,7 +25,8 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         }
         foreach (var agent in runtime.Registry.List())
         {
-            if (agent.Session.Header.IsSubagent || agent.Session.SnapshotEvents().Count == 0)
+            // 空会话判定只看序号: SnapshotEvents() 在窗口会话里会把整份日志按页读回来, 而这里只想知道有没有事件。
+            if (agent.Session.Header.IsSubagent || agent.Session.Seq == 0)
                 continue;
             byId[agent.Id.Value] = Describe(agent);
         }
@@ -56,24 +56,33 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         return Describe(handle.Agent);
     }
 
-    /** 返回整段历史; 分页由 RemoteHostServer 按帧预算切, 所以这里的 TotalEventCount 就是整段条数。 */
+    /** 返回历史的一段; 分页由 RemoteHostServer 按帧预算切, 所以这里的 TotalEventCount 是整段条数。 */
     public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken)
     {
         var id = SessionId.Create(sessionId);
         var approvals = runtime.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false);
         if (runtime.Store.Get(id) is { } session)
         {
-            var live = session.SnapshotEvents();
-            return Task.FromResult(new RemoteSessionSnapshot(session.Header, live, live.Count,
+            return Task.FromResult(new RemoteSessionSnapshot(session.Header, session.SnapshotEvents(), session.Seq,
                 approvals?.EffectivePolicy(session).ToString()));
         }
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read)
             ?? throw new InvalidOperationException($"unknown session: {sessionId}");
+        // 会话不在内存里时也要窗口化: 只为一个策略值和一页历史把 383MB 日志整段解析成事件不划算。
+        if (runtime.Persistence?.TryOpenWindow(id, SnapshotTailEvents) is { } window)
+        {
+            return Task.FromResult(new RemoteSessionSnapshot(handle.Header, window.Resident, window.TotalEvents,
+                approvals?.EffectivePolicy(window.Resident).ToString()));
+        }
+        // 窗口化不可用(无帧视图/索引损坏/尾窗读不出)才整段读。
         var events = handle.Read();
         // 只为一个策略值重建整篇派生状态(surface 折叠等)不划算: 策略就藏在事件流里。
         return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, events.Count,
             approvals?.EffectivePolicy(events).ToString()));
     }
+
+    /** 窗口化打开的尾窗: 服务一页历史足够, 剩下的按页取。 */
+    private const int SnapshotTailEvents = 20_000;
 
     public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
     {
@@ -134,9 +143,10 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         {
             if (notification.Session.Id != id)
                 return;
-            buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, Reset: true));
-            foreach (var item in notification.Session.SnapshotEvents())
-                buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, item));
+            // 撤回(就地截断)只告诉读者"保留到第几条": 客户端按序号删掉自己那边的尾部即可,
+            // 把整段历史再灌一遍会让界面整屏重建, 用户看到视口先跳到会话头再被一趟趟拉回末尾。
+            buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId,
+                TruncatedTo: notification.EventCount, TruncatedAt: notification.At));
         });
         ValueTask Release()
         {
@@ -147,12 +157,15 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         }
         try
         {
+            var start = reset ? 0 : fromSeq;
+            var total = session?.Seq ?? stored?.EventCount;
+            // 客户端通常已经拿到整段快照再来订阅: 起点追平条数时没必要为一片空白解析整份日志。
+            // 起点落后时只读 [start, total) —— 带长度的读走命中帧, 不必展开整份日志。
             var history = session is not null
-                ? session.SnapshotEvents(reset ? 0 : fromSeq)
-                // 客户端通常已经拿到整段快照再来订阅: 起点追平条数时没必要为一片空白解析整份日志。
-                : !reset && stored?.EventCount is { } total && fromSeq >= total
+                ? session.SnapshotEvents(start)
+                : total is { } known && start >= known
                     ? []
-                    : ReadPersisted(id, reset ? 0 : fromSeq);
+                    : ReadPersisted(id, start, total);
             return Task.FromResult(new RemoteHostStream<RemoteSessionEvent>(
                 LiveEventsAsync(sessionId, history, buffer, fromSeq, reset, cancellationToken), Release));
         }
@@ -198,12 +211,12 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
     private static RemoteSessionSummary Describe(SessionHeader header)
         => new(header.Id.Value, header.Cwd ?? "", "Idle", header.CreatedAt, header.Title, null, header.CreatedAt);
 
+    /** 最近一条非空的用户消息; 只看常驻尾窗, 否则窗口化恢复的会话会为一句摘要把整份日志按页读回来。 */
     private static string? Summarize(Session session)
     {
-        var events = session.SnapshotEvents();
-        for (var index = events.Count - 1; index >= 0; index--)
+        for (var seq = session.Seq - 1; seq >= session.ResidentFrom; seq--)
         {
-            if (events[index].Data is not UserMessagePayload { Message.Source: UserMessageSource } user)
+            if (session.EventAt(seq)?.Data is not UserMessagePayload { Message.Source: UserMessageSource } user)
                 continue;
             var text = string.Concat(user.Message.Content.OfType<TextBlock>().Select(block => block.Text));
             if (text.Length > 0)
@@ -215,14 +228,20 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
     /** 最后事件时间; 播种会话(fork)的最后一条事件带着父会话的旧时间, 所以以创建时间为下界。 */
     private static long LastEventTime(Session session)
     {
-        var events = session.SnapshotEvents();
-        return events.Count == 0 ? session.Header.CreatedAt : Math.Max(events[^1].Time, session.Header.CreatedAt);
+        // 只取最后一条: SnapshotEvents() 在窗口会话里等于把整份日志读回来。
+        var seq = session.Seq;
+        var last = seq > 0 ? session.EventAt(seq - 1) : null;
+        return last is null ? session.Header.CreatedAt : Math.Max(last.Time, session.Header.CreatedAt);
     }
 
 
-    private IReadOnlyList<SessionEvent> ReadPersisted(SessionId id, long fromSeq)
+    private IReadOnlyList<SessionEvent> ReadPersisted(SessionId id, long fromSeq, long? totalEvents)
     {
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read);
-        return handle is null ? [] : handle.Read(fromSeq);
+        if (handle is null)
+            return [];
+        // 带上长度: 句柄据此只解压在范围内命中帧(索引可信时是几十毫秒), 而不是把整份日志展开成事件数组。
+        // 总量未知(实现不数事件)时才退回无长度的整份读。
+        return totalEvents is { } total ? handle.Read(fromSeq, total - fromSeq) : handle.Read(fromSeq);
     }
 }

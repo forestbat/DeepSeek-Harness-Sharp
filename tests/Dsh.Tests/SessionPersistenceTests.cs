@@ -22,7 +22,13 @@ public class SessionPersistenceTests : IDisposable
     {
         foreach (var root in _roots)
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -41,7 +47,8 @@ public class SessionPersistenceTests : IDisposable
         session.Append(new StepStartPayload(1, 1));
         for (var index = 0; index < 5; index += 1)
             session.Append(new AssistantChunkPayload(1, 1, new StreamChunk.TextDelta(0, $"tok{index}")));
-        var message = new AssistantMessagePayload(1, 1, MessageFactory.CreateAssistantMessage([new TextBlock("done")], "deepseek", "deepseek-chat"));
+        var message = new AssistantMessagePayload(1, 1,
+            MessageFactory.CreateAssistantMessage([new TextBlock("done")], "deepseek", "deepseek-chat"));
         session.Append(message, new SurfaceOp.Append(), [2, 3, 4, 6]);
         session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
         return session;
@@ -51,8 +58,12 @@ public class SessionPersistenceTests : IDisposable
     {
         Assert.Equal(expected.Count, actual.Count);
         foreach (var (left, right) in expected.Zip(actual))
-            Assert.Equal(JsonSerializer.Serialize(left, DshJson.Options), JsonSerializer.Serialize(right, DshJson.Options));
+            Assert.Equal(JsonSerializer.Serialize(left, DshJson.Options),
+                JsonSerializer.Serialize(right, DshJson.Options));
     }
+
+    /** 绕过租约直接追加的字节数: 只要让长度变化就够, 内容无所谓。 */
+    private const int ForeignAppendBytes = 85;
 
     private static string LogPathOf(string root, SessionHeader header, JsonlCompression compression)
         => JsonlLayout.LogPath(root, header.Cwd, header.Id, compression);
@@ -154,7 +165,10 @@ public class SessionPersistenceTests : IDisposable
         handle.Close();
 
         var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
-        var tornFrame = ZstdFrames.CompressFrame(Encoding.UTF8.GetBytes("{\"type\":\"session/end-seed\",\"seq\":99,\"time\":1700000002000,\"data\":{}}\n"));
+        var tornFrame =
+            ZstdFrames.CompressFrame(
+                Encoding.UTF8.GetBytes(
+                    "{\"type\":\"session/end-seed\",\"seq\":99,\"time\":1700000002000,\"data\":{}}\n"));
         using (var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write))
         {
             stream.Write(tornFrame.AsSpan(0, tornFrame.Length / 2));
@@ -190,13 +204,15 @@ public class SessionPersistenceTests : IDisposable
             .Select(index => Encoding.UTF8.GetBytes($"frame-{index}-中文-" + new string((char)('a' + index), 500)))
             .ToArray();
         var buffer = payloads.SelectMany(payload => ZstdFrames.CompressFrame(payload)).ToArray();
-        var (frames, tornStart) = ZstdFrames.Scan(buffer);
+        var scanned = ZstdFrames.Scan(buffer);
 
-        Assert.Equal(payloads.Length, frames.Count);
-        Assert.Null(tornStart);
-        var reused = ZstdFrames.DecompressFrames(frames, buffer);
+        Assert.Equal(payloads.Length, scanned.Frames.Count);
+        Assert.Null(scanned.TornStart);
+        Assert.Empty(scanned.Damaged);
+        var reused = ZstdFrames.DecompressFrames(scanned.Frames, buffer);
         var perFrame = ZstdFrames.Scan(buffer).Frames
-            .Select(frame => ZstdFrames.DecompressFrame(buffer.AsSpan(frame.Start, frame.End - frame.Start), frame.Start))
+            .Select(frame =>
+                ZstdFrames.DecompressFrame(buffer.AsSpan(frame.Start, frame.End - frame.Start), frame.Start))
             .SelectMany(bytes => bytes)
             .ToArray();
 
@@ -204,33 +220,149 @@ public class SessionPersistenceTests : IDisposable
         Assert.Equal(payloads.SelectMany(bytes => bytes).ToArray(), reused);
     }
 
+    /**
+     * 知道每帧明文长度时按总和一次开够目标数组, 省掉扩容与多一次拷贝;
+     * 但长度只是"优化提示": 帧头把长度写错时一个字节也不能少, 必须退回长度不可知的路径重解一遍。
+     */
+    [Fact]
+    public void DecompressFrames_ExactSizesYieldTheSameBytes_AndIgnoreSizesThatLie()
+    {
+        var payloads = Enumerable.Range(0, 5)
+            .Select(index => Encoding.UTF8.GetBytes($"sized-{index}-中文-" + new string((char)('a' + index), 400)))
+            .ToArray();
+        var buffer = payloads.SelectMany(payload => ZstdFrames.CompressFrame(payload)).ToArray();
+        var frames = ZstdFrames.Scan(buffer).Frames;
+        var sizes = ZstdFrames.PlaintextSizes(buffer, frames);
+        Assert.NotNull(sizes);
+
+        var expected = payloads.SelectMany(bytes => bytes).ToArray();
+        var exact = ZstdFrames.DecompressFrames(frames, buffer, 0, sizes);
+        Assert.Equal(expected, exact);
+        Assert.Equal(ZstdFrames.DecompressFrames(frames, buffer, 0), exact);
+
+        var shortSizes = (long[])sizes!.Clone();
+        shortSizes[^1] -= 10;
+        Assert.Equal(expected, ZstdFrames.DecompressFrames(frames, buffer, 0, shortSizes));
+
+        var longSizes = (long[])sizes.Clone();
+        longSizes[^1] += 10;
+        Assert.Equal(expected, ZstdFrames.DecompressFrames(frames, buffer, 0, longSizes));
+
+        var noSizes = (long[])sizes.Clone();
+        noSizes[^1] = 0;
+        Assert.Equal(expected, ZstdFrames.DecompressFrames(frames, buffer, 0, noSizes));
+    }
+
+    /**
+     * 缺页重读: 取一窗只解压命中的帧。
+     * 判据是"坏帧在窗口之外也能读到窗口" —— 如果实现退化成全量解压, 中段坏帧会让整次读取失败。
+     */
+    [Fact]
+    public void ReadWindow_DecompressesOnlyTheFramesItNeeds()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root,
+            writeBatch: new JsonlWriteBatch(MaxEvents: 2, Interval: TimeSpan.FromHours(1)));
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
+        using (var writer = persistence.Create(session.Header))
+        {
+            foreach (var sessionEvent in events)
+                writer.Append([sessionEvent]);
+        }
+
+        var index = SessionLogIndex.TryLoad(logPath);
+        Assert.NotNull(index);
+        Assert.Equal(events.Count, index.EventCount);
+        Assert.True(index.Frames.Count > 3);
+
+        var full = File.ReadAllBytes(logPath);
+        var frames = ZstdFrames.Scan(full).Frames;
+        var broken = frames[2];
+        full[broken.Start + (broken.End - broken.Start) / 2] ^= 0xFF;
+        File.WriteAllBytes(logPath, full);
+        // 帧边界没变, 索引仍然信得过 —— 这正是"只解压命中帧"的前提。
+        Assert.NotNull(SessionLogIndex.TryLoad(logPath));
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        var window = reader.Read(events.Count - 2, 2);
+        Assert.Equal(2, window.Count);
+        Assert.Equal(events[^2].Seq, window[0].Seq);
+        Assert.Equal(events[^1].Seq, window[1].Seq);
+
+        // 全量读取会撞上那个坏帧并丢掉它那一帧的事件(整份日志仍然可读), 窗口读取则根本不碰它。
+        var all = reader.Read();
+        Assert.True(all.Count > 0);
+        Assert.True(all.Count < events.Count);
+        reader.Close();
+    }
+
+    /** 日志被重写(revert)后索引对不上, 必须退回全量解析, 而不是读出一段错位的窗口。 */
+    [Fact]
+    public void ReadWindow_FallsBackWhenTheIndexNoLongerMatchesTheFile()
+    {
+        var root = NewRoot();
+        using var persistence = new JsonlSessionPersistence(root,
+            writeBatch: new JsonlWriteBatch(MaxEvents: 2, Interval: TimeSpan.FromHours(1)));
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
+        using (var writer = persistence.Create(session.Header))
+        {
+            foreach (var sessionEvent in events)
+                writer.Append([sessionEvent]);
+        }
+
+        Assert.NotNull(SessionLogIndex.TryLoad(logPath));
+        // 手工截短到"半个帧 + 少量字节": 结构对不上, 索引必须判失效。
+        var bytes = File.ReadAllBytes(logPath);
+        File.WriteAllBytes(logPath, bytes[..(bytes.Length / 2)]);
+        Assert.Null(SessionLogIndex.TryLoad(logPath));
+
+        using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        var window = reader.Read(1, 2);
+        Assert.All(window, item => Assert.InRange(item.Seq, 1, 2));
+        reader.Close();
+    }
+
     /** 定时落盘会在读取期间从另一线程追加, 读取必须放行写入(Windows 上 File.ReadAllBytes 只共享读, 会和追加流冲突)。 */
     private static int FrameCount(string logPath)
     {
-        using var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var stream =
+            new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return ZstdFrames.Scan(buffer.ToArray()).Frames.Count;
     }
 
-    /** 流式 chunk 先缓冲, 遇到非 chunk 事件才连同之前的 chunk 写成一个帧; 最后一批写坏时之前的批次完好。 */
+    /**
+     * 攒批与提交点: 消息/工具调用/回合边界不再单独成帧, 只有数量上限、Flush 与 Close 才把缓冲写成一帧;
+     * 最后一批写坏时之前的批次完好。
+     */
     [Fact]
-    public void StreamChunks_AreBatchedUntilBoundaryEvent()
+    public void StreamChunks_AreBatchedUntilFlush()
     {
         var root = NewRoot();
-        using var persistence = new JsonlSessionPersistence(root, writeBatch: new JsonlWriteBatch(MaxEvents: 1000, Interval: TimeSpan.FromHours(1)));
+        using var persistence = new JsonlSessionPersistence(root,
+            writeBatch: new JsonlWriteBatch(MaxEvents: 1000, Interval: TimeSpan.FromHours(1)));
         var session = BuildSourceSession(TestCwd);
         var events = session.SnapshotEvents();
         var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
         var handle = persistence.Create(session.Header);
 
         handle.Append(events.Take(2).ToArray());
+        // 首次落盘(物化)是立即发生的: 日志文件的存在与可见性依赖它。
+        Assert.True(File.Exists(logPath));
         var framesAfterBoundary = FrameCount(logPath);
         foreach (var chunk in events.Skip(2).Take(5))
             handle.Append([chunk]);
         Assert.Equal(framesAfterBoundary, FrameCount(logPath));
 
+        // 边界事件(assistant/message)也只进缓冲: 帧粒度按批, 不按事件类型。
         handle.Append([events[7]]);
+        Assert.Equal(framesAfterBoundary, FrameCount(logPath));
+        handle.Flush();
         Assert.Equal(framesAfterBoundary + 1, FrameCount(logPath));
 
         var bytes = File.ReadAllBytes(logPath);
@@ -244,6 +376,59 @@ public class SessionPersistenceTests : IDisposable
         handle.Close();
     }
 
+    /**
+     * 崩溃语义: 进程在两次落盘之间被杀, 丢的只是当前预算窗口里的事件; 已落盘的那部分仍然可读,
+     * 而且文件可以被下一个写者接着写(不需要人工修复)。
+     *
+     * 判据都落在"磁盘上的字节"上: 把日志与索引复制成一份"崩溃快照", 让另一个 root 的持久化去读它,
+     * 这样就不会因为内存里还留着缓冲而误判落盘成功。
+     */
+    [Fact]
+    public void Crash_BetweenBatches_LosesOnlyTheCurrentWindow_AndTheLogStaysAppendable()
+    {
+        var root = TempTree.CreateDirectory("session-crash-writer");
+        _roots.Add(root);
+        var survivorRoot = TempTree.CreateDirectory("session-crash-survivor");
+        _roots.Add(survivorRoot);
+        using var persistence = new JsonlSessionPersistence(root,
+            writeBatch: new JsonlWriteBatch(MaxEvents: 1000, Interval: TimeSpan.FromHours(1)));
+        var session = BuildSourceSession(TestCwd);
+        var events = session.SnapshotEvents();
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
+        var handle = persistence.Create(session.Header);
+
+        handle.Append(events.Take(2).ToArray());
+        // 窗口内的事件还留在缓冲里: 不 Flush 就等于这一刻被杀。
+        handle.Append(events.Skip(2).Take(5).ToArray());
+
+        // 崩溃快照: 只有日志与索引, 没有租约(持有者已经不在了)。
+        var survivorLog = LogPathOf(survivorRoot, session.Header, JsonlCompression.Zstd);
+        Directory.CreateDirectory(Path.GetDirectoryName(survivorLog)!);
+        File.Copy(logPath, survivorLog, overwrite: true);
+        File.Copy(SessionLogIndex.PathFor(logPath), SessionLogIndex.PathFor(survivorLog), overwrite: true);
+
+        // 索引只含完整帧: 缓冲里那 5 条没有在索引里留下半帧条目, 结构校验仍然通过。
+        var index = SessionLogIndex.TryLoad(survivorLog);
+        Assert.NotNull(index);
+        Assert.Equal(2, index.EventCount);
+
+        using var survivor = new JsonlSessionPersistence(survivorRoot);
+        using (var reader = survivor.Open(session.Header.Id, SessionAccess.Read))
+            AssertEventsEqual(events.Take(2).ToArray(), reader.Read().ToArray());
+
+        // 可续: 下一个写者接着写, 日志不需要人工修复。
+        using (var writer = survivor.Open(session.Header.Id, SessionAccess.Write))
+            writer.Append([events[2]]);
+        using (var reader = survivor.Open(session.Header.Id, SessionAccess.Read))
+            AssertEventsEqual(events.Take(3).ToArray(), reader.Read().ToArray());
+
+        // 原进程继续跑(等价于它没被杀): Flush 之后窗口里的事件都在。
+        handle.Flush();
+        handle.Close();
+        using var recovered = persistence.Open(session.Header.Id, SessionAccess.Read);
+        AssertEventsEqual(events.Take(7).ToArray(), recovered.Read().ToArray());
+    }
+
     /** 缓冲的 chunk 在数量上限、定时器到点、Flush 与 Close 时都会落盘。 */
     [Fact]
     public async Task StreamChunks_DrainOnLimitTimerFlushAndClose()
@@ -253,7 +438,8 @@ public class SessionPersistenceTests : IDisposable
         var events = session.SnapshotEvents();
         var chunks = events.Skip(2).Take(5).ToArray();
         var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
-        using (var limited = new JsonlSessionPersistence(root, writeBatch: new JsonlWriteBatch(MaxEvents: 3, Interval: TimeSpan.FromHours(1))))
+        using (var limited = new JsonlSessionPersistence(root,
+                   writeBatch: new JsonlWriteBatch(MaxEvents: 3, Interval: TimeSpan.FromHours(1))))
         {
             var handle = limited.Create(session.Header);
             handle.Append(events.Take(2).ToArray());
@@ -270,7 +456,8 @@ public class SessionPersistenceTests : IDisposable
 
         var timedRoot = NewRoot();
         var timedLog = LogPathOf(timedRoot, session.Header, JsonlCompression.Zstd);
-        using var timed = new JsonlSessionPersistence(timedRoot, writeBatch: new JsonlWriteBatch(MaxEvents: 1000, Interval: TimeSpan.FromMilliseconds(20)));
+        using var timed = new JsonlSessionPersistence(timedRoot,
+            writeBatch: new JsonlWriteBatch(MaxEvents: 1000, Interval: TimeSpan.FromMilliseconds(20)));
         var timedHandle = timed.Create(session.Header);
         timedHandle.Append(events.Take(2).ToArray());
         var timedBaseline = FrameCount(timedLog);
@@ -282,6 +469,60 @@ public class SessionPersistenceTests : IDisposable
     }
 
     /** 会话活着时日志可能正被追加流持有(追加流只共享读), 这时读取会话不能失败。 */
+    /**
+     * 帧预算按**编码后的真实字节**结算: 每帧明文都不超过预算, 且帧边界只落在行边界上。
+     *
+     * 判据用"同一批事件、只换预算"的对照: 预算砍到 1/4, 帧数必须显著变多。
+     * 只要预算没按真实字节生效(比如退化成按条数), 两次的帧数就会一样, 这条用例立刻红。
+     */
+    [Fact]
+    public void FrameBudget_IsSettledOnEncodedBytes_AndFramesReadBackWhole()
+    {
+        // 每条消息约 1 KB 明文, 400 条 ≈ 400 KB, 在 64 KB / 256 KB 两档预算下都够切出多帧。
+        var events = Enumerable.Range(0, 400).Select(index => new SessionEvent
+        {
+            Type = SessionEventTypes.UserMessage,
+            Seq = index,
+            Time = 1_700_000_000_000 + index,
+            Data = new UserMessagePayload(MessageFactory.CreateUserMessage(
+                [new TextBlock($"{index:D4} {new string('x', 1000)}")])),
+        }).ToArray();
+
+        var framesOf = (int budget) =>
+        {
+            var root = NewRoot();
+            var session = BuildSourceSession(TestCwd);
+            var logPath = LogPathOf(root, session.Header, JsonlCompression.Zstd);
+            using (var persistence = new JsonlSessionPersistence(root,
+                       writeBatch: new JsonlWriteBatch(JsonlWriteBatch.DefaultMaxEvents, TimeSpan.FromHours(1))
+                       {
+                           MaxPlaintextBytes = budget,
+                       }))
+            {
+                var handle = persistence.Create(session.Header);
+                handle.Append(events);
+                handle.Close();
+            }
+
+            var bytes = File.ReadAllBytes(logPath);
+            var sizes = ZstdFrames.PlaintextSizes(bytes, ZstdFrames.Scan(bytes).Frames);
+            Assert.NotNull(sizes);
+            // 帧明文(取自帧头)一帧都不该超过预算: 这就是"按真实字节切"的直接后果。
+            foreach (var size in sizes.Skip(1))
+                Assert.True(size <= budget, $"预算 {budget}B 下有一帧明文 {size}B, 超出了一帧该有的量");
+
+            using var reopened = new JsonlSessionPersistence(root);
+            using var reader = reopened.Open(session.Header.Id, SessionAccess.Read);
+            // 被切开的帧仍要完整读回: 打包行跨不过边界, 事件一条不少。
+            AssertEventsEqual(events, reader.Read().ToArray());
+            return sizes.Length;
+        };
+
+        var wide = framesOf(256 * 1024);
+        var narrow = framesOf(64 * 1024);
+        Assert.True(narrow >= wide * 2, $"预算减到 1/4 帧数却只从 {wide} 变成 {narrow}: 预算没有按字节生效");
+    }
+
     [Fact]
     public void Read_WhileAnAppendStreamHoldsTheLog_Succeeds()
     {
@@ -293,7 +534,8 @@ public class SessionPersistenceTests : IDisposable
         handle.Append(events);
         handle.Close();
 
-        using (new FileStream(LogPathOf(root, session.Header, JsonlCompression.Zstd), FileMode.Append, FileAccess.Write, FileShare.Read))
+        using (new FileStream(LogPathOf(root, session.Header, JsonlCompression.Zstd), FileMode.Append, FileAccess.Write,
+                   FileShare.Read))
         {
             var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
             AssertEventsEqual(events, reader.Read().ToArray());
@@ -308,7 +550,8 @@ public class SessionPersistenceTests : IDisposable
         var id = SessionId.Create(Guid.NewGuid().ToString("N"));
         var path = JsonlLayout.LogPath(root, TestCwd, id, JsonlCompression.None);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, $"{{\"type\":\"session\",\"version\":1,\"id\":\"{id.Value}\",\"createdAt\":1,\"delegationDepth\":0}}\n");
+        File.WriteAllText(path,
+            $"{{\"type\":\"session\",\"version\":1,\"id\":\"{id.Value}\",\"createdAt\":1,\"delegationDepth\":0}}\n");
 
         using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
         Assert.Throws<SessionFormatUnsupportedException>(() => persistence.Open(id, SessionAccess.Read));
@@ -440,8 +683,8 @@ public class SessionPersistenceTests : IDisposable
     {
         var root = NewRoot();
         using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
-        Assert.Throws<SessionPersistenceNotFoundException>(
-            () => persistence.Open(SessionId.Create("missing"), SessionAccess.Read));
+        Assert.Throws<SessionPersistenceNotFoundException>(() =>
+            persistence.Open(SessionId.Create("missing"), SessionAccess.Read));
     }
 
     [Fact]
@@ -492,7 +735,8 @@ public class SessionPersistenceTests : IDisposable
         var id = SessionId.Create(Guid.NewGuid().ToString("N"));
         var path = JsonlLayout.LogPath(root, null, id, JsonlCompression.None);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, $"{{\"type\":\"session\",\"version\":0,\"id\":\"{id.Value}\",\"createdAt\":1,\"delegationDepth\":0}}\n");
+        File.WriteAllText(path,
+            $"{{\"type\":\"session\",\"version\":0,\"id\":\"{id.Value}\",\"createdAt\":1,\"delegationDepth\":0}}\n");
 
         using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
         var snapshot = persistence.Stat(id);
@@ -585,7 +829,8 @@ public class SessionPersistenceTests : IDisposable
         Assert.Null(persistence.Stat(session.Header.Id));
         Assert.False(File.Exists(logPath));
         Assert.Throws<SessionHandleClosedException>(() => handle.Read());
-        Assert.Throws<SessionPersistenceNotFoundException>(() => persistence.Open(session.Header.Id, SessionAccess.Read));
+        Assert.Throws<SessionPersistenceNotFoundException>(() =>
+            persistence.Open(session.Header.Id, SessionAccess.Read));
     }
 
     [Fact]
@@ -624,21 +869,29 @@ public class SessionPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void Open_MissingEventBeforeTurnEnd_StillReportsCorruption()
+    public void Open_MissingEventBeforeTurnEnd_OpensWithReadablePrefix()
     {
         var root = NewRoot();
-        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None);
         var session = BuildSourceSession(TestCwd);
-        using (var writer = persistence.Create(session.Header))
+        var expected = session.SnapshotEvents().Count;
+        using (var writer =
+               new JsonlSessionPersistence(root, compression: JsonlCompression.None).Create(session.Header))
             writer.Append(session.SnapshotEvents());
         var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
         var lines = File.ReadAllLines(logPath);
         File.WriteAllLines(logPath, [.. lines[..3], .. lines[4..]]);
 
+        // 序号断裂是损伤, 不是"整份日志有毒": 会话照常打开, 只装载能读出来的部分, 磁盘上的字节保持原样。
+        var warned = new List<string>();
+        using var persistence = new JsonlSessionPersistence(root, compression: JsonlCompression.None, warn: warned.Add);
         using var reader = persistence.Open(session.Header.Id, SessionAccess.Read);
+        var events = reader.Read().ToArray();
 
-        var error = Assert.Throws<SessionPersistenceCorruptionException>(() => reader.Read());
-        Assert.Contains("seq gap", error.Message);
+        Assert.NotEmpty(events);
+        Assert.True(events.Length < expected);
+        for (var index = 0; index < events.Length; index += 1)
+            Assert.Equal(index, events[index].Seq);
+        Assert.Contains(warned, message => message.Contains("unreadable log record", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -651,9 +904,17 @@ public class SessionPersistenceTests : IDisposable
         var writer = first.Create(session.Header);
         writer.Append(events.Take(2).ToArray());
         writer.Flush();
+
+        // 第二个写者现在在拿写权时就被租约挡住, 而不是让它先写、再由长度检查事后发现。
         using (var second = new JsonlSessionPersistence(root, compression: JsonlCompression.None))
-        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
-            rival.Append(events.Skip(2).Take(1).ToArray());
+        {
+            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
+        }
+
+        // 绕过租约直接改文件仍要挡住: 长度检查是最后一道绊线。
+        var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
+        using (var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write))
+            stream.Write(new byte[ForeignAppendBytes]);
 
         writer.Append(events.Skip(2).Take(1).ToArray());
 
@@ -677,16 +938,17 @@ public class SessionPersistenceTests : IDisposable
         var writer = first.Create(session.Header);
         writer.Append(events.Take(2).ToArray());
         first.Rename(session.Header.Id, "A longer renamed session title");
+
+        // 第二个写者拿不到写权; 它既不能推进日志, 也不会打断当前写者的改名/追加。
         using (var second = new JsonlSessionPersistence(root, compression: compression))
-        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
-            rival.Append(events.Skip(2).Take(1).ToArray());
+        {
+            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
+        }
 
         writer.Append(events.Skip(2).Take(1).ToArray());
-        var flushError = Record.Exception(writer.Flush);
-        var closeError = Record.Exception(writer.Close);
+        writer.Flush();
+        writer.Close();
 
-        Assert.IsType<SessionPersistenceCorruptionException>(flushError);
-        Assert.IsType<SessionPersistenceCorruptionException>(closeError);
         using var reader = first.Open(session.Header.Id, SessionAccess.Read);
         AssertEventsEqual(events.Take(3).ToArray(), reader.Read());
     }
@@ -725,16 +987,17 @@ public class SessionPersistenceTests : IDisposable
         using var first = new JsonlSessionPersistence(root, compression: compression);
         using var writer = first.Create(session.Header);
         writer.Append(events.Take(2).ToArray());
+        // 第二个写者拿写权就被租约挡住(不再有"先写进去、改名时才发现"的窗口)。
         using (var second = new JsonlSessionPersistence(root, compression: compression))
-        using (var rival = second.Open(session.Header.Id, SessionAccess.Write))
-            rival.Append(events.Skip(2).Take(1).ToArray());
+            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
+
+        // 绕过租约直接改文件仍要在改名时被长度检查挡住。
+        var logPath = LogPathOf(root, session.Header, compression);
+        using (var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write))
+            stream.Write(new byte[ForeignAppendBytes]);
 
         Assert.Throws<SessionPersistenceCorruptionException>(() =>
             first.Rename(session.Header.Id, "A longer renamed session title"));
-
-        using var reader = first.Open(session.Header.Id, SessionAccess.Read);
-        Assert.Null(reader.Header.Title);
-        AssertEventsEqual(events.Take(3).ToArray(), reader.Read());
     }
 
     [Theory]

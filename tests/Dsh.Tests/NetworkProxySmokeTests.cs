@@ -951,7 +951,7 @@ public sealed class NetworkProxySmokeTests
 
     private static string SurfaceEvidence(string name)
     {
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+        var root = Path.Combine(TempTree.RepositoryRoot, "");
         return Path.Combine(root, ".artifacts", "network-gui", $"{name}-{Guid.NewGuid():N}");
     }
 

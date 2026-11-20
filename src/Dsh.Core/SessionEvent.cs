@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dsh.Llm;
@@ -8,15 +10,75 @@ namespace Dsh.Core;
 [JsonConverter(typeof(SessionEventJsonConverter))]
 public sealed record SessionEvent
 {
+    private SessionEventPayload? _data;
+    private ReadOnlyMemory<byte> _rawRecord;
+
+    public SessionEvent()
+    {
+    }
+
+    /**
+     * 惰性负载的构造入口: 只给信封, `data` 留到真正访问 Data 时再从原始记录里解出来。
+     * 原始记录指向"解码时那一帧的明文数组", 一帧的记录共用同一个数组, 所以每条事件不额外分配。
+     */
+    [SetsRequiredMembers]
+#pragma warning disable CS8618 // Data 由 getter 从原始记录物化, 构造时有意不填
+    internal SessionEvent(string type, long seq, long time, bool ignorable, SurfaceOp? surfaceOp,
+        IReadOnlyList<long>? sourceEventSeqs, ReadOnlyMemory<byte> rawRecord)
+#pragma warning restore CS8618
+    {
+        Type = type;
+        Seq = seq;
+        Time = time;
+        Ignorable = ignorable;
+        SurfaceOp = surfaceOp;
+        SourceEventSeqs = sourceEventSeqs;
+        _rawRecord = rawRecord;
+    }
+
     public required string Type { get; init; }
     public required long Seq { get; init; }
     public required long Time { get; init; }
-    public required SessionEventPayload Data { get; init; }
+
+    /**
+     * 负载。窗口读取时它是惰性的: 切窗与折叠只用得到信封, 把 2 万条事件的 payload 全物化是白花的。
+     * 全量读取不走惰性 —— 那条路径要把整份日志留在内存里, 逐条留原始记录等于明文再存一份。
+     */
+    public required SessionEventPayload Data
+    {
+        get
+        {
+            if (_data is { } cached)
+                return cached;
+            var payload = SessionEventCodec.DecodeRecordPayload(_rawRecord);
+            // 解出来就不再压着那一帧明文: 否则整帧数组会被单条消息一直吊着。
+            _rawRecord = default;
+            return _data = payload;
+        }
+        init => _data = value;
+    }
+
     public bool Ignorable { get; init; }
     public SurfaceOp? SurfaceOp { get; init; }
     public IReadOnlyList<long>? SourceEventSeqs { get; init; }
 
     public bool IsSurfaceEligible => SessionEventTypes.SurfaceEligible.Contains(Type);
+
+    /**
+     * 记录生成的相等性会比较所有字段, 包括惰性负载的缓存状态 —— 那样"同一条记录, 一条已物化一条没有"就不相等了。
+     * 相等性只认信封与已解出的负载。
+     */
+    public bool Equals(SessionEvent? other)
+        => other is not null
+            && Type == other.Type
+            && Seq == other.Seq
+            && Time == other.Time
+            && Ignorable == other.Ignorable
+            && Equals(SurfaceOp, other.SurfaceOp)
+            && (SourceEventSeqs ?? []).SequenceEqual(other.SourceEventSeqs ?? [])
+            && Equals(Data, other.Data);
+
+    public override int GetHashCode() => HashCode.Combine(Type, Seq, Time, Ignorable);
 }
 
 public static class SessionEventCodec
@@ -29,7 +91,7 @@ public static class SessionEventCodec
     private static readonly ConcurrentDictionary<string, Registration> Registrations = new(StringComparer.Ordinal);
 
     /** ref struct 不能作为泛型实参, 所以这里用专门的委托类型而不是 Action<...>。 */
-    private delegate void PayloadReader(ref Utf8JsonReader reader, JsonSerializerOptions options, PayloadSlot slot);
+    private delegate SessionEventPayload PayloadReader(ref Utf8JsonReader reader, JsonSerializerOptions options);
 
     /**
      * 类型 -> 直接从 reader 读 payload 的分支。
@@ -39,11 +101,8 @@ public static class SessionEventCodec
      */
     private static readonly ConcurrentDictionary<string, PayloadReader> Readers = new(StringComparer.Ordinal);
 
-    /** 直接读取的结果容器: 用可变槽位把 payload 带出 ref struct 调用。 */
-    public sealed class PayloadSlot
-    {
-        public SessionEventPayload? Value { get; set; }
-    }
+    /** 注册表里每个类型标签的 UTF-8 字节: 逐行判断"是不是已知类型"时不必为每行分配一个 string。 */
+    private static volatile byte[][] _tags = [];
 
     static SessionEventCodec()
     {
@@ -82,9 +141,10 @@ public static class SessionEventCodec
             static (payload, writer, options) => DshJson.Serialize(writer, payload),
             ignorable);
         // payload 类型由 DshJson 的全局解析器提供; 传入的 options 只覆盖会话外壳那几个类型。
-        Readers[type] = static (ref Utf8JsonReader reader, JsonSerializerOptions options, PayloadSlot slot) =>
-            slot.Value = JsonSerializer.Deserialize(ref reader, DshJson.Info<T>())
+        Readers[type] = static (ref Utf8JsonReader reader, JsonSerializerOptions _) =>
+            JsonSerializer.Deserialize(ref reader, DshJson.Info<T>())
                 ?? throw new JsonException("invalid session payload");
+        RefreshTags();
     }
 
     /**
@@ -103,9 +163,25 @@ public static class SessionEventCodec
             reader,
             (payload, w, options) => writer((T)payload, w, options),
             ignorable);
+        RefreshTags();
     }
 
-    public static bool IsRegistered(string type) => Registrations.ContainsKey(type);    public static bool IsIgnorable(string type) => Registrations.TryGetValue(type, out var registration) && registration.Ignorable;
+    private static void RefreshTags()
+        => _tags = [.. Registrations.Keys.Select(Encoding.UTF8.GetBytes)];
+
+    public static bool IsRegistered(string type) => Registrations.ContainsKey(type);
+
+    /** 已知类型判定不分配: 逐行解析时每行都会问一次, 为它解码一个 string 是纯开销。 */
+    public static bool IsRegisteredUtf8(ReadOnlySpan<byte> utf8Type)
+    {
+        foreach (var tag in _tags)
+            if (utf8Type.SequenceEqual(tag))
+                return true;
+        // 快照里没有: 可能是真的不认识的类型, 也可能只是刚注册还没进快照, 退回按 string 查。
+        return Registrations.ContainsKey(Encoding.UTF8.GetString(utf8Type));
+    }
+
+    public static bool IsIgnorable(string type) => Registrations.TryGetValue(type, out var registration) && registration.Ignorable;
 
     /**
      * 直接从 reader 读 data。返回 false 表示这个类型没有直读分支(插件自定义类型等), 调用方需退回 JsonElement 路径。
@@ -115,21 +191,35 @@ public static class SessionEventCodec
     {
         if (Readers.TryGetValue(type, out var read))
         {
-            var slot = new PayloadSlot();
-            read(ref reader, options, slot);
-            payload = slot.Value ?? throw new JsonException($"invalid \"{type}\" payload");
+            payload = read(ref reader, options);
             return true;
         }
         payload = null!;
         return false;
     }
 
+    /**
+     * 惰性负载的物化: 把整条记录再解一遍, 取它的 payload。
+     * 复用完整解码器而不是另写一个只解 data 的分支 —— 未知类型、旧格式拒绝、通道校验都在那一条路上, 分叉就会走偏。
+     */
+    internal static SessionEventPayload DecodeRecordPayload(ReadOnlyMemory<byte> record)
+    {
+        if (record.IsEmpty)
+            throw new JsonException("session event has no payload source");
+        var decoded = JsonSerializer.Deserialize(record.Span, DshJson.Info<SessionEvent>())
+            ?? throw new JsonException("stored session record deserialized to null");
+        return decoded.Data;
+    }
+
     public static SessionEventPayload ReadPayload(string type, JsonElement data, bool ignorable, JsonSerializerOptions options)
-    {        if (Registrations.TryGetValue(type, out var registration))
+    {
+        if (Registrations.TryGetValue(type, out var registration))
             return registration.Reader(data, options);
-        if (ignorable)
-            return new UnknownSessionEventPayload(type, data.Clone());
-        throw new JsonException($"unrecognized session event type \"{type}\" without the ignorable marker");
+        // 本 harness 不认识的类型一律按**不透明记录**保留, 不再按 ignorable 标记决定读不读得下来:
+        // 丢掉它们会逼着读侧重排序号, 而序号一重排, sourceEventSeqs 与 surfaceOp.start 指向的节点就全错位
+        // (实测让尾窗一路退到文件开头, resume 从 0.3 s 变 3 s)。原样保留则序号与指向关系都成立。
+        _ = ignorable;
+        return new UnknownSessionEventPayload(type, data.Clone());
     }
 
     public static void WritePayload(SessionEventPayload payload, Utf8JsonWriter writer, JsonSerializerOptions options)

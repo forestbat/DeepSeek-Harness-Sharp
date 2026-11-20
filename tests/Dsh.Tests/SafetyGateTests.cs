@@ -74,6 +74,28 @@ public sealed class SafetyGateTests : IDisposable
         Assert.False(result.IsError, TextOf(result));
         Assert.True(File.Exists(target));
         Assert.Empty(Asked());
+        // 命中默认放行的决策只发通知, 不写会话日志: 这类"我允许了"占日志九成以上的事件量却不带信息。
+        Assert.Empty(SafetyAudits());
+    }
+
+    [Fact]
+    public async Task AutoApprove_DenialsStillPersistAnAuditEvent()
+    {
+        ConfigureSafety("autoApprove: true");
+        var target = Path.Combine(_outside, "outside-denied.txt");
+        HarnessSettings.Update(_home, settings =>
+        {
+            settings.Safety!.Blacklist["deny-outside-write"] = new() { Path = target, Intent = "write" };
+            return true;
+        });
+
+        var result = await Execute(WriteTool.ToolName, new JsonObject { ["file_path"] = target, ["content"] = "x" });
+
+        Assert.True(result.IsError);
+        var audit = Assert.Single(SafetyAudits());
+        Assert.Equal("deny", audit.Decision);
+        Assert.Equal("deny-outside-write", audit.RuleId);
+        Assert.Equal(_session.Id.Value, audit.SessionId);
     }
 
     [Fact]

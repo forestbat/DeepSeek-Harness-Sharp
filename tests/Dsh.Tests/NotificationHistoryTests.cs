@@ -8,8 +8,7 @@ public sealed class NotificationHistoryTests : IDisposable
 {
     private static readonly DateTimeOffset Start = new(2026, 10, 1, 8, 0, 0, TimeSpan.Zero);
 
-    private readonly string _directory = Path.GetFullPath(Path.Combine(
-        AppContext.BaseDirectory, "../../../../../artifacts020/test-tmp", $"notifications-{Guid.NewGuid():N}"));
+    private readonly string _directory = Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-tmp", $"notifications-{Guid.NewGuid():N}");
 
 
     private string FilePath => Path.Combine(_directory, "history.json");

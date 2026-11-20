@@ -18,7 +18,7 @@ namespace Dsh.Tests;
 public sealed class ToolOutputContractTests : IDisposable
 {
     private readonly string _directory = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         $"contract-{Guid.NewGuid():N}");
 
     /** 每个已注册工具声明的输出 schema 都必须能被校验器支持: 不支持的写法等于没有契约。 */

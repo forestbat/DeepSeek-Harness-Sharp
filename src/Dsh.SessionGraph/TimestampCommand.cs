@@ -62,20 +62,30 @@ public static class TimestampCommand
         var session = invocation.Agent.Session;
         var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
         var cwd = session.Header.Cwd;
-        if (ctx.Get<CheckpointService>(CheckpointService.ServiceName, false) is { } restore
-            && cwd is { Length: > 0 })
+        // 文件恢复可能根本没发生: 检查点插件没启用、或该位置之前没有检查点。
+        // 以前这两种情况都静默跳过并回一句"reverted", 用户以为文件回到过去了, 实际只有会话被截断。
+        var files = "files not restored: the checkpoints plugin is disabled (enable @deepseek-ai/dsh-checkpoints)";
+        if (ctx.Get<CheckpointService>(CheckpointService.ServiceName, false) is { } restore)
         {
-            try
+            if (cwd is not { Length: > 0 })
+                files = "files not restored: this session has no working directory";
+            else
             {
-                await restore.RestoreToSeqAsync(cwd, seq, invocation.Signal);
-            }
-            catch (Exception error) when (error is InvalidOperationException or IOException)
-            {
-                return new CommandResult.Error($"files were not restored ({error.Message}); the session was left untouched");
+                try
+                {
+                    var point = await restore.RestoreToSeqAsync(cwd, seq, invocation.Signal);
+                    files = point is null
+                        ? "files not restored: no checkpoint at or before this message"
+                        : $"files restored to checkpoint {point}";
+                }
+                catch (Exception error) when (error is InvalidOperationException or IOException)
+                {
+                    return new CommandResult.Error($"files were not restored ({error.Message}); the session was left untouched");
+                }
             }
         }
         return session.TryTruncateTo(boundary)
-            ? new CommandResult.Success($"reverted to before #{boundary}; #{seq} is back in the input area")
+            ? new CommandResult.Success($"reverted to before #{boundary}; {files}; #{seq} is back in the input area")
             : new CommandResult.Error($"#{seq} cannot be truncated: only this session's own events can be dropped");
     }
 

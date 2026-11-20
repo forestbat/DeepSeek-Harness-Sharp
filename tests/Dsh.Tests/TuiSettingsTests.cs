@@ -10,7 +10,7 @@ namespace Dsh.Tests;
 public sealed class TuiSettingsTests : IDisposable
 {
     private readonly string _homeDir = Path.Combine(
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/test-homes")),
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/test-homes"),
         Guid.NewGuid().ToString("N"));
 
     public void Dispose() => TempTree.Delete(_homeDir);

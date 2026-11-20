@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="11.0.0" />
     <!-- Managed, static P/Invoke providers only; SQLite itself is an optional system dependency. -->
     <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="3.0.5" />
     <PackageReference Include="SQLitePCLRaw.provider.winsqlite3" Version="3.0.5" />

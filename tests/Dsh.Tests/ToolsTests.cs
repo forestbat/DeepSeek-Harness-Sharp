@@ -497,6 +497,116 @@ public partial class ToolsTests : IDisposable
             var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "zzz-absent", path = _outer._tempDir }, DshJson.Options), agent);
             Assert.Equal("No matches found", TextOf(result));
         }
+
+        [Fact]
+        public async Task Grep_SkipsBinaryExtensionsWithoutOpeningThem()
+        {
+            SeedTree();
+            File.WriteAllText(_outer.TempPath("frame.png"), "needle inside a png\n");
+            var agent = new FakeAgent(_outer._ctx, _outer._tempDir);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle", path = _outer._tempDir }, DshJson.Options), agent);
+            var text = TextOf(result);
+            Assert.StartsWith("Found 2 matches", text);
+            Assert.DoesNotContain("frame.png", text);
+            Assert.Contains("skipped 1 binary or oversized file", text);
+        }
+
+        [Fact]
+        public async Task Grep_SkipsFilesOverTheSizeCapAndSaysSo()
+        {
+            const int oversized = 5 * 1024 * 1024;
+            File.WriteAllText(_outer.TempPath("huge.log"), new string('x', oversized) + "\nneedle in the tail\n");
+            File.WriteAllText(_outer.TempPath("small.txt"), "needle in a small file\n");
+            var agent = new FakeAgent(_outer._ctx, _outer._tempDir);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle", path = _outer._tempDir }, DshJson.Options), agent);
+            var text = TextOf(result);
+            Assert.StartsWith("Found 1 match", text);
+            Assert.Contains("small.txt", text);
+            Assert.DoesNotContain("huge.log", text);
+            Assert.Contains("skipped 1 binary or oversized file", text);
+        }
+
+        [Fact]
+        public async Task Grep_StopsEarlyAtTheMatchCapAndReportsIt()
+        {
+            for (var index = 0; index < 300; index += 1)
+                File.WriteAllText(_outer.TempPath($"file-{index:D3}.txt"), "needle\n");
+            var agent = new FakeAgent(_outer._ctx, _outer._tempDir);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle", path = _outer._tempDir }, DshJson.Options), agent);
+            var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+            Assert.Equal(250, value.GetProperty("matches").GetArrayLength());
+            Assert.True(value.GetProperty("stoppedEarly").GetBoolean());
+            Assert.Contains("stopped after reaching 250 matches", TextOf(result));
+        }
+
+        [Fact]
+        public async Task Grep_DefaultSearchPrunesBuildOutputDirectoriesAndSaysSo()
+        {
+            var repo = Directory.CreateDirectory(_outer.TempPath("repo")).FullName;
+            WriteFile(repo, "src/alpha.txt", "needle in source\n");
+            WriteFile(repo, "artifacts/build.log", "needle in artifacts\n");
+            WriteFile(repo, "artifacts020/old.log", "needle in artifacts020\n");
+            WriteFile(repo, "bin/Debug/out.txt", "needle in bin\n");
+            WriteFile(repo, "obj/tmp.txt", "needle in obj\n");
+            WriteFile(repo, "node_modules/pkg/index.js", "needle in node_modules\n");
+            WriteFile(repo, ".git/ignored.txt", "needle in git\n");
+            var agent = new FakeAgent(_outer._ctx, repo);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle" }, DshJson.Options), agent);
+            Assert.False(result.IsError, TextOf(result));
+            var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+            var paths = value.GetProperty("matches").EnumerateArray().Select(match => match.GetProperty("path").GetString()).ToList();
+            Assert.Equal(["src/alpha.txt"], paths);
+            Assert.Equal(5, value.GetProperty("skippedDirectories").GetInt32());
+            Assert.Contains("pruned 5 build-output directories (pass path to search them)", TextOf(result));
+        }
+
+        [Fact]
+        public async Task Grep_ExplicitPathInsidePrunedDirectoryIsStillSearched()
+        {
+            var repo = Directory.CreateDirectory(_outer.TempPath("repo")).FullName;
+            WriteFile(repo, "artifacts/build.log", "needle in artifacts\n");
+            WriteFile(repo, "bin/Debug/out.txt", "needle in bin\n");
+            var agent = new FakeAgent(_outer._ctx, repo);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle", path = "artifacts" }, DshJson.Options), agent);
+            Assert.False(result.IsError, TextOf(result));
+            var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+            var paths = value.GetProperty("matches").EnumerateArray().Select(match => match.GetProperty("path").GetString()).ToList();
+            // 显式 path 会先被 CanonicalFilePath 大写化(Windows), 因此目录段的大小写跟着请求走。
+            Assert.Equal("artifacts/build.log", Assert.Single(paths), ignoreCase: true);
+            Assert.Equal(0, value.GetProperty("skippedDirectories").GetInt32());
+            Assert.DoesNotContain("pruned", TextOf(result));
+        }
+
+        private static void WriteFile(string root, string relativePath, string content)
+        {
+            var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+    }
+
+    /** 墙钟预算: 树再大也不许把调用方卡住 —— 到点就带着已有结果返回, 并说明这次没搜全。 */
+    public sealed class SearchTimeBudget : IDisposable
+    {
+        private readonly ToolsTests _outer = new();
+
+        public SearchTimeBudget() => GrepTool.Register(_outer._ctx, new GrepToolCaps { TimeoutMs = 1 });
+
+        public void Dispose() => _outer.Dispose();
+
+        [Fact]
+        public async Task Grep_StopsAtTheTimeBudgetAndSaysSo()
+        {
+            // 1 ms 预算 + 400 个文件: 从第二个文件起必然超时, 断言的是"超时会收场并说明", 不是精确耗时。
+            for (var index = 0; index < 400; index += 1)
+                File.WriteAllText(_outer.TempPath($"file-{index:D3}.txt"), "needle\n");
+            var agent = new FakeAgent(_outer._ctx, _outer._tempDir);
+            var result = await _outer.Execute("grep", JsonSerializer.Serialize(new { pattern = "needle", path = _outer._tempDir }, DshJson.Options), agent);
+            var value = Assert.IsType<ToolExecutionResult.Success>(result).Value;
+            Assert.True(value.GetProperty("stoppedEarly").GetBoolean());
+            Assert.True(value.GetProperty("timedOut").GetBoolean());
+            Assert.Contains("stopped at the time budget", TextOf(result));
+        }
     }
 
     public sealed class Todo : IDisposable

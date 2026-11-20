@@ -27,6 +27,7 @@ internal sealed class StreamCollector : IDisposable
     private static readonly UTF8Encoding LenientUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
     private readonly int _maxBytes;
     private readonly int? _spillMaxBytes;
+    private readonly string _spillDirectory;
     private readonly object _gate = new();
     private MemoryStream _tail = new();
     private FileStream? _spill;
@@ -35,10 +36,11 @@ internal sealed class StreamCollector : IDisposable
     private bool _spillOverflowed;
     private bool _finished;
 
-    public StreamCollector(int maxBytes, int? spillMaxBytes)
+    public StreamCollector(int maxBytes, int? spillMaxBytes, string spillDirectory)
     {
         _maxBytes = maxBytes;
         _spillMaxBytes = spillMaxBytes;
+        _spillDirectory = spillDirectory;
     }
 
     public long TotalBytes
@@ -117,11 +119,10 @@ internal sealed class StreamCollector : IDisposable
         }
     }
 
-    private static FileStream CreateSpill(out string path)
+    private FileStream CreateSpill(out string path)
     {
-        var directory = Path.Combine(Path.GetTempPath(), "dsh-spill");
-        Directory.CreateDirectory(directory);
-        path = Path.Combine(directory, $"{Guid.NewGuid():N}.log");
+        Directory.CreateDirectory(_spillDirectory);
+        path = Path.Combine(_spillDirectory, $"{Guid.NewGuid():N}.log");
         return new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
     }
 
@@ -353,11 +354,18 @@ public sealed class SubprocessService : Service, IDisposable
     public const string ScriptPermissionsNotice = " scripts.permissions controls this executor's workspace read/write and network access while sandbox.enabled is ON; runtime inputs and private scratch are technical grants. Host-role plugins and other process tools are not constrained by these script permissions.";
 
     private static readonly Regex SensitiveEnvPattern = new("KEY|PASSWORD|SECRET|TOKEN", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /** 没有存储配置(独立组合/单元测试)时溢出的落点, 与历史位置一致。 */
+    private const string FallbackSpillDirectoryName = "dsh-spill";
     private readonly List<SubprocessHandle> _running = [];
     private readonly object _gate = new();
+    private readonly string _spillDirectory;
 
     public SubprocessService(Context ctx) : base(ctx, ServiceName)
     {
+        // 溢出原文跟随存储配置落到 <storage.root>/spill, 不再写系统临时目录。
+        _spillDirectory = DshPaths.FromContext(ctx)?.SpillPath
+            ?? Path.Combine(Path.GetTempPath(), FallbackSpillDirectoryName);
     }
 
     public static Dictionary<string, string> ScrubbedParentEnv()
@@ -437,8 +445,8 @@ public sealed class SubprocessService : Service, IDisposable
         {
             process = await startAsync(spec, executable, temporaryDirectory).ConfigureAwait(false);
             var handle = new SubprocessHandle(process,
-                new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
-                new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),
+                new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes, _spillDirectory),
+                new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes, _spillDirectory),
                 spec, temporaryDirectory);
             if (!spec.KeepStandardInputOpen)
                 handle.StandardInput.Close();
@@ -493,8 +501,8 @@ public sealed class SubprocessService : Service, IDisposable
             process.StandardInput.Close();
         var handle = new SubprocessHandle(
             process,
-            new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes),
-            new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes),
+            new StreamCollector(spec.Stdout.MaxBytes, spec.Stdout.SpillMaxBytes, _spillDirectory),
+            new StreamCollector(spec.Stderr.MaxBytes, spec.Stderr.SpillMaxBytes, _spillDirectory),
             spec.Signal);
         Track(handle);
         return handle;

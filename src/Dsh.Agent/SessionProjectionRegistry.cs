@@ -50,7 +50,7 @@ public sealed class SessionProjectionRegistry : Service
                 Advance(cell, session, session.Seq - 1);
                 return cell;
             }
-            var built = Build(session, session.SnapshotEvents());
+            var built = Build(session, session.ResidentEvents());
             _cells.Add(session, built);
             return built;
         }
@@ -90,7 +90,8 @@ public sealed class SessionProjectionRegistry : Service
             }
             else
             {
-                cell = Build(session, session.SnapshotEvents(0, sessionEvent.Seq));
+                // 从常驻段起点折起: 窗口会话的前缀不在内存里, 为算一个投影状态把它按页读回来不值得。
+                cell = Build(session, session.SnapshotEvents(session.ResidentFrom, sessionEvent.Seq));
                 _cells.Add(session, cell);
             }
             cell.State = definition.Apply(cell.State, sessionEvent);

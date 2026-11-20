@@ -109,7 +109,13 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
     /**
      * 推理强度解析顺序: 端点 /models 的实时元数据 → 内置 models.dev 快照(baseUrl 主机名命中 provider) → 端点探测结果。
      * 上下文窗口与输入模态取自 models.dev 快照。
+     * 目录(models.dev)没有这个模型时(自建中转站常见), 用端点 /models 自报的上下文窗口兜底。
      */
+    public override Task<int?> ProbeContextWindowAsync(string model, CancellationToken cancellationToken)
+        => _discoveredModels is { } source
+            ? source.EnsureContextWindowAsync(model, cancellationToken)
+            : Task.FromResult<int?>(null);
+
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
         var reasoning = _metadata.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model) ?? ReasoningForUnknownModel(model);

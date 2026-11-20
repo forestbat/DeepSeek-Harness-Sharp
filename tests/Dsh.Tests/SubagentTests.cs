@@ -356,6 +356,46 @@ public class SubagentTests
     }
 
     [Fact]
+    public async Task SpawnDelegation_ChildToolsWorkWhenSafetyAutoApproves()
+    {
+        var root = TempTree.CreateDirectory("subagent-auto");
+        var home = HarnessHome.Resolve(Path.Combine(root, "home"));
+        Directory.CreateDirectory(home.Root);
+        await File.WriteAllTextAsync(home.SettingsFile, "safety:\n  autoApprove: true\n",
+            TestContext.Current.CancellationToken);
+        try
+        {
+            using var fixture = new SubagentFixture(
+            [
+                _ => ToolCallAnswer("call-sub-1", "subagent", """{"description":"auto task","prompt":"use a tool"}"""),
+                _ => ToolCallAnswer("call-child-1", "list_agents", "{}"),
+                _ => TextAnswer("child done"),
+                _ => TextAnswer("parent ok"),
+            ], home: home);
+            _ = new SafetyPolicySource(fixture.Ctx, HarnessSettings.CreatePolicyReader(home, HarnessSettings.Load(home)));
+            var parent = await fixture.CreateParent("session-parent-child-tools");
+
+            parent.Followup(MessageFactory.CreateUserText("start"));
+            await parent.WhenIdle();
+
+            var child = fixture.ChildOf(parent.Id);
+            Assert.NotNull(child);
+            Assert.Equal(ApprovalPolicy.Never, fixture.Approval.EffectivePolicy(child));
+            var events = child.SnapshotEvents().Select(item => item.Data).ToList();
+            var result = Assert.Single(events.OfType<ToolResultPayload>(), payload =>
+                payload.Message.Content.Count > 0);
+            Assert.Null(result.Error);
+            Assert.DoesNotContain(events.OfType<SafetyDecisionAuditPayload>(), audit => audit.Outcome == "rejected");
+            // 默认放行的决策不再逐条落盘(见 SafetyPolicyBoundary.RecordDecision), 所以这里看的是"子代理真的跑成了",
+            // 而不是"有一条 allow 审计"。拒绝一类的决策仍然必须出现在审计里, 由上一条断言守着。
+        }
+        finally
+        {
+            TempTree.Delete(root);
+        }
+    }
+
+    [Fact]
     public async Task ForkDelegation_ChildInheritsCompletedTurnPrefix()
     {
         using var fixture = new SubagentFixture(

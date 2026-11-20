@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -56,6 +57,22 @@ public sealed class TerminalInputParser
     private static readonly byte[] PasteStart = "\u001b[200~"u8.ToArray();
     private static readonly byte[] PasteEnd = "\u001b[201~"u8.ToArray();
     private const int MaxPasteBytes = 8 * 1024 * 1024;
+
+    /** xterm 修饰键参数 = 1 + 位掩码: Shift=1、Alt=2、Ctrl=4、Super=8。 */
+    private const int ModifierParameterBase = 1;
+    private const int ModifierBitShift = 1;
+    private const int ModifierBitAlt = 2;
+    private const int ModifierBitControl = 4;
+
+    /** modifyOtherKeys 的键码前缀: `ESC [ 27 ; 修饰 ; codepoint ~`。 */
+    private const int ModifyOtherKeysCode = 27;
+
+    /** CSI-u 事件类型: 1 按下、2 重复、3 释放。 */
+    private const int KeyEventPress = 1;
+
+    /** 认不出的键: 键名与字符同时为空, `TryParse` 据此丢弃整条序列(超出 BMP 的码点也走这里)。 */
+    private static readonly ConsoleKeyInfo NoKey = new('\0', ConsoleKey.NoName, false, false, false);
+
     private readonly List<byte> _pending = [];
     private readonly Queue<TerminalInputEvent> _ready = new();
 
@@ -233,10 +250,19 @@ public sealed class TerminalInputParser
             return false;
 
         var parameters = Encoding.ASCII.GetString(_pending.ToArray(), 2, end - 2);
-        input = TerminalInputEvent.FromKey(CsiKey((char)_pending[end], parameters));
+        var final = (char)_pending[end];
+        input = TerminalInputEvent.FromKey(CsiKey(final, parameters));
+        if (input.Key.Key == ConsoleKey.NoName && input.Key.KeyChar == '\0')
+            Trace.TraceInformation($"unhandled CSI sequence: final='{final}' (0x{(int)final:x2}), parameters=\"{EscapeForLog(parameters)}\"");
         consumed = end + 1;
         return true;
     }
+
+    /** 日志里的不可打印字节转成 `\xNN`, 免得原始字节把日志行搅乱。 */
+    private static string EscapeForLog(string parameters)
+        => string.Concat(parameters.Select(value => value is >= ' ' and < '\u007f'
+            ? value.ToString()
+            : $"\\x{(int)value:x2}"));
 
     private static ConsoleKeyInfo ControlKey(byte value)
     {
@@ -277,6 +303,11 @@ public sealed class TerminalInputParser
 
     private static ConsoleKeyInfo CsiKey(char final, string parameters)
     {
+        if (final == 'u')
+            return CsiUKey(parameters);
+        if (final == '~' && TryModifyOtherKeys(parameters, out var modified))
+            return modified;
+
         var key = final switch
         {
             'A' => ConsoleKey.UpArrow,
@@ -311,6 +342,82 @@ public sealed class TerminalInputParser
             _ => ConsoleKey.NoName,
         };
         return new ConsoleKeyInfo('\0', key, false, false, false);
+    }
+
+    /**
+     * kitty 键盘协议的 CSI-u 形式: `ESC [ codepoint[;修饰[:事件]] u`。
+     * 只有按下事件产生输入, 重复/释放(`codepoint;3:3u`、`codepoint;3:2u`)与组合码点一律不产出键。
+     */
+    private static ConsoleKeyInfo CsiUKey(string parameters)
+    {
+        var fields = parameters.Split(';');
+        if (fields.Length > 2 || !int.TryParse(fields[0].Split(':')[0], out var codePoint))
+            return NoKey;
+        if (fields.Length == 1)
+            return CodePointKey(codePoint, ConsoleModifiers.None);
+
+        var modifiers = fields[1].Split(':');
+        if (!int.TryParse(modifiers[0], out var modifierParameter))
+            return NoKey;
+        if (modifiers.Length > 1 && (!int.TryParse(modifiers[1], out var eventType) || eventType != KeyEventPress))
+            return NoKey;
+        return CodePointKey(codePoint, ModifiersOf(modifierParameter));
+    }
+
+    /** `ESC [ 27 ; 修饰 ; codepoint ~`: 参数不是这一形状时返回 false, 交回普通键码表。 */
+    private static bool TryModifyOtherKeys(string parameters, out ConsoleKeyInfo key)
+    {
+        key = default;
+        var parts = parameters.Split(';');
+        if (parts.Length != 3
+            || !int.TryParse(parts[0], out var code)
+            || code != ModifyOtherKeysCode
+            || !int.TryParse(parts[1], out var modifierParameter)
+            || !int.TryParse(parts[2], out var codePoint))
+            return false;
+        key = CodePointKey(codePoint, ModifiersOf(modifierParameter));
+        return true;
+    }
+
+    private static ConsoleModifiers ModifiersOf(int modifierParameter)
+    {
+        var bits = modifierParameter - ModifierParameterBase;
+        var modifiers = ConsoleModifiers.None;
+        if ((bits & ModifierBitShift) != 0)
+            modifiers |= ConsoleModifiers.Shift;
+        if ((bits & ModifierBitAlt) != 0)
+            modifiers |= ConsoleModifiers.Alt;
+        if ((bits & ModifierBitControl) != 0)
+            modifiers |= ConsoleModifiers.Control;
+        return modifiers;
+    }
+
+    /** codepoint + 修饰键 → 按键; 超出单个 UTF-16 码元或本身不可映射(代理区/控制码)时返回 NoKey。 */
+    private static ConsoleKeyInfo CodePointKey(int codePoint, ConsoleModifiers modifiers)
+    {
+        var shift = (modifiers & ConsoleModifiers.Shift) != 0;
+        var alt = (modifiers & ConsoleModifiers.Alt) != 0;
+        var control = (modifiers & ConsoleModifiers.Control) != 0;
+        if (codePoint is 8 or 0x7f)
+            return new ConsoleKeyInfo('\0', ConsoleKey.Backspace, shift, alt, control);
+        if (codePoint == 0x09)
+            return new ConsoleKeyInfo('\t', ConsoleKey.Tab, shift, alt, control);
+        if (codePoint is 0x0a or 0x0d)
+            return new ConsoleKeyInfo('\r', ConsoleKey.Enter, shift, alt, control);
+        if (codePoint == 0x1b)
+            return new ConsoleKeyInfo('\0', ConsoleKey.Escape, shift, alt, control);
+        if (codePoint is < 0x20 or > 0xffff or >= 0xd800 and <= 0xdfff)
+            return NoKey;
+
+        var character = (char)codePoint;
+        if (character == ' ')
+            return new ConsoleKeyInfo(character, ConsoleKey.Spacebar, shift, alt, control);
+        // Ctrl+字母不带字符, 与裸控制字节(0x01..0x1a)的既有处理保持一致。
+        if (character is >= 'a' and <= 'z')
+            return new ConsoleKeyInfo(control ? '\0' : character, ConsoleKey.A + (character - 'a'), shift, alt, control);
+        if (character is >= 'A' and <= 'Z')
+            return new ConsoleKeyInfo(control ? '\0' : character, ConsoleKey.A + (character - 'A'), shift, alt, control);
+        return new ConsoleKeyInfo(character, ConsoleKey.NoName, shift, alt, control);
     }
 }
 

@@ -21,13 +21,13 @@ namespace Dsh.Tests;
  * 远程工作区: 用 GuiHeadless 在真实渲染的 GUI 里做交互(打开工作区菜单/设置页的机器管理/工作台)
  * 并截图, 不抢占前台。
  * - UI 结构用例不需要服务器, 常规运行。
- * - 真实 SSH 连接用例需要 <repo>/artifacts020/ssh-verify.json(本地, 不进版本库), 缺失即跳过。
+ * - 真实 SSH 连接用例需要 <repo>/tests/.scratch/ssh-verify.json(本地, 不进版本库), 缺失即跳过。
  */
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class GuiRemoteWorkspaceTests
 {
     private static readonly string ScreenshotDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts020", "gui-screenshots"));
+        Path.Combine(TempTree.RepositoryRoot, "tests/.scratch", "gui-screenshots"));
 
     private static IReadOnlyList<MachineSpec> SampleWorkspaces() =>
     [
@@ -104,7 +104,7 @@ public sealed class GuiRemoteWorkspaceTests
         var spec = LoadSpec();
         if (spec is null)
         {
-            Assert.Skip("未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证");
+            Assert.Skip("未找到 tests/.scratch/ssh-verify.json, 跳过真实 SSH 验证");
             return;
         }
 
@@ -144,11 +144,11 @@ public sealed class GuiRemoteWorkspaceTests
         var spec = LoadSpec();
         if (spec is null)
         {
-            Assert.Skip("未找到 artifacts020/ssh-verify.json, 跳过真实 SSH 验证");
+            Assert.Skip("未找到 tests/.scratch/ssh-verify.json, 跳过真实 SSH 验证");
             return;
         }
 
-        var publish = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../artifacts020/deploy/dsh"));
+        var publish = Path.Combine(TempTree.RepositoryRoot, "tests/.scratch/deploy/dsh");
         if (!Directory.Exists(publish))
         {
             Assert.Skip($"缺少本地发布目录: {publish}");

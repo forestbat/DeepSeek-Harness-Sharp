@@ -181,7 +181,8 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         var tag = reason switch
         {
             TurnEndReason.Aborted aborted => $"aborted(handle={aborted.Reason.Kind})",
-            TurnEndReason.Error error => $"failed(handle=scheduler, code={error.Failure.Code})",
+            // 带上原因: 只打 code 时, 未归类的上游错误(detail=UNKNOWN)事后完全看不出是网关的什么错。
+            TurnEndReason.Error error => $"failed(handle=scheduler, code={error.Failure.Code}, detail={error.Failure.Message})",
             TurnEndReason.Blocked => "blocked",
             TurnEndReason.MaxTokens => "max-tokens",
             _ => "completed",
