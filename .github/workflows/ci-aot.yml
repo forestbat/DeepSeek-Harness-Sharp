@@ -12,12 +12,6 @@ on:
       native-cc:
         required: true
         type: string
-      dryioc-commit:
-        required: true
-        type: string
-      dryioc-sha256:
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -61,18 +55,6 @@ jobs:
           dotnet-version: '10.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
-
-      - name: Download the DryIoc feed prepared for this run
-        uses: actions/download-artifact@v4
-        with:
-          name: dryioc-feed
-          path: packages
-
-      - name: Prepare local NuGet feed
-        shell: pwsh
-        run: |
-          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install AOT toolchain on Linux
         if: inputs.rid == 'linux-x64'
@@ -157,18 +139,6 @@ jobs:
           dotnet-version: '10.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
-
-      - name: Download the DryIoc feed prepared for this run
-        uses: actions/download-artifact@v4
-        with:
-          name: dryioc-feed
-          path: packages
-
-      - name: Prepare local NuGet feed
-        shell: pwsh
-        run: |
-          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install AOT toolchain on Linux
         if: inputs.rid == 'linux-x64'
