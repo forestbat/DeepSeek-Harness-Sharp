@@ -131,6 +131,7 @@ public class AgentLoopIntegrationTests
         public void Dispose() { }
     }
 
+
     [Fact]
     public async Task TextTurn_LogsFullEventSequence()
     {

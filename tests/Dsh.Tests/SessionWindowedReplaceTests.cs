@@ -83,6 +83,43 @@ public sealed class SessionWindowedReplaceTests
         }
     }
 
+    /**
+     * tool/result 的跨边界替换: 被替换的那**一个** tool/result 节点在窗口之前。
+     *
+     * 本地表上没有它, 但"恰好替换一个节点"这件事仍然成立(目标就是一个节点), 内容核对走按页取回的原文。
+     * 以前这里直接判"must rewrite exactly one current node", 于是整份会话打不开(实测现场:
+     * 会话无法加载: invalid window event at seq 775158)。
+     */
+    [Fact]
+    public void FromWindow_FoldsToolResultReplaceWhoseTargetIsBeforeTheWindow()
+    {
+        var root = NewRoot();
+        try
+        {
+            var header = NewHeader(root);
+            var log = BuildLogWithCrossBoundaryToolResult(header, ResidentFrom);
+            WriteLog(root, header, log.Events);
+
+            var warnings = new List<string>();
+            using var store = new JsonlSessionPersistence(root, warn: warnings.Add);
+            var window = store.TryOpenWindow(header.Id, TailEvents);
+            Assert.True(window is not null, $"the tail window was declined: {string.Join("; ", warnings)}");
+            Assert.True(
+                window.Value.ResidentFrom > log.Target,
+                $"precondition: the replaced tool/result {log.Target} must sit before the window {window.Value.ResidentFrom}");
+
+            var session = Session.FromWindow(header.Id, window.Value, header, 0);
+            Assert.Contains(log.ReplaceSeq, session.SurfaceManager.Nodes);
+            // 原文仍在日志里, 按 seq 翻页取回得到的是被替换的那条。
+            var original = Assert.IsType<ToolResultPayload>(session.EventAt(log.Target)!.Data);
+            Assert.Equal("原始输出", original.Message.Block.Content.OfType<TextBlock>().Single().Text);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void UnreadableFrameViewStillDeclinesTheWindowSoTheCallerOpensItInFull()
     {
@@ -108,6 +145,52 @@ public sealed class SessionWindowedReplaceTests
     }
 
     private sealed record WindowedLog(IReadOnlyList<SessionEvent> Events, long ReplaceSeq, long ShadowStart);
+
+    private sealed record ToolResultLog(IReadOnlyList<SessionEvent> Events, long ReplaceSeq, long Target);
+
+    /**
+     * 造一份"尾窗里有一条 tool/result 替换、它替换的节点在窗口之前"的日志:
+     * 工具输出在长会话里被改写(截断/重新格式化), 而改写发生在很久以后。
+     */
+    private static ToolResultLog BuildLogWithCrossBoundaryToolResult(SessionHeader header, long residentFrom)
+    {
+        var session = Session.Create(header.Id, null, header);
+        var turn = 1;
+        (int Turn, int Step)? target = null;
+        while (session.Seq < residentFrom)
+        {
+            session.Append(new TurnStartPayload(turn));
+            session.Append(new StepStartPayload(turn, 1));
+            session.Append(ToolResult(turn, 1, "call-1", "原始输出"), new SurfaceOp.Append());
+            // 目标要留在窗口之前: 只记第一条, 之后的同名工具输出不参与替换。
+            target ??= (turn, 1);
+            session.Append(new AssistantChunkPayload(turn, 1, new StreamChunk.TextDelta(0, $"chunk {session.Seq}\n")));
+            turn += 1;
+        }
+
+        var targetSeq = session.SurfaceManager.Nodes[0];
+        var (targetTurn, targetStep) = target!.Value;
+        // 替换只能改内容: 回合/步骤/调用 id 必须与原文一致。
+        var replacement = session.Append(
+            ToolResult(targetTurn, targetStep, "call-1", "改写后的输出"),
+            new SurfaceOp.Replace(targetSeq, targetSeq),
+            [targetSeq]);
+        return new ToolResultLog([.. session.SnapshotEvents()], replacement.Seq, targetSeq);
+    }
+
+    private static ToolResultPayload ToolResult(int turn, int step, string callId, string text)
+    {
+        var id = ToolCallId.Create(callId);
+        return new ToolResultPayload(
+            turn,
+            step,
+            new ToolResultMessage
+            {
+                Id = MessageId.Create($"{callId}-result"),
+                ToolSource = new ToolMessageSource(id),
+                Content = [new ToolResultBlock(id, [new TextBlock(text)])],
+            });
+    }
 
     /**
      * 造一份尾部带跨边界 replace 的日志: 前缀(seq &lt; residentFrom)的 surface 节点被尾窗里的

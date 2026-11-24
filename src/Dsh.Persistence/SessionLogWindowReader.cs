@@ -76,6 +76,9 @@ internal sealed class SessionLogWindowReader
 {
     private const FileShare ReadShare = FileShare.ReadWrite | FileShare.Delete;
 
+    /** 核对帧边界时抽查的帧数上限: 边界若整体错位, 抽样一定落在中间某处; 全量核对在大日志上是几万次 seek。 */
+    private const int SampleFrames = 32;
+
     private readonly string _path;
     private readonly Lock _gate = new();
     /** 每帧起点, 末项等于已扫到的文件长度。 */
@@ -101,7 +104,15 @@ internal sealed class SessionLogWindowReader
             if (length == 0)
                 return null;
             if (SessionLogIndex.TryLoad(path) is { Frames.Count: > 1 } index && index.Length == length)
-                return new SessionLogWindowReader(path, StartsOf(index), index);
+            {
+                var indexed = StartsOf(index);
+                // 结构校验(首帧 0 起、末帧到文件尾、seq 连续)挡不住"整份日志平移过"的索引:
+                // 帧边界要落在真正的帧头上才算数, 否则窗口读会按错位的边界解压(实测首页读不回来)。
+                if (SampledStartsAreFrames(stream, indexed))
+                    return new SessionLogWindowReader(path, indexed, index);
+                SessionLogIndex.Delete(path);
+                return null;
+            }
             var scanClock = Stopwatch.StartNew();
             var scanned = ZstdFrames.ScanFrameBoundaries(stream);
             WindowReadStats.AddScan(scanClock.ElapsedMilliseconds);
@@ -116,8 +127,21 @@ internal sealed class SessionLogWindowReader
         }
     }
 
+    /** 抽查帧边界确实落在帧头上(索引可能整份平移过: 头帧被改写时长度会变)。 */
+    private static bool SampledStartsAreFrames(Stream stream, List<long> starts)
+    {
+        var frames = starts.Count - 1;
+        if (frames <= 0 || !ZstdFrames.StartsWithFrame(stream, starts[0]))
+            return false;
+        var step = Math.Max(1, frames / SampleFrames);
+        for (var frame = 1; frame < frames; frame += step)
+            if (!ZstdFrames.StartsWithFrame(stream, starts[frame]))
+                return false;
+        return ZstdFrames.StartsWithFrame(stream, starts[frames - 1]);
+    }
+
     /** 索引就是帧边界的权威列表: 起点逐个抄出来, 末项补上文件长度。 */
-    private static List<long> StartsOf(SessionLogIndex index)
+    internal static List<long> StartsOf(SessionLogIndex index)
     {
         var starts = new List<long>(index.Frames.Count + 1);
         for (var position = 0; position < index.Frames.Count; position += 1)
@@ -125,6 +149,10 @@ internal sealed class SessionLogWindowReader
         starts.Add(index.Length);
         return starts;
     }
+
+    /** 索引里的帧边界是否仍落在日志的帧头上: 整份平移过的索引(头帧被改写后没跟着平移)不再可信。 */
+    public static bool Matches(Stream stream, SessionLogIndex index)
+        => SampledStartsAreFrames(stream, StartsOf(index));
 
     /**
      * 活会话在追加: 只扫新增的那一段。
@@ -378,44 +406,5 @@ internal sealed class SessionLogWindowReader
         return entry;
     }
 
-    /** 逐行解码; 任何一行解不出来都抛, 让调用方退回全量解析(那里有损伤记录与修复)。 */
-    private static List<SessionEvent> DecodeLines(byte[] plain, long frameStart)
-    {
-        var events = new List<SessionEvent>();
-        var lineStart = 0;
-        while (lineStart < plain.Length)
-        {
-            var newline = Array.IndexOf(plain, (byte)'\n', lineStart);
-            if (newline < 0)
-                break;
-            var line = plain.AsMemory(lineStart, newline - lineStart);
-            lineStart = newline + 1;
-            if (line.IsEmpty)
-                continue;
-            try
-            {
-                events.AddRange(ChunkRows.DecodeStorageRecordLazy(line));
-            }
-            catch (Exception error) when (error is not SessionFormatUnsupportedException)
-            {
-                throw new FormatException(
-                    $"session log frame at byte {frameStart} has an unreadable record: {error.Message}", error);
-            }
-        }
-        // 帧内 seq 必须连续递增: 不连续说明这一帧里混进了别的写入者的序号, 用它拼窗口是错的。
-        for (var index = 1; index < events.Count; index += 1)
-        {
-            if (events[index].Seq == events[index - 1].Seq + 1)
-                continue;
-            // 跨帧拼出来的一段里, 帧之间也可能不连续: 只有"同一帧内"才要求连续,
-            // 但一段里我们不区分帧界, 所以只拒绝倒退的序号。
-            if (events[index].Seq < events[index - 1].Seq)
-            {
-                throw new FormatException(
-                    $"session log range at byte {frameStart} has decreasing seq ({events[index - 1].Seq} -> {events[index].Seq})");
-            }
-        }
-        return events;
-    }
+    private static List<SessionEvent> DecodeLines(byte[] plain, long frameStart) => SessionLogFrameCodec.DecodePlain(plain, frameStart);
 }
-

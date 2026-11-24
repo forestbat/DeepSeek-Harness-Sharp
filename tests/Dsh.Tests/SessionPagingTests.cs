@@ -77,6 +77,36 @@ public sealed class SessionPagingTests
             Assert.Equal(ResidentFrom - 5 + index, slice[index].Seq);
     }
 
+    /**
+     * 页读回来的第一条未必是请求的那一条: 真实日志里记录会缺失、回退块会被跳过, 于是这一页从更晚的号开始。
+     * 下标基准必须是页自己的起点(第一条事件的号), 拿 page * PageSize 当基准会把整页错位一格 ——
+     * 界面上就是"打开只剩前半截 / 看到的段落和日志对不上"。
+     */
+    [Fact]
+    public void PageThatStartsAfterTheRequestedSeq_KeepsEveryLookupAligned()
+    {
+        const int shift = 3;
+        var (source, events) = BuildSource(TotalEvents);
+        var session = Session.FromWindow(source.Id,
+            new SessionWindow(ResidentFrom, TotalEvents, [.. events.Skip(ResidentFrom)],
+                (offset, count) =>
+                {
+                    // 模拟"请求 offset 起的那几条读不回来": 返回的页面从 offset + shift 开始。
+                    var from = offset + shift;
+                    var take = (int)Math.Max(0, Math.Min(count - shift, events.Count - from));
+                    return [.. events.Skip((int)from).Take(take)];
+                }),
+            source.Header,
+            0);
+
+        for (var seq = shift; seq < ResidentFrom; seq += 511)
+            Assert.Equal(seq, session.EventAt(seq)!.Seq);
+        // 页里没有的那几个号是"缺", 不是"下一条事件顶上来"。
+        Assert.Null(session.EventAt(0));
+        Assert.Null(session.EventAt(1));
+        Assert.Equal(2 + shift, session.EventAt(2 + shift)!.Seq);
+    }
+
     [Fact]
     public void UnreadablePageDegradesToNullInsteadOfFabricatingEvents()
     {
@@ -92,20 +122,6 @@ public sealed class SessionPagingTests
         Assert.Equal(ResidentFrom + 3, session.EventAt(ResidentFrom + 3)!.Seq);
         // 派生消息只看尾窗里的 surface 节点, 不因为前缀缺页而清空。
         Assert.NotEmpty(session.DeriveMessages());
-    }
-
-    [Fact]
-    public void TruncateBelowTheResidentWindowIsRefused()
-    {
-        var (source, events) = BuildSource(TotalEvents);
-        var session = Window(source, events, ResidentFrom, () => { });
-
-        Assert.False(session.TryTruncateTo(ResidentFrom - 1));
-        Assert.True(session.TryTruncateTo(ResidentFrom + 10));
-        Assert.Equal(ResidentFrom + 10, session.Seq);
-        Assert.Equal(ResidentFrom + 9, session.EventAt(ResidentFrom + 9)!.Seq);
-        // 前缀页仍然可读(截断没有往尾窗之前退)。
-        Assert.Equal(100, session.EventAt(100)!.Seq);
     }
 
     [Fact]

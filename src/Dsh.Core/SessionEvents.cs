@@ -154,6 +154,20 @@ public sealed record SessionEndSeedPayload : SessionEventPayload
     public override string Type => SessionEventTypes.SessionEndSeed;
 }
 
+/**
+ * 回退(阶段 4a): "把 TargetSeq 及之后的内容从表面上收掉", 而**日志本身只追加** —— 被回退的事件仍在日志里,
+ * 任何读者都能看到发生过什么, 正在读旧区间的读者也不会因为文件变短而拿到不一致的视图。
+ *
+ * 它自己不进表面(不派生消息): 与压缩摘要不同, 回退要的结果是"那一段不存在", 而不是"那一段换成一句话"。
+ * 需要 SourceEventSeqs(被收掉的表面节点)与一个覆盖同样区间的 SurfaceOp.Replace, 由写侧按当时的表面算出来。
+ */
+public sealed record SessionRevertPayload(long TargetSeq, string? Reason = null) : SessionEventPayload
+{
+    public const string EventType = "session/revert";
+
+    public override string Type => EventType;
+}
+
 public sealed record UnknownSessionEventPayload(string RawType, JsonElement Raw) : SessionEventPayload
 {
     public override string Type => RawType;
@@ -178,10 +192,12 @@ public static class SessionEventTypes
     public const string SessionEndSeed = "session/end-seed";
     public const string AgentInboxSpliced = "agent/inbox/spliced";
     public const string WorkingDirectoryChange = "working-directory/change";
+    /** 回退: 只追加的事件, 表面上把 TargetSeq 之后的内容收掉(见 SessionRevertPayload)。 */
+    public const string SessionRevert = SessionRevertPayload.EventType;
 
     public static readonly IReadOnlySet<string> SurfaceEligible = new HashSet<string>
     {
-        UserMessage, SystemMessage, AssistantMessage, ToolResult,
+        UserMessage, SystemMessage, AssistantMessage, ToolResult, SessionRevertPayload.EventType,
     };
 }
 

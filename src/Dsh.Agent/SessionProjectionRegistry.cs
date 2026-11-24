@@ -109,12 +109,7 @@ public sealed class SessionProjectionRegistry : Service
         {
             Drive(notification.Session, notification.Event);
         }, new EventOptions { Global = true });
-        // 截断后 seq 会复用: 旧单元格的 ObservedSeq 越过新日志末尾, 必须丢弃, 下次读取或推进时按截断后的日志重建。
-        ctx.On<SessionTruncateNotification>(notification =>
-        {
-            foreach (var registration in _registrations.Values)
-                registration.Forget(notification.Session);
-        }, new EventOptions { Global = true });
+
     }
 
     public IDisposable Register<TState>(SessionProjectionDefinition<TState> definition)

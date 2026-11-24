@@ -62,6 +62,15 @@ public static class ZstdFrames
         return false;
     }
 
+    /** offset 处是否落着一个帧头: 4 字节魔数即可判定, 用来核对索引里的帧边界是否还贴合日志。 */
+    public static bool StartsWithFrame(Stream stream, long offset)
+    {
+        Span<byte> magic = stackalloc byte[MagicBytes];
+        stream.Position = offset;
+        return stream.ReadAtLeast(magic, MagicBytes, throwOnEndOfStream: false) == MagicBytes
+            && BinaryPrimitives.ReadUInt32LittleEndian(magic) == Magic;
+    }
+
     /** 从 from 起找下一个帧魔数; 找不到返回 null。 */
     private static int? NextMagic(ReadOnlySpan<byte> buffer, int from)
     {
@@ -158,6 +167,34 @@ public static class ZstdFrames
             sizes[slot] = size;
         }
         return sizes;
+    }
+
+    /**
+     * 只读帧头里声明的解压后字节数: 传帧的前 20 字节就够, 不必把整帧读进来。
+     *
+     * 逐帧重切日志时要用它——"这一帧多大"决定要不要重切, 为此把整帧(甚至整份日志)读进内存是纯浪费。
+     * 返回 false 表示帧头没写长度, 或者传进来的字节不够解析帧头。
+     */
+    public static bool TryReadPlaintextSize(ReadOnlySpan<byte> framePrefix, out long size)
+    {
+        size = 0;
+        var offset = MagicBytes;
+        if (offset >= framePrefix.Length) return false;
+        var descriptor = framePrefix[offset];
+        offset += 1;
+        if ((descriptor & 0x18) != 0) return false;
+        var contentSizeFlag = descriptor >> 6;
+        var singleSegment = (descriptor & 0x20) != 0;
+        var dictionaryFlag = descriptor & 0x03;
+        var dictionaryBytes = dictionaryFlag == 3 ? 4 : dictionaryFlag;
+        var contentSizeBytes = contentSizeFlag == 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag;
+        var windowBytes = singleSegment ? 0 : 1;
+        if (contentSizeBytes == 0) return false;
+        if (framePrefix.Length - offset < windowBytes + dictionaryBytes + contentSizeBytes) return false;
+        if (ReadContentSize(framePrefix, offset + windowBytes + dictionaryBytes, contentSizeFlag, contentSizeBytes) is not { } declared)
+            return false;
+        size = declared;
+        return true;
     }
 
     /**
