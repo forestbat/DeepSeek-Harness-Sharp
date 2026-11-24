@@ -35,19 +35,12 @@ public static class InProcessDriver
             childId,
             ChildCompositionSupport.ResolveChildAgentOptions(parent, request.Request.AgentOptions),
             session,
-            LastTurnOf);
+            SessionRepair.LastTurnOf);
         (parent.Ctx.Get(SubagentRuntime.ServiceName, false) as SubagentRuntime)?.NoteChildScope(child.ScopeKey);
         var run = new InProcessRun(child, activationBoundary, request, inherited);
         if (!standalone)
             parent.Ctx.Root.Emit(new AgentSessionStartNotification(child, "startup"));
         return Task.FromResult<ISubagentRun>(run);
-    }
-
-    private static int LastTurnOf(Session session)
-    {
-        // 只看常驻段: 窗口化恢复的会话里往前扫到 seq 0 等于把整份日志按页读回来。
-        var lastStart = session.LastResidentEventWhere(sessionEvent => sessionEvent.Data is TurnStartPayload);
-        return lastStart?.Data is TurnStartPayload turnStart ? turnStart.Turn : 0;
     }
 
     internal static SubagentStopReason ToStopReason(TurnEndReason reason) => reason switch

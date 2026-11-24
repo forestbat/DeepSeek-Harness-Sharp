@@ -84,9 +84,9 @@ public static class TimestampCommand
                 }
             }
         }
-        return session.TryTruncateTo(boundary)
+        return session.Revert(boundary) is not null
             ? new CommandResult.Success($"reverted to before #{boundary}; {files}; #{seq} is back in the input area")
-            : new CommandResult.Error($"#{seq} cannot be truncated: only this session's own events can be dropped");
+            : new CommandResult.Error($"#{seq} cannot be reverted: only this session's own events can be dropped");
     }
 
     /**

@@ -21,7 +21,11 @@ public sealed record LlmWireDefinition(
 public sealed record ProviderModelSpec(
     string Id,
     string? Name = null,
-    string? SystemPromptUpdate = null);
+    string? SystemPromptUpdate = null,
+    /** settings 里手填的最大输入上下文; null 表示交给目录/端点探测。 */
+    int? ContextWindow = null,
+    /** settings 里手填的最大输出; null 表示交给目录/端点探测。 */
+    int? MaxOutputTokens = null);
 
 /** 宿主解析好的 provider 配置:适配器工厂只依赖这份数据构造适配器。 */
 public sealed record ResolvedLlmProvider(

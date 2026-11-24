@@ -592,6 +592,17 @@ public sealed class ProviderModelSettings
 
     [YamlMember(Alias = "system_prompt_update")]
     public string? SystemPromptUpdate { get; set; }
+
+    /**
+     * 模型的最大输入上下文(整数 token); 中转站/自建端点不在 /models 里声明时由这里补上。
+     * 也是压缩压力阈值的来源: 窗口未知时不猜阈值, 只等用户填这一项或让服务端拒绝超限请求。
+     */
+    [YamlMember(Alias = "context_window")]
+    public int? ContextWindow { get; set; }
+
+    /** 模型单次最大输出(整数 token)。 */
+    [YamlMember(Alias = "max_output_tokens")]
+    public int? MaxOutputTokens { get; set; }
 }
 
 public sealed class SubagentSettings

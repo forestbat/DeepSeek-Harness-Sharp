@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using OpenAI.Responses;
 using OpenAiAssistantChatMessage = OpenAI.Chat.AssistantChatMessage;
 using OpenAiChatToolCall = OpenAI.Chat.ChatToolCall;
 
@@ -108,25 +109,34 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
 
     /**
      * 推理强度解析顺序: 端点 /models 的实时元数据 → 内置 models.dev 快照(baseUrl 主机名命中 provider) → 端点探测结果。
-     * 上下文窗口与输入模态取自 models.dev 快照。
+     * 上下文窗口解析顺序: settings 手填(providers.<id>.models.<model>.context_window) → models.dev 快照。
      * 目录(models.dev)没有这个模型时(自建中转站常见), 用端点 /models 自报的上下文窗口兜底。
      */
     public override Task<int?> ProbeContextWindowAsync(string model, CancellationToken cancellationToken)
-        => _discoveredModels is { } source
+    {
+        if (DeclaredContextWindow(model) is { } declared)
+            return Task.FromResult<int?>(declared);
+        return _discoveredModels is { } source
             ? source.EnsureContextWindowAsync(model, cancellationToken)
             : Task.FromResult<int?>(null);
+    }
+
+    private int? DeclaredContextWindow(string model) => _models.FirstOrDefault(spec => spec.Id == model)?.ContextWindow;
 
     public override LlmResolvedModelInfo ResolveModel(string model)
     {
         var reasoning = _metadata.ReasoningFor(model) ?? _modelsDev.ReasoningFor(model) ?? ReasoningForUnknownModel(model);
+        var declared = _models.FirstOrDefault(spec => spec.Id == model);
         return new LlmResolvedModelInfo(
             _providerId,
             model,
             model,
             null,
             _modelsDev.InputModalitiesFor(model),
-            _modelsDev.ContextWindowFor(model),
-            null,
+            // 手填的窗口优先于目录: 中转站上同名模型的窗口和上游不一样, 只有用户知道。
+            declared?.ContextWindow ?? _modelsDev.ContextWindowFor(model),
+            // 输出上限: 手填 → 廉价探测从报错里读到的 → 目录。
+            declared?.MaxOutputTokens ?? _discoveredModels?.OutputLimitFor(model),
             reasoning);
     }
 
@@ -289,6 +299,11 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
         {
             if (update.FinishReason is { } finishReason)
                 pendingFinish = MapFinishReason(finishReason);
+
+            // Responses 通道把"输出被截断/被过滤"报成 response.incomplete 事件, 全程不带 finish_reason:
+            // 截断是正常收尾(长度用尽), 不是流中断, 不能按 STREAM_CLOSED 把这一轮回复整段丢掉。
+            if (update.RawRepresentation is StreamingResponseIncompleteUpdate incomplete)
+                pendingFinish = IncompleteFinish(incomplete);
 
             foreach (var content in update.Contents)
             {
@@ -543,6 +558,13 @@ public sealed class OpenAiCompatibleAdapter : LlmAdapter
             $"OpenAI-compatible provider does not support reasoning effort \"{effort}\"",
             "UNSUPPORTED_REASONING_EFFORT")),
     };
+
+    /** response.incomplete 的收尾原因: 内容被过滤仍算失败, 其余(输出长度用尽)按正常截断处理。 */
+    private static FinishReason IncompleteFinish(StreamingResponseIncompleteUpdate incomplete)
+        => incomplete.Response.IncompleteStatusDetails is { Reason: { } reason }
+           && reason == ResponseIncompleteStatusReason.ContentFilter
+            ? new FinishReason.Error(new LlmFailure("content filtered", "CONTENT_FILTER"))
+            : new FinishReason.MaxTokens();
 
     private static FinishReason MapFinishReason(ChatFinishReason reason) => reason.Value switch
     {

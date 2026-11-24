@@ -154,7 +154,7 @@ public class AgentModelSelectionTests
 
             await backend.Session.SendMessageAsync(created.Id, "Describe the configured route.", [], cancellationToken);
             await agent.WhenIdle();
-            var snapshot = await backend.Session.GetSessionSnapshotAsync(created.Id, cancellationToken);
+            var snapshot = await backend.Session.GetSessionSnapshotAsync(created.Id, 0, 0, cancellationToken);
             var payloads = snapshot.Events.Select(sessionEvent => sessionEvent.Data).ToArray();
             var turn = Assert.Single(payloads.OfType<TurnEndPayload>());
             if (!configured)

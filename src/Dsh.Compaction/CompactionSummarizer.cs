@@ -28,15 +28,33 @@ public static class CompactionSummarizer
      */
     public const int CharsPerToken = 4;
 
-    /** 模型窗口未知时的分块预算: 不敢按大窗口切块, 保守换稳定。 */
-    public const int UnknownContextChunkTokens = 8_000;
+    /** 模型窗口未知时的分块预算: 按默认窗口(200k 量级)算, 而不是退回 8k —— 8k 会把一份大历史切成几十上百块。 */
+    public static int ChunkBudgetTokens(LlmRuntime llm, string provider, string model, int maxTokens)
+    {
+        var contextWindow = ContextWindowOf(llm, provider, model);
+        return contextWindow is > 0
+            ? BudgetFor(contextWindow.Value, maxTokens)
+            : BudgetFor(CompactionConfigResolver.DefaultContextWindow, maxTokens);
+    }
 
+    private static int BudgetFor(int contextWindow, int maxTokens)
+    {
+        var usable = contextWindow - maxTokens;
+        return usable <= MinChunkTokens
+            ? MinChunkTokens
+            : Math.Max(MinChunkTokens, (int)Math.Floor(usable * ChunkBudgetRatio));
+    }
+
+    public const int MaxDepth = 3;
+
+    /** 单块最小预算: 再怎么缩也不小于这个, 否则切出来的块只剩半条消息。 */
     public const int MinChunkTokens = 1_000;
 
     /** 服务端报 payload 过大时预算的收缩倍数: 一次收缩就把块降到它肯接收的量级。 */
     public const int PayloadShrinkFactor = 4;
+
+    /** 分块请求的并发度。 */
     public const int ChunkConcurrency = 3;
-    public const int MaxDepth = 3;
 
     public const string ChunkInstruction =
         """
@@ -67,22 +85,7 @@ public static class CompactionSummarizer
     }
 
     /**
-     * 单次摘要请求能装多少历史: 按模型可用上下文算, 而不是固定字符数。
-     * 同一份会话内容, 块越大请求越少, 压缩越快; 只要不超出模型窗口就不会被拒。
-     */
-    public static int ChunkBudgetTokens(LlmRuntime llm, string provider, string model, int maxTokens)
-    {
-        var contextWindow = ContextWindowOf(llm, provider, model);
-        if (contextWindow is not { } context || context <= 0)
-            return UnknownContextChunkTokens;
-        var usable = context - maxTokens;
-        return usable <= MinChunkTokens
-            ? MinChunkTokens
-            : Math.Max(MinChunkTokens, (int)Math.Floor(usable * ChunkBudgetRatio));
-    }
-
-    /**
-     * 窗口信息只是"能切多大块"的优化参数: 取不到时按未知处理走保守预算。
+     * 窗口信息只是"能切多大块"的优化参数: 取不到时按默认窗口处理。
      * 未注册的 provider 会让 ResolveModelInfo 抛异常, 那种情况下连摘要请求本身也会失败,
      * 但那时该由真正的请求错误说话, 不该在这里先抛出来。
      */

@@ -36,6 +36,13 @@ public sealed class ContextUsage
         LastInputTokens = 0;
     }
 
+    /** 从派生缓存恢复(GUI 投影缓存): 值本来就是这两项的最后一轮观测结果。 */
+    public void Restore(int? contextWindow, double lastInputTokens)
+    {
+        ContextWindow = contextWindow is > 0 ? contextWindow : null;
+        LastInputTokens = lastInputTokens > 0 ? lastInputTokens : 0;
+    }
+
     /** 状态行文案: 有容量时带百分比, 无容量时只报占用, 完全没有数据时显示占位符。 */
     public string Label => LastInputTokens > 0
         ? ContextWindow is { } window

@@ -225,10 +225,17 @@ public static class PtyDaemonClient
         {
             // 服务端的状态重建进入的是备用屏: 离开 attach 时还原备用屏与光标, 免得终端留在会话画面里;
             // 同时关掉鼠标上报, 否则退出 TUI 后终端里的鼠标一动就被 shell 当输入回显。
-            await output.WriteAsync(
-                Encoding.UTF8.GetBytes($"\u001b[?1049l\u001b[?25h{PtyConsoleBridge.MouseDisableSequence}"),
-                cancellationToken);
-            await output.FlushAsync(cancellationToken);
+            // 终端本身已经不可写(窗口关了、管道断了)时这步失败是同一件事的另一半, 不该再抛一次。
+            try
+            {
+                await output.WriteAsync(
+                    Encoding.UTF8.GetBytes($"\u001b[?1049l\u001b[?25h{PtyConsoleBridge.MouseDisableSequence}"),
+                    cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
+            catch (Exception error) when (IsTunnelEnded(error) || error is OperationCanceledException)
+            {
+            }
         }
     }
 
@@ -530,23 +537,32 @@ public static class PtyDaemonClient
         var pumpOutput = PumpOutputAsync(output, stream, linked.Token);
         await Task.WhenAny(pumpInput, pumpOutput);
         linked.Cancel();
+        await ObserveTunnelEndAsync(pumpInput);
+        await ObserveTunnelEndAsync(pumpOutput);
+    }
 
+    /**
+     * 隧道的收场只有两种: 本地取消, 或者对端把连接掐了(会话退出、daemon 退出、终端窗口被关)。
+     *
+     * 后者是**正常的结束**, 不是未处理异常: 让 IOException 从 attach 里逃出去, 用户看到的是进程崩溃栈,
+     * 终端还留在原始模式与备用屏里。调用方在 attach 返回后照旧去读会话的退出码与最后的画面。
+     */
+    private static async Task ObserveTunnelEndAsync(Task pump)
+    {
         try
         {
-            await pumpInput;
+            await pump;
         }
         catch (OperationCanceledException)
         {
         }
-
-        try
-        {
-            await pumpOutput;
-        }
-        catch (OperationCanceledException)
+        catch (Exception error) when (IsTunnelEnded(error))
         {
         }
     }
+
+    internal static bool IsTunnelEnded(Exception error)
+        => error is IOException or SocketException or ObjectDisposedException;
 
     private static async Task PumpInputAsync(Stream input, NetworkStream stream, CancellationToken cancellationToken)
     {
