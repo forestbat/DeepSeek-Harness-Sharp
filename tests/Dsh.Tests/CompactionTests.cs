@@ -384,6 +384,31 @@ public class CompactionTests
         Assert.Equal(new string('u', 600), Assert.IsType<TextBlock>(summarization.Messages[0].Content[0]).Text);
     }
 
+    /**
+     * 窗口未知时不猜阈值: 旧实现拿默认窗口 200k 算阈值 160k, 真实窗口 1M 的中转模型会话长到 155k 就被判超阈值,
+     * 实测同一回合连压 4 次(每次只压掉 55k, 摘要还是同一段)。
+     * 未知窗口只等 service 端拒绝超限请求, 由 ContextOverflow 兜底。
+     */
+    [Fact]
+    public async Task UnknownContextWindow_DoesNotCompactOnAGuessedThreshold()
+    {
+        // 中文约一字一 token: 24 万字的用户消息稳定越过任何 160k 阈值, 与分词器的合并策略无关。
+        var huge = string.Concat(Enumerable.Repeat("用户消息", 60_000));
+        using var harness = new Harness(contextWindow: 0, turnText: new string('x', 200));
+        var agent = await harness.CreateAgent("compaction-unknown-window");
+        agent.Followup(MessageFactory.CreateUserText(huge));
+        await agent.WhenIdle();
+        agent.Followup(MessageFactory.CreateUserText("second"));
+        await agent.WhenIdle();
+
+        var guessedThreshold = CompactionConfigResolver.DefaultContextWindow * CompactionConfigResolver.DefaultThresholdRatio;
+        Assert.True(
+            harness.Meter.Measure(agent.Session).TotalTokens > guessedThreshold,
+            $"surface must exceed the old guessed threshold ({guessedThreshold}) for this test to prove anything");
+        Assert.Equal(0, harness.Adapter.CompactionCalls);
+        Assert.DoesNotContain(agent.Session.SnapshotEvents(), e => e.Type == CompactionEventTypes.Start);
+    }
+
     [Fact]
     public async Task BelowThreshold_NoCompaction()
     {
@@ -1087,15 +1112,17 @@ public class CompactionTests
         Assert.Equal(CompactionSummarizer.MinChunkTokens, CompactionSummarizer.ChunkBudgetTokens(tiny.Llm, Provider, Model, 8192));
     }
 
-    /** 模型窗口未知时不按大窗口切块(那会被服务端拒), 退到保守预算。 */
+    /**
+     * 模型窗口未知时按默认窗口(200k 量级)切块, 而不是退回 8k:
+     * 8k 会把一份大历史切成几十上百块, 又慢又容易失败。
+     */
     [Fact]
-    public void ChunkBudget_FallsBackWhenTheContextWindowIsUnknown()
+    public void ChunkBudget_FallsBackToTheDefaultWindowWhenTheContextWindowIsUnknown()
     {
         using var harness = new Harness(contextWindow: 0, turnText: "ok");
 
-        Assert.Equal(
-            CompactionSummarizer.UnknownContextChunkTokens,
-            CompactionSummarizer.ChunkBudgetTokens(harness.Llm, Provider, Model, 8192));
+        var expected = (int)Math.Floor((CompactionConfigResolver.DefaultContextWindow - 8192) * CompactionSummarizer.ChunkBudgetRatio);
+        Assert.Equal(expected, CompactionSummarizer.ChunkBudgetTokens(harness.Llm, Provider, Model, 8192));
     }
 
     /**

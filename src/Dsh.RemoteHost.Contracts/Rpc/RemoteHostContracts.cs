@@ -52,6 +52,10 @@ public partial interface IHostRpc
     [JsonRpcMethod(HostProtocol.MethodSessionSnapshot)]
     Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken = default);
 
+    /** 日志字节切片: 宿主只切字节, 客户端自己解析(投影实现仍只有一份)。 */
+    [JsonRpcMethod(HostProtocol.MethodSessionLogSlice)]
+    Task<RemoteLogSlice> GetSessionLogSliceAsync(RemoteLogSliceRequest request, CancellationToken cancellationToken = default);
+
     [JsonRpcMethod(HostProtocol.MethodToolsList)]
     Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default);
 
@@ -234,6 +238,10 @@ public partial interface ISessionEditingRpc
 
     [JsonRpcMethod(SessionEditingProtocol.MethodSessionDelete)]
     Task<bool> DeleteAsync(RemoteSessionRef request, CancellationToken cancellationToken = default);
+
+    /** 会话的用户消息时间线: 刻度按序号定位, 客户端据此在整段会话上画时间轴(不依赖已渲染多少)。 */
+    [JsonRpcMethod(SessionEditingProtocol.MethodSessionTimeline)]
+    Task<IReadOnlyList<RemoteTimelineEntry>> SessionTimelineAsync(RemoteSessionRef request, CancellationToken cancellationToken = default);
 
     [JsonRpcMethod(SessionEditingProtocol.MethodSessionApprovalPolicy)]
     Task<bool> SetApprovalPolicyAsync(RemoteSessionPolicyRequest request, CancellationToken cancellationToken = default);

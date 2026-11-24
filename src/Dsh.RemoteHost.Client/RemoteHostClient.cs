@@ -196,6 +196,15 @@ public sealed class RemoteHostClient : IAsyncDisposable, IWorkspaceHost, IHostPu
     public Task<RemoteSessionSnapshot> GetSessionSnapshotRangeAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken = default)
         => _rpc.GetSessionSnapshotAsync(new RemoteSessionSnapshotRequest(sessionId, fromEvent, HostProtocol.SnapshotPageBytes, maxEvents), cancellationToken);
 
+    /**
+     * 一段**日志字节**: 宿主只按帧切磁盘上的字节, 不解压不序列化。
+     *
+     * 客户端拿回去自己解析(与读日志同一套代码), 于是线缆体积等于日志压缩体积,
+     * 宿主也不必为每个读者物化一遍事件。MaxEvents 只决定一段带多少条, 是往返单价。
+     */
+    public Task<RemoteLogSlice> GetSessionLogSliceAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken = default)
+        => _rpc.GetSessionLogSliceAsync(new RemoteLogSliceRequest(sessionId, fromEvent, maxEvents), cancellationToken);
+
     /** 整段历史有多少条; 用一个越界请求问, 服务端只回总数不回事件。 */
     public async Task<long> TotalEventCountAsync(string sessionId, CancellationToken cancellationToken = default)
     {

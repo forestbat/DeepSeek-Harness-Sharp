@@ -58,7 +58,8 @@ public static class GuiRunner
         var fleet = FleetWorkspace.ForContext(app.Ctx, app.Home, startLocalHost);
         try
         {
-            return await HostChatSession.OpenAsync(fleet, cwd, resumeSessionId, cancellationToken);
+            return await HostChatSession.OpenAsync(
+                fleet, cwd, resumeSessionId, cancellationToken, ProjectionCache.ForHome(app.Home.Root));
         }
         catch
         {
@@ -106,7 +107,17 @@ public static class GuiRunner
         Func<string, CancellationToken, Task>? startLocalHost)
     {
         MainWindow? window = null;
-        StartupFailureWindow? failure = null;
+        StartupFailureWindow? failureWindow = null;
+        // GUI 没有控制台: 未处理异常不记日志, 用户看到的就只是"窗口自己没了"(实测如此)。
+        // 文件 provider 逐行 Flush, 进程随后退出也留得下这条栈。
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            var logger = app.Ctx.LoggerFor("gui");
+            if (args.ExceptionObject is Exception error)
+                logger.Error(error);
+            else
+                logger.Error("未处理异常, 进程即将退出: %s", Convert.ToString(args.ExceptionObject));
+        };
         // 本进程就是 GUI 本体: 允许退出兜底强杀自己(见 MainWindow.ShutdownApplication)。
         MainWindow.OwnsProcess = true;
         instance.ActivationRequested += () => Dispatcher.UIThread.Post(() =>
@@ -115,7 +126,7 @@ public static class GuiRunner
             if (window is not null)
                 window.ShowFromTray();
             else
-                failure?.Activate();
+                failureWindow?.Activate();
         });
         App.StartupAppearance = application => ThemeService.Apply(application, settings);
         // 启动路径只登记后台流程, 不同步等握手: 连不上时必须落到失败窗口, 而不是"进程活着但没有窗口"。
@@ -130,18 +141,18 @@ public static class GuiRunner
             {
                 while (true)
                 {
-                    if (await TryOpenMainWindowAsync() is not { } reason)
+                    if (await TryOpenMainWindowAsync() is not { } startupFailure)
                         return;
                     var retry = await Dispatcher.UIThread.InvokeAsync(async () =>
                     {
-                        failure = new StartupFailureWindow(reason);
+                        failureWindow = new StartupFailureWindow(startupFailure);
                         try
                         {
-                            return await failure.ShowAndWaitAsync();
+                            return await failureWindow.ShowAndWaitAsync();
                         }
                         finally
                         {
-                            failure = null;
+                            failureWindow = null;
                         }
                     });
                     if (retry)
@@ -158,8 +169,8 @@ public static class GuiRunner
             }
         }
 
-        // 返回 null 表示主窗口已经显示; 否则返回失败原因。
-        async Task<string?> TryOpenMainWindowAsync()
+        // null 表示主窗口已经显示; 否则返回失败窗口要摆的标题与原因。
+        async Task<StartupFailure?> TryOpenMainWindowAsync()
         {
             using var handshake = new CancellationTokenSource(HandshakeTimeout);
             try
@@ -176,11 +187,22 @@ public static class GuiRunner
             }
             catch (OperationCanceledException) when (handshake.IsCancellationRequested)
             {
-                return $"本机 Host 在 {HandshakeTimeout.TotalSeconds:0} 秒内没有完成握手。";
+                return new StartupFailure(
+                    "连不上本机 Host，主窗口没有打开。",
+                    $"本机 Host 在 {HandshakeTimeout.TotalSeconds:0} 秒内没有完成握手。",
+                    Connection: true);
+            }
+            catch (HostConnectionUnavailableException error)
+            {
+                return new StartupFailure(
+                    "连不上本机 Host，主窗口没有打开。",
+                    Runtime.OutboundProxy.Redact(error.Message),
+                    Connection: true);
             }
             catch (Exception error)
             {
-                return Runtime.OutboundProxy.Redact(error.Message);
+                // Host 已经连上了: 这一步的失败(打开/恢复会话读不出来)与连接无关, 别让用户去杀宿主进程。
+                return new StartupFailure("主窗口没有打开。", Runtime.OutboundProxy.Redact(error.Message), Connection: false);
             }
         }
 

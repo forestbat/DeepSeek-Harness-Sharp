@@ -14,17 +14,12 @@ public sealed class RuntimeContextProjection : IDisposable
     private (long Seq, string? Text)? _retained;
     private bool _neverExisted;
     private readonly Func<bool> _unsubscribe;
-    private readonly Func<bool> _unsubscribeTruncate;
+
 
     public RuntimeContextProjection(Context ctx, Session session)
     {
         Rebuild(session);
-        // 截断可能删掉已保留的快照; 不重建的话 Project 仍以为模型看得到它, 截断后的请求就缺了运行时上下文。
-        _unsubscribeTruncate = ctx.On<SessionTruncateNotification>(notification =>
-        {
-            if (ReferenceEquals(notification.Session, session))
-                Rebuild(session);
-        });
+
         _unsubscribe = ctx.On<SessionEventNotification>(notification =>
         {
             if (!ReferenceEquals(notification.Session, session))
@@ -47,7 +42,7 @@ public sealed class RuntimeContextProjection : IDisposable
     public void Dispose()
     {
         _unsubscribe();
-        _unsubscribeTruncate();
+
     }
 
     private void Rebuild(Session session)

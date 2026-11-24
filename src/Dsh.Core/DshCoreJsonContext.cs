@@ -31,6 +31,7 @@ namespace Dsh.Core;
 [JsonSerializable(typeof(WorkingDirectoryChangedPayload))]
 [JsonSerializable(typeof(ToolResultErrorInfo))]
 [JsonSerializable(typeof(EpochHeader))]
+[JsonSerializable(typeof(SurfaceFoldMeta))]
 [JsonSerializable(typeof(LlmCallConfigAdapterDefaults))]
 [JsonSerializable(typeof(SurfaceOp))]
 [JsonSerializable(typeof(SurfaceOp.Append))]

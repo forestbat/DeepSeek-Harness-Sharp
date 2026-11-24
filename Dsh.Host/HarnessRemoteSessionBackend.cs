@@ -10,7 +10,7 @@ using Dsh.Agent;
 namespace Dsh.Host;
 
 /** Core harness sessions and their ordered history/live event stream. */
-internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, ExternalAgentSessions agents) : IRemoteSessionBackend
+internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, ExternalAgentSessions agents) : IRemoteSessionBackend, IRemoteLogSliceBackend
 {
     public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken)
     {
@@ -56,29 +56,84 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
         return Describe(handle.Agent);
     }
 
-    /** 返回历史的一段; 分页由 RemoteHostServer 按帧预算切, 所以这里的 TotalEventCount 是整段条数。 */
-    public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken)
+    /**
+     * 返回历史的一段; 分页由 RemoteHostServer 按帧预算切, 所以这里的 TotalEventCount 是整段条数。
+     *
+     * fromEvent/maxEvents 是**范围**而不是"整段历史再切": 会话有一百多万条事件时, 每次翻页都整份物化一遍
+     * 等于把峰值内存与耗时都乘以页数(实测把宿主顶到 OOM)。窗口会话按页读前缀, 这里只取被请求的那一段。
+     */
+    public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(
+        string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken)
     {
         var id = SessionId.Create(sessionId);
         var approvals = runtime.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false);
+        var (logLength, revision) = LogStamp(id);
         if (runtime.Store.Get(id) is { } session)
         {
-            return Task.FromResult(new RemoteSessionSnapshot(session.Header, session.SnapshotEvents(), session.Seq,
-                approvals?.EffectivePolicy(session).ToString()));
+            var total = session.Seq;
+            var (from, to) = SnapshotRange(total, fromEvent, maxEvents);
+            return Task.FromResult(new RemoteSessionSnapshot(
+                session.Header,
+                session.SnapshotEvents(from, to),
+                total,
+                approvals?.EffectivePolicy(session).ToString(),
+                logLength,
+                revision));
         }
         using var handle = runtime.Persistence?.Open(id, SessionAccess.Read)
             ?? throw new InvalidOperationException($"unknown session: {sessionId}");
         // 会话不在内存里时也要窗口化: 只为一个策略值和一页历史把 383MB 日志整段解析成事件不划算。
-        if (runtime.Persistence?.TryOpenWindow(id, SnapshotTailEvents) is { } window)
-        {
-            return Task.FromResult(new RemoteSessionSnapshot(handle.Header, window.Resident, window.TotalEvents,
-                approvals?.EffectivePolicy(window.Resident).ToString()));
-        }
-        // 窗口化不可用(无帧视图/索引损坏/尾窗读不出)才整段读。
-        var events = handle.Read();
+        var window = runtime.Persistence?.TryOpenWindow(id, SnapshotTailEvents);
+        var known = window?.TotalEvents ?? handle.Count;
+        var (start, end) = SnapshotRange(known, fromEvent, maxEvents);
+        var events = handle.Read(start, end - start);
         // 只为一个策略值重建整篇派生状态(surface 折叠等)不划算: 策略就藏在事件流里。
-        return Task.FromResult(new RemoteSessionSnapshot(handle.Header, events, events.Count,
-            approvals?.EffectivePolicy(events).ToString()));
+        return Task.FromResult(new RemoteSessionSnapshot(
+            handle.Header, events, known, approvals?.EffectivePolicy(events).ToString(), logLength, revision));
+    }
+
+    /**
+     * 日志的修订标识: 已落盘字节数 + 文件戳记(长度/修改时间/创建时间), 每次 stat 就够, 不解压日志。
+     * 客户端用它判断投影缓存是否还对得上: 追加只会让长度变大, 回退会让长度变小或戳记变化。
+     */
+    private (long Length, string Revision) LogStamp(SessionId id)
+    {
+        if (runtime.Persistence?.Stat(id) is not { } stat)
+            return (0, "");
+        return (stat.SizeBytes ?? 0, stat.Revision);
+    }
+
+    /**
+     * 这一段事件的绝对序号区间 [from, to): 起点夹在历史范围内, 长度受 maxEvents 约束。
+     * maxEvents 为 0(调用方只要"一页")时按 SnapshotTailEvents 取, 免得一次请求就把百万条事件拉进内存。
+     */
+    private static (long From, long To) SnapshotRange(long total, long fromEvent, int maxEvents)
+    {
+        var from = Math.Clamp(fromEvent, 0, total);
+        var length = maxEvents > 0 ? maxEvents : SnapshotTailEvents;
+        return (from, Math.Min(total, from + length));
+    }
+
+    /**
+     * 一段历史, 以日志字节交付: 只按帧索引切磁盘上的字节, 不解压、不物化、不序列化。
+     *
+     * 会话在内存里也只切磁盘: 内存里的尾巴可能在落盘批量里还没写出, 那几条由实时事件流补, 与切片按序号接上。
+     */
+    public Task<RemoteLogSlice> GetSessionLogSliceAsync(
+        string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken)
+    {
+        var id = SessionId.Create(sessionId);
+        var persistence = runtime.Persistence
+            ?? throw new InvalidOperationException($"session storage is unavailable: {sessionId}");
+        var slice = persistence.TryReadLogSlice(id, fromEvent, maxEvents)
+            ?? throw new InvalidOperationException($"session history is not readable as bytes: {sessionId}");
+        var approvals = runtime.App.Ctx.Get<ApprovalService>(ApprovalService.ServiceName, false);
+        var policy = runtime.Store.Get(id) is { } session
+            ? approvals?.EffectivePolicy(session).ToString()
+            : null;
+        return Task.FromResult(new RemoteLogSlice(
+            slice.Bytes, slice.Header, slice.FromSeq, slice.EventCount, slice.TotalEventCount, policy,
+            slice.ContentHash));
     }
 
     /** 窗口化打开的尾窗: 服务一页历史足够, 剩下的按页取。 */
@@ -139,18 +194,16 @@ internal sealed class HarnessRemoteSessionBackend(HarnessRemoteRuntime runtime, 
             if (notification.Session.Id == id)
                 buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, notification.Event));
         });
-        var unsubscribeTruncate = runtime.App.Ctx.On<SessionTruncateNotification>(notification =>
+        // 号被别的写者接管过: 已发出去的序号整体平移, 客户端按 Reset 信号从日志重放一遍即可。
+        var unsubscribeRenumber = runtime.App.Ctx.On<SessionRenumberNotification>(notification =>
         {
-            if (notification.Session.Id != id)
-                return;
-            // 撤回(就地截断)只告诉读者"保留到第几条": 客户端按序号删掉自己那边的尾部即可,
-            // 把整段历史再灌一遍会让界面整屏重建, 用户看到视口先跳到会话头再被一趟趟拉回末尾。
-            buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId,
-                TruncatedTo: notification.EventCount, TruncatedAt: notification.At));
+            if (notification.Session.Id == id)
+                buffer.Writer.TryWrite(new RemoteSessionEvent(sessionId, Reset: true));
         });
+
         ValueTask Release()
         {
-            unsubscribeTruncate();
+            unsubscribeRenumber();
             unsubscribe();
             buffer.Writer.TryComplete();
             return ValueTask.CompletedTask;

@@ -44,10 +44,23 @@ public sealed class Session
     private List<Message> _derived = [];
     private int _derivedNodes;
     private int _derivedGeneration;
+    /** 已被回退事件收掉的日志区间(闭区间): 这些事件还在日志里, 但不再属于会话。 */
+    private readonly List<(long From, long To)> _reverted = [];
+    /** 发号凭证: 有它时序号由日志说话, 而不是本进程内存里的计数(多宿主写同一份日志的前提)。 */
+    private ISessionSequencer? _sequencer;
+    /** 已知落盘的条数; 之后的都是已发号但还没落盘的自有事件, 必要时可整段重编号。 */
+    private long _durableCount;
+    /** 上次写下折叠检查点的页号(-1 = 还没写过: 历史会话恢复后的第一次页边界就写一份)。 */
+    private long _checkpointPage = -1;
 
     public event Action<Session, SessionEvent>? Appended;
 
-    public event Action<Session, long>? Truncated;
+
+    /** 追加了一条回退事件(参数是回退目标序号): 从日志派生的辅助状态(收件箱、时间线)据此重建。 */
+    public event Action<Session, long>? Reverted;
+
+    /** 未落盘的那一段整体换了号(参数: 从哪个序号起、平移量): 客户端据此把卡片按新号对齐或直接重放。 */
+    public event Action<Session, long, long>? Renumbered;
 
     public event Action<Session, SessionHeader>? Renamed;
 
@@ -68,6 +81,9 @@ public sealed class Session
     /** 累计的页读取次数(打点用)。 */
     public long PageFaults => _pages?.Reads ?? 0;
 
+    /** 读过多少不同的页: 与 PageFaults 的比值就是重复解析的倍数(折前缀时应当接近 1)。 */
+    public long PageFaultDistinct => _pages?.DistinctPages ?? 0;
+
     public Surface.Manager SurfaceManager => _surfaceManager;
 
     /** 前缀页的事件条数: 页边界就是 seq / PageSize。 */
@@ -78,12 +94,19 @@ public sealed class Session
         IReadOnlyList<SessionEvent>? seed,
         SessionHeader? header,
         long? suppliedInheritedEventCount,
-        SessionWindow? window = null)
+        SessionWindow? window = null,
+        SurfaceFoldSnapshot? adoptedSurface = null)
     {
         _residentFrom = window?.ResidentFrom ?? 0;
-        // 窗口以外的事件按页取: 跨边界 replace 因此不必要求窗口覆盖到远端节点(见 B5)。
-        _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot), _residentFrom,
-            seq => _pages?.Get(seq));
+        // 表面**必须覆盖整条日志**: 它就是发给模型的那份消息序列(Session.DeriveMessages),
+        // 窗口只决定"哪些事件对象常驻内存", 前缀按页取。少折前缀等于让模型丢失窗口之前的上下文,
+        // 压缩也就只能压到窗口内那一段。命中派生缓存时不必再折一遍(见 adoptedSurface)。
+        _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot), 0,
+            seq => _pages?.Get(seq), _residentFrom, adoptedSurface);
+        // 折叠检查点带来的请求头/上下文: 尾窗里往往没有这两条(最近一次请求在窗口之外),
+        // 带上它们就不必为了取值把整份前缀扫一遍。尾窗里若另有更新的同类事件, 下面的 Commit 会覆盖。
+        _headerFold = adoptedSurface?.RequestHeader;
+        _contextFold = adoptedSurface?.RequestContext;
         if (window is { } loaded)
         {
             _pages = loaded.ReadPage is null ? null : new PageCache(loaded.ReadPage);
@@ -169,9 +192,57 @@ public sealed class Session
     public static Session FromRestore(SessionId id, IReadOnlyList<SessionEvent> seed, SessionHeader header, long inheritedEventCount)
         => new(id, seed, header, inheritedEventCount);
 
-    /** 窗口化恢复: 前缀按页读, 尾窗常驻。折叠范围是 [window.ResidentFrom, TotalEvents)。 */
-    public static Session FromWindow(SessionId id, SessionWindow window, SessionHeader header, long inheritedEventCount)
-        => new(id, null, header, inheritedEventCount, window);
+    /** 窗口化恢复: 前缀按页读, 尾窗常驻。折叠范围是整条日志(见 ctor); 命中派生缓存时直接采用折叠结果。 */
+    public static Session FromWindow(
+        SessionId id,
+        SessionWindow window,
+        SessionHeader header,
+        long inheritedEventCount,
+        SurfaceFoldSnapshot? adoptedSurface = null)
+        => new(id, null, header, inheritedEventCount, window, adoptedSurface);
+
+    /**
+     * 表面折叠的派生缓存快照: 折叠已经跟上日志末尾时才有意义(否则存下来的是半截状态)。
+     * LogLength 由持久化层在落盘时填(只有它知道文件长度)。
+     */
+    public SurfaceFoldSnapshot? FoldSnapshot()
+    {
+        // 先看折叠进度再碰 Nodes: 取 Nodes 会触发"把整条日志折一遍", 那是加载路径上最贵的一步。
+        if (_surfaceManager.FoldedThrough + 1 != TotalCount)
+            return null;
+        return new SurfaceFoldSnapshot(
+            [.. _surfaceManager.Nodes], 0, TotalCount, _surfaceManager.ReplaceGeneration,
+            RequestHeader(), RequestContext());
+    }
+
+    /**
+     * 折叠进度跨过一个读页边界之后才值得写一次检查点。
+     *
+     * 代价按页摊: 一页 4096 条事件, 写一次检查点约一次 fsync; 崩溃时最多重读一页。
+     * 还没折到日志末尾时返回 null —— 半截状态存下来没有意义。
+     */
+    public SurfaceFoldSnapshot? FoldSnapshotIfDue()
+    {
+        if (_surfaceManager.FoldedThrough + 1 != TotalCount)
+            return null;
+        var page = _surfaceManager.FoldedThrough / PageSize;
+        if (page <= _checkpointPage)
+            return null;
+        _checkpointPage = page;
+        return FoldSnapshot();
+    }
+
+    /** 收尾时补写一次: 把最后一个不满页也盖上。 */
+    public SurfaceFoldSnapshot? FoldSnapshotOnClose() => FoldSnapshot();
+
+    /** 完整性不变量: 表面必须已折到日志末尾。测试与基准用它证明"没有少一截"。 */
+    public void AssertFullyFolded()
+    {
+        _ = _surfaceManager.Nodes;
+        if (_surfaceManager.FoldedThrough + 1 != TotalCount)
+            throw new InvalidOperationException(
+                $"surface folded through {_surfaceManager.FoldedThrough} but the session holds {TotalCount} event(s)");
+    }
 
     /** 总事件数(尾窗之前的那些不在内存里)。 */
     private long TotalCount => _residentFrom + _count;
@@ -226,57 +297,219 @@ public sealed class Session
 
     public long Seq => Volatile.Read(ref _snapshot).Total;
 
-    /** 就地截断到 eventCount: 只剩 [0, eventCount), 重建 surface 与 header/context 折叠。仅限本会话自有区间。 */
-    public bool TryTruncateTo(long eventCount)
-    {
-        long truncatedTo;
-        lock (_writeGate)
-        {
-            if (eventCount < InheritedEventCount || eventCount > TotalCount)
-                return false;
-            if (eventCount == TotalCount)
-                return true;
-            // 窗口会话的前缀不在内存里, 就地回退无法重建那一段的折叠状态。
-            if (eventCount < _residentFrom)
-                return false;
-            _count = (int)(eventCount - _residentFrom);
-            _pages?.InvalidateFrom(_residentFrom + _count);
-            Volatile.Write(ref _snapshot, new SessionLog(_buffer, _count, _residentFrom, _pages));
-            // surface 与折叠状态由事件日志派生: 日志缩短后整体重建, 不能就地回退(见 D3 revert)。
-            _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot), _residentFrom);
-            _headerFold = null;
-            _contextFold = null;
-            _workingDirectoryFold = null;
-            for (var index = 0; index < _count; index++)
-                FoldAggregates(_buffer[index]);
-            _derived = [];
-            _derivedNodes = 0;
-            _derivedGeneration = -1;
-            truncatedTo = TotalCount;
-        }
 
-        NotifyTruncated(truncatedTo);
-        return true;
-    }
-
-    private void NotifyTruncated(long eventCount)
+    /**
+     * 回退到 targetSeq 之前: **只追加**一条 `session/revert`, 不缩短日志(阶段 4a)。
+     *
+     * 撤销从不物理截断: 正在读旧区间的读者不会因为文件变短而看到不一致的视图,
+     * 派生缓存(日志长度/条数只增)也继续有效。表面上被收掉的那一段由这条事件自己描述
+     * (SourceEventSeqs + 覆盖同一区间的 SurfaceOp), 任何读者折到它都会得到同一个结果。
+     *
+     * 只允许回退本会话自有区间(forks 的种子前缀不可回退); 越界返回 null。
+     */
+    public SessionEvent? Revert(long targetSeq, string? reason = null)
     {
-        var subscribers = Truncated;
+        if (targetSeq < InheritedEventCount || targetSeq > TotalCount)
+            return null;
+        var payload = new SessionRevertPayload(targetSeq, reason);
+        var nodes = _surfaceManager.Nodes;
+        var shadowed = nodes.Where(node => node >= targetSeq).ToList();
+        var appended = shadowed.Count == 0
+            ? Append(payload)
+            : Append(payload, new SurfaceOp.Replace(shadowed[0], shadowed[^1]), shadowed);
+        var subscribers = Reverted;
         if (subscribers is null)
-            return;
+            return appended;
         foreach (var subscriber in subscribers.GetInvocationList())
         {
             if (subscriber is not Action<Session, long> action)
                 continue;
             try
             {
-                action(this, eventCount);
+                action(this, targetSeq);
             }
             catch
             {
-                // Observer failures are contained and never unmake a committed truncation.
+                // Observer failures are contained and never unmake a committed revert.
             }
         }
+        return appended;
+    }
+
+    /**
+     * 这个序号是否已被某条回退事件收掉。
+     * 回退只追加, 所以"当前会话包含什么"不能再靠"日志里有什么"判断 —— 从日志扫描派生状态的代码(收件箱、
+     * 时间线、交付物)必须同时问一句这里。
+     */
+    public bool IsReverted(long seq)
+    {
+        lock (_writeGate)
+        {
+            foreach (var (from, to) in _reverted)
+            {
+                if (seq >= from && seq <= to)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /** 已被回退的日志区间(闭区间), 按日志顺序。 */
+    public IReadOnlyList<(long From, long To)> RevertedRanges
+    {
+        get
+        {
+            lock (_writeGate)
+                return [.. _reverted];
+        }
+    }
+
+    /**
+     * 接上发号凭证(由持久化接线在创建/接管写句柄时调用)。
+     *
+     * 接上之后的第一次追加会先向凭证要号: 日志上多出来的事件(别的宿主写进来的)先按日志读回来,
+     * 自己的号被别人的票覆盖过则整段重编号 —— 号永远以日志为准, 内存里的计数只是它的影子。
+     */
+    public void AttachSequencer(ISessionSequencer? sequencer)
+    {
+        lock (_writeGate)
+        {
+            _sequencer = sequencer;
+            _durableCount = TotalCount;
+        }
+    }
+
+
+    /**
+     * 把内存对齐到凭证给出的下一个号。
+     *
+     * - 号在内存之后: 那一段是别的宿主写的, 按日志读回来折进表面(少折等于让模型丢上下文);
+     * - 号在内存之前: 我们的票被别人接管过, 已发号未落盘的那一段按新起点整段重编号。
+     */
+    private void ApplySequencerLocked(long next)
+    {
+        if (next > TotalCount)
+        {
+            foreach (var sessionEvent in _sequencer!.ReadRange(TotalCount, next))
+            {
+                if (sessionEvent.Seq != TotalCount)
+                    continue;
+                _surfaceManager.ValidateNext(sessionEvent);
+                Commit(sessionEvent);
+            }
+            _durableCount = Math.Max(_durableCount, TotalCount);
+            return;
+        }
+        if (next < TotalCount && next >= (_sequencer?.DurableCount ?? _durableCount))
+            RebaseUnsaved(next);
+    }
+
+    /**
+     * 号被别的写者接管: 把未落盘的那一段按日志真实条数重新编号, 并返回重编号后的这一段。
+     *
+     * 已广播出去的号只能整体平移并广播这次平移(见 SessionRenumberNotification): 客户端的卡片按新号对齐,
+     * 不这么做就等于让界面拿着一套日志里不存在的号。
+     */
+    public IReadOnlyList<SessionEvent> RebaseUnsaved(long newStart)
+    {
+        List<SessionEvent> rebased = [];
+        long delta;
+        long fromSeq;
+        lock (_writeGate)
+        {
+            fromSeq = Math.Clamp(_sequencer?.DurableCount ?? _durableCount, 0, TotalCount);
+            if (fromSeq < _residentFrom)
+            {
+                // 窗口会话的前缀不在内存里: 在这里重编号等于凭空改写别人的历史, 交给调用方报错。
+                return [];
+            }
+            // 先把未落盘的那一段摘出来(它们要换号), 再把内存缩短到已落盘处。
+            var unsaved = new List<SessionEvent>();
+            for (var offset = (int)(fromSeq - _residentFrom); offset < _count; offset += 1)
+                unsaved.Add(_buffer[offset]);
+            TruncateMemoryLocked(fromSeq);
+            // 别人占了我们要用的号: 那几条按日志读回来当成历史, 否则内存会在中间缺一块。
+            if (newStart > fromSeq && _sequencer is { } sequencer)
+            {
+                foreach (var sessionEvent in sequencer.ReadRange(fromSeq, newStart))
+                {
+                    if (sessionEvent.Seq != TotalCount)
+                        continue;
+                    _surfaceManager.ValidateNext(sessionEvent);
+                    Commit(sessionEvent);
+                }
+            }
+            delta = newStart - fromSeq;
+            // 我们这一段整体平移到 newStart 之后, 一条都不丢。
+            foreach (var stale in unsaved)
+            {
+                var shifted = ShiftEvent(stale, delta, fromSeq);
+                _surfaceManager.ValidateNext(shifted);
+                Commit(shifted);
+                rebased.Add(shifted);
+            }
+        }
+        if (rebased.Count > 0 && delta != 0)
+            PublishRenumber(fromSeq, delta);
+        return rebased;
+    }
+
+    /** 把内存缩短到 keep 条并重建表面/聚合(重编号与参考实现共用)。 */
+    private void TruncateMemoryLocked(long keep)
+    {
+        _count = (int)(keep - _residentFrom);
+        _pages?.InvalidateFrom(keep);
+        Volatile.Write(ref _snapshot, new SessionLog(_buffer, _count, _residentFrom, _pages));
+        _surfaceManager = new Surface.Manager(() => Volatile.Read(ref _snapshot), 0, seq => _pages?.Get(seq), _residentFrom);
+        // 新建的管理器什么都不知道: 已落盘的那一段要按新号重新折一遍。
+        _surfaceManager.Refold(seq => Volatile.Read(ref _snapshot).EventAt(seq), 0, keep);
+        _headerFold = null;
+        _contextFold = null;
+        _workingDirectoryFold = null;
+        _reverted.Clear();
+        for (var index = 0; index < _count; index += 1)
+            FoldAggregates(_buffer[index]);
+        _derived = [];
+        _derivedNodes = 0;
+        _derivedGeneration = -1;
+    }
+
+    private void PublishRenumber(long fromSeq, long delta)
+    {
+        var subscribers = Renumbered;
+        if (subscribers is null)
+            return;
+        foreach (var subscriber in subscribers.GetInvocationList())
+        {
+            if (subscriber is not Action<Session, long, long> action)
+                continue;
+            try
+            {
+                action(this, fromSeq, delta);
+            }
+            catch
+            {
+                // 观察者失败不能回滚已经重编号的状态。
+            }
+        }
+    }
+
+    /** 重编号: 序号整体平移, 指向这段之后的来源清单一起平移, 指向更早事件的保持不变。 */
+    private static SessionEvent ShiftEvent(SessionEvent source, long delta, long firstUnsaved)
+    {
+        var sources = source.SourceEventSeqs is { } raw
+            ? raw.Select(seq => seq >= firstUnsaved ? seq + delta : seq).ToList()
+            : null;
+        return new SessionEvent
+        {
+            Type = source.Type,
+            Seq = source.Seq + delta,
+            Time = source.Time,
+            Data = source.Data,
+            Ignorable = source.Ignorable,
+            SurfaceOp = source.SurfaceOp,
+            SourceEventSeqs = sources,
+        };
     }
 
     public SessionEvent Append(SessionEventPayload payload, SurfaceOp? surfaceOp = null, IReadOnlyList<long>? sourceEventSeqs = null)
@@ -285,6 +518,9 @@ public sealed class Session
         Action<Session, SessionEvent>? subscribers;
         lock (_writeGate)
         {
+            // 号必须在创建事件之前定下来: 广播早于落盘, 而广播出去的号不能事后改。
+            if (_sequencer is { } sequencer)
+                ApplySequencerLocked(sequencer.NextSeq());
             sessionEvent = new SessionEvent
             {
                 Type = payload.Type,
@@ -341,6 +577,19 @@ public sealed class Session
 
     public EpochHeader? RequestHeader() => Volatile.Read(ref _headerFold);
 
+    /**
+     * 补回折叠时的请求头/请求上下文(旧检查点里没有这两项时由调用方从日志里找回来)。
+     *
+     * 只填当前为空的那一半: 快照里已有的不能被更旧的日志值覆盖。
+     */
+    public void AdoptFoldMeta(EpochHeader? header, RequestContextPayload? context)
+    {
+        if (header is not null && Volatile.Read(ref _headerFold) is null)
+            Volatile.Write(ref _headerFold, Core.RequestHeader.Canonicalize(header));
+        if (context is not null && Volatile.Read(ref _contextFold) is null)
+            Volatile.Write(ref _contextFold, context);
+    }
+
     public RequestContextPayload? RequestContext() => Volatile.Read(ref _contextFold);
 
     public IReadOnlyList<Message> DeriveMessages()
@@ -389,6 +638,10 @@ public sealed class Session
             case WorkingDirectoryChangedPayload change:
                 Volatile.Write(ref _workingDirectoryFold, change.Cwd);
                 break;
+            // 回退区间与"会话里还剩什么"一起由日志派生: 重建折叠状态时(截断/载入)必须重算, 否则会漏掉或留住旧区间。
+            case SessionRevertPayload revert:
+                _reverted.Add((revert.TargetSeq, sessionEvent.Seq));
+                break;
         }
     }
 
@@ -411,21 +664,34 @@ public sealed class Session
         private const int MaxPages = 8;
 
         private readonly Lock _gate = new();
-        private readonly Dictionary<long, SessionEvent[]?> _pages = [];
+        private readonly Dictionary<long, Page> _pages = [];
         private readonly List<long> _order = [];
         private long _reads;
+        private long _distinct;
+        /** 已经读过的页: 只用来区分"重复解析"与"第一次读"。 */
+        private readonly HashSet<long> _seen = [];
+        /**
+         * 折叠从前往后读前缀, 而 replace 的 SourceEventSeqs 会随机回看更早的事件 ——
+         * 那些回看如果和顺序页共用同一个 LRU, 就会把"下一章要读的页"挤出去, 同一页被反复解压(实测 1.47×)。
+         * 于是把顺序读到的最后一页单独钉住: 它不参与淘汰, 换页时才把它并入 LRU。
+         */
+        private long _pinnedPage = -1;
+        private Page _pinned = Page.Unavailable(0);
 
         public long Reads => Interlocked.Read(ref _reads);
+
+        /** 真正读过多少不同的页(reads 与它的比值就是重复解析的倍数)。 */
+        public long DistinctPages => Interlocked.Read(ref _distinct);
 
         public SessionEvent? Get(long seq)
         {
             var page = seq / Session.PageSize;
             lock (_gate)
             {
+                if (page == _pinnedPage)
+                    return At(_pinned, seq);
                 if (_pages.TryGetValue(page, out var cached))
                 {
-                    if (cached is null)
-                        return null;
                     TouchLocked(page);
                     return At(cached, seq);
                 }
@@ -433,15 +699,32 @@ public sealed class Session
             var loaded = Load(page);
             lock (_gate)
             {
-                _pages[page] = loaded;
-                _order.Add(page);
-                while (_order.Count > MaxPages)
+                // 顺序前进(或第一次读): 钉住这一页, 上一页并进 LRU。
+                if (_seen.Add(page))
+                    Interlocked.Increment(ref _distinct);
+                if (page >= _pinnedPage)
                 {
-                    var evicted = _order[0];
-                    _order.RemoveAt(0);
-                    _pages.Remove(evicted);
+                    if (_pinnedPage >= 0)
+                        AddLocked(_pinnedPage, _pinned);
+                    _pinnedPage = page;
+                    _pinned = loaded;
+                    return At(loaded, seq);
                 }
-                return loaded is null ? null : At(loaded, seq);
+                AddLocked(page, loaded);
+                return At(loaded, seq);
+            }
+        }
+
+        /** 放进 LRU 并淘汰最旧的一页。 */
+        private void AddLocked(long page, Page loaded)
+        {
+            _pages[page] = loaded;
+            _order.Add(page);
+            while (_order.Count > MaxPages)
+            {
+                var evicted = _order[0];
+                _order.RemoveAt(0);
+                _pages.Remove(evicted);
             }
         }
 
@@ -455,31 +738,48 @@ public sealed class Session
                     _pages.Remove(key);
                     _order.Remove(key);
                 }
+                if (_pinnedPage >= page)
+                {
+                    _pinnedPage = -1;
+                    _pinned = Page.Unavailable(page * Session.PageSize);
+                }
             }
         }
 
-        private static SessionEvent? At(SessionEvent[] page, long seq)
+        /**
+         * 页就是"从 From 起的连续事件": 页读回来的第一条未必是请求的那一条(记录缺失/被跳过的回退块都会让页从更晚的号开始),
+         * 因此下标基准必须是页自己的 From, 不能是 page * PageSize —— 用后者会把整页事件错位一格, 界面上就是"只剩前半截"。
+         */
+        private readonly record struct Page(long From, SessionEvent[]? Events)
         {
-            var offset = (int)(seq % Session.PageSize);
-            return offset < page.Length ? page[offset] : null;
+            public static Page Unavailable(long from) => new(from, null);
         }
 
-        private SessionEvent[]? Load(long page)
+        private static SessionEvent? At(Page page, long seq)
         {
+            if (page.Events is not { } events)
+                return null;
+            var offset = seq - page.From;
+            return offset >= 0 && offset < events.Length ? events[offset] : null;
+        }
+
+        private Page Load(long page)
+        {
+            var start = page * Session.PageSize;
             Interlocked.Increment(ref _reads);
             try
             {
-                var events = reader(page * Session.PageSize, Session.PageSize);
+                var events = reader(start, Session.PageSize);
                 if (events.Count == 0)
-                    return null;
+                    return Page.Unavailable(start);
                 var stored = new SessionEvent[events.Count];
                 for (var index = 0; index < events.Count; index += 1)
                     stored[index] = events[index];
-                return stored;
+                return new Page(stored[0].Seq, stored);
             }
             catch (Exception error) when (error is IOException or FormatException or InvalidOperationException)
             {
-                return null;
+                return Page.Unavailable(start);
             }
         }
 

@@ -1095,9 +1095,9 @@ public sealed class ChatWindowPaneTests : IDisposable
         return string.Join('\n', lines);
     }
 
-    /** §6 D3: /timestamp revert 就地截断会话并把被选消息回填输入区。 */
+    /** 阶段 4a: /timestamp revert 只追加一条回退事件(日志不变短), 并把被选消息回填输入区。 */
     [Fact]
-    public async Task Timestamp_Revert_Truncates_Session_And_Refills_Input()
+    public async Task Timestamp_Revert_AppendsARevertEvent_And_RefillsInput()
     {
         var (chat, _, _, _, _) = await CreateChatWithTwoAgents();
         var agent = chat.InputPane.Agent;
@@ -1107,18 +1107,24 @@ public sealed class ChatWindowPaneTests : IDisposable
         agent.Session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
         var secondTurn = agent.Session.Append(new TurnStartPayload(2)).Seq;
         var targetSeq = agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第二条")), new SurfaceOp.Append()).Seq;
+        var before = agent.Session.Seq;
 
         chat.RunSlashCommand(chat.InputPane, $"/timestamp revert {targetSeq}");
-        for (var attempt = 0; attempt < 200 && agent.Session.Seq != secondTurn; attempt++)
+        for (var attempt = 0; attempt < 200 && agent.Session.Seq == before; attempt++)
         {
             chat.DrainUi();
             await Task.Delay(5, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal("第二条", chat.InputPane.Input);
-        // 停在"这条消息所属回合之前": 整个第二回合都被截掉, 第一回合原样保留。
-        Assert.Equal(secondTurn, agent.Session.Seq);
-        Assert.True(agent.Session.Seq > firstTurn);
+        // 只追加: 日志比回退前多一条, 被回退的事件仍在日志里, 但不再属于会话。
+        Assert.Equal(before + 1, agent.Session.Seq);
+        Assert.Contains(agent.Session.SnapshotEvents(), ev => ev.Data is SessionRevertPayload revert && revert.TargetSeq == secondTurn);
+        Assert.DoesNotContain(
+            SessionTimeline.UserMessages(agent.Session),
+            entry => entry.Text == "第二条");
+        Assert.Contains(SessionTimeline.UserMessages(agent.Session), entry => entry.Text == "第一条");
+        Assert.True(firstTurn < secondTurn);
         chat.Dispose();
     }
 

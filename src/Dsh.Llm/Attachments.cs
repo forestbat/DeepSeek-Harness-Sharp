@@ -73,6 +73,53 @@ public static class AttachmentResolution
         => $"data:{attachment.MediaType};base64,{Convert.ToBase64String(Resolve(options, attachment).Span)}";
 }
 
+/**
+ * 附件字节已经不在了(被删/搬迁/副本比原件旧): 请求期把那张图换成一段文本占位, 会话本身一个字都不改。
+ *
+ * 以前是直接抛 ATTACHMENT_MISSING, 结果是整条会话再也发不出消息 —— 图看不了, 但上下文与后续对话不该跟着废掉。
+ * 与 TextOnlyImages 的区别只在理由: 那个是模型不吃图, 这个是图已经不存在。
+ */
+public static class MissingImages
+    {
+    /** The notice the model sees instead of one image whose bytes are gone. */
+    public static string OmittedText(ImageAttachmentRef attachment)
+        => $"[image omitted because its bytes are no longer stored; attachment sha256:{attachment.AttachmentId[..Math.Min(TextOnlyImages.DigestPrefixLength, attachment.AttachmentId.Length)]}]";
+
+    /** 返回把"引用了但拿不到字节"的图片换成占位的请求; 没有这种图片时原样返回。 */
+    public static GenerateOptions Project(GenerateOptions options, Action<string>? warn)
+    {
+        if (!options.Messages.Any(message => ToolResultImages.Any(message.Content)))
+            return options;
+        var missing = new HashSet<string>(StringComparer.Ordinal);
+        var projected = options.Messages.Select(message => ToolResultImages.Any(message.Content)
+            ? message with { Content = Replace(message.Content, options.Attachments, missing) }
+            : message).ToList();
+        if (missing.Count == 0)
+            return options;
+        warn?.Invoke($"request carries {missing.Count} image attachment(s) whose bytes are no longer stored; they are sent as text placeholders: {string.Join(", ", missing)}");
+        return options.WithMessages(projected);
+    }
+
+    private static IReadOnlyList<ContentBlock> Replace(
+        IReadOnlyList<ContentBlock> blocks,
+        IReadOnlyDictionary<string, byte[]>? attachments,
+        HashSet<string> missing)
+        => [.. blocks.Select(block => block switch
+        {
+            ImageBlock image when attachments is null || !attachments.ContainsKey(image.Attachment.AttachmentId)
+                => Missing(image, missing),
+            ToolResultBlock result when ToolResultImages.Any(result.Content)
+                => result with { Content = Replace(result.Content, attachments, missing) },
+            _ => block,
+        })];
+
+    private static TextBlock Missing(ImageBlock image, HashSet<string> missing)
+    {
+        missing.Add(image.Attachment.AttachmentId);
+        return new TextBlock(OmittedText(image.Attachment));
+    }
+}
+
 /** 从消息里收集 ImageBlock 引用的字节, 供请求期注入 GenerateOptions.Attachments。 */
 public static class AttachmentHydration
 {
@@ -151,7 +198,7 @@ public static class ToolResultImages
 public static class TextOnlyImages
 {
     private const string ImageModality = "image";
-    private const int DigestPrefixLength = 8;
+    internal const int DigestPrefixLength = 8;
 
     /** The notice the model sees instead of one image. */
     public static string OmittedText(ImageAttachmentRef attachment)

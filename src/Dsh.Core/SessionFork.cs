@@ -7,7 +7,8 @@ namespace Dsh.Core;
  *
  * 落成**种子会话**(与宿主 live 会话 `Session.Create(seed, IsSeeded:true, inheritedEventCount)` 同一形态):
  * - 继承父会话 [0, toSeqExclusive) 的事件, 末尾补 `session/end-seed` 标记, 日志头写 `seedLength`;
- * - `InheritedEventCount` 让 `OwnEvents()`/`TryTruncateTo` 只在本会话自有区间内动作, 种子区间不可回退;
+ * - `InheritedEventCount` 让 `OwnEvents()`/`Revert` 只在本会话自有区间内动作, 种子区间不可回退;
+
  * - 种子部分不被 `SessionRepair.InterruptedTurnClosers` 统计, 所以打开(resume)这个 fork 不会补任何合成事件,
  *   也就不会出现"请判断是否重试"这类会被模型当成继续指令的文本 —— fork 只复制, 不触发推理。
  * cwd 用调用方(输入窗格/检查点)的工作目录: 进程内会话的 header 可能没带 cwd, 不带过去会让 fork 显示"(无工作目录)"。

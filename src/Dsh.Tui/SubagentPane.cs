@@ -67,12 +67,18 @@ internal sealed class SubagentPane : ITuiPane
         Renderer.AppendSessionEvent(sessionEvent, replay);
     }
 
+    /** 按日志整段重画(与回退同一入口): 事件被收掉或整体换号之后, 界面必须与日志重新对齐。 */
+    public void RedrawFromLog()
+    {
+        RenderedSeq = 0;
+        ReplayEvents();
+    }
+
     public void ReplayEvents()
     {
-        // 与主窗格一致: 窗口化会话只回放常驻段, 前缀留一行说明 —— 遍历前缀会把页全拉回来。
-        if (_session.ResidentFrom > 0)
-            Renderer.AppendPrefixWindowNotice(_session.ResidentFrom);
-        foreach (var sessionEvent in _session.ResidentEvents())
+        // 子代理转录整段回放: 行缓冲有驻留上限(超了从头部裁), 所以这里不必自己限定窗口,
+        // 用户往上滚就能看到子代理最早的输出。
+        foreach (var sessionEvent in _session.SnapshotEvents())
             ProcessSessionEvent(sessionEvent, replay: true);
     }
 

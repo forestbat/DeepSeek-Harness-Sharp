@@ -80,16 +80,26 @@ public class SessionTests
         Assert.Equal("compacted", Assert.IsType<TextBlock>(message.Content[0]).Text);
     }
 
+    /**
+     * 来源清单不全的 replace: **不再拒绝写入**, 但要记一条损伤(读路径同样降级)。
+     *
+     * 早先这里抛异常, 结果是"一条 2026 年早期的真实日志因此整份打不开、也写不进去"。
+     * 来源清单是"这条消息由哪些事件构成"的记账, 缺记账不该让会话报废; 结构性问题(序号不连续、
+     * replace 终点不在表面上)仍然是致命的。
+     */
     [Fact]
-    public void SurfaceReplace_RequiresCompleteShadowCoverage()
+    public void SurfaceReplace_WithIncompleteShadowCoverage_DegradesInsteadOfFailing()
     {
         var session = Session.Create(NewSessionId());
         session.Append(UserText("old"), new SurfaceOp.Append());
         session.Append(UserText("other"), new SurfaceOp.Append());
 
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            session.Append(UserText("compacted"), new SurfaceOp.Replace(0, 1), [0]));
-        Assert.Contains("sourceEventSeqs must include every shadowed surface node", error.Message);
+        session.Append(UserText("compacted"), new SurfaceOp.Replace(0, 1), [0]);
+
+        var damage = Assert.Single(session.SurfaceManager.Damage);
+        Assert.Contains("缺 1 个节点", damage, StringComparison.Ordinal);
+        var message = Assert.Single(session.DeriveMessages());
+        Assert.Equal("compacted", Assert.IsType<TextBlock>(message.Content[0]).Text);
     }
 
     [Fact]

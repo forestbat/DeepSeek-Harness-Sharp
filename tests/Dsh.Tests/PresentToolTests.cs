@@ -257,23 +257,6 @@ public sealed class PresentToolTests
     }
 
     [Fact]
-    public async Task Deliverables_FollowSessionTruncation()
-    {
-        await using var environment = await GuiTestEnvironment.CreateAsync(HomeSettings);
-        var session = environment.Agent.Session;
-        var first = await CreateFile(session, "first.docx");
-        await CreateFile(session, "second.docx");
-        session.Append(new TurnStartPayload(1));
-        await Present(environment, File("first.docx"));
-        var cut = session.Seq;
-        await Present(environment, File("second.docx"));
-
-        Assert.True(session.TryTruncateTo(cut));
-
-        Assert.Equal([new PresentedFile(first)], SessionDeliverables.Collect(session.SnapshotEvents()));
-    }
-
-    [Fact]
     public async Task Deliverables_SurviveRestartAndResume_AndListThroughCommand()
     {
         await using var environment = await GuiTestEnvironment.CreateIsolatedAsync(HomeSettings);

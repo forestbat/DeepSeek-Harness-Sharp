@@ -613,7 +613,35 @@ public sealed class GuiHeadlessTests(ITestOutputHelper output)
             Dispatcher.UIThread.RunJobs();
         });
 
-    /** @引用补全只看光标处的未完成 token: 选中候选或继续打提示词之后, 提示词都要保住并且能整段发送。 */
+    /** 缓存里只有预览的卡片: 标题栏要直说"只有前 N 行", 否则重开之后少掉的那截看起来像本来就没改。 */
+    [Fact]
+    public async Task DiffCard_MarksAPreviewCardWithItsStoredLineCount() => await HeadlessGui.RunAsync(async () =>
+        {
+            var environment = await GuiTestEnvironment.CreateAsync();
+            await using var environmentScope = environment;
+            var window = new MainWindow(environment.App, await environment.OpenChatAsync());
+            var viewModel = window.ViewModel!;
+            window.Show();
+            viewModel.ShowChatCommand.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+
+            var lines = Enumerable.Range(0, 40)
+                .Select(index => new DiffLine(DiffLineKind.Add, null, index + 1, $"line {index}"))
+                .ToArray();
+            var message = new MessageViewModel("工具", "edit", MessageKind.Tool, false);
+            message.SetDiff(new DiffCard("edit src/big.cs", "patch", lines) { TotalLines = 600 });
+            viewModel.Messages.Add(message);
+            message.IsDiffExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+
+            var diffView = window.GetVisualDescendants().OfType<DiffView>().Single();
+            Assert.Contains(
+                diffView.GetVisualDescendants().OfType<TextBlock>(),
+                block => block.Text == $"仅缓存前 {lines.Length}/600 行");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
     [Fact]
     public async Task ComposerMentionMenu_ClosesOncePromptFollowsTheReference() => await HeadlessGui.RunAsync(async () =>
         {

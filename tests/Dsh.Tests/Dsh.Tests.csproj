@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <Import Project="..\..\src\Dsh.Plugins.Generator\DshPluginHost.props" />
 
@@ -11,6 +11,7 @@
     <DshBuildFaultProbe>true</DshBuildFaultProbe>
     <IsPackable>false</IsPackable>
     <StartupObject>Dsh.Tests.TestProcessEntryPoint</StartupObject>
+    <UserSecretsId>c4586b4c-a9c2-4f3e-9e36-0ca52b8c4d14</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -47,22 +48,15 @@
     <ProjectReference Include="..\Dsh.SandboxPluginSample\Dsh.SandboxPluginSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <ProjectReference Include="..\..\templates\managed-plugin\DshPluginTemplate.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!-- 让 /plugins add 走与真实插件相同的 dll + deps 闭包路径。 -->
-    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.dll"
-          Link="Dsh.ManagedPluginSample.dll"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.deps.json"
-          Link="Dsh.ManagedPluginSample.deps.json"
-          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.dll" Link="Dsh.ManagedPluginSample.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Dsh.ManagedPluginSample\bin\$(Configuration)\$(TargetFramework)\Dsh.ManagedPluginSample.deps.json" Link="Dsh.ManagedPluginSample.deps.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- MCP resource tests launch the copied sample apphost without referencing its types. -->
     <ProjectReference Include="..\Dsh.McpResourceServerSample\Dsh.McpResourceServerSample.csproj" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishSelfContained" />
     <!--
       发布版 settings.yaml 模板: 内容文件不会穿过传递项目引用(Dsh.Boot 是经 Dsh.Host 间接引用的),
       而 SettingsTemplateTests 校验的正是"随包发布的这份", 所以显式复制, 避免它悄悄缺失。
     -->
-    <None Include="..\..\src\Dsh.Boot\Profiles\Templates\settings.yaml"
-          Link="Profiles\Templates\settings.yaml"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\src\Dsh.Boot\Profiles\Templates\settings.yaml" Link="Profiles\Templates\settings.yaml" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="ScheduleUpstreamFixtures.json" LogicalName="Dsh.Tests.ScheduleUpstreamFixtures.json" />
     <None Update="NetworkGuiDriver.java" CopyToOutputDirectory="PreserveNewest" />
     <!-- Search API responses captured from the real GitHub and Stack Exchange APIs; the engine tests replay them through a local handler. -->
@@ -143,9 +137,7 @@
     <ItemGroup>
       <_McpResourceServerRuntime Include="$(MSBuildProjectDirectory)/../Dsh.McpResourceServerSample/bin/$(Configuration)/$(TargetFramework)/**/*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_McpResourceServerRuntime)"
-          DestinationFiles="@(_McpResourceServerRuntime->'$(TargetDir)mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_McpResourceServerRuntime)" DestinationFiles="@(_McpResourceServerRuntime-&gt;'$(TargetDir)mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Keep adversarial fixture code outside the host image and copy its actual deployment closure. -->
@@ -153,14 +145,11 @@
     <ItemGroup>
       <_SandboxPluginRuntime Include="$(MSBuildProjectDirectory)/../Dsh.SandboxPluginSample/bin/$(Configuration)/$(TargetFramework)/**/*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_SandboxPluginRuntime)"
-          DestinationFiles="@(_SandboxPluginRuntime->'$(TargetDir)sandbox-plugin/%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_SandboxPluginRuntime)" DestinationFiles="@(_SandboxPluginRuntime-&gt;'$(TargetDir)sandbox-plugin/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Build-only fixture copies must also participate in the self-contained publish manifest. -->
-  <Target Name="PublishSandboxFixtureRuntimes" BeforeTargets="ComputeFilesToPublish"
-          DependsOnTargets="CopyMcpResourceServerRuntime;CopySandboxPluginRuntime">
+  <Target Name="PublishSandboxFixtureRuntimes" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="CopyMcpResourceServerRuntime;CopySandboxPluginRuntime">
     <ItemGroup>
       <ResolvedFileToPublish Include="@(_McpResourceServerRuntime)">
         <RelativePath>mcp-resource-server/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
@@ -176,16 +165,8 @@
   </Target>
 
   <!-- A standalone startup hook must not load the test assembly's plugin-registration module initializers into dsharp. -->
-  <Target Name="BuildNetworkGuiObserver" AfterTargets="Build"
-          Inputs="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs;@(ReferencePath)"
-          Outputs="$(TargetDir)network-gui-observer.dll">
-    <Csc Sources="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs"
-         References="@(ReferencePath)"
-         OutputAssembly="$(TargetDir)network-gui-observer.dll"
-         TargetType="Library" DefineConstants="NETWORK_GUI_OBSERVER"
-         Nullable="enable" LangVersion="$(LangVersion)"
-         NoStandardLib="true" NoConfig="true" Deterministic="true"
-         UseSharedCompilation="false" EmitDebugInformation="false" />
+  <Target Name="BuildNetworkGuiObserver" AfterTargets="Build" Inputs="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs;@(ReferencePath)" Outputs="$(TargetDir)network-gui-observer.dll">
+    <Csc Sources="$(MSBuildProjectDirectory)/NetworkProxySmokeTests.cs" References="@(ReferencePath)" OutputAssembly="$(TargetDir)network-gui-observer.dll" TargetType="Library" DefineConstants="NETWORK_GUI_OBSERVER" Nullable="enable" LangVersion="$(LangVersion)" NoStandardLib="true" NoConfig="true" Deterministic="true" UseSharedCompilation="false" EmitDebugInformation="false" />
   </Target>
 
 </Project>

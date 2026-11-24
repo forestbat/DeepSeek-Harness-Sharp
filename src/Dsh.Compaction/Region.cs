@@ -23,6 +23,12 @@ public sealed record CompactionTransactionOptions(
     string? Focus = null,
     /** > 0 时, 摘要在可用性上失败(失败/比原文更大)后改为丢弃旧历史并保留最近 N 轮原文; 0 表示不降级。 */
     int DegradedRetainTurns = 0,
+    /**
+     * 尾部保留预算(与正常压缩同一个数字)。降级模式只按"最近 N 轮"保留是不够的 ——
+     * 一轮里有几十次工具调用时六轮原文能到几十万 token, 压完几乎没变小(现场: 48 万 → 33 万)。
+     * 轮数是上限, 预算才是把尾巴夹紧的那一刀; 0 表示用策略里的默认值。
+     */
+    int RetainTokens = 0,
     /** 内部标记: 当前这次已经是降级尝试, 不允许再次降级(否则会无限递归)。 */
     bool AlreadyDegraded = false);
 
@@ -70,7 +76,19 @@ public static class CompactionRegion
         var surfaceNodes = session.SurfaceManager.Nodes;
         if (surfaceNodes.Count != pricedNodes.Count
             || surfaceNodes.Where((seq, index) => seq != pricedNodes[index].Seq).Any())
-            throw new InvalidOperationException("compaction: token-meter surface does not match the current session surface");
+        {
+            // 计量器是缓存, 过期该重建(见 TokenMeter.SyncChecked); 这里只兜住"重建之后仍不一致"的真不一致。
+            var divergence = 0;
+            while (divergence < Math.Min(surfaceNodes.Count, pricedNodes.Count)
+                && surfaceNodes[divergence] == pricedNodes[divergence].Seq)
+                divergence += 1;
+            var at = divergence < Math.Min(surfaceNodes.Count, pricedNodes.Count)
+                ? $"first difference at index {divergence}: session #{surfaceNodes[divergence]} vs meter #{pricedNodes[divergence].Seq}"
+                : "one side is a strict prefix of the other";
+            throw new InvalidOperationException(
+                $"compaction: token-meter surface does not match the current session surface "
+                + $"(session {surfaceNodes.Count} nodes, meter {pricedNodes.Count} nodes; {at})");
+        }
 
         var firstEligibleIdx = 0;
         while (firstEligibleIdx < surfaceNodes.Count
@@ -92,6 +110,32 @@ public static class CompactionRegion
         if (keepFromIdx <= firstEligibleIdx)
             return null;
         return new ShadowedRange(surfaceNodes[firstEligibleIdx], surfaceNodes[keepFromIdx - 1]);
+    }
+
+    /**
+     * 把令牌数按 seq 贴到会话 surface 上。
+     *
+     * 两份表在窗口化会话里天然不同长(会话只覆盖常驻窗口, meter 折的是整条日志), 但**顺序**一致:
+     * 会话 surface 是完整 surface 的一段子序列。这里按 seq 对齐; 真有节点没被计量过就是真的不一致,
+     * 报出来而不是悄悄当成 0 token(那会让选区整体算错)。
+     */
+    private static IReadOnlyList<TokenSurfaceNode> AttachTokens(
+        IReadOnlyList<long> surfaceNodes,
+        IReadOnlyList<TokenSurfaceNode> pricedNodes)
+    {
+        var priced = new Dictionary<long, TokenSurfaceNode>(pricedNodes.Count);
+        foreach (var node in pricedNodes)
+            priced[node.Seq] = node;
+        var aligned = new List<TokenSurfaceNode>(surfaceNodes.Count);
+        foreach (var seq in surfaceNodes)
+        {
+            if (!priced.TryGetValue(seq, out var node))
+                throw new InvalidOperationException(
+                    $"compaction: token-meter has no measurement for surface seq {seq} "
+                    + $"(surface {surfaceNodes.Count} node(s), metered {pricedNodes.Count})");
+            aligned.Add(node);
+        }
+        return aligned;
     }
 
     private static int SelectRetentionStart(
@@ -308,8 +352,9 @@ public static class CompactionRegion
         var measurement = meter.Measure(session);
         for (var keeps = Math.Max(1, options.DegradedRetainTurns); keeps >= 1; keeps -= 1)
         {
-            // 预算给到无穷大: 让选区恰好停在"最近 N 轮"的起点, 这 N 轮本身不被丢弃、也不被摘要。
-            if (SelectCompactableRange(session, measurement, int.MaxValue, keeps) is not { } range)
+            // 轮数是上限, 预算才是真正夹紧尾巴的那一刀: 只按轮数保留时, 一轮几十次工具调用就能留下几十万 token。
+            var budget = options.RetainTokens > 0 ? options.RetainTokens : CompactionConfigResolver.DefaultRetainTokens;
+            if (SelectCompactableRange(session, measurement, budget, keeps) is not { } range)
                 continue;
             signal.ThrowIfCancellationRequested();
             try
@@ -443,7 +488,8 @@ public static class CompactionRegion
     private static PreparedCompaction PrepareCompaction(TokenMeter meter, Session session, SurfaceSelection selection, string? focus)
     {
         var measurement = meter.Measure(session);
-        var selectedNodes = (IReadOnlyList<TokenSurfaceNode>)[.. measurement.Nodes.Skip(selection.StartIdx).Take(selection.EndIdx - selection.StartIdx + 1)];
+        // 选区下标是**会话 surface** 的, 而测量结果是 meter 自己的折; 窗口化会话里两者不同长, 只能按 seq 取。
+        var selectedNodes = AttachTokens(selection.ShadowedSeqs, measurement.Nodes);
         if (selectedNodes.Count != selection.ShadowedSeqs.Count
             || selectedNodes.Where((node, index) => node.Seq != selection.ShadowedSeqs[index]).Any())
             throw new SurfaceChangedError("compaction: selected surface changed before summarization began");
@@ -496,7 +542,8 @@ public static class CompactionRegion
         }
         if (!currentSelection.ShadowedSeqs.SequenceEqual(prepared.Selection.ShadowedSeqs))
             throw new SurfaceChangedError("compaction: the selected span changed during summarization");
-        var measured = meter.Measure(session).Nodes.Skip(currentSelection.StartIdx).Take(currentSelection.EndIdx - currentSelection.StartIdx + 1);
+        // 与选区同样按 seq 取: 窗口化会话里 meter 的节点表比会话 surface 长, 下标不能直接对齐。
+        var measured = AttachTokens(currentSelection.ShadowedSeqs, meter.Measure(session).Nodes);
         if (!measured.SequenceEqual(prepared.SelectedNodes))
             throw new SurfaceChangedError("compaction: the selected span was rewritten during summarization");
     }

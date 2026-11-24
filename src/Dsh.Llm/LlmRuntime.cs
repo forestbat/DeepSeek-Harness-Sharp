@@ -194,7 +194,10 @@ public sealed class LlmRuntime : Service
             var registration = prepared?.Registration ?? RegistrationFor(options.Provider);
             var dispatch = prepared?.AdapterCall.Stream ?? registration.Adapter.Stream;
             var modelInfo = prepared?.ModelInfo ?? registration.Adapter.ResolveModel(options.Model);
-            var request = TextOnlyImages.Project(options, modelInfo?.InputModalities);
+            // 先补缺字节的图(会话里引用了、盘上已没有), 再按模型能力决定要不要把图换成纯文本提示。
+            var request = TextOnlyImages.Project(
+                MissingImages.Project(options, message => Ctx.LoggerFor("llm").Warn(message)),
+                modelInfo?.InputModalities);
             iterator = dispatch(request, options.Cancellation).GetAsyncEnumerator(options.Cancellation);
         }
         catch (Exception error)

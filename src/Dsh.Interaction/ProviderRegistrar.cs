@@ -166,7 +166,8 @@ public sealed class ProviderRegistrar : IDisposable
             : ProviderCatalog.EffectiveModels(id, baseUrl, provider.Models.Keys);
         var specs = effective
             .Select(modelId => provider.Models.TryGetValue(modelId, out var declared)
-                ? new ProviderModelSpec(modelId, declared.Name, declared.SystemPromptUpdate)
+                ? new ProviderModelSpec(modelId, declared.Name, declared.SystemPromptUpdate,
+                    declared.ContextWindow, declared.MaxOutputTokens)
                 : new ProviderModelSpec(modelId))
             .ToList();
 

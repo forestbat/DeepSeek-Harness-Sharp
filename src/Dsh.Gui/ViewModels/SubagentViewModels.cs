@@ -13,6 +13,9 @@ using Dsh.Sdk;
 
 namespace Dsh.Gui.ViewModels;
 
+/** 时间轴上的一条用户消息: 序号定位, 预览文字给人看; 它可能还没进转录。 */
+public sealed record TimelineEntryViewModel(long Seq, long Time, string Preview);
+
 /** 子代理树条目: descriptor 与 live 状态均来自拥有父会话的 Host。 */
 public sealed partial class SubagentNodeViewModel(
     SessionId id, SessionId? parent, int depth, string mode, string? label, bool hasChildren) : ObservableObject

@@ -12,6 +12,11 @@ public sealed record SessionEvent
 {
     private SessionEventPayload? _data;
     private ReadOnlyMemory<byte> _rawRecord;
+    private string? _type;
+    private long? _time;
+    /** 只读信封时的延迟来源: 真正要 Type/Time/Data 了才去解那一条记录。 */
+    private Func<SessionEvent>? _deferred;
+    private SessionEvent? _resolved;
 
     public SessionEvent()
     {
@@ -36,9 +41,42 @@ public sealed record SessionEvent
         _rawRecord = rawRecord;
     }
 
-    public required string Type { get; init; }
+    /**
+     * **只读信封**的构造入口: 序号立刻可用(索引里就有), 类型/时刻/负载留到第一次真正用到时才解。
+     *
+     * 用于"百万条事件从头扫到尾"这类动作: 扫的时候只取序号, 一条负载都不解, 于是耗时从"整段解码"
+     * 降到"查表"; 只有视口里真正要渲染的那几条才会解出负载。解出来的负载由 `resolve` 自己缓存。
+     */
+[SetsRequiredMembers]
+#pragma warning disable CS8618 // Type/Time/Data 由 _deferred 提供
+    internal SessionEvent(long seq, Func<SessionEvent> resolve)
+#pragma warning restore CS8618
+    {
+        Seq = seq;
+        _deferred = resolve;
+    }
+
+    private SessionEvent Resolved => _resolved ??= _deferred!();
+
+    /** 只读信封事件的构造入口: 序号立刻可用, 类型/时刻/负载第一次用到时才由 `resolve` 解出。 */
+    public static SessionEvent Deferred(long seq, Func<SessionEvent> resolve) => new(seq, resolve);
+
+    /** 事件类型。只读信封时由 `_deferred` 解出(第一次访问才解)。 */
+    public required string Type
+    {
+        get => _type ?? Resolved.Type;
+        init => _type = value;
+    }
+
+    /** 序号: 索引里直接就有, 不触发任何解码。 */
     public required long Seq { get; init; }
-    public required long Time { get; init; }
+
+    /** 时刻(Unix 毫秒)。只读信封时由 `_deferred` 解出。 */
+    public required long Time
+    {
+        get => _time ?? Resolved.Time;
+        init => _time = value;
+    }
 
     /**
      * 负载。窗口读取时它是惰性的: 切窗与折叠只用得到信封, 把 2 万条事件的 payload 全物化是白花的。
@@ -50,7 +88,7 @@ public sealed record SessionEvent
         {
             if (_data is { } cached)
                 return cached;
-            var payload = SessionEventCodec.DecodeRecordPayload(_rawRecord);
+            var payload = _deferred is not null ? Resolved.Data : SessionEventCodec.DecodeRecordPayload(_rawRecord);
             // 解出来就不再压着那一帧明文: 否则整帧数组会被单条消息一直吊着。
             _rawRecord = default;
             return _data = payload;
@@ -123,6 +161,8 @@ public static class SessionEventCodec
         Register<SystemMessagePayload>(SessionEventTypes.SystemMessage);
         Register<RequestContextPayload>(SessionEventTypes.RequestContext);
         Register<SessionEndSeedPayload>(SessionEventTypes.SessionEndSeed);
+        // 回退不进 ignorable: 旧版本跳过它就会把已经回退的内容继续当上下文发给模型。
+        Register<SessionRevertPayload>(SessionEventTypes.SessionRevert);
         Register<InboxSplicePayload>(SessionEventTypes.AgentInboxSpliced);
         Register<WorkingDirectoryChangedPayload>(SessionEventTypes.WorkingDirectoryChange);
         Register<UserMessagePayload>(SessionEventTypes.UserMessage,
@@ -290,7 +330,9 @@ public sealed class SessionEventJsonConverter : JsonConverter<SessionEvent>
             if (reader.ValueTextEquals("sourceEventSeqs"))
             {
                 reader.Read();
-                sourceEventSeqs = DshJson.Deserialize<IReadOnlyList<long>>(JsonElement.ParseValue(ref reader));
+                // 存盘形态是区间编码([start,end] 或数字), 不是裸数组: 在这里就地展开,
+                // 于是带来源列表的记录也不必先建成 JsonNode 再反序列化一遍。
+                sourceEventSeqs = SeqRanges.Decode(ref reader, seq >= 0 ? seq : long.MaxValue);
                 continue;
             }
             if (reader.ValueTextEquals("data"))

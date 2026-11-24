@@ -11,23 +11,18 @@ namespace Dsh.SessionGraph;
  * 活会话(在 SessionStore 里)以内存日志为准: 每次查询只吸收上次之后追加的事件, 截断时丢弃、下次查询按截断后的日志重建。
  * 其余会话从持久层日志构建, 按 Revision 缓存; 持久层重写日志(截断、改名)会换 Revision, 缓存随之失效。
  */
-public sealed class SessionEventGraphService : Service, IDisposable
+public sealed class SessionEventGraphService : Service
 {
     public const string ServiceName = "sessionEventGraph";
 
     private readonly Lock _gate = new();
     private readonly ConditionalWeakTable<Session, SessionLogGraph> _live = new();
     private readonly Dictionary<SessionId, (string Revision, SessionLogGraph Graph)> _stored = [];
-    private readonly Func<bool> _unsubscribeTruncate;
+
 
     public SessionEventGraphService(Context ctx) : base(ctx, ServiceName)
     {
-        // 截断后 seq 会复用, 已吸收的事件不再是日志的前缀: 丢弃整张图。
-        _unsubscribeTruncate = ctx.On<SessionTruncateNotification>(notification =>
-        {
-            lock (_gate)
-                _live.Remove(notification.Session);
-        }, new EventOptions { Global = true });
+
     }
 
     private SessionStore? Sessions => Ctx.Get<SessionStore>(SessionStore.ServiceName, false);
@@ -114,5 +109,5 @@ public sealed class SessionEventGraphService : Service, IDisposable
         return graph;
     }
 
-    public void Dispose() => _unsubscribeTruncate();
+
 }

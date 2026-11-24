@@ -22,12 +22,6 @@ on:
         required: false
         type: string
         default: 'all'
-      dryioc-commit:
-        required: true
-        type: string
-      dryioc-sha256:
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -86,18 +80,6 @@ jobs:
           "IROH_RID=$rid" >> $env:GITHUB_ENV
           $directory = [System.IO.Path]::GetFullPath("artifacts/iroh-ssh/$rid")
           $directory >> $env:GITHUB_PATH
-
-      - name: Download the DryIoc feed prepared for this run
-        uses: actions/download-artifact@v4
-        with:
-          name: dryioc-feed
-          path: packages
-
-      - name: Prepare local NuGet feed (packages/, DryIoc.dll)
-        shell: pwsh
-        run: |
-          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ inputs.dryioc-commit }}' -ExpectedSha256 '${{ inputs.dryioc-sha256 }}' -RefreshPackageCache
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install real C# frontends for standalone tool tests
         if: (inputs.suite == 'quick' && inputs.quick-cohort != 'fleet-iroh') || (runner.os == 'Windows' && inputs.suite == 'regression-1')

@@ -71,6 +71,7 @@ public sealed partial class ChatWindow : IDisposable
     private readonly KeyBindingTable _keys;
     private readonly KeySequenceMatcher _keySequence;
     private readonly Func<bool> _unsubscribe;
+    private readonly Func<bool> _renumberSubscription;
     private readonly Func<bool> _approvalSubscription;
     private readonly Func<bool> _questionsSubscription;
     private readonly Func<bool> _skillChangeSubscription;
@@ -110,6 +111,13 @@ public sealed partial class ChatWindow : IDisposable
             if (target is null)
                 return;
             QueueSessionEvent(target, notification.Event);
+        });
+        // 未落盘的事件被整体换了号(别的宿主接管了发号权): 按日志整段重画, 界面才不会拿着日志里不存在的号。
+        _renumberSubscription = ctx.On<Dsh.Core.SessionRenumberNotification>(notification =>
+        {
+            var target = FindPaneBySession(notification.Session);
+            if (target is not null)
+                QueueAction(target.RedrawFromLog);
         });
 
         _approvalSubscription = ctx.OnWaterfall<ApprovalRequestNotification>(async (notification, _) =>
@@ -612,7 +620,7 @@ public sealed partial class ChatWindow : IDisposable
             {
                 _inputDividerClickAt = 0;
                 _inputHeight = null;
-                _settings.InputHeight = null;
+                _settings?.InputHeight = null;
                 _inputDrag = false;
                 RenderVersion++;
                 return;
@@ -978,6 +986,7 @@ public sealed partial class ChatWindow : IDisposable
         foreach (var pane in _panes.Values)
             pane.Dispose();
         _unsubscribe.Invoke();
+        _renumberSubscription.Invoke();
         _approvalSubscription.Invoke();
         _questionsSubscription.Invoke();
         _skillChangeSubscription.Invoke();
@@ -1686,13 +1695,22 @@ public sealed partial class ChatWindow : IDisposable
 
     /**
      * jump: 只滚到该消息(不改会话/文件); 目标消息必须落在视口最上方 —— 这是 jump 的全部意义。
-     * 跳不过去(消息已随转录裁头丢失)时明说, 不再让用户"先渲染一次再试"。
+     *
+     * 目标比当前转录更早时先把更早的历史按页接上(用户当然会跳到很早以前的消息), 一页一页往前直到
+     * 它被渲染出来; 真的接不上(事件已经不在日志里 / 页面读不出来)才明说跳不过去。
      */
     private static Task JumpToMessage(ChatPane pane, long seq, int index, int total)
     {
-        // 只定位: 目标消息滚到顶上; 不打印 "jumped to"(那会把视图重新贴回底部, 跳转看不到效果)。
-        if (!pane.TryScrollToUserMessage(index, total))
-            pane.AppendRaw($"  jump 失败: 消息 #{seq} 已不在当前转录里(更早的内容已被裁剪)\n");
+        // 目标比当前转录更早时先把更早的历史接上, 一页一页往前直到它被渲染出来; 历史接完(seq 0)还没有
+        // 就说明这条消息不在日志里。循环因此天然终止, 不需要"最多补几页"这类阈值。
+        while (!pane.TryScrollToUserMessage(index, total))
+        {
+            if (!pane.LoadOlderHistory())
+            {
+                pane.AppendRaw($"  jump 失败: 消息 #{seq} 已不在会话日志里\n");
+                return Task.CompletedTask;
+            }
+        }
         return Task.CompletedTask;
     }
 
@@ -1716,16 +1734,17 @@ public sealed partial class ChatWindow : IDisposable
 
         // 停在"这条消息所属回合之前": 消息前面紧挨着 TurnStart, 截在消息处会留下没有 TurnEnd 的回合。
         var boundary = SessionTimeline.TurnStartOf(pane.Agent.Session.SnapshotEvents(), seq);
-        if (!pane.Agent.Session.TryTruncateTo(boundary))
+        // 回退是**只追加**的事件(阶段 4a): 日志不变短, 正在读旧区间的其他读者因此拿到一致的视图。
+        if (pane.Agent.Session.Revert(boundary, $"revert to #{seq}") is null)
         {
-            pane.AppendRaw($"  revert 失败: #{seq} 超出可截断范围\n");
+            pane.AppendRaw($"  revert 失败: #{seq} 超出可回退范围\n");
             return;
         }
 
         pane.Input = targetText;
         pane.Cursor = pane.Input.Length;
         pane.StickToBottom = true;
-        pane.AppendRaw($"  reverted: 会话已截断到 #{boundary} 之前, 消息已回填输入区\n");
+        pane.AppendRaw($"  reverted: 会话已回退到 #{boundary} 之前, 消息已回填输入区\n");
     }
 
     /**

@@ -12,6 +12,11 @@
     <ProjectReference Include="..\Dsh.Transport\Dsh.Transport.csproj" />
   </ItemGroup>
 
+  <!-- 请求投影的配对不变量(恢复把常驻尾窗截在回合内部的情形)直接在进程内用例里验。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dsh.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

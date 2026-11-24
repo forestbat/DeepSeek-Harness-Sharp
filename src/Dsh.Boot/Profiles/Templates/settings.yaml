@@ -513,6 +513,10 @@ plugins:
 #         tool_call:
 #         系统提示覆盖
 #         system_prompt_update:
+#         模型的最大输入上下文(整数 token); 中转站/自建端点不在 /models 里声明时由这里补上
+#         context_window:
+#         模型单次最大输出(整数 token)
+#         max_output_tokens:
 # 技能目录：扫描顺序 <项目根>/.dsh/skills -> <项目根>/.agents/skills -> paths/customSkillDirs -> ~/.dsh/skills -> ~/.agents/skills -> bundledSkillDir(DSH_BUNDLED_SKILL_DIR)；同名先到先得
 # skills:
 #   额外的本地目录列表(写绝对路径, 不展开 ~)

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    真实会话日志的规范化转储: 用来比较"改动前 / 改动后"读同一份日志得到的东西是否一致。
+    只读, 不写任何会话文件; 也不进解决方案(只有做格式级改动时才需要它)。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>Dsh.SessionDump</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Persistence\Dsh.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Runtime\Dsh.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Compaction\Dsh.Compaction.csproj" />
+  </ItemGroup>
+
+</Project>

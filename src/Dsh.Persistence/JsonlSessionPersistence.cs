@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Dsh.Core;
 using Dsh.Llm;
 
@@ -10,7 +11,24 @@ namespace Dsh.Persistence;
 public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
 {
     private const int FirstLineChunkSize = 8192;
+
+    /** 追加时抢"尾部这段字节"的重试次数与间隔: 抢不到只是这一次写不进去, 不是日志坏了。 */
+    private const int TailLockAttempts = 100;
+    /**
+     * 发号票在别人手里时的等待: 覆盖到票的 TTL(10s)还要多一点。
+     *
+     * 对方正在写的一批只有微秒级; 需要等满 TTL 的情形只有"它卡住了", 而那时票到期就会让出来。
+     * 等不到才把可重试异常交给调用方 —— 这一轮的事件还没创建, 因此不会丢。
+     */
+    private const int TicketAttempts = 240;
+    private static readonly TimeSpan TicketRetryDelay = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan TailLockRetryDelay = TimeSpan.FromMilliseconds(5);
     private const string BackendName = "session-persistence-jsonl";
+    /** 表面派生缓存的文件头魔数与版本: 格式一变就让旧缓存作废, 不要拿旧列表去当折叠结果。 */
+    private const string SurfaceFoldMagic = "surface-fold";
+    private const int SurfaceFoldVersion = 1;
+    /** 超过这么多节点的表面就不缓存了: 没压过的百万级会话本来就要折一遍, 5MB 的缓存只会拖慢每次落盘。 */
+    private const int MaxCachedSurfaceNodes = 32_768;
     private const string ArtifactKind = "jsonl";
 
     /**
@@ -25,7 +43,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     private readonly object _trackerGate = new();
     private readonly Dictionary<SessionId, JsonlSessionHandle?> _writers = [];
     /** 每个写句柄一份跨进程写租约: 别的进程只能显式接管, 不能悄悄追加。 */
-    private readonly Dictionary<SessionId, SessionLease> _leases = [];
+
     private readonly Dictionary<SessionId, PendingSession> _pending = [];
     private readonly HashSet<JsonlSessionHandle> _openHandles = [];
 
@@ -90,17 +108,11 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             if (_pending.ContainsKey(header.Id) || _writers.ContainsKey(header.Id) || FindLog(header.Id) is not null)
                 throw new SessionAlreadyExistsException(header.Id);
         }
-        // 租约的文件重试不放在 _trackerGate 里: 抢租约可能要等另一个进程的短锁, 不能因此卡住所有会话。
-        var lease = AcquireLease(header.Id, header.Cwd);
         lock (_trackerGate)
         {
             if (_pending.ContainsKey(header.Id) || _writers.ContainsKey(header.Id))
-            {
-                lease.Dispose();
                 throw new SessionAlreadyExistsException(header.Id);
-            }
             _writers[header.Id] = null;
-            _leases[header.Id] = lease;
             var cut = inheritedEventCount ?? 0;
             _pending[header.Id] = new PendingSession(header, $"memory:{BackendName}:{++_pendingCounter}", cut);
             return AdoptLocked(new JsonlSessionHandle(this, header.Id, header, SessionAccess.Write,
@@ -138,12 +150,8 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             // 大日志且索引可信时直接按索引开写: 打开一份 1M 事件的会话不必先把它整份解压一遍。
             if (TryOpenAppend(id) is { } windowed)
             {
-                var appendLease = AcquireLease(id, windowed.Header.Cwd);
                 lock (_trackerGate)
-                {
-                    _leases[id] = appendLease;
                     return AdoptLocked(new JsonlSessionHandle(this, id, windowed.Header, SessionAccess.Write, windowed.State));
-                }
             }
             var stored = RequireStoredLog(id);
             var logPath = JsonlLayout.LogPath(_root, stored.Meta.Cwd, id, _compression);
@@ -152,10 +160,13 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
                 RepairDamagedLog(logPath, stored);
                 stored = stored with { Revision = string.Empty, TornTruncateTo = null, RecoveredTail = [] };
             }
-            var lease = AcquireLease(id, stored.Meta.Cwd);
+            else if (TryReframeToWriteBudget(logPath, stored))
+            {
+                // 重写只改帧边界: 事件与头行不变, 但文件与缓存的解析结果都换了一份。
+                stored = stored with { Revision = string.Empty, TornTruncateTo = null, RecoveredTail = [] };
+            }
             lock (_trackerGate)
             {
-                _leases[id] = lease;
                 var storedLength = new FileInfo(logPath).Length;
                 return AdoptLocked(new JsonlSessionHandle(this, id, stored.Meta, SessionAccess.Write,
                     new StorageHandleState
@@ -203,6 +214,44 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         }
         var path = FindLog(id);
         return path is null ? null : ReadLogSnapshot(path, id);
+    }
+
+    /**
+     * 落盘条数: 先问帧索引(一次 stat + 命中缓存), 没有索引才解析。
+     *
+     * **必须给真数**: 发号票用它决定起点, 回 0 等于把整份日志当作还没写过。
+     * 清单快照在"数不清"时给的是 null(它只做列举), 那不是 0, 要退回解析一条路。
+     */
+    public long StoredEventCount(SessionId id)
+    {
+        EnsureRootEncoding();
+        var path = FindLog(id);
+        if (path is null)
+            return 0;
+        if (SessionLogIndex.TryLoad(path) is { } index)
+            return index.EventCount;
+        if (ReadLogSnapshot(path, id)?.EventCount is { } counted)
+            return counted;
+        return ReadStoredLog(path, id).Events.Count;
+    }
+
+    /**
+     * 日志末尾有没有"不属于任何事件"的字节(半帧、别人的半截写)。
+     *
+     * 有的话不能往上追加: 追加会落在那些字节之后, 之后的整条日志都读不回来。
+     * 这种情况按原样交给上层处理(重开一次由打开逻辑修损伤), 不在追加路径里猜。
+     */
+    internal bool IsLogTailClean(SessionId id)
+    {
+        EnsureRootEncoding();
+        var path = FindLog(id);
+        if (path is null)
+            return false;
+        var info = new FileInfo(path);
+        if (SessionLogIndex.TryLoad(path) is { } index)
+            return index.Length == info.Length;
+        var stored = ReadStoredLog(path, id);
+        return stored.TornTruncateTo is null && !stored.Damage.Any;
     }
 
     public IReadOnlyList<SessionPersistenceSnapshot> List()
@@ -310,6 +359,11 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
         File.WriteAllBytes(temp, replacement);
         File.Move(temp, path, overwrite: true);
+        // 头帧长度随标题而变: 整份日志的后续字节因此平移 delta 字节, 帧索引与缓存的窗口读者必须跟着走。
+        // 不跟着走的索引会让"末帧到文件尾"照样成立(后续追加用的是新长度), 于是错位的边界被当成权威 ——
+        // 窗口读按它解压必然失败, 首页再也读不回来。
+        SessionLogIndex.Shift(path, replacement.LongLength - original.LongLength);
+        DropWindowReader(path);
         return replacement.LongLength;
     }
 
@@ -376,46 +430,52 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
 
         // 跨边界的 replace **不再拉宽窗口**: 折叠把"本地要收掉的那一段"取成表头到终点,
 // 起点在窗口之前的那部分本来就不在 surface 上, 其来源由事件自带的 sourceEventSeqs 表达。
-        if (!window.Events.Any(sessionEvent => sessionEvent.Data is RequestHeaderPayload))
-        {
-            // 请求头是会话级折叠状态: 尾窗里没有就只能按 agent 的 Options 走, 说清楚而不是悄悄退化。
-            _warn?.Invoke($"session \"{id}\": the resident window from {window.From} holds no request header; resuming without the persisted request configuration");
-        }
+        // 尾窗里有没有 request/header 不在这里告警: 恢复路径由 AgentLoop.UsesWindowedRestore 把关(缺头就整份恢复),
+        // 其余调用方(宿主快照预览)只要条数与事件, 拿不到请求头是正常的 —— 从这条路径喊"少一截"只会误导。
         return new SessionWindow(window.From, total, window.Events,
-            (offset, count) => ReadWindowPage(reader, offset, count));
-    }
-
-    /** 页读失败返回空列表(Session 把它记成缺页, 取值得到 null, 而不是伪造事件), 同时把原因报到日志里。 */
-    private IReadOnlyList<SessionEvent> ReadWindowPage(SessionLogWindowReader reader, long offset, int count)
-    {
-        try
-        {
-            return reader.Read(offset, count)?.Events ?? [];
-        }
-        catch (Exception error) when (error is IOException or FormatException)
-        {
-            _warn?.Invoke($"session log page [{offset}, {offset + count}) could not be read back: {error.Message}");
-            return [];
-        }
+            (offset, count) => ReadWindowPage(path, offset, count));
     }
 
     /**
-     * 尾窗里指向窗口之前的 replace 的最早目标 seq: 只覆盖真正需要靠加宽解决的那种。
-     * 更早的 replace 不在窗口里, 折叠根本不会重放它, 也就不影响窗口内的 surface。
+     * 页读失败返回空列表(Session 把它记成缺页, 取值得到 null, 而不是伪造事件), 同时把原因报到日志里。
+     *
+     * 一页读不出来通常是帧视图与日志内容不符(日志被改写过/别处重建过索引): 先丢掉索引与帧视图、
+     * 按日志本身的帧头重切一次再试。"这一页永远读不回来"会把整份会话变成打不开(GUI 因此连主窗口都出不来)。
      */
-    private static long? CrossBoundaryReplaceStart(IReadOnlyList<SessionEvent> events, long residentFrom)
+    private IReadOnlyList<SessionEvent> ReadWindowPage(string path, long offset, int count)
     {
-        long? earliest = null;
-        foreach (var sessionEvent in events)
+        for (var attempt = 0; attempt < 3; attempt += 1)
         {
-            if (sessionEvent.SurfaceOp is not SurfaceOp.Replace replace || replace.Start >= residentFrom)
-                continue;
-            if (earliest is null || replace.Start < earliest)
-                earliest = replace.Start;
+            var reader = WindowReader(path);
+            if (reader is null)
+                return [];
+            try
+            {
+                return reader.Read(offset, count)?.Events ?? [];
+            }
+            catch (Exception error) when (error is IOException or FormatException)
+            {
+                _warn?.Invoke($"session log page [{offset}, {offset + count}) could not be read back: {error.Message}");
+                if (attempt == 0)
+                {
+                    // 第一次: 多半是索引与日志对不上, 丢掉索引重切一次。
+                    DropStaleIndex(path);
+                    continue;
+                }
+                if (attempt == 1)
+                {
+                    // 第二次: 盘上那一段本身不自洽(序号回退)。全量解析会拼接回退前后的两段并把日志原子重写,
+                    // 之后再读这一页就正常了。
+                    DropParsed(path);
+                    _ = ReadStoredLog(path, SessionId.Create(Path.GetFileName(Path.GetDirectoryName(path)!)));
+                    DropStaleIndex(path);
+                    continue;
+                }
+                return [];
+            }
         }
-        return earliest;
+        return [];
     }
-
     private SessionLogWindowReader? WindowReader(string path)
     {
         lock (_windowGate)
@@ -437,6 +497,247 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             _windowReaders.Remove(path);
     }
 
+    /** 索引与日志不再相符(帧边界错位): 索引与帧视图一起丢掉, 下一次全量打开会按日志重建索引。 */
+    private void DropStaleIndex(string path)
+    {
+        SessionLogIndex.Delete(path);
+        DropWindowReader(path);
+    }
+
+    /**
+     * 日志的帧边界是否还是"现在这套写入规则"的: 一帧大于写盘批次的明文字节预算就算不是。
+     *
+     * 这里不用"超过预算几倍"这种门槛: 写入方本来就用同一个预算切帧, 比它大就说明这份日志是旧规则写的,
+     * 而旧规则的大帧正是"翻一页要解压几十 MB"的唯一来源。判据因此是"与写入规则一致", 不是某个经验数值。
+     *
+     * 重写只在持有写句柄时进行(此时没有别的写入者); 失败就保持原样并留一条告警, 绝不因此丢掉会话。
+     */
+    private bool TryReframeToWriteBudget(string path, StoredLog stored)
+    {
+        // 末尾半帧是"写了一半"的现场: 它由截断处理, 重写会把那一帧一起改掉(还会多一条告警)。
+        if (_compression != JsonlCompression.Zstd || stored.Events.Count == 0 || stored.Damage.Any
+            || stored.TornTruncateTo is not null)
+            return false;
+        // 索引必须与日志、事件列表三方对上才敢按帧重写; 对不上就不动它(下一次全量打开会重建索引)。
+        if (FrameLayout(path, stored) is not { } layout)
+            return false;
+        var budget = (long)WriteBatch.MaxPlaintextBytes;
+        var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
+        (long Length, List<FrameEntry> Entries)? written;
+        try
+        {
+            written = WriteReframedLog(path, temp, layout, budget);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or FormatException)
+        {
+            TryDeleteTemp(temp);
+            WarnReframeFailed(stored, error);
+            return false;
+        }
+        if (written is not { } result)
+        {
+            TryDeleteTemp(temp);
+            return false;
+        }
+        try
+        {
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            TryDeleteTemp(temp);
+            WarnReframeFailed(stored, error);
+            return false;
+        }
+        DropStaleIndex(path);
+        DropParsed(path);
+        // 新布局的索引当场写出来: 否则下一次打开又得整份解析一遍才知道帧边界在哪。
+        // 重切是按行切的, 打包记录可能被切在两个帧之间, 那里的差分计数是 0 —— 写进索引前先合并。
+        SessionLogIndex.Append(path, SessionLogIndex.Coalesce(result.Entries), stored.Events.Count, stored.Events[0].Seq);
+        _warn?.Invoke(
+            $"session \"{stored.Meta.Id}\": the log was re-framed to the write budget "
+            + $"({result.Length / 1024}KB, {stored.Events.Count} events kept), "
+            + "so a history page now decompresses one frame instead of tens of megabytes");
+        return true;
+    }
+
+    private void WarnReframeFailed(StoredLog stored, Exception error)
+        => _warn?.Invoke(
+            $"session \"{stored.Meta.Id}\": the log could not be re-framed to the write budget ({error.Message}); reading its history stays slow");
+
+    /** 一帧在文件里的位置, 以及它装的事件段(来自索引)。 */
+    private readonly record struct FrameSlot(ZstdFrames.FrameRange Range, long FirstSeq, int EventCount, long MinReplaceStart);
+
+    /**
+     * 索引与日志、事件列表三方对上的帧布局; 任一方对不上就返回 null(调用方退回整体重切)。只读帧头, 不解压。
+     */
+    private IReadOnlyList<FrameSlot>? FrameLayout(string path, StoredLog stored)
+    {
+        if (SessionLogIndex.TryLoad(path) is not { } index || index.Frames.Count < 2)
+            return null;
+        long[]? boundaries;
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, LiveLogReadShare))
+            boundaries = ZstdFrames.ScanFrameBoundaries(stream);
+        if (boundaries is null || boundaries.Length != index.Frames.Count + 1)
+            return null;
+        var slots = new List<FrameSlot>(index.Frames.Count);
+        var nextSeq = stored.Events[0].Seq;
+        for (var slot = 0; slot < index.Frames.Count; slot += 1)
+        {
+            var entry = index.Frames[slot];
+            if (entry.Start != boundaries[slot] || entry.End != boundaries[slot + 1] || entry.End > int.MaxValue)
+                return null;
+            if (slot > 0)
+            {
+                if (entry.FirstSeq != nextSeq)
+                    return null;
+                nextSeq += entry.EventCount;
+            }
+            slots.Add(new FrameSlot(new ZstdFrames.FrameRange((int)entry.Start, (int)entry.End), entry.FirstSeq,
+                entry.EventCount, entry.MinReplaceStart));
+        }
+        return nextSeq == stored.Events[0].Seq + stored.Events.Count ? slots : null;
+    }
+
+    /**
+     * 取一段**日志字节**: 头帧 + 覆盖 [fromEvent, fromEvent + maxEvents) 的事件帧, 一个字节都不解压。
+     *
+     * 这是"把历史交给别的进程"的成本下界: 宿主不再物化事件、也不再序列化成 JSON, 交出去的就是磁盘上那几帧。
+     * 索引缺失时先走一次全量解析(顺手重建索引), 之后就是按帧切字节。
+     */
+    public SessionLogSlice? TryReadLogSlice(SessionId id, long fromEvent, int maxEvents)
+    {
+        if (_compression != JsonlCompression.Zstd)
+            return null;
+        var path = FindLog(id);
+        if (path is null)
+            return null;
+        var index = SessionLogIndex.TryLoad(path);
+        if (index is null)
+        {
+            // 索引缺失/与文件不符: 全量解析一次把它重建出来(此后都走按帧切字节)。
+            _ = ReadStoredLog(path, id);
+            index = SessionLogIndex.TryLoad(path);
+        }
+        if (index is not { Frames.Count: > 1 })
+            return null;
+        var total = index.EventCount;
+        if (total <= 0)
+            return null;
+        var start = Math.Clamp(fromEvent, 0, total);
+        var count = maxEvents > 0 ? Math.Min(maxEvents, total - start) : total - start;
+        var (from, to) = index.FramesCovering(start, count);
+        if (from < 0)
+            return null;
+        var frames = new List<FrameEntry>(to - from + 2) { index.Frames[0] };
+        for (var slot = from; slot <= to; slot += 1)
+            frames.Add(index.Frames[slot]);
+        byte[] bytes;
+        try
+        {
+            bytes = ReadFrameRanges(path, frames, new int[frames.Count], out _);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        var header = Stat(id)?.Header ?? throw new SessionPersistenceNotFoundException(id);
+        var eventCount = frames.Skip(1).Sum(frame => frame.EventCount);
+        return new SessionLogSlice(bytes, header, frames[1].FirstSeq, eventCount, total, SessionLogSlice.HashOf(bytes));
+    }
+
+    /**
+     * 逐帧重写: **没超预算的帧原样搬运压缩字节**, 只有超预算的帧才解压、按行重新切帧。
+     *
+     * 一份日志因此只有出问题的那几帧付解压/压缩的代价, 也不会为了一份副本把整份日志物化进内存:
+     * 每次读进内存的只有一帧。返回 null 表示没有需要重切的帧(日志本来合规)。
+     */
+    private (long Length, List<FrameEntry> Entries)? WriteReframedLog(
+        string path, string temp, IReadOnlyList<FrameSlot> layout, long budget)
+    {
+        using var source = new FileStream(path, FileMode.Open, FileAccess.Read, LiveLogReadShare);
+        using var target = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        // 头帧的明文是解压任何一帧的前提(扫描器要靠它认出会话头), 只在这里解一次。
+        var headerPlaintext = ZstdFrames.DecompressFrame(ReadFrame(source, layout[0].Range), 0);
+        var entries = new List<FrameEntry>(layout.Count);
+        var reframed = false;
+        for (var slot = 0; slot < layout.Count; slot += 1)
+        {
+            var current = layout[slot];
+            var frame = ReadFrame(source, current.Range);
+            var plaintextBytes = ZstdFrames.TryReadPlaintextSize(frame, out var declared) ? declared : frame.LongLength;
+            if (slot == 0 || plaintextBytes <= budget)
+            {
+                WriteFrame(target, entries, frame, current);
+                continue;
+            }
+            reframed = true;
+            foreach (var piece in ResegmentFrame(headerPlaintext, frame, current.FirstSeq))
+            {
+                var offset = target.Position;
+                target.Write(piece.Content);
+                entries.Add(new FrameEntry(offset, offset + piece.Content.Length, piece.FirstSeq, piece.EventCount)
+                {
+                    MinReplaceStart = piece.MinReplaceStart,
+                });
+            }
+        }
+        if (!reframed)
+            return null;
+        target.Flush(true);
+        return (target.Length, entries);
+    }
+
+    private static void WriteFrame(Stream target, List<FrameEntry> entries, byte[] frame, FrameSlot slot)
+    {
+        var offset = target.Position;
+        target.Write(frame);
+        entries.Add(new FrameEntry(offset, offset + frame.Length, slot.FirstSeq, slot.EventCount)
+        {
+            MinReplaceStart = slot.MinReplaceStart,
+        });
+    }
+
+    private static byte[] ReadFrame(Stream stream, ZstdFrames.FrameRange range)
+    {
+        var frame = new byte[range.End - range.Start];
+        stream.Position = range.Start;
+        stream.ReadExactly(frame);
+        return frame;
+    }
+
+    /** 只解压这一帧, 按写盘预算重新切帧: 解出来的事件带着自己的绝对 seq, 重切不会串号。 */
+    private List<(byte[] Content, long FirstSeq, int EventCount, long MinReplaceStart)> ResegmentFrame(
+        ReadOnlySpan<byte> headerPlaintext, byte[] frame, long firstSeq)
+    {
+        var scanner = new SessionLogScanner(headerPlaintext, firstSeq);
+        scanner.Write(ZstdFrames.DecompressFrame(frame, 0));
+        var scan = scanner.Finish();
+        if (scan.Damage.Any || scan.Events.Count == 0)
+            throw new FormatException($"frame starting at event {firstSeq} could not be decoded");
+        return EncodeEventFrames(scan.Events);
+    }
+
+    private void TryDeleteTemp(string temp)
+    {
+        try
+        {
+            File.Delete(temp);
+        }
+        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private void DropParsed(string path)
+    {
+        lock (_parsedGate)
+        {
+            _parsed.Remove(path);
+            _parsedOrder.Remove(path);
+        }
+    }
+
     /** 只有足够大的日志才值得走"按索引开写"这条路。 */
     private const long WindowedAppendThreshold = 50_000;
 
@@ -455,6 +756,10 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             return null;
         if (SessionLogIndex.TryLoad(logPath) is not { Frames.Count: > 1 } index
             || index.EventCount < WindowedAppendThreshold)
+            return null;
+        // 帧边界不是"现在这套写入规则"切出来的日志不走"按索引开写": 那条路不解压, 也就没机会重新分帧。
+        // 退回全量解析, 由 TryReframeToWriteBudget 按写盘预算重写一遍 —— 一次性代价, 换来之后翻页从秒级降到毫秒级。
+        if (index.Frames.Skip(1).Any(frame => frame.End - frame.Start > WriteBatch.MaxPlaintextBytes))
             return null;
         var snapshot = ReadLogSnapshot(logPath, id);
         if (snapshot is null)
@@ -650,6 +955,8 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             _warn?.Invoke(
                 $"session \"{parsed.Meta.Id}\": {damage.Records} unreadable log record(s) skipped "
                 + $"(first at byte {damage.FirstByte?.ToString(CultureInfo.InvariantCulture) ?? "?"}); the session opens with its readable prefix and every original byte stays on disk");
+        else if (SpliceSeqRegression(path, ref parsed))
+            damage = parsed.Damage;
         else if (rebuildIndex)
             WriteRebuiltIndex(path, buffer.LongLength, parsed);
         return new StoredLog(parsed.Meta, parsed.Events, parsed.TornTruncateTo, parsed.RecoveredTail, parsed.InheritedEventCount, revision, damage);
@@ -669,10 +976,65 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return dropped;
     }
 
+    /**
+     * 领票并返回下一个可用序号: 起点以日志真实条数为准(见 SessionWriteTicket)。
+     *
+     * 另一个宿主正持着票时先等一会儿再试: 它只在"发号 + 追加"的这段里持票, 通常几微秒就放开了。
+     * 等不到才把可重试异常交给调用方(事件尚未创建, 因此没有丢失)。
+     */
+    /** 日志当前字节长度; 没有日志返回 null。只做一次 stat, 不读内容。 */
+    internal long? LogLength(SessionId id)
+        => FindLog(id) is { } path && new FileInfo(path) is { Exists: true } info ? info.Length : null;
+
+    internal long NextSeq(SessionHeader header, int count, long knownCount)
+    {
+        EnsureRootEncoding();
+        var path = SessionWriteTicket.PathFor(_root, header.Cwd, header.Id);
+        // 只信索引与句柄自己的游标: 整份读日志会撞上别人（或自己）正占着的尾锁, 发号因此卡死过。
+        var logPath = FindLog(header.Id);
+        var stored = Math.Max(knownCount, logPath is null ? 0 : SessionLogIndex.TryLoad(logPath)?.EventCount ?? 0);
+        for (var attempt = 0; ; attempt += 1)
+        {
+            try
+            {
+                return SessionWriteTicket.NextSeq(path, stored, count);
+            }
+            catch (SessionWriteBusyException) when (attempt < TicketAttempts)
+            {
+                Thread.Sleep(TicketRetryDelay);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // 票文件读不到只是这一次, 不要把裸 IO 异常扔进回合里。
+                throw new SessionWriteBusyException(Environment.ProcessId,
+                    $"the write ticket could not be read ({error.GetType().Name}); retrying on the next write");
+            }
+        }
+    }
+
+    /** 这批事件已经落盘到 durableUpTo(不含): 票随之前进, 没有未落盘事件时票被删掉。 */
+    internal void MarkDurable(SessionHeader header, long durableUpTo)
+        => SessionWriteTicket.MarkDurable(SessionWriteTicket.PathFor(_root, header.Cwd, header.Id), durableUpTo);
+
+    /** 放弃自己手里的票(写句柄关闭)。 */
+    internal void ReleaseTicket(SessionHeader header)
+        => SessionWriteTicket.Release(SessionWriteTicket.PathFor(_root, header.Cwd, header.Id));
+
+    /** 读回日志上 [from, to) 的事件: 别的写者写进去的那一段, 用于把内存对齐到磁盘。 */
+    internal IReadOnlyList<SessionEvent> ReadStoredRange(SessionId id, long from, long to)
+    {
+        if (to <= from)
+            return [];
+        var path = FindLog(id) ?? throw new SessionPersistenceNotFoundException(id);
+        var events = ReadStoredLog(path, id).Events;
+        var start = (int)Math.Clamp(from, 0, events.Count);
+        var end = (int)Math.Clamp(to, start, events.Count);
+        return events.GetRange(start, end - start);
+    }
+
     internal void PersistBatch(SessionHeader header, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
         EnsureRootEncoding();
-        VerifyLease(header.Id);
         if (state.Materialized)
         {
             AppendLines(header, events, state);
@@ -685,36 +1047,303 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     internal void PersistHeader(SessionHeader header, StorageHandleState state)
     {
         EnsureRootEncoding();
-        VerifyLease(header.Id);
         state.WrittenLength = Materialize(header, state.InheritedEventCount, []);
         MarkMaterialized(header.Id);
     }
 
-    /** 该会话当前的写租约持有者; 没有日志或还没建租约时返回 null。 */
-    public SessionLeaseHolder? InspectLease(SessionId id)
+    /**
+     * 把"写不进去"的那批事件另存一份(同一会话目录下), 并打一条能照做的日志。
+     *
+     * 租约的判据可以输(别人活着并且持有写权), 事件不能丢: 丢掉的是用户刚刚说的话。
+     * 存成一行一条事件的 JSONL, 与日志并排, 事后可以人工补回或直接读。
+     */
+    internal void SaveUnsavedTail(SessionHeader header, IReadOnlyList<SessionEvent> events, Exception error)
     {
-        if (Stat(id) is not { } snapshot)
+        if (events.Count == 0)
+            return;
+        try
+        {
+            var directory = JsonlLayout.SessionDir(_root, header.Cwd, header.Id);
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory,
+                $"session.unsaved-{Environment.ProcessId}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.jsonl");
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+            {
+                foreach (var sessionEvent in events)
+                    JsonSerializer.Serialize(stream, sessionEvent, DshJson.Info<SessionEvent>());
+                stream.Flush(true);
+            }
+            _warn?.Invoke($"session \"{header.Id}\": {events.Count} unsaved event(s) were kept at {path} "
+                + $"because the log could not be written ({error.GetType().Name}: {error.Message})");
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"session \"{header.Id}\": {events.Count} unsaved event(s) were LOST — "
+                + $"the recovery copy could not be written either ({failure.Message})");
+        }
+    }
+
+
+    /**
+     * 中段序号回退的修复: 同一个会话日志被两个写入者按各自的游标追加过, 于是文件里出现
+     * "写到 638053 又回到 623136 重写一遍" 的形状。整份日志因此不再单调, 按页读会整段失败。
+     *
+     * 真相是序号: 保留 [0, 首次回退) 前缀, 再把回退之后那段**递增序列里仍在前缀之外**的事件接上,
+     * 重复段丢掉。原文件先整份备份成 `*.damaged-时间戳`, 再无损重写; 任何一步不成立就不动文件。
+     */
+    private bool SpliceSeqRegression(string path, ref ParsedLog parsed)
+    {
+        var events = parsed.Events;
+        var regression = -1;
+        for (var index = parsed.InheritedEventCount > 0 ? (int)parsed.InheritedEventCount : 1; index < events.Count; index += 1)
+        {
+            if (events[index].Seq <= events[index - 1].Seq)
+            {
+                regression = index;
+                break;
+            }
+        }
+        if (regression < 0)
+            return false;
+        var prefix = events.GetRange(0, regression);
+        var resume = -1;
+        for (var index = regression; index < events.Count; index += 1)
+        {
+            if (index > regression && events[index].Seq <= events[index - 1].Seq)
+                continue;
+            if (events[index].Seq >= prefix.Count)
+            {
+                resume = index;
+                break;
+            }
+        }
+        var kept = resume < 0 ? prefix : [.. prefix, .. events.GetRange(resume, events.Count - resume)];
+        var keptIsSound = kept.Count > 0;
+        for (var index = 1; keptIsSound && index < kept.Count; index += 1)
+            keptIsSound = kept[index].Seq == kept[index - 1].Seq + 1;
+        if (!keptIsSound)
+            return false;
+        var dropped = events.Count - kept.Count;
+        try
+        {
+            File.WriteAllBytes($"{path}.damaged-{DateTime.UtcNow:yyyyMMddHHmmss}", File.ReadAllBytes(path));
+            var (content, _, _) = EncodeWholeLog(parsed.Meta, parsed.InheritedEventCount, kept);
+            var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(content);
+                stream.Flush(true);
+            }
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke(
+                $"session \"{parsed.Meta.Id}\": the log's sequence numbers regress at event {regression} "
+                + $"and the repair could not be written ({error.Message}); opening the readable prefix only");
+            parsed = parsed with { Events = prefix, Damage = parsed.Damage.Plus(1, null) };
+            return true;
+        }
+        SessionLogIndex.Delete(path);
+        DropWindowReader(path);
+        DropParsed(path);
+        parsed = parsed with { Events = kept, TornTruncateTo = null, RecoveredTail = [], Damage = parsed.Damage.Plus(1, null) };
+        _warn?.Invoke(
+            $"session \"{parsed.Meta.Id}\": the log's sequence numbers regressed at event {regression} "
+            + $"(a second writer rewrote an already-appended range); kept {kept.Count} event(s), dropped {dropped} duplicate(s), "
+            + "the original file is preserved as *.damaged-*");
+        return true;
+    }
+
+    /**
+     * 派生缓存: 读上次存下的表面折叠结果, 并用"日志没变短、事件没变少"验真。
+     *
+     * 表面是派生状态, 折一遍要读整条日志(0.8–1.0M 事件实测 5–21s), 而它只有几百到几千个序号。
+     * 缓存按 seq 列表存(zstd 帧, 差值 varint), 与日志并排放在 `*.surface` 里。
+     */
+    public SurfaceFoldSnapshot? TryLoadSurfaceFold(SessionId id)
+    {
+        if (_compression != JsonlCompression.Zstd || FindLog(id) is not { } path)
             return null;
-        return SessionLease.Inspect(SessionLease.PathFor(_root, snapshot.Header.Cwd, id));
+        var sidecar = SurfaceFoldPath(path);
+        try
+        {
+            if (!File.Exists(sidecar))
+                return null;
+            var bytes = File.ReadAllBytes(sidecar);
+            var scan = ZstdFrames.Scan(bytes);
+            if (scan.Frames.Count < 2 || scan.Damaged.Count > 0 || scan.TornStart is not null)
+                return null;
+            var headerText = Encoding.UTF8.GetString(
+                ZstdFrames.DecompressFrame(bytes, scan.Frames[0].Start,
+                    scan.Frames[0].End - scan.Frames[0].Start, scan.Frames[0].Start)).Trim();
+            var parts = headerText.Split(' ');
+            if (parts.Length != 6 || parts[0] != SurfaceFoldMagic
+                || !long.TryParse(parts[1], CultureInfo.InvariantCulture, out var length)
+                || !long.TryParse(parts[2], CultureInfo.InvariantCulture, out var total)
+                || !int.TryParse(parts[3], CultureInfo.InvariantCulture, out var generation)
+                || !int.TryParse(parts[4], CultureInfo.InvariantCulture, out var count)
+                || !int.TryParse(parts[5], CultureInfo.InvariantCulture, out var version)
+                || version != SurfaceFoldVersion)
+                return null;
+            var plain = new List<byte>();
+            for (var slot = 1; slot < Math.Min(scan.Frames.Count, 2); slot += 1)
+            {
+                var frame = scan.Frames[slot];
+                plain.AddRange(ZstdFrames.DecompressFrame(bytes, frame.Start, frame.End - frame.Start, frame.Start));
+            }
+            var nodes = DecodeSurfaceNodes([.. plain], count);
+            // 第三帧(如果有)是 request/header 与 request/context 的折叠值: 老检查点没有这一帧, 读到就是没有。
+            var (snapshotHeader, snapshotContext) = scan.Frames.Count > 2
+                ? DecodeSurfaceMeta(ZstdFrames.DecompressFrame(bytes,
+                    scan.Frames[2].Start, scan.Frames[2].End - scan.Frames[2].Start, scan.Frames[2].Start))
+                : (null, null);
+            var snapshot = new SurfaceFoldSnapshot(nodes, length, total, generation, snapshotHeader, snapshotContext);
+            var currentLength = new FileInfo(path).Length;
+            var currentTotal = WindowReader(path)?.TotalEvents ?? total;
+            return snapshot.Fits(currentLength, currentTotal) ? snapshot : null;
+        }
+        catch (Exception error) when (error is IOException or FormatException or UnauthorizedAccessException)
+        {
+            _warn?.Invoke($"session \"{id}\": the surface fold cache could not be read ({error.GetType().Name}: {error.Message}); folding the log instead");
+            return null;
+        }
     }
 
-    /** 强制接管写租约(CLI 的 take-over): 不要求原持有者退出, 但会让它的下一次落盘失败并停写。 */
-    public SessionLeaseHolder ForceTakeOverLease(SessionId id)
+    /** 存下表面折叠结果: 先写临时文件再原子替换, 写不成就不写(缓存永远只是加速, 不是真相)。 */
+    public void SaveSurfaceFold(SessionId id, SurfaceFoldSnapshot fold)
     {
-        var snapshot = Stat(id) ?? throw new SessionPersistenceNotFoundException(id);
-        return SessionLease.ForceTakeOver(SessionLease.PathFor(_root, snapshot.Header.Cwd, id));
+        if (_compression != JsonlCompression.Zstd || fold.Nodes.Count > MaxCachedSurfaceNodes
+            || FindLog(id) is not { } path)
+            return;
+        try
+        {
+            // 长度与条数一律以**日志**为准: 会话可能比落盘多几条待写事件, 拿会话的数字会让缓存永远对不上。
+            var logLength = new FileInfo(path).Length;
+            var totalEvents = WindowReader(path)?.TotalEvents ?? fold.TotalEvents;
+            var header = string.Create(CultureInfo.InvariantCulture,
+                $"{SurfaceFoldMagic} {logLength} {totalEvents} {fold.ReplaceGeneration} {fold.Nodes.Count} {SurfaceFoldVersion}");
+            var headerFrame = ZstdFrames.CompressFrame(Encoding.UTF8.GetBytes(header + "\n"));
+            var payloadFrame = ZstdFrames.CompressFrame(EncodeSurfaceNodes(fold.Nodes));
+            // 尾部那条尾部信息(request/header 与 request/context 的折叠值)自带一帧: 老版本没有这一帧, 读到就是没有。
+            var metaFrame = ZstdFrames.CompressFrame(EncodeSurfaceMeta(fold));
+            var sidecar = SurfaceFoldPath(path);
+            var temp = $"{sidecar}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(headerFrame);
+                stream.Write(payloadFrame);
+                stream.Write(metaFrame);
+                stream.Flush(true);
+            }
+            File.Move(temp, sidecar, overwrite: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
-    /** 落盘前的 fencing: 租约已被接管就立刻停写。 */
-    private void VerifyLease(SessionId id)
+    private static string SurfaceFoldPath(string logPath) => $"{logPath}.surface";
+
+    /** 日志变短(回退/修复)时作废派生缓存: 旧快照描述的是更长的日志。 */
+    public void DropSurfaceFold(SessionId id)
     {
-        SessionLease? lease;
-        lock (_trackerGate) _leases.TryGetValue(id, out lease);
-        lease?.Verify();
+        if (FindLog(id) is { } path)
+            File.Delete(SurfaceFoldPath(path));
     }
 
-    private SessionLease AcquireLease(SessionId id, string? cwd)
-        => SessionLease.Acquire(SessionLease.PathFor(_root, cwd, id));
+    /** 检查点尾部信息: request/header 与 request/context 的折叠值(没有就是 null)。 */
+    private static byte[] EncodeSurfaceMeta(SurfaceFoldSnapshot fold)
+    {
+        var meta = new SurfaceFoldMeta(fold.RequestHeader, fold.RequestContext);
+        return JsonSerializer.SerializeToUtf8Bytes(meta, DshCoreJsonContext.Default.SurfaceFoldMeta);
+    }
+
+    private static (EpochHeader? Header, RequestContextPayload? Context) DecodeSurfaceMeta(byte[] payload)
+    {
+        try
+        {
+            var meta = JsonSerializer.Deserialize(payload, DshCoreJsonContext.Default.SurfaceFoldMeta);
+            return (meta?.RequestHeader, meta?.RequestContext);
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+    }
+
+    /** 表面节点序号按差值 varint 存: 相邻序号通常只差几个到几百个。 */
+    private static byte[] EncodeSurfaceNodes(IReadOnlyList<long> nodes)
+    {
+        var buffer = new List<byte>(nodes.Count * 2);
+        long previous = 0;
+        foreach (var seq in nodes)
+        {
+            var delta = seq - previous;
+            previous = seq;
+            var value = (ulong)delta;
+            while (value >= 0x80)
+            {
+                buffer.Add((byte)(value | 0x80));
+                value >>= 7;
+            }
+            buffer.Add((byte)value);
+        }
+        return [.. buffer];
+    }
+
+    private static List<long> DecodeSurfaceNodes(byte[] payload, int count)
+    {
+        var nodes = new List<long>(count);
+        long previous = 0;
+        var cursor = 0;
+        while (cursor < payload.Length && nodes.Count < count)
+        {
+            ulong value = 0;
+            var shift = 0;
+            while (cursor < payload.Length)
+            {
+                var current = payload[cursor];
+                cursor += 1;
+                value |= (ulong)(current & 0x7F) << shift;
+                if ((current & 0x80) == 0)
+                    break;
+                shift += 7;
+            }
+            previous += (long)value;
+            nodes.Add(previous);
+        }
+        if (nodes.Count != count)
+            throw new FormatException("surface fold sidecar is truncated");
+        return nodes;
+    }
+
+    /**
+     * 就地修掉"末尾不属于任何事件"的字节, 返回修完之后的事件条数。
+     *
+     * 不等到下一次打开: 宿主可能连续开着几天, 那期间一条都不写盘是绝对不能接受的。
+     * 读得出来的记录全部保留, 原文件另存为 `*.damaged-*`(取证用), 主日志按可读前缀整份重写。
+     * 修不动(IO 失败)时抛出去, 由调用方按"这次先别写"处理 —— 事件仍在缓冲里。
+     */
+    internal long RepairDamagedTail(SessionId id)
+    {
+        if (FindLog(id) is not { } path)
+            return 0;
+        var stored = ReadStoredLog(path, id);
+        if (!stored.Damage.Any && stored.TornTruncateTo is { } keep)
+        {
+            // 末尾半帧(上一次写盘崩在半路): 截掉即可, 不留取证副本也不告警 —— 那是正常恢复, 不是异常。
+            TruncateTornTail(stored.Meta, keep);
+            SessionLogIndex.Delete(path);
+            DropWindowReader(path);
+        }
+        else
+        {
+            // 读不出的记录/无法归属的字节: 原文件另存一份(`*.damaged-*`)再从可读前缀重写。
+            RepairDamagedLog(path, stored);
+        }
+        return StoredEventCount(id);
+    }
 
     internal void TruncateTornTail(SessionHeader header, long truncateTo)
     {
@@ -724,43 +1353,16 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         stream.Flush(true);
     }
 
-    /** 就地重写日志到前 eventCount 个事件(D3 revert): 头行 + 保留事件整体原子替换, 失败不改原文件。 */
-    internal long? TruncateLog(SessionHeader header, long eventCount)
-    {
-        var path = FindLog(header.Id);
-        if (path is null)
-            return null;
-        var stored = ReadStoredLog(path, header.Id);
-        var keep = (int)Math.Clamp(eventCount, 0, stored.Events.Count);
-        if (keep == stored.Events.Count)
-            return null;
-        var kept = stored.Events.GetRange(0, keep);
-        var (content, _, _) = EncodeWholeLog(stored.Meta, stored.InheritedEventCount, kept);
-        var temp = $"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant()}.tmp";
-        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        {
-            stream.Write(content);
-            stream.Flush(true);
-        }
-        File.Move(temp, path, overwrite: true);
-        SessionLogIndex.Delete(path);
-        DropWindowReader(path);
-        return content.Length;
-    }
 
     internal void ReleaseHandle(JsonlSessionHandle handle, bool materialized)
     {
-        SessionLease? lease;
         lock (_trackerGate)
         {
             _openHandles.Remove(handle);
             if (handle.Access != SessionAccess.Write) return;
             _writers.Remove(handle.Id);
             if (!materialized) _pending.Remove(handle.Id);
-            _leases.Remove(handle.Id, out lease);
         }
-        // 让出租约要在 _trackerGate 之外: 释放要等另一个进程的短锁, 不能卡住所有会话。
-        lease?.Dispose();
     }
 
     private StoredLog RequireStoredLog(SessionId id)
@@ -859,7 +1461,8 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             at += length;
             seq += count;
         }
-        return entries;
+        // 打包记录跨帧时那一帧的差分计数是 0: 合并成整数条记录的帧, 否则索引校验不过、切字节会切出半条记录。
+        return SessionLogIndex.Coalesce(entries);
     }
 
     /** 帧必须从字节 0 起首尾相接地铺满整份日志: 有缺口或半帧时切出来的边界不能当索引。 */
@@ -1031,46 +1634,166 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
                 : text.WrittenSpan.ToArray(), seq, count, replaceStart);
     }
 
+    /**
+     * 追加一批事件。整个动作是"看末尾 → 定起点 → 写 → 更新索引"的一次事务, 尾部这段字节
+     * 用**区间锁**占住, 另一个写者只能等这一次追加结束 —— 否则两边会各自把同一个起点当成自己的,
+     * 把两套序号写进同一段字节(那正是"日志再也读不回来"的来源)。
+     *
+     * 锁是字节区间锁(一个 syscall), 不是独立锁文件: 后者要开一个文件, 实测 95µs, 是这个的五十倍。
+     */
     private void AppendLines(SessionHeader meta, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
         var frames = EncodeEventFrames(events);
         var path = JsonlLayout.LogPath(_root, meta.Cwd, meta.Id, _compression);
-        long before;
-        using (var probe = new FileStream(path, FileMode.Open, FileAccess.Read, LiveLogReadShare))
-        {
-            before = probe.Length;
-        }
-        // 日志在本写入者两次落盘之间被别人推进过: 本写入者的序号已经落后于文件内容。
-        // 这时继续追加会把两套序号交织进同一个文件, 之后整份日志都读不回来。
-        if (state.WrittenLength is { } expected && before != expected)
-            throw new SessionPersistenceCorruptionException(
-                $"session \"{meta.Id}\": the log grew from {expected} to {before} bytes while this writer held it — another process appended to the same session; refusing to interleave events");
-        var entries = new List<FrameEntry>(frames.Count);
         long total = 0;
         foreach (var frame in frames)
-        {
-            entries.Add(new FrameEntry(before + total, before + total + frame.Content.Length, frame.FirstSeq, frame.EventCount)
-            {
-                MinReplaceStart = frame.MinReplaceStart,
-            });
             total += frame.Content.Length;
+        using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        var (guard, start) = AcquireAppendTail(stream, path, total);
+        var before = start;
+        try
+        {
+            // 这一批的号必须接在日志真实末尾之后(索引级复核; 没有索引的日志由上一步的长度比对兜住)。
+            if (events.Count > 0 && SessionLogIndex.TryLoad(path) is { } tail && tail.Length == before
+                && tail.EventCount != events[0].Seq)
+            {
+                throw new SessionNumberStaleException(tail.EventCount, events[0].Seq);
+            }
+            // 日志在本写入者两次落盘之间被推进过: 以磁盘为准对齐, 而不是永久停写。
+            before = ReconcileLocked(meta, path, before, events, state);
+            var entries = new List<FrameEntry>(frames.Count);
+            long offset = before;
+            foreach (var frame in frames)
+            {
+                entries.Add(new FrameEntry(offset, offset + frame.Content.Length, frame.FirstSeq, frame.EventCount)
+                {
+                    MinReplaceStart = frame.MinReplaceStart,
+                });
+                offset += frame.Content.Length;
+            }
+            try
+            {
+                // 显式落到锁住的起点: FileMode.Append 会跟着当时的文件末尾走, 抢过别人的位置也不报错。
+                stream.Seek(before, SeekOrigin.Begin);
+                foreach (var frame in frames)
+                    stream.Write(frame.Content);
+                stream.Flush(true);
+            }
+            catch
+            {
+                state.WrittenLength = before;
+                RollbackAppend(path, before);
+                throw;
+            }
+            state.WrittenLength = before + total;
+            if (_compression == JsonlCompression.Zstd && entries.Count > 0)
+                SessionLogIndex.Append(path, entries, events.Count, events[0].Seq);
+        }
+        finally
+        {
+            guard.Dispose();
+        }
+    }
+
+    /**
+     * 占住"我要写的那段字节", 返回真正的起点。
+     *
+     * 拿锁前后各看一次长度: 别人正好在我读长度之后写完的话, 我锁住的是旧起点,
+     * 那时放锁重来, 直到"我持锁期间长度没有变化"为止。
+     */
+    private (AppendTailGuard Guard, long Start) AcquireAppendTail(FileStream stream, string path, long length)
+    {
+        var span = Math.Max(length, 1);
+        for (var attempt = 0; attempt < TailLockAttempts; attempt += 1)
+        {
+            var start = stream.Length;
+            if (TryEnterAppendTail(stream, path, start, span) is not { } guard)
+            {
+                // 有人正占着这一段: 等他写完再看新的末尾。
+                Thread.Sleep(TailLockRetryDelay);
+                continue;
+            }
+            if (stream.Length == start)
+                return (guard, start);
+            guard.Dispose();
+        }
+        // 写不进去不是"日志坏了": 按"写权此刻不在我手里"处理(留缓冲、下次重试), 不要把它当作报废。
+        throw new SessionWriteBusyException(Environment.ProcessId,
+            "another writer kept the session log tail busy; retrying on the next write");
+    }
+
+    /**
+     * 进临界区: 正常情况下是日志文件上的**字节区间锁**(一个 syscall); macOS 没有可用的区间锁,
+     * 退化成一个锁文件(会慢一个量级, 但只在这一种平台上)。
+     */
+    private static AppendTailGuard? TryEnterAppendTail(FileStream stream, string path, long start, long span)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            try
+            {
+                stream.Lock(start, span);
+                return new AppendTailGuard(stream, start, span, null);
+            }
+            catch (IOException)
+            {
+                return null;
+            }
         }
         try
         {
-            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
-            foreach (var frame in frames)
-                stream.Write(frame.Content);
-            stream.Flush(true);
+            var lockFile = new FileStream($"{path}.tail.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return new AppendTailGuard(null, 0, 0, lockFile);
         }
-        catch
+        catch (IOException)
         {
-            state.WrittenLength = before;
-            RollbackAppend(path, before);
-            throw;
+            return null;
         }
-        state.WrittenLength = before + total;
-        if (_compression == JsonlCompression.Zstd && entries.Count > 0)
-            SessionLogIndex.Append(path, entries, events.Count, events[0].Seq);
+    }
+
+    /** 追加临界区: 区间锁或锁文件, 释放时哪一个在场就放哪一个。 */
+    private sealed class AppendTailGuard(FileStream? stream, long start, long span, FileStream? lockFile) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (stream is not null && !OperatingSystem.IsMacOS())
+            {
+                try
+                {
+                    stream.Unlock(start, span);
+                }
+                catch (IOException)
+                {
+                    // 文件已被回滚或关闭时解锁会失败: 进程退出时 OS 会释放, 这里没有补救动作。
+                }
+            }
+            lockFile?.Dispose();
+        }
+    }
+
+
+    /**
+     * 尾部长度与"我上次写完的长度"不一致时的对齐。
+     *
+     * 只有一种情形能在本层就地解决: 索引覆盖到文件末尾, 且它的条数正好等于这批事件的起点 ——
+     * 那说明日志里已经是"这一批之前"的全部事件(上一批其实写成功了), 顺着写就行。
+     * 其余情形(尾巴上有没有归属的字节、条数对不上)不在这里猜: 由调用方按会话重新对齐后整段补写,
+     * 猜错的代价是把用户的事件丢进别人的日志里, 比多跑一趟恢复流程贵得多。
+     */
+    private long ReconcileLocked(SessionHeader meta, string path, long before, IReadOnlyList<SessionEvent> events, StorageHandleState state)
+    {
+        if (state.WrittenLength is not { } expected || expected == before)
+            return before;
+        var firstSeq = events.Count > 0 ? events[0].Seq : 0;
+        if (SessionLogIndex.TryLoad(path) is { } index && index.Length == before && index.EventCount == firstSeq)
+        {
+            state.Cursor = index.EventCount;
+            state.WrittenLength = before;
+            return before;
+        }
+        throw new SessionPersistenceCorruptionException(
+            $"session \"{meta.Id}\": the log changed from {expected} to {before} bytes while this writer held it, "
+            + $"and its frames do not line up with the next event #{firstSeq}");
     }
 
     private static void RollbackAppend(string path, long size)
@@ -1391,13 +2114,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
 
     private void ReleaseClaim(SessionId id)
     {
-        SessionLease? lease;
-        lock (_trackerGate)
-        {
-            _writers.Remove(id);
-            _leases.Remove(id, out lease);
-        }
-        lease?.Dispose();
+        lock (_trackerGate) _writers.Remove(id);
     }
 
     private void MarkMaterialized(SessionId id)
@@ -1412,4 +2129,3 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         return handle;
     }
 }
-

@@ -48,13 +48,12 @@ public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
     private IDisposable? EnterCore(Session session)
     {
         Action<Session, SessionEvent> forward = (source, sessionEvent) => PublishEvent(source, sessionEvent);
-        Action<Session, long> truncated = (source, eventCount) =>
-            Ctx.Events.Emit(Ctx, new SessionTruncateNotification(
-                source, eventCount, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        Action<Session, long, long> renumbered = (source, fromSeq, delta) =>
+            Ctx.Events.Emit(Ctx, new SessionRenumberNotification(source, fromSeq, delta));
         var detach = new SessionDetach(() =>
         {
             session.Appended -= forward;
-            session.Truncated -= truncated;
+            session.Renumbered -= renumbered;
             Detach(session);
         });
         lock (_sync)
@@ -62,7 +61,7 @@ public sealed class SessionStore(Context ctx) : Service(ctx, ServiceName)
             if (!_sessions.TryAdd(session.Id, new Entry { Session = session, Detach = detach }))
                 return null;
             session.Appended += forward;
-            session.Truncated += truncated;
+            session.Renumbered += renumbered;
         }
         // 公告在锁外: 持久化收到它就会回查本 store, 持锁发事件等于把锁交给订阅者。
         Ctx.Emit(new SessionCreatedNotification(session));

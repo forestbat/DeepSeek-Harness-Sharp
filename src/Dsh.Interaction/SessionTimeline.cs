@@ -19,18 +19,36 @@ public static class SessionTimeline
     /** 时间线预览的最大字符数; 超出部分用 ~ 结尾, 让选单行保持一行宽。 */
     public const int PreviewCharacters = 60;
 
-    public static IReadOnlyList<Entry> UserMessages(Session session) => FromEvents(session.SnapshotEvents());
+    /** 当前会话的用户消息: 回退只追加, 所以被回退掉的那些虽然还在日志里, 但不再算"我说过的话"。 */
+    public static IReadOnlyList<Entry> UserMessages(Session session)
+    {
+        var ranges = session.RevertedRanges;
+        return FromEvents(session.SnapshotEvents(), seq => Contains(ranges, seq));
+    }
 
-    public static IReadOnlyList<Entry> FromEvents(IReadOnlyList<SessionEvent> events)
+    public static IReadOnlyList<Entry> FromEvents(IReadOnlyList<SessionEvent> events, Func<long, bool>? isReverted = null)
     {
         var entries = new List<Entry>();
         foreach (var sessionEvent in events)
         {
+            if (isReverted?.Invoke(sessionEvent.Seq) == true)
+                continue;
             var text = UserText(sessionEvent);
             if (text.Length > 0)
                 entries.Add(new Entry(sessionEvent.Seq, sessionEvent.Time, text));
         }
         return entries;
+    }
+
+    /** 序号是否落在任一回退区间(闭区间)内。 */
+    public static bool Contains(IReadOnlyList<(long From, long To)> ranges, long seq)
+    {
+        foreach (var (from, to) in ranges)
+        {
+            if (seq >= from && seq <= to)
+                return true;
+        }
+        return false;
     }
 
     /** 用户自己发的消息才算数: 插件/工具投回来的消息不属于"我说过的话"。 */

@@ -317,4 +317,63 @@ public sealed class AttachmentTests : IDisposable
 
         Assert.Throws<LlmException>(() => AttachmentResolution.DataUrl(options, reference));
     }
+
+    /**
+     * 引用了、盘上却没有字节的图片: 请求期换成文本占位, 会话本身一个字都不改。
+     * 以前这里是整条请求失败(ATTACHMENT_MISSING), 结果是这些会话再也发不出消息。
+     */
+    [Fact]
+    public void MissingImagesAreReplacedWithTextInsteadOfFailingTheRequest()
+    {
+        var stored = new ImageAttachmentRef(new string('a', 64), "image/png", 10, 3, 2);
+        var gone = new ImageAttachmentRef(new string('b', 64), "image/png", 10, 4, 5);
+        var inToolResult = new ImageAttachmentRef(new string('c', 64), "image/jpeg", 12, 6, 7);
+        var options = new GenerateOptions
+        {
+            Provider = "p",
+            Model = "m",
+            Messages =
+            [
+                MessageFactory.CreateUserMessage([new TextBlock("看图"), new ImageBlock(gone), new ImageBlock(stored)]),
+                MessageFactory.CreateToolResultMessage(
+                    ToolCallId.Create("call-1"), [new ImageBlock(inToolResult)], false),
+            ],
+            Attachments = new Dictionary<string, byte[]> { [stored.AttachmentId] = [1, 2, 3] },
+        };
+        var warnings = new List<string>();
+
+        var projected = MissingImages.Project(options, warnings.Add);
+
+        var texts = projected.Messages[0].Content.OfType<TextBlock>().Select(block => block.Text).ToList();
+        Assert.Contains(texts, text => text.Contains("bytes are no longer stored", StringComparison.Ordinal)
+            && text.Contains(gone.AttachmentId[..8], StringComparison.Ordinal));
+        // 拿得到字节的那张仍然是图。
+        Assert.Single(projected.Messages[0].Content.OfType<ImageBlock>());
+        // 工具结果里的图同样处理。
+        Assert.Empty(projected.Messages[1].Content.OfType<ToolResultBlock>()
+            .SelectMany(result => result.Content).OfType<ImageBlock>());
+        // 只告警一次, 且两条缺失都点名。
+        var warning = Assert.Single(warnings);
+        Assert.Contains(gone.AttachmentId, warning, StringComparison.Ordinal);
+        Assert.Contains(inToolResult.AttachmentId, warning, StringComparison.Ordinal);
+        // 原请求不被改写。
+        Assert.Equal(3, options.Messages[0].Content.Count);
+    }
+
+    [Fact]
+    public void MissingImagesLeavesACompleteRequestUntouched()
+    {
+        var stored = new ImageAttachmentRef(new string('a', 64), "image/png", 10, 3, 2);
+        var options = new GenerateOptions
+        {
+            Provider = "p",
+            Model = "m",
+            Messages = [MessageFactory.CreateUserMessage([new ImageBlock(stored)])],
+            Attachments = new Dictionary<string, byte[]> { [stored.AttachmentId] = [1, 2, 3] },
+        };
+        var warnings = new List<string>();
+
+        Assert.Same(options, MissingImages.Project(options, warnings.Add));
+        Assert.Empty(warnings);
+    }
 }

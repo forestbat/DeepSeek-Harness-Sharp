@@ -319,18 +319,6 @@ public sealed class WorkingDirectoryTests : IDisposable
     }
 
     [Fact]
-    public async Task Truncation_RestoresTheEarlierDirectory()
-    {
-        Directory.CreateDirectory(Path.Combine(_root, "sub"));
-        var before = _agent.Session.Seq;
-        await Cd("sub");
-
-        Assert.True(_agent.Session.TryTruncateTo(before));
-
-        Assert.Equal(_root, _agent.Session.WorkingDirectory);
-    }
-
-    [Fact]
     public async Task CreateWorktree_BranchesFromHead_AndEntersCheckout()
     {
         _ = ApprovalService.Register(_ctx);

@@ -63,7 +63,6 @@ public sealed class DiffView : UserControl
     private TextBlock? _chevron;
     private readonly FontFamily _monoFont = FontFamily.Parse(MonoFontFallback);
     private DiffCard? _renderedCard;
-    private DiffCard? _builtCard;
     private DiffCard? _pendingCard;
     private bool _rebuildPosted;
 
@@ -122,7 +121,6 @@ public sealed class DiffView : UserControl
         {
             _root.Children.Clear();
             _lines.Children.Clear();
-            _builtCard = null;
             if (card is not null)
             {
                 _root.Children.Add(BuildHeader(card));
@@ -148,7 +146,6 @@ public sealed class DiffView : UserControl
         _renderedCard = card;
         _root.Children.Clear();
         _lines.Children.Clear();
-        _builtCard = null;
         if (card is null)
             return;
         // 默认折叠: 只建标题栏, 行内容等用户展开时才建, 不会先铺满整段再收起。
@@ -176,7 +173,6 @@ public sealed class DiffView : UserControl
                 Height = LineHeight,
             });
         }
-        _builtCard = card;
     }
 
     private Control BuildHeader(DiffCard card)
@@ -204,6 +200,17 @@ public sealed class DiffView : UserControl
             panel.Children.Add(new TextBlock { Text = $"+{card.Added}", FontSize = CaptionFontSize, Foreground = AddedBrush, VerticalAlignment = VerticalAlignment.Center });
         if (card.Removed > 0)
             panel.Children.Add(new TextBlock { Text = $"-{card.Removed}", FontSize = CaptionFontSize, Foreground = RemovedBrush, VerticalAlignment = VerticalAlignment.Center });
+        // 投影缓存只存了前若干行: 标题栏上直说, 免得"重开之后这张卡片少了半截"被当成 diff 本来就只改了这些。
+        if (card.TotalLines > card.Lines.Count)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"仅缓存前 {card.Lines.Count}/{card.TotalLines} 行",
+                FontSize = CaptionFontSize,
+                Foreground = LineNumberBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
         return panel;
     }
 

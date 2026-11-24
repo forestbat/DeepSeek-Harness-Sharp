@@ -21,6 +21,7 @@
     <ProjectReference Include="..\Dsh.Llm\Dsh.Llm.csproj" />
     <ProjectReference Include="..\Dsh.Notifications\Dsh.Notifications.csproj" />
     <ProjectReference Include="..\Dsh.Pty\Dsh.Pty.csproj" />
+    <ProjectReference Include="..\Dsh.Persistence\Dsh.Persistence.csproj" />
     <ProjectReference Include="..\Dsh.Runtime\Dsh.Runtime.csproj" />
   </ItemGroup>
 
@@ -32,7 +33,9 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
+  <!-- 投影缓存的验收测试要直接抓取/存回视图模型的投影(内部接缝, 不进公开面)。 -->
   <ItemGroup>
+    <InternalsVisibleTo Include="Dsh.Tests" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('Assets\icon.png')">

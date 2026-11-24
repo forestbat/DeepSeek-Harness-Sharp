@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk;PublishWithSatoriGC/11.0.1-satori.44643583273.1">
+
+  <!--
+    打开会话的代价基准: 同一份程序用两套 GC 各发一次(Satori GC 与 stock)。
+    Satori 用 -p:UseSatoriGC=false 关闭, 于是 A/B 只差运行时, 代码与构建参数完全一致。
+    这个项目不进解决方案: 只有做 GC 对比时才单独 build/publish。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <RootNamespace>Dsh.Bench</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dsh.Core\Dsh.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.Persistence\Dsh.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Dsh.RemoteHost.Contracts\Dsh.RemoteHost.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

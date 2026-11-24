@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Dsh.Gui.Services;
 using Dsh.Interaction;
 using Dsh.Llm;
 
@@ -127,5 +128,34 @@ public sealed partial class TokenStatsViewModel(TimeProvider clock) : Observable
         // 重放历史会话时事件是瞬间连发的, 这种耗时算出来的 tok/s 没有意义。
         if (usage.OutputTokens > 0 && seconds >= MinimumMeasurableSeconds)
             TokensPerSecond = $"{usage.OutputTokens / seconds:0.0} tok/s";
+    }
+
+    /**
+     * 存下来的只有**跨重开仍然成立**的量: 累计 token、上下文占用与轮/步。
+     * 耗时与首 token 延迟属于"这次请求跑了多久", 重开时重放一遍本就得不到(事件是瞬间连发的), 于是不存。
+     */
+    public TokenStatsSnapshot Capture()
+        => new(_inputTokens, _outputTokens, _cacheReadTokens, _context.ContextWindow, _context.LastInputTokens, Rounds);
+
+    public void Restore(TokenStatsSnapshot state)
+    {
+        _inputTokens = state.InputTokens;
+        _outputTokens = state.OutputTokens;
+        _cacheReadTokens = state.CacheReadTokens;
+        _context.Restore(state.ContextWindow, state.LastInputTokens);
+        _requestStartedAt = null;
+        _finishedElapsed = TimeSpan.Zero;
+        _firstTokenSeen = false;
+        ContextText = _context.Label;
+        Rounds = state.Rounds;
+        Latency = Empty;
+        FirstToken = Empty;
+        TokensPerSecond = Empty;
+        Cache = _inputTokens > 0
+            ? $"缓存命中 {_cacheReadTokens / _inputTokens * 100:0}%"
+            : Empty;
+        Totals = _inputTokens > 0 || _outputTokens > 0
+            ? $"in {TokenText.Compact(_inputTokens)} / out {TokenText.Compact(_outputTokens)}"
+            : Empty;
     }
 }

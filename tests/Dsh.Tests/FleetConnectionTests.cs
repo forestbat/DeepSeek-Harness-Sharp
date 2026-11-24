@@ -1,6 +1,5 @@
 using Dsh.Core;
 using Dsh.Fleet;
-using Dsh.Interaction;
 using Dsh.RemoteHost;
 using Dsh.Agent;
 
@@ -157,24 +156,30 @@ public sealed class FleetConnectionTests
         await WaitForAsync(() => Events(second).Count == 4);
         Assert.Equal(new[] { sharedFrom, sharedFrom + 1, sharedFrom + 2, sharedFrom + 3 }, Events(second).Select(EventSeq));
 
-        Assert.True(session.TryTruncateTo(sharedFrom));
-        await WaitForAsync(() => Events(second).Any(item => item.Reset));
+        // 回退只追加: 号不回退, 所以读者不该被重置, 回退事件就按它自己的号顺流送达。
+        // (旧契约"截断先通知 Reset 再复用序号"随物理截断一起删除, 见 SessionRevertTests。)
+        Assert.NotNull(session.Revert(sharedFrom));
+        await WaitForAsync(() => Events(second).Any(item => !item.Reset && EventSeq(item) == sharedFrom));
+        Assert.DoesNotContain(Events(second), item => item.Reset);
         session.Append(new TurnStartPayload(5));
-        await WaitForAsync(() => Events(second).SkipWhile(item => !item.Reset).Skip(1)
-            .Any(item => !item.Reset && EventSeq(item) == sharedFrom));
-        var afterReset = Events(second).SkipWhile(item => !item.Reset).Skip(1).Where(item => !item.Reset).Select(EventSeq).ToArray();
-        Assert.Equal(Enumerable.Range(0, (int)session.Seq).Select(index => (long)index), afterReset);
+        await WaitForAsync(() => Events(second).Any(item => !item.Reset && EventSeq(item) == sharedFrom + 1));
+        var afterRevert = Events(second).Select(EventSeq).ToArray();
+        // 没有 Reset 就没有重放: 这名读者手里仍然只有自己订的那一段, 只是多出回退与它后面那两条。
+        Assert.Equal(Enumerable.Range((int)sharedFrom, (int)(session.Seq - sharedFrom)).Select(index => (long)index), afterRevert);
 
         using var lateStop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var late = new List<RemoteSessionEvent>();
         var lateTask = ReadEventsAsync(connection.SubscribeAsync(session.Id.Value, 0, lateStop.Token), late);
         await WaitForAsync(() => Events(late).Count(item => !item.Reset) == session.Seq);
-        Assert.Equal(afterReset, Events(late).Where(item => !item.Reset).Select(EventSeq));
+        Assert.Equal(Enumerable.Range(0, (int)session.Seq).Select(index => (long)index),
+            Events(late).Where(item => !item.Reset).Select(EventSeq));
         using var tailStop = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var tail = new List<RemoteSessionEvent>();
         var tailTask = ReadEventsAsync(connection.SubscribeAsync(session.Id.Value, sharedFrom, tailStop.Token), tail);
-        await WaitForAsync(() => Events(tail).Count == 1);
-        Assert.Equal(sharedFrom, EventSeq(Assert.Single(Events(tail))));
+        // 从 sharedFrom 起订: 回退事件在这个号上, 之后的号也都还在(号从不复用), 所以一条不落。
+        await WaitForAsync(() => Events(tail).Count == session.Seq - sharedFrom);
+        Assert.Equal(Enumerable.Range((int)sharedFrom, (int)(session.Seq - sharedFrom)).Select(index => (long)index),
+            Events(tail).Where(item => !item.Reset).Select(EventSeq));
         await tailStop.CancelAsync();
         await tailTask;
         await lateStop.CancelAsync();
