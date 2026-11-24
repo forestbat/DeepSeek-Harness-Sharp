@@ -83,11 +83,12 @@ public sealed class TimestampCommandTests
         Assert.Contains("back in the input area", result.Text);
         var remaining = SessionTimeline.UserMessages(fixture.Agent.Session).Select(entry => entry.Text).ToList();
         Assert.Equal(["keep me"], remaining);
-        // 整个回合都要走(剩下唯一一个 TurnStart), 且日志不能以悬空的 TurnStart 收尾:
-        // 那正是界面卡在"正在运行"、停止按钮又没反应的原因。
-        var events = fixture.Agent.Session.SnapshotEvents();
-        Assert.Single(events, sessionEvent => sessionEvent.Data is TurnStartPayload);
-        Assert.IsNotType<TurnStartPayload>(events[^1].Data);
+        // 回退是"只追加一条 revert", 因此原始日志里那三个 TurnStart 还在 —— 判据必须落在折叠结果上:
+        // 被收掉的回合不能再留着"开着的回合", 否则界面重放就永远停在"正在运行"、停止按钮按了也没反应。
+        var projections = new SessionProjectionRegistry(fixture.Ctx);
+        projections.Register(TurnBoundaryProjectionDefinition.Instance);
+        var boundary = projections.StateOf<TurnBoundaryProjection>(fixture.Agent.Session, TurnBoundaryProjectionDefinition.Key)!;
+        Assert.Null(boundary.OpenTurnStartSeq);
     }
 
     /** 分叉同样停在回合之前: 被选中那条不进新会话, 新会话标题沿用父会话标题。 */

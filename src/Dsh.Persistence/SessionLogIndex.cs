@@ -26,6 +26,9 @@ namespace Dsh.Persistence;
  * 校验只看结构: 首条帧从字节 0 开始, 末条帧的 end 等于日志当前长度 —— 少了(截断/重写)、多了(半帧)都判失效,
  * 于是 revert、修复、崩溃半帧都会自然退回全量解析并重建索引。
  *
+ * 一帧必须装**整数条记录**: 打包(chunk)记录是多行, 帧预算按字节切会让一条记录跨两个帧, 那样的帧事件数是 0。
+ * 索引因此按 Coalesce 把它们并进相邻帧 —— 否则"翻历史"会在帧边界上解出半条记录, 而结构校验还会把整份索引判死。
+ *
  * 同一进程内同一份日志只解析一次: 解析结果连同两个文件的(长度, 修改时间)缓存起来, 之后每次 TryLoad 只做两次 stat。
  * 任何写动作(Save/Append/Delete)都让缓存失效 —— 落盘的索引变了, 内存里那份就不能再被当成最新的。
  */
@@ -128,6 +131,72 @@ public sealed class SessionLogIndex
         return index;
     }
 
+    /**
+     * 把"没有完整记录"的帧并进相邻帧, 让索引的每一帧都装整数条记录。
+     *
+     * 打包记录(chunk 行)是**多行**, 帧预算按字节切, 于是记录会被切在两个帧之间: 前半帧结束时那条记录还没闭合,
+     * 它的序号与条数都还没"落定", 帧事件数因此是 0(见 JsonlSessionPersistence.FeedFrames 的差分计数)。
+     * 这种帧本身是合法的 —— 只是不能单独解压(半条记录解析不出来), 也不能单独当页(会漏掉它的前半截)。
+     *
+     * 合并规则: 0 事件帧并到**前一帧**(它的字节是前一帧那条记录的续行); 开头连续出现 0 事件帧时(struct 少见)
+     * 并到**后一帧**, 让"从 0 起一页"仍能解出完整记录。头帧(字节 0 起的那条)不参与合并。
+     */
+    public static List<FrameEntry> Coalesce(IReadOnlyList<FrameEntry> frames)
+    {
+        if (frames.Count <= 2)
+            return [.. frames];
+        var merged = new List<FrameEntry>(frames.Count) { frames[0] };
+        List<FrameEntry>? leading = null;
+        for (var position = 1; position < frames.Count; position += 1)
+        {
+            var frame = frames[position];
+            if (frame.EventCount > 0)
+            {
+                if (leading is { Count: > 0 })
+                {
+                    frame = frame with
+                    {
+                        Start = leading[0].Start,
+                        MinReplaceStart = Math.Min(frame.MinReplaceStart, leading.Min(frame => frame.MinReplaceStart)),
+                    };
+                    leading = null;
+                }
+                merged.Add(frame);
+                continue;
+            }
+            var previous = merged[^1];
+            if (merged.Count == 1 || previous.EventCount == 0)
+            {
+                // 还没见到任何装完整记录的帧: 攒着, 等下一个这样的帧出现时把起点让给它。
+                leading ??= [];
+                leading.Add(frame);
+                continue;
+            }
+            merged[^1] = previous with
+            {
+                End = frame.End,
+                MinReplaceStart = Math.Min(previous.MinReplaceStart, frame.MinReplaceStart),
+            };
+        }
+        // 末尾全是 0 事件帧(整份日志都没有一条闭合记录): 归成一帧, 起点不变、不丢字节。
+        if (leading is { Count: > 0 })
+        {
+            if (merged.Count == 1)
+            {
+                merged.Add(leading[0] with
+                {
+                    End = leading[^1].End,
+                    MinReplaceStart = leading.Min(frame => frame.MinReplaceStart),
+                });
+            }
+            else
+            {
+                merged[^1] = merged[^1] with { End = leading[^1].End, MinReplaceStart = Math.Min(merged[^1].MinReplaceStart, leading.Min(frame => frame.MinReplaceStart)) };
+            }
+        }
+        return merged;
+    }
+
     private static SessionLogIndex? Read(string path, long indexBytes, long logLength)
     {
         if (indexBytes < HeaderSize)
@@ -158,18 +227,21 @@ public sealed class SessionLogIndex
     private static SessionLogIndex? Decode(string path, byte[] bytes, long logLength)
     {
         var legacy = !bytes.AsSpan(0, Magic.Length).SequenceEqual(Magic);
-        if ((legacy ? ReadLegacyJson(bytes) : ReadRecords(bytes)) is not { Length: > 0 } frames)
+        if (DecodeRecords(bytes) is not { Length: > 0 } records)
             return null;
-        if (frames[0].Start != 0 || frames[^1].End != logLength)
+        // 一条打包记录(chunk 行)可以跨帧: 那样的帧里"完整的记录数为 0"。合并之后每一帧都装完整记录,
+        // 读取方(切字节 / 分页 / 尾窗)才对每个帧边界有同一个假设。
+        var frames = Coalesce(records);
+        if (frames.Count == 0 || frames[0].Start != 0 || frames[^1].End != logLength)
             return null;
         // 结构自洽校验: 事件帧的序号区间必须首尾相接、逐帧递增。
         // 校验不过就判失效(交给全量读重建) —— 一份"帧边界对、条数错"的索引比没有索引更糟:
         // 尾窗会按错的条数往回数, 一路退到文件开头(实测 d 档 2 万条的窗口变成 32.7 万条)。
         var nextSeq = frames[0].FirstSeq;
-        for (var position = 0; position < frames.Length; position += 1)
+        for (var position = 0; position < frames.Count; position += 1)
         {
             var frame = frames[position];
-            // 第 0 帧是头行, 不含事件; 之后每一帧都必须含事件 —— 一帧是一条完整记录, 不可能为空。
+            // 第 0 帧是头行, 不含事件; 之后每一帧都装整数条记录(Coalesce 已把跨帧的半条记录并进相邻帧)。
             if (position == 0)
                 continue;
             if (frame.EventCount <= 0)
@@ -188,6 +260,50 @@ public sealed class SessionLogIndex
         if (legacy)
             Upgrade(path, index);
         return index;
+    }
+
+    /** 只把记录读出来(不看日志长度、不做结构校验): 平移时用, 那时索引与日志的长度本来就对不上。 */
+    private static FrameEntry[]? DecodeRecords(byte[] bytes)
+        => !bytes.AsSpan(0, Magic.Length).SequenceEqual(Magic) ? ReadLegacyJson(bytes) : ReadRecords(bytes);
+
+    /**
+     * 头帧被改写后整份日志平移了 delta 字节(重命名会把头行换成新的压缩帧, 长度随标题而变): 帧边界跟着平移。
+     *
+     * 不平移的后果: 早先那些帧记录的偏移停在旧位置, 之后追加的记录用的是新位置, 两边在接缝处相差 delta 字节;
+     * 而结构校验(首帧从 0 起、末帧到文件尾、seq 连续)照样通过 —— 于是"日志变长了"这件事被后续追加掩盖,
+     * 窗口读再按错位的边界解压, 首页永远读不回来(实测 GUI 因此整个打不开会话)。
+     * 读不出索引就删掉: 下次全量打开会按日志重建一份。
+     */
+    public static void Shift(string logPath, long delta)
+    {
+        if (delta == 0)
+            return;
+        var path = PathFor(logPath);
+        try
+        {
+            if (!File.Exists(path))
+                return;
+            var bytes = File.ReadAllBytes(path);
+            if (bytes.Length < HeaderSize || DecodeRecords(bytes) is not { Length: > 0 } frames)
+            {
+                Delete(logPath);
+                return;
+            }
+            var shifted = new List<FrameEntry>(frames.Length);
+            foreach (var frame in frames)
+                shifted.Add(frame with { Start = frame.Start + delta, End = frame.End + delta });
+            new SessionLogIndex
+            {
+                Length = shifted[^1].End,
+                EventCount = shifted[^1].FirstSeq + shifted[^1].EventCount,
+                SeqBase = shifted[0].FirstSeq,
+                Frames = Coalesce(shifted),
+            }.Save(logPath);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Delete(logPath);
+        }
     }
 
     /** 读到旧 JSON 索引时按新格式重写一次; 写不成就算了, 下次读还能再试。 */
@@ -309,12 +425,18 @@ public sealed class SessionLogIndex
     /** 追加一批帧记录(写日志的同时增量维护索引)。 */
     public static void Append(string logPath, IReadOnlyList<FrameEntry> frames, long eventCount, long seqBase)
     {
+        if (frames.Count == 0)
+            return;
         var path = PathFor(logPath);
         var buffer = new byte[frames.Count * RecordSize];
         for (var position = 0; position < frames.Count; position += 1)
             WriteRecord(buffer.AsSpan(position * RecordSize, RecordSize), frames[position]);
         if (!File.Exists(path))
         {
+            // 只有"从整份日志的第一帧开始"的记录才能就地创建索引; 半路追加的记录若单独成文件,
+            // 首帧就不在字节 0, 之后每次读都会判它失效(白建一份还要每次读盘解析)。
+            if (frames[0].Start != 0)
+                return;
             using var created = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
             var header = new byte[HeaderSize];
             Magic.CopyTo(header);

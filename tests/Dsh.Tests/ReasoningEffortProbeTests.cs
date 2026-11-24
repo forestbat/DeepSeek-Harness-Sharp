@@ -59,6 +59,34 @@ public sealed class ReasoningEffortProbeTests
         Assert.Equal(1, endpoint.Posts);
     }
 
+    /**
+     * Responses 通道在输出被截断时以 response.incomplete 收尾, 全程没有 finish_reason。
+     * 推理型模型 + 16 token 的探针预算必然被截断: 截断是"端点收下了参数", 不能当流中断丢掉,
+     * 否则结论永不落盘(deepseek-ly 那类中转站上档位就永远解析不出来)。
+     */
+    [Fact]
+    public async Task Probe_Adopts_Efforts_When_The_Responses_Stream_Is_Truncated()
+    {
+        const string truncated = """
+            event: response.created
+            data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":0,"model":"relay-model","status":"in_progress","output":[]},"sequence_number":0}
+
+            event: response.incomplete
+            data: {"type":"response.incomplete","response":{"id":"resp_1","object":"response","created_at":0,"model":"relay-model","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":1,"output_tokens":16,"total_tokens":17}},"sequence_number":1}
+
+            """;
+        var endpoint = new StubEndpoint(_ => Text(HttpStatusCode.OK, $"{truncated}\n", "text/event-stream"));
+        var adapter = CreateAdapter(endpoint, useResponses: true);
+
+        Assert.Null(adapter.ResolveModel("relay-model").Reasoning);
+        await WaitForReasoningAsync(adapter);
+
+        Assert.Equal(
+            ["low", "medium", "high", "max"],
+            adapter.ResolveModel("relay-model").Reasoning!.Efforts.Select(effort => effort.Id.Value));
+        Assert.Equal(1, endpoint.Posts);
+    }
+
     /** 结论写进缓存文件: 换一个适配器/重启后直接用, 不再打端点。 */
     [Fact]
     public async Task Probe_Result_Survives_A_New_Adapter()
@@ -103,12 +131,13 @@ public sealed class ReasoningEffortProbeTests
         Assert.Equal(0, endpoint.Posts);
     }
 
-    private static OpenAiCompatibleAdapter CreateAdapter(StubEndpoint endpoint, ReasoningEffortsCache? cache = null)
+    private static OpenAiCompatibleAdapter CreateAdapter(StubEndpoint endpoint, ReasoningEffortsCache? cache = null, bool useResponses = false)
         => new(
             "relay",
             Endpoint,
             "sk-test",
             httpClient: new HttpClient(endpoint),
+            useResponses: useResponses,
             reasoningEfforts: cache);
 
     private static async Task WaitForReasoningAsync(LlmAdapter adapter)

@@ -90,6 +90,7 @@ public sealed class FleetBootstrapTests
         public Task<bool> SendMessageAsync(RemoteMessageRequest request, CancellationToken cancellationToken = default) => throw Missing();
         public Task<bool> InterruptAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => throw Missing();
         public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken = default) => throw Missing();
+        public Task<RemoteLogSlice> GetSessionLogSliceAsync(RemoteLogSliceRequest request, CancellationToken cancellationToken = default) => throw Missing();
         public Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => throw Missing();
         public Task<IReadOnlyList<RemoteSessionSummary>> ListRegistryAsync(CancellationToken cancellationToken = default) => throw Missing();
         public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default) => throw Missing();

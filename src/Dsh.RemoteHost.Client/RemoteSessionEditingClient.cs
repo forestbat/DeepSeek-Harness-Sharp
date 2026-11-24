@@ -24,6 +24,9 @@ public sealed class RemoteSessionEditingClient : IWorkspaceSessionEditing
     public async Task SetSessionApprovalPolicyAsync(string sessionId, string policy, CancellationToken cancellationToken = default)
         => await _rpc.SetApprovalPolicyAsync(new RemoteSessionPolicyRequest(sessionId, policy), cancellationToken).ConfigureAwait(false);
 
+    public Task<IReadOnlyList<RemoteTimelineEntry>> SessionTimelineAsync(string sessionId, CancellationToken cancellationToken = default)
+        => _rpc.SessionTimelineAsync(new RemoteSessionRef(sessionId), cancellationToken);
+
     public Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(string rootSessionId, CancellationToken cancellationToken = default)
         => _rpc.ListSubagentsAsync(new RemoteSessionRef(rootSessionId), cancellationToken);
 }

@@ -57,6 +57,8 @@ public sealed class RemoteHostMultiClientTests
         }
         public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(RemoteSessionSnapshotRequest request, CancellationToken cancellationToken = default)
             => upstream.GetSessionSnapshotRangeAsync(request.SessionId, request.FromEvent, int.MaxValue, cancellationToken);
+        public Task<RemoteLogSlice> GetSessionLogSliceAsync(RemoteLogSliceRequest request, CancellationToken cancellationToken = default)
+            => upstream.GetSessionLogSliceAsync(request.SessionId, request.FromEvent, request.MaxEvents, cancellationToken);
         public Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken = default) => upstream.ListToolsAsync(request.SessionId, cancellationToken);
         public Task<IReadOnlyList<RemoteSessionSummary>> ListRegistryAsync(CancellationToken cancellationToken = default) => upstream.ListHostSessionsAsync(cancellationToken);
         public Task<RemotePendingList> ListPendingAsync(CancellationToken cancellationToken = default) => upstream.ListPendingAsync(cancellationToken);

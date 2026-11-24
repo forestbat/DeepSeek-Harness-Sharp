@@ -285,7 +285,7 @@ public sealed class RemoteHostReaderInitializationTests
         public Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken ct) => backend.Session.ListSessionsAsync(ct);
         public Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken ct) => backend.Session.CreateSessionAsync(cwd, ct);
         public Task<RemoteSessionSummary> ResumeSessionAsync(string id, CancellationToken ct) => backend.Session.ResumeSessionAsync(id, ct);
-        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string id, CancellationToken ct) => backend.Session.GetSessionSnapshotAsync(id, ct);
+        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string id, long fromEvent, int maxEvents, CancellationToken ct) => backend.Session.GetSessionSnapshotAsync(id, fromEvent, maxEvents, ct);
         public Task SendMessageAsync(string id, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken ct) => backend.Session.SendMessageAsync(id, text, images, ct);
         public Task InterruptAsync(string id, CancellationToken ct) => backend.Session.InterruptAsync(id, ct);
         public Task<IReadOnlyList<string>> ListToolsAsync(string id, CancellationToken ct) => backend.Session.ListToolsAsync(id, ct);

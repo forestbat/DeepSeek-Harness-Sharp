@@ -103,7 +103,7 @@ public static class CompactCommand
         ManualCompactionErrorCode.Commit => new CommandResult.Error(
             "Compaction did not finish cleanly; some session history may have changed. Inspect the current session state before retrying." + DetailSuffix(error), followup),
         ManualCompactionErrorCode.Persistence => new CommandResult.Error(
-            "Compaction finished, but the session could not be saved." + DetailSuffix(error), followup),
+            "Compaction finished, but the session could not be saved." + CauseSuffix(error) + DetailSuffix(error), followup),
         _ => throw new ArgumentOutOfRangeException(nameof(error), $"unknown manual compaction error code: {error.ErrorCode}"),
     };
 

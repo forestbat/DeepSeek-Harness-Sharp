@@ -10,7 +10,7 @@ public sealed partial class SubagentRuntime
     {
         var sessions = SessionsOrThrow();
         signal.ThrowIfCancellationRequested();
-        var live = sessions.List();
+        var live = Candidates(sessions);
         var subagentParents = SubagentParents(live);
         var rows = new List<SubagentListEntry>();
         foreach (var candidate in OrderedSubagentChildren(live, parentSessionId))
@@ -36,7 +36,7 @@ public sealed partial class SubagentRuntime
             throw new ArgumentException("subagent listDescendants depth must be a positive safe integer");
         var sessions = SessionsOrThrow();
         signal.ThrowIfCancellationRequested();
-        var live = sessions.List();
+        var live = Candidates(sessions);
         var subagentParents = SubagentParents(live);
         var children = new Dictionary<SessionId, List<Session>>();
         foreach (var session in live)
@@ -74,6 +74,29 @@ public sealed partial class SubagentRuntime
             ?? throw new SubagentException(
                 "listing subagents requires the session store (load @deepseek-ai/dsh-session)",
                 SubagentErrorCodes.SessionStoreUnavailable);
+
+    /**
+     * 可列的候选会话 = 店里登记的 + 只活在本次运行里的子会话。
+     *
+     * 无头子代理在"升档"(注入提示词/写操作)之前不进 SessionStore, 但它已经在跑了: 只按店里的列表算,
+     * 界面上就看不到它, 徽标一直是 0, 要等到某个把它写进店的时刻(下一回合)才出现。子代理一旦开跑,
+     * _liveRuns 里就有它, 因此以运行态为准补上这一批。
+     */
+    private IReadOnlyList<Session> Candidates(SessionStore sessions)
+    {
+        var byId = new Dictionary<SessionId, Session>();
+        foreach (var session in sessions.List())
+            byId[session.Id] = session;
+        lock (_sync)
+        {
+            foreach (var run in _liveRuns.Values)
+            {
+                if (run.LocalAgent is { } agent && agent.Session.Header.ParentSession is not null)
+                    byId.TryAdd(agent.Session.Id, agent.Session);
+            }
+        }
+        return [.. byId.Values];
+    }
 
     private static HashSet<SessionId> SubagentParents(IReadOnlyList<Session> live)
     {

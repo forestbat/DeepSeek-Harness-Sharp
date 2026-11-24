@@ -15,9 +15,8 @@ namespace Dsh.RemoteHost;
 public sealed record RemoteSessionEvent(
     string SessionId,
     SessionEvent? Event = null,
-    bool Reset = false,
-    long? TruncatedTo = null,
-    long TruncatedAt = 0);
+    bool Reset = false);
+
 
 /** 每个读者有独立订阅标识，历史和实时事件均由 Host 提供。 */
 public sealed record RemoteSubscribeRequest(string SessionId, long FromSeq, string SubscriptionId);
@@ -34,12 +33,43 @@ public readonly record struct RemoteEventFrame(string SubscriptionId, RemoteSess
  */
 public sealed record RemoteSessionSnapshotRequest(string SessionId, long FromEvent = 0, int MaxBytes = HostProtocol.SnapshotPageBytes, int MaxEvents = 0);
 
-/** 会话历史的一页; TotalEventCount 是整段历史的条数, 客户端据此取完剩余各页。 */
+/**
+ * 会话历史的一页; TotalEventCount 是整段历史的条数, 客户端据此取完剩余各页。
+ *
+ * LogLength / LogRevision 是这份日志的**修订标识**(已落盘字节数 + 文件的长度/时间戳戳记),
+ * 客户端据此判定自己手里的投影缓存还对不对得上: 日志只追加, 长度不会变小; 回退会把日志截短,
+ * 于是长度变小或戳记变化都让缓存自然失效。旧宿主不给这两个字段(0 / 空), 客户端就永远不命中。
+ */
 public sealed record RemoteSessionSnapshot(
     SessionHeader Header,
     IReadOnlyList<SessionEvent> Events,
     long TotalEventCount,
-    string? ApprovalPolicy = null);
+    string? ApprovalPolicy = null,
+    long LogLength = 0,
+    string LogRevision = "");
+
+/**
+ * 日志字节切片请求: 从 FromEvent 起最多 MaxEvents 条事件的**压缩字节**。
+ *
+ * 与快照请求同形, 区别只在响应载荷: 快照是事件对象(宿主物化 + JSON), 切片是日志里那几帧原样字节。
+ * 传字节让线缆体积等于日志压缩体积 —— 七十多万条事件的会话也就十几 MB。
+ */
+public sealed record RemoteLogSliceRequest(string SessionId, long FromEvent = 0, int MaxEvents = 0);
+
+/**
+ * 一段日志字节切片: Bytes 是头帧 + 覆盖 [FromSeq, FromSeq + EventCount) 的事件帧原样字节。
+ *
+ * 客户端用读日志的同一套代码解压解析(SessionLogSliceParser), 因此投影实现只有一份。
+ * EventCount 可能大于请求的条数(帧边界只落在行边界上, 一帧可能多带几条), 客户端按序号自行裁剪。
+ */
+public sealed record RemoteLogSlice(
+    byte[] Bytes,
+    SessionHeader Header,
+    long FromSeq,
+    int EventCount,
+    long TotalEventCount,
+    string? ApprovalPolicy = null,
+    string ContentHash = "");
 
 
 /** 远端发起的审批/问答: 需本地决策, 用 RequestId 回填。 */
@@ -322,6 +352,8 @@ public sealed record RemoteCommandDescriptor(string Name, string Description);
 public sealed record RemoteSessionRenameRequest(string SessionId, string Title);
 
 public sealed record RemoteSessionPolicyRequest(string SessionId, string Policy);
+
+public sealed record RemoteTimelineEntry(long Seq, long Time, string Preview);
 
 public sealed record RemoteSubagentInfo(string SessionId, string? Parent, int Depth, string Mode, string? Label, bool HasChildren, bool IsLive, long CreatedAt);
 

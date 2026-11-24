@@ -1,7 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Input.Raw;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
 using Dsh.Core;
@@ -215,7 +214,7 @@ public sealed class GuiHostChatIntegrationTests
     }
 
     [Fact]
-    public async Task HostTruncation_RebuildsRichChatProjection_WithoutKeepingDiscardedMessages()
+    public async Task HostRevert_RebuildsRichChatProjection_WithoutKeepingDiscardedMessages()
     {
         await using var host = await HarnessHostFixture.CreateAsync("gr", TestContext.Current.CancellationToken);
         await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
@@ -228,11 +227,11 @@ public sealed class GuiHostChatIntegrationTests
             var keepCount = agent.Session.Seq;
             agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("discarded tail")), new SurfaceOp.Append());
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.Any(message => message.Text == "discarded tail"));
-            Assert.True(agent.Session.TryTruncateTo(keepCount));
+            Assert.NotNull(agent.Session.Revert(keepCount));
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.All(message => message.Text != "discarded tail"));
-            agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("replacement at reused seq")), new SurfaceOp.Append());
-            await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.Any(message => message.Text == "replacement at reused seq"));
-            Assert.Single(viewModel.Messages, message => message.Text == "replacement at reused seq");
+            agent.Session.Append(new UserMessagePayload(MessageFactory.CreateUserText("replacement after revert")), new SurfaceOp.Append());
+            await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.Any(message => message.Text == "replacement after revert"));
+            Assert.Single(viewModel.Messages, message => message.Text == "replacement after revert");
             Assert.DoesNotContain(viewModel.Messages, message => message.Text == "discarded tail");
         });
     }
@@ -415,6 +414,42 @@ public sealed class GuiHostChatIntegrationTests
             {
                 window.Close();
             }
+        });
+    }
+
+    /**
+     * 打开会话就把整段历史取齐: 不许"只剩尾巴"。
+     *
+     * 界面上的滚动条量与时间轴刻度都来自已加载的消息 —— 少一段历史, 用户既滚不过去也跳不过去,
+     * 而且没有任何操作能把那段历史叫回来。所以这条用例不滚不跳, 只打开就要求首条事件序号为 0。
+     */
+    [Fact]
+    public async Task OpeningASession_LoadsTheWholeHistory_WithoutAnyUserAction()
+    {
+        await using var host = await HarnessHostFixture.CreateAsync("gp", TestContext.Current.CancellationToken);
+        await using var gui = await GuiTestEnvironment.CreateIsolatedAsync();
+        var id = host.Environment.Agent.Session.Id;
+        var session = host.Environment.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!.Get(id)!.Session;
+        // 造够三页多的事件: 直接写进宿主里那条活会话(界面要的是历史, 不是真实回合)。
+        for (var turn = 1; session.Seq < 45_000; turn += 1)
+        {
+            session.Append(new TurnStartPayload(turn));
+            session.Append(new StepStartPayload(turn, 1));
+            session.Append(new AssistantChunkPayload(turn, 1, new StreamChunk.TextDelta(0, $"chunk {session.Seq}\n")));
+            session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"第 {turn} 个问题")), new SurfaceOp.Append());
+        }
+        var total = session.Seq;
+        var userMessages = SessionTimeline.UserMessages(session).Count;
+
+        await using var fleet = Fleet(host, gui);
+        await HeadlessGui.RunAsync(async () =>
+        {
+            using var chat = await HostChatSession.OpenAsync(fleet, host.Root, id.Value, Ct);
+            Assert.True(chat.HasWholeHistory, "打开会话必须带整段历史");
+            Assert.Equal(0, chat.Events[0].Seq);
+            Assert.Equal(total - 1, chat.Events[^1].Seq);
+            // 时间轴的刻度来自用户消息: 整段都在, 刻度才可能覆盖全部。
+            Assert.Equal(userMessages, SessionTimeline.FromEvents(chat.Events).Count);
         });
     }
 

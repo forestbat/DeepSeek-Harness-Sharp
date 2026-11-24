@@ -44,12 +44,15 @@ public static class TuiProxy
             {
                 await PtyDaemonClient.AttachConsoleAsync(session.Id, Console.OpenStandardOutput(), CancellationToken.None);
             }
-            catch (InvalidOperationException)
+            catch (Exception error) when (error is InvalidOperationException || PtyDaemonClient.IsTunnelEnded(error))
             {
                 var exitCode = await ProxyExitCodeAsync(session.Id, reportFailure: true, requireExited: true);
-                if (exitCode is null)
-                    throw;
-                return exitCode.Value;
+                if (exitCode is not null)
+                    return exitCode.Value;
+                // 连会话记录都取不到: daemon 也一起没了。给一句话就走, 不要把未处理异常甩到用户的终端上。
+                await Console.Error.WriteLineAsync(
+                    $"dsharp: 与会话的连接已断开({error.Message}); 会话状态也读不到, daemon 可能已退出。");
+                return 1;
             }
         }
         return await ProxyExitCodeAsync(session.Id, reportFailure: windowShown) ?? 0;

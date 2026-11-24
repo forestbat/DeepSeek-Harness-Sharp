@@ -517,6 +517,8 @@
 
     <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="22,0,22,10" Spacing="8">
       <TextBlock Text="{Binding StatusText}" Classes="Tertiary" VerticalAlignment="Center" />
+      <!-- 活性: 忙的时候显示"落后几条、多久没事件", 让"完成了/在跑/已死"分得开。 -->
+      <TextBlock Text="{Binding ActivityText}" Classes="Tertiary" VerticalAlignment="Center" />
       <ItemsControl Name="PluginStatusHost" ItemsSource="{Binding Workbench.StatusItems}"
                     IsVisible="{Binding Workbench.HasStatusItems}" VerticalAlignment="Center">
         <ItemsControl.ItemsPanel>

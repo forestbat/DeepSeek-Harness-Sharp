@@ -67,6 +67,39 @@ public sealed class SubagentViewModelTests
             MessageText.Flatten(result.Message.Content).Contains("child-out"));
     });
 
+    /**
+     * 无头子代理在升档之前不进 SessionStore, 但它已经在跑: 列表与徽标必须以运行态为准把它算进来。
+     * 只按店里的列表算的话, 界面上要等到下一回合才看得到子代理, 用户这期间无从判断它起没起来。
+     */
+    [Fact]
+    public async Task RunningChildThatNeverEnteredTheStore_IsListedAndCounted() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        using var panel = new SubagentPanelViewModel(await environment.OpenChatAsync());
+        panel.SetRoot(environment.Agent.Id);
+        await panel.RefreshAsync();
+        Assert.Empty(panel.Nodes);
+
+        var runtime = environment.App.Ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
+        var run = await runtime.StartAsync("spawn", new SubagentStartRequest
+        {
+            Parent = environment.Agent,
+            Label = "unflushed",
+            Prompt = [new TextBlock("running without a store flush")],
+            Signal = TestContext.Current.CancellationToken,
+        });
+        try
+        {
+            await panel.RefreshAsync();
+            var node = Assert.Single(panel.Nodes);
+            Assert.Equal(run.Id, node.Id);
+            Assert.Equal("unflushed", node.Label);
+            Assert.True(node.IsLive);
+            Assert.Equal("1", panel.Badge);
+        }
+        finally { await run.DisposeAsync(); }
+    });
+
     [Fact]
     public async Task StartAndEnd_FlipLiveStateAndBadge() => await HeadlessGui.RunAsync(async () =>
     {

@@ -238,7 +238,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
                 persistence.Delete(snapshot.Header.Id);
         foreach (var path in new[] { app.Home.SessionsPath })
             if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
+                TempTree.Delete(path);
         HarnessSettings.MutateDocument(app.Home.SettingsFile, (_, _) => shared.Settings!);
         Restore(Path.Combine(app.Home.Root, ".agent-presets"), shared.Presets);
         return Task.CompletedTask;
@@ -267,7 +267,7 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
     public async Task<HostChatSession> OpenChatAsync(AgentLoopAgent? selected = null)
         => await OpenChatAsync((selected ?? Agent).Id);
 
-    public async Task<HostChatSession> OpenChatAsync(SessionId sessionId)
+    public async Task<HostChatSession> OpenChatAsync(SessionId sessionId, ProjectionCache? projections = null)
     {
         var store = App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!;
         foreach (var session in store.List())
@@ -296,7 +296,8 @@ public sealed class GuiTestEnvironment : IAsyncDisposable
         }
         if (_fleet is null)
             _fleet = FleetWorkspace.ForContext(App.Ctx, App.Home, startLocalHost: null);
-        var chat = await HostChatSession.OpenAsync(_fleet!, _directory, sessionId.Value, TestContext.Current.CancellationToken);
+        var chat = await HostChatSession.OpenAsync(
+            _fleet!, _directory, sessionId.Value, TestContext.Current.CancellationToken, projections);
         _chats.Add(chat);
         var machine = _fleet!.Find(MachineSpec.LocalName)!;
         var registered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

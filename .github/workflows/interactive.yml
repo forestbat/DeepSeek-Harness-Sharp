@@ -26,15 +26,8 @@ env:
   UPTERM_VERSION: v0.41.1
 
 jobs:
-  dryioc-feed:
-    name: Prepare shared DryIoc feed
-    uses: ./.github/workflows/ci-dryioc.yml
-    with:
-      checkout-ref: ${{ github.sha }}
-
   ssh:
     name: 交互会话（${{ matrix.os }}）
-    needs: dryioc-feed
     runs-on: ${{ matrix.os }}
     # Dispatches from the API or gh CLI deliver number inputs as strings.
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
@@ -52,18 +45,6 @@ jobs:
           dotnet-version: '11.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
-
-      - name: Download the DryIoc feed prepared for this run
-        uses: actions/download-artifact@v4
-        with:
-          name: dryioc-feed
-          path: packages
-
-      - name: 准备本地 NuGet feed（packages/，DryIoc.dll）
-        shell: pwsh
-        run: |
-          & ./packages/fetch-dryioc-feed.ps1 -VerifyOnly -ExpectedCommit '${{ needs.dryioc-feed.outputs.commit }}' -ExpectedSha256 '${{ needs.dryioc-feed.outputs.sha256 }}' -RefreshPackageCache
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # upterm relays SSH through uptermd.upterm.dev; only listed public keys may join or run commands.
       # Keys come from the triggering user's GitHub profile plus the optional repository variable INTERACTIVE_SSH_AUTHORIZED_KEYS.

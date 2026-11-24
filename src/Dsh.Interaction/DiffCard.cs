@@ -15,5 +15,15 @@ public sealed record DiffCard(string Title, string Source, IReadOnlyList<DiffLin
     public int Added { get; } = Lines.Count(line => line.Kind == DiffLineKind.Add);
 
     public int Removed { get; } = Lines.Count(line => line.Kind == DiffLineKind.Delete);
+
+    /**
+     * 卡片正文的总行数; 大于 Lines.Count 表示 Lines 只是一份预览(投影缓存只留了前若干行)。
+     * 0 是"没设过"的默认值, 此时 Lines 就是全部 —— 既有构造方式不必改动。
+     */
+    public int TotalLines
+    {
+        get => field == 0 ? Lines.Count : field;
+        init;
+    }
 }
 

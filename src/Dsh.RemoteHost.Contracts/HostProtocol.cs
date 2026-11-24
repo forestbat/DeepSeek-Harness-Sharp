@@ -28,6 +28,14 @@ public static class HostProtocol
     public const string SessionRegistryCapability = "sessions.registry";
 
     /**
+     * 会话历史能否按**日志字节**取: 宿主只切压缩字节, 客户端自己解压解析。
+     *
+     * 线缆体积因此等于日志压缩后的体积(几十万条事件也就十几 MB), 宿主也不必把事件物化再序列化。
+     * 客户端复用读日志的同一套解析代码, 投影实现仍然只有一份。
+     */
+    public const string LogSliceCapability = "sessions.logslice";
+
+    /**
      * 一页会话历史的字节预算: 必须明显低于传输层单帧上限(FrameCodec, 16 MB), 才能给 JSON-RPC 外壳与头部字段留余量。
      * 超长会话的历史按它切页, 客户端凭 TotalEventCount 取完整段历史。
      */
@@ -45,6 +53,9 @@ public static class HostProtocol
     public const string MethodSessionMessage = "host.session.message";
     public const string MethodSessionInterrupt = "host.session.interrupt";
     public const string MethodSessionSnapshot = "host.session.snapshot";
+
+    /** 日志字节切片: 与快照同形, 但载荷是压缩后的日志字节而不是事件对象。 */
+    public const string MethodSessionLogSlice = "host.session.logslice";
 
     public const string MethodToolsList = "host.tools.list";
     public const string MethodApprovalRespond = "host.approval.respond";
@@ -101,6 +112,8 @@ public sealed record HostInfo(int ProtocolVersion, string HostVersion, string Pl
 [JsonSerializable(typeof(SessionEvent))]
 [JsonSerializable(typeof(RemoteSessionSnapshot))]
 [JsonSerializable(typeof(RemoteSessionSnapshotRequest))]
+[JsonSerializable(typeof(RemoteLogSlice))]
+[JsonSerializable(typeof(RemoteLogSliceRequest))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(RemoteApprovalRequest))]
 [JsonSerializable(typeof(RemoteApprovalResponse))]
@@ -344,7 +357,7 @@ public static class SessionEditingProtocol
 {
     public const string Capability = "session.editing";
     public static IReadOnlyList<string> Methods { get; } = Array.AsReadOnly<string>(
-        [MethodSessionCommand, MethodSessionCommands, MethodSessionRename, MethodSessionDelete, MethodSessionApprovalPolicy, MethodSessionSubagents]);
+        [MethodSessionCommand, MethodSessionCommands, MethodSessionRename, MethodSessionDelete, MethodSessionApprovalPolicy, MethodSessionSubagents, MethodSessionTimeline]);
 
     public const string MethodSessionCommand = "host.session.command";
     public const string MethodSessionCommands = "host.session.commands";
@@ -352,6 +365,7 @@ public static class SessionEditingProtocol
     public const string MethodSessionDelete = "host.session.delete";
     public const string MethodSessionApprovalPolicy = "host.session.approvalPolicy";
     public const string MethodSessionSubagents = "host.session.subagents";
+    public const string MethodSessionTimeline = "host.session.timeline";
 }
 
 [JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UseStringEnumConverter = true)]
@@ -363,6 +377,8 @@ public static class SessionEditingProtocol
 [JsonSerializable(typeof(RemoteSessionPolicyRequest))]
 [JsonSerializable(typeof(RemoteSubagentInfo))]
 [JsonSerializable(typeof(IReadOnlyList<RemoteSubagentInfo>))]
+[JsonSerializable(typeof(RemoteTimelineEntry))]
+[JsonSerializable(typeof(IReadOnlyList<RemoteTimelineEntry>))]
 [JsonSerializable(typeof(RemoteSessionRef))]
 [JsonSerializable(typeof(bool))]
 public partial class SessionEditingProtocolJsonContext : JsonSerializerContext;

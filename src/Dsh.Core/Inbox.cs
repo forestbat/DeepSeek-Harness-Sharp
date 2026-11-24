@@ -21,18 +21,26 @@ public sealed class Inbox : IDisposable
     private readonly InboxNotifications _notifications;
     private readonly List<UserMessage> _nextTurn = [];
     private readonly List<UserMessage> _nextStep = [];
-    private readonly Action<Session, long> _onTruncated;
+
+    private readonly Action<Session, long> _onReverted;
 
     public Inbox(Session session, InboxNotifications notifications)
     {
         _session = session;
         _notifications = notifications;
         Rebuild();
-        _onTruncated = (_, _) => RebuildAfterTruncation();
-        session.Truncated += _onTruncated;
+        // 回退是只追加的: 日志没变短, 但"入队 → 取走"里被回退掉的是"取走", 按日志重放就会把已发的那条
+        // 又当成待发, 所以按日志整份重放一次(见 RebuildAfterTruncation)。
+
+        _onReverted = (_, _) => RebuildAfterTruncation();
+        session.Reverted += _onReverted;
     }
 
-    public void Dispose() => _session.Truncated -= _onTruncated;
+    public void Dispose()
+    {
+
+        _session.Reverted -= _onReverted;
+    }
 
     private void Rebuild()
     {
@@ -45,6 +53,9 @@ public sealed class Inbox : IDisposable
         foreach (var sessionEvent in _session.SnapshotEvents(from))
         {
             if (sessionEvent.Data is not InboxSplicePayload splice)
+                continue;
+            // 回退只追加: 被回退区间里的 splice 已经不生效, 跳过后面的清理才不会把撤回的那条又摆回来。
+            if (_session.IsReverted(sessionEvent.Seq))
                 continue;
             if (windowed && !Fits(splice))
                 continue;

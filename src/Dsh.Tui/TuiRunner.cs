@@ -96,7 +96,10 @@ public static class TuiRunner
 
     private static bool _crashLogHooked;
 
-    /** 未处理异常把栈落盘(开发期落 artifacts020/, 安装态回落 home/logs), 事后可定位。 */
+    /**
+     * 未处理异常记进会话日志(文件 provider 逐行 Flush, 进程随后就退出也留得下)。
+     * TUI 崩在原始模式里时终端上只剩恢复序列, 事后能查的只有这条记录。
+     */
     private static void HookCrashLog(HarnessApp app)
     {
         if (_crashLogHooked)
@@ -104,21 +107,11 @@ public static class TuiRunner
         _crashLogHooked = true;
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            try
-            {
-                var directory = Path.Combine(Environment.CurrentDirectory, "artifacts020");
-                if (!Directory.Exists(directory))
-                    directory = app.Home.LogsPath;
-                Directory.CreateDirectory(directory);
-                var path = Path.Combine(directory, $"tui-crash-{DateTime.Now:yyyyMMdd-HHmmss}.log");
-                File.WriteAllText(path, Convert.ToString(args.ExceptionObject) ?? "unhandled exception (no detail)");
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            var logger = app.Ctx.LoggerFor("tui");
+            if (args.ExceptionObject is Exception error)
+                logger.Error(error);
+            else
+                logger.Error("未处理异常, 进程即将退出: %s", Convert.ToString(args.ExceptionObject));
         };
     }
 

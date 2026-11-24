@@ -20,11 +20,15 @@ internal sealed record SessionLogScan(
 internal sealed class SessionLogScanner
 {
     private const byte Newline = (byte)'\n';
-    private readonly List<SessionEvent> _events = [];
     private readonly List<byte> _fragment = [];
     private readonly long _seqBase;
+    private List<SessionEvent> _events = [];
     private bool _finished;
     private LogDamage _damage = LogDamage.None;
+    /** 到目前为止收下的事件总数(含已经取走的部分): 序号连续性与落后重放的判据都靠它, 不是 _events.Count。 */
+    private long _taken;
+    /** 已经被取走的事件数(见 TakeEvents): 收尾重编号要按它给出绝对下标。 */
+    private long _released;
 
     /**
      * seqBase: 扫描起点对应的绝对 seq。缺页重读拿到的是一段中间帧, 它本来就从中途开始,
@@ -77,7 +81,24 @@ internal sealed class SessionLogScanner
     }
 
     public (long InputBytes, long CommittedBytes, long EventCount) Checkpoint()
-        => (InputBytes, CommittedBytes, _events.Count);
+        => (InputBytes, CommittedBytes, _taken);
+
+    /**
+     * 取走到目前为止收下的事件, 扫描器随后从头攒下一批。
+     *
+     * 逐帧解析用: 一帧解出来就交给调用方(投影)消费, 消费完这一批就能被回收,
+     * 于是同一时刻常驻的已解析事件只有一批, 而不是整段日志那么多。
+     * 序号连续性与损伤判定不受影响 —— 它们看的是 _taken(累计收下多少), 不是手上还剩多少。
+     */
+    public IReadOnlyList<SessionEvent> TakeEvents()
+    {
+        if (_events.Count == 0)
+            return [];
+        var taken = _events;
+        _released += taken.Count;
+        _events = [];
+        return taken;
+    }
 
     public SessionLogScan Finish()
     {
@@ -108,7 +129,7 @@ internal sealed class SessionLogScanner
         if (_damage.Any)
         {
             // 已经知道 seq 不可信了, 直接收下, 收尾统一重编号。
-            _events.AddRange(decoded);
+            Accept(decoded);
             return;
         }
         if (IsStaleReplay(decoded))
@@ -119,17 +140,25 @@ internal sealed class SessionLogScanner
         var rowStart = _events.Count;
         foreach (var sessionEvent in decoded)
         {
-            if (sessionEvent.Seq != _seqBase + _events.Count)
+            if (sessionEvent.Seq != _seqBase + _taken)
             {
                 // 序号断裂同样只是损伤: 丢掉这一行刚加的部分, 记为损伤, 交给收尾重编号。
+                _taken -= _events.Count - rowStart;
                 _events.RemoveRange(rowStart, _events.Count - rowStart);
                 _damage = _damage.Plus(1, endByte - line.Length - 1, CommittedBytes);
-                _events.AddRange(decoded);
+                Accept(decoded);
                 return;
             }
             _events.Add(sessionEvent);
+            _taken += 1;
         }
         CommittedBytes = endByte;
+    }
+
+    private void Accept(IReadOnlyList<SessionEvent> decoded)
+    {
+        _events.AddRange(decoded);
+        _taken += decoded.Count;
     }
 
     /**
@@ -140,11 +169,11 @@ internal sealed class SessionLogScanner
     {
         for (var index = 0; index < _events.Count; index += 1)
         {
-            if (_events[index].Seq != index)
-                _events[index] = _events[index] with { Seq = index };
+            if (_events[index].Seq != _released + index)
+                _events[index] = _events[index] with { Seq = _released + index };
         }
-        if (InheritedEventCount > _events.Count)
-            InheritedEventCount = _events.Count;
+        if (InheritedEventCount > _taken)
+            InheritedEventCount = _taken;
     }
 
     /**
@@ -152,7 +181,7 @@ internal sealed class SessionLogScanner
      * 整块都落在已提交区间内才认定为重放并整体丢弃; 与已提交区间交错则是损伤, 交给上面的判定。
      */
     private bool IsStaleReplay(IReadOnlyList<SessionEvent> decoded)
-        => decoded[0].Seq < _seqBase + _events.Count && decoded[^1].Seq < _seqBase + _events.Count;
+        => decoded[0].Seq < _seqBase + _taken && decoded[^1].Seq < _seqBase + _taken;
 
     /**
      * 直接按字节解码: 普通事件不需要 DOM, 只有 chunk 打包行与带区间来源的记录才退回 JsonNode。

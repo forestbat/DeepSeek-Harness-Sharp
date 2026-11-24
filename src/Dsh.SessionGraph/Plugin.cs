@@ -20,11 +20,20 @@ public sealed class Plugin(string packageName) : IDshPlugin
 
     public IDisposable Apply(Context ctx, object? config) => packageName switch
     {
-        SessionGraph => new DisposableBundle(new SessionEventGraphService(ctx), TimestampCommand.Register(ctx)),
+        SessionGraph => Start(ctx),
+
         _ => throw new InvalidOperationException($"Unknown DSH package '{packageName}'."),
     };
 
+    /** 图服务注册进 ctx 之后由 ctx 持有引用，插件本身只需交回命令的释放句柄。 */
+    private static IDisposable Start(Context ctx)
+    {
+        _ = new SessionEventGraphService(ctx);
+        return TimestampCommand.Register(ctx);
+    }
+
     private sealed class DisposableBundle(params IDisposable[] items) : IDisposable
+
     {
         public void Dispose()
         {

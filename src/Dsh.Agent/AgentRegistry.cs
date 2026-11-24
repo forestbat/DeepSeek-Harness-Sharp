@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Dsh.Runtime;
 using Dsh.Llm;
 using Dsh.Core;
@@ -23,6 +24,9 @@ public sealed record AgentHandle(IAgent Agent, IDisposable Dispose);
 public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
 {
     public const string ServiceName = "agents";
+
+    /** 打开路径的日志分类名: 一行一次打开, 便于按 "session open:" 直接 grep。 */
+    private const string LogName = "session";
 
     private static readonly AsyncLocal<IAgent?> InitiatorSlot = new();
 
@@ -82,8 +86,20 @@ public sealed class AgentRegistry(Context ctx) : Service(ctx, ServiceName)
     public async Task<AgentHandle> Resume(ResumeAgentOptions options, CancellationToken signal = default)
     {
         var factory = _factory ?? throw new InvalidOperationException("no agent factory registered");
+        // 打开路径的唯一共享点: TUI 直连与 GUI 的宿主服务都从这里进来, 所以只在这一层记一次时间。
+        var started = Stopwatch.GetTimestamp();
         var agent = await factory.Resume(Ctx, options, signal);
         Register(agent);
+        var openMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        // 注册完成时 agent 已 idle、可以接收回合: 这一层的 interactive 与 open 重合(用户可感知的那两个刻度在前端进程里)。
+        Ctx.LoggerFor(LogName).Info(new SessionOpenReport(
+            agent.Id,
+            openMs,
+            SessionOpenReport.UnknownMs,
+            openMs,
+            SessionOpenReport.UnknownMs,
+            agent.Session.Seq,
+            agent.Session.ResidentFrom > 0).Line);
         return new AgentHandle(agent, new AgentDetach(() => Unregister(agent.Id)));
     }
 

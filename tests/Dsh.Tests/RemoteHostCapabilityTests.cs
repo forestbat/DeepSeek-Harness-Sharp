@@ -46,8 +46,9 @@ public sealed class RemoteHostCapabilityTests
         Assert.Equal("hello"u8.ToArray(), await client.Files.ReadFileAsync(Path.Combine(work, "a.txt"), Ct));
 
         var listing = await client.Files.ListDirectoryAsync(work, Ct);
-        Assert.Equal(work, listing.Path);
-        Assert.Equal(backend.Root, listing.Parent);
+        // host 回的路径由文件系统统一过, 与测试拼出来的字符串只差目录分隔符风格
+        Assert.Equal(Path.GetFullPath(work), Path.GetFullPath(listing.Path));
+        Assert.Equal(Path.GetFullPath(backend.Root), Path.GetFullPath(listing.Parent!));
         Assert.Contains(listing.Entries, entry => entry is { Name: "sub", IsDirectory: true });
 
         var received = new TaskCompletionSource<RemoteSessionEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -410,7 +411,7 @@ public sealed class RemoteHostCapabilityTests
             return Task.FromResult(_sessions.TryGetValue(sessionId, out var session) ? session : throw new KeyNotFoundException(sessionId));
         }
 
-        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken)
         {

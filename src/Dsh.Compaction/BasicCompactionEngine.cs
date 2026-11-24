@@ -29,6 +29,8 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
     private readonly SessionStore _sessions;
     private readonly List<Func<bool>> _listeners = [];
     private readonly HashSet<string> _warnedPressureConfigTargets = [];
+    /** 窗口未知的提示每个 target 只说一次: 它挂在每一步之前, 否则每个 step 都要说一遍。 */
+    private readonly HashSet<string> _warnedUnknownWindowTargets = [];
     private readonly ConditionalWeakTable<IAgent, RetryCount> _overflowRetries = new();
     private readonly ConditionalWeakTable<Session, IAgent> _overflowAgents = new();
     private readonly ConditionalWeakTable<Session, FailedPressure> _failedPressure = new();
@@ -118,15 +120,24 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             return await CompactRegion(overflowRange.Start, overflowRange.End, agent, signal);
         }
 
-        // 目录(models.dev)没有这个模型时(自建中转站)回落到端点自报的上下文窗口, 拿不到才报配置错误。
+        /*
+         * 只按**已知**窗口决定压力阈值: 目录(models.dev)、settings 手填、端点 /models、免费报错探测都拿不到窗口时,
+         * 不拿默认值凑一个阈值 —— 猜小会把健康会话压穿，猜大则会让请求撞上服务端上限。
+         * 窗口未知时真正的兜底是服务端自己的拒绝: ContextWindowExceeded 走 ContextOverflow 分支(剪枝 + 压缩 + 重试)。
+         */
         var contextWindow = await _llm.ResolveContextWindowAsync(target.Value.Provider, target.Value.Model, signal)
             .ConfigureAwait(false);
         CompactionRegion.AssertNoActiveCompaction(agent.Session, "automatic pressure compaction");
         var targetKey = $"{target.Value.Provider}/{target.Value.Model}";
         if (contextWindow is null)
-            throw new TargetPressureConfigError(
-                targetKey,
-                $"compaction-basic: no context window for {targetKey}; neither models.dev nor the provider endpoint's /models declares one (set a limit.context for this model or expose context_length on the endpoint)");
+        {
+            if (_warnedUnknownWindowTargets.Add(targetKey))
+                Ctx.LoggerFor(ServiceName).Warn(
+                    $"compaction: no context window for {targetKey} (settings, models.dev, the endpoint's /models and the error probe all lack one); "
+                    + "skipping pressure compaction and waiting for the server to reject an oversized request — "
+                    + $"declare it with providers.{target.Value.Provider}.models.{target.Value.Model}.context_window to compact in advance");
+            return null;
+        }
         var spec = CompactionConfigResolver.ResolveCompactSpec(policy, contextWindow.Value);
         if (measurement.TotalTokens < spec.ThresholdTokens)
         {
@@ -198,7 +209,8 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
             new CompactionTransactionOptions(
                 CompactionOwner.CurrentTurn,
                 CompactionStability.WholeSurface,
-                DegradedRetainTurns: ResolvePolicy(agent).DegradedRetainTurns),
+                DegradedRetainTurns: ResolvePolicy(agent).DegradedRetainTurns,
+                RetainTokens: ResolvePolicy(agent).RetainTokens),
             signal);
 
     /** LLM 工具发起的当场压缩:与自动压缩共用 tail_turns+预算选区,在开启的 turn 内提交并接受可选 focus。 */
@@ -225,6 +237,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
                 CompactionOwner.CurrentTurn,
                 CompactionStability.WholeSurface,
                 Focus: focus,
+                RetainTokens: policy.RetainTokens,
                 DegradedRetainTurns: policy.DegradedRetainTurns),
             signal);
         LogResult(result, "in-turn", elapsed.Elapsed);
@@ -293,6 +306,7 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
                             CompactionStability.SelectedSpan,
                             sourceCommandId,
                             () => _sessions.Flush(agent.Session),
+                            RetainTokens: policy.RetainTokens,
                             DegradedRetainTurns: policy.DegradedRetainTurns),
                         operationSignal);
                     LogResult(result, "manual", elapsed.Elapsed);
@@ -304,8 +318,9 @@ public class BasicCompactionEngine : CompactionEngine, IDisposable
                         throw new ManualCompactionError(ManualCompactionErrorCode.Cancelled, "manual compaction was cancelled", error);
                     operationSignal.ThrowIfCancellationRequested();
                     // 手动压缩的失败原先只以 CommandResult 的形式回到界面, 日志里什么都不留,
-                    // 事后无法判断是选区问题、摘要问题还是持久化问题。
-                    Ctx.LoggerFor(ServiceName).Warn($"compaction (manual) failed: {error.GetType().Name}: {error.Message}");
+                    // 事后无法判断是选区问题、摘要问题还是持久化问题。原因(内层异常)也要记:
+                    // 外层消息对"落盘为什么失败"一个字都没有(实测: 真正的原因是写租约被别的进程接管)。
+                    Ctx.LoggerFor(ServiceName).Warn($"compaction (manual) failed: {error.GetType().Name}: {LlmFailureClassifiers.ErrorChain(error)}");
                     throw;
                 }
             }

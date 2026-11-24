@@ -92,6 +92,14 @@ public static class CompactionConfigResolver
     public const double DefaultThresholdRatio = 0.8;
 
     /**
+     * 上下文窗口未知时切摘要分块用的量级(200k, 与 qwen-code 的 DEFAULT_TOKEN_LIMIT 同量级)。
+     *
+     * 只用于"一次摘要请求能塞多少原文", 不再用来推压力压缩的阈值: 窗口真正未知时压不压由服务端拒绝说了算
+     * (见 BasicCompactionEngine 的压力分支)。这里的兜底之前是 8k, 会把一份 58 万 token 的历史切成七十多块。
+     */
+    public const int DefaultContextWindow = 200_000;
+
+    /**
      * 尾部保留预算默认值: 与 Kilo Code 的 compaction.preserve_recent_tokens 上限(8,000)一致。
      * 旧实现是"窗口的 16%", 在 1M 窗口下会留 160K, 压缩后残留被尾部撑到 120K 以上。
      */

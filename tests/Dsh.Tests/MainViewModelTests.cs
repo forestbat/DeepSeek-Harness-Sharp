@@ -11,6 +11,8 @@ using Dsh.Llm;
 using Dsh.Runtime;
 using Dsh.Runtime.Events;
 using Dsh.Agent;
+using Dsh.Sdk;
+using Dsh.Subagent;
 
 namespace Dsh.Tests;
 
@@ -186,8 +188,10 @@ public sealed class MainViewModelTests
         Assert.Same(message, scrolled);
 
         await viewModel.RevertToMessageCommand.ExecuteAsync(message);
-        await GuiTestEnvironment.WaitForAsync(viewModel,
-            () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1);
+        await GuiTestEnvironment.WaitForAsync(
+            (INotifyCollectionChanged)viewModel.Messages,
+            () => viewModel.Messages.Count(item => item.HasTimelineEntry) == 1,
+            () => GuiTestEnvironment.DescribeChatState(viewModel));
         Assert.Equal(["keep me"], viewModel.Messages.Where(item => item.IsUser).Select(item => item.Text));
         // 被回退的那条原文回输入区: 用户接下来就是改它再发, 而不是留在转录里当一条"卡住"的消息。
         Assert.Equal("drop me", viewModel.Composer.Input);
@@ -279,6 +283,60 @@ public sealed class MainViewModelTests
         Assert.True(viewModel.HasAttachments);
     });
 
+    /**
+     * 徽标必须跟到"subagent 工具开跑"这一刻: 只看宿主会话列表的话, 无头子代理在升档前不进列表,
+     * 徽标就一直是 0, 要等到下一个回合某个把它写进店的时机才跳出来 —— 用户在这期间无从判断子代理起没起来。
+     */
+    [Fact]
+    public async Task SubagentBadge_RefreshesOnTheToolCall_WithoutWaitingForTheNextTurn() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        var runtime = environment.App.Ctx.Get<SubagentRuntime>(SubagentRuntime.ServiceName)!;
+        var run = await runtime.StartAsync("spawn", new SubagentStartRequest
+        {
+            Parent = environment.Agent,
+            Label = "badge-live",
+            Prompt = [new TextBlock("badge live")],
+            Signal = TestContext.Current.CancellationToken,
+        });
+        try
+        {
+            var session = environment.Agent.Session;
+            var callId = ToolCallId.Create($"call-badge-{run.Id.Value}");
+            session.Append(new TurnStartPayload(1));
+            var callSeq = session.Seq;
+            session.Append(new ToolCallPayload(1, 1, callId, ISubagentService.DefaultToolName, """{"description":"badge-live"}"""));
+            session.Append(
+                new ToolResultPayload(1, 1, MessageFactory.CreateToolResultMessage(callId, [new TextBlock("done")], false)),
+                new SurfaceOp.Append(),
+                [callSeq]);
+            session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+
+            await GuiTestEnvironment.WaitForAsync(viewModel.Subagents, () => viewModel.Subagents.Badge == "1");
+            Assert.Equal(run.Id, Assert.Single(viewModel.Subagents.Nodes).Id);
+            Assert.True(viewModel.Subagents.Nodes[0].IsLive);
+        }
+        finally { await run.DisposeAsync(); }
+    });
+
+    /** 时间轴的数据来自宿主(整段会话), 不是"已渲染多少"。 */
+    [Fact]
+    public async Task TimelineComesFromTheHostAndCoversEveryUserMessage() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateAsync();
+        var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第一条给我的问题")), new SurfaceOp.Append());
+        session.Append(new TurnEndPayload(1, new TurnEndReason.Completed()));
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+
+        await GuiTestEnvironment.WaitForAsync(viewModel.TimelineEntries, () => viewModel.TimelineEntries.Count == 1);
+        var entry = Assert.Single(viewModel.TimelineEntries);
+        Assert.Contains("第一条给我的问题", entry.Preview, StringComparison.Ordinal);
+        Assert.True(viewModel.TimelineTotalEvents > entry.Seq);
+    });
+
     /** 1x1 透明 PNG: 附件存储只认字节, 不需要真的图片解码。 */
     private static readonly byte[] OnePixelPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
@@ -344,9 +402,9 @@ public sealed class MainViewModelTests
         }
     });
 
-    /** 交付物清单: 打开会话时从日志回放, 之后跟随新声明与会话截断。 */
+    /** 交付物清单: 打开会话时从日志回放, 之后跟随新声明与回退。 */
     [Fact]
-    public async Task Deliverables_ReplayFromLog_ThenFollowLiveEventsAndTruncation() => await HeadlessGui.RunAsync(async () =>
+    public async Task Deliverables_ReplayFromLog_ThenFollowLiveEventsAndRevert() => await HeadlessGui.RunAsync(async () =>
     {
         var environment = GuiTestEnvironment.CreateBlocking();
         await using var environmentScope = environment;
@@ -367,11 +425,40 @@ public sealed class MainViewModelTests
         await GuiTestEnvironment.WaitForAsync(viewModel.Deliverables.Items, () => viewModel.Deliverables.Items.Count == 2);
         Assert.False(viewModel.Deliverables.Items[1].Exists);
 
-        Assert.True(session.TryTruncateTo(cut));
+        Assert.NotNull(session.Revert(cut));
         await GuiTestEnvironment.WaitForAsync(viewModel.Deliverables.Items, () => viewModel.Deliverables.Items.Count == 1);
         Assert.Equal(report, Assert.Single(viewModel.Deliverables.Items).Path);
     });
 
+
+    /** 回退是只追加的事件(阶段 4a): 界面按它收掉那一段, 日志本身不变短。 */
+    [Fact]
+    public async Task RevertEvent_DropsTheTailButKeepsTheLog() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var environment = await GuiTestEnvironment.CreateIsolatedAsync();
+        var session = environment.Agent.Session;
+        session.Append(new TurnStartPayload(1));
+        session.Append(new StepStartPayload(1, 1));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第一轮留下")), new SurfaceOp.Append());
+        var boundary = session.Seq;
+        session.Append(new TurnStartPayload(2));
+        session.Append(new UserMessagePayload(MessageFactory.CreateUserText("第二轮要被回退")), new SurfaceOp.Append());
+        await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        Assert.Contains(viewModel.Messages, message => message.Text.Contains("第二轮要被回退", StringComparison.Ordinal));
+        var before = session.Seq;
+
+        Assert.NotNull(session.Revert(boundary, "test"));
+
+        await GuiTestEnvironment.WaitForAsync(
+            viewModel.Messages,
+            () => viewModel.Messages.All(message => !message.Text.Contains("第二轮要被回退", StringComparison.Ordinal)));
+        Assert.Contains(viewModel.Messages, message => message.Text.Contains("第一轮留下", StringComparison.Ordinal));
+        Assert.Contains(viewModel.TraceItems, item => item.Title == $"回退到 #{boundary} 之前");
+        // 只追加: 日志比回退前更长, 被回退的事件仍在日志里。
+        Assert.Equal(before + 1, session.Seq);
+        Assert.Contains(session.SnapshotEvents(), ev => ev.Data is UserMessagePayload payload
+            && payload.Message.Content.OfType<TextBlock>().Any(block => block.Text == "第二轮要被回退"));
+    });
 
     [Fact]
     public async Task SnapshotReplay_MapsEventsToMessagesAndTrace() => await HeadlessGui.RunAsync(async () =>

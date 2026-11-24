@@ -24,14 +24,19 @@ public static class SessionDeliverables
 
     /** Unique files in first-presented order; a later declaration of the same path replaces its description. */
     public static IReadOnlyList<PresentedFile> Collect(IEnumerable<SessionEvent> events)
+        => Collect(events
+            .Select(sessionEvent => sessionEvent.Data)
+            .OfType<DeliverablesPresentedPayload>()
+            .Select(presented => presented.Files));
+
+    /** 同一套折叠规则的另一种输入: 每次"交付"的文件组(投影缓存里存的就是这个, 免得连事件一起存)。 */
+    public static IReadOnlyList<PresentedFile> Collect(IEnumerable<IReadOnlyList<PresentedFile>> presentations)
     {
         var order = new List<string>();
         var latest = new Dictionary<string, PresentedFile>(PathComparer);
-        foreach (var sessionEvent in events)
+        foreach (var files in presentations)
         {
-            if (sessionEvent.Data is not DeliverablesPresentedPayload presented)
-                continue;
-            foreach (var file in presented.Files)
+            foreach (var file in files)
             {
                 if (latest.TryAdd(file.Path, file))
                     order.Add(file.Path);

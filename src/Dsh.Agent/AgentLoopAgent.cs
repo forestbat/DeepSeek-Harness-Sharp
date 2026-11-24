@@ -429,12 +429,14 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         while (true)
         {
             var surfaceGeneration = Session.SurfaceManager.ReplaceGeneration;
-            var (request, preparedCall) = await BuildRequest(phase, assembly.Tools, Session.DeriveMessages(), startsRequestSeries, surfaceGeneration, signal);
+            var (request, preparedCall, stats) = await BuildRequest(phase, assembly.Tools, Session.DeriveMessages(), startsRequestSeries, surfaceGeneration, signal);
             startsRequestSeries = false;
             var assembler = new BlockAssembler();
             var chunkSeqs = new List<long>();
             try
             {
+                if (preparedCall is not null)
+                    LogRequestStats(turn, step, stats);
                 var stream = preparedCall is not null
                     ? preparedCall.Stream(request, signal)
                     : throw new InvalidOperationException(
@@ -623,7 +625,7 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         }
     }
 
-    private async Task<(GenerateOptions Request, PreparedLlmCall? PreparedCall)> BuildRequest(
+    private async Task<(GenerateOptions Request, PreparedLlmCall? PreparedCall, PromptRequestStats Stats)> BuildRequest(
         Phase.Running phase,
         IReadOnlyList<ToolSchema> tools,
         IReadOnlyList<Message> boundaryMessages,
@@ -632,7 +634,19 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
         CancellationToken signal)
     {
         var session = Session;
+        // 修补之前的派生消息序列: 统计里的 dropped 要和表面节点表对上, 所以先留住这一份。
+        var derived = boundaryMessages;
         boundaryMessages = EnvironmentDetails.Append(session, MergeRuntimeContext(boundaryMessages));
+        // 请求投影的配对不变量: 历史缺一段时(停写的尾巴、取不回的页、回退/压缩切在配对中间)不能让
+        // "assistant 带 tool_calls 却没有 tool 消息"原样发给供应商 —— 那是 INVALID_REQUEST。
+        var pairing = ToolCallPairing.Repair(boundaryMessages);
+        if (pairing.Patched > 0 || pairing.Dropped > 0)
+        {
+            Ctx.LoggerFor(LogName).Warn(
+                $"request tool pairing repaired: agent={Id} patched={pairing.Patched} dropped={pairing.Dropped} "
+                + "(会话日志未改动, 只改这一次请求)");
+            boundaryMessages = pairing.Messages;
+        }
         var persistedHeader = session.RequestHeader();
         var persistedConfig = persistedHeader?.Config;
         var provider = Options.Provider ?? "";
@@ -728,8 +742,17 @@ public sealed class AgentLoopAgent : IAgent, IDisposable
             Cancellation = signal,
             Attachments = attachments,
         });
-        return (request, preparedCall);
+        return (request, preparedCall, PromptRequestStats.Measure(session, derived, request.Messages, pairing));
     }
+
+    /**
+     * 每发一次请求前记一条统计(验收 O1): 条数、字符数、覆盖的事件号范围与检查点位置。
+     * 只进运行日志, 不进会话事件日志(那是用户可见的转录)。
+     */
+    private void LogRequestStats(int turn, int step, PromptRequestStats stats)
+        => Ctx.LoggerFor(LogName).Info(
+            $"request prompt: agent={Id} turn={turn} step={step} messages={stats.Messages} chars={stats.Chars} "
+            + $"firstSeq={stats.FirstSeq} lastSeq={stats.LastSeq} checkpointSeq={stats.CheckpointSeq} dropped={stats.Dropped}");
 
     private static LlmCallConfig RequestProposal(EpochHeader header)
     {

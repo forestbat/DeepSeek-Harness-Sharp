@@ -1,10 +1,5 @@
-using Dsh.Boot;
 using Dsh.Core;
 using Dsh.Interaction;
-using Dsh.Llm;
-using Dsh.RemoteHost;
-using Dsh.Runtime;
-using Dsh.Transport;
 
 namespace Dsh.Tests;
 
@@ -43,8 +38,13 @@ public sealed class HostChatProtocolTests
         Assert.DoesNotContain(await observer.ListSessionsAsync(Ct), item => item.Id == created.Id);
     }
 
+    /**
+     * 回退对其他客户端的表现: 它是一条**普通追加事件**, 号不回退, 所以读者既不该被重置,
+     * 也不该拿到一个"变空了"的快照 —— 谁折到这条事件, 谁得到同一个结果。
+     * (旧契约"物理截断先发 Reset 再复用序号"随截断 API 一起删除。)
+     */
     [Fact(Timeout = 5000)]
-    public async Task Truncation_NotifiesOtherClientsBeforeReusedSequenceNumbers()
+    public async Task Revert_ReachesOtherClientsAsAnAppendedEvent_WithoutResettingThem()
     {
         await using var host = await HarnessHostFixture.CreateAsync("hct", TestContext.Current.CancellationToken);
         var editor = await host.ConnectAsync("editor", Ct);
@@ -59,14 +59,18 @@ public sealed class HostChatProtocolTests
         var first = stream.Current.Event!;
         Assert.Equal(0, first.Seq);
 
-        Assert.True(session.TryTruncateTo(0));
+        Assert.NotNull(session.Revert(0));
         Assert.True(await stream.MoveNextAsync());
-        Assert.True(stream.Current.Reset);
-        Assert.Empty((await observer.GetSessionSnapshotAsync(created.Id, Ct)).Events);
+        Assert.False(stream.Current.Reset);
+        var revert = stream.Current.Event!;
+        Assert.Equal(1, revert.Seq);
+        Assert.IsType<SessionRevertPayload>(revert.Data);
+        // 日志没变短: 快照给出"回合开始 + 回退"两条, 读者不需要从头重放。
+        Assert.Equal(2, (await observer.GetSessionSnapshotAsync(created.Id, Ct)).Events.Count);
         session.Append(new TurnStartPayload(2));
         Assert.True(await stream.MoveNextAsync());
         var replacement = stream.Current.Event!;
-        Assert.Equal(0, replacement.Seq);
+        Assert.Equal(2, replacement.Seq);
         Assert.Equal(2, Assert.IsType<TurnStartPayload>(replacement.Data).Turn);
         await following.CancelAsync();
     }

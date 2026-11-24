@@ -7,8 +7,12 @@ using Dsh.Gui.ViewModels;
 
 namespace Dsh.Gui.Views;
 
-/** 时间轨道上的一条刻度: 会话里的第几条消息、它在这条轨道上的相对位置, 以及预览用的文字。 */
-public sealed record TimelineMark(int Index, double Fraction, MessageViewModel Message);
+/**
+ * 时间轨道上的一条刻度: 它在这条轨道上的相对位置、对应的事件序号, 以及(已渲染时的)那条消息。
+ *
+ * `Message` 为空表示这条用户消息还没进转录(历史没取齐/正在分页): 位置按序号折算, 点击时再去把它取出来。
+ */
+public sealed record TimelineMark(int Index, double Fraction, MessageViewModel? Message, long Seq, string? Preview);
 
 /**
  * 会话右侧的时间轨道: 一条竖线加每条用户消息一个刻度。
@@ -38,6 +42,14 @@ public sealed class TimelineRail : Control
     public static readonly StyledProperty<IBrush?> TickBrushProperty =
         AvaloniaProperty.Register<TimelineRail, IBrush?>(nameof(TickBrush), Brushes.White);
 
+    /** 宿主给的整段用户消息时间线; 为空时只按已渲染的消息画刻度。 */
+    public static readonly StyledProperty<IReadOnlyList<TimelineEntryViewModel>?> TimelineProperty =
+        AvaloniaProperty.Register<TimelineRail, IReadOnlyList<TimelineEntryViewModel>?>(nameof(Timeline));
+
+    /** 会话的事件总数: 未渲染的刻度按 序号/总数 定位。 */
+    public static readonly StyledProperty<long> TotalEventsProperty =
+        AvaloniaProperty.Register<TimelineRail, long>(nameof(TotalEvents));
+
     private List<TimelineMark> _marks = [];
     private int _hovered = -1;
     private MessageViewModel? _hoveredMessage;
@@ -47,6 +59,19 @@ public sealed class TimelineRail : Control
     private int _heightsForCount = -1;
 
     static TimelineRail() => AffectsRender<TimelineRail>(LineBrushProperty, TickBrushProperty);
+
+    /** 宿主的整段时间线; 变了就重画刻度。 */
+    public IReadOnlyList<TimelineEntryViewModel>? Timeline
+    {
+        get => GetValue(TimelineProperty);
+        set => SetValue(TimelineProperty, value);
+    }
+
+    public long TotalEvents
+    {
+        get => GetValue(TotalEventsProperty);
+        set => SetValue(TotalEventsProperty, value);
+    }
 
     public ListBox? Transcript
     {
@@ -66,12 +91,12 @@ public sealed class TimelineRail : Control
         set => SetValue(TickBrushProperty, value);
     }
 
-    /** 当前刻度; 每次取都按最新布局重算(内容长高/折叠/滚动都会改变刻度位置)。 */
+    /** 当前刻度; 只有条数/滚动/视口高变了才重算 —— 每帧扫一遍全部消息在长会话里是白烧 CPU。 */
     public IReadOnlyList<TimelineMark> Marks
     {
         get
         {
-            Rebuild();
+            EnsureMarks();
             return _marks;
         }
     }
@@ -79,6 +104,20 @@ public sealed class TimelineRail : Control
     public event Action<int>? HoverChanged;
 
     public event Action<int>? Activated;
+
+    /** 上一次重建时的形状: 条数、滚动位置、内容高、视口高。任何一项变了刻度才需要重算。 */
+    private (int Items, double Offset, double Extent, double Viewport, int Timeline)? _marksSignature;
+
+    private void EnsureMarks()
+    {
+        var list = Transcript;
+        var scroll = list?.Scroll as ScrollViewer;
+        var signature = (list?.ItemCount ?? 0, scroll?.Offset.Y ?? 0, scroll?.Extent.Height ?? 0, scroll?.Viewport.Height ?? 0, Timeline?.Count ?? 0);
+        if (_marksSignature == signature)
+            return;
+        _marksSignature = signature;
+        Rebuild();
+    }
 
     /**
      * 重建刻度: 用"内容坐标里的顶端"除以内容总高。
@@ -96,15 +135,40 @@ public sealed class TimelineRail : Control
             return;
         }
         var fractions = Positions(list, total);
+        var rendered = new HashSet<long>();
         for (var index = 0; index < total; index++)
         {
             // 只认"真实时间线条目": 与 /timestamp 的候选同一套(用户自己发的消息, 带事件序号),
             // 合成出来的界面行、上下文注入行都不会变成刻度。
             if (items[index] is MessageViewModel { Kind: MessageKind.User, HasTimelineEntry: true } message)
-                _marks.Add(new TimelineMark(index, fractions[index], message));
+            {
+                rendered.Add(message.Seq!.Value);
+                _marks.Add(new TimelineMark(index, fractions[index], message, message.Seq.Value, null));
+            }
         }
+        _marks.AddRange(Unrendered(rendered));
+        _marks = [.. _marks.OrderBy(mark => mark.Fraction).ThenBy(mark => mark.Seq)];
         if (_hovered >= _marks.Count)
             _hovered = -1;
+    }
+
+    /**
+     * 宿主时间线里还没进转录的条目: 位置按 序号/总数 折算, 于是刻度在打开瞬间就覆盖整段会话。
+     *
+     * 已渲染的那些用转录里的真实位置(高度模型), 未渲染的用序号比例 —— 两套比例都单调,
+     * 合起来仍然是从上到下递增, 不会出现"刻度挤成一堆"或跳回。
+     */
+    private IEnumerable<TimelineMark> Unrendered(HashSet<long> rendered)
+    {
+        if (Timeline is not { Count: > 0 } timeline || TotalEvents <= 0)
+            yield break;
+        foreach (var entry in timeline)
+        {
+            if (rendered.Contains(entry.Seq))
+                continue;
+            var fraction = Math.Clamp((double)entry.Seq / TotalEvents, 0, 1);
+            yield return new TimelineMark(-1, fraction, null, entry.Seq, entry.Preview);
+        }
     }
 
     /**
@@ -167,7 +231,7 @@ public sealed class TimelineRail : Control
     /** 指针落在**哪条刻度上**: 超出 TickReach 的距离一律不算命中, 轨道的空白处什么都不做。 */
     public int MarkAt(double y)
     {
-        Rebuild();
+        EnsureMarks();
         var best = -1;
         var bestDistance = TickReach;
         for (var index = 0; index < _marks.Count; index++)
@@ -185,7 +249,7 @@ public sealed class TimelineRail : Control
     {
         // 透明底只为了让指针进入轨道列时能收到事件; 命中判定仍然只认刻度。
         context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
-        Rebuild();
+        EnsureMarks();
         var centerX = Bounds.Width / 2;
         var span = Bounds.Height - 2 * EdgePadding;
         if (span <= 0)

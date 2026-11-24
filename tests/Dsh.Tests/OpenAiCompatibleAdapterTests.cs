@@ -37,6 +37,44 @@ public class OpenAiCompatibleAdapterTests
         Assert.Null(adapter.ResolveModel("gpt-6-luna").Reasoning);
     }
 
+    /**
+     * 中转站的模型不在 models.dev 里, 窗口只能靠用户手填:
+     * settings 的 providers.<id>.models.<model>.context_window / max_output_tokens 必须直接生效。
+     */
+    [Fact]
+    public void ResolveModel_Prefers_TheDeclaredContextWindowOverTheCatalog()
+    {
+        var adapter = new OpenAiCompatibleAdapter(
+            "relay",
+            "https://example.invalid/v1",
+            "sk-test",
+            [new ProviderModelSpec("some-model", ContextWindow: 1_000_000, MaxOutputTokens: 384_000)]);
+
+        var info = adapter.ResolveModel("some-model");
+
+        Assert.Equal(1_000_000, info.ContextWindow);
+        Assert.Equal(384_000, info.DefaultMaxTokens);
+    }
+
+    /** 廉价探测: 服务端在生成前拒绝 max_tokens, 报错里写了自己的上限 —— 从报错里读出来即可。 */
+    [Theory]
+    [InlineData("""{"error":{"message":"max_tokens must be <= 8192"}}""", 8192, false)]
+    [InlineData("""{"error":{"message":"This model's maximum context length is 65536 tokens"}}""", 65536, true)]
+    [InlineData("""{"error":{"message":"Requested token count exceeds the configured maximum output length of 393216 tokens."}}""", 393216, false)]
+    [InlineData("""{"error":{"message":"max_completion_tokens is too large: 1000000000. This model supports at most 65536"}}""", 65536, false)]
+    public void ParseDeclaredLimit_ReadsTheLimitFromTheErrorText(string body, int expected, bool isContextWindow)
+    {
+        var limit = ModelMetadataReasoningSource.ParseDeclaredLimit(body);
+
+        Assert.True(limit is not null);
+        Assert.Equal(expected, limit.Value.Value);
+        Assert.Equal(isContextWindow, limit.Value.IsContextWindow);
+    }
+
+    [Fact]
+    public void ParseDeclaredLimit_IgnoresMessagesWithoutALimit()
+        => Assert.Null(ModelMetadataReasoningSource.ParseDeclaredLimit("""{"error":{"message":"invalid model"}}"""));
+
     [Fact]
     public void ResolveModel_Uses_Online_Metadata_Before_ModelsDev()
     {
@@ -209,6 +247,60 @@ public class OpenAiCompatibleAdapterTests
             // The scripted reply is a chat-completions stream; only the captured request body matters here.
         }
         return (JsonDocument.Parse(handler.Body!), png);
+    }
+
+    /**
+     * Responses 通道在输出被截断时以 response.incomplete 收尾, 全程不带 finish_reason。
+     * 截断是正常收尾(长度用尽), 不能当成流中断: 否则整轮回复被 STREAM_CLOSED 丢掉,
+     * 推理强度探针也因此永远记不下结论(deepseek-ly 那类推理模型 + 小输出预算必然踩到)。
+     */
+    [Fact]
+    public async Task Responses_Incomplete_Stream_Finishes_As_MaxTokens()
+    {
+        var adapter = new OpenAiCompatibleAdapter(
+            "relay",
+            "https://example.invalid/v1",
+            "sk-test",
+            httpClient: new HttpClient(new TruncatedResponsesHandler()),
+            useResponses: true,
+            metadataSource: new NoReasoningSource());
+        var options = new GenerateOptions
+        {
+            Provider = "relay",
+            Model = "relay-model",
+            Messages = [MessageFactory.CreateUserText("ping")],
+            ReasoningEffort = ReasoningEffortId.Create("low"),
+            MaxTokens = 16,
+        };
+
+        var finishes = new List<FinishReason>();
+        await foreach (var chunk in adapter.Stream(options, CancellationToken.None))
+        {
+            if (chunk is StreamChunk.Finish finish)
+                finishes.Add(finish.Reason);
+        }
+
+        var reason = Assert.Single(finishes);
+        Assert.IsType<FinishReason.MaxTokens>(reason);
+    }
+
+    /** 端点收下请求后把输出截断在 16 个 token: Responses 流以 response.incomplete 收尾, 没有 finish_reason。 */
+    private sealed class TruncatedResponsesHandler : HttpMessageHandler
+    {
+        private const string Sse = """
+            event: response.created
+            data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1795356484,"model":"relay-model","status":"in_progress","output":[]},"sequence_number":0}
+
+            event: response.incomplete
+            data: {"type":"response.incomplete","response":{"id":"resp_1","object":"response","created_at":1795356484,"model":"relay-model","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":1,"output_tokens":16,"total_tokens":17}},"sequence_number":1}
+
+            """;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($"{Sse}\n", Encoding.UTF8, "text/event-stream"),
+            });
     }
 
     private sealed class CapturingHandler : HttpMessageHandler

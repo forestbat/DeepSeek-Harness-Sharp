@@ -40,7 +40,7 @@ public sealed class ScheduleService : Service, IDisposable
         [
             ctx.On<AgentCreatedNotification>(notification => Arm(notification.Agent), global),
             ctx.On<AgentDisposedNotification>(notification => Disarm(notification.Agent.Session), global),
-            ctx.On<SessionTruncateNotification>(notification => Rearm(notification.Session), global),
+
         ];
         foreach (var agent in ctx.Get<AgentRegistry>(AgentRegistry.ServiceName, false)?.List() ?? [])
             Arm(agent);

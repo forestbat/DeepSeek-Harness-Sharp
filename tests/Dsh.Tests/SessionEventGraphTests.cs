@@ -105,7 +105,6 @@ public sealed class SessionEventGraphTests : IDisposable
             Ctx.Provide(ISessionPersistence.ServiceName, PersistenceReads);
             var graph = new SessionEventGraphService(Ctx);
             Graph = graph;
-            _owned.Add(graph);
             RegisterProbeTool();
             llm.RegisterAdapter([Provider], new ScriptedAdapter(script));
         }
@@ -175,6 +174,7 @@ public sealed class SessionEventGraphTests : IDisposable
         }
         public void Rename(SessionId id, string title) => inner.Rename(id, title);
         public void Delete(SessionId id) => inner.Delete(id);
+        public long StoredEventCount(SessionId id) => inner.StoredEventCount(id);
     }
 
     private static IReadOnlyList<StreamChunk> TextAnswer(string text) =>
@@ -493,56 +493,6 @@ public sealed class SessionEventGraphTests : IDisposable
         var session = agent.Session;
         var secondResult = ResultSeq(session, "call-two");
         Assert.Contains(new SessionEventEdge(SessionEventEdgeKind.ResultOf, secondResult, CallSeq(session, "call-two")), graph.EdgesFrom(agent.Id, secondResult));
-        var rebuilt = fixture.ForkThrough(session, session.Seq - 1);
-        AssertSameGraph(graph, agent.Id, rebuilt, session.Seq);
-    }
-
-    /** 跑完四轮对话后执行 /compact, 返回压缩遮蔽的节点与 command/run 的 seq(截断到这里即撤销压缩)。 */
-    private static async Task<(AgentLoopAgent Agent, IReadOnlyList<long> Shadowed, long CommandRun)> CompactedAgent(Fixture fixture, string id)
-    {
-        var agent = await fixture.CreateAgent(id);
-        foreach (var turn in CompactableTurns)
-            await RunTurn(agent, turn);
-        await fixture.Commands.Execute(agent, "/compact", TestContext.Current.CancellationToken);
-        var session = agent.Session;
-        var shadowed = ((CompactionSummaryPayload)session.EventAt(SeqOf<CompactionSummaryPayload>(session))!.Data).ShadowedSeqs;
-        Assert.Equal(SessionEventSurface.Shadowed, fixture.Graph.Node(agent.Id, shadowed[0])?.Surface);
-        return (agent, shadowed, SeqOf<CommandRunPayload>(session));
-    }
-
-    [Fact]
-    public async Task Truncation_RestoresShadowedNodes_AndDropsRemovedEvents()
-    {
-        using var fixture = new Fixture(_directory, CompactableTurns.Select(_ => Reply(new string('x', 200))));
-        var (agent, shadowed, commandRun) = await CompactedAgent(fixture, "graph-truncate");
-
-        Assert.True(agent.Session.TryTruncateTo(commandRun));
-
-        var graph = fixture.Graph;
-        Assert.All(shadowed, seq => Assert.Equal(SessionEventSurface.Current, graph.Node(agent.Id, seq)?.Surface));
-        Assert.All(shadowed, seq => Assert.Empty(graph.EdgesTo(agent.Id, seq)));
-        Assert.Null(graph.Node(agent.Id, commandRun));
-    }
-
-    /** 截断后不经查询就长回超过原长度: 只能靠截断通知发现旧图已不是日志前缀。 */
-    [Fact]
-    public async Task Truncation_ThenRegrowth_ReusesSeqsWithoutStaleEdges()
-    {
-        var script = CompactableTurns.Select(_ => Reply(new string('x', 200))).ToList();
-        script.AddRange([Probe("call-after-revert", "after"), Reply("after done")]);
-        using var fixture = new Fixture(_directory, script);
-        var (agent, shadowed, commandRun) = await CompactedAgent(fixture, "graph-regrow");
-        var session = agent.Session;
-        var lengthBeforeRevert = session.Seq;
-
-        Assert.True(session.TryTruncateTo(commandRun));
-        await RunTurn(agent, "after revert");
-
-        Assert.True(session.Seq > lengthBeforeRevert);
-        var graph = fixture.Graph;
-        Assert.All(shadowed, seq => Assert.Equal(SessionEventSurface.Current, graph.Node(agent.Id, seq)?.Surface));
-        var result = ResultSeq(session, "call-after-revert");
-        Assert.Contains(new SessionEventEdge(SessionEventEdgeKind.ResultOf, result, CallSeq(session, "call-after-revert")), graph.EdgesFrom(agent.Id, result));
         var rebuilt = fixture.ForkThrough(session, session.Seq - 1);
         AssertSameGraph(graph, agent.Id, rebuilt, session.Seq);
     }

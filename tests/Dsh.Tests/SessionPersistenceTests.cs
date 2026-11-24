@@ -327,13 +327,23 @@ public class SessionPersistenceTests : IDisposable
     }
 
     /** 定时落盘会在读取期间从另一线程追加, 读取必须放行写入(Windows 上 File.ReadAllBytes 只共享读, 会和追加流冲突)。 */
+    /** 读日志数帧: 写句柄可能正握着尾部那段字节锁, 读失败就等一会儿再来。 */
     private static int FrameCount(string logPath)
     {
-        using var stream =
-            new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return ZstdFrames.Scan(buffer.ToArray()).Frames.Count;
+        for (var attempt = 1; ; attempt += 1)
+        {
+            try
+            {
+                using var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var buffer = new MemoryStream();
+                stream.CopyTo(buffer);
+                return ZstdFrames.Scan(buffer.ToArray()).Frames.Count;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(25);
+            }
+        }
     }
 
     /**
@@ -894,8 +904,13 @@ public class SessionPersistenceTests : IDisposable
         Assert.Contains(warned, message => message.Contains("unreadable log record", StringComparison.Ordinal));
     }
 
+    /**
+     * 日志尾部被塞进无法归属的字节: 落盘时当场截掉它们再追加, 而不是把会话判成"写不进去"。
+     *
+     * 截之前先把原文件另存一份(`*.damaged-*`): 那些字节是取证材料, 可能是另一个写入方的半截写。
+     */
     [Fact]
-    public void WriteHandle_RefusesToAppendWhenAnotherWriterAdvancedTheLog()
+    public void WriteHandle_RepairsForeignBytesAtTheLogTailBeforeAppending()
     {
         var root = NewRoot();
         var session = BuildSourceSession(TestCwd);
@@ -905,23 +920,19 @@ public class SessionPersistenceTests : IDisposable
         writer.Append(events.Take(2).ToArray());
         writer.Flush();
 
-        // 第二个写者现在在拿写权时就被租约挡住, 而不是让它先写、再由长度检查事后发现。
-        using (var second = new JsonlSessionPersistence(root, compression: JsonlCompression.None))
-        {
-            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
-        }
-
-        // 绕过租约直接改文件仍要挡住: 长度检查是最后一道绊线。
         var logPath = LogPathOf(root, session.Header, JsonlCompression.None);
         using (var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write))
             stream.Write(new byte[ForeignAppendBytes]);
 
         writer.Append(events.Skip(2).Take(1).ToArray());
+        writer.Flush();
+        writer.Close();
 
-        var error = Assert.Throws<SessionPersistenceCorruptionException>(() => writer.Flush());
-        Assert.Contains("another process", error.Message);
-        // 缓冲区里那条事件已经没法安全落盘: 关闭时同样拒绝, 而不是把它硬塞进别人的日志。
-        Assert.Throws<SessionPersistenceCorruptionException>(() => writer.Close());
+        // 三条事件都在, 外来字节被截掉, 原字节另存一份。
+        using var reader = first.Open(session.Header.Id, SessionAccess.Read);
+        AssertEventsEqual(events.Take(3).ToArray(), reader.Read());
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logPath)!,
+            $"{Path.GetFileName(logPath)}.damaged-*"));
     }
 
     [Theory]
@@ -939,11 +950,9 @@ public class SessionPersistenceTests : IDisposable
         writer.Append(events.Take(2).ToArray());
         first.Rename(session.Header.Id, "A longer renamed session title");
 
-        // 第二个写者拿不到写权; 它既不能推进日志, 也不会打断当前写者的改名/追加。
+        // 第二个写者可以打开写句柄(发号票只按批持有), 但改名与追加各走各的短事务, 不会互相撕开文件。
         using (var second = new JsonlSessionPersistence(root, compression: compression))
-        {
-            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
-        }
+            second.Open(session.Header.Id, SessionAccess.Write).Close();
 
         writer.Append(events.Skip(2).Take(1).ToArray());
         writer.Flush();
@@ -987,11 +996,11 @@ public class SessionPersistenceTests : IDisposable
         using var first = new JsonlSessionPersistence(root, compression: compression);
         using var writer = first.Create(session.Header);
         writer.Append(events.Take(2).ToArray());
-        // 第二个写者拿写权就被租约挡住(不再有"先写进去、改名时才发现"的窗口)。
+        // 第二个写者可以打开(发号票只按批持有), 但改名仍以长度检查为准。
         using (var second = new JsonlSessionPersistence(root, compression: compression))
-            Assert.Throws<SessionLeaseHeldException>(() => second.Open(session.Header.Id, SessionAccess.Write));
+            second.Open(session.Header.Id, SessionAccess.Write).Close();
 
-        // 绕过租约直接改文件仍要在改名时被长度检查挡住。
+        // 绕过持久化直接改文件仍要在改名时被长度检查挡住。
         var logPath = LogPathOf(root, session.Header, compression);
         using (var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write))
             stream.Write(new byte[ForeignAppendBytes]);

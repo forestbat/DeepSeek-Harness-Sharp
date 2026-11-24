@@ -33,9 +33,6 @@ internal static class ChunkRows
         string? CallId,
         string? CallName);
 
-    public static bool IsChunkRowTag(string? type)
-        => type is TextChunksTag or ReasoningChunksTag or ToolCallChunksTag;
-
     public static string EncodeEventLines(IReadOnlyList<SessionEvent> events, bool packChunks)
         => string.Join('\n', EncodeRecords(events, packChunks).Select(record => record.Line));
 
@@ -96,6 +93,176 @@ internal static class ChunkRows
     }
 
     /** 一条存储记录的(首序号, 事件条数); 打包行的条数来自它的成员数组长度。 */
+    /**
+     * 一条存储记录的**信封**: 类型 + 每条的序号与时刻 + 这一行在明文里的位置。
+     *
+     * 只读信封不解负载: 打包行只读 `seq0/time0/dt`(跳过 texts/args), 普通行只读 `type/seq/time`
+     * (跳过 data)。于是"从头扫到尾"只需要查表, 真正要渲染的那几条才按位置去解那一条记录。
+     */
+    internal readonly record struct StoredEnvelope(long Seq, long Time, string Type, int LineStart, int LineLength);
+
+    /** 把一段明文的每一条事件读成信封(不解负载)。 */
+    internal static void ReadEnvelopes(ReadOnlySpan<byte> plain, List<StoredEnvelope> into)
+    {
+        var lineStart = 0;
+        while (lineStart < plain.Length)
+        {
+            var newline = plain[lineStart..].IndexOf((byte)'\n');
+            if (newline < 0)
+                break;
+            var lineEnd = lineStart + newline;
+            if (lineEnd > lineStart)
+                ReadEnvelope(plain[lineStart..lineEnd], lineStart, lineEnd - lineStart, into);
+            lineStart = lineEnd + 1;
+        }
+    }
+
+    private static void ReadEnvelope(ReadOnlySpan<byte> line, int lineStart, int lineLength, List<StoredEnvelope> into)
+    {
+        var tag = ChunkRowTagOf(line);
+        if (tag is not null)
+        {
+            ReadPackedEnvelope(line, tag, lineStart, lineLength, into);
+            return;
+        }
+        string? type = null;
+        long seq = -1;
+        long time = 0;
+        var reader = new Utf8JsonReader(line);
+        try
+        {
+            
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return;
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals("type"u8))
+                {
+                    reader.Read();
+                    type = reader.GetString();
+                }
+                else if (reader.ValueTextEquals("seq"u8))
+                {
+                    reader.Read();
+                    seq = reader.GetInt64();
+                }
+                else if (reader.ValueTextEquals("time"u8))
+                {
+                    reader.Read();
+                    time = reader.GetInt64();
+                }
+                else
+                {
+                    // data 与别的字段都不必读内容, 跳过即可(不建 JsonElement, 不建负载)。
+                    reader.Read();
+                    reader.Skip();
+                }
+            }
+        }
+        catch (JsonException error)
+        {
+            if (Environment.GetEnvironmentVariable("DSH_ENVELOPE_TRACE") is { Length: > 0 })
+                Console.Error.WriteLine($"[env] json {error.Message} line={System.Text.Encoding.UTF8.GetString(line[..Math.Min(120, line.Length)])}");
+            return;
+        }
+        if (type is null || seq < 0)
+        {
+            if (Environment.GetEnvironmentVariable("DSH_ENVELOPE_TRACE") is { Length: > 0 })
+                Console.Error.WriteLine($"[env] skip type={type ?? "-"} seq={seq} line={System.Text.Encoding.UTF8.GetString(line[..Math.Min(120, line.Length)])}");
+            return;
+        }
+        into.Add(new StoredEnvelope(seq, time, type, lineStart, lineLength));
+    }
+
+    /** 打包行: 类型固定是 assistant/chunk, 每条的时刻是 time0 加上前面各条的 dt 之和。 */
+    private static void ReadPackedEnvelope(ReadOnlySpan<byte> line, string tag, int lineStart, int lineLength,
+        List<StoredEnvelope> into)
+    {
+        var seq0 = -1L;
+        var time0 = 0L;
+        long[]? gaps = null;
+        var members = 0;
+        var reader = new Utf8JsonReader(line);
+        try
+        {
+            
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return;
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals("seq0"u8))
+                {
+                    reader.Read();
+                    seq0 = reader.GetInt64();
+                }
+                else if (reader.ValueTextEquals("time0"u8))
+                {
+                    reader.Read();
+                    time0 = reader.GetInt64();
+                }
+                else if (reader.ValueTextEquals("data"u8))
+                {
+                    reader.Read();
+                    (gaps, members) = ReadPackedTimes(ref reader);
+                }
+                else
+                {
+                    reader.Read();
+                    reader.Skip();
+                }
+            }
+        }
+        catch (JsonException error)
+        {
+            if (Environment.GetEnvironmentVariable("DSH_ENVELOPE_TRACE") is { Length: > 0 })
+                Console.Error.WriteLine($"[env-packed] json {error.Message} line={System.Text.Encoding.UTF8.GetString(line[..Math.Min(100, line.Length)])}");
+            return;
+        }
+        if (seq0 < 0 || members <= 0 || gaps is null)
+        {
+            if (Environment.GetEnvironmentVariable("DSH_ENVELOPE_TRACE") is { Length: > 0 })
+                Console.Error.WriteLine($"[env-packed] seq0={seq0} members={members} gaps={gaps?.Length.ToString() ?? "-"} line={System.Text.Encoding.UTF8.GetString(line[..Math.Min(100, line.Length)])}");
+            return;
+        }
+        var time = time0;
+        for (var index = 0; index < members; index += 1)
+        {
+            if (index > 0)
+            {
+                try { time = checked(time + gaps[index - 1]); }
+                catch (OverflowException) { return; }
+            }
+            into.Add(new StoredEnvelope(seq0 + index, time, SessionEventTypes.AssistantChunk, lineStart, lineLength));
+        }
+    }
+
+    /** 打包行的 dt 数组(成员之间的时刻差)与成员条数; texts/args 一个字节都不读。 */
+    private static (long[] Gaps, int Members) ReadPackedTimes(ref Utf8JsonReader reader)
+    {
+        long[]? gaps = null;
+        // 调用方刚读完 "data" 的值, reader 已停在 StartObject 上, 直接读它的属性。
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            if (reader.ValueTextEquals("dt"u8))
+            {
+                reader.Read();
+                if (reader.TokenType != JsonTokenType.StartArray)
+                    continue;
+                var values = new List<long>();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                    values.Add(reader.GetInt64());
+                gaps = [.. values];
+            }
+            else
+            {
+                reader.Read();
+                reader.Skip();
+            }
+        }
+        // 成员条数 = dt 的条数 + 1; 没有 dt 就当一条。
+        return (gaps ?? [], gaps is null ? 1 : gaps.Length + 1);
+    }
+
     internal static (long FirstSeq, int EventCount) MeasureStorageRecord(ReadOnlySpan<byte> line)
     {
         long seq = -1;
@@ -142,35 +309,10 @@ internal static class ChunkRows
      */
     internal readonly record struct EncodedRecord(string Line, long FirstSeq, int EventCount, long MinReplaceStart);
 
-    public static IReadOnlyList<SessionEvent> DecodeStorageRecord(JsonObject record)
-    {
-        ExpandProvenance(record);
-        var type = ReadTypeTag(record);
-        if (IsChunkRowTag(type)) return ExpandRow(record, type!);
-        if (type == SessionEventTypes.RequestHeader
-            && record["data"] is JsonObject data
-            && data["reason"] is JsonValue reasonValue
-            && reasonValue.TryGetValue<string>(out var reason)
-            && reason == "fallback")
-        {
-            throw new SessionFormatUnsupportedException(
-                "session log contains a request/header event with the unsupported legacy reason \"fallback\"; refusing to interpret the log — it was written by a retired pre-release harness");
-        }
-        return [DshJson.Deserialize<SessionEvent>(record)
-            ?? throw new FormatException("stored session record deserialized to null")];
-    }
-
-    /**
-     * 直接从 UTF-8 字节解码一条存储记录。
-     *
-     * 绝大多数记录是普通事件, 既不是 chunk 打包行, 也不需要展开 sourceEventSeqs 的区间编码,
-     * 所以它们不需要 DOM: 走 JsonNode.Parse 只为把整棵 JSON 物化一遍、再序列化回去喂给反序列化,
-     * 相当于每条记录多解析一次。只有确实需要改写结构的记录才退回 DOM 路径。
-     */
     public static IReadOnlyList<SessionEvent> DecodeStorageRecord(ReadOnlySpan<byte> line)
     {
-        if (NeedsDom(line))
-            return DecodeStorageRecord(ParseRecord(line));
+        if (ChunkRowTagOf(line) is { } tag)
+            return ExpandRow(line, tag);
         ValidateTypeTag(line);
         var sessionEvent = JsonSerializer.Deserialize(line, DshJson.Info<SessionEvent>())
             ?? throw new FormatException("stored session record deserialized to null");
@@ -186,9 +328,9 @@ internal static class ChunkRows
     public static IReadOnlyList<SessionEvent> DecodeStorageRecordLazy(ReadOnlyMemory<byte> record)
     {
         var span = record.Span;
-        // chunk 打包行与区间编码来源要展开成多条, 没有"一段连续明文"可用, 只能当场物化。
-        if (NeedsDom(span))
-            return DecodeStorageRecord(span);
+        // chunk 打包行要展开成多条, 没有"一段连续明文"可用, 只能当场物化。
+        if (ChunkRowTagOf(span) is { } tag)
+            return ExpandRow(span, tag);
         ValidateTypeTag(span);
         return [ParseEnvelope(record)];
     }
@@ -201,6 +343,7 @@ internal static class ChunkRows
         var time = 0L;
         var ignorable = false;
         SurfaceOp? surfaceOp = null;
+        IReadOnlyList<long>? sourceEventSeqs = null;
         var hasData = false;
         if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             throw new FormatException("stored session records must be objects");
@@ -235,6 +378,12 @@ internal static class ChunkRows
                 reader.Read();
                 surfaceOp = ReadSurfaceOp(ref reader);
             }
+            else if (reader.ValueTextEquals("sourceEventSeqs"u8))
+            {
+                // 窗口读也要保留来源列表: 跨边界的 replace 要靠它判断"被收掉的那段还在不在"。
+                reader.Read();
+                sourceEventSeqs = SeqRanges.Decode(ref reader, seq >= 0 ? seq : long.MaxValue);
+            }
             else if (reader.ValueTextEquals("data"u8))
             {
                 reader.Read();
@@ -249,7 +398,7 @@ internal static class ChunkRows
         }
         if (type is null || seq < 0 || !hasData)
             throw new FormatException("stored session record has an invalid envelope");
-        return new SessionEvent(type, seq, time, ignorable, surfaceOp, null, record);
+        return new SessionEvent(type, seq, time, ignorable, surfaceOp, null, record) { SourceEventSeqs = sourceEventSeqs };
     }
 
     private static SurfaceOp ReadSurfaceOp(ref Utf8JsonReader reader)
@@ -289,21 +438,10 @@ internal static class ChunkRows
         return replace ? new SurfaceOp.Replace(start, end) : throw new FormatException("invalid replace surfaceOp");
     }
 
-    /** 是否需要 Dom: chunk 打包行(要按行展开)与带区间编码来源(要展开 sourceEventSeqs)。 */
-    private static bool NeedsDom(ReadOnlySpan<byte> line)
-        => line.IndexOf("\"text-chunks\""u8) >= 0
-            || line.IndexOf("\"reasoning-chunks\""u8) >= 0
-            || line.IndexOf("\"tool-call-chunks\""u8) >= 0
-            || line.IndexOf("\"sourceEventSeqs\""u8) >= 0;
-
     /** 未转义的 UTF-8 字节与常量比较: type 标签都是纯 ASCII, 不需要解码成字符串。 */
     private static readonly byte[] RequestHeaderType = Encoding.UTF8.GetBytes(SessionEventTypes.RequestHeader);
 
     private static bool IsType(ReadOnlySpan<byte> value, ReadOnlySpan<byte> expected) => value.SequenceEqual(expected);
-
-    private static JsonObject ParseRecord(ReadOnlySpan<byte> line)
-        => JsonNode.Parse(Encoding.UTF8.GetString(line)) as JsonObject
-            ?? throw new FormatException("stored session records must be objects");
 
     /**
      * 快速路径上的类型标签校验: 只拒绝**已退役的目录内格式**, 未知类型照样收下。
@@ -376,19 +514,6 @@ internal static class ChunkRows
         if (IsType(type, RequestHeaderType) && fallback)
             throw new SessionFormatUnsupportedException(
                 "session log contains a request/header event with the unsupported legacy reason \"fallback\"; refusing to interpret the log — it was written by a retired pre-release harness");
-    }
-
-    private static string? ReadTypeTag(JsonObject record)
-        => record["type"] is JsonValue value && value.TryGetValue<string>(out var type) ? type : null;
-
-    private static void ExpandProvenance(JsonObject record)
-    {
-        if (record["sourceEventSeqs"] is not { } stored) return;
-        if (record["seq"] is not JsonValue seqValue || !seqValue.TryGetValue<long>(out var seq) || seq < 0)
-            throw new FormatException("stored session event seq must be a non-negative safe integer");
-        var expanded = new JsonArray();
-        foreach (var seqEntry in SeqRanges.Decode(stored, seq)) expanded.Add(seqEntry);
-        record["sourceEventSeqs"] = expanded;
     }
 
     private static string SerializeEvent(SessionEvent sessionEvent)
@@ -548,59 +673,115 @@ internal static class ChunkRows
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static IReadOnlyList<SessionEvent> ExpandRow(JsonObject record, string tag)
+    /**
+     * 打包行的类型标签: 命中三个 chunk 行标签之一才返回, 其余记录不在这里处理。
+     * 只扫到 type 为止(序列化时 type 是第一个属性), 不建树、不把整行解成字符串。
+     */
+    private static string? ChunkRowTagOf(ReadOnlySpan<byte> line)
     {
-        if (!HasExactKeys(record, "type", "seq0", "time0", "data"))
-            throw Malformed(tag, "envelope must be exactly {type, seq0, time0, data}");
-        var seq0 = ReadInt64(record["seq0"], tag, "seq0");
-        if (seq0 < 0) throw Malformed(tag, "seq0 must be a non-negative safe integer");
-        var time0 = ReadInt64(record["time0"], tag, "time0");
-        if (record["data"] is not JsonObject data) throw Malformed(tag, "data must be an object");
+        var reader = new Utf8JsonReader(line);
+        try
+        {
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return null;
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals("type"u8))
+                {
+                    reader.Read();
+                    if (reader.TokenType != JsonTokenType.String)
+                        return null;
+                    if (reader.ValueTextEquals(TextChunksTag)) return TextChunksTag;
+                    if (reader.ValueTextEquals(ReasoningChunksTag)) return ReasoningChunksTag;
+                    if (reader.ValueTextEquals(ToolCallChunksTag)) return ToolCallChunksTag;
+                    return null;
+                }
+                reader.Read();
+                reader.Skip();
+            }
+        }
+        catch (JsonException)
+        {
+            // 读不出标签就交给后面的解析路径报错, 这里不当成"打包行"。
+            return null;
+        }
+        return null;
+    }
+
+    private static IReadOnlyList<SessionEvent> ExpandRow(ReadOnlySpan<byte> line, string tag)
+    {
         var isToolCall = tag == ToolCallChunksTag;
-        var keysOk = isToolCall
-            ? HasExactKeys(data, "turn", "step", "index", "id", "dt", "args")
-              || HasExactKeys(data, "turn", "step", "index", "id", "name", "dt", "args")
-            : HasExactKeys(data, "turn", "step", "index", "dt", "texts");
-        if (!keysOk)
-            throw Malformed(tag, isToolCall
-                ? "data must be exactly {turn, step, index, id, name?, dt, args}"
-                : "data must be exactly {turn, step, index, dt, texts}");
-        var turn = ReadInt32(data["turn"], tag, "turn");
-        var step = ReadInt32(data["step"], tag, "step");
-        var index = ReadInt32(data["index"], tag, "index");
+        var seq0 = -1L;
+        var time0 = 0L;
+        var turn = 0;
+        var step = 0;
+        var index = 0;
         string? callId = null;
         string? callName = null;
-        if (isToolCall)
+        long[]? gaps = null;
+        List<string>? members = null;
+        var keys = 0;
+        try
         {
-            if (data["id"] is not JsonValue idValue || !idValue.TryGetValue(out callId))
-                throw Malformed(tag, "id (and name when present) must be strings");
-            if (data["name"] is { } nameNode
-                && (nameNode is not JsonValue nameValue || !nameValue.TryGetValue(out callName)))
-                throw Malformed(tag, "id (and name when present) must be strings");
+            var reader = new Utf8JsonReader(line);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                throw new FormatException("stored session records must be objects");
+            var sawType = false;
+            var sawSeq0 = false;
+            var sawTime0 = false;
+            var sawData = false;
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                keys += 1;
+                if (reader.ValueTextEquals("type"u8))
+                {
+                    sawType = true;
+                    reader.Read();
+                    if (reader.TokenType != JsonTokenType.String || !reader.ValueTextEquals(tag))
+                        throw Malformed(tag, $"type must be \"{tag}\"");
+                }
+                else if (reader.ValueTextEquals("seq0"u8))
+                {
+                    sawSeq0 = true;
+                    reader.Read();
+                    seq0 = ReadSafeInt64(ref reader, tag, "seq0");
+                    if (seq0 < 0) throw Malformed(tag, "seq0 must be a non-negative safe integer");
+                }
+                else if (reader.ValueTextEquals("time0"u8))
+                {
+                    sawTime0 = true;
+                    reader.Read();
+                    time0 = ReadSafeInt64(ref reader, tag, "time0");
+                }
+                else if (reader.ValueTextEquals("data"u8))
+                {
+                    sawData = true;
+                    reader.Read();
+                    ReadRowData(ref reader, tag, isToolCall, out turn, out step, out index, out callId, out callName, out gaps, out members);
+                }
+                else
+                {
+                    throw Malformed(tag, "envelope must be exactly {type, seq0, time0, data}");
+                }
+            }
+            if (keys != 4 || !sawType || !sawSeq0 || !sawTime0 || !sawData)
+                throw Malformed(tag, "envelope must be exactly {type, seq0, time0, data}");
         }
-        var payloadKey = isToolCall ? "args" : "texts";
-        if (data[payloadKey] is not JsonArray payload || payload.Count == 0)
-            throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
-        var members = new string[payload.Count];
-        for (var k = 0; k < payload.Count; k += 1)
+        catch (JsonException error)
         {
-            if (payload[k] is not JsonValue memberValue || !memberValue.TryGetValue<string>(out var text) || text is null)
-                throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
-            members[k] = text;
+            throw new FormatException("corrupt session log: stored record is not valid JSON", error);
         }
-        if (data["dt"] is not JsonArray dtNode) throw Malformed(tag, "dt must be an array of safe integers");
-        if (dtNode.Count != members.Length - 1)
-            throw Malformed(tag, $"dt length {dtNode.Count} does not match {members.Length} members");
-        var dt = new long[dtNode.Count];
-        for (var k = 0; k < dtNode.Count; k += 1) dt[k] = ReadInt64(dtNode[k], tag, "dt");
-        if (members.Length - 1 > long.MaxValue - seq0) throw Malformed(tag, "member seqs must stay safe integers");
-        var events = new List<SessionEvent>(members.Length);
+        if (members is null || gaps is null) throw Malformed(tag, "row data is missing");
+        if (gaps.Length != members.Count - 1)
+            throw Malformed(tag, $"dt length {gaps.Length} does not match {members.Count} members");
+        if (members.Count - 1 > long.MaxValue - seq0) throw Malformed(tag, "member seqs must stay safe integers");
+        var events = new List<SessionEvent>(members.Count);
         var time = time0;
-        for (var k = 0; k < members.Length; k += 1)
+        for (var k = 0; k < members.Count; k += 1)
         {
             if (k > 0)
             {
-                try { time = checked(time + dt[k - 1]); }
+                try { time = checked(time + gaps[k - 1]); }
                 catch (OverflowException) { throw Malformed(tag, "member times must stay safe integers"); }
             }
             StreamChunk chunk = tag switch
@@ -620,24 +801,121 @@ internal static class ChunkRows
         return events;
     }
 
-    private static bool HasExactKeys(JsonObject value, params string[] keys)
+    /** 打包行的 data 对象: {turn, step, index, dt, texts} 或 {turn, step, index, id, name?, dt, args}。 */
+    private static void ReadRowData(
+        ref Utf8JsonReader reader,
+        string tag,
+        bool isToolCall,
+        out int turn,
+        out int step,
+        out int index,
+        out string? callId,
+        out string? callName,
+        out long[]? gaps,
+        out List<string>? members)
     {
-        if (value.Count != keys.Length) return false;
-        foreach (var key in keys)
-            if (!value.ContainsKey(key)) return false;
-        return true;
+        var payloadKey = isToolCall ? "args" : "texts";
+        if (reader.TokenType != JsonTokenType.StartObject) throw Malformed(tag, "data must be an object");
+        turn = 0;
+        step = 0;
+        index = 0;
+        callId = null;
+        callName = null;
+        gaps = null;
+        members = null;
+        var keys = 0;
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            keys += 1;
+            if (reader.ValueTextEquals("turn"u8))
+            {
+                reader.Read();
+                turn = ReadSafeInt32(ref reader, tag, "turn");
+            }
+            else if (reader.ValueTextEquals("step"u8))
+            {
+                reader.Read();
+                step = ReadSafeInt32(ref reader, tag, "step");
+            }
+            else if (reader.ValueTextEquals("index"u8))
+            {
+                reader.Read();
+                index = ReadSafeInt32(ref reader, tag, "index");
+            }
+            else if (isToolCall && reader.ValueTextEquals("id"u8))
+            {
+                reader.Read();
+                callId = ReadString(ref reader, tag);
+            }
+            else if (isToolCall && reader.ValueTextEquals("name"u8))
+            {
+                reader.Read();
+                callName = ReadString(ref reader, tag);
+            }
+            else if (reader.ValueTextEquals("dt"u8))
+            {
+                reader.Read();
+                gaps = ReadGaps(ref reader, tag);
+            }
+            else if (reader.ValueTextEquals(payloadKey))
+            {
+                reader.Read();
+                members = ReadMembers(ref reader, tag, payloadKey);
+            }
+            else
+            {
+                throw Malformed(tag, isToolCall
+                    ? "data must be exactly {turn, step, index, id, name?, dt, args}"
+                    : "data must be exactly {turn, step, index, dt, texts}");
+            }
+        }
+        var expected = isToolCall ? new[] { "turn", "step", "index", "id", "dt", payloadKey } : ["turn", "step", "index", "dt", payloadKey];
+        if (keys < expected.Length || keys > expected.Length + 1 || members is null || gaps is null || (isToolCall && callId is null))
+            throw Malformed(tag, isToolCall
+                ? "data must be exactly {turn, step, index, id, name?, dt, args}"
+                : "data must be exactly {turn, step, index, dt, texts}");
     }
 
-    private static long ReadInt64(JsonNode? node, string tag, string field)
+    private static long ReadSafeInt64(ref Utf8JsonReader reader, string tag, string field)
     {
-        if (node is JsonValue value && value.TryGetValue<long>(out var result)) return result;
-        throw Malformed(tag, $"{field} must be a safe integer");
+        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt64(out var value))
+            throw Malformed(tag, $"{field} must be a safe integer");
+        return value;
     }
 
-    private static int ReadInt32(JsonNode? node, string tag, string field)
+    private static int ReadSafeInt32(ref Utf8JsonReader reader, string tag, string field)
     {
-        if (node is JsonValue value && value.TryGetValue<int>(out var result)) return result;
-        throw Malformed(tag, $"{field} must be a safe integer");
+        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt32(out var value))
+            throw Malformed(tag, $"{field} must be a safe integer");
+        return value;
+    }
+
+    private static string ReadString(ref Utf8JsonReader reader, string tag)
+    {
+        if (reader.TokenType != JsonTokenType.String) throw Malformed(tag, "id (and name when present) must be strings");
+        return reader.GetString() ?? throw Malformed(tag, "id (and name when present) must be strings");
+    }
+
+    private static long[] ReadGaps(ref Utf8JsonReader reader, string tag)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray) throw Malformed(tag, "dt must be an array of safe integers");
+        var values = new List<long>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            values.Add(ReadSafeInt64(ref reader, tag, "dt"));
+        return [.. values];
+    }
+
+    private static List<string> ReadMembers(ref Utf8JsonReader reader, string tag, string payloadKey)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray) throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
+        var values = new List<string>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType != JsonTokenType.String) throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
+            values.Add(reader.GetString() ?? throw Malformed(tag, $"{payloadKey} must be a non-empty string array"));
+        }
+        if (values.Count == 0) throw Malformed(tag, $"{payloadKey} must be a non-empty string array");
+        return values;
     }
 
     private static FormatException Malformed(string tag, string why)

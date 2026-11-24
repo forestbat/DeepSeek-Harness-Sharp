@@ -14,6 +14,7 @@ using Dsh.Interaction;
 using Dsh.Llm;
 using Dsh.RemoteHost;
 using Dsh.Runtime;
+using Dsh.Transport;
 using Dsh.Runtime.Events;
 using Dsh.SessionQuery;
 using Dsh.Ide;
@@ -62,7 +63,30 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly HostChatSession _chat;
     private long _renderedSeq;
     private bool _renderedAny;
-    private bool _resyncRequested;
+
+    /** 打开当前会话的体感探针(首屏/可输入/主线程最长阻塞): 只在 GUI 进程里量得到(方案 §6.3)。 */
+    private SessionOpenProbe? _openProbe;
+
+    /** 界面显示的回合号: 按 turn/start 在日志里出现的先后递增(与 payload 里的 turn 无关, 见 §8.1)。 */
+    private int _displayTurn;
+    private int _currentDisplayTurn;
+
+    /** 当前开着的那一回合的 TurnStart 序号(没有开着的回合就是 null): 回退掉它时得据此收尾。 */
+    private long? _openTurnStartSeq;
+
+    /** 事件流里没到手、也没渲染过的序号区间(左闭右开)。
+
+     * 跳号不再是致命错误: 记下缺的是哪一段, 后面的照常消费(尾巴必须继续流), 缺口按区间补。 */
+    private readonly List<SeqRange> _gaps = [];
+
+    /** 正在把补洞回来的迟到事件插回原位: 此时不动忙闲/统计/模型标签, 只补正文与工具卡片。 */
+    private bool _fillingGap;
+
+    /** 缺口补齐的进行中标记: 同一时刻只跑一趟, 免得同一段被反复取。 */
+    private bool _gapFillRunning;
+
+    /** 被撤回掉、不该再出现在界面上的序号区间: 迟到补洞与重放都要按它过滤。 */
+    private readonly List<SeqRange> _reverted = [];
     private MessageViewModel? _openAssistant;
     private MessageViewModel? _openReasoning;
 
@@ -134,9 +158,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             _ctx.Get<Func<string, EditorRequest, EditorRequest>>("editorClientRequestMapper", false),
             _ctx.Get<Func<string, string, bool>>("editorClientHasMapping", false));
         chat.Fleet.Changed += OnFleetChanged;
+        _activityTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => RefreshActivity());
+        _activityTimer.Stop();
+        _subagentWatch = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => TickSubagentWatch());
+        _subagentWatch.Stop();
+        Subagents.Changed += SyncSubagentWatch;
         chat.Reset += ShowSession;
-        chat.Truncated += TruncateTo;
+
         chat.Received += OnChatReceived;
+        chat.Filled += ApplyFilled;
         chat.Failed += SetStatus;
         ShowSession();
         chat.Follow();
@@ -330,7 +360,55 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public IReadOnlyList<SettingsNavItemViewModel> SettingsSections => Preferences.Sections;
 
-    partial void OnIsBusyChanged(bool value) => Composer.IsBusy = value;
+    partial void OnIsBusyChanged(bool value)
+    {
+        Composer.IsBusy = value;
+        if (value)
+            _activityTimer.Start();
+        else
+            _activityTimer.Stop();
+        RefreshActivity();
+    }
+
+    /** 最近一次收到事件(实时流)的时刻: 与 IsBusy 一起用来判断"还在跑"还是"已经没声了"。 */
+    private DateTimeOffset _lastEventAt = DateTimeOffset.UtcNow;
+
+    /** 取消已经发出、还在等宿主收尾的时刻; 收到 turn/end 或超时后清掉。 */
+    private DateTimeOffset? _cancelSentAt;
+    private const int CancelConfirmSeconds = 10;
+
+    /** 状态行旁边那句活性: 空闲时为空, 忙时给"落后几条 / 多久没事件"。 */
+    [ObservableProperty]
+    private string _activityText = "";
+
+    /** 忙的时候每秒重算一次活性: "已 N 秒没有事件"只靠事件驱动永远显示不出来(那时正好没有事件)。 */
+    private readonly DispatcherTimer _activityTimer;
+
+    /** 子代理徽标的看护表: 有 subagent 工具在飞、或还有子代理活着时每秒问一次宿主, 两种情况都收敛就停表。 */
+    private readonly DispatcherTimer _subagentWatch;
+
+    /** 还没返回的 subagent 工具调用数(工具执行里才会建出子会话, 调用开始的那一刻列表里往往还没有它)。 */
+    private int _subagentCallsInFlight;
+
+    /**
+     * 落后量是**现成的**: 宿主报的总条数减去已渲染位置。
+     *
+     * 以前这些量只在写缓存时被读一次, 从不显示 —— 于是流一断, 所有可见信号一起静止且不报错,
+     * 用户无法区分"正常完成"和"失去响应"。
+     */
+    private void RefreshActivity()
+    {
+        if (!IsBusy)
+        {
+            ActivityText = "";
+            return;
+        }
+        var lag = Math.Max(0, _chat.TotalEventCount - _renderedSeq);
+        var silent = DateTimeOffset.UtcNow - _lastEventAt;
+        ActivityText = silent.TotalSeconds >= 10
+            ? $"落后 {lag} 条 · 已 {silent.TotalSeconds:F0} 秒没有事件"
+            : $"落后 {lag} 条";
+    }
 
     partial void OnPageChanged(AppPage value)
     {
@@ -760,10 +838,46 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         return Regex.Replace(remaining.Trim(), " {2,}", " ");
     }
 
+    /**
+     * 停止: 发出中断后**本机立刻复位**, 再用宿主的状态确认。
+     *
+     * 以前这里只有一句 `await InterruptAsync`: 宿主没回、回得晚、或者这一轮早就结束了(idle 相位的中断是空操作),
+     * 界面就一直停在"停止"形态, 用户只能看着它卡住 —— 也分不清是"还在跑"还是"已经死了"。
+     */
     [RelayCommand]
     private async Task CancelTaskAsync()
     {
-        await (await _chat.ClientAsync()).InterruptAsync(_chat.Id.Value);
+        var interrupted = false;
+        try
+        {
+            await (await _chat.ClientAsync()).InterruptAsync(_chat.Id.Value);
+            interrupted = true;
+        }
+        catch (Exception error)
+        {
+            _ctx.LoggerFor("gui").Warn($"cancel: interrupt failed: {error.Message}");
+            StatusText = $"取消未被宿主确认: {error.Message}";
+        }
+        IsBusy = false;
+        _compactionBusy = false;
+        _lastEventAt = DateTimeOffset.UtcNow;
+        if (!interrupted)
+            return;
+        StatusText = "已发送取消, 等宿主收尾";
+        var sent = DateTimeOffset.UtcNow;
+        _cancelSentAt = sent;
+        _ = ConfirmCancelAsync(sent);
+    }
+
+    /** 取消发出后的一次性确认: 一直没有收尾就说出来, 不让状态行永远停在"等宿主收尾"。 */
+    private async Task ConfirmCancelAsync(DateTimeOffset sent)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(CancelConfirmSeconds));
+        if (_disposed || _cancelSentAt != sent)
+            return;
+        _cancelSentAt = null;
+        if (StatusText == "已发送取消, 等宿主收尾")
+            StatusText = $"取消未被宿主确认({CancelConfirmSeconds} 秒内没有收尾)";
     }
 
     [RelayCommand]
@@ -953,8 +1067,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
      * 回退/分叉共用: 服务端把会话截断到"这条消息所属回合之前", 这里再把这条消息的原文放回输入区,
      * 于是用户看到的是"编辑并重发", 而不是一条留在转录里、界面还以为在跑的用户消息。
      *
-     * 撤回之后的界面由截断通知驱动(见 TruncateTo): 一次撤回只增量删掉尾部消息, 不再重取整份快照 ——
-     * 否则同一件事要走两遍(一遍逐事件重放、一遍分页快照), 观感就是整屏重建两次。
+     * 撤回之后的界面由 session/revert 事件驱动(见 DropTranscriptTail 与 _reverted 区间): 只增量删掉尾部消息,
+     * 不再重取整份快照 —— 否则同一件事要走两遍(一遍逐事件重放、一遍分页快照), 观感就是整屏重建两次。
      */
     private async Task RunTimelineCommandAsync(MessageViewModel? message, string action, bool revert)
     {
@@ -966,7 +1080,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             AppendMessage(new MessageViewModel("系统", output, MessageKind.System, false));
         if (revert)
         {
-            // 会话已在服务端被截断: 截断通知会把尾部消息按序号删掉(见 TruncateTo), 这里只把原文放回输入区。
+            // 撤回事件到达时界面会按序号删掉尾部消息(见 DropTranscriptTail), 这里只把原文放回输入区。
             FillComposer(text);
             return;
         }
@@ -1202,6 +1316,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _disposed = true;
         Workbench.DetachViewModel(this);
+        _activityTimer.Stop();
+        _subagentWatch.Stop();
+        Subagents.Changed -= SyncSubagentWatch;
         _suggestionCancellation?.Cancel();
         _suggestionCancellation?.Dispose();
         _suggestionCancellation = null;
@@ -1214,8 +1331,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _pendingDialogs.Clear();
         _chat.Fleet.Changed -= OnFleetChanged;
         _chat.Reset -= ShowSession;
-        _chat.Truncated -= TruncateTo;
+
         _chat.Received -= OnChatReceived;
+        _chat.Filled -= ApplyFilled;
         _chat.Failed -= SetStatus;
         _contentSearch?.Cancel();
         _contentSearch?.Dispose();
@@ -1410,6 +1528,34 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void OnSettingsChanged() => Dispatcher.UIThread.Post(RefreshSessions);
 
+    /**
+     * 子代理徽标不能只等"宿主会话列表变了": 无头子代理在升档前不进会话列表, 于是它一开跑徽标仍是 0,
+     * 要等到下一回合某个把它写进店的时刻才跳出来 —— 用户在这期间无从判断子代理到底起没起来。
+     *
+     * 看护表在"有 subagent 工具调用在飞, 或还有子代理活着"这段时间里每秒问一次宿主; 两种状态都归零就停表,
+     * 空闲时零开销。子代理结束(含后台跑到父回合之后)也由它收敛。
+     */
+    private void SyncSubagentWatch()
+    {
+        if (_disposed)
+            return;
+        var active = _subagentCallsInFlight > 0 || Subagents.LiveCount > 0;
+        if (active == _subagentWatch.IsEnabled)
+            return;
+        if (active)
+            _subagentWatch.Start();
+        else
+            _subagentWatch.Stop();
+    }
+
+    private void TickSubagentWatch()
+    {
+        if (_disposed)
+            return;
+        Subagents.Refresh();
+        SyncSubagentWatch();
+    }
+
     private void OnFleetChanged()
     {
         if (_disposed)
@@ -1419,6 +1565,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             SessionTitle = current.Title ?? _chat.Id.Value;
         RefreshSessions();
         Subagents.Refresh();
+        SyncSubagentWatch();
         _chat.RefreshConnection();
         _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         RefreshPendingDialogs();
@@ -1575,12 +1722,22 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ShowSession()
     {
+        _openProbe?.Stop();
+        // 从"点击会话"起算: HostChatSession 已经把它读历史的那一段计时留下来了。
+        _openProbe = new SessionOpenProbe(_chat.OpenMs);
+        // 用户感知的"打开"到视口出现为止; 整段历史铺完另有 firstPaint 记着。
+        _openProbe.MarkViewport();
         UpdateCurrentWorkspace();
         SwapComposerDraft(_shownSession, _chat.Id.Value);
         _shownSession = _chat.Id.Value;
         _ = _editorClientBinding.UpdateAsync(_chat.Fleet.Find(_chat.Machine), _chat.Id.Value, _chat.Header.Cwd ?? Home.Root);
         _renderedSeq = 0;
         _renderedAny = false;
+        _openTurnStartSeq = null;
+        _gaps.Clear();
+        _reverted.Clear();
+        _displayTurn = 0;
+        _currentDisplayTurn = 0;
         // 上一个进程可能留下未闭合的 compaction/start: 重放它会把界面卡在"正在压缩",
         // 而那次压缩早已随进程退出。
         _compactionBusy = false;
@@ -1598,15 +1755,128 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         // 否则新建会话会继承上一个会话的数字, 切回旧会话又会把 in/out 重复累加。
         TokenStats.Reset();
         _requestHeader = null;
-        ApplyEvents(_chat.Events, replay: true);
+        // 投影缓存命中: 整段历史不必再解析重放, 直接还原出上次的界面状态, 再按增量补上缓存之后的事件。
+        if (_chat.CachedProjection is { } projection)
+            RestoreProjection(projection);
+        ApplyHistory(_chat.HistoryBatches());
+        if (_gaps.Count > 0)
+            _ = FillGapsAsync();
         RefreshModelLabels();
+        ReportHistoryCompleteness();
         SelectedSession = FindSession(_chat.Id);
         Subagents.SetRoot(_chat.Id);
+        SyncSubagentWatch();
+        // 时间轴要覆盖整段会话: 宿主扫一遍用户消息, 与客户端已渲染多少无关。后台取, 不占首屏。
+        TimelineEntries.Clear();
+        OnPropertyChanged(nameof(TimelineTotalEvents));
+        _ = LoadTimelineAsync();
         OnPropertyChanged(nameof(CurrentSessionId));
         RefreshPendingDialogs();
+        // 回放结束 = 输入区可用; 首屏就是这一帧(内容已经进视图模型, 下一次渲染会把它画出来)。
+        _openProbe?.MarkFirstPaint();
+        _openProbe?.MarkInteractive();
         // 整段重放已经结束, 现在请视图重新落点: 上次读的那条还在就回到它, 不在就贴最新。
         TranscriptRestoreRequested?.Invoke(TranscriptRestoreAnchor);
         Workbench.NotifySessionChanged();
+        // 只有"投影确实到了日志末尾、中途也没有跳号"的这一份才值得存: 少一段的投影存下来,
+        // 下次重开就是直接还原成那个少一段的界面(实测 887,072 条的会话因此永远停在 53.8%)。
+        // 命中缓存且没有新事件的这一种由 SaveProjectionAsync 自己判掉(见 MainViewModel.Projection)。
+        if (_chat.HistoryIncomplete is null && _gaps.Count == 0 && _renderedSeq >= _chat.TotalEventCount)
+            _ = SaveProjectionAsync();
+        ReportOpenCost();
+    }
+
+    /** 上一次打开的可感知代价(首屏/可输入/最长卡顿/收尾); 没打开过时为 null。 */
+    public OpenCostResult? LastOpenCost { get; private set; }
+
+    /** 整段会话的用户消息时间线(宿主给的): 时间轴据此在打开瞬间就画满, 不必等历史全部渲染。 */
+    public ObservableCollection<TimelineEntryViewModel> TimelineEntries { get; } = [];
+
+    /** 时间轴按 序号/总数 给未渲染的刻度定位。 */
+    public long TimelineTotalEvents => _chat.TotalEventCount;
+
+    private async Task LoadTimelineAsync()
+    {
+        var session = _chat;
+        try
+        {
+            var entries = await session.TimelineAsync().ConfigureAwait(true);
+            if (_disposed || !ReferenceEquals(session, _chat))
+                return;
+            TimelineEntries.Clear();
+            foreach (var entry in entries)
+                TimelineEntries.Add(new TimelineEntryViewModel(entry.Seq, entry.Time, entry.Preview));
+            OnPropertyChanged(nameof(TimelineTotalEvents));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            // 时间轴是辅助视图: 取不到就只按已渲染的消息画刻度, 不打扰用户。
+            SetStatus($"时间线读取失败: {error.Message}");
+        }
+    }
+
+    /** 点到还没进转录的刻度: 让宿主把它取回来并落到位(与 /timestamp jump 同一条路径)。 */
+    public async Task JumpToTimelineAsync(long seq)
+    {
+        try
+        {
+            await _chat.RunAsync($"/timestamp jump #{seq}").ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception error)
+        {
+            SetStatus($"跳转失败: {error.Message}");
+        }
+    }
+
+    /**
+     * 打开会话的一行打点(方案 §6.3): 首屏/可输入/主线程最长阻塞/后台收尾完成。
+     *
+     * 和宿主那条 `session open:` 分开: 宿主量的是"会话可读", 这里量的是"用户看到、能用、界面没被卡住"。
+     * 后台任务(投影缓存写)不计入前三个刻度, 但 `total_ms` 要等它结束 —— 否则下一次打开才发现它拖慢。
+     */
+    private void ReportOpenCost()
+    {
+        if (_openProbe is not { } probe)
+            return;
+        _openProbe = null;
+        var id = _chat.Id.Value;
+        var events = _chat.TotalEventCount;
+        // 首帧那次标记是 Post(Render) 出去的: 快照也要排在同一优先级之后, 否则 firstPaint 永远是 -1。
+        Dispatcher.UIThread.Post(() => PublishOpenCost(probe, id, events), DispatcherPriority.Render);
+    }
+
+    private void PublishOpenCost(SessionOpenProbe probe, string id, long events)
+    {
+        // 结构化结果留一份: 日志行给人看, 这份给验收与测试断言(同一个探针, 同一批数字)。
+        LastOpenCost = probe.Snapshot(probe.ElapsedMs, events);
+        OnPropertyChanged(nameof(LastOpenCost));
+        _ = Task.Run(async () =>
+        {
+            // 后台收尾: 投影缓存保存跑在任务里, 这里等它一小会儿(拿不到就以当前时刻为准)。
+            await Task.Delay(1).ConfigureAwait(false);
+            var line = probe.Finish(id, probe.ElapsedMs, events);
+            if (line.Length > 0)
+                _ctx.LoggerFor("gui").Info("%s", line);
+        });
+    }
+
+    /**
+     * 历史没取全时明确说出来: 状态行 + 轨迹里都留一条。
+     *
+     * 不说的后果是用户以为"这段会话本来只有这么多", 于是把界面的残缺当成数据没了 —— 那比慢、比少一段都难查。
+     */
+    private void ReportHistoryCompleteness()
+    {
+        if (_chat.HistoryIncomplete is not { Length: > 0 } reason)
+            return;
+        StatusText = $"会话历史不完整: {reason}";
+        AddTrace(_chat.TotalEventCount, TraceKind.Context, "会话历史不完整", reason);
     }
 
     /**
@@ -1641,56 +1911,86 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     /** 实时事件: 不是重放, 因此压缩状态要按真实生命周期切换。 */
-    private void OnChatReceived(IReadOnlyList<SessionEvent> batch) => ApplyEvents(batch);
+    private void OnChatReceived(IReadOnlyList<SessionEvent> batch)
+    {
+        _lastEventAt = DateTimeOffset.UtcNow;
+        ApplyEvents(batch);
+        RefreshActivity();
+    }
 
     /**
-     * 会话在服务端被就地截断(撤回): 只删掉由已经不存在的事件产生的尾部消息, 整屏不重建。
-     * 用户正在读的那条还在的话视口一帧都不动(视图按锚点重新落点), 被删掉了才贴最新。
+     * 丢掉"由 keepSeq 及之后的事件产生"的界面内容: 消息、轨迹、待配对工具调用、交付物都按序号重算。
+     *
+     * 回退(阶段 4a)在日志里只是一条新事件, 所以界面这边要做的正是这一步 —— 与物理截断共用同一段逻辑,
+     * 差别只在"要不要把渲染游标退回去"(回退时游标此刻已经前进到回退事件之后)。
      */
-    private void TruncateTo(long keepEventCount)
+    private void DropTranscriptTail(long keepSeq)
     {
-        if (_disposed)
-            return;
         for (var index = Messages.Count - 1; index >= 0; index--)
         {
-            if (Messages[index].RenderSeq >= keepEventCount)
+            if (Messages[index].RenderSeq >= keepSeq)
                 Messages.RemoveAt(index);
         }
         for (var index = TraceItems.Count - 1; index >= 0; index--)
         {
             var trace = TraceItems[index];
-            if (trace.Seq < keepEventCount)
+            if (trace.Seq < keepSeq)
                 continue;
             TraceItems.RemoveAt(index);
             TraceView.Remove(trace);
         }
-        _lastUserMessages.RemoveAll(message => message.RenderSeq >= keepEventCount);
+        _lastUserMessages.RemoveAll(message => message.RenderSeq >= keepSeq);
         _pendingToolCalls.Clear();
         _openAssistant = null;
         _openReasoning = null;
-        // 交付物清单由事件派生: 截断之后重建一遍, 否则被回退掉的那次"交付"还留在侧栏里。
+        // 交付物清单由事件派生: 回退之后重建一遍, 否则被回退掉的那次"交付"还留在侧栏里。
         Deliverables.Reset(canOpen: true);
-        foreach (var sessionEvent in _chat.Events)
+        foreach (var sessionEvent in _chat.DeliverableEvents)
         {
+            if (sessionEvent.Seq >= keepSeq)
+                continue;
             if (sessionEvent.Data is DeliverablesPresentedPayload)
                 Deliverables.Observe(sessionEvent);
         }
-        _renderedSeq = keepEventCount;
-        _renderedAny = keepEventCount > 0;
-        MessagesChanged?.Invoke();
-        // 截断通知可能晚于"截断之后新写入的事件"到达: 那条事件的序号正好等于截断后的条数,
-        // 在截断之前因为序号回退被丢掉了。这里把它按序号补回来, 否则用户撤回后发的那条消息就永远不显示。
-        var resumed = _chat.Events.Where(sessionEvent => sessionEvent.Seq >= keepEventCount).ToList();
-        if (resumed.Count > 0)
-            ApplyEvents(resumed, replay: true);
-        TranscriptRestoreRequested?.Invoke(TranscriptRestoreAnchor);
+    }
+
+    /**
+     * 整段历史**按批**进投影: 每批各走一遍与实时事件相同的规则(同顺序、同跳号判据),
+     * 交出去的那一批随后被会话放掉, 于是峰值只与一批相关而不是整段。
+     *
+     * 收尾(把每条消息刷到最终文本 + 通知视图)只在全部批跑完之后做一次 ——
+     * 与"一次性喂整段"逐字段等价, 差别只在内存占用。
+     */
+    private void ApplyHistory(IEnumerable<IReadOnlyList<SessionEvent>> batches)
+    {
+        try
+        {
+            foreach (var batch in batches)
+            {
+                if (!ApplyEventsCore(batch, replay: true))
+                    return;
+            }
+        }
+        finally
+        {
+            // 提前返回也收尾: 否则每条消息的正文停在最后一帧之前, 界面看着就是"没写完"。
+            FinishReplay();
+        }
     }
 
     /** replay=true 表示在重放既有历史(切会话/重新加载), 而不是收到了实时事件。 */
     private void ApplyEvents(IReadOnlyList<SessionEvent> batch, bool replay = false)
     {
-        if (_disposed)
+        if (!ApplyEventsCore(batch, replay) || !replay)
             return;
+        FinishReplay();
+    }
+
+    /** 逐条投影一批事件; 返回 false 只有两种情况: 已释放, 或者这一批本身不该再往下走。 */
+    private bool ApplyEventsCore(IReadOnlyList<SessionEvent> batch, bool replay)
+    {
+        if (_disposed)
+            return false;
         _replaying = replay;
         try
         {
@@ -1698,11 +1998,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             {
                 if (sessionEvent.Seq < _renderedSeq)
                     continue;
+                // 跳号不是致命的: 记下缺的那一段, 这一条照常投影 —— 同一批里的 turn/end、压缩结束、
+                // 后续正文都必须落地, 否则界面就停在"停止按钮按不动、底部不刷新"的半死状态。
                 if (_renderedAny && sessionEvent.Seq > _renderedSeq)
-                {
-                    RequestResync(sessionEvent.Seq);
-                    return;
-                }
+                    RecordGap(_renderedSeq, sessionEvent.Seq);
                 _renderedAny = true;
                 _renderedSeq = sessionEvent.Seq + 1;
                 _currentSeq = sessionEvent.Seq;
@@ -1713,42 +2012,177 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             _replaying = false;
         }
-        if (!replay)
-            return;
-        // 重放时增量不排定时器(见 MessageViewModel.Append): 这里一次性把每条消息刷到最终文本。
+        return true;
+    }
+
+    /** 重放收尾时增量不排定时器(见 MessageViewModel.Append): 这里一次性把每条消息刷到最终文本。 */
+    private void FinishReplay()
+    {
         foreach (var message in Messages)
             message.FlushPending();
         MessagesChanged?.Invoke();
     }
 
-    private void RequestResync(long receivedSeq)
+    /**
+     * 事件流里出现跳号: 把缺的区间登记下来并说出来, 而不是整批丢掉重新取整段历史。
+     *
+     * 整段重取是"把已经渲染好的东西全部作废", 代价随会话长度增长; 而且取不回来的原因通常在宿主一侧,
+     * 重取会稳定断在同一处(实测每秒一次、界面停在 53.8%)。所以: 只登记缺口, 尾巴继续流, 补缺按区间来。
+     */
+    private void RecordGap(long start, long end)
     {
-        if (_resyncRequested || _disposed)
+        if (end <= start)
             return;
-        _resyncRequested = true;
-        _ctx.LoggerFor("gui").Warn($"session event gap: expected seq {_renderedSeq}, received {receivedSeq}; reloading snapshot");
-        _ = ResyncAsync();
+        AddGap(new SeqRange(start, end));
+        var missing = _gaps.Sum(gap => gap.Count);
+        _ctx.LoggerFor("gui").Warn(
+            $"session event gap: missing #{start}..#{end - 1} ({end - start} events); kept the rest, {missing} missing in total");
+        StatusText = $"会话历史缺 {missing} 条(#{start}..#{end - 1})";
+        // 重放途中不动索引(历史是一个惰性迭代器, 边迭代边补会把批次的边界挪掉); 等这一遍走完再补。
+        if (!_replaying)
+            _ = FillGapsAsync();
     }
 
-    private async Task ResyncAsync()
+    /**
+     * 按缺口区间一个一个补, 补到的当场插回原位。
+     *
+     * 只补缺口本身: 一段几十到几千条, 而整段重取是几十万条起 —— 后者正是"界面停在半截还每秒重来一次"的成因。
+     * 补不回来的留在 `_gaps` 里等下一次(滚动、重开、下一条实时事件都能再触发), 不升级成致命错误。
+     */
+    private async Task FillGapsAsync()
     {
+        if (_gapFillRunning || _disposed)
+            return;
+        _gapFillRunning = true;
         try
         {
-            await _chat.ReloadAsync(forceReset: true);
-        }
-        catch (Exception error)
-        {
-            if (!_disposed)
-                StatusText = $"会话重同步失败: {error.Message}";
+            foreach (var gap in _gaps.ToArray())
+            {
+                if (_disposed || _chat.HistoryIncomplete is not null && _chat.Coverage.Count == 0)
+                    return;
+                try
+                {
+                    if (!await _chat.FillAsync(gap).ConfigureAwait(true))
+                        continue;
+                }
+                catch (Exception error)
+                {
+                    if (!_disposed)
+                        _ctx.LoggerFor("gui").Warn($"session gap fill #{gap.Start}..#{gap.End - 1} failed: {error.Message}");
+                }
+            }
         }
         finally
         {
-            _resyncRequested = false;
+            _gapFillRunning = false;
         }
+    }
+
+    /** 缺口按区间补回来之后: 把这段事件按序号插回原位, 并把 `_gaps` 里已经补到的部分扣掉。 */
+    private void ApplyFilled(IReadOnlyList<SessionEvent> events)
+    {
+        if (_disposed)
+            return;
+        var applied = 0;
+        _fillingGap = true;
+        try
+        {
+            foreach (var sessionEvent in events.OrderBy(item => item.Seq))
+            {
+                if (!IsMissing(sessionEvent.Seq))
+                    continue;
+                _currentSeq = sessionEvent.Seq;
+                ApplyEvent(sessionEvent, replay: true);
+                applied += 1;
+            }
+        }
+        finally
+        {
+            _fillingGap = false;
+        }
+        if (applied == 0)
+            return;
+        foreach (var sessionEvent in events)
+            ShrinkGap(sessionEvent.Seq);
+        FinishReplay();
+        StatusText = _gaps.Count == 0 ? "准备就绪" : $"会话历史缺 {_gaps.Sum(gap => gap.Count)} 条";
+    }
+
+    private bool IsMissing(long seq) => _gaps.Exists(gap => seq >= gap.Start && seq < gap.End);
+
+    /** 这条序号是否落在被撤回的区间里。 */
+    private bool IsReverted(long seq) => _reverted.Exists(range => seq >= range.Start && seq < range.End);
+
+    private void AddRevertedRange(SeqRange range)
+    {
+        if (range.IsEmpty)
+            return;
+        for (var index = 0; index < _reverted.Count; index += 1)
+        {
+            if (_reverted[index].Union(range) is not { } merged)
+                continue;
+            _reverted[index] = merged;
+            return;
+        }
+        _reverted.Add(range);
+    }
+
+    /** 从缺口集合里扣掉一条已补到的序号(必要时把区间劈成两段)。 */
+    private void ShrinkGap(long seq)
+    {
+        for (var index = 0; index < _gaps.Count; index += 1)
+        {
+            var gap = _gaps[index];
+            if (seq < gap.Start || seq >= gap.End)
+                continue;
+            _gaps.RemoveAt(index);
+            if (seq > gap.Start)
+                _gaps.Insert(index, new SeqRange(gap.Start, seq));
+            if (seq + 1 < gap.End)
+                _gaps.Insert(index + (seq > gap.Start ? 1 : 0), new SeqRange(seq + 1, gap.End));
+            return;
+        }
+    }
+
+    /** 相邻/重叠的缺口合并成一段, 免得状态行里列出十几条互不相连的小段。 */
+    private void AddGap(SeqRange gap)
+    {
+        for (var index = 0; index < _gaps.Count; index++)
+        {
+            if (_gaps[index].Union(gap) is not { } merged)
+                continue;
+            _gaps[index] = merged;
+            while (index + 1 < _gaps.Count && _gaps[index].Union(_gaps[index + 1]) is { } next)
+            {
+                _gaps[index] = next;
+                _gaps.RemoveAt(index + 1);
+            }
+            return;
+        }
+        _gaps.Add(gap);
     }
 
     private void ApplyEvent(SessionEvent sessionEvent, bool replay)
     {
+        // 撤回掉的区间无论怎么回到这里(实时、重放、迟到补洞)都不许再渲染: 靠"游标恰好走过"来删是不可靠的。
+        if (IsReverted(sessionEvent.Seq))
+            return;
+        // 补洞回来的事件属于更早的回合: 它们只负责把正文/工具卡片补出来,
+        // 不许改忙闲、统计、模型标签这些"当下状态"(那是实时流的事)。
+        if (_fillingGap)
+        {
+            switch (sessionEvent.Data)
+            {
+                case UserMessagePayload:
+                case AssistantMessagePayload:
+                case ToolCallPayload:
+                case ToolResultPayload:
+                case DeliverablesPresentedPayload:
+                    break;
+                default:
+                    return;
+            }
+        }
         if (sessionEvent.Data is TurnStartPayload or TurnEndPayload)
             foreach (var node in AllSessions().Where(node => node.SessionId == _chat.Id))
                 node.IsRunning = sessionEvent.Data is TurnStartPayload;
@@ -1760,18 +2194,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
         switch (sessionEvent.Data)
         {
-            case TurnStartPayload turn:
+            case TurnStartPayload:
+                _openTurnStartSeq = sessionEvent.Seq;
                 IsBusy = true;
-                TokenStats.ObserveTurn(turn.Turn, 0);
-                AddTrace(sessionEvent.Seq, TraceKind.Turn, $"第 {turn.Turn} 轮");
+                // 回合号按"回合起点在日志里的先后"编: payload 里的 turn 只用于 turn/start ↔ turn/end 配对,
+                // 两个宿主同时驱动同一会话时它会重复(方案 §8.1), 拿它当编号显示会看到两个"第 3 轮"。
+                _displayTurn += 1;
+                _currentDisplayTurn = _displayTurn;
+                TokenStats.ObserveTurn(_currentDisplayTurn, 0);
+                AddTrace(sessionEvent.Seq, TraceKind.Turn, $"第 {_currentDisplayTurn} 轮");
                 break;
             case StepStartPayload step:
-                TokenStats.ObserveTurn(step.Turn, step.Step);
+                TokenStats.ObserveTurn(_currentDisplayTurn, step.Step);
                 break;
             case TurnEndPayload turn:
+                _openTurnStartSeq = null;
                 IsBusy = false;
+                _cancelSentAt = null;
                 TokenStats.RequestFinished();
-                AddTrace(sessionEvent.Seq, TraceKind.Turn, $"第 {turn.Turn} 轮结束", TurnEndText(turn.Reason));
+                AddTrace(sessionEvent.Seq, TraceKind.Turn, $"第 {_currentDisplayTurn} 轮结束", TurnEndText(turn.Reason));
                 ApplyTurnEnd(turn.Reason);
                 break;
             case UserMessagePayload user:
@@ -1820,6 +2261,24 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             case DeliverablesPresentedPayload presented:
                 Deliverables.Observe(sessionEvent);
                 AddTrace(sessionEvent.Seq, TraceKind.Tool, $"交付物 {presented.Files.Count} 个", string.Join('\n', presented.Files.Select(file => file.Path)));
+                break;
+            // 回退(阶段 4a)是一条普通事件: 日志没变短, 所以界面自己把那段内容收掉。
+            case SessionRevertPayload revert:
+                DropTranscriptTail(revert.TargetSeq);
+                // 回退点之后、回退事件之前的这段内容再也不该出现(重放/补洞都不许把它捡回来)。
+                AddRevertedRange(new SeqRange(revert.TargetSeq, sessionEvent.Seq));
+                _chat.ForgetProjection();
+                // 被收掉的正是"当前这一回合"时不会有 TurnEnd 再来: 不在这里收尾, 界面就一直停在
+                // "正在运行"、停止按钮按了也没反应(回退只在回合边界切, 所以判起点即可)。
+                if (_openTurnStartSeq >= revert.TargetSeq)
+                {
+                    _openTurnStartSeq = null;
+                    IsBusy = false;
+                    _cancelSentAt = null;
+                }
+                AddTrace(sessionEvent.Seq, TraceKind.Turn, $"回退到 #{revert.TargetSeq} 之前", revert.Reason ?? "");
+                MessagesChanged?.Invoke();
+                TranscriptRestoreRequested?.Invoke(TranscriptRestoreAnchor);
                 break;
         }
     }
@@ -1942,7 +2401,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyAssistant(string text)
     {
-        if (_openAssistant is not null)
+        // 补洞时不接"正在写"的那条气泡: 那个游标属于实时回合, 补回来的是已经写完的旧回复。
+        if (!_fillingGap && _openAssistant is not null)
         {
             _openAssistant.SetText(text);
             _openAssistant.IsStreaming = false;
@@ -1950,7 +2410,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         if (text.Length > 0)
-            AppendMessage(new MessageViewModel(AssistantRole(), text, MessageKind.Assistant, false));
+            AppendMessage(new MessageViewModel(AssistantRole(), text, MessageKind.Assistant, false) { Seq = _currentSeq });
     }
 
     private string AssistantRole()
@@ -1958,8 +2418,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyToolCall(long seq, ToolCallPayload call)
     {
-        _openAssistant = null;
-        _openReasoning = null;
+        // 补洞不接实时回合的"正在写"气泡: 那属于当下这一轮。
+        if (!_fillingGap)
+        {
+            _openAssistant = null;
+            _openReasoning = null;
+        }
         var isSubagent = string.Equals(call.Name, ISubagentService.DefaultToolName, StringComparison.Ordinal);
         var label = isSubagent ? ReadDescription(call.Arguments) : null;
         var arguments = ToolPresentation.FormatArguments(call.Arguments);
@@ -1971,6 +2435,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             ToolName = isSubagent ? SubagentCardText(label) : call.Name,
             ArgumentText = arguments,
+            Seq = seq,
         });
         message.Detail = arguments;
         _pendingToolCalls[call.CallId] = (call.Name, call.Arguments, message);
@@ -1979,6 +2444,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             message.IsSubagentTool = true;
             message.SubagentLabel = label;
             message.IsExpanded = false;
+            // 子会话是工具执行里才建的: 开跑的这一刻先问一次, 之后由看护表每秒跟进, 不等下一回合。
+            _subagentCallsInFlight += 1;
+            Subagents.Refresh();
+            SyncSubagentWatch();
         }
         AddTrace(seq, TraceKind.Tool, $"工具 {call.Name}", arguments);
     }
@@ -2042,16 +2511,24 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         MessageViewModel? message = pending.Message;
         if (message is null)
         {
-            message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false));
+            message = AppendMessage(new MessageViewModel(label, text, MessageKind.Result, false) { Seq = seq });
             message.Detail = text;
         }
         else
         {
             message.SetToolResult(text, result.Error is not null);
         }
+        // 记下来源事件: 缓存里只存卡片正文的预览, 展开时按这条工具结果回头取全文(见 UpgradeCachedDiffAsync)。
         if (result.Error is null && DiffCardExtractor.TryExtract(pending.Name, pending.Arguments, result.Meta, text) is { } card)
-            message.SetDiff(card);
+            message.SetDiff(card, seq);
         AddTrace(seq, TraceKind.Tool, result.Error is null ? "工具结果" : $"工具失败 {result.Error.Code}", text);
+        // 子代理工具返回后徽标要跟着回落; 后台子代理仍在跑的话由看护表继续跟进到它结束。
+        if (string.Equals(pending.Name, ISubagentService.DefaultToolName, StringComparison.Ordinal))
+        {
+            _subagentCallsInFlight = Math.Max(0, _subagentCallsInFlight - 1);
+            Subagents.Refresh();
+            SyncSubagentWatch();
+        }
     }
 
     private void AppendAssistant(string delta, bool replay = false)
@@ -2066,11 +2543,33 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _openReasoning.Append(delta, coalesce: !replay);
     }
 
+    /** 按序号把消息插到它该在的位置: 补洞回来的事件序号小于当前位置, 追加就错序了。 */
+    private void InsertBySeq(MessageViewModel message)
+    {
+        if (message.Seq is not { } seq)
+        {
+            Messages.Add(message);
+            return;
+        }
+        var index = Messages.Count;
+        while (index > 0 && Messages[index - 1].Seq is { } previous && previous > seq)
+            index -= 1;
+        Messages.Insert(index, message);
+    }
+
     private MessageViewModel AppendMessage(MessageViewModel message)
     {
         message.RenderSeq = _currentSeq;
         message.Updated += _ => MessagesChanged?.Invoke();
-        Messages.Add(message);
+        if (_fillingGap)
+        {
+            // 补洞回来的是更早的内容: 追加到末尾会让它跑到最新消息后面, 必须按序号插回原位。
+            InsertBySeq(message);
+        }
+        else
+        {
+            Messages.Add(message);
+        }
         // 整段重放时逐条通知会把长会话的加载拖成一堆贴底与布局轮次; 重放结束由 ApplyEvents 通知一次。
         if (!_replaying)
             MessagesChanged?.Invoke();
@@ -2258,8 +2757,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         return action is "jump" or "revert" or "fork" ? SeqCandidates(action) : [];
     }
 
+    /**
+     * 序号候选只从"已渲染的用户消息"里出, 不再读 `_chat.Events`。
+     *
+     * `_chat.Events` 在整段投影之后会放掉前缀(见 `ReleaseParsedHistory`), 从它算候选就只剩尾段 ——
+     * 而 `_lastUserMessages` 是整份历史走过的轻量索引(每条用户消息一个条目), 覆盖面与命令本身的语义一致。
+     */
     private IReadOnlyList<string> SeqCandidates(string action)
-        => [.. SessionTimeline.FromEvents(_chat.Events).Select(entry => $"{action} #{entry.Seq}")];
+        => [.. _lastUserMessages.Select(message => $"{action} #{message.RenderSeq}")];
 
     private IReadOnlyList<string> ProviderCandidates(string argument)
     {
@@ -2331,3 +2836,4 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     };
 
 }
+
