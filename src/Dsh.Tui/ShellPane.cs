@@ -15,6 +15,11 @@ namespace Dsh.Tui;
  */
 internal sealed class ShellPane : ITuiPane
 {
+    /** 终端内容来自 PTY 字节流, 与事件序号无关: 重编号/回退都不需要重画。 */
+    public void RedrawFromLog()
+    {
+    }
+
     private readonly ChatWindow _window;
     private readonly ScrollWheel _wheel = new();
     private readonly ITerminalBacking? _backing;

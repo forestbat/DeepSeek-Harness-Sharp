@@ -31,6 +31,9 @@ internal interface ITuiPane : IDisposable
 
     void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false);
 
+    /** 按日志整段重画: 事件被收掉(回退)或整体换了号(重编号)之后, 界面必须与日志重新对齐。 */
+    void RedrawFromLog();
+
     void DrawTranscript(CellGrid grid, ConsoleRect rect);
 
     /** 点击落在 fold 头行(折叠态=预览行, 展开态=首行)时切换折叠; 命中返回 true。 */

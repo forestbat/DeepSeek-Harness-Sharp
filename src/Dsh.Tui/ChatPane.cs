@@ -66,6 +66,11 @@ public sealed class ChatPane : ITuiPane
     private int _wrapProcessedLine;
     private readonly List<VisualRow> _visualRows = [];
     private readonly List<(int Start, int End, bool Collapsed, int Scroll)> _foldSnapshot = [];
+    /** 已被回退事件收掉的日志区间(闭区间): 这些事件还在日志里, 但不再属于会话。 */
+    private readonly List<(long From, long To)> _reverted = [];
+    /** 界面显示的回合号: 按 turn/start 在日志里出现的先后递增(payload 的 turn 只用于配对, 见 §8.1)。 */
+    private int _displayTurn;
+    private int _currentDisplayTurn;
 
     public ChatPane(ChatWindow window, int id, AgentLoopAgent agent)
     {
@@ -76,6 +81,8 @@ public sealed class ChatPane : ITuiPane
         StatusText = ReadyStatus;
         Id = id;
         Agent = agent;
+        // 转录从会话的常驻窗口开始: 更早的前缀在用户往上滚/跳转时按页补(见 LoadOlderHistory)。
+        _replayFrom = agent.Session.ResidentFrom;
         SubscribeSessionRenamed();
         ReplayEvents();
     }
@@ -605,6 +612,9 @@ public sealed class ChatPane : ITuiPane
             case ConsoleKey.PageUp:
                 StickToBottom = false;
                 ScrollOffset = Math.Max(0, ScrollOffset - 10);
+                // 滚到顶就自动接上更早的一页(与滚轮同一个入口)。
+                if (ScrollOffset == 0)
+                    LoadOlderHistory();
                 break;
             case ConsoleKey.PageDown:
                 ScrollOffset += 10;
@@ -709,6 +719,9 @@ public sealed class ChatPane : ITuiPane
         {
             StickToBottom = false;
             ScrollOffset = Math.Max(0, ScrollOffset - lines);
+            // 滚到顶就自动接上更早的一页: 界面上不该存在"更早的没载入"这件事。
+            if (ScrollOffset == 0)
+                LoadOlderHistory();
         }
         else if (lines < 0)
         {
@@ -736,18 +749,73 @@ public sealed class ChatPane : ITuiPane
         _maintaining = false;
         ScrollOffset = 0;
         StickToBottom = true;
+        _replayFrom = agent.Session.ResidentFrom;
         InvalidateWrapCache();
         ReplayEvents();
+    }
+
+    /** 一页历史: 与 GUI 同量级(2 万条), 一次只补一段。 */
+    private const int OlderHistoryPageEvents = 20_000;
+
+    /** 转录当前是从哪条事件开始重放的: 0 表示整段历史都在转录里。 */
+    private long _replayFrom;
+
+    /** 更早的历史还在日志里(转录还没覆盖到 seq 0)。 */
+    public bool HasOlderHistory => _replayFrom > 0;
+
+    /**
+     * 往上接一页更早的历史: 滚到顶部、或跳转到更早的消息时调用。
+     *
+     * 转录是只增的行缓冲, 所以"往上接"就是从更早的起点整篇重放; 重放完再把视口挪回原来那段内容,
+     * 于是用户看到的只是上面多了东西, 阅读位置不动。前缀事件走会话的分页读(窗口外的按页解压)。
+     * 返回是否真的接上了(没有更早的历史、或者那一页读不出来时为 false)。
+     */
+    public bool LoadOlderHistory()
+    {
+        if (_replayFrom <= 0)
+            return false;
+        var from = Math.Max(0, _replayFrom - OlderHistoryPageEvents);
+        List<SessionEvent> earlier;
+        try
+        {
+            earlier = [.. Agent.Session.SnapshotEvents(from, _replayFrom)];
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException)
+        {
+            return false;
+        }
+        if (earlier.Count == 0)
+            return false;
+        var keepOffset = ScrollOffset;
+        var previousLength = Renderer.CurrentLength;
+        _replayFrom = from;
+        Renderer.Clear();
+        RenderedSeq = 0;
+        // 重放期间不能带整理状态: 更早的前缀里可能残留上一个进程的未闭合开始标记。
+        _maintaining = false;
+        _pendingSubagentCalls.Clear();
+        InvalidateWrapCache();
+        ReplayEvents();
+        // 同一段内容现在往后挪了"新接上的字数": 视口跟着挪, 屏幕上还是那一行。
+        StickToBottom = false;
+        ScrollOffset = keepOffset + Math.Max(0, Renderer.CurrentLength - previousLength);
+        return true;
     }
 
     /** 切换会话后回放历史事件, 让恢复/重进的会话立刻可见; 序列守卫会跳过与滞留事件的重合部分。 */
     public void ReplayEvents()
     {
         var session = Agent.Session;
-        // 窗口化会话只常驻尾部: 回放常驻段, 前缀留一行说明 —— 遍历前缀会把页全拉回来, 等于放弃窗口化。
-        if (session.ResidentFrom > 0)
-            Renderer.AppendPrefixWindowNotice(session.ResidentFrom);
-        foreach (var sessionEvent in session.SnapshotEvents(session.ResidentFrom))
+        SyncRevertedRanges();
+        _displayTurn = 0;
+        _currentDisplayTurn = 0;
+        // 只回放 _replayFrom 之后的事件: 更早的前缀在用户往上滚/跳转时由 LoadOlderHistory 补上,
+        // 而不是在打开会话时把整份历史拉回来。
+        foreach (var sessionEvent in session.ResidentFrom > _replayFrom
+                     ? session.SnapshotEvents(_replayFrom, session.ResidentFrom)
+                     : [])
+            ProcessSessionEvent(sessionEvent, replay: true);
+        foreach (var sessionEvent in session.ResidentEvents())
             ProcessSessionEvent(sessionEvent, replay: true);
         // 还在 inbox 里排队、尚未被回合取用的消息不是事件, 回放不会画出来; 这里按当前排队状态补上,
         // 否则切走会话再切回来, 用户会以为自己那条提示丢了。
@@ -758,12 +826,65 @@ public sealed class ChatPane : ITuiPane
         }
     }
 
+    /** 回退之后整段重画: 先按日志重算被收掉的区间, 再从常驻窗口回放一遍。 */
+    private void RedrawAfterRevert(SessionRevertPayload revert)
+    {
+        RedrawFromLog();
+        AppendRaw($"\n  已回退到 #{revert.TargetSeq} 之前\n");
+    }
+
+    /** 按日志整段重画: 事件被收掉(回退)或整体换了号(重编号)之后, 界面必须与日志重新对齐。 */
+    public void RedrawFromLog()
+    {
+        Renderer.Clear();
+        RenderedSeq = 0;
+        _replayFrom = Session.ResidentFrom;
+        ReplayEvents();
+    }
+
+    /** 从日志重算"哪些区间已被回退", 回放前调用: 顺序无关, 也不会因为回放自身再触发一次重画。 */
+    private void SyncRevertedRanges()
+    {
+        _reverted.Clear();
+        foreach (var sessionEvent in Session.ResidentEvents())
+        {
+            if (sessionEvent.Data is SessionRevertPayload revert)
+                _reverted.Add((revert.TargetSeq, sessionEvent.Seq));
+        }
+    }
+
+    private bool IsReverted(long seq)
+    {
+        foreach (var (from, to) in _reverted)
+        {
+            if (seq >= from && seq <= to)
+                return true;
+        }
+        return false;
+    }
+
     public void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false)
     {
         if (sessionEvent.Seq < RenderedSeq)
             return;
         RenderedSeq = sessionEvent.Seq + 1;
-        TrackContextUsage(sessionEvent.Data);
+        // 回退是一条只追加的事件: 被它收掉的那一段在日志里仍然存在, 但不再属于会话。
+        // 界面上它就表现为"少了一段", 增量删除不划算 —— 整段重画一次(与打开会话时的回放同一条路)。
+        if (sessionEvent.Data is SessionRevertPayload revert)
+        {
+            if (!replay)
+                RedrawAfterRevert(revert);
+            return;
+        }
+        if (IsReverted(sessionEvent.Seq))
+            return;
+        // 回合号按"回合起点在日志里的先后"编: payload 里的 turn 只用于配对, 多宿主驱动时会重复(方案 §8.1)。
+        if (sessionEvent.Data is TurnStartPayload)
+        {
+            _displayTurn += 1;
+            _currentDisplayTurn = _displayTurn;
+        }
+        TrackContextUsage(sessionEvent.Data, _currentDisplayTurn);
         switch (sessionEvent.Data)
         {
             case TurnStartPayload:
@@ -827,7 +948,7 @@ public sealed class ChatPane : ITuiPane
     }
 
     /** 上下文占用: 请求上下文给容量分母, 流式/最终用量给分子(只认最近一次请求的提示词)。 */
-    private void TrackContextUsage(SessionEventPayload payload)
+    private void TrackContextUsage(SessionEventPayload payload, int displayTurn)
     {
         switch (payload)
         {
@@ -840,16 +961,16 @@ public sealed class ChatPane : ITuiPane
                 _stats.ObserveUsage(usage.Value);
                 break;
             case AssistantChunkPayload chunk:
-                _stats.ObserveTurn(chunk.Turn, chunk.Step);
+                _stats.ObserveTurn(displayTurn, chunk.Step);
                 _stats.FirstTokenArrived();
                 break;
             case AssistantMessagePayload { Usage: { } messageUsage } message:
-                _stats.ObserveTurn(message.Turn, message.Step);
+                _stats.ObserveTurn(displayTurn, message.Step);
                 _stats.ObserveUsage(messageUsage);
                 _stats.RequestFinished();
                 break;
             case ToolCallPayload call:
-                _stats.ObserveTurn(call.Turn, call.Step);
+                _stats.ObserveTurn(displayTurn, call.Step);
                 break;
         }
     }

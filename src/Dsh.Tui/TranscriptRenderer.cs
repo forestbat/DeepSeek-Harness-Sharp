@@ -127,14 +127,36 @@ public sealed class TranscriptRenderer
     public void AppendRaw(string text) => Append(text);
 
     /**
-     * 窗口化会话的前缀不在内存里: 在转录顶端留一行说明。
-     * 什么都不画的话, 用户滚到顶只会看到记录"凭空开始", 会以为历史丢了。
+     * 清空转录, 供"接上更早的历史之后整篇重放"用。
+     *
+     * 转录是只增的行缓冲, 往上接内容只能从头重放: 先 Clear 再按新的起点重放, 调用方负责随后把视口挪到
+     * 原来那一段(见 ChatPane.LoadOlderHistory)。清空要连同折叠、行起点、用户消息索引与流式状态一起复位,
+     * 否则新内容会带着旧账渲染(折叠指向已不存在的行、行号错位)。
      */
-    public void AppendPrefixWindowNotice(long droppedEvents)
+    public void Clear()
     {
-        if (droppedEvents <= 0)
-            return;
-        Append($"\n⋯ 更早的 {droppedEvents} 条事件未载入内存(仍在会话日志里)\n");
+        lock (_buffer)
+        {
+            _buffer.Clear();
+            _folds.Clear();
+            _lines.Clear();
+            _tints.Clear();
+            _pendingTint = TranscriptTint.None;
+            _pendingToolCalls.Clear();
+            _lineStarts.Clear();
+            _userMessageStarts.Clear();
+            _tail.Clear();
+            _tailStart = 0;
+            _droppedChars = 0;
+            _reasoningOpen = false;
+            _assistantOpen = false;
+            _assistantStreamed = false;
+            _reasoningFoldStart = 0;
+            _codeFenceStart = null;
+            _codeFenceKind = null;
+        }
+        Version++;
+        TrimVersion++;
     }
 
     public void AppendSystemMessage(string text)
