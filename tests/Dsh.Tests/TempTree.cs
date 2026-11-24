@@ -12,7 +12,7 @@ internal static class TempTree
     public static string RepositoryRoot { get; } = FindRepositoryRoot();
 
     /** 项目内临时目录根: 与 ChatWindow* 等测试同一处, 便于统一清理与忽略(.gitignore tests/.scratch)。 */
-    private static readonly string Root = Path.Combine(RepositoryRoot, "tests/.scratch", "test-homes");
+    private static readonly string Root = Path.GetFullPath(Path.Combine(RepositoryRoot, "tests/.scratch", "test-homes"));
 
     private static string FindRepositoryRoot()
     {
