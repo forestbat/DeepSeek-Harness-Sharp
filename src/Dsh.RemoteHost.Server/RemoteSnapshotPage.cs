@@ -5,7 +5,8 @@ namespace Dsh.RemoteHost;
 
 /**
  * 会话历史按帧上限切页: 历史整段塞进一帧会超过 FrameCodec 的上限, 而一帧写不出去会把整条连接带走。
- * 所以一页受字节预算约束, 客户端凭 TotalEventCount 继续取下一页。
+ * 所以一页受字节预算约束, 客户端凭 TotalEventCount 继续取下一页 —— **续页按序号, 不能按页号**:
+ * 被截断的一页给的是更短的一段, 按页号续页会静默跳过它剩下的那几条。
  */
 internal static class RemoteSnapshotPage
 {

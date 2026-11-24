@@ -11,8 +11,15 @@ namespace Dsh.RemoteHost;
 /**
  * 服务端选项。
  * HiddenCapabilities 用于"能力已实现但暂不通告"的场景(滚动升级期间的老客户端兼容), 方法本身照常可用。
+ *
+ * SnapshotPageBytes 是**服务端**一页历史的字节预算(客户端请求里的 MaxBytes 只能更小): 一页装不下就截断,
+ * 由客户端按序号续页。它不是协议常量而是宿主策略, 因此可以按部署/传输方式调小(例如走浏览器的中继),
+ * 也便于用例在很小的数据上复现"一页被截断"。
  */
-public sealed record RemoteHostServerOptions(string? Token = null, IReadOnlyList<string>? HiddenCapabilities = null);
+public sealed record RemoteHostServerOptions(
+    string? Token = null,
+    IReadOnlyList<string>? HiddenCapabilities = null,
+    int SnapshotPageBytes = HostProtocol.SnapshotPageBytes);
 
 /**
  * 在一条双向流上服务一个客户端: 处理握手/探活/信息与全部能力方法, 并把会话事件/审批/会话变化/PTY 输出推给客户端。
@@ -34,6 +41,9 @@ public sealed class RemoteHostServer(
 
     /** 非回环监听必须先有 token; 监听器用它拒绝"裸端口直接暴露全部能力"。 */
     public bool HasToken => Token is { Length: > 0 };
+
+    /** 一页历史的服务端字节预算(客户端请求里的 MaxBytes 只能更小)。 */
+    internal int PageBudget => options.SnapshotPageBytes;
 
     /** Capabilities describe the services this backend actually supplies, not protocol knowledge. */
     private readonly IReadOnlyList<string> _capabilities = Hidden(CapabilitiesOf(backend), options.HiddenCapabilities);
@@ -59,6 +69,7 @@ public sealed class RemoteHostServer(
         if (backend.Network is IRemoteNetworkReloadBackend) capabilities.Add(NetworkProtocol.ReloadCapability);
         if (backend.Editor is not null) capabilities.Add(EditorProtocol.Capability);
         if (backend.Editor?.Clients is not null) capabilities.Add(EditorProtocol.ClientCapability);
+        if (backend.Session is IRemoteLogSliceBackend) capabilities.Add(HostProtocol.LogSliceCapability);
         return capabilities;
     }
 
@@ -300,8 +311,23 @@ public sealed class RemoteHostServer(
         {
             EnsureAuthenticated();
             var backend = Backend;
-            var snapshot = await backend.Session.GetSessionSnapshotAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
-            return RemoteSnapshotPage.Slice(snapshot, request.FromEvent, request.MaxBytes, request.MaxEvents);
+            var snapshot = await backend.Session
+                .GetSessionSnapshotAsync(request.SessionId, request.FromEvent, request.MaxEvents, cancellationToken)
+                .ConfigureAwait(false);
+            return RemoteSnapshotPage.Slice(
+                snapshot,
+                request.FromEvent,
+                Math.Min(request.MaxBytes, server.PageBudget),
+                request.MaxEvents);
+        }
+
+        /** 日志字节切片: 只是把范围交给后端按帧切字节, 不做任何物化/序列化。 */
+        public Task<RemoteLogSlice> GetSessionLogSliceAsync(RemoteLogSliceRequest request, CancellationToken cancellationToken)
+        {
+            EnsureAuthenticated();
+            if (Backend.Session is not IRemoteLogSliceBackend slices)
+                throw new InvalidOperationException($"session history is not served as bytes: {request.SessionId}");
+            return slices.GetSessionLogSliceAsync(request.SessionId, request.FromEvent, request.MaxEvents, cancellationToken);
         }
 
         public async Task<IReadOnlyList<string>> ListToolsAsync(RemoteSessionRef request, CancellationToken cancellationToken)

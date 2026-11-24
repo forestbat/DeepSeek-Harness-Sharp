@@ -60,6 +60,30 @@ internal sealed class HarnessRemoteSessionEditingBackend(HarnessRemoteRuntime ru
         return Task.CompletedTask;
     }
 
+    /**
+     * 会话整段的用户消息时间线: 活会话扫内存, 非活会话读日志。
+     * 客户端要用它在"还没渲染多少历史"的时候就把时间轴画满, 因此这里不能依赖客户端已拿到多少事件。
+     */
+    public Task<IReadOnlyList<RemoteTimelineEntry>> ListSessionTimelineAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        var id = SessionId.Create(sessionId);
+        IReadOnlyList<SessionTimeline.Entry> entries;
+        if (runtime.Store.Get(id) is { } live)
+        {
+            entries = SessionTimeline.UserMessages(live);
+        }
+        else
+        {
+            var persistence = runtime.Persistence
+                ?? throw new InvalidOperationException("session persistence is unavailable");
+            using var handle = persistence.Open(id, SessionAccess.Read);
+            entries = SessionTimeline.FromEvents(handle.Read());
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<RemoteTimelineEntry>>(
+            [.. entries.Select(entry => new RemoteTimelineEntry(entry.Seq, entry.Time, SessionTimeline.Preview(entry.Text)))]);
+    }
+
     public async Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(string rootSessionId, CancellationToken cancellationToken)
     {
         var subagents = runtime.App.Ctx.Get<ISubagentService>(ISubagentService.ServiceName, false);

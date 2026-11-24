@@ -206,7 +206,7 @@ public sealed class RemoteHostPersistenceTests
         public Task<RemoteSessionSummary> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken)
             => Task.FromResult(_sessions.TryGetValue(sessionId, out var session) ? session : throw new KeyNotFoundException(sessionId));
 
-        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken) => Task.CompletedTask;
 

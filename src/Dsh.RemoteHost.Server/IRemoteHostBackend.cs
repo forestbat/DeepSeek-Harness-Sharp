@@ -27,7 +27,11 @@ public interface IRemoteSessionBackend
     Task<IReadOnlyList<RemoteSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken);
     Task<RemoteSessionSummary> CreateSessionAsync(string cwd, CancellationToken cancellationToken);
     Task<RemoteSessionSummary> ResumeSessionAsync(string sessionId, CancellationToken cancellationToken);
-    Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, CancellationToken cancellationToken);
+    /**
+     * 一段历史: 从 fromEvent(绝对序号)起, 最多 maxEvents 条(0 表示由实现决定一页多大)。
+     * 传范围而不是"整段历史再由服务端切": 百万级事件的会话每次翻页都整份物化一遍, 峰值内存与耗时都随历史长度走。
+     */
+    Task<RemoteSessionSnapshot> GetSessionSnapshotAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken);
     Task SendMessageAsync(string sessionId, string text, IReadOnlyList<RemoteImageBlock> images, CancellationToken cancellationToken);
     Task InterruptAsync(string sessionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<string>> ListToolsAsync(string sessionId, CancellationToken cancellationToken);
@@ -42,6 +46,9 @@ public interface IRemoteSessionEditingBackend
     Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken);
     Task SetSessionApprovalPolicyAsync(string sessionId, string policy, CancellationToken cancellationToken);
     Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(string rootSessionId, CancellationToken cancellationToken);
+
+    /** 会话的用户消息时间线(整段), 供客户端画时间轴。 */
+    Task<IReadOnlyList<RemoteTimelineEntry>> ListSessionTimelineAsync(string sessionId, CancellationToken cancellationToken);
 }
 
 public interface IRemoteAgentBackend
@@ -79,6 +86,17 @@ public interface IRemoteNetworkBackend
 public interface IRemoteNetworkReloadBackend
 {
     Task ReloadAsync(CancellationToken cancellationToken);
+}
+
+/**
+ * 会话历史能以**日志字节**交付的后端: 头帧 + 覆盖 [fromEvent, fromEvent + maxEvents) 的帧原样字节。
+ *
+ * 支持就通告 `HostProtocol.LogSliceCapability`, 客户端于是自己解压解析(与读日志同一套代码);
+ * 不支持则仍旧走事件快照。这套"能力按后端可选"的写法与 IRemoteNetworkReloadBackend 一致。
+ */
+public interface IRemoteLogSliceBackend
+{
+    Task<RemoteLogSlice> GetSessionLogSliceAsync(string sessionId, long fromEvent, int maxEvents, CancellationToken cancellationToken);
 }
 
 public interface IRemoteEditorBackend

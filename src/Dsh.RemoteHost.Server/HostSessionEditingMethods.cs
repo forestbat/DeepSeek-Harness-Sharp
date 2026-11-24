@@ -37,6 +37,12 @@ internal sealed class HostSessionEditingMethods(IRemoteSessionEditingBackend bac
         return true;
     }
 
+    public async Task<IReadOnlyList<RemoteTimelineEntry>> SessionTimelineAsync(RemoteSessionRef request, CancellationToken cancellationToken)
+    {
+        ensureAuthenticated();
+        return await backend.ListSessionTimelineAsync(request.SessionId, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(RemoteSessionRef request, CancellationToken cancellationToken)
     {
         ensureAuthenticated();

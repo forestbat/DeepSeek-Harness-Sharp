@@ -61,6 +61,9 @@ public interface IWorkspaceSessionEditing
     Task DeleteSessionAsync(string sessionId, CancellationToken cancellationToken = default);
     Task SetSessionApprovalPolicyAsync(string sessionId, string policy, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<RemoteSubagentInfo>> ListSubagentsAsync(string rootSessionId, CancellationToken cancellationToken = default);
+
+    /** 会话的用户消息时间线: GUI 的时间轴据此覆盖整段会话, 不依赖已渲染多少。 */
+    Task<IReadOnlyList<RemoteTimelineEntry>> SessionTimelineAsync(string sessionId, CancellationToken cancellationToken = default);
 }
 
 /** Typed plugins capability; the connection owner controls its lifetime. */
