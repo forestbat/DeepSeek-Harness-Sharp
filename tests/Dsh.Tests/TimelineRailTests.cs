@@ -335,6 +335,43 @@ public sealed class TimelineRailTests
         return text.ToString();
     }
 
+    /**
+     * 宿主时间线到的比转录早时, 刻度也要覆盖整段: 还没进转录的那几条按 序号/总数 定位, 点击交给宿主按序号跳。
+     */
+    [Fact]
+    public async Task HostTimelinePutsMarksForMessagesThatAreNotRenderedYet() => await HeadlessGui.RunAsync(async () =>
+    {
+        await using var scene = await ChatScene.CreateAsync();
+        scene.ViewModel.Messages.Clear();
+        scene.ViewModel.Messages.Add(new MessageViewModel("用户", "渲染出来的那条", MessageKind.User, false) { Seq = 10 });
+        scene.ScrollToEnd();
+        scene.Settle();
+
+        var rail = Rail(scene);
+        var renderedOnly = rail.Marks.Count;
+        // 宿主说整段有 4 条用户消息, 其中 3 条还没进转录。
+        rail.Timeline =
+        [
+            new TimelineEntryViewModel(10, 0, "渲染出来的那条"),
+            new TimelineEntryViewModel(40, 0, "更早的"),
+            new TimelineEntryViewModel(70, 0, "更晚的"),
+            new TimelineEntryViewModel(95, 0, "最后一条"),
+        ];
+        rail.TotalEvents = 100;
+        rail.Rebuild();
+
+        Assert.Equal(1, renderedOnly);
+        var marks = rail.Marks;
+        Assert.Equal(4, marks.Count);
+        Assert.Equal([10L, 40L, 70L, 95L], marks.Select(mark => mark.Seq));
+        // 已渲染的那条仍带消息(点击走原来的跳转), 其余只有序号。
+        Assert.NotNull(marks.Single(mark => mark.Seq == 10).Message);
+        Assert.All(marks.Where(mark => mark.Seq != 10), mark => Assert.Null(mark.Message));
+        // 位置单调, 且未渲染的那些按序号比例。
+        Assert.True(marks.Zip(marks.Skip(1)).All(pair => pair.First.Fraction <= pair.Second.Fraction));
+        Assert.Equal(0.95, marks[^1].Fraction, 3);
+    });
+
     private static TimelineRail Rail(ChatScene scene) => scene.Chat.FindControl<TimelineRail>("Rail")!;
 
     private static void Hover(ChatScene scene, TimelineRail rail, int index)

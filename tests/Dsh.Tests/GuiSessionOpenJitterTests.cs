@@ -320,11 +320,11 @@ public sealed class GuiSessionOpenJitterTests
     });
 
     /**
-     * 撤回(会话就地截断)不许整屏重建, 落点按锚点决定:
-     * 锚点还在(截断点在被看那条之后) → 用户正在读的内容一动不动; 锚点没了 → 落到末尾。
+     * 回退(只追加一条 session/revert)不许整屏重建, 落点按锚点决定:
+     * 锚点还在(回退点在被看那条之后) → 用户正在读的内容一动不动; 锚点没了 → 落到末尾。
      */
     [Fact]
-    public Task TruncatingASession_KeepsTheAnchorOrLandsAtTheBottom() => HeadlessGui.RunAsync(async () =>
+    public Task RevertingASession_KeepsTheAnchorOrLandsAtTheBottom() => HeadlessGui.RunAsync(async () =>
     {
         await using var environment = await GuiTestEnvironment.CreateAsync();
         var session = environment.Agent.Session;
@@ -353,10 +353,10 @@ public sealed class GuiSessionOpenJitterTests
             var anchorTop = TopOf(view, scroll, anchor)!.Value;
             var keep = anchor.Seq!.Value + 1;
             var before = viewModel.Messages.Count;
-            Assert.True(keep < before, $"precondition: the truncation must discard something (keep {keep} of {before})");
+            Assert.True(keep < before, $"precondition: the revert must discard something (keep {keep} of {before})");
 
             rebuilds = 0;
-            Assert.True(session.TryTruncateTo(keep), "precondition: the live session must accept the truncation");
+            Assert.NotNull(session.Revert(keep));
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.Count < before);
             PumpFrames(window, view, 4);
 
@@ -365,16 +365,16 @@ public sealed class GuiSessionOpenJitterTests
             Assert.NotNull(kept);
             var keptTop = TopOf(view, scroll, kept);
             Assert.True(keptTop is not null && Math.Abs(keptTop.Value - anchorTop) <= FrameTolerance,
-                $"the message being read must not move on a truncation that keeps it ({anchorTop:0} → {keptTop:0})");
+                $"the message being read must not move on a revert that keeps it ({anchorTop:0} → {keptTop:0})");
             Assert.True(!IsAtBottom(scroll), "a kept anchor must not be dragged to the bottom");
 
-            // 再截到锚点之前: 用户正在看的那条已经不存在, 这时才贴底。
+            // 再回退到锚点之前: 用户正在看的那条已经不存在, 这时才贴底。
             var count = viewModel.Messages.Count;
-            Assert.True(session.TryTruncateTo(anchor.Seq!.Value), "precondition: the live session must accept the second truncation");
+            Assert.NotNull(session.Revert(anchor.Seq!.Value));
             await GuiTestEnvironment.WaitForAsync(viewModel.Messages, () => viewModel.Messages.Count < count);
             var frames = PumpFrames(window, view, 4);
             Assert.Equal(0, rebuilds);
-            Assert.True(IsAtBottom(scroll), $"a truncation that removes the anchor lands at the bottom ({Describe(frames)})");
+            Assert.True(IsAtBottom(scroll), $"a revert that removes the anchor lands at the bottom ({Describe(frames)})");
         }
         finally
         {

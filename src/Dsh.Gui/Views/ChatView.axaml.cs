@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
@@ -46,6 +47,10 @@ public sealed partial class ChatView : UserControl
     private bool _scrollEndPosted;
     /** 待还原的阅读位置: 新内容要排几轮版才够长, 落定前反复应用; null 表示没有待办。 */
     private double? _pendingRestoreOffset;
+
+    /** 待还原的像素目标最多试几轮布局: 超过就作废(像素只对同一份内容有意义)。 */
+    private const int MaxPendingRestoreAttempts = 4;
+    private int _pendingRestoreAttempts;
     /** 没有阅读记录的会话(新会话/第一次看): 内容一排出来就滑到最新。 */
     private bool _pendingStickToEnd;
     /** 正在整段重建之后的落点判定: 这期间的位移不是用户读到的位置, 不许记成阅读位置。 */
@@ -118,7 +123,15 @@ public sealed partial class ChatView : UserControl
             if (index < 0 || index >= marks.Count)
                 return;
             HideTimelinePreview();
-            _viewModel?.JumpToMessageCommand.Execute(marks[index].Message);
+            var mark = marks[index];
+            if (mark.Message is { } message)
+            {
+                _viewModel?.JumpToMessageCommand.Execute(message);
+                return;
+            }
+            // 还没进转录的刻度: 让宿主按序号把它取回来。
+            if (_viewModel is { } viewModel)
+                _ = viewModel.JumpToTimelineAsync(mark.Seq);
         };
         // 悬停/关闭都在 ChatView 上判定: 指针从刻度挪到预览面板要跨过轨道左边的空白,
         // 只靠"离开控件就关"会把面板在用户手上抽走。
@@ -191,7 +204,9 @@ public sealed partial class ChatView : UserControl
         TimelinePreview.IsVisible = true;
         FillPreviewItems();
         PlaceTimelinePreview(index);
-        CenterTimelinePreview(marks[index].Message);
+        // 还没进转录的刻度没有消息可居中: 面板照样出现(它显示的是整段时间线), 只是不滚到某一条。
+        if (marks[index].Message is { } hovered)
+            CenterTimelinePreview(hovered);
     }
 
     /**
@@ -265,6 +280,9 @@ public sealed partial class ChatView : UserControl
         _viewModel.ScrollRequested += ScrollToMessage;
         _viewModel.MessagesChanged += QueueScrollToEnd;
         _viewModel.TranscriptRestoreRequested += RestoreTranscriptPosition;
+        _viewModel.TimelineEntries.CollectionChanged += OnTimelineEntriesChanged;
+        Rail.Timeline = _viewModel.TimelineEntries;
+        Rail.TotalEvents = _viewModel.TimelineTotalEvents;
         _composer = _viewModel.Composer;
         _composer.PropertyChanged += OnComposerPropertyChanged;
         SyncCaretFromView();
@@ -282,7 +300,16 @@ public sealed partial class ChatView : UserControl
         _viewModel.ScrollRequested -= ScrollToMessage;
         _viewModel.MessagesChanged -= QueueScrollToEnd;
         _viewModel.TranscriptRestoreRequested -= RestoreTranscriptPosition;
+        _viewModel.TimelineEntries.CollectionChanged -= OnTimelineEntriesChanged;
+        Rail.Timeline = null;
         _viewModel = null;
+    }
+
+    /** 宿主时间线是异步到的: 到了就把刻度重画一遍(含还没进转录的那些)。 */
+    private void OnTimelineEntriesChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        Rail.TotalEvents = _viewModel?.TimelineTotalEvents ?? 0;
+        Rail.Rebuild();
     }
 
     /** 输入框文本或光标变化都回填给视图模型: 补全菜单要按光标所在 token 决定是否弹出。 */
@@ -1046,6 +1073,7 @@ public sealed partial class ChatView : UserControl
     private void ResetViewportState()
     {
         _pendingRestoreOffset = null;
+        _pendingRestoreAttempts = 0;
         _pendingStickToEnd = false;
         _sticky = true;
         // 还在飞的那趟手势属于上一份文档: 它的位移不该拿到新文档上改判意图。
@@ -1073,9 +1101,18 @@ public sealed partial class ChatView : UserControl
         {
             // 目标像素在这份内容里还不存在(历史还没上齐/会话变短): 停在末尾, 不许把视口留在会话头。
             StickToEnd(scroll);
+            // 像素只对同一份内容有意义: 几轮布局之后还落不下去, 这个目标就已经过期了 ——
+            // 再等下去就是"用户滚到一半, 迟到的旧锚点把他拽回中段"。
+            if (++_pendingRestoreAttempts >= MaxPendingRestoreAttempts)
+            {
+                _pendingRestoreOffset = null;
+                _pendingStickToEnd = true;
+                _pendingRestoreAttempts = 0;
+            }
             return;
         }
         _pendingRestoreOffset = null;
+        _pendingRestoreAttempts = 0;
         scroll.Offset = new Vector(scroll.Offset.X, Math.Clamp(target, 0, maximum));
         // 落点由还原决定, 意图也由它声明: 回到中途就不再跟随末尾(落点正好在末尾时继续跟随)。
         _sticky = IsAtBottom(scroll);

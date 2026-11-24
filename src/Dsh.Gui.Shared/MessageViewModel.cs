@@ -137,6 +137,15 @@ public sealed partial class MessageViewModel : ObservableObject
     /** 工具结果命中 diff 提取时挂载的卡片; 展开时替代纯文本正文。 */
     public DiffCard? Diff { get; private set; }
 
+    /**
+     * 卡片正文的来源事件序号(那条工具结果)。非 null 表示 Diff 只是投影缓存里的预览,
+     * 展开时由 MainViewModel 按它回头取正文(见 ProjectionSnapshot.DiffCardSnapshot)。
+     */
+    public long? DiffSourceSeq { get; private set; }
+
+    /** 预览卡片被展开: 正文还不在手上, 需要回头取。 */
+    public event Action<MessageViewModel>? DiffPreviewExpanded;
+
     public bool HasDiff => Diff is not null;
 
     public bool ShowDiff => HasDiff && ShowBody;
@@ -145,9 +154,10 @@ public sealed partial class MessageViewModel : ObservableObject
     [ObservableProperty]
     private bool _isDiffExpanded;
 
-    public void SetDiff(DiffCard diff)
+    public void SetDiff(DiffCard diff, long? sourceSeq = null)
     {
         Diff = diff;
+        DiffSourceSeq = sourceSeq;
         // 消息级展开以露出卡片标题栏, 卡片本体仍保持折叠(IsDiffExpanded 默认 false)。
         IsExpanded = true;
         OnPropertyChanged(nameof(Diff));
@@ -343,6 +353,13 @@ public sealed partial class MessageViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(IsLiked));
         OnPropertyChanged(nameof(IsDisliked));
+    }
+
+    /** 展开的若是只有预览的卡片, 通知外面把正文取回来(重取失败时界面就停在预览)。 */
+    partial void OnIsDiffExpandedChanged(bool value)
+    {
+        if (value && Diff is { } card && card.TotalLines > card.Lines.Count)
+            DiffPreviewExpanded?.Invoke(this);
     }
 
     [RelayCommand]
