@@ -13,8 +13,10 @@ public static class SessionErrorCodes
     public const string Corruption = "SessionCorruption";
     public const string NotFound = "SessionNotFound";
     public const string ReadOnly = "SessionReadOnly";
-    public const string LeaseHeld = "SessionLeaseHeld";
-    public const string LeaseLost = "SessionLeaseLost";
+    /** 发号票此刻在别人手里: 下一次写会重试, 不是终局。 */
+    public const string WriteBusy = "SessionWriteBusy";
+    /** 这一批的号被别人的写者接管过: 按日志重编号后照常写。 */
+    public const string NumberStale = "SessionNumberStale";
 }
 
 public abstract class SessionPersistenceException : Exception
@@ -68,23 +70,28 @@ public sealed class SessionPersistenceCorruptionException(string message, Except
     public override string Code => SessionErrorCodes.Corruption;
 }
 
-/** 会话已被别的进程持有写租约: 这份日志只能由它追加, 调用方要么连到它那里, 要么显式 take-over。 */
-public sealed class SessionLeaseHeldException(SessionLeaseHolder? holder, string message)
-    : SessionPersistenceException(message)
+/**
+ * 这一批的号已经过期: 日志末尾比我们发号时更靠后(别的写者接管了号并写进日志)。
+ *
+ * 这不是"忙"也不是损坏: 正确反应是按 `StartSeq` 把这批事件重编号后照常写进去,
+ * 未落盘的那一段也只是换号, 一条都不丢。
+ */
+public sealed class SessionNumberStaleException(long startSeq, long got) : SessionPersistenceException(
+    $"this batch starts at {got} but the log already holds {startSeq} event(s); renumbering to the log")
 {
-    public SessionLeaseHolder? Holder { get; } = holder;
-    public override string Code => SessionErrorCodes.LeaseHeld;
+    public long StartSeq { get; } = startSeq;
+    public override string Code => SessionErrorCodes.NumberStale;
 }
 
-/** 本进程的写租约已被别人接管(fencing): 必须立刻停止落盘, 否则两套序号会交织进同一份日志。 */
-public sealed class SessionLeaseLostException(int pid, SessionLeaseHolder? holder)
-    : SessionPersistenceException(
-        $"session lease held by pid {pid} was taken over by "
-        + (holder is { Pid: > 0 } ? $"pid {holder.Pid} on {holder.Machine} (epoch {holder.Epoch})" : "another writer")
-        + "; stopping this writer")
+/**
+ * 发号权此刻不在自己手里(别的写者正持着这张票): **不是**失权, 更不是报废。
+ *
+ * 正确反应是"这一次先别写, 下次再试": 票有明确的到期时刻, 到期它自己就失效, 不需要任何人判死。
+ */
+public sealed class SessionWriteBusyException(int pid, string message)
+    : SessionPersistenceException($"session write ticket is held by pid {pid}: {message}")
 {
-    public SessionLeaseHolder? Holder { get; } = holder;
-    public override string Code => SessionErrorCodes.LeaseLost;
+    public override string Code => SessionErrorCodes.WriteBusy;
 }
 
 public sealed record SessionLocation(string Kind, string Path);

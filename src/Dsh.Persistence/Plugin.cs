@@ -49,6 +49,11 @@ public sealed class Plugin(string packageName) : IDshPlugin
         // 异常总线为每次失败打一份栈(2026-11-16 事故: 7 分钟、5489 条同样的栈)。原因留在 failures 里,
         // 由本轮的 flush 抛回给结束这一轮的人, 而不是静静丢事件。
         var failures = new Dictionary<SessionId, SessionPersistenceException>();
+        // 可恢复的落盘受阻(写租约暂时不在自己手里): 句柄与缓冲都留着, 落盘按原样重试。
+        // 与 failures 的区别是"不关句柄、不丢事件": 持有租约的进程一旦退出, 下一次落盘就能把写权收回来。
+        var stalled = new Dictionary<SessionId, SessionPersistenceException>();
+        // 受阻的会话只报一次, 避免每条事件刷一份同样的栈(2026-11-16 事故的教训)。
+        var reportedStall = new HashSet<SessionId>();
         var created = ctx.On<SessionCreatedNotification>(notification =>
         {
             var session = notification.Session;
@@ -63,6 +68,7 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 try
                 {
                     handles[session.Id] = Adopt(persistence, session);
+
                 }
                 catch (SessionPersistenceException error) when (IsTerminal(error))
                 {
@@ -98,11 +104,24 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 }
             }
             // 新建句柄时 Materialize 已经把当时的会话事件全量写入(含本条), 再追加会重复。
+            // 写租约被别人拿走时**不关句柄、不丢缓冲**: 事件留在缓冲里, 下一次落盘先把写权收回来。
+            // 写租约被别人拿走时也不关句柄: 事件留在缓冲里, 下一次落盘先试着把写权收回来。
             if (!materialized)
             {
                 try
                 {
                     handle.Append([notification.Event]);
+
+                    lock (gate)
+                    {
+                        stalled.Remove(session.Id);
+                        reportedStall.Remove(session.Id);
+                    }
+                }
+                catch (SessionPersistenceException error) when (IsStall(error))
+                {
+                    Stall(ctx, stalled, reportedStall, session.Id, error);
+                    return;
                 }
                 catch (SessionPersistenceException error) when (IsTerminal(error))
                 {
@@ -128,15 +147,30 @@ public sealed class Plugin(string packageName) : IDshPlugin
             // 落盘已经报废: 把原因抛给结束这一轮的人, 不让这一轮看起来正常结束。
             if (failure is not null)
                 throw failure;
-            handle?.Flush();
-        });
-        var truncated = ctx.On<SessionTruncateNotification>(notification =>
-        {
-            ISessionHandle? handle;
+            if (handle is null)
+                return;
+            // 受阻过(写租约在别人手里): 这一次落盘就是收回写权的机会 —— 收回来了就把这一整段补上。
+            try
+            {
+                handle.Flush();
+
+            }
+            catch (SessionPersistenceException error) when (IsStall(error))
+            {
+                // 记下状态(只报一次), 再把原因交给结束这一轮的人: 事件仍在缓冲里, 不会丢。
+                Stall(ctx, stalled, reportedStall, notification.Session.Id, error);
+                throw;
+            }
             lock (gate)
-                handles.TryGetValue(notification.Session.Id, out handle);
-            handle?.Truncate(notification.EventCount);
+            {
+                stalled.Remove(notification.Session.Id);
+                reportedStall.Remove(notification.Session.Id);
+            }
+            // 折叠检查点: 折过一个读页边界才写一次(摊到 4096 条事件上是 0.2µs/条)。
+            if (notification.Session.FoldSnapshotIfDue() is { } fold)
+                persistence.SaveSurfaceFold(notification.Session.Id, fold);
         });
+
         var disposed = ctx.On<SessionDisposedNotification>(notification =>
         {
             ISessionHandle? handle;
@@ -144,6 +178,9 @@ public sealed class Plugin(string packageName) : IDshPlugin
                 handles.Remove(notification.Session.Id, out handle);
             if (handle is null)
                 return;
+            // 收尾时补写一次检查点: 最后一个不满页也盖上, 下次打开直接从它的末尾接着折。
+            if (notification.Session.FoldSnapshotOnClose() is { } fold)
+                persistence.SaveSurfaceFold(notification.Session.Id, fold);
             // 关闭放在锁外: Close 会回调本类释放句柄登记, 持锁关闭等于把锁交给被调方。
             handle.Flush();
             handle.Close();
@@ -152,17 +189,34 @@ public sealed class Plugin(string packageName) : IDshPlugin
             new CallbackDisposable(() => created()),
             new CallbackDisposable(() => eventHandler()),
             new CallbackDisposable(() => flush()),
-            new CallbackDisposable(() => truncated()),
+
             new CallbackDisposable(() => disposed()));
     }
 
 
-    /** 重试也不会好的错误: 日志被别的写入方推进, 会话已被别的写句柄占用, 或写租约在别人手里/已被接管。 */
+    /** 重试也不会好的错误: 日志被别的写入方推进, 或会话已被别的写句柄占用。 */
     private static bool IsTerminal(SessionPersistenceException error)
         => error is SessionPersistenceCorruptionException
-            or SessionAlreadyOwnedException
-            or SessionLeaseHeldException
-            or SessionLeaseLostException;
+            or SessionAlreadyOwnedException;
+
+    /**
+     * 可以等的错误: 发号票此刻在别人手里。必须与"报废"分开 ——
+     * 报废要停写并告诉用户, 而这种情形只要等对方放票(票到期也会自己失效)就能继续, 事件一条都不能丢。
+     */
+    private static bool IsStall(SessionPersistenceException error)
+        => error is SessionWriteBusyException or SessionNumberStaleException;
+
+    /** 记下"暂时写不进去", 只报一次: 之后每次落盘都会重试, 成功就自动恢复。 */
+    private static void Stall(Context ctx, Dictionary<SessionId, SessionPersistenceException> stalled,
+        HashSet<SessionId> reported, SessionId id, SessionPersistenceException error)
+    {
+        lock (stalled)
+            stalled[id] = error;
+        if (!reported.Add(id))
+            return;
+        ctx.LoggerFor("sessionPersistence").Warn(
+            $"session \"{id}\": the write ticket is held by another writer right now, events are buffered and will be written once it frees up: {error.Message}");
+    }
 
     /** 记录终局失败: 只报一次(不带栈), 之后该会话不再尝试落盘。 */
     private static void Latch(Context ctx, Dictionary<SessionId, SessionPersistenceException> failures,
@@ -210,6 +264,9 @@ public sealed class Plugin(string packageName) : IDshPlugin
     private static ISessionHandle Materialize(ISessionPersistence persistence, Session session)
     {
         var handle = persistence.Create(session.Header, session.InheritedEventCount);
+        handle.TailSource = from => [.. session.SnapshotEvents(from)];
+        handle.RebaseSource = session.RebaseUnsaved;
+        session.AttachSequencer(handle.Sequencer);
         var seed = session.SnapshotEvents();
         if (seed.Count > 0)
             handle.Append(seed);
@@ -223,6 +280,10 @@ public sealed class Plugin(string packageName) : IDshPlugin
         // 只比个数: 窗口化会话的事件不全在内存里, 为了比长度把它们全部读回来等于放弃窗口化。
         var storedCount = handle.Count;
         var ownCount = session.Seq - session.InheritedEventCount;
+        // 落盘一旦落后, 句柄靠这句话把缺的那一段整段补回来(见 TryAlignToDiskLocked)。
+        handle.TailSource = from => [.. session.SnapshotEvents(from)];
+        handle.RebaseSource = session.RebaseUnsaved;
+        session.AttachSequencer(handle.Sequencer);
         if (ownCount > storedCount)
             handle.Append([.. session.SnapshotEvents(session.InheritedEventCount + storedCount)]);
         return handle;

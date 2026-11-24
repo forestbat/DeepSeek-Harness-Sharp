@@ -8,8 +8,10 @@ using Dsh.SessionGraph;
 namespace Dsh.Tests;
 
 /**
- * 收件箱是会话日志的派生视图: 撤回(截断)把日志改短之后, 内存里的待发列表必须跟着重建,
+ * 收件箱是会话日志的派生视图: 回退把一段内容收掉之后, 内存里的待发列表必须跟着重建,
  * 否则日志与内存分叉 —— 日志还记着"这条已入队", 内存里已经发过了。
+ *
+ * 回退只追加: 日志不会变短, 但"入队 → 取走"里被回退掉的是"取走", 所以重建时必须跳过被回退区间的 splice。
  */
 public sealed class InboxTruncateTests
 {
@@ -29,10 +31,10 @@ public sealed class InboxTruncateTests
 
     /**
      * 真实顺序: 入队(seq0) → TurnStart(seq1) → 取走(seq2) → 用户消息(seq3)。
-     * 撤回到回合之前(boundary=1)会丢掉"取走"那条事件, 只留"入队"。
+     * 回退到回合之前(boundary=1)会丢掉"取走"那条事件, 只留"入队"。
      */
     [Fact]
-    public void Truncation_BeforeClaim_DoesNotResurrectTheWithdrawnMessage()
+    public void Revert_BeforeClaim_DoesNotResurrectTheWithdrawnMessage()
     {
         var session = NewSession();
         var inbox = new Inbox(session, new InboxNotifications());
@@ -41,7 +43,7 @@ public sealed class InboxTruncateTests
         inbox.Splice(InboxTargets.NextTurn, 0, 1, []);
         Assert.False(inbox.HasPending);
 
-        Assert.True(session.TryTruncateTo(1));
+        Assert.NotNull(session.Revert(1));
 
         Assert.False(inbox.HasPending);
         // 重建出来的收件箱(恢复会话/重建 agent 时看到的就是这个)必须与日志一致。
@@ -50,7 +52,7 @@ public sealed class InboxTruncateTests
 
     /** 撤回后再发新消息: 落盘日志重放出来只能有新消息, 不能把撤回那条一起带出来。 */
     [Fact]
-    public void Truncation_ThenNewMessage_ReplaysOnlyTheNewMessage()
+    public void Revert_ThenNewMessage_ReplaysOnlyTheNewMessage()
     {
         var session = NewSession();
         var inbox = new Inbox(session, new InboxNotifications());
@@ -58,7 +60,7 @@ public sealed class InboxTruncateTests
         session.Append(new TurnStartPayload(1));
         inbox.Splice(InboxTargets.NextTurn, 0, 1, []);
 
-        Assert.True(session.TryTruncateTo(1));
+        Assert.NotNull(session.Revert(1));
         inbox.Splice(InboxTargets.NextTurn, int.MaxValue, 0, [Text("next")]);
 
         var replayed = new Inbox(session, new InboxNotifications());
@@ -71,7 +73,7 @@ public sealed class InboxTruncateTests
      * 只靠内存剔除的话, 恢复会话会把撤回那条重新捞出来。
      */
     [Fact]
-    public void Truncation_PersistsTheCleanup_SoARestoredInboxStaysClean()
+    public void Revert_PersistsTheCleanup_SoARestoredInboxStaysClean()
     {
         var session = NewSession();
         var inbox = new Inbox(session, new InboxNotifications());
@@ -79,7 +81,7 @@ public sealed class InboxTruncateTests
         session.Append(new TurnStartPayload(1));
         inbox.Splice(InboxTargets.NextTurn, 0, 1, []);
 
-        Assert.True(session.TryTruncateTo(1));
+        Assert.NotNull(session.Revert(1));
 
         // 模拟重启: 只用日志里的事件重建一个全新 Inbox。
         var restored = new Inbox(session, new InboxNotifications());
