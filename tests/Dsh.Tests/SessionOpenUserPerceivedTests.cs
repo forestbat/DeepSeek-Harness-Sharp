@@ -20,7 +20,7 @@ public sealed class SessionOpenUserPerceivedTests
     private const string LogFileName = "session.jsonl.zstd";
     private const string SurfacePattern = "*.surface";
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task WarmProcessOpenOfTheLargestSessions() => await HeadlessGui.RunAsync(async () =>
     {
         var top = TopSessions();

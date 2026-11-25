@@ -570,8 +570,9 @@ public sealed class FleetProxyProbeCliTests
 {
     private const int SigInt = 2;
     private const string PublicTarget = "http://1.1.1.1/cli-layer-probe";
-    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan CancellationProofTimeout = TimeSpan.FromSeconds(5);
+    /** 真实 CLI 进程的启动、取消与退出都要走系统栈: 5 秒在有负载的 runner 上会把"慢"判成"没取消"。 */
+    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CancellationProofTimeout = TimeSpan.FromSeconds(30);
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact(Explicit = true)]

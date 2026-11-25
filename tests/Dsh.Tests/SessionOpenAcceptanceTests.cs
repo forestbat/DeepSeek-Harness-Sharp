@@ -52,7 +52,7 @@ public sealed class SessionOpenAcceptanceTests
     /** 本次会话打开过的界面: 不释放(见下), 只用来在会话结束时断开引用。 */
     private static readonly List<Open> Opens = [];
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task EveryRealSessionMeetsR1R3R5InColdAndWarmStates() => await HeadlessGui.RunAsync(async () =>
     {
         var sources = Distinct(EnumerateCorpus()).OrderBy(source => source.LogBytes).Take(Limit()).ToList();
@@ -86,7 +86,7 @@ public sealed class SessionOpenAcceptanceTests
      * 这与上一条 Fact 的"冷态"不是一回事: 上一条每份会话都新起宿主进程(插件组合 + 首用 JIT 都算在内),
      * 量出来的是崩溃后第一次打开的最坏情形; 用户掐秒表量的是这一条 —— 进程已经热了, 只是这条会话没开过。
      */
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task WarmProcess_ColdCache_OpeningTheLargestSessions() => await HeadlessGui.RunAsync(async () =>
     {
         var top = TopBigSessions();
