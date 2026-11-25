@@ -63,24 +63,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          if [ -z "$SDK_ROOT" ]; then
-            SDK_ROOT="$RUNNER_TEMP/android-sdk"
-          fi
-          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          # 装到自己的可写根: 镜像预置的 SDK 目录属主不定, 直接往里写会因权限失败。
+          SDK_ROOT="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK_ROOT"
+          HOST_SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          SDKMANAGER="$HOST_SDK/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
             # 镜像里没有 cmdline-tools 时按固定版本现装, 不依赖镜像的预置布局。
-            mkdir -p "$SDK_ROOT"
             curl --fail --silent --show-error --location \
               --output "$RUNNER_TEMP/cmdline-tools.zip" \
               "https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip"
             unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
             mkdir -p "$SDK_ROOT/cmdline-tools"
             mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           fi
+          "$SDKMANAGER" --version
+          # 用有限的 y 序列而不是 yes: yes 会被 sdkmanager 提前关闭管道吃成 SIGPIPE, 在 pipefail 下算失败。
+          printf 'y\n%.0s' {1..40} | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
           # csproj 钉了 TargetPlatformVersion 37.0 与 build-tools 37.0.0, 平台包名就是 android-37.0。
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+            "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          test -d "$SDK_ROOT/platforms/android-37.0"
+          test -x "$SDK_ROOT/build-tools/37.0.0/aapt2"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
