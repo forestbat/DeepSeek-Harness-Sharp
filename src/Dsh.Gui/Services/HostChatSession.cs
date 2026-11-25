@@ -272,11 +272,6 @@ public sealed class HostChatSession : IDisposable
     /** 同时在飞的取页请求数: 再多只是把线路与宿主的解压线程压满, 不会更快。 */
     private const int PageFetchParallelism = 4;
 
-    /** 排查开关: 置 1 时强制整段物化(与改动前一致), 用于对照与定位"惰性路径是不是这次慢/错的原因"。 */
-    private static bool OpenFull
-        => Environment.GetEnvironmentVariable("DSH_OPEN_FULL") is { Length: > 0 } value
-            && value is not "0" and not "false";
-
     /**
      * 取整段历史的**日志字节**并本地解析: 按序取页、逐帧解析、按序号拼接。
      *
@@ -328,7 +323,6 @@ public sealed class HostChatSession : IDisposable
      * 落盘批量里还没写下去的尾巴照旧按序号从活会话补上。
      *
      * 任何一个前提不成立(切片不连续、哈希不符、索引没铺满)都返回 null: 退回整段事件快照这条老路。
-     * `DSH_OPEN_FULL=1` 可以强制走老路(排查与对照用)。
      */
     private static async Task<LoadedHistory?> TryOpenPagedAsync(
         RemoteHostClient client,
@@ -337,7 +331,7 @@ public sealed class HostChatSession : IDisposable
         CancellationToken cancellationToken)
     {
         // 一页以内的会话本来就只有一段, 拆开没有意义; 超过一页才有"索引 + 按需"可谈。
-        if (OpenFull || total <= LazyPageEvents)
+        if (total <= LazyPageEvents)
             return null;
         var slices = await FetchSlicesAsync(client, id, total, cancellationToken).ConfigureAwait(false);
         if (slices is not { Count: > 0 } || slices[0].FromSeq != 0)
@@ -1094,5 +1088,6 @@ public sealed class HostChatSession : IDisposable
         _subscription?.Cancel();
     }
 }
+
 
 
