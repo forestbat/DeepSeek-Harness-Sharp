@@ -180,7 +180,10 @@ public static class SessionWriteTicket
             writer.WriteNumber("nextSeq", holder.NextSeq);
             writer.WriteEndObject();
         }
-        File.Move(temp, path, overwrite: true);
+        if (File.Exists(path))
+            File.Replace(temp, path, destinationBackupFileName: null);
+        else
+            File.Move(temp, path);
     }
 
     /** 旧版本的写租约文件: 票机制下它没有任何读者, 见到就删, 免得留下"谁在写"的假线索。 */

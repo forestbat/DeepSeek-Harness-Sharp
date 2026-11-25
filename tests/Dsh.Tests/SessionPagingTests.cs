@@ -161,7 +161,7 @@ public sealed class SessionPagingTests
         {
             Version = SessionHeader.SessionFormatVersion,
             Id = SessionId.Create(Guid.NewGuid().ToString("N")),
-            Cwd = "C:/tmp/n4",
+            Cwd = Path.GetFullPath("."),
             CreatedAt = 0,
             IsSeeded = false,
         };
