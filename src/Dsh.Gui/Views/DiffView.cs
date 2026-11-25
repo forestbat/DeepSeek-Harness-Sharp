@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Threading;
 using Dsh.Interaction;
 
@@ -45,12 +46,17 @@ public sealed class DiffView : UserControl
     /** 渲染上限: 超大 diff 只渲染前若干行并补一行省略提示, 避免一次建出上万个 TextBlock。 */
     private const int MaxRenderedLines = 400;
 
-    private static readonly IBrush AddBackground = new SolidColorBrush(Color.FromArgb(0x2E, 0x2E, 0xA0, 0x43));
-    private static readonly IBrush DeleteBackground = new SolidColorBrush(Color.FromArgb(0x2E, 0xF8, 0x51, 0x49));
-    private static readonly IBrush AddedBrush = new SolidColorBrush(Color.FromRgb(0x3F, 0xB9, 0x50));
-    private static readonly IBrush RemovedBrush = new SolidColorBrush(Color.FromRgb(0xF8, 0x51, 0x49));
-    private static readonly IBrush LineNumberBrush = new SolidColorBrush(Color.FromArgb(0x80, 0x80, 0x80, 0x80));
-    private static readonly IBrush CardBackground = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+    /**
+     * 静态画刷一律用不可变实现: SolidColorBrush 是带线程归属的 AvaloniaObject,
+     * 放进 static 字段就等于把"第一次用到它的那个 Dispatcher"钉死, 之后在别的 UI 线程上读它(例如格式化日志)会抛
+     * "The calling thread cannot access this object"。这些颜色本来就是常量, 没有任何需要可变属性的理由。
+     */
+    private static readonly IBrush AddBackground = new ImmutableSolidColorBrush(Color.FromArgb(0x2E, 0x2E, 0xA0, 0x43));
+    private static readonly IBrush DeleteBackground = new ImmutableSolidColorBrush(Color.FromArgb(0x2E, 0xF8, 0x51, 0x49));
+    private static readonly IBrush AddedBrush = new ImmutableSolidColorBrush(Color.FromRgb(0x3F, 0xB9, 0x50));
+    private static readonly IBrush RemovedBrush = new ImmutableSolidColorBrush(Color.FromRgb(0xF8, 0x51, 0x49));
+    private static readonly IBrush LineNumberBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x80, 0x80, 0x80, 0x80));
+    private static readonly IBrush CardBackground = new ImmutableSolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
 
     private readonly StackPanel _root = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
     private readonly StackPanel _lines = new() { Orientation = Orientation.Vertical, Spacing = LineSpacing };
