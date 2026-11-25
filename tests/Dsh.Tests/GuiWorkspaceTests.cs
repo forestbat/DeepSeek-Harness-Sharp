@@ -564,7 +564,10 @@ public sealed class GuiWorkspaceTests
                 await UntilAsync(() => files.Content is FilesViewModel { Roots: [{ Path: var root }] } && root == repo.Root, "files on the session's project");
                 var firstLink = files.Content;
                 await alpha.RestartHostAsync(ct);
-                await UntilAsync(() => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink), "files rebuilt on the new link", RestartArrival);
+                await UntilAsync(
+                    () => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink),
+                    () => "files rebuilt on the new link: " + DescribePage(files, firstLink),
+                    RestartArrival);
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Git));
                 Assert.Null(files.Content);
@@ -664,6 +667,10 @@ private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) 
 
     /** Polls on the UI thread, running the posted UI work between checks. */
     internal static async Task UntilAsync(Func<bool> condition, string what, TimeSpan? budget = null)
+        => await UntilAsync(condition, () => what, budget);
+
+    /** Polls on the UI thread; the description is only evaluated when the wait times out. */
+    internal static async Task UntilAsync(Func<bool> condition, Func<string> describe, TimeSpan? budget = null)
     {
         var deadline = DateTime.UtcNow + (budget ?? Arrival);
         while (true)
@@ -672,8 +679,20 @@ private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) 
             if (condition())
                 return;
             if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"timed out waiting for {what}");
+                throw new TimeoutException($"timed out waiting for {describe()}");
             await Task.Delay(50, Ct);
         }
+    }
+
+    /** The page state behind "files rebuilt on the new link", so a timeout says what actually happened. */
+    private static string DescribePage(HostPageViewModel page, OperationViewModel? previous)
+    {
+        var content = page.Content;
+        var roots = content is FilesViewModel files
+            ? $"{files.Roots.Count} roots ({string.Join(", ", files.Roots.Select(root => root.Path))})"
+            : "n/a";
+        var connection = page.Content is null ? "-" : content!.GetType().Name;
+        return $"content={connection} same={ReferenceEquals(content, previous)} roots={roots} "
+            + $"opening={page.IsOpening} status={page.Status ?? "-"} machine={page.Machine} path={page.Path}";
     }
 }
