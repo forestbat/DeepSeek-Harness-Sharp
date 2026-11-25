@@ -109,17 +109,17 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
         var agent = (AgentLoopAgent)handle.Agent;
 
         using var oneShot = new ChatWindow(restarted.App.Ctx, agent, restarted.App.Home);
-        _ = RenderText(oneShot);
+        _ = RenderTranscriptText(oneShot);
         Assert.True(oneShot.InputPane.LoadOlderHistoryTo(0), "一次接完整段必须成功");
-        var expected = RenderText(oneShot);
+        _ = RenderTranscriptText(oneShot);
 
         using var pageByPage = new ChatWindow(restarted.App.Ctx, agent, restarted.App.Home);
-        _ = RenderText(pageByPage);
+        _ = RenderTranscriptText(pageByPage);
         var pane = pageByPage.InputPane;
         for (var attempt = 0; attempt < 60 && pane.HasOlderHistory; attempt += 1)
         {
             pane.ScrollOffset = 0;
-            _ = RenderText(pageByPage);
+            _ = RenderTranscriptText(pageByPage);
             Assert.True(pane.LoadOlderHistory(), $"第 {attempt + 1} 次补页应当还有更早的历史");
         }
         Assert.False(pane.HasOlderHistory);
@@ -133,7 +133,7 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
         {
             oneShot.InputPane.ScrollOffset = offset;
             pane.ScrollOffset = offset;
-            Assert.Equal(RenderText(oneShot), RenderText(pageByPage));
+            Assert.Equal(RenderTranscriptText(oneShot), RenderTranscriptText(pageByPage));
         }
     }
 
@@ -153,16 +153,17 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
         }
     }
 
-    /** 画一帧并把 30×100 个格子读回来: 折行是否等价, 只有逐字符比才看得见。 */
-    private static string RenderText(ChatWindow chat)
+    // Compare rendered transcript cells without including independently refreshed sidebar content.
+    private static string RenderTranscriptText(ChatWindow chat)
     {
         chat.DrainUi();
         var grid = new CellGrid(100, 30);
-        chat.Draw(grid, LayoutEngine.Calculate(100, 30));
+        var layout = LayoutEngine.Calculate(grid.Width, grid.Height);
+        chat.Draw(grid, layout);
         var text = new StringBuilder();
-        for (var row = 0; row < grid.Height; row += 1)
+        for (var row = layout.Main.Y; row < layout.Main.Bottom; row += 1)
         {
-            foreach (var cell in grid.Row(row))
+            foreach (var cell in grid.Row(row).Slice(layout.Main.X, layout.Main.Width))
                 _ = text.Append(cell.Character);
             _ = text.Append('\n');
         }
