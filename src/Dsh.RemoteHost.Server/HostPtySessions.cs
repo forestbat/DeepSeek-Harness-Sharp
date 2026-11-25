@@ -93,8 +93,8 @@ public sealed class HostPtySessions(HostSessionRegistry registry, HostPtyDaemon 
         => PtyDaemonClient.ResizeAsync(ptyId, rows, columns, daemon.SocketPath, daemon.PortFile, cancellationToken);
 
     /**
-     * 结束 PTY 里的进程。daemon 不在时它持有的 PTY 已经随它一起消失: 停止的目的已经达到, 不是失败
-     * (重启后停止或删除一个早已退出的终端会话就走这条路)。
+     * 结束 PTY 里的进程。daemon 不在、或它早就不认识这个 pty(重启过)时, 目标状态已经成立, 不是失败:
+     * 登记表与 daemon 是两份独立状态, 登记表里仍会留下 daemon 曾经管过的终端会话。
      */
     public async Task StopAsync(string ptyId, CancellationToken cancellationToken)
     {
@@ -102,7 +102,7 @@ public sealed class HostPtySessions(HostSessionRegistry registry, HostPtyDaemon 
         {
             await PtyDaemonClient.KillAsync(ptyId, daemon.SocketPath, daemon.PortFile, cancellationToken).ConfigureAwait(false);
         }
-        catch (PtyDaemonNotRunningException)
+        catch (Exception error) when (error is PtyDaemonNotRunningException or PtySessionNotFoundException)
         {
         }
         registry.MarkExited(ptyId, null);

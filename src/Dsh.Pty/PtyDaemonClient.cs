@@ -547,9 +547,21 @@ public static class PtyDaemonClient
         var response = JsonSerializer.Deserialize(line, PtyDaemonJsonContext.Default.PtyDaemonResponse)
             ?? throw new InvalidOperationException("daemon returned an invalid response");
         if (!response.Ok && throwOnError)
-            throw new InvalidOperationException(response.Error ?? "daemon request failed");
+            throw IsMissingSession(response)
+                ? new PtySessionNotFoundException(response.Error ?? "PTY session not found")
+                : new InvalidOperationException(response.Error ?? "daemon request failed");
         return response;
     }
+
+    /**
+     * daemon 明确说"没有这个 pty"。
+     *
+     * 新 daemon 另带 notFound 标志; 还在跑的老 daemon 只把它写在错误文本里(协议没变之前就是这个措辞), 两种都要认 ——
+     * 否则升级后第一次删除一个 daemon 早已不认识的终端会话仍旧会失败。
+     */
+    private static bool IsMissingSession(PtyDaemonResponse response)
+        => response.NotFound
+            || response.Error?.StartsWith("PTY session not found:", StringComparison.Ordinal) == true;
 
     private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken cancellationToken)
     {

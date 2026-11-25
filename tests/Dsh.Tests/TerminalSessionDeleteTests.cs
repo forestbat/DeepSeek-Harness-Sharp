@@ -9,16 +9,17 @@ using Dsh.RemoteHost;
 namespace Dsh.Tests;
 
 /**
- * 已退出的终端会话必须能被删掉, 而且删的时候 PTY daemon 可能已经不在了(重启、或用户关掉了 daemon)。
- * 那时 daemon 手里的 PTY 也随之消失: 删除只该当"已经停了"来处理, 不能因为连不上 daemon 就失败 —— 失败会从
- * 命令处理器抛到 UI 线程, 直接把 GUI 带走(WER 里是 StreamJsonRpc.RemoteInvocation)。
+ * 已退出的终端会话必须能被删掉, 即使 PTY daemon 已经不记得它: daemon 重启过(它手里的 pty 全没了)、
+ * 或者 daemon 干脆没在跑。登记表(host 的 sessions.json)与 daemon 是两份独立状态, 这种"登记表里还在、daemon 里已经没有"
+ * 的终端会话在界面上就是一张"已退出"的卡片。
+ *
+ * 删除因此只该当"已经停了"来处理。失败会从命令处理器抛到 UI 线程, 直接把 GUI 带走
+ * (WER 里是 StreamJsonRpc.RemoteInvocation), 宿主进程反而留下来。
  */
 [Collection(GuiSerialCollection.CollectionName)]
 public sealed class TerminalSessionDeleteTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
 
     private static readonly FleetOptions Options = FleetConnectionTests.TestOptions with { ClientName = "terminal-delete-test" };
 
@@ -39,7 +40,26 @@ public sealed class TerminalSessionDeleteTests
     }
 
     [Fact(Timeout = 120000)]
-    public async Task Dashboard_DeleteCommand_RemovesExitedTerminalCard_WhenPtyDaemonIsGone()
+    public async Task Host_DeletesExitedTerminalSession_WhenDaemonNoLongerKnowsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await HarnessHostFixture.CreateAsync("tsf", ct);
+        var client = await host.ConnectAsync("owner", ct);
+        var started = await StartExitedTerminalAsync(client, host.Root);
+        // daemon 重启后的真实形态: 它不再持有这个 pty, 也没有它的启动记录, 而 host 的登记表里还留着这张卡片。
+        await PtyDaemonClient.KillAsync(started.SessionId, host.PtyEndpoint.SocketPath, host.PtyEndpoint.PortFile, ct);
+        Assert.Contains(await client.ListHostSessionsAsync(ct), session => session.SessionId == started.SessionId);
+
+        await client.SessionEditing.DeleteSessionAsync(started.SessionId, ct);
+
+        Assert.DoesNotContain(await client.ListHostSessionsAsync(ct), session => session.SessionId == started.SessionId);
+    }
+
+    /** 侧边栏"汉堡菜单 → 删除"与仪表盘卡片的删除按钮是同一条命令。 */
+    [Theory(Timeout = 120000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Dashboard_DeleteCommand_RemovesExitedTerminalCard_WhateverTheDaemonThinks(bool daemonGone)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await HarnessHostFixture.CreateAsync("tsg", ct);
@@ -59,13 +79,21 @@ public sealed class TerminalSessionDeleteTests
                         Title: "已退出的终端"),
                     ct);
                 var dashboard = workspace.Dashboard;
+                var reports = new List<(string Title, string Detail, bool Failed)>();
+                dashboard.ActionReported += (title, detail, failed) => reports.Add((title, detail, failed));
                 await UntilAsync(() => dashboard.Find("local", started.SessionId) is not null, "会话卡片出现");
-                RemoveDaemonEndpoint(host);
+                if (daemonGone)
+                    RemoveDaemonEndpoint(host);
+                else
+                    // daemon 仍在跑, 但已经不认识这个 pty(重启过): 它只回一句 "PTY session not found"。
+                    await PtyDaemonClient.KillAsync(started.SessionId, host.PtyEndpoint.SocketPath, host.PtyEndpoint.PortFile, ct);
 
                 // 与侧边栏"汉堡菜单 → 删除"同一条命令; 失败在这里抛出去就会带走 GUI。
                 await dashboard.DeleteCommand.ExecuteAsync(dashboard.Find("local", started.SessionId));
 
-                Assert.Null(dashboard.Find("local", started.SessionId));
+                // 卡片消失是后台快照刷新驱动的, 给刷新留一拍; 用户看到的结果以状态报告为准。
+                await UntilAsync(() => dashboard.Find("local", started.SessionId) is null, "会话卡片消失");
+                Assert.Contains(reports, report => report is { Title: "会话已删除", Failed: false });
             }
             finally
             {
@@ -102,10 +130,19 @@ public sealed class TerminalSessionDeleteTests
     /** daemon 不在了的真实形态: 端点文件消失(重启后、或用户关掉 daemon)。 */
     private static void RemoveDaemonEndpoint(HarnessHostFixture host)
     {
-        if (host.PtyEndpoint.PortFile is { } portFile && File.Exists(portFile))
-            File.Delete(portFile);
-        else if (File.Exists(host.PtyEndpoint.SocketPath))
-            File.Delete(host.PtyEndpoint.SocketPath);
+        var endpoint = host.PtyEndpoint.PortFile ?? host.PtyEndpoint.SocketPath;
+        // 客户端与 daemon 都会顺路读这个文件: 撞上它们正好打开时等一拍再删, 而不是当成失败。
+        for (var attempt = 0; File.Exists(endpoint); attempt++)
+        {
+            try
+            {
+                File.Delete(endpoint);
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                Thread.Sleep(20);
+            }
+        }
     }
 
     /** 记录文件在 daemon 端点旁边(与 PtyDaemon 的 _runRoot 同一算法)。 */
@@ -134,6 +171,4 @@ public sealed class TerminalSessionDeleteTests
         throw new TimeoutException($"等待 {what} 超时");
     }
 }
-
-
 
