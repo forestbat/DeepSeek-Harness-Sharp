@@ -91,32 +91,32 @@ public sealed class MainViewModelTests
     {
         await using var environment = await GuiTestEnvironment.CreateAsync();
         await using var viewModel = new MainViewModel(environment.App, await environment.OpenChatAsync());
+        environment.CancelBeforeModelRequest();
         var cwd = environment.Agent.Session.Header.Cwd;
         Assert.NotNull(cwd);
         var image = Path.Combine(cwd, "shot.png");
-        await File.WriteAllBytesAsync(image, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3], TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(image, OnePixelPng, TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(
             Path.Combine(cwd, "notes.md"),
             "见 shot.png 附图",
             TestContext.Current.CancellationToken);
 
-        viewModel.Composer.Input = "read @notes.md";
+        const string prompt = "read @notes.md";
+        viewModel.Composer.Input = prompt;
         await viewModel.SubmitCommand.ExecuteAsync(null);
-        static bool HasPrompt(UserMessagePayload payload)
-            => payload.Message.Content.Any(block => block is TextBlock text && text.Text.Contains("shot.png", StringComparison.Ordinal));
-        await GuiTestEnvironment.WaitForAsync(
-            viewModel.Messages,
-            () => environment.Agent.Session.SnapshotEvents()
-                .Select(sessionEvent => sessionEvent.Data)
-                .OfType<UserMessagePayload>()
-                .Any(HasPrompt),
+        await GuiTestEnvironment.WaitForAsync(viewModel.Messages,
+            () => viewModel.Messages.Any(message => message.Kind == MessageKind.User),
             () => GuiTestEnvironment.DescribeChatState(viewModel));
+        await GuiTestEnvironment.PumpAsync(environment.Agent.WhenIdle());
 
-        var message = environment.Agent.Session.SnapshotEvents()
-            .Select(sessionEvent => sessionEvent.Data)
-            .OfType<UserMessagePayload>()
-            .Last(HasPrompt).Message;
+        var events = environment.Agent.Session.SnapshotEvents();
+        var message = Assert.Single(events.Select(item => item.Data).OfType<UserMessagePayload>(),
+            payload => payload.Message.Source is UserMessageSource).Message;
+        Assert.Contains(message.Content, block => block is TextBlock text && text.Text == prompt);
+        Assert.DoesNotContain(message.Content, block => block is TextBlock text && text.Text.Contains("shot.png", StringComparison.Ordinal));
         Assert.DoesNotContain(message.Content, block => block is ImageBlock);
+        Assert.Contains(events,
+            item => item.Data is TurnEndPayload { Reason: TurnEndReason.Aborted { Reason: AgentCancelCause.User } });
     });
 
     [Fact]
