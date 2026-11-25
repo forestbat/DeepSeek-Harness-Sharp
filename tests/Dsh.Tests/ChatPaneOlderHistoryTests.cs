@@ -110,6 +110,7 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
         using var oneShot = new ChatWindow(restarted.App.Ctx, agent, restarted.App.Home);
         _ = RenderText(oneShot);
         Assert.True(oneShot.InputPane.LoadOlderHistoryTo(0), "一次接完整段必须成功");
+        await SettleGitPanelAsync(oneShot);
         var expected = RenderText(oneShot);
 
         using var pageByPage = new ChatWindow(restarted.App.Ctx, agent, restarted.App.Home);
@@ -122,6 +123,7 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
             Assert.True(pane.LoadOlderHistory(), $"第 {attempt + 1} 次补页应当还有更早的历史");
         }
         Assert.False(pane.HasOlderHistory);
+        await SettleGitPanelAsync(pageByPage);
         Assert.Equal(oneShot.InputPane.SnapshotLines(), pane.SnapshotLines());
 
         // 每一屏都要对上: 折行几何不同的话, 相同的 ScrollOffset 会停在不同的行上。
@@ -151,6 +153,25 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
             turn += 1;
         }
     }
+
+    /**
+     * 右栏的 Git 变更由后台任务填, 未就绪时显示"计算中~"。
+     *
+     * 两个窗格各自异步刷新, 谁先落地不确定 —— 比较整屏文字之前必须等两份都落到同一份内容上,
+     * 否则比的是"谁先算完", 与被测的折行平移毫无关系(CI 上就是这么偶发红的)。
+     */
+    private static async Task SettleGitPanelAsync(ChatWindow chat)
+    {
+        for (var attempt = 0; attempt < 200 && GitPanelPending(chat); attempt += 1)
+        {
+            chat.DrainUi();
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+        Assert.False(GitPanelPending(chat), "Git 变更面板必须在比较几何之前落到确定内容上");
+    }
+
+    private static bool GitPanelPending(ChatWindow chat)
+        => chat.GitLines().Any(line => line.Contains("计算中", StringComparison.Ordinal));
 
     /** 画一帧并把 30×100 个格子读回来: 折行是否等价, 只有逐字符比才看得见。 */
     private static string RenderText(ChatWindow chat)

@@ -58,7 +58,16 @@ public sealed class GuiWorkspaceTests
         });
     }
 
+    /** 只等界面自身反应: 一条已连上的连接上做一次往返, 5 秒足够。 */
     private static readonly TimeSpan Arrival = TimeSpan.FromSeconds(5);
+
+    /**
+     * 等一次**宿主重启后重建页面**: 停监听、释放后端、按同一个 home 重新组合、重连、再重建页面内容。
+     * 重新组合是真实宿主侧的工作(插件组合 + 首用 JIT), 与"界面多久响应"不是一回事。
+     * 取与 GuiTestEnvironment 的宿主往返同一个预算(30 秒), 并保持在 HeadlessGui 自己的 45 秒收尾预算之内 ——
+     * 内层等待不能比外层预算更长, 否则永远走不到。
+     */
+    private static readonly TimeSpan RestartArrival = TimeSpan.FromSeconds(30);
 
     /** Fast heartbeat and backoff, so a stopped host is noticed and the reconnect happens within the test. */
     private static readonly FleetOptions Options = FleetConnectionTests.TestOptions with { ClientName = "gui-workspace-test" };
@@ -555,7 +564,7 @@ public sealed class GuiWorkspaceTests
                 await UntilAsync(() => files.Content is FilesViewModel { Roots: [{ Path: var root }] } && root == repo.Root, "files on the session's project");
                 var firstLink = files.Content;
                 await alpha.RestartHostAsync(ct);
-                await UntilAsync(() => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink), "files rebuilt on the new link");
+                await UntilAsync(() => files.Content is FilesViewModel { Roots.Count: 1 } rebuilt && !ReferenceEquals(rebuilt, firstLink), "files rebuilt on the new link", RestartArrival);
 
                 workspace.OpenPage(Page(workspace, WorkspacePages.Git));
                 Assert.Null(files.Content);
@@ -654,9 +663,9 @@ private static WorkspacePageEntry Page(WorkspaceViewModel workspace, string id) 
     }
 
     /** Polls on the UI thread, running the posted UI work between checks. */
-    internal static async Task UntilAsync(Func<bool> condition, string what)
+    internal static async Task UntilAsync(Func<bool> condition, string what, TimeSpan? budget = null)
     {
-        var deadline = DateTime.UtcNow + Arrival;
+        var deadline = DateTime.UtcNow + (budget ?? Arrival);
         while (true)
         {
             Dispatcher.UIThread.RunJobs();
