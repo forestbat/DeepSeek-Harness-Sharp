@@ -54,6 +54,18 @@ public sealed class TerminalPasteTests
 
         Assert.False(parser.TryParse(out _));
     }
+
+    /** 粘贴内容里的换行是内容的一部分: 拆成多条消息是缺陷, 压成空格也是缺陷。 */
+    [Fact]
+    public void Parser_KeepsLineBreaksInsidePaste()
+    {
+        var parser = new TerminalInputParser();
+        Append(parser, "\u001b[200~第一行\r\n第二行\u001b[201~");
+
+        Assert.True(parser.TryParse(out var input));
+        Assert.True(input.IsPaste);
+        Assert.Equal("第一行\r\n第二行", input.Paste);
+    }
 }
 
 /** 粘贴图片路径的归一化: 引号/file:// 前缀/MSYS 风格 /C:/ 都要还原成本机可读路径。 */

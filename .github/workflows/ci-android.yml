@@ -1,0 +1,158 @@
+name: Android APK 构建
+
+# Android 产物与 win/linux/macos 桌面三入口独立:
+# 只构建 Dsh.Android 一个工程, 产物是单个 APK, 不进桌面 RID 矩阵、不参与 AOT/WebHost 校验。
+# 本工作流由 ci.yml 按选测结果调用; release.yml 复用同一条构建路径产出发布资产。
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: '显示版本号(如 0.4.0); 留空则用 csproj 里的默认值'
+        required: false
+        type: string
+        default: ''
+      artifact-name:
+        description: '上传的产物名'
+        required: false
+        type: string
+        default: 'dsharp-android'
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: 构建 APK（android-arm64）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Dsh.Android 的构建脚本按 JDK 21 校验, 与桌面无关。
+          java-version: '21'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # net11.0-android 的工作负载按 SDK band 安装, 不能用桌面档的 10.0.x。
+          dotnet-version: '11.0.x'
+          cache: true
+          cache-dependency-path: 'src/Dsh.Android/Dsh.Android.csproj'
+
+      - name: 安装 Android 工作负载
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet workload install android
+          dotnet workload list
+
+      - name: 安装 Android SDK 平台与构建工具
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            SDK_ROOT="$RUNNER_TEMP/android-sdk"
+          fi
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            # 镜像里没有 cmdline-tools 时按固定版本现装, 不依赖镜像的预置布局。
+            mkdir -p "$SDK_ROOT"
+            curl --fail --silent --show-error --location \
+              --output "$RUNNER_TEMP/cmdline-tools.zip" \
+              "https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip"
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+          fi
+          # csproj 钉了 TargetPlatformVersion 37.0 与 build-tools 37.0.0, 平台包名就是 android-37.0。
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: 准备签名密钥
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          # 没有仓库密钥时走 SDK 默认签名: 每次运行都是临时密钥, 升级安装会被系统拒绝。
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，APK 用临时密钥签名，只能全新安装，不能覆盖升级"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "DSH_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: 发布 APK
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ARGS=(-c Release -f net11.0-android -p:AndroidSdkDirectory="$ANDROID_SDK_ROOT" --nologo -v m)
+          if [ -n "$VERSION" ]; then
+            # 显示版本随 tag; versionCode 由语义版本推出, 单调递增才能覆盖升级。
+            CODE="$(awk -F. '{ printf "%d", ($1 * 10000) + ($2 * 100) + ($3 + 0) }' <<<"$VERSION")"
+            ARGS+=(-p:ApplicationDisplayVersion="$VERSION" -p:ApplicationVersion="$CODE")
+          fi
+          if [ -n "${DSH_KEYSTORE:-}" ]; then
+            ARGS+=(-p:AndroidKeyStore=true
+              -p:AndroidSigningKeyStore="$DSH_KEYSTORE"
+              -p:AndroidSigningStorePass="$KEYSTORE_PASSWORD"
+              -p:AndroidSigningKeyAlias="$KEY_ALIAS"
+              -p:AndroidSigningKeyPass="$KEY_PASSWORD")
+          fi
+          dotnet build src/Dsh.Android/Dsh.Android.csproj "${ARGS[@]}"
+
+      - name: 校验 APK 并归档
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        run: |
+          set -euo pipefail
+          OUT="src/Dsh.Android/bin/Release/net11.0-android"
+          APK="$(find "$OUT" -maxdepth 1 -name '*-Signed.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "::error::构建没有产出已签名的 APK"
+            ls -la "$OUT"
+            exit 1
+          fi
+          AAPT2="$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt2"
+          "$AAPT2" dump badging "$APK" | grep -E '^package:' \
+            || { echo "::error::APK 的 package 信息读不出来"; exit 1; }
+          # 程序集在 lib/*/libassembly-store.so 里(EmbedAssembliesIntoApk=true 的新布局),
+          # 侧载安装不走 fast deployment, 少了这个包就起不来。
+          ENTRIES="$(unzip -l "$APK")"
+          grep -qE 'lib/[^/]+/libassembly-store\.so' <<<"$ENTRIES" \
+            || { echo "::error::APK 内没有程序集存储, 侧载后无法启动"; exit 1; }
+          # 首次启动要写的 settings.yaml 模板以 AndroidAsset 随包, 桌面端是 Content 拷贝。
+          grep -q 'assets/Profiles/Templates/settings.yaml' <<<"$ENTRIES" \
+            || { echo "::error::APK 缺少随包的 settings.yaml 模板"; exit 1; }
+          mkdir -p artifacts
+          cp "$APK" "artifacts/${ARTIFACT_NAME}.apk"
+          echo "APK 体积: $(du -h "artifacts/${ARTIFACT_NAME}.apk" | cut -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 7

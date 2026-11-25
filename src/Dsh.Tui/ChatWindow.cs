@@ -946,6 +946,24 @@ public sealed partial class ChatWindow : IDisposable
             DrawAgentList(grid);
         DrawPaneOverlays(grid, layout);
         ChoicePane?.DrawChoicePrompt(grid, layout.Input);
+        ReportOpenProbes();
+    }
+
+    /**
+     * 打开会话的打点: 每帧记一次节拍, 三个刻度都到齐后写一行 `tui open: …`(纯观测, 行为不变)。
+     * 只报一次, 且只在观测窗口内累计 stall —— 窗口之后用户不按键的空闲不是"卡顿"。
+     */
+    private void ReportOpenProbes()
+    {
+        foreach (var pane in _panes.Values)
+        {
+            if (pane is not ChatPane chat || chat.Probe is not { Reported: null } probe)
+                continue;
+            probe.OnFrame();
+            if (!probe.Ready)
+                continue;
+            _ctx.LoggerFor("tui").Info(probe.Describe(chat.Agent.Session));
+        }
     }
 
     /**
@@ -1454,15 +1472,15 @@ public sealed partial class ChatWindow : IDisposable
             : null;
 
     /**
-     * `/timestamp seq` 的候选: 本会话用户消息 + 工作区命中的 IDE 历史(§6 统一时间线)。
+     * `/timestamp seq` 的候选: 本会话用户消息(轻量索引) + 工作区命中的 IDE 历史(§6 统一时间线)。
      * 消息项写入 `#<seq>`; IDE 项写入 `ide|<provider>|<epoch-ms>|<path>`(路径放最后, 自身可含空格)。
      */
-    internal IReadOnlyList<CommandCandidate> TimestampCandidates()
+    internal IReadOnlyList<CommandCandidate> TimestampCandidates(ChatPane pane)
     {
         var candidates = new List<(long Timestamp, CommandCandidate Candidate)>();
         _ideTimelineMoments.Clear();
         _ideTimelineSession = null;
-        foreach (var (seq, time, text) in UserMessages(InputPane.Agent.Session))
+        foreach (var (seq, time, text) in pane.TimelineEntries)
         {
             var token = $"#{seq.ToString(CultureInfo.InvariantCulture)}";
             candidates.Add((time, new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time))));
@@ -1470,12 +1488,10 @@ public sealed partial class ChatWindow : IDisposable
 
         var service = _ctx.Get<IdeHistoryService>(IdeHistoryService.ServiceName, false);
         // 默认不并进时间线(插件参数 timeline=false): IDE 自动保存很密, 会淹掉用户消息。
-        if (service is null || !service.TimelineEnabled)
-            return [.. candidates.Select(item => item.Candidate)];
-        var workspace = InputPane.CurrentCwd();
-        _ideTimelineSession = InputPane.Agent.Session.Id;
-        if (workspace is not null)
+        if (service is not null && service.TimelineEnabled)
         {
+            var workspace = pane.CurrentCwd();
+            _ideTimelineSession = pane.Agent.Session.Id;
             foreach (var moment in service.QueryTimeline(workspace))
             {
                 var token = $"ide-group|{moment.Timestamp.ToString(CultureInfo.InvariantCulture)}";
@@ -1486,9 +1502,9 @@ public sealed partial class ChatWindow : IDisposable
                     $"history window; {moment.Entries.Count(entry => entry.MatchesGitHead is true)} match git HEAD")));
             }
         }
-        else
-            foreach (var entry in service.Query(workspace, from: null, to: null))
-                candidates.Add((entry.Timestamp, new CommandCandidate(IdeTargetValue(entry), IdeEntryLabel(workspace, entry), entry.Kind)));
+
+        // 唯一出口统一按时间倒序: 浮层默认选中第 0 条 = 最新一条。IDE 历史关闭时那条提前返回曾经漏掉排序,
+        // 结果浮层从最早的消息开始列, 与"时间线"的直觉相反。
         return [.. candidates.OrderByDescending(item => item.Timestamp).Select(item => item.Candidate)];
     }
 
@@ -1525,34 +1541,84 @@ public sealed partial class ChatWindow : IDisposable
             : $"timestamp {action} {value}");
 
     /** `/timestamp [jump|revert|fork] <#seq|ide|...>`: 无参数列出时间线; revert 回退文件+会话, fork 派生新会话。 */
-    private async Task TimestampCommand(ChatPane pane, string text)
+    private Task TimestampCommand(ChatPane pane, string text)
     {
-        var messages = UserMessages(pane.Agent.Session);
+        // 先把已经到达的事件回放掉: 命令读的是"界面已经看见的历史", 索引才不会比日志慢半拍。
+        DrainUi();
         var space = text.IndexOf(' ');
         var arguments = space < 0 ? "" : text[(space + 1)..].Trim();
         var parts = arguments.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
             // 裸执行打开时间线浮层(先选消息, 再选动作), 不再把列表打印进转录。
-            pane.OpenTimeline(TimestampCandidates(), (action, value) => _ = RunTimestampActionAsync(pane, action, value));
-            return;
+            WhenHistoryIndexed(pane, "正在读取时间线…",
+                () => pane.OpenTimeline(TimestampCandidates(pane), (action, value) => _ = RunTimestampActionAsync(pane, action, value)));
+            return Task.CompletedTask;
         }
 
-        var action = parts[0].ToLowerInvariant();
         if (parts.Length < 2)
         {
             pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide 项>\n");
-            return;
+            return Task.CompletedTask;
         }
 
-        var target = parts[1];
+        // 显式目标也要同一份索引: 候选、回退边界与 jump 的定位都从它取, 两条路径才不会各算一套。
+        WhenHistoryIndexed(pane, "正在定位时间戳目标…", () => RunTimestampTarget(pane, parts[0].ToLowerInvariant(), parts[1]));
+        return Task.CompletedTask;
+    }
+
+    /**
+     * 索引还没铺满整段时先后台按页补齐(与滚轮补页同一个入口), 补完再执行 action ——
+     * 百万条会话不该在 UI 线程上把整份日志读一遍, 也不该让用户对着不动的界面猜。
+     */
+    private void WhenHistoryIndexed(ChatPane pane, string busyStatus, Action action)
+    {
+        if (pane.HistoryIndexComplete)
+        {
+            action();
+            return;
+        }
+        var session = pane.Agent.Session;
+        var covered = pane.HistoryCoveredFrom;
+        var known = pane.KnownRevertedRanges;
+        pane.StatusText = busyStatus;
+        _ = Task.Run(() => TranscriptHistoryIndex.Scan(session, 0, covered, known)).ContinueWith(task =>
+        {
+            if (task.IsFaulted)
+            {
+                var reason = task.Exception?.GetBaseException().Message ?? "unknown";
+                QueueAction(() =>
+                {
+                    pane.SetStatusReady();
+                    pane.AppendRaw($"  时间线读取失败: {reason}\n");
+                });
+                return;
+            }
+
+            var (messages, turnStarts, reverted, coveredFrom) = task.Result;
+            QueueAction(() =>
+            {
+                if (!IsPaneAlive(pane))
+                    return;
+                pane.MergeEarlierHistory(messages, turnStarts, reverted, coveredFrom);
+                pane.SetStatusReady();
+                action();
+            });
+        }, TaskScheduler.Default);
+    }
+
+    /** 执行 `/timestamp <action> <target>`; 目标解析失败时只打印用法, 不动会话。 */
+    private void RunTimestampTarget(ChatPane pane, string action, string rawTarget)
+    {
+        var messages = pane.TimelineEntries;
+        var target = rawTarget;
         var confirm = target.StartsWith("--confirm ", StringComparison.Ordinal);
         if (confirm)
             target = target["--confirm ".Length..];
         if (target.StartsWith("ide-group|", StringComparison.Ordinal))
         {
             if (_ideTimelineSession == pane.Agent.Session.Id && _ideTimelineMoments.TryGetValue(target, out var moment))
-                await IdeTimestampMomentActionAsync(pane, action, target, moment, messages, confirm);
+                _ = IdeTimestampMomentActionAsync(pane, action, target, moment, messages, confirm);
             else
                 pane.AppendRaw("  History window expired; open /timestamp again.\n");
             return;
@@ -1565,7 +1631,7 @@ public sealed partial class ChatWindow : IDisposable
             if (entry is null)
                 pane.AppendRaw("  History revision is unavailable.\n");
             else
-                await IdeTimestampMomentActionAsync(pane, action, target, new IdeHistoryMoment(ide.Timestamp, [entry]), messages, confirm);
+                _ = IdeTimestampMomentActionAsync(pane, action, target, new IdeHistoryMoment(ide.Timestamp, [entry]), messages, confirm);
             return;
         }
 
@@ -1577,21 +1643,33 @@ public sealed partial class ChatWindow : IDisposable
         }
 
         var message = messages.FirstOrDefault(entry => entry.Seq == targetSeq);
+        var targetText = TargetTextOf(pane, targetSeq, message);
         switch (action)
         {
             case "jump":
-                await JumpToMessage(pane, targetSeq, messages.FindIndex(entry => entry.Seq == targetSeq), messages.Count);
+                JumpToMessage(pane, targetSeq, messages);
                 return;
             case "revert":
-                await RevertToAsync(pane, targetSeq, message.Text);
+                _ = RevertToAsync(pane, targetSeq, targetText);
                 return;
             case "fork":
-                await ForkAtAsync(pane, targetSeq, message.Text);
+                _ = ForkAtAsync(pane, targetSeq, targetText);
                 return;
             default:
                 pane.AppendRaw("  usage: /timestamp <jump|revert|fork> <#seq|ide 项>\n");
                 return;
         }
+    }
+
+    /**
+     * 目标消息的原文: 优先用时间线索引(与浮层同一口径), 索引还没收录时直接问会话日志 ——
+     * 回退/分叉要把这条消息回填输入区, 拿不到文本会把用户的草稿清成空。
+     */
+    private static string TargetTextOf(ChatPane pane, long seq, SessionTimeline.Entry message)
+    {
+        if (message.Text is { Length: > 0 } text)
+            return text;
+        return pane.Agent.Session.EventAt(seq) is { } sessionEvent ? SessionTimeline.UserText(sessionEvent) : "";
     }
 
     /** A grouped revision previews every affected file and keeps the selected IDE content authoritative over checkpoints. */
@@ -1600,7 +1678,7 @@ public sealed partial class ChatWindow : IDisposable
         string action,
         string target,
         IdeHistoryMoment moment,
-        IReadOnlyList<(long Seq, long Time, string Text)> messages,
+        IReadOnlyList<SessionTimeline.Entry> messages,
         bool confirm)
     {
         if (action == "jump")
@@ -1677,7 +1755,7 @@ public sealed partial class ChatWindow : IDisposable
     }
 
     /** 时间 ≤ 目标时刻的最近一条用户消息(消息按时间递增, 取最后一个满足的就是它)。 */
-    private static long? NearestMessageSeq(IReadOnlyList<(long Seq, long Time, string Text)> messages, long timestamp)
+    private static long? NearestMessageSeq(IReadOnlyList<SessionTimeline.Entry> messages, long timestamp)
     {
         long? nearest = null;
         foreach (var message in messages)
@@ -1689,29 +1767,38 @@ public sealed partial class ChatWindow : IDisposable
     }
 
 
-    /** 本会话里用户自己发的消息(seq / 事件时间 / 文本); 过滤规则与 GUI 时间线共用 SessionTimeline。 */
-    private static List<(long Seq, long Time, string Text)> UserMessages(Session session)
-        => [.. SessionTimeline.UserMessages(session).Select(entry => (entry.Seq, entry.Time, entry.Text))];
 
     /**
      * jump: 只滚到该消息(不改会话/文件); 目标消息必须落在视口最上方 —— 这是 jump 的全部意义。
      *
      * 目标比当前转录更早时先把更早的历史按页接上(用户当然会跳到很早以前的消息), 一页一页往前直到
-     * 它被渲染出来; 真的接不上(事件已经不在日志里 / 页面读不出来)才明说跳不过去。
+     * 它被渲染出来; 真的接不上时才明说为什么 —— "已不在会话日志里"与"那一页读不出来"是两种原因,
+     * 混成一句话会让人以为消息真的没了(见 ChatPane.OlderHistoryStatusText)。
      */
-    private static Task JumpToMessage(ChatPane pane, long seq, int index, int total)
+    private static void JumpToMessage(ChatPane pane, long seq, IReadOnlyList<SessionTimeline.Entry> messages)
     {
-        // 目标比当前转录更早时先把更早的历史接上, 一页一页往前直到它被渲染出来; 历史接完(seq 0)还没有
-        // 就说明这条消息不在日志里。循环因此天然终止, 不需要"最多补几页"这类阈值。
-        while (!pane.TryScrollToUserMessage(index, total))
+        var index = -1;
+        for (var position = 0; position < messages.Count; position += 1)
         {
-            if (!pane.LoadOlderHistory())
+            if (messages[position].Seq == seq)
             {
-                pane.AppendRaw($"  jump 失败: 消息 #{seq} 已不在会话日志里\n");
-                return Task.CompletedTask;
+                index = position;
+                break;
             }
         }
-        return Task.CompletedTask;
+        if (index < 0)
+        {
+            pane.AppendRaw($"  jump 失败: 消息 #{seq} 不在时间线里(可能已被回退)\n");
+            return;
+        }
+        // 目标比当前转录更早时先把更早的历史接上。一次补到目标所在页, 不逐页爬:
+        // 每次补页都要重放 [_replayFrom, ResidentFrom) 整段, 逐页补是 O(页数²)(百万条会话要几分钟),
+        // 一次到位只付一次整段重放; 起点取 min(下一页, 目标), 所以目标必定落在重放区间里。
+        if (pane.TryScrollToUserMessage(index, messages.Count)
+            || (pane.LoadOlderHistoryTo(seq) && pane.TryScrollToUserMessage(index, messages.Count)))
+            return;
+        var reason = pane.OlderHistoryStatusText ?? $"消息 #{seq} 已不在会话日志里";
+        pane.AppendRaw($"  jump 失败: #{seq} 跳不过去 · {reason}\n");
     }
 
     /** 会话截断到该消息之前并把消息回填输入区; 文件侧先按检查点恢复到 <= seq。 */
@@ -1733,7 +1820,7 @@ public sealed partial class ChatWindow : IDisposable
         }
 
         // 停在"这条消息所属回合之前": 消息前面紧挨着 TurnStart, 截在消息处会留下没有 TurnEnd 的回合。
-        var boundary = SessionTimeline.TurnStartOf(pane.Agent.Session.SnapshotEvents(), seq);
+        var boundary = pane.TurnStartOf(seq);
         // 回退是**只追加**的事件(阶段 4a): 日志不变短, 正在读旧区间的其他读者因此拿到一致的视图。
         if (pane.Agent.Session.Revert(boundary, $"revert to #{seq}") is null)
         {
@@ -1768,7 +1855,7 @@ public sealed partial class ChatWindow : IDisposable
         SessionId forked;
         try
         {
-            var boundary = SessionTimeline.TurnStartOf(session.SnapshotEvents(), seq);
+            var boundary = pane.TurnStartOf(seq);
             forked = SessionFork.Fork(persistence, session, boundary, SessionFork.ForkTitle(session, seq), pane.CurrentCwd());
         }
         catch (InvalidOperationException error)
@@ -3097,3 +3184,6 @@ public sealed partial class ChatWindow : IDisposable
 
     private sealed record OverviewItem(string Line, OverviewTargetKind Kind, int? PaneId, string? SessionId, string? PtyId = null);
 }
+
+
+

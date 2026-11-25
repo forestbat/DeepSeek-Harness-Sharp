@@ -10,12 +10,12 @@ public sealed record MentionSessionInfo(string Id, string? Title, string? Summar
         => new(snapshot.Header.Id.Value, snapshot.Header.Title, null, snapshot.Header.CreatedAt);
 }
 
-/** `@` 引用的解析: 会话 id/标题优先, 否则按 cwd 匹配文件系统条目; 选中后展开为带边界的文本块。 */
+/**
+ * `@` 引用的解析: 会话 id/标题优先, 否则按 cwd 匹配文件系统条目。
+ * 展开时只把**会话**引用换成元信息块; 文件/目录引用保留用户输入的 `@路径`。
+ */
 public static partial class MentionResolver
 {
-    public const int FileContentMaxChars = 2000;
-    public const int DirectoryMaxEntries = 20;
-
     [GeneratedRegex(@"@([^\s@]+)", RegexOptions.Compiled)]
     private static partial Regex MentionPattern();
 
@@ -60,16 +60,27 @@ public static partial class MentionResolver
     public static (string Text, int Caret) ReplaceActiveToken(string text, int start, int end, string candidate)
         => ($"{text[..start]}@{candidate} {text[end..]}", start + candidate.Length + 2);
 
-    public static string ExpandMentions(string text, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
+    /**
+     * 只展开会话引用(`@会话id/标题` → 一段元信息); 文件与目录引用原样留在文本里。
+     *
+     * 旧做法把被引用文件的正文(或目录清单)抄进用户消息: 每次引用都是几十 KB 的不可回收文本,
+     * 压缩要为它重写摘要, 保留尾部也被它占满; 而模型要内容时用 read/grep 自己取, 又快又不带无关行。
+     */
+    public static string ExpandMentions(string text, IReadOnlyList<MentionSessionInfo> sessions)
     {
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(cwd))
+        if (string.IsNullOrEmpty(text))
             return text;
         return MentionPattern().Replace(text, match =>
         {
-            var token = match.Groups[1].Value;
-            return ExpandToken(token, cwd, sessions) ?? match.Value;
+            var session = FindSession(match.Groups[1].Value, sessions);
+            return session is null ? match.Value : FormatSession(session);
         });
     }
+
+    private static MentionSessionInfo? FindSession(string token, IReadOnlyList<MentionSessionInfo> sessions)
+        => sessions.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, token, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate.Title, token, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<string> ResolveFileSystemCandidates(string token, string cwd)
     {
@@ -107,28 +118,6 @@ public static partial class MentionResolver
         return (Path.GetDirectoryName(fullPath), Path.GetFileName(fullPath));
     }
 
-    private static string? ExpandToken(string token, string cwd, IReadOnlyList<MentionSessionInfo> sessions)
-    {
-        var session = sessions.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, token, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(candidate.Title, token, StringComparison.OrdinalIgnoreCase));
-        if (session is not null)
-            return FormatSession(session);
-        try
-        {
-            var fullPath = Path.GetFullPath(Path.Combine(cwd, token));
-            if (File.Exists(fullPath))
-                return FormatFile(fullPath, cwd);
-            if (Directory.Exists(fullPath))
-                return FormatDirectory(fullPath, cwd);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-        return null;
-    }
-
     private static string FormatSession(MentionSessionInfo session)
     {
         var builder = new StringBuilder();
@@ -139,25 +128,6 @@ public static partial class MentionResolver
         if (!string.IsNullOrWhiteSpace(session.Summary))
             builder.AppendLine($"Summary: {session.Summary}");
         return builder.ToString().TrimEnd();
-    }
-
-    private static string FormatFile(string fullPath, string cwd)
-    {
-        var relative = Slash(Path.GetRelativePath(cwd, fullPath));
-        var content = File.ReadAllText(fullPath);
-        if (content.Length > FileContentMaxChars)
-            content = content[..FileContentMaxChars];
-        return $"\n[file: {relative}]\n{content}\n[/file]";
-    }
-
-    private static string FormatDirectory(string fullPath, string cwd)
-    {
-        var relative = Slash(Path.GetRelativePath(cwd, fullPath));
-        var entries = Directory.EnumerateFileSystemEntries(fullPath)
-            .OrderBy(entry => entry, StringComparer.Ordinal)
-            .Take(DirectoryMaxEntries)
-            .Select(entry => Slash(Path.GetRelativePath(cwd, entry)));
-        return $"\n[directory: {relative}]\n{string.Join('\n', entries)}\n[/directory]";
     }
 
     private static string Slash(string path)

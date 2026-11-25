@@ -2564,7 +2564,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     private string ExpandMentions(string text)
-        => MentionResolver.ExpandMentions(text, _chat.Header.Cwd ?? Environment.CurrentDirectory, CurrentMentionSessions());
+        => MentionResolver.ExpandMentions(text, CurrentMentionSessions());
 
     private IReadOnlyList<MentionSessionInfo> CurrentMentionSessions()
         => [.. _catalog.Load().Select(node => new MentionSessionInfo(node.SessionId.Value, node.Title, null))];

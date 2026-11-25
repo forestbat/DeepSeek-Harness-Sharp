@@ -58,13 +58,17 @@ public sealed class ChatPane : ITuiPane
     private int _rightPanelLineCount;
     private readonly List<string> _history = [];
     private int _historyIndex = -1;
+    /** 切进历史之前那份草稿(内容 + 光标): 按 ↓ 回到"当前草稿"时原样恢复, 用户写的东西不会因为看了眼历史就丢。 */
+    private string _draftBeforeHistory = "";
+    private int _draftCursorBeforeHistory;
     private bool _sessionRenamedSubscribed;
     private int _wrapCacheVersion = -1;
     private int _wrapCacheWidth = -1;
-    private int _wrapCacheTrimVersion = -1;
-    private List<string>? _wrapCacheLines;
+    private int _wrapCacheResetVersion = -1;
+    /** 折行后的视觉行: 文本按区间从转录正文取, 只有折叠头/页码这类合成行才自带字符串。 */
+    private List<WrapRow>? _wrapRows;
     private int _wrapProcessedLine;
-    private readonly List<VisualRow> _visualRows = [];
+    private List<VisualRow> _visualRows = [];
     private readonly List<(int Start, int End, bool Collapsed, int Scroll)> _foldSnapshot = [];
     /** 已被回退事件收掉的日志区间(闭区间): 这些事件还在日志里, 但不再属于会话。 */
     private readonly List<(long From, long To)> _reverted = [];
@@ -81,10 +85,17 @@ public sealed class ChatPane : ITuiPane
         StatusText = ReadyStatus;
         Id = id;
         Agent = agent;
+        // 打点: 视口=窗格建好(用户看到会话切过去了), 首帧=第一次画出正文, 可交互=回放返回。
+        Probe = new TuiOpenProbe(agent.Session.Id.Value);
+        Probe.MarkViewport();
         // 转录从会话的常驻窗口开始: 更早的前缀在用户往上滚/跳转时按页补(见 LoadOlderHistory)。
         _replayFrom = agent.Session.ResidentFrom;
+        // 用 Reset 而不是 CoverFrom: CoverFrom 是"把覆盖起点往下推", 对初始 0 取 min 等于没设,
+        // 于是新窗格会自称"索引已覆盖整段", /timestamp 跳过补扫后候选只剩尾窗里的那几条。
+        _timeline.Reset(_replayFrom);
         SubscribeSessionRenamed();
         ReplayEvents();
+        Probe.MarkInteractive();
     }
 
     public int Id { get; }
@@ -283,10 +294,31 @@ public sealed class ChatPane : ITuiPane
         var adjusted = index - Math.Max(0, total - Renderer.UserMessageCount);
         if (adjusted < 0 || Renderer.UserMessageStartAt(adjusted) is not { } offset)
             return false;
-        // 视口缓存是绘制时按宽度建的: 刚切会话/刚裁过头时它是空的, 这里补建一次,
-        // 否则"跳不过去"取决于用户有没有先滚一下。
+        return TryScrollToSourceOffset(offset);
+    }
+
+    /**
+     * 视口顶行的实际文本。
+     * 补页/重画之后它必须和之前相同 —— 这是"上面多了东西, 我在看的那行没动"的直接判据。
+     */
+    internal string ViewportTopText()
+    {
+        var rows = _wrapRows;
+        if (rows is null || rows.Count == 0)
+            return "";
+        return new string(RowSpan(rows[Math.Clamp(ScrollOffset, 0, rows.Count - 1)]));
+    }
+
+    /**
+     * 把视口顶行放到"源偏移 offset 所在的那一视觉行"。
+     * 视口缓存是绘制时按宽度建的: 刚切会话/刚重放过时它是空的, 这里补建一次,
+     * 否则"跳不过去"取决于用户有没有先滚一下。
+     */
+    private bool TryScrollToSourceOffset(int offset)
+    {
         EnsureWrapCache();
-        if (_visualRows is not { Count: > 0 } rows)
+        var rows = _visualRows;
+        if (rows.Count == 0)
             return false;
         // 源偏移 -> 视觉行: 找最后一个 SourceStart <= offset 的视觉行。
         var low = 0;
@@ -307,9 +339,21 @@ public sealed class ChatPane : ITuiPane
     /** 上次绘制正文用的宽度: 跳转要按需重建视口缓存时用它。 */
     private int _lastTranscriptWidth;
 
+    /**
+     * 锚点: 视口顶行对应的源偏移, 以及它所属的事件序号。
+     *
+     * 补页/回退重画/重编号重画都要"整篇重放", 行号会整体位移; 只有按源偏移 + 事件序号还原,
+     * 用户正在看的那一行才会留在原处(按字数差加减是错的, 那会把视口甩到底部)。
+     */
+    private int? _anchorSourceOffset;
+    private long _anchorSeq;
+
+    /** 打开/补页打点: 只在会话打开后的观测窗口内计时, 窗口外空闲阻塞不计入 stall。 */
+    internal TuiOpenProbe? Probe { get; set; }
+
     private void EnsureWrapCache()
     {
-        if (_wrapCacheLines is { Count: > 0 } || _lastTranscriptWidth <= 0)
+        if (_wrapRows is { Count: > 0 } || _lastTranscriptWidth <= 0)
             return;
         RebuildWrapCache(_lastTranscriptWidth);
         _wrapCacheVersion = Renderer.Version;
@@ -340,10 +384,20 @@ public sealed class ChatPane : ITuiPane
 
     private string _statusText = "";
 
-    /** 状态行文本; 读取时自动拼上上下文占用, 因此用量一更新(无需额外刷新)就会显示出来。 */
+    /**
+     * 状态行文本; 读取时自动拼上上下文占用与"更早的历史为什么接不上", 因此用量/补页状态一更新
+     * (无需额外刷新)就会显示出来。补页失败不能静默 —— 否则用户看到的就是"顶也加载不出来、底也加载不出来"。
+     */
     public string StatusText
     {
-        get => ContextStatusOf(_statusText);
+        get
+        {
+            var status = ContextStatusOf(_statusText);
+            var reason = OlderHistoryStatusText;
+            if (reason is null)
+                return status;
+            return status.Length == 0 ? reason : $"{status} · {reason}";
+        }
         set => _statusText = value;
     }
 
@@ -568,10 +622,12 @@ public sealed class ChatPane : ITuiPane
                 break;
             case ConsoleKey.DownArrow when MoveCursorByRow(1):
                 break;
-            case ConsoleKey.UpArrow:
+            // 只有在草稿开头按 ↑ 才切历史: 否则用户只是想把光标往上挪, 修改却被整段替换。
+            case ConsoleKey.UpArrow when Cursor == 0:
                 RecallHistory(-1);
                 break;
-            case ConsoleKey.DownArrow:
+            // 同理, 只有停在草稿末尾按 ↓ 才切下一条。
+            case ConsoleKey.DownArrow when Cursor == Input.Length:
                 RecallHistory(1);
                 break;
             case ConsoleKey.LeftArrow:
@@ -684,7 +740,20 @@ public sealed class ChatPane : ITuiPane
             StatusText = $"已附加 {_attachments.Count} 张图片 - Enter 发送";
             return;
         }
-        InsertText(remaining);
+        InsertPastedText(remaining);
+    }
+
+    /**
+     * 粘贴文本按原样进草稿: 换行是粘贴内容的一部分, 一条消息就是一条消息。
+     * 不能复用 InsertText —— 它为单行插入把 \r\n 压成空格。
+     */
+    internal void InsertPastedText(string text)
+    {
+        var normalized = text.ReplaceLineEndings("\n");
+        _stickyStatus = null;
+        Input = Input.Insert(Cursor, normalized);
+        Cursor += normalized.Length;
+        RefreshMenus();
     }
 
     private bool TryAttachClipboardImage()
@@ -750,8 +819,16 @@ public sealed class ChatPane : ITuiPane
         ScrollOffset = 0;
         StickToBottom = true;
         _replayFrom = agent.Session.ResidentFrom;
+        // 换了会话: 上一条的索引、锚点与补页失败原因都不再适用。
+        _timeline.Reset(_replayFrom);
+        _anchorSourceOffset = null;
+        _anchorSeq = 0;
+        _olderHistoryError = null;
         InvalidateWrapCache();
-        ReplayEvents();
+        Probe = new TuiOpenProbe(agent.Session.Id.Value);
+        Probe.MarkViewport();
+        ReplayEvents(null, keepAnchor: false);
+        Probe.MarkInteractive();
     }
 
     /** 一页历史: 与 GUI 同量级(2 万条), 一次只补一段。 */
@@ -763,57 +840,203 @@ public sealed class ChatPane : ITuiPane
     /** 更早的历史还在日志里(转录还没覆盖到 seq 0)。 */
     public bool HasOlderHistory => _replayFrom > 0;
 
+    /** 转录当前覆盖的起点: 0 表示整段历史都已接上。诊断与验收读它。 */
+    internal long ReplayFrom => _replayFrom;
+
+    /**
+     * 上次补页失败的原因(对应 GUI 的 HistoryIncomplete)。
+     *
+     * GUI 的取舍是"打不开比少一段严重, 悄悄少一段又比明确说少了哪一段严重": 这里把原因留在状态行,
+     * 而不是让补页失败悄无声息 —— 那正是"顶也加载不出来、底也加载不出来"看起来像卡死的原因。
+     */
+    private string? _olderHistoryError;
+
+    /** 补页失败原因(没有失败时为 null): 由状态行拼出去。 */
+    public string? OlderHistoryStatusText => _olderHistoryError;
+
+    /** 用户消息/回合起点/回退区间的轻量索引: `/timestamp` 与回退边界共用一份。 */
+    private readonly TranscriptHistoryIndex _timeline = new();
+
+    /** 已收录的用户消息(seq 递增, 已剔除被回退的): `/timestamp` 的候选来源。 */
+    internal IReadOnlyList<SessionTimeline.Entry> TimelineEntries => _timeline.Messages;
+
+    /** 索引是否已覆盖整段历史。 */
+    internal bool HistoryIndexComplete => _timeline.CoveredFrom <= 0;
+
+    internal long HistoryCoveredFrom => _timeline.CoveredFrom;
+
+    /** 已知的回退区间(整段扫描时要一起滤掉): 后台扫描线程读取快照。 */
+    internal IReadOnlyList<(long From, long To)> KnownRevertedRanges => [.. _reverted];
+
+    /** 该序号所属回合的 TurnStart 序号: 回退/分叉的边界, 与 `/timestamp` 同一份索引。 */
+    internal long TurnStartOf(long seq) => _timeline.TurnStartOf(seq);
+
+    /** 把后台扫出来的更早区间合并进索引(必须在 UI 线程调用)。coveredFrom 是那次扫描的起点。 */
+    internal void MergeEarlierHistory(
+        IReadOnlyList<SessionTimeline.Entry> messages,
+        IReadOnlyList<long> turnStarts,
+        IReadOnlyList<(long From, long To)> reverted,
+        long coveredFrom)
+        => _timeline.MergeEarlier(messages, turnStarts, reverted, coveredFrom);
+
     /**
      * 往上接一页更早的历史: 滚到顶部、或跳转到更早的消息时调用。
      *
      * 转录是只增的行缓冲, 所以"往上接"就是从更早的起点整篇重放; 重放完再把视口挪回原来那段内容,
      * 于是用户看到的只是上面多了东西, 阅读位置不动。前缀事件走会话的分页读(窗口外的按页解压)。
+     *
+     * 那一页只读一次: 读出来的事件直接喂给重放, 重放不再把同一段再读一遍(T-2)。
+     * 读失败时保留已渲染的内容、把原因写进状态行 —— 不允许半截重放留在界面上。
      * 返回是否真的接上了(没有更早的历史、或者那一页读不出来时为 false)。
      */
-    public bool LoadOlderHistory()
+    public bool LoadOlderHistory() => LoadOlderHistoryTo(Math.Max(0, _replayFrom - OlderHistoryPageEvents));
+
+    /**
+     * 一次补到 targetFrom 之前(再按一页对齐), 而不是一页一页往上爬。
+     *
+     * 只读并渲染**新补进来的这一页**, 再把它的文本整块前置: 每补一页的成本是 O(这一页的事件数)。
+     * 旧实现每次 Clear 后重放已载入的整段前缀, 逐页补的总成本是 O(页数²) —— 百万条会话补到顶要几分钟。
+     */
+    public bool LoadOlderHistoryTo(long targetFrom)
     {
         if (_replayFrom <= 0)
+        {
+            _olderHistoryError = null;
             return false;
-        var from = Math.Max(0, _replayFrom - OlderHistoryPageEvents);
-        List<SessionEvent> earlier;
+        }
+        var from = Math.Max(0, Math.Min(_replayFrom - OlderHistoryPageEvents, targetFrom));
+        List<SessionEvent> page;
         try
         {
-            earlier = [.. Agent.Session.SnapshotEvents(from, _replayFrom)];
+            page = [.. Agent.Session.SnapshotEvents(from, _replayFrom)];
+        }
+        catch (SessionPageUnavailableException error)
+        {
+            _olderHistoryError = $"第 {error.Page} 页读不出来(#{error.Seq}), 更早的历史暂时接不上";
+            return false;
         }
         catch (Exception error) when (error is IOException or InvalidOperationException)
         {
+            _olderHistoryError = $"更早的历史读取失败: {error.Message}";
             return false;
         }
-        if (earlier.Count == 0)
+        if (page.Count == 0)
+        {
+            _olderHistoryError = $"更早的历史不在会话日志里(#{from}-#{_replayFrom - 1} 为空)";
             return false;
-        var keepOffset = ScrollOffset;
-        var previousLength = Renderer.CurrentLength;
-        _replayFrom = from;
-        Renderer.Clear();
-        RenderedSeq = 0;
-        // 重放期间不能带整理状态: 更早的前缀里可能残留上一个进程的未闭合开始标记。
-        _maintaining = false;
-        _pendingSubagentCalls.Clear();
-        InvalidateWrapCache();
-        ReplayEvents();
-        // 同一段内容现在往后挪了"新接上的字数": 视口跟着挪, 屏幕上还是那一行。
-        StickToBottom = false;
-        ScrollOffset = keepOffset + Math.Max(0, Renderer.CurrentLength - previousLength);
+        }
+        _olderHistoryError = null;
+        // 先记下视口顶行(按当前滚动位置算, 不用上一帧的), 之后按它把同一行放回原处。
+        var anchor = SourceOffsetAt(ScrollOffset) ?? _anchorSourceOffset;
+        var anchorSeq = anchor is { } anchorOffset ? Renderer.SeqAt(anchorOffset) : _anchorSeq;
+        PrependOlderPage(page, from, anchor, anchorSeq);
         return true;
     }
 
+    /** 把这一页渲染进一份独立转录, 再整块前置; 页尾未闭合的构造就地收口, 保证接缝干净。 */
+    private void PrependOlderPage(List<SessionEvent> page, long from, int? anchor, long anchorSeq)
+    {
+        var staged = new TranscriptRenderer(_maintenance);
+        foreach (var sessionEvent in page)
+        {
+            // 只生成文本: 统计、忙碌状态、回合编号描述的是"会话现在在哪", 补进来的旧历史不该改它们。
+            staged.AppendSessionEvent(sessionEvent, replay: true);
+        }
+        staged.SealBoundary();
+        // 这一页很可能一条可见内容都没有(百万条事件里绝大部分是审计决策): 那也算补页成功,
+        // 只是没有文字要前置。
+        var delta = Renderer.PrependFrom(staged);
+        ShiftHistoryOffsets(delta, staged);
+        _replayFrom = from;
+        var scanned = TranscriptHistoryIndex.OfEvents(page, from, KnownRevertedRanges);
+        _timeline.MergeEarlier(scanned.Messages, scanned.TurnStarts, scanned.Reverted, scanned.CoveredFrom);
+        RestoreAnchor(anchor is { } offset ? offset + delta : null, anchorSeq);
+    }
+
+    /**
+     * 前置一页之后挪动按偏移记账的状态, 并把折行缓存接上。
+     *
+     * 折行只依赖"行文本 + 宽度", 页与页之间互不影响(PrependFrom 保证接缝落在行边界上),
+     * 所以已有行不必重折, 只需连同下标一起后移, 再折新前置的那一页(O(这一页))。
+     * 早先是整段作废重折: 11.5MB 的会话每补一页要重折 17.9 万行(约 1.6 秒), 补到顶就是 O(页数²)。
+     */
+    private void ShiftHistoryOffsets(int delta, TranscriptRenderer page)
+    {
+        if (_wrapRows is { Count: > 0 } && _wrapCacheWidth > 0 && _wrapProcessedLine > 0)
+            PrependWrapCache(page, delta);
+        else
+        {
+            _wrapRows = null;
+            _visualRows.Clear();
+            _foldSnapshot.Clear();
+            _wrapProcessedLine = 0;
+        }
+        if (_pendingSubagentCalls.Count > 0)
+        {
+            foreach (var (callId, pending) in _pendingSubagentCalls.ToArray())
+                _pendingSubagentCalls[callId] = (pending.Start + delta, pending.Arguments);
+        }
+        if (_anchorSourceOffset is { } anchorOffset)
+            _anchorSourceOffset = anchorOffset + delta;
+    }
+
+    /** 折新前置的这一页, 再把它插到已折好的行前面; 已有行只做整体平移, 不重折。 */
+    private void PrependWrapCache(TranscriptRenderer page, int delta)
+    {
+        var outerRows = _wrapRows!;
+        var outerVisual = _visualRows;
+        _wrapRows = [];
+        _visualRows = [];
+        WrapInto(page, page.Folds, _wrapCacheWidth, 0, page.LineCount);
+        var headRows = _wrapRows;
+        var headVisual = _visualRows;
+        _wrapRows = outerRows;
+        _visualRows = outerVisual;
+        ShiftRows(outerRows, outerVisual, delta, headRows.Count);
+        outerRows.InsertRange(0, headRows);
+        outerVisual.InsertRange(0, headVisual);
+        _wrapProcessedLine += page.LineCount;
+        // 折叠快照要跟着换成合并后的: 不换的话 RebuildWrapCache 会以为折叠变了, 把整段又折一遍。
+        SnapshotFolds(Renderer.Folds);
+    }
+
+    /** 已折好的行整体后移: 正文偏移 +delta(前面多了一页), 折行下标 +newRows(前面多了那些行)。 */
+    private static void ShiftRows(List<WrapRow> rows, List<VisualRow> visual, int delta, int newRows)
+    {
+        for (var index = 0; index < rows.Count; index += 1)
+        {
+            var row = rows[index];
+            rows[index] = new WrapRow(row.Start + delta, row.Length, row.Literal);
+        }
+        for (var index = 0; index < visual.Count; index += 1)
+        {
+            var row = visual[index];
+            visual[index] = new VisualRow(row.SourceStart + delta, row.FlatStart + newRows);
+        }
+    }
+
     /** 切换会话后回放历史事件, 让恢复/重进的会话立刻可见; 序列守卫会跳过与滞留事件的重合部分。 */
-    public void ReplayEvents()
+    public void ReplayEvents() => ReplayEvents(null, keepAnchor: true);
+
+    /**
+     * 回放 [_replayFrom, 末尾)。prefix 非空时它就是 [_replayFrom, ResidentFrom) 那一段 ——
+     * 补页调用方已经读过一次, 这里不再重复读同一批页。
+     */
+    private void ReplayEvents(IReadOnlyList<SessionEvent>? prefix, bool keepAnchor)
     {
         var session = Agent.Session;
+        var anchor = keepAnchor ? _anchorSourceOffset : null;
+        var anchorSeq = _anchorSeq;
         SyncRevertedRanges();
+        _timeline.KeepBelow(_replayFrom);
         _displayTurn = 0;
         _currentDisplayTurn = 0;
         // 只回放 _replayFrom 之后的事件: 更早的前缀在用户往上滚/跳转时由 LoadOlderHistory 补上,
         // 而不是在打开会话时把整份历史拉回来。
-        foreach (var sessionEvent in session.ResidentFrom > _replayFrom
-                     ? session.SnapshotEvents(_replayFrom, session.ResidentFrom)
-                     : [])
+        var earlier = prefix ?? (session.ResidentFrom > _replayFrom
+            ? [.. session.SnapshotEvents(_replayFrom, session.ResidentFrom)]
+            : []);
+        foreach (var sessionEvent in earlier)
             ProcessSessionEvent(sessionEvent, replay: true);
         foreach (var sessionEvent in session.ResidentEvents())
             ProcessSessionEvent(sessionEvent, replay: true);
@@ -824,6 +1047,39 @@ public sealed class ChatPane : ITuiPane
             foreach (var queued in loop.Inbox.NextTurn.Concat(loop.Inbox.NextStep))
                 Renderer.AppendQueuedUserMessage(queued);
         }
+        if (keepAnchor)
+            RestoreAnchor(anchor, anchorSeq);
+    }
+
+    /**
+     * 按锚点把视口放回去: 先按事件序号找"那条内容还在不在", 再按源偏移落到行;
+     * 内容已经不在(回退把它收掉了)就停在原来的偏移附近, 由绘制阶段夹到合法范围。
+     */
+    private void RestoreAnchor(int? anchor, long anchorSeq)
+    {
+        if (anchor is not { } offset)
+            return;
+        StickToBottom = false;
+        if (anchorSeq > 0 && Renderer.CurrentLength > 0 && Renderer.SeqAt(offset) != anchorSeq)
+        {
+            // 重放之后偏移处已是别的内容: 按序号找它原来那一行的新位置。
+            if (SourceOffsetOfSeq(anchorSeq) is { } moved)
+                offset = moved;
+        }
+        // 还没有视口缓存(一次都没画过)时 TryScrollToSourceOffset 返回 false: 交给下一帧按新的行号重建。
+        TryScrollToSourceOffset(offset);
+    }
+
+    /** 第一条属于该事件(或更晚事件)的视觉行的源偏移: 序号在重放后不再落在同一偏移时的退路。 */
+    private int? SourceOffsetOfSeq(long seq)
+    {
+        EnsureWrapCache();
+        foreach (var row in _visualRows)
+        {
+            if (Renderer.SeqAt(row.SourceStart) >= seq)
+                return row.SourceStart;
+        }
+        return null;
     }
 
     /** 回退之后整段重画: 先按日志重算被收掉的区间, 再从常驻窗口回放一遍。 */
@@ -839,6 +1095,8 @@ public sealed class ChatPane : ITuiPane
         Renderer.Clear();
         RenderedSeq = 0;
         _replayFrom = Session.ResidentFrom;
+        // 回退/重编号之后日志视图整体变了: 索引里已收录的区间不再可信, 从常驻窗口重新累积。
+        _timeline.Reset(Session.ResidentFrom);
         ReplayEvents();
     }
 
@@ -851,17 +1109,12 @@ public sealed class ChatPane : ITuiPane
             if (sessionEvent.Data is SessionRevertPayload revert)
                 _reverted.Add((revert.TargetSeq, sessionEvent.Seq));
         }
+        // 尾窗里的回退区间也进索引: 索引在补页/整段扫描时靠它把更早的消息一起滤掉。
+        foreach (var (from, to) in _reverted)
+            _timeline.AddReverted(from, to);
     }
 
-    private bool IsReverted(long seq)
-    {
-        foreach (var (from, to) in _reverted)
-        {
-            if (seq >= from && seq <= to)
-                return true;
-        }
-        return false;
-    }
+    private bool IsReverted(long seq) => _timeline.Contains(seq);
 
     public void ProcessSessionEvent(SessionEvent sessionEvent, bool replay = false)
     {
@@ -903,6 +1156,14 @@ public sealed class ChatPane : ITuiPane
 
         if (sessionEvent.Data is ToolCallPayload call)
             _pendingSubagentCalls[call.CallId] = (Renderer.CurrentLength, call.Arguments);
+
+        // 时间线索引与回退边界在回放时顺手累积: /timestamp 与 /timestamp revert 之后都只读内存。
+        // 过滤规则复用 SessionTimeline.UserText, 不在这里另写一套"什么算用户消息"。
+        if (sessionEvent.Data is TurnStartPayload)
+            _timeline.AddTurnStart(sessionEvent.Seq);
+        var userText = SessionTimeline.UserText(sessionEvent);
+        if (userText.Length > 0)
+            _timeline.AddMessage(sessionEvent.Seq, sessionEvent.Time, userText);
 
         if (sessionEvent.Data is ToolResultPayload result)
         {
@@ -996,8 +1257,10 @@ public sealed class ChatPane : ITuiPane
                 renderer.AppendSessionEvent(sessionEvent);
         }
 
-        var lines = renderer.CompletedLines.Select(line => $"  {line}").ToList();
-        if (renderer.Tail.Length > 0)
+        var lines = new List<string>(renderer.LineCount + 1);
+        for (var index = 0; index < renderer.LineCount; index += 1)
+            lines.Add($"  {new string(renderer.LineSpan(index))}");
+        if (renderer.TailSpan.Length > 0)
             lines.Add($"  {renderer.Tail}");
         return string.Join('\n', lines);
     }
@@ -1016,22 +1279,22 @@ public sealed class ChatPane : ITuiPane
 
         var transcriptVersion = Renderer.Version;
         _lastTranscriptWidth = rect.Width;
-        if (Renderer.TrimVersion != _wrapCacheTrimVersion)
+        if (Renderer.ResetVersion != _wrapCacheResetVersion)
         {
-            // 转录裁过头部: 行号整体位移, 按行号缓存的包裹行与折叠快照都不再对得上, 丢弃重算。
-            _wrapCacheTrimVersion = Renderer.TrimVersion;
-            _wrapCacheLines = null;
+            // 转录被整体清空重放过: 行号已经重排, 按行号缓存的包裹行与折叠快照都不再对得上, 丢弃重算。
+            _wrapCacheResetVersion = Renderer.ResetVersion;
+            _wrapRows = null;
             _visualRows.Clear();
             _foldSnapshot.Clear();
         }
-        if (_wrapCacheLines is null || _wrapCacheVersion != transcriptVersion || _wrapCacheWidth != rect.Width)
+        if (_wrapRows is null || _wrapCacheVersion != transcriptVersion || _wrapCacheWidth != rect.Width)
         {
             RebuildWrapCache(rect.Width);
             _wrapCacheVersion = transcriptVersion;
         }
-        var wrapped = _wrapCacheLines!;
+        var wrapped = _wrapRows!;
         if (wrapped.Count == 0)
-            wrapped.Add("");
+            wrapped.Add(new WrapRow(0, 0, ""));
 
         var maxOffset = Math.Max(0, wrapped.Count - rect.Height);
         if (StickToBottom)
@@ -1045,15 +1308,20 @@ public sealed class ChatPane : ITuiPane
         ScrollOffset = Math.Clamp(ScrollOffset, 0, maxOffset);
 
         var start = ScrollOffset;
+        _anchorSourceOffset = SourceOffsetAt(start);
+        if (_anchorSourceOffset is { } anchorOffset)
+            _anchorSeq = Renderer.SeqAt(anchorOffset);
+        Probe?.MarkViewport();
         for (var row = 0; row < rect.Height; row++)
         {
             var lineIndex = start + row;
             if (lineIndex >= wrapped.Count)
                 break;
-            CellText.Draw(grid, rect.X, rect.Y + row, wrapped[lineIndex], literal: true);
+            CellText.Draw(grid, rect.X, rect.Y + row, RowSpan(wrapped[lineIndex]), literal: true);
             ApplyTintHighlight(grid, rect, row, lineIndex);
             ApplySelectionHighlight(grid, rect, row, lineIndex);
         }
+        Probe?.MarkFirstPaint();
     }
 
     /** 时间线浮层: 一级列消息(含 IDE 历史项), 二级列动作; revert 的确认走同一浮层的提示行。 */
@@ -1544,7 +1812,7 @@ public sealed class ChatPane : ITuiPane
                 // provider 的 --type 候选按已注册适配器动态取(插件启用/停用后依然正确)。
                 "type" => Candidates([.. KnownProviderTypes()]),
                 "action" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => Candidates("jump", "revert", "fork"),
-                "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(),
+                "seq" when string.Equals(descriptor.Name, "timestamp", StringComparison.OrdinalIgnoreCase) => _window.TimestampCandidates(this),
                 PluginCommand.PackageArgument => Candidates([.. _window.Ctx.Get<HarnessPluginManager>("pluginManager", false)?.PackageNames ?? []]),
                 _ => descriptor.Name switch
                 {
@@ -2082,7 +2350,7 @@ public sealed class ChatPane : ITuiPane
             return;
         var expandedText = text.Length == 0
             ? ""
-            : MentionResolver.ExpandMentions(text, CurrentCwd(), _window.CurrentSessions());
+            : MentionResolver.ExpandMentions(text, _window.CurrentSessions());
         var content = new List<ContentBlock>();
         if (expandedText.Length > 0)
             content.Add(new TextBlock(expandedText));
@@ -2094,13 +2362,11 @@ public sealed class ChatPane : ITuiPane
     }
 
     /**
-     * 多行输入里 ↑/↓ 先在视觉行之间移动光标, 到首行/末行才让位给历史记录。
-     * 返回 true 表示这次按键已被"按行移动"消费。
+     * 需要在视觉行之间移动光标: 多行草稿与"很长的单行草稿(软折行)"都算。
+     * 返回 true 表示这次按键已被"按行移动"消费; 移动不了(已在首行/末行)才让位给历史记录。
      */
     private bool MoveCursorByRow(int delta)
     {
-        if (!Input.Contains('\n', StringComparison.Ordinal))
-            return false;
         var width = _lastInputWidth > 0 ? _lastInputWidth : Math.Max(1, 80 - InputPrompt.Length);
         var caret = InputLayout.Cursor(Input, Cursor, width);
         var target = caret.Row + delta;
@@ -2111,14 +2377,37 @@ public sealed class ChatPane : ITuiPane
         return true;
     }
 
+    /**
+     * ↑/↓ 切历史: 只由"光标在草稿开头/末尾"触发(见 HandleKey), 所以这里的每次调用都是用户的明确意图。
+     * 离开草稿时留一份底(内容+光标), 按 ↓ 回到 -1 时恢复它 —— 否则"看一眼历史"就会把正在写的东西清空。
+     */
     private void RecallHistory(int direction)
     {
         if (_history.Count == 0)
             return;
-        _historyIndex = _historyIndex < 0
+        // 历史是一条链, 当前草稿挂在新的一头: ↑ 往前走(最早一条为止), ↓ 走回草稿(-1)。
+        var next = _historyIndex < 0
             ? direction < 0 ? _history.Count - 1 : -1
-            : Math.Clamp(_historyIndex + direction, -1, _history.Count - 1);
-        Input = _historyIndex < 0 ? "" : _history[_historyIndex];
+            : direction < 0
+                ? Math.Max(0, _historyIndex - 1)
+                : _historyIndex >= _history.Count - 1 ? -1 : _historyIndex + 1;
+        if (next == _historyIndex)
+            return;
+        if (_historyIndex < 0)
+        {
+            _draftBeforeHistory = Input;
+            _draftCursorBeforeHistory = Cursor;
+        }
+        _historyIndex = next;
+        if (_historyIndex < 0)
+        {
+            Input = _draftBeforeHistory;
+            Cursor = Math.Min(_draftCursorBeforeHistory, Input.Length);
+            _draftBeforeHistory = "";
+            _draftCursorBeforeHistory = 0;
+            return;
+        }
+        Input = _history[_historyIndex];
         Cursor = Input.Length;
     }
 
@@ -2145,7 +2434,7 @@ public sealed class ChatPane : ITuiPane
     {
         _wrapCacheVersion = -1;
         _wrapCacheWidth = -1;
-        _wrapCacheLines = null;
+        _wrapRows = null;
         _wrapProcessedLine = 0;
         _visualRows.Clear();
         _foldSnapshot.Clear();
@@ -2218,22 +2507,22 @@ public sealed class ChatPane : ITuiPane
 
     private string? ExtractSelection()
     {
-        var lines = _wrapCacheLines;
-        if (lines is null || lines.Count == 0)
+        var rows = _wrapRows;
+        if (rows is null || rows.Count == 0)
             return null;
         var (firstRow, firstColumn, lastRow, lastColumn) = OrderedSelection();
         firstRow = Math.Max(0, firstRow);
-        lastRow = Math.Min(lines.Count - 1, lastRow);
+        lastRow = Math.Min(rows.Count - 1, lastRow);
         if (lastRow < firstRow)
             return null;
         var builder = new StringBuilder();
         for (var row = firstRow; row <= lastRow; row++)
         {
-            var line = lines[row];
+            var line = RowSpan(rows[row]);
             var start = row == firstRow ? Math.Min(firstColumn, line.Length) : 0;
             var end = row == lastRow ? Math.Min(lastColumn + 1, line.Length) : line.Length;
             if (end > start)
-                builder.Append(line, start, end - start);
+                builder.Append(line[start..end]);
             if (row < lastRow)
                 builder.Append('\n');
         }
@@ -2247,7 +2536,7 @@ public sealed class ChatPane : ITuiPane
         var offset = SourceOffsetAt(wrappedIndex);
         if (offset is null)
             return;
-        var lineIndex = LineIndexOf(Renderer.LineStarts, Renderer.CompletedLines.Count, Renderer.TailStart, offset.Value);
+        var lineIndex = LineIndexOf(offset.Value);
         var tints = Renderer.LineTints;
         if (lineIndex < 0 || lineIndex >= tints.Count)
             return;
@@ -2381,7 +2670,7 @@ public sealed class ChatPane : ITuiPane
     private int? SourceOffsetAt(int wrappedIndex)
     {
         var rows = _visualRows;
-        if (_wrapCacheLines is null || rows.Count == 0 || wrappedIndex < 0 || wrappedIndex >= _wrapCacheLines.Count)
+        if (_wrapRows is null || rows.Count == 0 || wrappedIndex < 0 || wrappedIndex >= _wrapRows.Count)
             return null;
         var low = 0;
         var high = rows.Count - 1;
@@ -2431,21 +2720,24 @@ public sealed class ChatPane : ITuiPane
     private static string FoldKey(TranscriptFold fold)
         => $"{fold.Start}:{fold.Label}";
 
-    private sealed class VisualRow
-    {
-        public required int SourceStart { get; init; }
-        public required int FlatStart { get; set; }
-    }
+    /** 视觉行(值类型): 源偏移 + 它在折行列表里的下标。 */
+    private readonly record struct VisualRow(int SourceStart, int FlatStart);
+
+    /**
+     * 折行行: 文本按 [Start, Start + Length) 从转录正文取一份切片, 只有折叠头/页码这类合成内容才自带字符串。
+     * 逐行存 string 会把同一段文字再抄一份 —— 用户往上滚过的页越多, 这份重复越大。
+     */
+    private readonly record struct WrapRow(int Start, int Length, string? Literal);
+
+    private ReadOnlySpan<char> RowSpan(WrapRow row)
+        => row.Literal is { } literal ? literal.AsSpan() : Renderer.TextSpan(row.Start, row.Length);
 
     private void RebuildWrapCache(int width)
     {
-        var lines = Renderer.CompletedLines;
-        var starts = Renderer.LineStarts;
-        var tail = Renderer.Tail;
-        var tailStart = Renderer.TailStart;
+        var lineCount = Renderer.LineCount;
         var folds = Renderer.Folds;
         var from = 0;
-        if (_wrapCacheLines is not null && _wrapCacheWidth == width && _wrapProcessedLine <= lines.Count + 1)
+        if (_wrapRows is not null && _wrapCacheWidth == width && _wrapProcessedLine <= lineCount + 1)
         {
             from = _wrapProcessedLine;
             for (var index = 0; index < folds.Count; index++)
@@ -2455,60 +2747,52 @@ public sealed class ChatPane : ITuiPane
                     continue;
                 if (index >= _foldSnapshot.Count && !fold.Collapsed)
                     continue;
-                from = Math.Min(from, LineIndexOf(starts, lines.Count, tailStart, fold.Start));
+                from = Math.Min(from, LineIndexOf(fold.Start));
             }
         }
-        RebuildWrapFromLines(lines, starts, tail, tailStart, folds, width, from);
+        RebuildWrapFromLines(folds, width, from);
         SnapshotFolds(folds);
         _wrapCacheWidth = width;
-        TrimWrapRows();
     }
 
-    /**
-     * 折行缓存也要有上限: 它按行存了转录的第二份文本, 一份 4M 字符的转录折行后会到十万行量级。
-     * 超出就丢掉最老的一整批行(按行边界丢, 不会切开某一行); 更早的内容仍在 renderer 里,
-     * 只是不再预先折行 —— 用户滚到顶会看到缓存从哪里开始。
-     */
-    private const int MaxWrapRows = 40_000;
-
-    private void TrimWrapRows()
-    {
-        if (_wrapCacheLines is not { Count: > MaxWrapRows } wrapped)
-            return;
-        var target = wrapped.Count - MaxWrapRows;
-        var cut = _visualRows.FindIndex(row => row.FlatStart >= target);
-        if (cut <= 0)
-            return;
-        var drop = _visualRows[cut].FlatStart;
-        wrapped.RemoveRange(0, drop);
-        _visualRows.RemoveRange(0, cut);
-        foreach (var row in _visualRows)
-            row.FlatStart -= drop;
-        ScrollOffset = Math.Max(0, ScrollOffset - drop);
-    }
-
-    /** 行索引空间的增量重排: 全文不再物化, 行文本直接取 renderer 的行列表; fold 偏移经 LineStarts 二分映射为行号。 */
-    private void RebuildWrapFromLines(IReadOnlyList<string> lines, IReadOnlyList<int> starts, string tail, int tailStart, IReadOnlyList<TranscriptFold> folds, int width, int fromLine)
+    /** 行索引空间的增量重排: 行文本按切片从 renderer 取; fold 偏移经行起点二分映射为行号。 */
+    private void RebuildWrapFromLines(IReadOnlyList<TranscriptFold> folds, int width, int fromLine)
     {
         var rows = _visualRows;
-        var wrapped = _wrapCacheLines ??= [];
-        var fromOffset = fromLine < lines.Count ? starts[fromLine] : tailStart;
+        var wrapped = _wrapRows ??= [];
+        var lineCount = Renderer.LineCount;
+        var fromOffset = fromLine < lineCount ? Renderer.LineAt(fromLine).Start : Renderer.TailStart;
         var rowIndex = LowerBoundRow(rows, fromOffset);
         var flatIndex = rowIndex < rows.Count ? rows[rowIndex].FlatStart : wrapped.Count;
         if (rowIndex < rows.Count)
             rows.RemoveRange(rowIndex, rows.Count - rowIndex);
         wrapped.RemoveRange(flatIndex, wrapped.Count - flatIndex);
+        WrapInto(Renderer, folds, width, fromLine, lineCount + 1);
+        _wrapProcessedLine = lineCount;
+    }
 
+    /**
+     * 把 [fromLine, lastLine) 这些逻辑行折成视觉行, 追加到 `_visualRows` / `_wrapRows` 末尾。
+     * lastLine 取 lineCount + 1 时把"尾部半行"那一行也算进来。
+     * 前置一页时也走这里(见 PrependWrapCache): 折行只依赖行文本与宽度, 页与页之间互不影响。
+     */
+    private void WrapInto(TranscriptRenderer source, IReadOnlyList<TranscriptFold> folds, int width, int fromLine, int lastLine)
+    {
+        var lineCount = source.LineCount;
+        var tailStart = source.TailStart;
+        // 折行时每行都要查"展开折叠的头", 所以先按起点建好索引(见 ExpandedFoldsByStart)。
+        var expandedFolds = ExpandedFoldsByStart(folds);
+        var collapsedFolds = CollapsedFoldsByStart(folds);
         var lineIndex = fromLine;
-        while (lineIndex <= lines.Count)
+        while (lineIndex < lastLine)
         {
-            var lineStart = lineIndex < lines.Count ? starts[lineIndex] : tailStart;
-            var raw = lineIndex < lines.Count ? lines[lineIndex] : tail;
-            var expanded = FindExpandedFold(folds, lineStart);
+            var lineStart = lineIndex < lineCount ? source.LineAt(lineIndex).Start : tailStart;
+            var raw = lineIndex < lineCount ? source.LineSpan(lineIndex) : source.TailSpan;
+            var expanded = expandedFolds.GetValueOrDefault(lineStart);
             if (expanded is not null)
             {
-                var endLine = LineIndexOf(starts, lines.Count, tailStart, expanded.End);
-                // 折叠内容可能整段落在同一行里(单行 thinking、行内代码围栏、被裁头夹到折叠起点的那段):
+                var endLine = LineIndexOf(source, expanded.End);
+                // 折叠内容可能整段落在同一行里(单行 thinking、行内代码围栏、折叠起点与终点同处一行):
                 // 这时 endLine 就是当前行, 以它作下一行会让外层循环原地打转(TUI 100% CPU 卡死、按键无响应)。
                 // 这种退化情形按"这一行就是折叠体"渲染, 保证至少前进一行。
                 if (endLine <= lineIndex)
@@ -2530,7 +2814,7 @@ public sealed class ChatPane : ITuiPane
                 if (expanded.Paged && foldLines > DiffCardDisplay.PageLines)
                 {
                     var last = Math.Min(foldLines, expanded.Scroll + DiffCardDisplay.PageLines);
-                    AddRow(expanded.Start,
+                    AddLiteralRow(expanded.Start,
                         $"{FoldHeader(expanded)} [第 {expanded.Scroll + 1}-{last} 行 / 共 {foldLines} 行]  (滚轮滚动, 点正文翻页)",
                         width);
                 }
@@ -2538,23 +2822,24 @@ public sealed class ChatPane : ITuiPane
                 var bodyEnd = expanded.Paged ? Math.Min(endLine, bodyStart + DiffCardDisplay.PageLines) : endLine;
                 for (var pageLine = bodyStart; pageLine < bodyEnd; pageLine++)
                 {
-                    var pageStartOffset = pageLine < lines.Count ? starts[pageLine] : tailStart;
-                    var pageContent = pageLine < lines.Count ? lines[pageLine] : tail;
+                    var pageStartOffset = pageLine < lineCount ? source.LineAt(pageLine).Start : tailStart;
+                    var pageContent = pageLine < lineCount ? source.LineSpan(pageLine) : source.TailSpan;
                     if (pageContent.EndsWith('\r'))
                         pageContent = pageContent[..^1];
                     if (expanded.Paged && pageLine == bodyStart && expanded.Scroll == 0 && pageCount > 1)
-                        pageContent = $"{pageContent} [1/{pageCount}]";
-                    AddRow(pageStartOffset, pageContent, width);
+                        AddLiteralRow(pageStartOffset, $"{pageContent} [1/{pageCount}]", width);
+                    else
+                        AddRow(pageStartOffset, pageContent, width);
                 }
                 lineIndex = Math.Max(endLine, lineIndex + 1);
                 continue;
             }
-            var fold = FindCollapsedFold(folds, lineStart);
+            var fold = CollapsedFoldAt(collapsedFolds, lineStart);
             if (fold is not null)
             {
-                AddRow(lineStart, FoldHeader(fold), width);
-                var endLine = LineIndexOf(starts, lines.Count, tailStart, fold.End);
-                var endLineStart = endLine < lines.Count ? starts[endLine] : tailStart;
+                AddLiteralRow(lineStart, FoldHeader(fold), width);
+                var endLine = LineIndexOf(source, fold.End);
+                var endLineStart = endLine < lineCount ? source.LineAt(endLine).Start : tailStart;
                 if (fold.End <= endLineStart)
                 {
                     // 与展开态同一个不变量: 下一行必须比当前行靠后, 否则外层循环不前进。
@@ -2562,7 +2847,7 @@ public sealed class ChatPane : ITuiPane
                 }
                 else
                 {
-                    var endRaw = endLine < lines.Count ? lines[endLine] : tail;
+                    var endRaw = endLine < lineCount ? source.LineSpan(endLine) : source.TailSpan;
                     var rest = endRaw[(fold.End - endLineStart)..];
                     if (rest.EndsWith('\r'))
                         rest = rest[..^1];
@@ -2575,20 +2860,23 @@ public sealed class ChatPane : ITuiPane
             AddRow(lineStart, content, width);
             lineIndex++;
         }
-        _wrapProcessedLine = lines.Count;
     }
 
-    /** offset > 行号: 行 i 覆盖 [starts[i], 下一行起点), tail 行覆盖 [tailStart, 末尾)。 */
-    private static int LineIndexOf(IReadOnlyList<int> starts, int completeCount, int tailStart, int offset)
+    /** offset > 行号: 行 i 覆盖 [start_i, 下一行起点), 尾部行覆盖 [TailStart, 末尾)。 */
+    private int LineIndexOf(int offset) => LineIndexOf(Renderer, offset);
+
+    private static int LineIndexOf(TranscriptRenderer source, int offset)
     {
+        var lineCount = source.LineCount;
+        var tailStart = source.TailStart;
         if (offset >= tailStart)
-            return completeCount;
+            return lineCount;
         var low = 0;
-        var high = completeCount;
+        var high = lineCount;
         while (low < high)
         {
             var mid = (low + high) >>> 1;
-            if (starts[mid] <= offset)
+            if (source.LineAt(mid).Start <= offset)
                 low = mid + 1;
             else
                 high = mid;
@@ -2600,15 +2888,41 @@ public sealed class ChatPane : ITuiPane
     private static string FoldHeader(TranscriptFold fold)
         => $"{(fold.Collapsed ? "▸" : "▾")} {fold.Preview.TrimStart()}";
 
-    private static TranscriptFold? FindCollapsedFold(IReadOnlyList<TranscriptFold> folds, int position)
+    /**
+     * 折叠态折叠按起点排好的数组: 折行时每行都要问"这行落在哪个折叠里", 线性扫全部折叠是 O(行数×折叠数)。
+     * 先二分定位, 再向前回溯"还覆盖这里的" —— 通常一步就结束。
+     */
+    private static TranscriptFold[] CollapsedFoldsByStart(IReadOnlyList<TranscriptFold> folds)
     {
-        TranscriptFold? outermost = null;
+        var collapsed = new List<TranscriptFold>(folds.Count);
         foreach (var fold in folds)
         {
-            if (!fold.Collapsed || fold.Start > position || position >= fold.End)
-                continue;
-            if (outermost is null || fold.Start < outermost.Start)
-                outermost = fold;
+            if (fold.Collapsed)
+                collapsed.Add(fold);
+        }
+        // 不依赖"折叠总是按起点递增追加"这个隐含约定: 前置/合并之后照样二分得对。
+        collapsed.Sort((left, right) => left.Start.CompareTo(right.Start));
+        return [.. collapsed];
+    }
+
+    /** 覆盖 position 的最外层折叠态折叠(嵌套时取起点最小的那个)。 */
+    private static TranscriptFold? CollapsedFoldAt(TranscriptFold[] sortedByStart, int position)
+    {
+        var low = 0;
+        var high = sortedByStart.Length;
+        while (low < high)
+        {
+            var middle = (low + high) >>> 1;
+            if (sortedByStart[middle].Start <= position)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        TranscriptFold? outermost = null;
+        for (var index = low - 1; index >= 0 && position < sortedByStart[index].End; index -= 1)
+        {
+            if (position >= sortedByStart[index].Start)
+                outermost = sortedByStart[index];
         }
         return outermost;
     }
@@ -2622,6 +2936,22 @@ public sealed class ChatPane : ITuiPane
                 return fold;
         }
         return null;
+    }
+
+    /**
+     * 展开态折叠按起点建索引: 折行时每一行都要问"这行的起点是不是某个展开折叠的头",
+     * 线性扫全部折叠会让整段折行变成 O(行数×折叠数)(11.5MB/17.9 万行/5 千折叠要 1.6 秒)。
+     * 折叠在转录里按起点递增追加, 起点即标识, 所以按起点建表即可精确命中。
+     */
+    private static Dictionary<int, TranscriptFold> ExpandedFoldsByStart(IReadOnlyList<TranscriptFold> folds)
+    {
+        var map = new Dictionary<int, TranscriptFold>(folds.Count);
+        foreach (var fold in folds)
+        {
+            if (!fold.Collapsed && fold.End > fold.Start)
+                map[fold.Start] = fold;
+        }
+        return map;
     }
 
     private static int LowerBoundRow(List<VisualRow> rows, int sourceStart)
@@ -2639,12 +2969,45 @@ public sealed class ChatPane : ITuiPane
         return low;
     }
 
-    private void AddRow(int sourceStart, string content, int width)
+    /** 一逻辑行折成若干视觉行; 文本留在转录正文里, 这里只记区间。 */
+    private void AddRow(int sourceStart, ReadOnlySpan<char> content, int width)
     {
-        var probe = new List<string>();
-        WrapSingleLine(content, width, probe);
-        _visualRows.Add(new VisualRow { SourceStart = sourceStart, FlatStart = _wrapCacheLines!.Count });
-        _wrapCacheLines.AddRange(probe);
+        _visualRows.Add(new VisualRow(sourceStart, _wrapRows!.Count));
+        if (content.Length == 0)
+        {
+            _wrapRows.Add(new WrapRow(sourceStart, 0, null));
+            return;
+        }
+
+        // 逻辑行里可能内嵌换行(session-query 等多行命令输出): 必须先按 \n/\r 切行,
+        // 否则 '\n' 会被当普通字符写进网格, 终端渲染时真的换行, 导致后续内容错位/互相插入。
+        var start = 0;
+        var wrote = false;
+        for (var index = 0; index <= content.Length; index++)
+        {
+            if (index < content.Length && content[index] is not ('\n' or '\r'))
+                continue;
+            if (index > start)
+            {
+                WrapSegment(content[start..index], sourceStart + start, width);
+                wrote = true;
+            }
+
+            start = index + 1;
+        }
+
+        if (!wrote)
+            _wrapRows.Add(new WrapRow(sourceStart, 0, null));
+    }
+
+    /** 合成内容的视觉行(折叠头/页码): 它不来自转录正文, 只能自己带字符串。 */
+    private void AddLiteralRow(int sourceStart, string content, int width)
+    {
+        _visualRows.Add(new VisualRow(sourceStart, _wrapRows!.Count));
+        var pieces = new List<string>();
+        WrapSingleLine(content, width, pieces);
+        foreach (var piece in pieces)
+            _wrapRows.Add(new WrapRow(0, 0, piece));
     }
 
     private void SnapshotFolds(IReadOnlyList<TranscriptFold> folds)
@@ -2683,6 +3046,27 @@ public sealed class ChatPane : ITuiPane
             output.Add("");
     }
 
+    /** 把一段(已按 \n/\r 切开)的文本按显示宽度切行, 每行记成转录正文里的 [sourceStart + 起, 长度) 区间。 */
+    private void WrapSegment(ReadOnlySpan<char> segment, int sourceStart, int width)
+    {
+        var start = 0;
+        var column = 0;
+        for (var index = 0; index < segment.Length; index++)
+        {
+            var characterWidth = TerminalTextWidth.Of(segment[index]);
+            if (column + characterWidth > width)
+            {
+                _wrapRows!.Add(new WrapRow(sourceStart + start, index - start, null));
+                start = index;
+                column = 0;
+            }
+
+            column += characterWidth;
+        }
+
+        _wrapRows!.Add(new WrapRow(sourceStart + start, segment.Length - start, null));
+    }
+
     private static void WrapSegment(string segment, int width, List<string> output)
     {
         var start = 0;
@@ -2710,3 +3094,7 @@ public sealed class ChatPane : ITuiPane
         PendingQuestions?.TrySetResult(AskUserQuestionAnswer.Dismissed);
     }
 }
+
+
+
+

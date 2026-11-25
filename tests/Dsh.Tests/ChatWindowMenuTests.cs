@@ -1074,6 +1074,42 @@ public class ChatWindowMenuTests : IDisposable
                 ]));
     }
 
+    /**
+     * 候选必须按时间倒序(最新在前): 浮层默认选中第 0 条, 顺序反了就是从最早一条开始列。
+     * IDE 历史默认关闭, 而"IDE 关闭"那条提前返回曾经漏掉排序 —— 这里就走没有 IDE 项的默认配置。
+     */
+    [Fact]
+    public async Task TimestampCandidates_AreNewestFirst_WithoutIdeHistory()
+    {
+        using var chat = await CreateChat();
+
+        Type(chat, "第一条");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => chat.InputPane.TimelineEntries.Count >= 1);
+        Type(chat, "第二条");
+        Press(chat, ConsoleKey.Enter);
+        await SettleAsync(chat, () => chat.InputPane.TimelineEntries.Count >= 2);
+
+        var entries = chat.InputPane.TimelineEntries;
+        var candidates = chat.TimestampCandidates(chat.InputPane);
+        Assert.True(candidates.Count >= 2);
+
+        var times = new List<long>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            var seq = long.Parse(candidate.Value.TrimStart('#'), CultureInfo.InvariantCulture);
+            var entry = Assert.Single(entries, item => item.Seq == seq);
+            times.Add(entry.Time);
+        }
+        for (var index = 1; index < times.Count; index += 1)
+            Assert.True(times[index - 1] >= times[index], $"候选第 {index} 条比前一条更新: {times[index - 1]} < {times[index]}");
+
+        // 浮层默认落在首项(= 最新一条)。
+        var overlay = new TimelineOverlay();
+        overlay.Open(candidates);
+        Assert.Equal(candidates[0].Value, overlay.Selected?.Value);
+    }
+
     /** /timestamp 的 seq 候选显示可读预览(#seq + 消息文本), 而不是只有编号。 */
     [Fact]
     public async Task TimestampCandidates_Show_Readable_Preview()
@@ -1082,9 +1118,9 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "hello jump target");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
+        await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Count > 0);
 
-        var entry = Assert.Single(chat.TimestampCandidates());
+        var entry = Assert.Single(chat.TimestampCandidates(chat.InputPane));
 
         Assert.StartsWith("#", entry.Value, StringComparison.Ordinal);
         Assert.Contains("hello jump target", entry.Label, StringComparison.Ordinal);
@@ -1134,11 +1170,12 @@ public class ChatWindowMenuTests : IDisposable
 
         Type(chat, "kept message");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
+        await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Count > 0);
         Type(chat, "message to repost");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => chat.TimestampCandidates().Count > 1);
-        var sourceSeq = long.Parse(chat.TimestampCandidates()[^1].Value.TrimStart('#'), CultureInfo.InvariantCulture);
+        await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Count > 1);
+        // 候选按时间倒序(最新在前): 最后发的那条是首项, 不是末项。
+        var sourceSeq = long.Parse(chat.TimestampCandidates(chat.InputPane)[0].Value.TrimStart('#'), CultureInfo.InvariantCulture);
 
         // 直接走命令分发(菜单的多参数面板需要多次 Tab/Enter, 与本用例无关)。
         chat.RunSlashCommand(chat.InputPane, $"/timestamp fork {sourceSeq}");
@@ -1161,7 +1198,7 @@ public class ChatWindowMenuTests : IDisposable
         var frame = WideFrame(chat);
         Assert.Contains("kept message", frame, StringComparison.Ordinal);
         // 转录里没有它, 只有输入区那一行还带着: 出现两次就说明消息仍留在转录里。
-        Assert.Equal(1, frame.Split("message to repost").Length - 1);
+        Assert.True(frame.Split("message to repost").Length - 1 == 1, $"input=[{chat.InputPane.Input}]`n{frame}");
         Assert.Equal("message to repost", chat.InputPane.Input);
 
         // 打开(resume)不许往 fork 里补合成事件: 种子的部分不参与中断收尾。
@@ -1245,16 +1282,16 @@ public class ChatWindowMenuTests : IDisposable
         {
             Type(chat, "message for timeline");
             Press(chat, ConsoleKey.Enter);
-            await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
-            Assert.DoesNotContain(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
+            await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Count > 0);
+            Assert.DoesNotContain(chat.TimestampCandidates(chat.InputPane), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
         }
 
         using (var chat = await CreateChat(cwd: workspace, configure: (ctx, _) => RegisterIdeHistory(ctx, timeline: true)))
         {
             Type(chat, "message for timeline");
             Press(chat, ConsoleKey.Enter);
-            await SettleAsync(chat, () => chat.TimestampCandidates().Count > 0);
-            var ide = Assert.Single(chat.TimestampCandidates(), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
+            await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Count > 0);
+            var ide = Assert.Single(chat.TimestampCandidates(chat.InputPane), entry => entry.Value.StartsWith("ide-group|", StringComparison.Ordinal));
             Assert.Contains("app.cs", ide.Label, StringComparison.Ordinal);
         }
     }
@@ -1310,8 +1347,8 @@ public class ChatWindowMenuTests : IDisposable
         });
         Type(chat, "message before the history revision");
         Press(chat, ConsoleKey.Enter);
-        await SettleAsync(chat, () => chat.TimestampCandidates().Any(candidate => candidate.Value.StartsWith("#", StringComparison.Ordinal)));
-        var token = Assert.Single(chat.TimestampCandidates(), candidate => candidate.Value.StartsWith("ide-group|", StringComparison.Ordinal)).Value;
+        await SettleAsync(chat, () => chat.TimestampCandidates(chat.InputPane).Any(candidate => candidate.Value.StartsWith("#", StringComparison.Ordinal)));
+        var token = Assert.Single(chat.TimestampCandidates(chat.InputPane), candidate => candidate.Value.StartsWith("ide-group|", StringComparison.Ordinal)).Value;
 
         chat.RunSlashCommand(chat.InputPane, $"/timestamp revert {token}");
         await SettleAsync(chat, () => WideFrame(chat).Contains("Preview only", StringComparison.Ordinal));
@@ -1444,3 +1481,6 @@ public class ChatWindowMenuTests : IDisposable
 
     public void Dispose() => TempTree.Delete(_homeDir);
 }
+
+
+
