@@ -190,7 +190,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
             Started = await _actions.StartAsync(machine, BuildRequest(), CancellationToken.None);
             Completed?.Invoke(this);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or ArgumentException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or ArgumentException or OperationCanceledException)
         {
             Status = $"启动失败: {error.Message}";
         }
@@ -243,7 +243,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
             Agent = Agents.FirstOrDefault(item => item.IsAvailable);
             Status = "";
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or OperationCanceledException)
         {
             if (!cancellationToken.IsCancellationRequested)
                 Status = $"读取 Agent 列表失败: {error.Message}";
@@ -261,7 +261,7 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
                 Worktrees.Add(worktree);
             ExistingWorktree = Worktrees.FirstOrDefault(item => !item.IsMain) ?? Worktrees.FirstOrDefault();
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or OperationCanceledException)
         {
             Status = $"读取 worktree 失败: {error.Message}";
         }
@@ -319,5 +319,4 @@ public sealed partial class NewSessionViewModel : ObservableObject, IDisposable
         return words.Count > 0 ? new RemoteAgentCommand(words[0], words[1..]) : throw new ArgumentException("the command is empty");
     }
 }
-
 

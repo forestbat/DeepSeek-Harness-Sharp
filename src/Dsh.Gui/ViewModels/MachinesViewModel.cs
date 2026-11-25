@@ -250,7 +250,7 @@ public sealed partial class MachinesViewModel(IWorkspaceServices services) : Ope
             }
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException
-            or ArgumentException or JsonRpcException or UnauthorizedAccessException)
+            or ArgumentException or JsonRpcException or StreamJsonRpc.RemoteRpcException or UnauthorizedAccessException)
         {
             if (!Current())
                 return;

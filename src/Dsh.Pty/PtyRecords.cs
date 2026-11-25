@@ -51,6 +51,14 @@ public sealed class PtyRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/**
+ * 记录文件的序列化上下文: 发布档(裁剪/AOT)默认关掉反射序列化, 走反射的 JsonSerializer 在宿主里会抛异常,
+ * 表现为"终端起不来"。源生成的上下文在两种形态下都可用。
+ */
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(PtyRecord))]
+internal partial class PtyRecordJsonContext : JsonSerializerContext;
+
 public static class PtyRecords
 {
     private const string Prefix = "pty-";
@@ -134,7 +142,3 @@ public static class PtyRecords
         }
     }
 }
-
-[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(PtyRecord))]
-internal partial class PtyRecordJsonContext : JsonSerializerContext;

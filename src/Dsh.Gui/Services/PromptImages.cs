@@ -45,7 +45,7 @@ public static partial class PromptImages
             images.Add(new RemoteImageBlock(mediaType, 0, 0, RemotePaths.FileName(path, style), Convert.ToBase64String(bytes)));
             return true;
         }
-        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonRpcException)
+        catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException or JsonRpcException or StreamJsonRpc.RemoteRpcException)
         {
             seen.Remove(path);
             return false;

@@ -270,6 +270,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     {
                         Ok = known,
                         Error = known ? null : $"PTY session not found: {id}",
+                        NotFound = !known,
                         Session = live is not null ? ToDto(live.ToInfo()) : recorded is null ? null : ToDto(recorded),
                     }, cancellationToken);
                     return false;
@@ -285,7 +286,7 @@ public sealed class PtyDaemon : IAsyncDisposable
 
                     if (!await _host.StopAsync(target))
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {target}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(target), cancellationToken);
                         return false;
                     }
 
@@ -362,7 +363,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     var session = id is null ? null : _host.Get(id);
                     if (session is null)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(id), cancellationToken);
                         return false;
                     }
 
@@ -381,7 +382,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     var session = id is null ? null : _host.Get(id);
                     if (session is null || session.Status != PtySessionStatus.Running)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(id), cancellationToken);
                         return false;
                     }
 
@@ -399,7 +400,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     var session = id is null ? null : _host.Get(id);
                     if (session is null)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(id), cancellationToken);
                         return false;
                     }
 
@@ -426,6 +427,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                             await WriteResponseAsync(stream, new PtyDaemonResponse
                             {
                                 Ok = false,
+                                NotFound = session is null,
                                 Error = session is null
                                     ? $"PTY session not found: {id}"
                                     : $"PTY session {id} is not running and has no recorded start parameters"
@@ -477,7 +479,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     var session = id is null ? null : _host.Get(id);
                     if (session is null)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(id), cancellationToken);
                         return false;
                     }
 
@@ -494,7 +496,7 @@ public sealed class PtyDaemon : IAsyncDisposable
                     var session = id is null ? null : _host.Get(id);
                     if (session is null)
                     {
-                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        await WriteResponseAsync(stream, Missing(id), cancellationToken);
                         return false;
                     }
 
@@ -686,6 +688,10 @@ public sealed class PtyDaemon : IAsyncDisposable
             await stream.FlushAsync(cancellationToken);
         }
     }
+
+    /** 会话不存在(既没在跑, 也没有落盘记录)的统一应答: 客户端据此把它当成既成事实, 而不是一次失败。 */
+    private static PtyDaemonResponse Missing(string? id)
+        => new() { Ok = false, NotFound = true, Error = $"PTY session not found: {id}" };
 
     private static async Task WriteResponseAsync(Stream stream, PtyDaemonResponse response, CancellationToken cancellationToken)
     {

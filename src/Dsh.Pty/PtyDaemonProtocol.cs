@@ -12,6 +12,14 @@ public sealed class PtyDaemonNotRunningException : Exception
     }
 }
 
+/**
+ * daemon 里没有这个 pty: 既不在运行, 也没有落盘的启动记录。
+ *
+ * 对"停止/删除这个会话"而言目标状态已经成立, 不是一次失败 —— 登记表(host 的 sessions.json)与 daemon 是两份独立状态,
+ * daemon 重启过之后登记表里仍会留下它曾经管过的终端会话。
+ */
+public sealed class PtySessionNotFoundException(string message) : Exception(message);
+
 public static class PtyDaemonPaths
 {
     /**
@@ -191,6 +199,10 @@ public sealed class PtyDaemonResponse
     public bool Ok { get; set; }
 
     public string? Error { get; set; }
+
+    /** 会话不存在(既没在跑, 也没有落盘记录): 调用方据此把它当成"已经没有了", 而不是一次操作失败。 */
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NotFound { get; set; }
 
     public List<PtyDaemonSessionDto>? Sessions { get; set; }
 

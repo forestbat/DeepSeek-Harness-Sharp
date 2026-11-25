@@ -376,7 +376,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
         {
             await Actions.StopAsync(card.Machine, card.SessionId, CancellationToken.None);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or OperationCanceledException)
         {
             _toast($"停止失败 · {card.Title}", error.Message, true);
         }
@@ -391,7 +391,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject, IAsyncDisposa
             if (resumed != card.SessionId && ActiveSession?.SessionId == card.SessionId)
                 await OpenWhenListedAsync(card.Machine, resumed);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or InvalidOperationException or OperationCanceledException)
         {
             _toast($"恢复失败 · {card.Title}", error.Message, true);
         }

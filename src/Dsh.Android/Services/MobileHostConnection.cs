@@ -308,7 +308,7 @@ public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
             await foreach (var item in source.ConfigureAwait(false))
                 apply(item);
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or JsonRpcException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or JsonRpcException or StreamJsonRpc.RemoteRpcException)
         {
         }
     }
@@ -332,7 +332,7 @@ public sealed class MobileHostConnection : IMachineLink, IAgentMachineLink
             {
                 await client.PingAsync(timeout.Token).ConfigureAwait(false);
             }
-            catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or JsonRpcException)
+            catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or JsonRpcException or StreamJsonRpc.RemoteRpcException)
             {
                 return;
             }
