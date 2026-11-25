@@ -51,16 +51,18 @@ public sealed class PtyRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/**
+ * 记录文件的序列化上下文: 发布档(裁剪/AOT)默认关掉反射序列化, 走反射的 JsonSerializer 在宿主里会抛异常,
+ * 表现为"终端起不来"。源生成的上下文在两种形态下都可用。
+ */
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(PtyRecord))]
+internal partial class PtyRecordJsonContext : JsonSerializerContext;
+
 public static class PtyRecords
 {
     private const string Prefix = "pty-";
     private const string Suffix = ".json";
-
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        WriteIndented = false,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     /** 参数就是 run 目录本身(默认取 daemon 的默认 run 目录); 记录与尺寸文件都跟着 daemon 的端点走。 */
     public static string DirectoryOf(string? directory = null) => directory ?? PtyDaemonPaths.RunDirectory();
@@ -76,7 +78,7 @@ public static class PtyRecords
             Directory.CreateDirectory(DirectoryOf(directory));
             var path = PathFor(record.Id, directory);
             var temp = $"{path}.{Guid.NewGuid():N}.tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(record, Options));
+            File.WriteAllText(temp, JsonSerializer.Serialize(record, PtyRecordJsonContext.Default.PtyRecord));
             File.Move(temp, path, overwrite: true);
         }
         catch (IOException)
@@ -94,7 +96,7 @@ public static class PtyRecords
             return null;
         try
         {
-            var record = JsonSerializer.Deserialize<PtyRecord>(File.ReadAllText(path), Options);
+            var record = JsonSerializer.Deserialize(File.ReadAllText(path), PtyRecordJsonContext.Default.PtyRecord);
             return record is { FileName.Length: > 0 } ? record : null;
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
@@ -113,7 +115,7 @@ public static class PtyRecords
         {
             try
             {
-                var record = JsonSerializer.Deserialize<PtyRecord>(File.ReadAllText(path), Options);
+                var record = JsonSerializer.Deserialize(File.ReadAllText(path), PtyRecordJsonContext.Default.PtyRecord);
                 if (record is { FileName.Length: > 0 })
                     records.Add(record);
             }
