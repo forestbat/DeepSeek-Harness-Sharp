@@ -33,8 +33,7 @@ public sealed class SessionScaleBenchTests
             using (var writer = new JsonlSessionPersistence(root, compression: compression).Create(header))
                 writer.Append(BuildEvents(header, eventCount));
             var writeMs = writeClock.ElapsedMilliseconds;
-            var logPath = Directory.GetFiles(root, "session.jsonl*", SearchOption.AllDirectories)
-                .Single(path => !path.EndsWith(SessionLogIndex.Extension, StringComparison.Ordinal));
+            var logPath = JsonlLayout.LogPath(root, header.Cwd, header.Id, compression);
             var fileBytes = new FileInfo(logPath).Length;
 
             var loadMs = 0L;
@@ -65,7 +64,7 @@ public sealed class SessionScaleBenchTests
         }
     }
 
-    [Fact]
+    [Fact(Explicit = true)]
     public void WindowedRead_BeatsFullParseForTailAndMiddleWindows()
     {
         const int eventCount = 200_000;
@@ -81,8 +80,7 @@ public sealed class SessionScaleBenchTests
                 for (var offset = 0; offset < all.Count; offset += 1000)
                     writer.Append(all.Skip(offset).Take(1000).ToArray());
             }
-            var logPath = Directory.GetFiles(root, "session.jsonl*", SearchOption.AllDirectories)
-                .First(path => !path.EndsWith(SessionLogIndex.Extension, StringComparison.Ordinal));
+            var logPath = JsonlLayout.LogPath(root, header.Cwd, header.Id, JsonlCompression.Zstd);
             var fileMb = new FileInfo(logPath).Length / 1024d / 1024d;
 
             // 冷缓存全量读

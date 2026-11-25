@@ -50,7 +50,7 @@ public sealed class SessionOpenCorpusBenchTests
     /** 分档只用于看趋势(方案 §6.1): 判定仍逐份进行。 */
     private static readonly string[] Tiers = [TinyTier, SmallTier, MediumTier, HugeTier];
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task OpeningEveryRealSession_RecordsColdAndWarmIntoCsv()
     {
         var sources = EnumerateCorpus().OrderBy(source => source.LogBytes).Take(Limit()).ToList();

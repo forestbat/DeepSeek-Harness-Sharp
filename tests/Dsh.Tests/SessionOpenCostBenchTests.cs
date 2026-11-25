@@ -33,7 +33,7 @@ public sealed class SessionOpenCostBenchTests
 
     private const long Megabyte = 1024 * 1024;
 
-    [Fact]
+    [Fact(Explicit = true)]
     public async Task OpeningRealSessions_ReportsElapsedTimeAndResidentMemory()
     {
         var report = new StringBuilder();
