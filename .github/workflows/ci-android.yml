@@ -79,7 +79,8 @@ jobs:
             mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
           fi
           # csproj 钉了 TargetPlatformVersion 37.0 与 build-tools 37.0.0, 平台包名就是 android-37.0。
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null
+          # Preserve sdkmanager's exit status when it stops reading license responses.
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses < <(yes 2>/dev/null) > /dev/null
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
