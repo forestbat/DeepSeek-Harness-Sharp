@@ -92,11 +92,34 @@ public sealed class HostPtySessions(HostSessionRegistry registry, HostPtyDaemon 
     public Task ResizeAsync(string ptyId, int columns, int rows, CancellationToken cancellationToken)
         => PtyDaemonClient.ResizeAsync(ptyId, rows, columns, daemon.SocketPath, daemon.PortFile, cancellationToken);
 
+    /**
+     * 结束 PTY 里的进程。daemon 不在时它持有的 PTY 已经随它一起消失: 停止的目的已经达到, 不是失败
+     * (重启后停止或删除一个早已退出的终端会话就走这条路)。
+     */
     public async Task StopAsync(string ptyId, CancellationToken cancellationToken)
     {
-        await PtyDaemonClient.KillAsync(ptyId, daemon.SocketPath, daemon.PortFile, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await PtyDaemonClient.KillAsync(ptyId, daemon.SocketPath, daemon.PortFile, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PtyDaemonNotRunningException)
+        {
+        }
         registry.MarkExited(ptyId, null);
     }
+
+    /**
+     * 删除一个终端会话: 先尽力结束进程, 再删掉它的启动记录。
+     * 记录留着的话, attach 会按记录把已删除的会话重新拉起来, `dsharp tui list` 也会重新列出它。
+     */
+    public async Task DeleteAsync(string ptyId, CancellationToken cancellationToken)
+    {
+        await StopAsync(ptyId, cancellationToken).ConfigureAwait(false);
+        PtyRecords.Delete(ptyId, RecordRoot());
+    }
+
+    /** 记录与尺寸文件跟着 daemon 的端点走(与 PtyDaemon 里的 _runRoot 同一算法)。 */
+    private string? RecordRoot() => Path.GetDirectoryName(daemon.PortFile ?? daemon.SocketPath);
 
     /** 连接已有 PTY: 首帧是整屏快照, 已退出会话在快照后以 Eof 结束; 不存在则在订阅时失败。 */
     public async Task<RemoteHostStream<RemotePtyOutput>> AttachAsync(string ptyId, CancellationToken cancellationToken)
@@ -204,4 +227,3 @@ public sealed class HostPtySessions(HostSessionRegistry registry, HostPtyDaemon 
         yield return new RemotePtyOutput(ptyId, "", true);
     }
 }
-

@@ -38,7 +38,7 @@ public sealed class HarnessRemoteHostBackend : IRemoteHostBackend, IAsyncDisposa
         Session = new HarnessRemoteSessionBackend(_runtime, agents);
         Agent = new HarnessRemoteAgentBackend(_runtime, Session, ptys, agents);
         Pty = new HarnessRemotePtyBackend(ptys);
-        SessionEditing = new HarnessRemoteSessionEditingBackend(_runtime, Agent);
+        SessionEditing = new HarnessRemoteSessionEditingBackend(_runtime, Agent, ptys);
         if (app.Ctx.Get<HarnessPluginManager>("pluginManager", false) is { } plugins)
             Plugins = new HarnessRemotePluginsBackend(app, plugins);
         if (app.Ctx.GetProp(OutboundProxy.PropName) is OutboundProxy proxy)

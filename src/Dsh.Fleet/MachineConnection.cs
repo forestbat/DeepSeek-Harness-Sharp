@@ -367,7 +367,7 @@ public sealed class MachineConnection : IWorkspaceMachine
             await client.PingAsync(timeout.Token).ConfigureAwait(false);
             return true;
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or JsonRpcException or ObjectDisposedException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or ObjectDisposedException)
         {
             return false;
         }

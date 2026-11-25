@@ -922,7 +922,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var title = node.RenameDraft.Trim();
         if (title.Length == 0 || title == node.Title)
             return;
-        await (await _chat.ClientAsync()).SessionEditing.RenameSessionAsync(node.SessionId.Value, title);
+        try
+        {
+            await (await _chat.ClientAsync()).SessionEditing.RenameSessionAsync(node.SessionId.Value, title);
+        }
+        catch (Exception error) when (IsSessionMutationFailure(error))
+        {
+            StatusText = $"重命名失败: {error.Message}";
+            return;
+        }
         node.Title = title;
         if (node.SessionId == _chat.Id)
         {
@@ -950,12 +958,26 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             StatusText = "不能删除当前正在使用的会话";
             return;
         }
-        await (await _chat.ClientAsync()).SessionEditing.DeleteSessionAsync(node.SessionId.Value);
+        try
+        {
+            await (await _chat.ClientAsync()).SessionEditing.DeleteSessionAsync(node.SessionId.Value);
+        }
+        catch (Exception error) when (IsSessionMutationFailure(error))
+        {
+            // 宿主拒绝或掉线只该显示一行状态; 让它从命令里抛出去会带走整个 GUI。
+            StatusText = $"删除失败: {error.Message}";
+            return;
+        }
         // 磁盘上已经没有这条会话, 缓存的目录快照必须失效, 否则它会在侧栏里留下幽灵条目。
         _catalog.InvalidateDiskCache();
         StatusText = "会话已删除";
         RefreshSessions();
     }
+
+    /** 会话改名/删除失败是"宿主拒绝或掉线", 不是"程序写错了": 报给用户, 不能把异常抛到 UI 线程。 */
+    private static bool IsSessionMutationFailure(Exception error)
+        => error is IOException or StreamJsonRpc.RemoteRpcException or Dsh.Transport.JsonRpcException
+            or InvalidOperationException or OperationCanceledException or ObjectDisposedException;
 
     [RelayCommand]
     private async Task ExportSessionLogAsync()
@@ -2791,4 +2813,3 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     };
 
 }
-

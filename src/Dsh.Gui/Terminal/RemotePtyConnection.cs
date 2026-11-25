@@ -117,7 +117,7 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
             var lease = await _machine.WaitConnectedAsync(timeout.Token);
             await lease.Client.Pty.StopPtyAsync(_ptyId, timeout.Token);
         }
-        catch (Exception error) when (error is IOException or JsonRpcException or OperationCanceledException or ObjectDisposedException)
+        catch (Exception error) when (error is IOException or JsonRpcException or StreamJsonRpc.RemoteRpcException or OperationCanceledException or ObjectDisposedException)
         {
             // The link is gone: the PTY stays in the machine's PTY daemon, where another client can attach to it or stop it.
         }
@@ -130,7 +130,7 @@ public sealed class RemotePtyConnection : ITerminalConnection, IAsyncDisposable
         {
             await _machine.AttachPtyAsync(_ptyId, _input.Reader.AsStream(), _output.Writer.AsStream(), _cts.Token, ResizeForAttachAsync);
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or InvalidOperationException or JsonRpcException or ObjectDisposedException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or InvalidOperationException or JsonRpcException or StreamJsonRpc.RemoteRpcException or ObjectDisposedException)
         {
             // Ending is reported by completing the output pipe below.
         }

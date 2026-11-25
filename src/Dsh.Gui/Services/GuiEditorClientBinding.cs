@@ -56,7 +56,7 @@ public sealed class GuiEditorClientBinding(IEditorService? local, Func<string, E
             }
             finally { _gate.Release(); }
         }
-        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or Dsh.Transport.JsonRpcException)
+        catch (Exception error) when (error is OperationCanceledException or IOException or ObjectDisposedException or Dsh.Transport.JsonRpcException or StreamJsonRpc.RemoteRpcException)
         {
             // A disconnect retires this authenticated peer; the next Fleet notification uses the new lease.
         }
