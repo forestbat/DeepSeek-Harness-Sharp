@@ -17,12 +17,14 @@ ALL_SUITES = ["quick", "regression-1", "regression-2", "regression-3", "raw"]
 
 
 class SelectionTests(unittest.TestCase):
-    def assert_selection(self, paths, *, suites=(), jit=False, aot=False, validate=False,
-                         event="pull_request", manual_aot=False):
+    def assert_selection(self, paths, *, suites=(), jit=False, android=None, aot=False,
+                         validate=False, event="pull_request", manual_aot=False):
+        # The APK bundles the same shared assemblies as the desktop entries, so it
+        # follows jit everywhere; pass android explicitly only to pin that down.
         self.assertEqual(
             SELECTOR.classify_changes(paths, event, manual_aot),
-            {"tests": bool(suites), "jit": jit, "aot": aot,
-             "validate": validate, "suites": list(suites)},
+            {"tests": bool(suites), "jit": jit, "android": jit if android is None else android,
+             "aot": aot, "validate": validate, "suites": list(suites)},
         )
 
     def test_safe_documentation_allowlist(self):
@@ -109,6 +111,16 @@ class SelectionTests(unittest.TestCase):
                 else:
                     self.assert_selection([path], suites=ALL_SUITES, jit=True, aot=True)
 
+    def test_android_apk_follows_the_desktop_publish_selection(self):
+        # Shared code and project metadata rebuild the APK...
+        for path in ("src/Dsh.Core/Agent.cs", "src/Dsh.Android/MainActivity.cs",
+                     "src/Dsh.Android/Dsh.Android.csproj", "Directory.Build.props"):
+            with self.subTest(path=path):
+                self.assert_selection([path], suites=ALL_SUITES, jit=True, android=True, aot=True)
+        # ...while documentation and test-only changes do not.
+        self.assert_selection(["README.md", "docs/ci.md"], android=False)
+        self.assert_selection(["tests/Dsh.Tests/UnitTests.cs"], suites=ALL_SUITES, android=False)
+
     def test_push_does_not_add_aot(self):
         self.assert_selection(["src/Dsh.Core/Agent.cs"], event="push", suites=ALL_SUITES, jit=True)
 
@@ -140,7 +152,7 @@ class CommandLineTests(unittest.TestCase):
                 result = self.run_selector(base=base, head="invalid-revision", aot="true")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.parse_output(result.stdout), {
-                    "tests": True, "jit": True, "aot": False, "validate": True,
+                    "tests": True, "jit": True, "android": True, "aot": False, "validate": True,
                     "suites": ALL_SUITES,
                 })
 
@@ -151,7 +163,7 @@ class CommandLineTests(unittest.TestCase):
                                            head="invalid-head", aot=aot)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.parse_output(result.stdout), {
-                    "tests": True, "jit": True, "aot": aot == "true", "validate": True,
+                    "tests": True, "jit": True, "android": True, "aot": aot == "true", "validate": True,
                     "suites": ALL_SUITES,
                 })
 
@@ -177,7 +189,7 @@ class CommandLineTests(unittest.TestCase):
             contents = output.read_text(encoding="utf-8")
             self.assertTrue(contents.startswith("existing=value\n"))
             self.assertEqual(self.parse_output(contents.removeprefix("existing=value\n")), {
-                "tests": False, "jit": False, "aot": False, "validate": False, "suites": [],
+                "tests": False, "jit": False, "android": False, "aot": False, "validate": False, "suites": [],
             })
 
     def test_real_git_diff_preserves_newlines_in_paths(self):
@@ -199,7 +211,7 @@ class CommandLineTests(unittest.TestCase):
             result = self.run_selector(event="pull_request", base=base, head="HEAD", cwd=root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(self.parse_output(result.stdout), {
-                "tests": True, "jit": True, "aot": True, "validate": False,
+                "tests": True, "jit": True, "android": True, "aot": True, "validate": False,
                 "suites": ALL_SUITES,
             })
 
@@ -224,7 +236,7 @@ class CommandLineTests(unittest.TestCase):
             result = self.run_selector(event="pull_request", base=base, head="HEAD", cwd=root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(self.parse_output(result.stdout), {
-                "tests": True, "jit": True, "aot": True, "validate": False,
+                "tests": True, "jit": True, "android": True, "aot": True, "validate": False,
                 "suites": ALL_SUITES,
             })
 

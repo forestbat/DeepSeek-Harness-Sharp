@@ -49,6 +49,9 @@ def classify_changes(paths, event, aot=False, full=False):
     return {
         "tests": bool(suites),
         "jit": jit,
+        # The APK bundles the same shared assemblies the desktop entries publish,
+        # so it follows the JIT selection instead of keeping its own path rules.
+        "android": jit,
         "aot": jit and (aot if event == "workflow_dispatch" else event == "pull_request"),
         "validate": validate,
         "suites": [suite for suite in SUITES if suite in suites],

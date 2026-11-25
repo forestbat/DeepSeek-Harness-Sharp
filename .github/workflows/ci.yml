@@ -30,6 +30,7 @@ jobs:
       tests: ${{ steps.select.outputs.tests }}
       suites: ${{ steps.select.outputs.suites }}
       jit: ${{ steps.select.outputs.jit }}
+      android: ${{ steps.select.outputs.android }}
       aot: ${{ steps.select.outputs.aot }}
       validate: ${{ steps.select.outputs.validate }}
     steps:
@@ -381,9 +382,17 @@ jobs:
       rid: ${{ matrix.rid }}
       native-cc: ${{ matrix.native-cc }}
 
+  android:
+    name: Android APK 构建
+    needs: [changes]
+    # 独立于桌面三入口: 自己的 runner、自己的产物, 不进 JIT 与 AOT 的 RID 矩阵。
+    if: needs.changes.outputs.android == 'true'
+    uses: ./.github/workflows/ci-android.yml
+    secrets: inherit
+
   result:
     name: CI 结果
-    needs: [changes, validate, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot]
+    needs: [changes, validate, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot, android]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
