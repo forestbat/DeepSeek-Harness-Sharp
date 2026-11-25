@@ -17,16 +17,18 @@ OWNED_USER=0
 SSHD_LABEL="org.dsharp.tests.iroh-lan.$$"
 OWNED_DAEMON=0
 DIRECTORY_ACCESS="$ACCOUNT allow list,search,add_subdirectory,add_file,delete_child"
+SCRATCH_ACCESS="$ACCOUNT allow search"
 [ -z "$(dscl . -search /Users RecordName "$ACCOUNT")" ] || { echo 'The acceptance account already exists.' >&2; exit 1; }
 [ -z "$(dscl . -search /Users UniqueID "$ACCOUNT_UID")" ] || { echo 'The acceptance UID is already allocated.' >&2; exit 1; }
-mkdir -p "$WORK_DIR/home" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/artifacts020/test-homes"
+mkdir -p "$WORK_DIR/home" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/tests/.scratch/test-homes"
 cleanup() {
     local code=$?
     if [ "$code" -ne 0 ] && [ -f "$WORK_DIR/sshd.log" ]; then cat "$WORK_DIR/sshd.log"; fi
     if [ "$OWNED_DAEMON" -eq 1 ]; then sudo launchctl bootout "system/$SSHD_LABEL" 2>/dev/null || true; fi
     if [ "$OWNED_USER" -eq 1 ]; then
         sudo pkill -u "$ACCOUNT_UID" 2>/dev/null || true
-        chmod -a "$DIRECTORY_ACCESS" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/artifacts020/test-homes" 2>/dev/null || true
+        chmod -a "$DIRECTORY_ACCESS" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/tests/.scratch/test-homes" 2>/dev/null || true
+        chmod -a "$SCRATCH_ACCESS" "$ROOT_DIR/tests/.scratch" 2>/dev/null || true
         sudo dscl . -delete "/Users/$ACCOUNT"
     fi
     sudo rm -rf -- "$WORK_DIR"
@@ -42,7 +44,8 @@ sudo dscl . -create "/Users/$ACCOUNT" NFSHomeDirectory "$WORK_DIR/home"
 # Public-key-only SSH still needs a usable account, not a disabled password record.
 sudo dscl . -passwd "/Users/$ACCOUNT" "$(openssl rand -hex 32)"
 sudo chown "$ACCOUNT_UID:20" "$WORK_DIR/home"
-chmod +a "$DIRECTORY_ACCESS" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/artifacts020/test-homes"
+chmod +a "$SCRATCH_ACCESS" "$ROOT_DIR/tests/.scratch"
+chmod +a "$DIRECTORY_ACCESS" "$ROOT_DIR/.daemon-tests" "$ROOT_DIR/tests/.scratch/test-homes"
 ssh-keygen -q -t ed25519 -N '' -C iro-lan-host -f "$WORK_DIR/host_key"
 ssh-keygen -q -t ed25519 -N '' -C iro-lan-client -f "$WORK_DIR/client_key"
 printf '[127.0.0.1]:%s ' "$SSH_PORT" > "$WORK_DIR/known_hosts"
