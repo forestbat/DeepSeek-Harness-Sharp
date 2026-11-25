@@ -1627,11 +1627,13 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /**
-     * 追加一批事件。整个动作是"看末尾 → 定起点 → 写 → 更新索引"的一次事务, 尾部这段字节
-     * 用**区间锁**占住, 另一个写者只能等这一次追加结束 —— 否则两边会各自把同一个起点当成自己的,
+     * 追加一批事件。整个动作是"看末尾 → 定起点 → 写 → 更新索引"的一次事务, 临界区用**锁文件**占住,
+     * 另一个写者只能等这一次追加结束 —— 否则两边会各自把同一个起点当成自己的,
      * 把两套序号写进同一段字节(那正是"日志再也读不回来"的来源)。
      *
-     * 锁是字节区间锁(一个 syscall), 不是独立锁文件: 后者要开一个文件, 实测 95µs, 是这个的五十倍。
+     * 不用日志自身的字节区间锁: 那会连带拒绝对该区间的读(Windows 上是 ERROR_LOCK_VIOLATION, 同进程也算冲突),
+     * 于是写者一追加, 正在读尾部的读者就失败 —— 那是把并发读者挡在外面, 不是"只挡写者"。
+     * 代价是每次追加多一次锁文件开关; 读者因此完全不必等写者。
      */
     private void AppendLines(SessionHeader meta, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
@@ -1641,7 +1643,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         foreach (var frame in frames)
             total += frame.Content.Length;
         using var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
-        var (guard, start) = AcquireAppendTail(stream, path, total);
+        var (guard, start) = AcquireAppendTail(stream, path);
         var before = start;
         try
         {
@@ -1688,20 +1690,19 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /**
-     * 占住"我要写的那段字节", 返回真正的起点。
+     * 占住这次追加, 返回真正的起点。
      *
      * 拿锁前后各看一次长度: 别人正好在我读长度之后写完的话, 我锁住的是旧起点,
      * 那时放锁重来, 直到"我持锁期间长度没有变化"为止。
      */
-    private (AppendTailGuard Guard, long Start) AcquireAppendTail(FileStream stream, string path, long length)
+    private (AppendTailGuard Guard, long Start) AcquireAppendTail(FileStream stream, string path)
     {
-        var span = Math.Max(length, 1);
         for (var attempt = 0; attempt < TailLockAttempts; attempt += 1)
         {
             var start = stream.Length;
-            if (TryEnterAppendTail(stream, path, start, span) is not { } guard)
+            if (TryEnterAppendTail(path) is not { } guard)
             {
-                // 有人正占着这一段: 等他写完再看新的末尾。
+                // 有人正在追加: 等他放锁再看新的末尾。
                 Thread.Sleep(TailLockRetryDelay);
                 continue;
             }
@@ -1715,52 +1716,36 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     }
 
     /**
-     * 进临界区: 正常情况下是日志文件上的**字节区间锁**(一个 syscall); macOS 没有可用的区间锁,
-     * 退化成一个锁文件(会慢一个量级, 但只在这一种平台上)。
+     * 进临界区: 日志旁边的锁文件, 全平台一致。
+     *
+     * 这里曾经在非 macOS 上用日志文件自身的**字节区间锁**(一个 syscall)。那是错的:
+     * Windows 的字节区间锁会连带拒绝对该区间的**读**, 而且跨进程、同进程不同句柄都算冲突 ——
+     * 于是"写者正在追加尾部"与"读者正在读尾部"必然互相打断, 读者拿到的是
+     * "另一个程序已锁定文件的一部分"(ERROR_LOCK_VIOLATION)。打开参数上的共享位救不了它,
+     * 因为这不是共享冲突而是区域锁。
+     *
+     * 锁文件只在写者之间争用, 读者完全看不到它; 文件名不带 session 前缀, 不会被日志/索引的枚举当成日志。
      */
-    private static AppendTailGuard? TryEnterAppendTail(FileStream stream, string path, long start, long span)
+    private static AppendTailGuard? TryEnterAppendTail(string path)
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            try
-            {
-                stream.Lock(start, span);
-                return new AppendTailGuard(stream, start, span, null);
-            }
-            catch (IOException)
-            {
-                return null;
-            }
-        }
         try
         {
-            var lockFile = new FileStream($"{path}.tail.lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            return new AppendTailGuard(null, 0, 0, lockFile);
+            return new AppendTailGuard(new FileStream(TailLockPath(path), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
         }
-        catch (IOException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             return null;
         }
     }
 
-    /** 追加临界区: 区间锁或锁文件, 释放时哪一个在场就放哪一个。 */
-    private sealed class AppendTailGuard(FileStream? stream, long start, long span, FileStream? lockFile) : IDisposable
+    /** 追加临界区的锁文件: 与日志同目录, 名字与日志前缀无关, 免得被"找日志"的枚举扫到。 */
+    private static string TailLockPath(string path)
+        => Path.Join(Path.GetDirectoryName(path), "append.tail.lock");
+
+    /** 追加临界区: 锁文件, 释放即关闭。 */
+    private sealed class AppendTailGuard(FileStream lockFile) : IDisposable
     {
-        public void Dispose()
-        {
-            if (stream is not null && !OperatingSystem.IsMacOS())
-            {
-                try
-                {
-                    stream.Unlock(start, span);
-                }
-                catch (IOException)
-                {
-                    // 文件已被回滚或关闭时解锁会失败: 进程退出时 OS 会释放, 这里没有补救动作。
-                }
-            }
-            lockFile?.Dispose();
-        }
+        public void Dispose() => lockFile.Dispose();
     }
 
 
