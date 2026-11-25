@@ -127,9 +127,17 @@ public sealed class RemoteEditorClient(RemoteHostClient host, JsonRpcChannel rpc
 
     private async ValueTask UnregisterAsync()
     {
-        lock (_gate) { _registered = false; _local = null; _map = null; }
-        if (!host.IsClosed)
-            await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, _lifetime.Token).ConfigureAwait(false);
+        Task<bool> unregister;
+        lock (_gate)
+        {
+            _registered = false;
+            _local = null;
+            _map = null;
+            if (_disposed || host.IsClosed)
+                return;
+            unregister = rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, _lifetime.Token);
+        }
+        await unregister.ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()

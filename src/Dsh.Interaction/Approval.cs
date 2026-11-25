@@ -96,7 +96,8 @@ public sealed class ApprovalService : Service, IApprovalService
      */
     public static bool HasGrant(Session session, string toolName)
         => session.LastResidentEventWhere(sessionEvent =>
-                sessionEvent.Data is ApprovalGrantedPayload payload
+                sessionEvent.Seq >= session.InheritedEventCount
+                && sessionEvent.Data is ApprovalGrantedPayload payload
                 && string.Equals(payload.ToolName, toolName, StringComparison.Ordinal))
             is not null;
 
