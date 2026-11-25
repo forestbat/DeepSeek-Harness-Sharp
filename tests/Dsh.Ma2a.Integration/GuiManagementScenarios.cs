@@ -245,7 +245,9 @@ internal static class GuiManagementScenarios
         Text(owner, "url", PublicRelayUrl);
         await ExecuteAsync(owner, "public_relay_configured", cancellationToken);
         var configured = await ReadAsync(owner, "public_relay_status", cancellationToken);
-        NativeRuntimePair.Check(configured.GetProperty("configured").GetBoolean() && configured.GetProperty("url").GetString() == PublicRelayUrl, "Public relay GUI configuration must survive an independent authoritative read.");
+        var expectedUrl = new Uri(PublicRelayUrl).AbsoluteUri;
+        NativeRuntimePair.Check(configured.GetProperty("configured").GetBoolean() && configured.GetProperty("url").GetString() == expectedUrl,
+            "Public relay GUI configuration must read back the canonical URL.");
         GuiScenarios.SelectManagement(owner, "public_relay_disable");
         await ExecuteAsync(owner, "public_relay_status", cancellationToken);
         NativeRuntimePair.Check(!(await ReadAsync(owner, "public_relay_status", cancellationToken)).GetProperty("configured").GetBoolean(), "Public relay GUI disable must be committed.");

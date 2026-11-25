@@ -164,7 +164,7 @@
         "public_url": {
           "type": "string",
           "min_bytes": 1,
-          "max_bytes": 2048,
+          "max_bytes": 512,
           "format": "https_url_without_credentials"
         },
         "served_space_ids": {
@@ -202,7 +202,7 @@
         "url": {
           "type": "string",
           "min_bytes": 1,
-          "max_bytes": 2048,
+          "max_bytes": 512,
           "format": "https_url_without_credentials"
         }
       }
@@ -1030,7 +1030,7 @@
     "text_bytes": 4096,
     "collection_items": 256
   },
-  "source_schema_sha256": "a05039d59ec3cb38270f9e0d74541ea4a8fbff8f1f3523e1d3fccee2d8f826fd",
+  "source_schema_sha256": "d9d0b863136863b12ea9dc44c61721363f3fb4606cadef89495430b08eef2612",
   "types": {
     "agent_message": {
       "type": "object",

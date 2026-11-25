@@ -44,6 +44,22 @@ public sealed class Ma2aGuiTests
         });
     }
 
+    [Theory]
+    [InlineData("public_relay_configure", "url")]
+    [InlineData("private_relay_configure", "public_url")]
+    public void RelayForms_EnforceRuntimeUrlByteLimit(string operation, string fieldName)
+    {
+        const int runtimeUrlLimit = 512;
+        const string prefix = "https://relay.example/";
+        var field = Ma2aCommandCatalog.Commands.Single(command => command.Operation == operation)
+            .CreateFields().Single(field => field.Name == fieldName);
+        field.Text = $"{prefix}{new string('a', runtimeUrlLimit - prefix.Length)}";
+        Assert.Equal(field.Text, field.BuildValue()!.GetValue<string>());
+
+        field.Text += "a";
+        Assert.Throws<InvalidOperationException>(() => field.BuildValue());
+    }
+
     [Fact]
     public void NativeGrantForm_ProducesAllEightIndependentPermissions()
     {
