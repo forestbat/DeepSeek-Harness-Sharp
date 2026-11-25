@@ -10,6 +10,6 @@
     <ProjectReference Include="..\..\src\Dsh.Ma2a\Dsh.Ma2a.csproj" />
     <ProjectReference Include="../../src/Dsh.Ma2a.Tools/Dsh.Ma2a.Tools.csproj" />
     <ProjectReference Include="../../src/Dsh.Gui/Dsh.Gui.csproj" />
-    <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.6" />
   </ItemGroup>
 </Project>
