@@ -65,7 +65,7 @@ public sealed class GuiWorkspaceTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task Dashboard_GroupsBothMachines_FiltersSearchesSorts_AndPaletteJumps()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -147,7 +147,7 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task NotificationCenter_SyncsReadMarks_AnswersPendingOnce_AndNotifiesDesktop()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -226,7 +226,7 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task PendingApproval_AnsweredFromNotifications_ReachesTheHost()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -400,7 +400,7 @@ public sealed class GuiWorkspaceTests
         });
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task HarnessSession_OpensMainChatView_InsteadOfSessionTranscript()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -477,7 +477,7 @@ public sealed class GuiWorkspaceTests
         Assert.Throws<ArgumentException>(() => NewSessionViewModel.ParseCommand("   "));
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task NewSession_OpenedBeforeConnection_EnablesTheSelectedMachineWithoutReselection_AndCancelsClosedForms()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -523,7 +523,7 @@ public sealed class GuiWorkspaceTests
      * Files, Git and machine management as workspace pages: files and Git open on the machine and project of the session in view and are rebuilt on the next link after the host restarts.
      * A Git worktree opens the new-session form there; saving a machine in machine management reconnects the workspace while the page stays in view.
      */
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = HeadlessGui.FactTimeoutMilliseconds)]
     public async Task ContributedPages_FollowTheSessionAndTheConnection()
     {
         var ct = TestContext.Current.CancellationToken;
