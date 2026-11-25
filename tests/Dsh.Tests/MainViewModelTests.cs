@@ -102,8 +102,9 @@ public sealed class MainViewModelTests
 
         viewModel.Composer.Input = "read @notes.md";
         await viewModel.SubmitCommand.ExecuteAsync(null);
+        // 文件引用原样进提示词(正文由模型自己 read), 因此这里等的是"提交出去的用户消息"。
         static bool HasPrompt(UserMessagePayload payload)
-            => payload.Message.Content.Any(block => block is TextBlock text && text.Text.Contains("shot.png", StringComparison.Ordinal));
+            => payload.Message.Content.Any(block => block is TextBlock text && text.Text.Contains("@notes.md", StringComparison.Ordinal));
         await GuiTestEnvironment.WaitForAsync(
             viewModel.Messages,
             () => environment.Agent.Session.SnapshotEvents()
@@ -116,6 +117,7 @@ public sealed class MainViewModelTests
             .Select(sessionEvent => sessionEvent.Data)
             .OfType<UserMessagePayload>()
             .Last(HasPrompt).Message;
+        // 被引用的是文本文件: 它里面提到的图片不该因此变成附件。
         Assert.DoesNotContain(message.Content, block => block is ImageBlock);
     });
 

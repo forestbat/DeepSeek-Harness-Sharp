@@ -14,14 +14,6 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
 
     /** 追加时抢"尾部这段字节"的重试次数与间隔: 抢不到只是这一次写不进去, 不是日志坏了。 */
     private const int TailLockAttempts = 100;
-    /**
-     * 发号票在别人手里时的等待: 覆盖到票的 TTL(10s)还要多一点。
-     *
-     * 对方正在写的一批只有微秒级; 需要等满 TTL 的情形只有"它卡住了", 而那时票到期就会让出来。
-     * 等不到才把可重试异常交给调用方 —— 这一轮的事件还没创建, 因此不会丢。
-     */
-    private const int TicketAttempts = 240;
-    private static readonly TimeSpan TicketRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan TailLockRetryDelay = TimeSpan.FromMilliseconds(5);
     private const string BackendName = "session-persistence-jsonl";
     /** 表面派生缓存的文件头魔数与版本: 格式一变就让旧缓存作废, 不要拿旧列表去当折叠结果。 */
@@ -986,6 +978,13 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     internal long? LogLength(SessionId id)
         => FindLog(id) is { } path && new FileInfo(path) is { Exists: true } info ? info.Length : null;
 
+    /**
+     * 领票取这一批事件的起点序号。
+     *
+     * 不在这里重试:"另一个活着的写者正持有票"不是可等待的瞬时状态, 它可能持续到对方落盘为止 ——
+     * 反复 sleep 只会把调用方(常常是界面线程)按住, 而事件本身还没创建, 交回上层缓冲是正确做法。
+     * 真正的瞬时竞争只有锁文件本身, 那一层已经有自己的短重试(见 SessionWriteTicket.TryLock)。
+     */
     internal long NextSeq(SessionHeader header, int count, long knownCount)
     {
         EnsureRootEncoding();
@@ -993,22 +992,15 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
         // 只信索引与句柄自己的游标: 整份读日志会撞上别人（或自己）正占着的尾锁, 发号因此卡死过。
         var logPath = FindLog(header.Id);
         var stored = Math.Max(knownCount, logPath is null ? 0 : SessionLogIndex.TryLoad(logPath)?.EventCount ?? 0);
-        for (var attempt = 0; ; attempt += 1)
+        try
         {
-            try
-            {
-                return SessionWriteTicket.NextSeq(path, stored, count);
-            }
-            catch (SessionWriteBusyException) when (attempt < TicketAttempts)
-            {
-                Thread.Sleep(TicketRetryDelay);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                // 票文件读不到只是这一次, 不要把裸 IO 异常扔进回合里。
-                throw new SessionWriteBusyException(Environment.ProcessId,
-                    $"the write ticket could not be read ({error.GetType().Name}); retrying on the next write");
-            }
+            return SessionWriteTicket.NextSeq(path, stored, count);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // 票文件读不到只是这一次, 不要把裸 IO 异常扔进回合里。
+            throw new SessionWriteBusyException(Environment.ProcessId,
+                $"the write ticket could not be read ({error.GetType().Name}); retrying on the next write");
         }
     }
 

@@ -21,7 +21,10 @@ public sealed class HostStdioBridgeTests
     public async Task StdioHost_ServesManyRequestsOnOneConnection()
     {
         var home = Dsh.Boot.HarnessStorage.ResolveDefaultHome().Root;
-        Assert.True(File.Exists(Path.Combine(home, "run", "host.port")), $"没有运行中的 daemon: {home}");
+        // 这个入口接到的是常驻 daemon。没有 daemon 只是这台机器/这一次运行没准备好, 不是桥接坏了:
+        // 按仓库里其它外部夹具用例的口径跳过, 不要把它变成"CI 步骤顺序"的断言。
+        if (!File.Exists(Path.Combine(home, "run", "host.port")))
+            Assert.Skip($"没有运行中的 daemon: {home}");
         using var process = StartStdioHost(home);
         await using var duplex = new ProcessDuplexStream(process);
         await using var client = await RemoteHostClient.ConnectAsync(duplex, token: null, "stdio-test", Ct);
@@ -39,9 +42,10 @@ public sealed class HostStdioBridgeTests
     [Fact]
     public async Task StdioHost_CompletesHelloAndListsSessions()
     {
-        // 桥接模式把 stdio 接到常驻 daemon; 用当前用户的真实 home, 那里有正在运行的 daemon。
+        // 桥接模式把 stdio 接到常驻 daemon; 用当前用户的真实 home, 那里应有正在运行的 daemon。
         var home = Dsh.Boot.HarnessStorage.ResolveDefaultHome().Root;
-        Assert.True(File.Exists(Path.Combine(home, "run", "host.port")), $"没有运行中的 daemon: {home}");
+        if (!File.Exists(Path.Combine(home, "run", "host.port")))
+            Assert.Skip($"没有运行中的 daemon: {home}");
         using var process = StartStdioHost(home);
         await using var duplex = new ProcessDuplexStream(process);
         // 先看子进程往 stdout 写了什么: 协议流里混进任何文字, 客户端都会把它当帧长读, 报"非法帧长度"。
