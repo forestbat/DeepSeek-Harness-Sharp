@@ -1,4 +1,3 @@
-using System.Text;
 using Dsh.Core;
 using Dsh.Interaction;
 using Dsh.Llm;
@@ -11,26 +10,23 @@ public sealed class TranscriptRenderer
     public const int SystemMessageFoldChars = 140;
     public const string DeliverablesHint = "/deliverables 列出本会话交付物, /deliverables open <编号> 用默认程序打开";
 
+    /** 已完成行: 正文里的 (起点, 长度) 切片, 文本本身只在 TranscriptText 里存一份。 */
+    public readonly record struct Line(int Start, int Length);
+
+    private readonly Lock _gate = new();
     private readonly IContextMaintenancePresenter? _maintenance;
-    private readonly StringBuilder _buffer = new();
+    private readonly TranscriptText _text = new();
     private readonly List<TranscriptFold> _folds = [];
-    private readonly List<string> _lines = [];
+    private readonly List<Line> _lines = [];
     private readonly List<TranscriptTint> _tints = [];
+    /** 与 _lines 对齐的事件序号: 锚点靠它判断"重放之后这一行还是不是同一条内容"。 */
+    private readonly List<long> _lineSeqs = [];
     private TranscriptTint _pendingTint;
     private readonly Dictionary<ToolCallId, (string Name, string Arguments, TranscriptFold Fold)> _pendingToolCalls = [];
-    private readonly List<int> _lineStarts = [];
     private readonly List<(int Start, UserMessage Message)> _userMessageStarts = [];
-
-    /**
-     * 转录文本的驻留上限(字符)。一段 1M 事件的会话光正文就上千万字符, 而屏幕只看得见最后一屏 ——
-     * 超过上限就在"安全点"(所有流式块都已闭合、最后一行已完整)把最老的整行连同它们的折叠/行起点一起丢掉,
-     * 丢掉的字数记在 DroppedChars 里。历史仍在磁盘上, 重新打开会话就能看到。
-     */
-    private const int MaxRetainedChars = 4 * 1024 * 1024;
-    private const int TrimTargetChars = MaxRetainedChars / 2;
-    private int _droppedChars;
-    private readonly StringBuilder _tail = new();
     private int _tailStart;
+    private long _currentSeq;
+    private long _tailSeq;
     private bool _reasoningOpen;
     private bool _assistantOpen;
     private bool _assistantStreamed;
@@ -41,18 +37,45 @@ public sealed class TranscriptRenderer
     /** 呈现接缝可为空: 没装提供该能力的插件时这些进度行不出现, 其余渲染不受影响。 */
     public TranscriptRenderer(IContextMaintenancePresenter? maintenance = null) => _maintenance = maintenance;
 
-    /** 已完成行(不含换行符)与每行在全文中的起始偏移, 随 Append 增量维护; 供 wrap 缓存免物化全文。UI 线程亲和, 与 Version 同一时序读取。 */
-    public IReadOnlyList<string> CompletedLines => _lines;
+    /** 已完成的逻辑行数(不含尾部未闭合的那一行)。 */
+    public int LineCount
+    {
+        get
+        {
+            lock (_gate)
+                return _lines.Count;
+        }
+    }
 
-    /** 与 CompletedLines 对齐的行级着色提示(diff 卡片用红删绿增; 其余行 None)。 */
+    /** 第 index 行的切片(起点/长度都在全文坐标系里)。UI 线程亲和, 与 Version 同一时序读取。 */
+    public Line LineAt(int index) => _lines[index];
+
+    /** 第 index 行的只读切片; 需要 string(导出/复制/日志)时才 ToString。UI 线程亲和(与绘制同一时序)。 */
+    public ReadOnlySpan<char> LineSpan(int index)
+    {
+        var line = _lines[index];
+        return line.Length == 0 ? ReadOnlySpan<char>.Empty : _text.Slice(line.Start, line.Length);
+    }
+
+    /** 全文坐标里的任意一段: 折行行只记区间, 绘制时按这里取切片(同一段文字只驻留一份)。 */
+    public ReadOnlySpan<char> TextSpan(int start, int length) => _text.Slice(start, length);
+
+    /** 与 LineAt 对齐的行级着色提示(diff 卡片用红删绿增; 其余行 None)。 */
     internal IReadOnlyList<TranscriptTint> LineTints => _tints;
 
-    public IReadOnlyList<int> LineStarts => _lineStarts;
+    /** 未完成行(最后一段, 可能为空): 从 TailStart 到正文末尾。UI 线程亲和。 */
+    public ReadOnlySpan<char> TailSpan => _text.SliceToEnd(_tailStart);
 
-    /** 未完成行(最后一段, 可能为空字符串); TailStart 是它的全文偏移。 */
-    public string Tail => _tail.ToString();
+    public string Tail => new(TailSpan);
 
-    public int TailStart => _tailStart;
+    public int TailStart
+    {
+        get
+        {
+            lock (_gate)
+                return _tailStart;
+        }
+    }
 
     public int Version { get; private set; }
 
@@ -61,49 +84,62 @@ public sealed class TranscriptRenderer
     {
         get
         {
-            lock (_buffer)
-                return _buffer.Length;
+            lock (_gate)
+                return _text.Length;
         }
     }
 
     public IReadOnlyList<TranscriptFold> Folds => _folds;
 
-    /** 已被裁掉的头部字数: 绝对位置 = 当前偏移 + DroppedChars。 */
-    public int DroppedChars
-    {
-        get
-        {
-            lock (_buffer)
-                return _droppedChars;
-        }
-    }
+    /** 每清空一次自增: 行号与包裹行缓存已经作废, 消费方据此丢弃按行号缓存的状态。 */
+    public int ResetVersion { get; private set; }
 
-    /** 每裁一次自增: 行号与包裹行缓存已经位移, 消费方据此丢弃按行号缓存的状态。 */
-    public int TrimVersion { get; private set; }
-
-    /** 线程安全快照(完成行+非空尾行的拷贝): 非 UI 线程的读取方(窗格读取工具)走这里, 不碰 UI 亲和的 CompletedLines/Tail。 */
+    /** 线程安全快照(完成行+非空尾行的拷贝): 非 UI 线程的读取方(窗格读取工具)走这里, 不碰 UI 亲和的 LineSpan/TailSpan。 */
     public IReadOnlyList<string> SnapshotLines()
     {
-        lock (_buffer)
+        lock (_gate)
         {
-            var lines = new List<string>(_lines);
-            if (_tail.Length > 0)
-                lines.Add(_tail.ToString());
+            var lines = new List<string>(_lines.Count + 1);
+            foreach (var line in _lines)
+                lines.Add(new string(_text.Slice(line.Start, line.Length)));
+            var tail = _text.SliceToEnd(_tailStart);
+            if (tail.Length > 0)
+                lines.Add(new string(tail));
             return lines;
         }
     }
 
-    public void BumpVersion()
+    /** 这个偏移属于哪条事件: 锚点重建后据此确认"还是那一行", 而不是按字数猜。 */
+    public long SeqAt(int offset)
     {
-        Version++;
+        lock (_gate)
+        {
+            if (offset >= _text.Length)
+                return _tailSeq;
+            if (_lines.Count == 0)
+                return _tailSeq;
+            var low = 0;
+            var high = _lines.Count;
+            while (low < high)
+            {
+                var middle = (low + high) >>> 1;
+                if (_lines[middle].Start <= offset)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+            return low == 0 ? _lineSeqs[0] : _lineSeqs[low - 1];
+        }
     }
+
+    public void BumpVersion() => Version++;
 
     /** 由调用方追加一段正文后, 把 [start, CurrentLength) 收成一个 fold; 用于包装工具调用+结果等多事件区间。 */
     public void AddFold(int start, int end, string label, string preview)
     {
         if (end <= start)
             return;
-        lock (_buffer)
+        lock (_gate)
         {
             // 同一段内容已经被收成 fold(例如工具调用 fold 已覆盖这段)时只延长它, 不叠第二个 fold。
             var existing = _folds.FirstOrDefault(fold => fold.Start == start);
@@ -135,19 +171,19 @@ public sealed class TranscriptRenderer
      */
     public void Clear()
     {
-        lock (_buffer)
+        lock (_gate)
         {
-            _buffer.Clear();
+            _text.Clear();
             _folds.Clear();
             _lines.Clear();
             _tints.Clear();
+            _lineSeqs.Clear();
             _pendingTint = TranscriptTint.None;
             _pendingToolCalls.Clear();
-            _lineStarts.Clear();
             _userMessageStarts.Clear();
-            _tail.Clear();
             _tailStart = 0;
-            _droppedChars = 0;
+            _currentSeq = 0;
+            _tailSeq = 0;
             _reasoningOpen = false;
             _assistantOpen = false;
             _assistantStreamed = false;
@@ -156,7 +192,7 @@ public sealed class TranscriptRenderer
             _codeFenceKind = null;
         }
         Version++;
-        TrimVersion++;
+        ResetVersion++;
     }
 
     public void AppendSystemMessage(string text)
@@ -170,12 +206,12 @@ public sealed class TranscriptRenderer
             Append(text);
             return;
         }
-        var start = _buffer.Length;
+        var start = CurrentLength;
         Append(text);
         _folds.Add(new TranscriptFold
         {
             Start = start,
-            End = _buffer.Length,
+            End = CurrentLength,
             Label = "output",
             Preview = Preview(flat, ToolResultPreviewChars),
         });
@@ -188,7 +224,17 @@ public sealed class TranscriptRenderer
             return;
         var imageNames = message.Content.OfType<ImageBlock>().Select(block => ImageName(block.Attachment)).ToList();
         var suffix = imageNames.Count == 0 ? "" : $" [图片: {string.Join(", ", imageNames)}]";
-        var start = CurrentLength;
+        // 用户消息是回合边界: 先把还开着的折叠在这里收口。
+        // 否则 CloseReasoning 会用**稍后**才到的 CurrentLength 作结束位置, 折叠区间把整条用户消息包进去 ——
+        // 折叠态下用户看不到自己发的话, 跳转也只能落到折叠头 "▸ [thinking]" 上。
+        CloseReasoning();
+        CloseAssistant();
+        // 代码块同理: 助手开了 ``` 却没收尾时, 那个折叠会一直延伸到本条消息里 ——
+        // 用户看不到自己发的话, 跳转也只能落到折叠头 "▸ ```" 上。
+        CloseCodeFence();
+        // 锚点必须是 "❯" 那一行的起点: 记成前导换行的位置会让跳转把一条空行顶到视口最上方,
+        // 目标消息被挤到第二行 —— 看上去就是"跳过去了但没跳准"。
+        var start = CurrentLength + 1;
         Append($"\n❯ {text}{suffix}\n");
         _userMessageStarts.Add((start, message));
     }
@@ -225,16 +271,195 @@ public sealed class TranscriptRenderer
     public int? UserMessageStartAt(int index)
         => index >= 0 && index < _userMessageStarts.Count ? _userMessageStarts[index].Start : null;
 
-    /** 当前仍留在转录里的用户消息条数: 裁头会丢早的消息, 跳转据此把序号前移。 */
+    /** 当前仍留在转录里的用户消息条数。 */
     public int UserMessageCount => _userMessageStarts.Count;
 
     /** 只显示文件名, 绝不渲染包含账户目录的完整路径。 */
     private static string ImageName(ImageAttachmentRef attachment)
         => string.IsNullOrWhiteSpace(attachment.Name) ? "image" : attachment.Name;
 
+    /** 转录末尾可能停在这些未闭合的构造里; 补页要把它们当成"接缝不干净"。 */
+    [Flags]
+    public enum OpenConstruct
+    {
+        None = 0,
+        Reasoning = 1,
+        Assistant = 2,
+        CodeFence = 4,
+        ToolCall = 8,
+    }
+
+    /**
+     * 这份转录末尾停在哪些未闭合的构造里。
+     * 补页时用它判断"这一页的结尾能不能当成干净的接缝": 停在构造中间时, 单独渲染这一页会把它截断,
+     * 必须退回整段重放才能保持连续。
+     */
+    public OpenConstruct OpenConstructs
+    {
+        get
+        {
+            lock (_gate)
+            {
+                var open = OpenConstruct.None;
+                if (_reasoningOpen)
+                    open |= OpenConstruct.Reasoning;
+                if (_assistantOpen)
+                    open |= OpenConstruct.Assistant;
+                if (_codeFenceStart is not null)
+                    open |= OpenConstruct.CodeFence;
+                if (_pendingToolCalls.Count > 0)
+                    open |= OpenConstruct.ToolCall;
+                return open;
+            }
+        }
+    }
+
+    public bool HasOpenConstruct => OpenConstructs != OpenConstruct.None;
+
+    /**
+     * 就地收口本转录末尾还开着的构造, 让页边界成为干净接缝。
+     *
+     * 为什么需要它: 页是按事件数硬切的, 页尾可能停在 thinking/代码块/工具调用中间。
+     * 这时若为了"连续"而退回整段重放, 每遇到一次就要重放全部已载入前缀
+     * (百万条会话实测 15 秒一步)。收口只关掉本页自己的构造, 内容一字不少,
+     * 代价仅仅是折叠在页边界处多一个边界 —— 页边界本来就是人为的, 不该让内容跨越它。
+     */
+    public void SealBoundary()
+    {
+        lock (_gate)
+        {
+            CloseReasoning();
+            CloseAssistant();
+            CloseCodeFence();
+            // 工具调用的参数已经写进正文、fold 也已经闭合; 这里只需丢掉"等结果再扩展"的账本:
+            // 结果在更晚的页里, 而更晚的页属于本文, 不属于这一页。
+            _pendingToolCalls.Clear();
+            Version++;
+        }
+    }
+
+    /**
+     * 收口未闭合的代码块: 补一个结束围栏, 把 [开栏, 这里) 收成一个折叠。
+     * 页边界与用户消息边界都要收口 —— 折叠跨过边界就会把边界之后的内容一并藏起来。
+     */
+    private void CloseCodeFence()
+    {
+        if (_codeFenceStart is not { } fence)
+            return;
+        Append("```\n");
+        _folds.Add(new TranscriptFold
+        {
+            Start = fence,
+            End = CurrentLength,
+            Label = string.IsNullOrWhiteSpace(_codeFenceKind) ? "code" : _codeFenceKind,
+            Preview = string.IsNullOrWhiteSpace(_codeFenceKind) ? "```" : $"```{_codeFenceKind}",
+        });
+        _codeFenceStart = null;
+        _codeFenceKind = null;
+    }
+
+    /**
+     * 把另一份转录(只含更早的一页)整体插到本文最前面, 本文既有内容的偏移随之平移。
+     * 返回平移量, 调用方按它平移自己的偏移记账(折行行/锚点等)。
+     *
+     * 为什么不是"Clear 再重放整段": 那样每补一页都要把已载入的前缀重新物化一遍,
+     * 补到顶的总成本是 O(页数²)(百万条会话要几分钟)。前置只付一页的渲染成本。
+     */
+    public int PrependFrom(TranscriptRenderer other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        lock (_gate)
+        {
+            lock (other._gate)
+            {
+                // 这一页若停在半行, 先补一个换行: 否则它会和本文第一行黏成同一行。
+                if (other._tailStart < other._text.Length)
+                    other.Append("\n");
+                var delta = other._text.Length;
+                if (delta == 0)
+                    return 0;
+                _text.Prepend(other._text.Span);
+                ShiftForPrepend(delta);
+                _lines.InsertRange(0, other._lines);
+                _tints.InsertRange(0, other._tints);
+                _lineSeqs.InsertRange(0, other._lineSeqs);
+                _folds.InsertRange(0, other._folds);
+                _userMessageStarts.InsertRange(0, other._userMessageStarts);
+                foreach (var (callId, pending) in other._pendingToolCalls)
+                    _pendingToolCalls[callId] = pending;
+                _tailStart += delta;
+                if (_codeFenceStart is { } fence)
+                    _codeFenceStart = fence + delta;
+                if (_reasoningOpen)
+                    _reasoningFoldStart += delta;
+                Version++;
+                return delta;
+            }
+        }
+    }
+
+    /** 前置之后, 本文既有内容的所有偏移整体右移 delta。 */
+    private void ShiftForPrepend(int delta)
+    {
+        for (var index = 0; index < _lines.Count; index += 1)
+        {
+            var line = _lines[index];
+            _lines[index] = new Line(line.Start + delta, line.Length);
+        }
+        foreach (var fold in _folds)
+        {
+            fold.Start += delta;
+            fold.End += delta;
+        }
+        for (var index = 0; index < _userMessageStarts.Count; index += 1)
+        {
+            var (start, message) = _userMessageStarts[index];
+            _userMessageStarts[index] = (start + delta, message);
+        }
+    }
+
+    /** 渲染器按事件追加时记下序号: 行->序号映射是锚点"还是同一行"的判据。 */
+    public void MarkEvent(long seq)
+    {
+        _currentSeq = seq;
+        _tailSeq = seq;
+    }
+
     /** replay=true 用于会话切换后的历史回放: 用户消息平时由输入回显渲染, 只在回放时从事件补渲染。 */
+    /**
+     * 不在转录上产生任何字符的事件类型。
+     *
+     * 这张表等于"AppendSessionEvent 的 switch 没处理到的类型": 它们一个字符都不画, 但它们的
+     * `Data` 是延迟解析的, 逐条解析要付 JSON 解析成本。会话越长这类事件占比越高
+     * (实测百万条会话里 99.7% 是安全决策审计), 补页时逐条解析它们会占掉绝大部分时间。
+     *
+     * 信封上的 `Type` 不需要解析, 用它提前挡掉; 表与 switch 的一致性由 TranscriptLinesTests 钉住
+     * (表里每个类型都必须"画不出字符"), 所以它不是针对某个会话的特判。
+     */
+    private static readonly HashSet<string> SilentEventTypes = new(StringComparer.Ordinal)
+    {
+        SessionEventTypes.TurnStart,
+        SessionEventTypes.StepStart,
+        SessionEventTypes.StepEnd,
+        SessionEventTypes.RequestHeader,
+        SessionEventTypes.RequestContext,
+        SessionEventTypes.SessionEndSeed,
+        SessionEventTypes.AgentInboxSpliced,
+        SessionEventTypes.WorkingDirectoryChange,
+        SessionEventTypes.FileChanged,
+        SessionEventTypes.ToolDisclosed,
+        SafetyDecisionAuditPayload.EventType,
+    };
+
+    /** 这条事件在转录上不产生任何字符(因此连载荷都不必解析)。 */
+    public static bool IsSilent(SessionEvent sessionEvent) => SilentEventTypes.Contains(sessionEvent.Type);
+
     public void AppendSessionEvent(SessionEvent sessionEvent, bool replay = false, bool foldToolResult = true)
     {
+        MarkEvent(sessionEvent.Seq);
+        // 画不出字符的事件: 直接返回, 不解析载荷, 也不问维护提供方。
+        if (IsSilent(sessionEvent))
+            return;
         // 上下文整理(压缩)的进度由提供方翻译成中立视图; 渲染器只按视图出图, 不引用产生它的插件。
         if (_maintenance?.Describe(sessionEvent) is { } maintenance)
         {
@@ -260,13 +485,13 @@ public sealed class TranscriptRenderer
                 CloseReasoning();
                 CloseAssistant();
                 _assistantStreamed = false;
-                var toolStart = _buffer.Length;
+                var toolStart = CurrentLength;
                 Append($"⚙ {call.Name}\n");
                 AppendIndented(ToolPresentation.FormatArguments(call.Arguments));
                 var toolFold = new TranscriptFold
                 {
                     Start = toolStart,
-                    End = _buffer.Length,
+                    End = CurrentLength,
                     Label = "tool",
                     // 折叠头只给名字: 三角标记由渲染侧统一加(⚙ 在部分字体里缺字形, 会显示成 *).
                     Preview = call.Name,
@@ -288,7 +513,7 @@ public sealed class TranscriptRenderer
                         AppendDiffCard(card, fold: pending.Fold is null && foldToolResult);
                         if (pending.Fold is { } diffFold)
                         {
-                            diffFold.End = _buffer.Length;
+                            diffFold.End = CurrentLength;
                             // 折叠态显示"改了什么", 和 GUI 的编辑卡片标题一致。
                             diffFold.Label = "diff";
                             diffFold.Preview = $"  ⤿ {card.Title} (+{card.Added} -{card.Removed})";
@@ -297,14 +522,14 @@ public sealed class TranscriptRenderer
                         break;
                     }
                     var label = result.Error is not null ? $"x {result.Error.Code} " : "↳ ";
-                    var resultStart = _buffer.Length;
+                    var resultStart = CurrentLength;
                     // 失败的工具结果整行按错误色着色(颜色由 TuiTheme.Error 决定, 设 Default 即不着色)。
                     _pendingTint = result.Error is not null ? TranscriptTint.Error : TranscriptTint.None;
                     Append($"  {label}{text}\n");
                     _pendingTint = TranscriptTint.None;
                     if (pending.Fold is { } resultFold)
                     {
-                        resultFold.End = _buffer.Length;
+                        resultFold.End = CurrentLength;
                         // 失败结果直接展开: 错误信息不该藏在"⚙ 工具名"后面。
                         if (result.Error is not null)
                             resultFold.Collapsed = false;
@@ -314,7 +539,7 @@ public sealed class TranscriptRenderer
                         _folds.Add(new TranscriptFold
                         {
                             Start = resultStart,
-                            End = _buffer.Length,
+                            End = CurrentLength,
                             Label = "tool result",
                             Preview = $"  {label}{Preview(text, ToolResultPreviewChars)}",
                         });
@@ -380,23 +605,23 @@ public sealed class TranscriptRenderer
     private void AppendSummarized(ContextMaintenanceEvent.Summarized summarized)
     {
         var headline = $"✔ 上下文已压缩: 收起 {summarized.Items} 条历史 (~{summarized.Tokens} tokens)";
-        var start = _buffer.Length;
+        var start = CurrentLength;
         Append(headline + "\n");
         _folds.Add(new TranscriptFold
         {
             Start = start,
-            End = _buffer.Length,
+            End = CurrentLength,
             Label = "compacted summary",
             Preview = headline,
         });
         if (summarized.Summary.Length == 0)
             return;
-        var bodyStart = _buffer.Length;
+        var bodyStart = CurrentLength;
         Append(summarized.Summary + "\n");
         _folds.Add(new TranscriptFold
         {
             Start = bodyStart,
-            End = _buffer.Length,
+            End = CurrentLength,
             Label = "summary",
             Preview = Preview(summarized.Summary, SystemMessageFoldChars),
         });
@@ -457,7 +682,7 @@ public sealed class TranscriptRenderer
         if (_reasoningOpen)
             return;
         Append("\n");
-        _reasoningFoldStart = _buffer.Length;
+        _reasoningFoldStart = CurrentLength;
         Append("[thinking] ");
         _reasoningOpen = true;
     }
@@ -474,7 +699,7 @@ public sealed class TranscriptRenderer
     {
         if (!_reasoningOpen)
             return;
-        var end = _buffer.Length;
+        var end = CurrentLength;
         Append("\n");
         _folds.Add(new TranscriptFold
         {
@@ -509,7 +734,7 @@ public sealed class TranscriptRenderer
             Append(text[searchStart..marker]);
             if (_codeFenceStart is null)
             {
-                _codeFenceStart = _buffer.Length;
+                _codeFenceStart = CurrentLength;
                 var lineEnd = text.IndexOf('\n', marker);
                 var markerLine = lineEnd < 0 ? text[marker..] : text[marker..lineEnd];
                 _codeFenceKind = markerLine.TrimStart('`').Trim();
@@ -530,7 +755,7 @@ public sealed class TranscriptRenderer
                 _folds.Add(new TranscriptFold
                 {
                     Start = _codeFenceStart.Value,
-                    End = _buffer.Length,
+                    End = CurrentLength,
                     Label = string.IsNullOrWhiteSpace(_codeFenceKind) ? "code" : _codeFenceKind,
                     Preview = string.IsNullOrWhiteSpace(_codeFenceKind) ? "```" : $"```{_codeFenceKind}",
                 });
@@ -544,7 +769,7 @@ public sealed class TranscriptRenderer
     /** diff 卡片命中时替换原始结果文本: 标题栏即折叠 preview, 展开为双列行号 + +/- 标记的行列表。 */
     private void AppendDiffCard(DiffCard card, bool fold)
     {
-        var start = _buffer.Length;
+        var start = CurrentLength;
         var title = $"  ⤿ {card.Title} (+{card.Added} -{card.Removed})";
         _pendingTint = TranscriptTint.DiffTitle;
         Append($"{title}\n");
@@ -566,7 +791,7 @@ public sealed class TranscriptRenderer
             _folds.Add(new TranscriptFold
             {
                 Start = start,
-                End = _buffer.Length,
+                End = CurrentLength,
                 Label = "diff",
                 Preview = title,
                 Paged = true,
@@ -628,59 +853,16 @@ public sealed class TranscriptRenderer
 
     private void Append(string text)
     {
-        lock (_buffer)
+        lock (_gate)
         {
-            var baseOffset = _buffer.Length;
-            _buffer.Append(text);
+            var baseOffset = _text.Length;
+            _text.Append(text);
             UpdateLines(text, baseOffset);
-            TrimHeadIfOverBudget();
-            BumpVersion();
+            Version++;
         }
     }
 
-    /**
-     * 只在安全点裁头: 尾部没有半行、没有悬空的代码围栏, 流式块也都闭合。
-     * 这样丢掉的是若干整行, 行起点、折叠区间与用户消息位置都只是整体平移, 不会切开任何一块。
-     */
-    private void TrimHeadIfOverBudget()
-    {
-        if (_buffer.Length <= MaxRetainedChars || _tail.Length > 0 || _codeFenceStart is not null)
-            return;
-        if (_reasoningOpen || _assistantOpen || _lines.Count <= 1)
-            return;
-        var cut = _buffer.Length - TrimTargetChars;
-        if (cut <= 0)
-            return;
-        // 对齐到一个行起点: 只从整行边界裁, 保证剩下的行起点仍然指向自己的文本。
-        var dropped = 0;
-        while (dropped < _lineStarts.Count && _lineStarts[dropped] <= cut)
-            dropped += 1;
-        if (dropped == 0 || dropped >= _lineStarts.Count)
-            return;
-        var trimAt = _lineStarts[dropped];
-        _buffer.Remove(0, trimAt);
-        _lines.RemoveRange(0, dropped);
-        _tints.RemoveRange(0, dropped);
-        _lineStarts.RemoveRange(0, dropped);
-        for (var index = 0; index < _lineStarts.Count; index += 1)
-            _lineStarts[index] -= trimAt;
-        _folds.RemoveAll(fold => fold.End <= trimAt);
-        foreach (var fold in _folds)
-        {
-            fold.Start = Math.Max(0, fold.Start - trimAt);
-            fold.End -= trimAt;
-        }
-        _userMessageStarts.RemoveAll(item => item.Start < trimAt);
-        for (var index = 0; index < _userMessageStarts.Count; index += 1)
-            _userMessageStarts[index] = (_userMessageStarts[index].Start - trimAt, _userMessageStarts[index].Message);
-        if (_reasoningFoldStart > 0)
-            _reasoningFoldStart = Math.Max(0, _reasoningFoldStart - trimAt);
-        _tailStart -= trimAt;
-        _droppedChars += trimAt;
-        TrimVersion += 1;
-    }
-
-    /** 把新追加的文本增量并入行列表: 完整行落定到 _lines, 末尾不足一行留在 _tail。 */
+    /** 把新追加的文本增量并入行列表: 完整行落定到 _lines, 末尾不足一行留作尾部(偏移即 _tailStart..末尾)。 */
     private void UpdateLines(string text, int baseOffset)
     {
         var position = 0;
@@ -688,17 +870,15 @@ public sealed class TranscriptRenderer
         {
             var newline = text.IndexOf('\n', position);
             if (newline < 0)
-            {
-                _tail.Append(text.AsSpan(position));
                 break;
-            }
-            _tail.Append(text.AsSpan(position, newline - position));
-            _lines.Add(_tail.ToString());
+            var end = baseOffset + newline;
+            _lines.Add(new Line(_tailStart, end - _tailStart));
             _tints.Add(_pendingTint);
-            _lineStarts.Add(_tailStart);
-            _tail.Clear();
-            _tailStart = baseOffset + newline + 1;
+            _lineSeqs.Add(_currentSeq);
+            _tailStart = end + 1;
             position = newline + 1;
         }
+        _tailSeq = _currentSeq;
     }
 }
+

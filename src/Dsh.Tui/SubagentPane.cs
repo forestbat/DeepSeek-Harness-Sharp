@@ -193,10 +193,11 @@ internal sealed class SubagentPane : ITuiPane
             return _wrapLines;
 
         var lines = new List<string>();
-        foreach (var line in Renderer.CompletedLines)
-            ChatPane.WrapSingleLine(line, width, lines);
-        if (Renderer.Tail.Length > 0)
-            ChatPane.WrapSingleLine(Renderer.Tail, width, lines);
+        for (var index = 0; index < Renderer.LineCount; index += 1)
+            ChatPane.WrapSingleLine(new string(Renderer.LineSpan(index)), width, lines);
+        var tail = Renderer.TailSpan;
+        if (tail.Length > 0)
+            ChatPane.WrapSingleLine(new string(tail), width, lines);
         if (lines.Count == 0)
             lines.Add("");
 
