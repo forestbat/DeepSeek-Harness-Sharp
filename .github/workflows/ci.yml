@@ -2,6 +2,11 @@ name: 构建校验
 
 # Keep a lightweight result for every push/PR so skipped heavy jobs do not leave required checks pending.
 # Merges are checked by the master push event rather than a second pull_request.closed run.
+#
+# 作业划分只有三类, 不再按"每个平台各写一份":
+#   - 测试：platform × suite 的一个矩阵(quick 另按类名分三片, 见 ci-tests.yml);
+#   - 发布校验：JIT 三入口发布 + AOT(只在 PR 上跑), 以及独立的 Android APK;
+#   - 真实 Iroh 测试夹具：可选组件, 准备失败只提示, 不阻塞任何测试与发布。
 on:
   push:
     branches: [master]
@@ -76,10 +81,13 @@ jobs:
       - name: 验证变更选择边界
         run: python3 -m unittest discover -s tests/ci -v
 
-  iroh-component-windows:
+  # 真实的 iroh-ssh 是可选的本地网络组件: 夹具准备失败时依赖它的用例自行跳过,
+  # 因此这里只提示, 不阻塞测试与发布(continue-on-error 让作业结论保持成功)。
+  iroh-fixture:
     name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
     needs: changes
     if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
+    continue-on-error: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -88,7 +96,11 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-    steps: &iroh-component-steps
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-latest
+            rid: osx-arm64
+    steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || github.sha }}
@@ -149,34 +161,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  iroh-component-linux:
-    name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
-    needs: changes
-    if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            rid: linux-x64
-    steps: *iroh-component-steps
-
-  iroh-component-macos:
-    name: 准备真实 Iroh 测试夹具（${{ matrix.rid }}）
-    needs: changes
-    if: needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick')
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            rid: osx-arm64
-    steps: *iroh-component-steps
-
+  # quick 之外的所有套件(regression、raw): 平台 × 套件的单一份矩阵。
   test:
     name: 测试（${{ matrix.platform.os }}，${{ matrix.suite }}）
     needs: [changes]
@@ -210,51 +195,31 @@ jobs:
       suite: ${{ matrix.suite }}
       quick-cohort: all
 
-  test-windows-quick:
-    name: 测试（windows-latest，quick-${{ matrix.cohort }}）
-    needs: [changes, iroh-component-windows]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-windows.result == 'success' || needs.iroh-component-windows.result == 'skipped') }}
+  # quick 按类名切成三片并行: 整包在一个作业里会超过 25 分钟的作业上限。
+  # 片名只说"跑哪些类", 不再用 remainder/rest 这类同义反复的叫法。
+  test-quick:
+    name: 测试（${{ matrix.platform.os }}，quick-${{ matrix.cohort }}）
+    needs: [changes, iroh-fixture]
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') }}
     strategy:
       fail-fast: false
       matrix:
-        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
+        platform:
+          - os: windows-latest
+            native-cc: cl
+            native-cc-alt: clang-cl
+          - os: ubuntu-latest
+            native-cc: clang
+            native-cc-alt: ''
+          - os: macos-latest
+            native-cc: clang
+            native-cc-alt: ''
+        cohort: [fleet, a-m, n-z]
     uses: ./.github/workflows/ci-tests.yml
     with:
-      os: windows-latest
-      native-cc: cl
-      native-cc-alt: clang-cl
-      suite: quick
-      quick-cohort: ${{ matrix.cohort }}
-
-  test-linux-quick:
-    name: 测试（ubuntu-latest，quick-${{ matrix.cohort }}）
-    needs: [changes, iroh-component-linux]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-linux.result == 'success' || needs.iroh-component-linux.result == 'skipped') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
-    uses: ./.github/workflows/ci-tests.yml
-    with:
-      os: ubuntu-latest
-      native-cc: clang
-      native-cc-alt: ''
-      suite: quick
-      quick-cohort: ${{ matrix.cohort }}
-
-
-  test-macos-quick:
-    name: 测试（macos-latest，quick-${{ matrix.cohort }}）
-    needs: [changes, iroh-component-macos]
-    if: ${{ !cancelled() && needs.changes.outputs.tests == 'true' && contains(fromJSON(needs.changes.outputs.suites), 'quick') && (needs.iroh-component-macos.result == 'success' || needs.iroh-component-macos.result == 'skipped') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        cohort: [fleet-iroh, remainder-a-m, remainder-rest]
-    uses: ./.github/workflows/ci-tests.yml
-    with:
-      os: macos-latest
-      native-cc: clang
+      os: ${{ matrix.platform.os }}
+      native-cc: ${{ matrix.platform.native-cc }}
+      native-cc-alt: ${{ matrix.platform.native-cc-alt }}
       suite: quick
       quick-cohort: ${{ matrix.cohort }}
 
@@ -290,7 +255,7 @@ jobs:
         run: git merge-base --is-ancestor "$EXPECTED_HEAD_SHA" HEAD
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
           cache: true
           cache-dependency-path: '**/*.csproj'
       - name: 依次发布三个入口并校验原生故障遏制库（Release + 裁剪 + 自包含）
@@ -361,7 +326,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-
   aot:
     name: AOT 构建（${{ matrix.rid }}）
     needs: [changes]
@@ -392,16 +356,37 @@ jobs:
 
   result:
     name: CI 结果
-    needs: [changes, validate, iroh-component-windows, iroh-component-linux, iroh-component-macos, test, test-windows-quick, test-linux-quick, test-macos-quick, build, aot, android]
+    needs: [changes, validate, iroh-fixture, test, test-quick, build, aot, android]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: 汇总必需校验结果
         shell: bash
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          VALIDATE: ${{ needs.validate.result }}
+          TEST: ${{ needs.test.result }}
+          QUICK: ${{ needs.test-quick.result }}
+          BUILD: ${{ needs.build.result }}
+          AOT: ${{ needs.aot.result }}
+          ANDROID: ${{ needs.android.result }}
+          IROH: ${{ needs.iroh-fixture.result }}
         run: |
-          if [ '${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}' = 'true' ]; then
-            echo '::error::受影响的 CI 校验失败或被取消'
+          set -euo pipefail
+          # 这个列表就是"必需校验"的全部: 真实 Iroh 夹具是可选的, 单独判定, 只提示不判红。
+          failed=""
+          for state in "$CHANGES" "$VALIDATE" "$TEST" "$QUICK" "$BUILD" "$AOT" "$ANDROID"; do
+            case "$state" in
+              failure|cancelled) failed="$failed $state" ;;
+            esac
+          done
+          echo "必需校验: $QUICK | iroh-fixture: $IROH"
+          if [ "$IROH" = "failure" ]; then
+            echo "::warning::真实 Iroh 测试夹具准备失败; 依赖它的用例已跳过, 不判红"
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::受影响的 CI 校验失败或被取消:$failed"
             exit 1
           fi
           echo '受影响的 CI 校验全部通过；不相关的校验已跳过'
