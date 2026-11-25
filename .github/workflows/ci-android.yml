@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dotnet workload install android --skip-sign-check
+          dotnet workload install android
           dotnet workload list
 
       - name: 安装 Android SDK 平台与构建工具
