@@ -125,11 +125,28 @@ public sealed class RemoteEditorClient(RemoteHostClient host, JsonRpcChannel rpc
         }
     }
 
+    /**
+     * 告诉对端"本连接不再提供编辑器"。
+     *
+     * 注册句柄的释放与客户端退役是两条独立的路径, 顺序不定: 连接先关闭时客户端的 CTS 已经释放,
+     * 再去取 _lifetime.Token 会抛 ObjectDisposedException。既然连接都没了, 对端也不需要这条通知 ——
+     * 已经退役就直接返回, 并在锁内取 token, 免得取到一半被释放。
+     */
     private async ValueTask UnregisterAsync()
     {
-        lock (_gate) { _registered = false; _local = null; _map = null; }
-        if (!host.IsClosed)
-            await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, _lifetime.Token).ConfigureAwait(false);
+        CancellationToken token;
+        lock (_gate)
+        {
+            _registered = false;
+            _local = null;
+            _map = null;
+            if (_disposed)
+                return;
+            token = _lifetime.Token;
+        }
+        if (host.IsClosed)
+            return;
+        await rpc.InvokeAsync<bool>(EditorProtocol.MethodUnregister, token).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()
