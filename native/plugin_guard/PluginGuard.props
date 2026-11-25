@@ -22,13 +22,23 @@
     <DshBuildFaultProbe Condition="'$(DshGuardOwner)' == 'true' And '$(DshShipFaultProbe)' == 'true'">true</DshBuildFaultProbe>
   </PropertyGroup>
 
+  <Target Name="PrepareDshNativeCompiler"
+          Condition="'$(DshGuardOwner)' == 'true' Or '$(DshBuildFaultProbe)' == 'true'">
+    <PropertyGroup>
+      <DshNativeCompilerStamp>$(IntermediateOutputPath)dsh-guard\compiler.txt</DshNativeCompilerStamp>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntermediateOutputPath)dsh-guard\" />
+    <WriteLinesToFile File="$(DshNativeCompilerStamp)" Lines="$(DshNativeCompiler)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+
   <!--
     增量: Inputs/Outputs 让 MSBuild 在源文件与产物都没变时整段跳过 —— vswhere 与 VsDevCmd.bat 的启动开销
     (每次数秒) 不该出现在每个 warm build 里。VsDevCmd 的解析因此挪进目标内部, 只在真的要编译时才跑。
   -->
-  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild"
+  <Target Name="BuildDshPluginGuard" BeforeTargets="BeforeBuild" DependsOnTargets="PrepareDshNativeCompiler"
           Condition="'$(DshGuardOwner)' == 'true'"
-          Inputs="$(DshGuardSource)"
+          Inputs="$(DshGuardSource);$(DshNativeCompilerStamp);$(MSBuildThisFileFullPath)"
           Outputs="$(IntermediateOutputPath)dsh-guard\$(DshGuardFile)">
     <PropertyGroup>
       <DshGuardOutputDir>$(IntermediateOutputPath)dsh-guard\</DshGuardOutputDir>
@@ -70,9 +80,9 @@
   </Target>
 
   <!-- 会访问违例的真实原生探针, 验证 guard 的遏制: 测试工程以 DshBuildFaultProbe=true 自建, 发布以 DshShipFaultProbe=true 附带。 -->
-  <Target Name="BuildDshFaultProbe" BeforeTargets="BeforeBuild"
+  <Target Name="BuildDshFaultProbe" BeforeTargets="BeforeBuild" DependsOnTargets="PrepareDshNativeCompiler"
           Condition="'$(DshBuildFaultProbe)' == 'true'"
-          Inputs="$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c"
+          Inputs="$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c;$(DshNativeCompilerStamp);$(MSBuildThisFileFullPath)"
           Outputs="$(IntermediateOutputPath)dsh-guard\$(DshProbeFile)">
     <PropertyGroup>
       <DshProbeSource>$(MSBuildThisFileDirectory)..\fault_probe\fault_probe.c</DshProbeSource>
