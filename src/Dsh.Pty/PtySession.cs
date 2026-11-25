@@ -19,6 +19,9 @@ public sealed class PtySession : IDisposable, ITerminalConnection
     /** 窗格级(非独占)订阅者: 每个订阅者拿到当前屏快照与后续输出的一份拷贝。 */
     private readonly List<Channel<byte[]>> _subscribers = [];
 
+    /** 输入旁路的订阅者: 常驻 TUI 用它拿原始终端字节, 不再经 pty 的控制台记录翻译。 */
+    private readonly List<PtyInputSubscription> _inputSubscribers = [];
+
     /** 子进程退出后留给泵读完尾巴输出再结束流的时间(见 OnConPtyExited)。 */
     private const int ExitDrainMilliseconds = 150;
 
@@ -215,6 +218,9 @@ public sealed class PtySession : IDisposable, ITerminalConnection
 
     public async ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
+        if (PublishInput(data.Span))
+            return;
+
         var unix = _unix;
         if (unix is not null)
         {
@@ -237,6 +243,43 @@ public sealed class PtySession : IDisposable, ITerminalConnection
         }
 
         throw new ObjectDisposedException(nameof(PtySession));
+    }
+
+    /**
+     * 输入旁路订阅: 常驻 TUI 拿到的就是代理/窗口送进来的原始终端字节(含 ESC[200~ 粘贴标记、CSI-u 修饰键、
+     * 鼠标报文与中文标点)。Windows 上必须走这条: ConPTY 把输入字节翻成控制台记录时会丢东亚歧义符号(中文引号/省略号)、
+     * 丢带修饰键的按键编码、把括号粘贴标记吃成普通字符, 表现为"标点打不进去""Shift+Enter 没反应""多行粘贴变多条消息"。
+     * 有订阅者时输入不再写 pty(那侧只会翻成没人读的记录), 订阅结束后自动回落到 pty。
+     */
+    public PtyInputSubscription SubscribeInput()
+    {
+        var subscription = new PtyInputSubscription(this);
+        lock (_gate)
+            _inputSubscribers.Add(subscription);
+        return subscription;
+    }
+
+    internal void UnsubscribeInput(PtyInputSubscription subscription)
+    {
+        lock (_gate)
+            _inputSubscribers.Remove(subscription);
+    }
+
+    /** 把输入交给旁路订阅者; 没有订阅者(非 TUI 会话、或 TUI 还没挂上旁路)时返回 false, 调用方照旧写 pty。 */
+    private bool PublishInput(ReadOnlySpan<byte> data)
+    {
+        PtyInputSubscription[] subscribers;
+        lock (_gate)
+        {
+            if (_inputSubscribers.Count == 0)
+                return false;
+            subscribers = [.. _inputSubscribers];
+        }
+
+        var bytes = data.ToArray();
+        foreach (var subscriber in subscribers)
+            subscriber.TryWrite(bytes);
+        return true;
     }
 
     /**

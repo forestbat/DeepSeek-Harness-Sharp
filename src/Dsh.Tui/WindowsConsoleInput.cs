@@ -32,6 +32,9 @@ internal sealed class WindowsConsoleInputReader : ITerminalInputSource
 
     public bool EndOfStream { get; private set; }
 
+    /** 控制台记录不是原始字节: ConPTY 已经翻译过一遍, 修饰键与粘贴标记在这一层就没了。 */
+    public bool DecodesEscapeSequences => false;
+
     /** 控制台句柄不可用时返回 null, 由调用方回退到 Console.ReadKey。 */
     public static WindowsConsoleInputReader? TryCreate()
     {

@@ -373,6 +373,24 @@ public sealed class PtyDaemon : IAsyncDisposable
                     return false;
                 }
 
+            case "input":
+                {
+                    // 常驻 TUI 的输入旁路: 之后的键盘/粘贴/鼠标字节从这条连接直传, 不再经 pty 的 ConPTY 输入翻译。
+                    // 老版本 daemon 不认识这个方法(返回 unauthorized/错误), 调用方据此退回控制台记录路径。
+                    var id = request.Id;
+                    var session = id is null ? null : _host.Get(id);
+                    if (session is null || session.Status != PtySessionStatus.Running)
+                    {
+                        await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = false, Error = $"PTY session not found: {id}" }, cancellationToken);
+                        return false;
+                    }
+
+                    using var subscription = session.SubscribeInput();
+                    await WriteResponseAsync(stream, new PtyDaemonResponse { Ok = true }, cancellationToken);
+                    await PumpInputToSocketAsync(subscription.Reader, stream, cancellationToken);
+                    return true;
+                }
+
             case "mouse":
                 {
                     // 终端代理把宿主终端的鼠标事件送进来: 注入常驻会话的控制台输入缓冲, 不能写 pty
@@ -645,6 +663,14 @@ public sealed class PtyDaemon : IAsyncDisposable
         }
     }
 
+    private static async Task PumpInputToSocketAsync(ChannelReader<byte[]> input, NetworkStream stream, CancellationToken cancellationToken)
+    {
+        await foreach (var chunk in input.ReadAllAsync(cancellationToken))
+        {
+            await stream.WriteAsync(chunk, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+        }
+    }
     private static async Task PumpSessionToSocketAsync(PtySession session, NetworkStream stream, CancellationToken cancellationToken)
     {
         var buffer = new byte[8192];
