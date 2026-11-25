@@ -1,4 +1,7 @@
 using Dsh.Pty;
+using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Dsh.Tests;
 
@@ -8,6 +11,48 @@ namespace Dsh.Tests;
  */
 public sealed class PtyRecordTests
 {
+    [Fact(Timeout = 20000)]
+    public async Task Records_WorkWithoutJsonReflection()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = TempTree.CreateDirectory("pty-records-json");
+        Process? child = null;
+        try
+        {
+            var assembly = typeof(PtyRecordTests).Assembly.Location;
+            var configuration = JsonNode.Parse(await File.ReadAllTextAsync(Path.ChangeExtension(assembly, ".runtimeconfig.json"), cancellationToken))!;
+            configuration["runtimeOptions"]!["configProperties"]!["System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault"] = false;
+            var configurationPath = Path.Combine(root, "records.runtimeconfig.json");
+            await File.WriteAllTextAsync(configurationPath, configuration.ToJsonString(), cancellationToken);
+            var dotnet = Path.GetFullPath(Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "../../..", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+            var start = new ProcessStartInfo(dotnet, ["exec", "--runtimeconfig", configurationPath, assembly,
+                "-method", $"{typeof(PtyRecordTests).FullName}.{nameof(Record_WithoutJsonReflection_SurvivesRoundTripAndListsById)}", "-explicit", "on", "-parallelMode", "none"])
+            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            child = TestProcessScope.Start(start);
+            var output = child.StandardOutput.ReadToEndAsync(cancellationToken);
+            var error = child.StandardError.ReadToEndAsync(cancellationToken);
+            await child.WaitForExitAsync(cancellationToken);
+            Assert.True(child.ExitCode == 0, $"{await output}\n{await error}");
+        }
+        finally
+        {
+            if (child is { HasExited: false })
+            {
+                child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync(CancellationToken.None);
+            }
+            child?.Dispose();
+            TempTree.Delete(root);
+        }
+    }
+
+    [Fact(Explicit = true)]
+    public void Record_WithoutJsonReflection_SurvivesRoundTripAndListsById()
+    {
+        Assert.False(JsonSerializer.IsReflectionEnabledByDefault);
+        Record_SurvivesRoundTripAndListsById();
+    }
+
     [Fact]
     public void Record_SurvivesRoundTripAndListsById()
     {
