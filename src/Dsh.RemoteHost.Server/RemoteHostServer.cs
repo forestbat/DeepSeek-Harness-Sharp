@@ -89,7 +89,11 @@ public sealed class RemoteHostServer(
                 using var registration = cancellationToken.Register(() => connection.StopAll());
                 try
                 {
-                    await channel.Completion.ConfigureAwait(false);
+                    // 等待这条连接自己结束, 同时让宿主的取消也能结束它。
+                    // Completion 只在传输层读到结尾时完成, 而停掉事件泵既不关闭 socket, 也不让对端不再 ping ——
+                    // 监听被取消(宿主下线)时如果只等 Completion, 这里就永远不会返回, 下面 using 里的关闭也就永远轮不到,
+                    // 客户端会一直以为自己连着旧宿主。取消即返回, 关闭交给 using。
+                    await channel.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is ConnectionLostException or IOException or ObjectDisposedException or OperationCanceledException)
                 {
