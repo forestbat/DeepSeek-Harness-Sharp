@@ -34,7 +34,10 @@ public sealed class ChatPaneOlderHistoryTests : IDisposable
             session.Append(new UserMessagePayload(MessageFactory.CreateUserText($"q{turn}")), new SurfaceOp.Append());
             turn += 1;
         }
+        // A windowed resume requires the production fold checkpoint to cover the persisted log.
+        _ = session.DeriveMessages();
         await environment.App.Ctx.Get<SessionStore>(SessionStore.ServiceName)!.Flush(session);
+        Assert.NotNull(environment.App.Ctx.Get<ISessionPersistence>(ISessionPersistence.ServiceName)!.TryLoadSurfaceFold(sessionId));
 
         await using var restarted = await environment.RestartAsync();
         var agents = restarted.App.Ctx.Get<AgentRegistry>(AgentRegistry.ServiceName)!;
