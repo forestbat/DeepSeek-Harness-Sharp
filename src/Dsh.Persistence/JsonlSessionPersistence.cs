@@ -1007,7 +1007,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             {
                 // 票文件读不到只是这一次, 不要把裸 IO 异常扔进回合里。
                 throw new SessionWriteBusyException(Environment.ProcessId,
-                    $"the write ticket could not be read ({error.GetType().Name}); retrying on the next write");
+                    $"the write ticket could not be updated ({error.GetType().Name}); retrying on the next write", error);
             }
         }
     }
@@ -1634,13 +1634,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
                 : text.WrittenSpan.ToArray(), seq, count, replaceStart);
     }
 
-    /**
-     * 追加一批事件。整个动作是"看末尾 → 定起点 → 写 → 更新索引"的一次事务, 尾部这段字节
-     * 用**区间锁**占住, 另一个写者只能等这一次追加结束 —— 否则两边会各自把同一个起点当成自己的,
-     * 把两套序号写进同一段字节(那正是"日志再也读不回来"的来源)。
-     *
-     * 锁是字节区间锁(一个 syscall), 不是独立锁文件: 后者要开一个文件, 实测 95µs, 是这个的五十倍。
-     */
+    /** Append under an exclusive tail guard through the index update so concurrent writers cannot choose the same offset. */
     private void AppendLines(SessionHeader meta, IReadOnlyList<SessionEvent> events, StorageHandleState state)
     {
         var frames = EncodeEventFrames(events);
@@ -1722,13 +1716,10 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
             "another writer kept the session log tail busy; retrying on the next write");
     }
 
-    /**
-     * 进临界区: 正常情况下是日志文件上的**字节区间锁**(一个 syscall); macOS 没有可用的区间锁,
-     * 退化成一个锁文件(会慢一个量级, 但只在这一种平台上)。
-     */
+    /** Windows uses mandatory byte-range locks and macOS does not support them, so both lock a separate file to keep the live log readable. */
     private static AppendTailGuard? TryEnterAppendTail(FileStream stream, string path, long start, long span)
     {
-        if (!OperatingSystem.IsMacOS())
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
         {
             try
             {
@@ -1756,7 +1747,7 @@ public sealed class JsonlSessionPersistence : ISessionPersistence, IDisposable
     {
         public void Dispose()
         {
-            if (stream is not null && !OperatingSystem.IsMacOS())
+            if (stream is not null && !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
             {
                 try
                 {

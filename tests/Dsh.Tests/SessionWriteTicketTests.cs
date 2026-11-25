@@ -112,6 +112,20 @@ public sealed class SessionWriteTicketTests : IDisposable
         }
     }
 
+    [Fact]
+    public void TicketUpdate_WithAnOpenReader_PreservesSequenceNumbers()
+    {
+        var path = Path.Join(_root, "ticket.json");
+        Assert.Equal(0, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
+
+        using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            Assert.Equal(1, SessionWriteTicket.NextSeq(path, storedCount: 0, count: 1));
+
+        Assert.Equal(2, SessionWriteTicket.Inspect(path)!.NextSeq);
+        SessionWriteTicket.MarkDurable(path, durableUpTo: 2);
+        Assert.Null(SessionWriteTicket.Inspect(path));
+    }
+
     /** 关掉第一个写句柄之后, 第二个写者接着写, 序号从日志末尾继续。 */
     [Fact]
     public void ClosedWriter_LetsTheNextWriterContinueTheSequence()
