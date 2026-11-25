@@ -1,0 +1,152 @@
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -163,6 +163,10 @@
+ 
+ #[derive(Args, Clone, Debug)]
+ pub struct ServerArgs {
++    /// Acknowledge direct discovery or relay publication before writing this file.
++    #[arg(long, value_name = "FILE")]
++    pub ready_file: Option<PathBuf>,
++
+     #[arg(long, default_value = "22")]
+     pub ssh_port: u16,
+ 
+--- a/src/api.rs
++++ b/src/api.rs
+@@ -113,6 +113,13 @@
+ }
+ 
+ pub async fn server_mode(server_args: ServerArgs, service: bool) -> anyhow::Result<()> {
++    if let Some(path) = &server_args.ready_file {
++        match tokio::fs::remove_file(path).await {
++            Ok(()) => {}
++            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
++            Err(error) => return Err(error.into()),
++        }
++    }
+     let mut iroh_ssh_builder = IrohSsh::builder()
+         .accept_incoming(true)
+         .accept_port(server_args.ssh_port)
+@@ -123,6 +130,9 @@
+         iroh_ssh_builder = iroh_ssh_builder.dot_ssh_integration(true, service);
+     }
+     let iroh_ssh = iroh_ssh_builder.build().await?;
++    if let Some(path) = &server_args.ready_file {
++        iroh_ssh.write_ready_file(path).await?;
++    }
+ 
+     println!("Connect to this this machine:");
+     println!(
+--- a/src/service/windows.rs
++++ b/src/service/windows.rs
+@@ -623,6 +623,7 @@
+ 
+             let result = crate::api::server_mode(
+                 ServerArgs {
++                    ready_file: None,
+                     ssh_port,
+                     persist: true,
+                     key_dir,
+--- a/src/ssh.rs
++++ b/src/ssh.rs
+@@ -206,6 +206,68 @@
+         Ok(ssh_process)
+     }
+ 
++    /// Wait for either a current direct discovery record or acknowledged relay publication.
++    /// Identity creation and bind() alone do not acknowledge any discovery publisher.
++    pub async fn write_ready_file(&self, path: &Path) -> anyhow::Result<()> {
++        use iroh::address_lookup::{
++            AddressLookup, AddressLookupBuilder, EndpointInfo, PkarrRelayClient,
++            DEFAULT_PKARR_TTL, N0_DNS_PKARR_RELAY_PROD,
++        };
++        use tokio_stream::StreamExt;
++
++        let endpoint = &self.inner.as_ref().expect("inner not set").endpoint;
++        let direct = async {
++            let options = iroh_mdns_peer_lookup::Options::new().announce(false).build();
++            let observer = iroh_mdns_peer_lookup::lookup(options).await?
++                .into_address_lookup(endpoint)?;
++            let results = observer.resolve(endpoint.id())
++                .ok_or_else(|| anyhow::anyhow!("mDNS lookup is unavailable"))?;
++            tokio::pin!(results);
++            while let Some(result) = results.next().await {
++                if let Ok(item) = result {
++                    let current = endpoint.addr();
++                    if item.ip_addrs().any(|addr| current.ip_addrs().any(|ours| ours == addr)) {
++                        return Ok::<(), anyhow::Error>(());
++                    }
++                }
++            }
++            bail!("No current direct address was discovered for the receiver")
++        };
++        let relay = async {
++            endpoint.online().await;
++            let mut info = EndpointInfo::from(endpoint.addr());
++            // Match N0's relay-only privacy policy.
++            info.data.clear_ip_addrs();
++            let packet = info.to_pkarr_signed_packet(endpoint.secret_key(), DEFAULT_PKARR_TTL)?;
++            let publisher = PkarrRelayClient::new(
++                N0_DNS_PKARR_RELAY_PROD.parse()?,
++                endpoint.tls_config().clone(),
++                endpoint.dns_resolver()?.clone(),
++            );
++            publisher.publish(&packet).await?;
++            Ok::<(), anyhow::Error>(())
++        };
++        tokio::pin!(direct, relay);
++        // Either branch acknowledges the receiver's existing address lookup paths.
++        tokio::select! {
++            result = &mut direct => if let Err(direct_error) = result {
++                relay.await.map_err(|relay_error| anyhow::anyhow!(
++                    "Receiver discovery failed: {direct_error:#}; {relay_error:#}"
++                ))?;
++            },
++            result = &mut relay => if let Err(relay_error) = result {
++                direct.await.map_err(|direct_error| anyhow::anyhow!(
++                    "Receiver discovery failed: {direct_error:#}; {relay_error:#}"
++                ))?;
++            },
++        }
++
++        let temporary = path.with_extension("tmp");
++        tokio::fs::write(&temporary, format!("{}\n{}\n", endpoint.id(), std::process::id())).await?;
++        tokio::fs::rename(temporary, path).await?;
++        Ok(())
++    }
++
+     pub async fn connect_pubkey(&self, endpoint_id: EndpointId) -> anyhow::Result<()> {
+         let inner = self.inner.as_ref().expect("inner not set");
+         let conn = inner
+--- /dev/null
++++ b/build.rs
+@@ -0,0 +1,10 @@
++fn main() {
++    println!("cargo:rerun-if-changed=iroh-ssh.Info.plist");
++    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
++        let plist = concat!(env!("CARGO_MANIFEST_DIR"), "/iroh-ssh.Info.plist");
++        for argument in ["-sectcreate", "__TEXT", "__info_plist", plist] {
++            println!("cargo:rustc-link-arg=-Xlinker");
++            println!("cargo:rustc-link-arg={argument}");
++        }
++    }
++}
+--- /dev/null
++++ b/iroh-ssh.Info.plist
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>CFBundleIdentifier</key>
++    <string>io.github.forestbat.dsharp.iroh-ssh</string>
++    <key>CFBundleName</key>
++    <string>dsharp Iroh</string>
++    <key>NSLocalNetworkUsageDescription</key>
++    <string>Discover and connect to your SSH machines over Iroh on the local network.</string>
++    <key>NSBonjourServices</key>
++    <array>
++        <string>_irohv1._udp</string>
++    </array>
++</dict>
++</plist>

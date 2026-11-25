@@ -1,0 +1,21 @@
+iroh-ssh 0.2.12 (post-release source revision with mDNS and DHT address lookup)
+Upstream: https://github.com/rustonbsd/iroh-ssh
+Source revision: 82e99719f8b4e44c69622140f4acb25e5ae54184
+Source archive SHA256: cfcafde6b789b076bd6e4c28abbc9a92476db122efa5d644bdded35380d6a8ac
+Build: Rust 1.93.0, cargo build --locked --release, upstream Cargo.lock.
+Local modification: optional server --ready-file synchronizes initial discovery before receiver readiness.
+Either a current direct address is discovered by a temporary non-announcing mDNS observer, or a relay-only
+signed record is acknowledged by the existing N0 PKARR service after relay registration.
+The original background publishers remain responsible for subsequent address changes.
+The macOS executable embeds its bundle identity, Local Network usage description, and Bonjour service declaration.
+This declares its purpose; it neither grants permission nor elevates the receiver.
+Patch: READINESS.patch, distributed next to this test fixture notice.
+Patch SHA256: e383bd31cfe47d8ac57bb732ee53f31f24f6d94e8ec48d5a41cd59d26ed4f58c
+License: MIT, reproduced in LICENSE.txt next to this notice.
+Locked Rust dependency package versions, license expressions, and their included license files are reproduced in THIRD-PARTY-LICENSES.txt.
+Each package entry includes a version-specific source download URL so recipients can obtain its corresponding source, including the MPL-2.0-covered attohttpc crate.
+
+All test fixture platforms are built from this same source revision and pinned local patch.
+The mutable upstream release assets are not used, including the linux-aarch64 asset built against a different iroh version.
+The optional test fixture is a separate executable and invokes the operating system's OpenSSH client only when its connection commands are used.
+dsharp uses its proxy and server commands to carry the existing SSH protocol over iroh, without bypassing SSH authentication or host-key verification.
