@@ -108,8 +108,8 @@ public sealed class SessionPersistenceFailureTests : IDisposable
         AppendAndPublish(ctx, session, new TurnStartPayload(1));
         await ctx.Events.Parallel(new SessionFlushNotification(session));
 
-        // 另一个活着的写者持着票(票面未过期、票主不是本进程)。
-        WriteForeignTicket(persistence, session, expiresInSeconds: 30, nextSeq: 99);
+        // Keep the foreign ticket valid throughout the production retry loop, including slow CI runs.
+        WriteForeignTicket(persistence, session, expiresUtc: DateTimeOffset.MaxValue.ToUnixTimeMilliseconds(), nextSeq: 99);
 
         Assert.Throws<SessionWriteBusyException>(() => session.Append(new StepStartPayload(1, 1)));
         using var reader = persistence.Open(session.Id, SessionAccess.Read);
@@ -135,7 +135,7 @@ public sealed class SessionPersistenceFailureTests : IDisposable
         await ctx.Events.Parallel(new SessionFlushNotification(session));
 
         // 票面写着 nextSeq=99, 但它已经过期: 接管时以日志真实条数(1)为起点, 不制造空洞。
-        WriteForeignTicket(persistence, session, expiresInSeconds: -30, nextSeq: 99);
+        WriteForeignTicket(persistence, session, expiresUtc: DateTimeOffset.UnixEpoch.ToUnixTimeMilliseconds(), nextSeq: 99);
         AppendAndPublish(ctx, session, new StepStartPayload(1, 1));
         await ctx.Events.Parallel(new SessionFlushNotification(session));
 
@@ -144,14 +144,13 @@ public sealed class SessionPersistenceFailureTests : IDisposable
     }
 
     /** 手写票文件: 造出"别的写者持票"这种真实运行中难以复现的状态。 */
-    private void WriteForeignTicket(JsonlSessionPersistence persistence, Session session, int expiresInSeconds, long nextSeq)
+    private void WriteForeignTicket(JsonlSessionPersistence persistence, Session session, long expiresUtc, long nextSeq)
     {
         var logPath = JsonlLayout.LogPath(_root, session.Header.Cwd, session.Id, JsonlCompression.None);
         var path = Path.Join(Path.GetDirectoryName(logPath), "ticket.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var expires = DateTimeOffset.UtcNow.AddSeconds(expiresInSeconds).ToUnixTimeMilliseconds();
         File.WriteAllText(path,
-            $"{{\"pid\":2000000,\"machine\":\"{Environment.MachineName}\",\"processStartUtc\":1,\"epoch\":7,\"writerId\":\"somebody-else\",\"expiresUtc\":{expires},\"nextSeq\":{nextSeq}}}");
+            $"{{\"pid\":2000000,\"machine\":\"{Environment.MachineName}\",\"processStartUtc\":1,\"epoch\":7,\"writerId\":\"somebody-else\",\"expiresUtc\":{expiresUtc},\"nextSeq\":{nextSeq}}}");
     }
 
     /**
