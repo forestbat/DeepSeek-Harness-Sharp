@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using Dsh.Account;
@@ -201,13 +202,26 @@ public sealed class DeepSeekAccountRouteTests
         Assert.Equal("deepseek-account/deepseek-flash", settings.GlobalDefaultModel);
         Assert.Null(persisted.Options.ApiKey);
 
-        // 第二次启动: 端点清单不再被问, 配置直接生效。
+        // The persisted route remains usable while model discovery is unavailable.
+        endpoint.ModelListingStatus = HttpStatusCode.ServiceUnavailable;
         endpoint.Requests.Clear();
         using var restarted = await HarnessComposer.Compose(new HarnessOptions(home.Home, home.Root), global::Dsh.Plugins.Generated.DshPluginCatalog.CreatePluginRuntime);
         var llm = restarted.Ctx.Get<LlmRuntime>(LlmRuntime.ServiceName)!;
         Assert.Contains(llm.ListProviders(), provider => provider.Id == "deepseek-account");
         Assert.Equal(["deepseek-flash", "deepseek-v4-pro"], llm.ListModels("deepseek-account").Select(model => model.Id).OrderBy(id => id, StringComparer.Ordinal));
-        Assert.DoesNotContain(endpoint.Requests, request => request.Path.EndsWith("/models", StringComparison.Ordinal));
+        await endpoint.ModelListingRejected.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("deepseek-account", restarted.Provider);
+        Assert.Equal("deepseek-flash", restarted.Model);
+        await using var restartedFixture = await AgentFixture.StartAsync(restarted.Ctx);
+        Assert.Equal("deepseek-flash", await restartedFixture.RunTurnAsync(
+            new AgentOptions(Provider: restarted.Provider, Model: restarted.Model), TestContext.Current.CancellationToken));
+        var chats = endpoint.Requests.Where(request => request.Path.EndsWith("/chat/completions", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(chats);
+        Assert.All(chats, chat =>
+        {
+            Assert.Equal("account-token", chat.Header(LlmCredential.DshAuthTokenHeader));
+            Assert.Null(chat.Header("Authorization"));
+        });
     }
 
     private static async Task<(string Text, LlmFailure? Failure)> StreamAsync(LlmRuntime llm, string model)
@@ -313,6 +327,7 @@ public sealed class DeepSeekAccountRouteTests
     {
         private readonly WebApplication _application;
         private readonly HttpStatusCode _chatStatus;
+        private readonly TaskCompletionSource _modelListingRejected = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private AccountEndpoint(HttpStatusCode chatStatus)
         {
@@ -344,7 +359,11 @@ public sealed class DeepSeekAccountRouteTests
 
         public string BaseUrl => $"http://127.0.0.1:{Port}";
 
-        public List<RecordedRequest> Requests { get; } = [];
+        public HttpStatusCode ModelListingStatus { get; set; } = HttpStatusCode.OK;
+
+        public Task ModelListingRejected => _modelListingRejected.Task;
+
+        public ConcurrentQueue<RecordedRequest> Requests { get; } = new();
 
         private async Task Serve(HttpContext context)
         {
@@ -352,11 +371,15 @@ public sealed class DeepSeekAccountRouteTests
             foreach (var header in context.Request.Headers)
                 headers[header.Key] = header.Value.ToString();
             var path = context.Request.Path.Value ?? "";
-            Requests.Add(new RecordedRequest(path, headers));
+            Requests.Enqueue(new RecordedRequest(path, headers));
             if (path.EndsWith("/models", StringComparison.Ordinal))
             {
+                var status = ModelListingStatus;
+                context.Response.StatusCode = (int)status;
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(ListingJson, context.RequestAborted);
+                if (status == HttpStatusCode.ServiceUnavailable)
+                    _modelListingRejected.TrySetResult();
                 return;
             }
             if (!path.EndsWith("/chat/completions", StringComparison.Ordinal))
