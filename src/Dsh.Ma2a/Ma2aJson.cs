@@ -5,31 +5,12 @@ namespace Dsh.Ma2a;
 
 internal static class Ma2aJson
 {
+    private static readonly JsonDocumentOptions ResponseOptions = new() { AllowDuplicateProperties = false };
+
     internal static JsonElement Parse(ReadOnlyMemory<byte> bytes)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(bytes);
-            ValidateMembers(document.RootElement);
-            return document.RootElement.Clone();
-        }
+        try { return JsonElement.Parse(bytes.Span, ResponseOptions); }
         catch (JsonException) { throw new Ma2aProtocolException("invalid_frame", "The local response is not valid JSON."); }
-    }
-
-    private static void ValidateMembers(JsonElement element)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var property in element.EnumerateObject())
-            {
-                if (!names.Add(property.Name))
-                    throw new Ma2aProtocolException("invalid_frame", "The local response contains duplicate fields.");
-                ValidateMembers(property.Value);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-            foreach (var item in element.EnumerateArray()) ValidateMembers(item);
     }
 
     internal static void ValidateResponse(JsonElement response, JsonObject command)

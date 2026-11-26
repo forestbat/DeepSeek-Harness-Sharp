@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 
 namespace Dsh.Ma2a;
@@ -16,7 +17,7 @@ internal static class Ma2aSnapshot
             "snapshot_fetch" => "snapshot", "space_list" => "spaces",
             _ => throw new Ma2aProtocolException("invalid_frame", "This operation cannot return snapshot fragments."),
         };
-        using var bytes = new MemoryStream();
+        var bytes = new ArrayBufferWriter<byte>(FragmentBytes);
         var stamp = ReadStamp(first);
         var fragment = first;
         ulong index = 0;
@@ -27,7 +28,7 @@ internal static class Ma2aSnapshot
             index = checked(index + 1);
             fragment = Ma2aJson.Parse(await Ma2aConnection.ReadAsync(stream, correlation, cancellationToken, waitForReply: false));
         }
-        var response = Ma2aJson.Parse(bytes.GetBuffer().AsMemory(0, (int)bytes.Length));
+        var response = Ma2aJson.Parse(bytes.WrittenMemory);
         ValidateAssembled(response, stamp, expectedType);
         return response;
     }
@@ -41,7 +42,7 @@ internal static class Ma2aSnapshot
         return (value, boot.GetString()!);
     }
 
-    private static bool Append(JsonElement fragment, (ulong Revision, string Boot) stamp, ulong index, MemoryStream bytes)
+    private static bool Append(JsonElement fragment, (ulong Revision, string Boot) stamp, ulong index, ArrayBufferWriter<byte> bytes)
     {
         if (fragment.ValueKind != JsonValueKind.Object || fragment.EnumerateObject().Count() != FragmentFields.Count
             || fragment.EnumerateObject().Any(property => !FragmentFields.Contains(property.Name))
@@ -56,10 +57,13 @@ internal static class Ma2aSnapshot
         var hex = data.GetString()!;
         if (!Ma2aJson.IsHex(hex) || hex.Length > FragmentBytes * 2 || (!isLast && hex.Length != FragmentBytes * 2))
             throw new Ma2aProtocolException("invalid_frame", "The snapshot fragment size or encoding is invalid.");
-        var totalBytes = bytes.Length + hex.Length / 2;
+        var fragmentBytes = hex.Length / 2;
+        var totalBytes = bytes.WrittenCount + fragmentBytes;
         if (totalBytes > MaximumSnapshotBytes)
             throw new Ma2aProtocolException("invalid_frame", "The assembled snapshot exceeds the response limit.");
-        bytes.Write(Convert.FromHexString(hex));
+        if (Convert.FromHexString(hex.AsSpan(), bytes.GetSpan(fragmentBytes), out _, out var written) != OperationStatus.Done)
+            throw new Ma2aProtocolException("invalid_frame", "The snapshot fragment encoding is invalid.");
+        bytes.Advance(written);
         return isLast;
     }
 

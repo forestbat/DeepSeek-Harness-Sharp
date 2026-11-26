@@ -61,10 +61,12 @@ public sealed class LocalProtocolTests
         Assert.Equal("invalid_frame", error.Error);
     }
 
-    [Fact]
-    public void RejectsDuplicateResponseFields()
+    [Theory]
+    [InlineData("""{"version":1,"version":1}""")]
+    [InlineData("""{"result":[{"revision":1,"revisi\u006fn":2}]}""")]
+    public void RejectsDuplicateResponseFields(string response)
     {
-        var error = Assert.Throws<Ma2aProtocolException>(() => Ma2aJson.Parse("""{"version":1,"version":1}"""u8.ToArray()));
+        var error = Assert.Throws<Ma2aProtocolException>(() => Ma2aJson.Parse(Encoding.UTF8.GetBytes(response)));
         Assert.Equal("invalid_frame", error.Error);
     }
 
