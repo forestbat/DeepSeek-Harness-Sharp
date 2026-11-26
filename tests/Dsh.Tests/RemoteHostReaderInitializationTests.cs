@@ -42,7 +42,7 @@ public sealed class RemoteHostReaderInitializationTests
 
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         var tap = new PushTap();
-        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), [tap], tap.Methods());
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), contracts: [new(RpcTargetMetadata.FromShape<IHostPush>(), tap)], methods: tap.Methods());
         var gate = delayed!;
         var pending = peer.InvokeAsync(pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe,
             Parameters(pty, resource, "cancelled-view"), Ct);
@@ -129,7 +129,7 @@ public sealed class RemoteHostReaderInitializationTests
             resource = (await client.CreateSessionAsync(host.Environment.App.Home.Root, cancellationToken: Ct)).Id;
         await using var transport = await RemoteHostConnector.ConnectAsync(host.Root, Ct);
         var tap = new PushTap();
-        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), [tap], tap.Methods());
+        using var peer = JsonRpcChannel.Connect(transport, HostRpcFormatter.CreateJson(EditorProtocolJsonContext.Default), contracts: [new(RpcTargetMetadata.FromShape<IHostPush>(), tap)], methods: tap.Methods());
         var subscribe = pty ? PtyProtocol.MethodPtyAttach : HostProtocol.MethodSessionSubscribe;
         var stop = pty ? PtyProtocol.MethodPtyDetach : HostProtocol.MethodSessionUnsubscribe;
         List<Task<JsonElement>> starts = [];
