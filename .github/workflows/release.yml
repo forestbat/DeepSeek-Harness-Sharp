@@ -419,10 +419,13 @@ jobs:
               -GuiPublishDir "Dsh.GuiHost/bin/Release/net11.0/$env:RID/publish"
           } finally { Remove-Item $verify -Recurse -Force }
 
+      # Web 入口只在 JIT 档产出: 它作为 JSON-RPC 客户端需要运行时生成代理, NativeAOT 不支持。
       - uses: actions/upload-artifact@v4
         if: matrix.flavor != 'aot'
+        # 产物名必须与发布作业的下载模式(dsharp-*)一致, 否则资产不会进 Release:
+        # 归档文件名是 dsharp-web-<rid>[-aot], 这里沿用同一个前缀。
         with:
-          name: web-${{ matrix.flavor }}-${{ matrix.rid }}
+          name: dsharp-web-${{ matrix.rid }}-${{ matrix.flavor }}
           path: artifacts/release-stage/dsharp-web-*
           if-no-files-found: error
           retention-days: 7
