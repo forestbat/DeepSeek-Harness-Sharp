@@ -1477,13 +1477,13 @@ public sealed partial class ChatWindow : IDisposable
      */
     internal IReadOnlyList<CommandCandidate> TimestampCandidates(ChatPane pane)
     {
-        var candidates = new List<(long Timestamp, CommandCandidate Candidate)>();
+        var candidates = new List<(long Timestamp, long? MessageSequence, CommandCandidate Candidate)>();
         _ideTimelineMoments.Clear();
         _ideTimelineSession = null;
         foreach (var (seq, time, text) in pane.TimelineEntries)
         {
             var token = $"#{seq.ToString(CultureInfo.InvariantCulture)}";
-            candidates.Add((time, new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time))));
+            candidates.Add((time, seq, new CommandCandidate(token, $"{token} {Preview(text)}", SessionTimestamp(time))));
         }
 
         var service = _ctx.Get<IdeHistoryService>(IdeHistoryService.ServiceName, false);
@@ -1497,15 +1497,15 @@ public sealed partial class ChatWindow : IDisposable
                 var token = $"ide-group|{moment.Timestamp.ToString(CultureInfo.InvariantCulture)}";
                 _ideTimelineMoments[token] = moment;
                 var first = moment.Entries[0];
-                candidates.Add((moment.Timestamp, new CommandCandidate(token,
+                candidates.Add((moment.Timestamp, null, new CommandCandidate(token,
                     $"{IdeEntryLabel(workspace, first)}{(moment.Entries.Count > 1 ? $" +{moment.Entries.Count - 1} revisions" : "")}",
                     $"history window; {moment.Entries.Count(entry => entry.MatchesGitHead is true)} match git HEAD")));
             }
         }
 
-        // 唯一出口统一按时间倒序: 浮层默认选中第 0 条 = 最新一条。IDE 历史关闭时那条提前返回曾经漏掉排序,
-        // 结果浮层从最早的消息开始列, 与"时间线"的直觉相反。
-        return [.. candidates.OrderByDescending(item => item.Timestamp).Select(item => item.Candidate)];
+        // Use the event sequence to show the latest message first when timestamps share a millisecond.
+        return [.. candidates.OrderByDescending(item => item.Timestamp)
+            .ThenByDescending(item => item.MessageSequence).Select(item => item.Candidate)];
     }
 
     /** IDE 历史项在选单里的值编码(可被 `/timestamp` 解析回条目)。 */
